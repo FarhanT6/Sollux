@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { ClerkExpressRequireAuth } from '@clerk/clerk-sdk-node';
+import { getAuth, requireAuth as clerkRequireAuth } from '@clerk/express';
 import { db } from '../config/db';
 
 // Extend Express Request to include userId
@@ -13,12 +13,12 @@ declare global {
 }
 
 // Clerk auth middleware
-export const requireAuth = ClerkExpressRequireAuth();
+export const requireAuth = clerkRequireAuth();
 
 // Middleware to attach the database User record to the request
 export async function attachDbUser(req: Request, res: Response, next: NextFunction) {
   try {
-    const clerkUserId = req.auth?.userId;
+    const clerkUserId = getAuth(req)?.userId;
     if (!clerkUserId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
@@ -27,7 +27,7 @@ export async function attachDbUser(req: Request, res: Response, next: NextFuncti
 
     // Auto-create user record on first request (after Clerk registration)
     if (!user) {
-      const clerkUser = req.auth as any;
+      const clerkUser = getAuth(req) as any;
       user = await db.user.create({
         data: {
           clerkUserId,

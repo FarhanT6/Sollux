@@ -27,15 +27,15 @@ export default function AppLayout() {
   }, []);
 
   return (
-    <div className="flex h-screen bg-white overflow-hidden">
+    <div className="flex h-screen overflow-hidden" style={{ background: '#1e1e1e' }}>
       {/* Sidebar */}
-      <aside className="w-52 flex-shrink-0 border-r border-gray-100 flex flex-col bg-white">
+      <aside className="w-52 flex-shrink-0 flex flex-col" style={{ background: '#161616', borderRight: '1px solid rgba(255,255,255,0.07)' }}>
         {/* Logo */}
-        <div className="px-4 py-4 border-b border-gray-100 flex items-center gap-2">
+        <div className="px-4 py-4 flex items-center gap-2" style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
           <div className="w-7 h-7 rounded-lg bg-gold-500 flex items-center justify-center">
             <div className="w-3 h-3 rounded-full bg-white" />
           </div>
-          <span className="text-base font-semibold text-gray-900 tracking-tight">
+          <span className="text-base font-semibold tracking-tight text-white">
             Sol<span className="text-gold-500">lux</span>
           </span>
         </div>
@@ -70,20 +70,21 @@ export default function AppLayout() {
         </nav>
 
         {/* User footer */}
-        <div className="px-3 py-3 border-t border-gray-100">
+        <div className="px-3 py-3" style={{ borderTop: '1px solid rgba(255,255,255,0.07)' }}>
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center text-xs font-semibold text-amber-800 flex-shrink-0">
+            <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0"
+              style={{ background: 'rgba(245,166,35,0.2)', color: '#F5A623' }}>
               {user?.firstName?.[0]}{user?.lastName?.[0]}
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-medium text-gray-900 truncate">{user?.fullName || user?.emailAddresses[0]?.emailAddress}</p>
-              <p className="text-xs text-gray-400 truncate">
+              <p className="text-xs font-medium text-white truncate">{user?.fullName || user?.emailAddresses[0]?.emailAddress}</p>
+              <p className="text-xs text-gray-500 truncate">
                 {summary ? `${summary.totalProperties} properties` : 'Pro plan'}
               </p>
             </div>
             <button
               onClick={() => signOut()}
-              className="text-xs text-gray-400 hover:text-gray-600 flex-shrink-0"
+              className="text-xs text-gray-500 hover:text-gray-300 flex-shrink-0"
               title="Sign out"
             >
               ↩
@@ -93,7 +94,7 @@ export default function AppLayout() {
       </aside>
 
       {/* Main content */}
-      <main className="flex-1 overflow-y-auto bg-white">
+      <main className="flex-1 overflow-y-auto" style={{ background: '#1e1e1e' }}>
         <Outlet />
       </main>
     </div>
