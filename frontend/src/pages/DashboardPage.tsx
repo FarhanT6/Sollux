@@ -31,14 +31,15 @@ export default function DashboardPage() {
   return (
     <div>
       {/* Top bar */}
-      <div className="border-b border-gray-100 px-6 py-4 flex items-center justify-between bg-white sticky top-0 z-10">
+      <div className="px-6 py-4 flex items-center justify-between sticky top-0 z-10"
+        style={{ background: '#1e1e1e', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
         <div>
-          <h1 className="text-base font-semibold text-gray-900">
-            {greeting}, {user?.firstName || 'there'} ☀
+          <h1 className="text-base font-semibold text-white">
+            {greeting}, {user?.firstName || 'there'} ☀️
           </h1>
-          <p className="text-xs text-gray-400 mt-0.5">
+          <p className="text-xs text-gray-500 mt-0.5">
             {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
-            {summary?.billsDueSoon ? ` · ${summary.billsDueSoon} bill${summary.billsDueSoon === 1 ? '' : 's'} due this week` : ''}
+            {summary?.billsDueSoon ? ` — ${summary.billsDueSoon} bill${summary.billsDueSoon === 1 ? '' : 's'} due this week` : ''}
           </p>
         </div>
         <Link to="/properties/new" className="btn btn-primary text-xs">
@@ -100,19 +101,20 @@ export default function DashboardPage() {
                     to={`/properties/${bill.utilityAccount?.property?.id || ''}`}
                     className="card p-3 flex items-center gap-3 hover:border-gold-300 transition-colors block"
                   >
-                    <div className="w-9 h-9 rounded-lg bg-amber-50 flex items-center justify-center text-base flex-shrink-0">
+                    <div className="w-9 h-9 rounded-lg flex items-center justify-center text-base flex-shrink-0"
+                      style={{ background: 'rgba(245,166,35,0.15)' }}>
                       🏠
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-900 truncate">
+                      <p className="text-sm font-medium text-white truncate">
                         {bill.utilityAccount?.property?.nickname || bill.utilityAccount?.property?.address}
                       </p>
-                      <p className="text-xs text-gray-400">
+                      <p className="text-xs text-gray-500">
                         {bill.utilityAccount?.providerName} · Due {bill.dueDate ? format(new Date(bill.dueDate), 'MMM d') : '—'}
                       </p>
                     </div>
                     <div className="text-right flex-shrink-0">
-                      <p className="text-sm font-semibold text-gray-900">${Number(bill.amountDue).toFixed(2)}</p>
+                      <p className="text-sm font-semibold text-white">${Number(bill.amountDue).toFixed(2)}</p>
                       <span className="pill pill-amber text-xs">Due soon</span>
                     </div>
                   </Link>
