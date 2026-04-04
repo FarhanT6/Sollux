@@ -39,8 +39,8 @@ export class SDGEScraper extends BaseScraperProvider {
       // Extract billing rows
       const rows = await this.page!.$$eval(
         '.billing-history-table tr:not(:first-child), .bill-row',
-        (rows) => rows.map(row => {
-          const cells = Array.from(row.querySelectorAll('td'));
+        (rows: Element[]) => rows.map((row: Element) => {
+          const cells = Array.from(row.querySelectorAll('td')) as HTMLElement[];
           return {
             date: cells[0]?.textContent?.trim(),
             dueDate: cells[1]?.textContent?.trim(),
@@ -78,8 +78,8 @@ export class SDGEScraper extends BaseScraperProvider {
 
       const rows = await this.page!.$$eval(
         '.payment-row, .payments-table tr:not(:first-child)',
-        (rows) => rows.map(row => {
-          const cells = Array.from(row.querySelectorAll('td'));
+        (rows: Element[]) => rows.map((row: Element) => {
+          const cells = Array.from(row.querySelectorAll('td')) as HTMLElement[];
           return {
             date: cells[0]?.textContent?.trim(),
             amount: cells[1]?.textContent?.trim(),
