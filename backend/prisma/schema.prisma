@@ -1,0 +1,259 @@
+// Sollux — Prisma Schema
+// PostgreSQL 15
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── USERS ───────────────────────────────────────────────
+model User {
+  id                 String               @id @default(cuid())
+  email              String               @unique
+  passwordHash       String?
+  fullName           String
+  phone              String?
+  subscriptionTier   SubscriptionTier     @default(BASIC)
+  stripeCustomerId   String?
+  clerkUserId        String?              @unique
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  properties              Property[]
+  notificationPreferences NotificationPreference[]
+  gmailTokens             GmailToken?
+
+  @@map("users")
+}
+
+enum SubscriptionTier {
+  BASIC
+  PRO
+  BUSINESS
+}
+
+// ─── PROPERTIES ──────────────────────────────────────────
+model Property {
+  id          String       @id @default(cuid())
+  userId      String
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  nickname    String?
+  address     String
+  city        String
+  state       String
+  zip         String
+  country     String       @default("US")
+  type        PropertyType
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  utilityAccounts UtilityAccount[]
+  insights        AIInsight[]
+
+  @@map("properties")
+}
+
+enum PropertyType {
+  PRIMARY
+  RENTAL
+  INVESTMENT
+  COMMERCIAL
+}
+
+// ─── UTILITY ACCOUNTS ────────────────────────────────────
+model UtilityAccount {
+  id                    String          @id @default(cuid())
+  propertyId            String
+  property              Property        @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  providerName          String
+  providerSlug          String          // e.g. "sdge", "socal-gas", "cox"
+  accountNumber         String?         // plaintext display (last 4 only)
+  accountNumberEnc      String?         // AES-256 encrypted full account number
+  usernameEnc           String?         // encrypted
+  passwordEnc           String?         // encrypted
+  loginUrl              String?
+  category              UtilityCategory
+  notes                 String?
+  syncEnabled           Boolean         @default(true)
+  lastSyncedAt          DateTime?
+  lastSyncStatus        SyncStatus?
+  lastSyncError         String?
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  statements  Statement[]
+  payments    Payment[]
+  insights    AIInsight[]
+
+  @@map("utility_accounts")
+}
+
+enum UtilityCategory {
+  ELECTRIC
+  GAS
+  WATER
+  SEWER
+  TRASH
+  SOLAR
+  INTERNET
+  PHONE
+  INSURANCE
+  HOA
+  TAXES
+  OTHER
+}
+
+enum SyncStatus {
+  SUCCESS
+  FAILED
+  PENDING
+  PARTIAL
+}
+
+// ─── STATEMENTS ──────────────────────────────────────────
+model Statement {
+  id               String         @id @default(cuid())
+  utilityAccountId String
+  utilityAccount   UtilityAccount @relation(fields: [utilityAccountId], references: [id], onDelete: Cascade)
+  statementDate    DateTime
+  dueDate          DateTime?
+  billingPeriodStart DateTime?
+  billingPeriodEnd   DateTime?
+  amountDue        Decimal?       @db.Decimal(10, 2)
+  amountPaid       Decimal?       @db.Decimal(10, 2)
+  balance          Decimal?       @db.Decimal(10, 2)
+  usageValue       Decimal?       @db.Decimal(10, 3)
+  usageUnit        String?        // "kWh", "therms", "gallons", "CCF"
+  ratePlan         String?
+  pdfS3Key         String?
+  pdfUrl           String?        // Signed URL (transient)
+  rawDataJson      Json?
+  sourceType       StatementSource @default(SCRAPER)
+  createdAt        DateTime       @default(now())
+
+  payments Payment[]
+
+  @@map("statements")
+}
+
+enum StatementSource {
+  SCRAPER
+  EMAIL
+  MANUAL
+}
+
+// ─── PAYMENTS ────────────────────────────────────────────
+model Payment {
+  id               String         @id @default(cuid())
+  utilityAccountId String
+  utilityAccount   UtilityAccount @relation(fields: [utilityAccountId], references: [id], onDelete: Cascade)
+  statementId      String?
+  statement        Statement?     @relation(fields: [statementId], references: [id])
+  amount           Decimal        @db.Decimal(10, 2)
+  paymentDate      DateTime
+  confirmationNumber String?
+  paymentMethod    String?
+  status           PaymentStatus  @default(PAID)
+  notes            String?
+  createdAt        DateTime       @default(now())
+
+  @@map("payments")
+}
+
+enum PaymentStatus {
+  PAID
+  PENDING
+  FAILED
+  PARTIAL
+}
+
+// ─── AI INSIGHTS ─────────────────────────────────────────
+model AIInsight {
+  id               String         @id @default(cuid())
+  propertyId       String
+  property         Property       @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  utilityAccountId String?
+  utilityAccount   UtilityAccount? @relation(fields: [utilityAccountId], references: [id])
+  insightType      InsightType
+  severity         InsightSeverity
+  title            String
+  body             String
+  recommendation   String?
+  potentialSavings Decimal?       @db.Decimal(10, 2)
+  isRead           Boolean        @default(false)
+  isDismissed      Boolean        @default(false)
+  expiresAt        DateTime?
+  createdAt        DateTime       @default(now())
+
+  @@map("ai_insights")
+}
+
+enum InsightType {
+  ANOMALY
+  SAVINGS
+  REMINDER
+  INFO
+  OUTAGE
+}
+
+enum InsightSeverity {
+  INFO
+  WARNING
+  ALERT
+}
+
+// ─── NOTIFICATION PREFERENCES ────────────────────────────
+model NotificationPreference {
+  id          String      @id @default(cuid())
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel     NotifChannel
+  eventType   String      // "bill_due", "payment_overdue", "anomaly_detected", etc.
+  thresholdDays Int       @default(5)
+  isEnabled   Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@unique([userId, channel, eventType])
+  @@map("notification_preferences")
+}
+
+enum NotifChannel {
+  EMAIL
+  SMS
+  PUSH
+}
+
+// ─── GMAIL TOKENS ────────────────────────────────────────
+model GmailToken {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken  String
+  refreshToken String
+  expiresAt    DateTime
+  email        String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("gmail_tokens")
+}
+
+// ─── SYNC JOBS ───────────────────────────────────────────
+model SyncJob {
+  id               String    @id @default(cuid())
+  utilityAccountId String
+  status           SyncStatus @default(PENDING)
+  startedAt        DateTime?
+  completedAt      DateTime?
+  error            String?
+  statementsFound  Int       @default(0)
+  paymentsFound    Int       @default(0)
+  createdAt        DateTime  @default(now())
+
+  @@map("sync_jobs")
+}
