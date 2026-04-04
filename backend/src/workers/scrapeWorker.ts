@@ -1,4 +1,5 @@
 import { Worker, Job } from 'bullmq';
+import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';
 import { getScraperProvider } from '../scrapers/base';
@@ -99,7 +100,7 @@ const worker = new Worker<ScrapeJobData>(
               usageUnit: stmt.usageUnit,
               ratePlan: stmt.ratePlan,
               pdfS3Key,
-              rawDataJson: stmt.rawData,
+              rawDataJson: stmt.rawData as Prisma.InputJsonValue,
             },
           });
           statementsInserted++;
