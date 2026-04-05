@@ -109,3 +109,9 @@ export const updateNotificationPreferences = (data: any) =>
 // Gmail
 export const getGmailConnectUrl = () =>
   api.post<{ url: string }>('/gmail/connect').then(r => r.data);
+
+export const getGmailStatus = () =>
+  api.get<{ connected: boolean; email?: string }>('/gmail/status').then(r => r.data);
+
+export const syncGmail = () =>
+  api.post<{ jobId: string }>('/gmail/sync').then(r => r.data);

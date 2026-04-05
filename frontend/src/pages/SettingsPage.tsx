@@ -1,9 +1,22 @@
 import { useUser, useClerk } from '@clerk/clerk-react';
+import { useEffect, useState } from 'react';
 import { PageHeader } from '../components/ui';
+import api, { getGmailConnectUrl } from '../api/client';
 
 export default function SettingsPage() {
   const { user } = useUser();
   const { signOut } = useClerk();
+  const [gmailStatus, setGmailStatus] = useState<{ connected: boolean; email?: string } | null>(null);
+  const [gmailSuccessMsg, setGmailSuccessMsg] = useState('');
+
+  useEffect(() => {
+    api.get('/gmail/status').then(r => setGmailStatus(r.data)).catch(() => {});
+
+    if (window.location.search.includes('gmail=connected')) {
+      setGmailSuccessMsg('Gmail connected successfully!');
+      setTimeout(() => setGmailSuccessMsg(''), 4000);
+    }
+  }, []);
 
   return (
     <div>
@@ -45,6 +58,9 @@ export default function SettingsPage() {
 
         <div className="card p-5 mb-4">
           <h2 className="text-sm font-semibold text-white mb-4">Connected accounts</h2>
+          {gmailSuccessMsg && (
+            <p className="text-xs text-green-400 mb-3">{gmailSuccessMsg}</p>
+          )}
           <div className="flex items-center justify-between py-2">
             <div className="flex items-center gap-2">
               <div className="w-6 h-6 bg-red-500/10 rounded flex items-center justify-center text-xs text-gray-300">G</div>
@@ -53,7 +69,19 @@ export default function SettingsPage() {
                 <p className="text-xs text-gray-400">Parse utility emails automatically</p>
               </div>
             </div>
-            <button className="btn text-xs">Connect</button>
+            {gmailStatus?.connected ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-400">{gmailStatus.email}</span>
+                <span className="pill pill-green text-xs">&#x2713; Connected</span>
+              </div>
+            ) : (
+              <button
+                className="btn text-xs"
+                onClick={() => getGmailConnectUrl().then(r => { window.location.href = r.url; })}
+              >
+                Connect
+              </button>
+            )}
           </div>
         </div>
 

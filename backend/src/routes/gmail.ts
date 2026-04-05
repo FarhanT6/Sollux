@@ -72,4 +72,16 @@ router.get('/status', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// POST /api/gmail/sync — queue a Gmail parse job for current user
+router.post('/sync', async (req, res, next) => {
+  try {
+    const token = await db.gmailToken.findUnique({ where: { userId: req.dbUserId! } });
+    if (!token) return res.status(400).json({ error: 'Gmail not connected' });
+
+    const { gmailQueue } = await import('../workers/queues');
+    const job = await gmailQueue.add('parse', { userId: req.dbUserId! }, { attempts: 2 });
+    res.json({ jobId: job.id, message: 'Gmail sync queued' });
+  } catch (err) { next(err); }
+});
+
 export default router;

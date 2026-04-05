@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import './scrapeWorker';
 import './insightWorker';
+import './gmailWorker';
 import { scrapeQueue, insightQueue } from './queues';
 import { db } from '../config/db';
 
