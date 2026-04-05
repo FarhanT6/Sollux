@@ -16,12 +16,13 @@ import notificationsRouter from './routes/notifications';
 import authRouter from './routes/auth';
 import stripeRouter from './routes/stripe';
 import { errorHandler } from './middleware/errorHandler';
-import { requireAuth } from './middleware/requireAuth';
+import { requireAuth, clerkMiddleware } from './middleware/requireAuth';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 // ─── Security ────────────────────────────────────────────
+app.use(clerkMiddleware());
 app.use(helmet());
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:5173',

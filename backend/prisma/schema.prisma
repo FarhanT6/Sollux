@@ -25,7 +25,7 @@ model User {
 
   properties              Property[]
   notificationPreferences NotificationPreference[]
-  gmailTokens             GmailToken?
+  gmailTokens             GmailToken[]
 
   @@map("users")
 }
@@ -231,15 +231,17 @@ enum NotifChannel {
 // ─── GMAIL TOKENS ────────────────────────────────────────
 model GmailToken {
   id           String   @id @default(cuid())
-  userId       String   @unique
+  userId       String
   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   accessToken  String
   refreshToken String
   expiresAt    DateTime
-  email        String
+  email        String   @unique  // one token per Gmail address
+  label        String?           // optional nickname e.g. "Main", "Property management"
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
+  @@unique([userId, email])
   @@map("gmail_tokens")
 }
 

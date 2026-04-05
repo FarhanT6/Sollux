@@ -30,10 +30,18 @@ function getOAuthClient(accessToken: string, refreshToken: string) {
  * Searches the last 30 days for emails from known utility senders.
  */
 export async function parseGmailForUser(userId: string): Promise<void> {
-  const tokenRecord = await db.gmailToken.findUnique({ where: { userId } });
-  if (!tokenRecord) return;
+  // Support multiple Gmail accounts per user
+  const tokenRecords = await db.gmailToken.findMany({ where: { userId } });
+  if (!tokenRecords.length) return;
 
-  const auth = getOAuthClient(tokenRecord.accessToken, tokenRecord.refreshToken);
+  for (const tokenRecord of tokenRecords) {
+    console.log(`[GmailParser] Scanning account: ${tokenRecord.email}`);
+    await parseGmailAccount(userId, tokenRecord.accessToken, tokenRecord.refreshToken);
+  }
+}
+
+async function parseGmailAccount(userId: string, accessToken: string, refreshToken: string): Promise<void> {
+  const auth = getOAuthClient(accessToken, refreshToken);
   const gmail = google.gmail({ version: 'v1', auth });
 
   // Build search query for utility senders

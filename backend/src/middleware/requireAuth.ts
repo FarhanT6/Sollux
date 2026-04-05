@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { getAuth, requireAuth as clerkRequireAuth } from '@clerk/express';
+import { clerkMiddleware, getAuth, requireAuth as clerkRequireAuth } from '@clerk/express';
 import { db } from '../config/db';
 
 // Extend Express Request to include userId
@@ -13,6 +13,7 @@ declare global {
 }
 
 // Clerk auth middleware
+export { clerkMiddleware };
 export const requireAuth = clerkRequireAuth();
 
 // Middleware to attach the database User record to the request
