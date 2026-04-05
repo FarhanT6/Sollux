@@ -6,8 +6,8 @@ import { PageHeader, StatCard, Skeleton, EmptyState, Pill } from '../components/
 import { PROPERTY_TYPE_LABELS, CATEGORY_COLORS } from '../types';
 
 const TYPE_COLORS: Record<string, string> = {
-  PRIMARY: 'bg-amber-50', RENTAL: 'bg-emerald-50',
-  INVESTMENT: 'bg-purple-50', COMMERCIAL: 'bg-blue-50',
+  PRIMARY: 'bg-amber-500/10', RENTAL: 'bg-emerald-500/10',
+  INVESTMENT: 'bg-purple-500/10', COMMERCIAL: 'bg-blue-500/10',
 };
 
 const FILTER_CHIPS = [
@@ -63,13 +63,13 @@ export default function PropertiesPage() {
               onClick={() => setFilter(chip.value)}
               className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
                 filter === chip.value
-                  ? 'bg-amber-50 border-amber-300 text-amber-800 font-medium'
-                  : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
+                  ? 'bg-amber-500/10 border border-amber-500/30 text-amber-400 font-medium'
+                  : 'bg-transparent border border-white/10 text-gray-400 hover:border-white/20 hover:text-gray-300'
               }`}
             >
               {chip.label}
               {chip.value !== 'all' && (
-                <span className="ml-1 text-gray-400">
+                <span className="ml-1 text-gray-500">
                   ({properties.filter(p => p.type === chip.value).length})
                 </span>
               )}
@@ -107,12 +107,12 @@ function PropertyCard({ property }: { property: Property }) {
   return (
     <Link to={`/properties/${property.id}`} className="card hover:border-gold-300 transition-colors block overflow-hidden">
       {/* Header */}
-      <div className="p-4 border-b border-gray-100 flex items-start gap-3">
-        <div className={`w-10 h-10 rounded-xl ${TYPE_COLORS[property.type] || 'bg-gray-50'} flex items-center justify-center text-lg flex-shrink-0`}>
+      <div className="p-4 border-b border-white/8 flex items-start gap-3">
+        <div className={`w-10 h-10 rounded-xl ${TYPE_COLORS[property.type] || 'bg-white/5'} flex items-center justify-center text-lg flex-shrink-0`}>
           {property.type === 'PRIMARY' ? '🏠' : property.type === 'RENTAL' ? '🏡' : property.type === 'COMMERCIAL' ? '🏢' : '🏘'}
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-gray-900 truncate">
+          <p className="text-sm font-semibold text-white truncate">
             {property.nickname || property.address}
           </p>
           <p className="text-xs text-gray-400 mt-0.5">{property.city}, {property.state}</p>
@@ -132,9 +132,9 @@ function PropertyCard({ property }: { property: Property }) {
             const dueDate = latest?.dueDate;
             const isDue = dueDate && new Date(dueDate) <= new Date(Date.now() + 7 * 86400000);
             return (
-              <div key={account.id} className="bg-gray-50 rounded-lg p-2">
+              <div key={account.id} className="bg-white/5 rounded-lg p-2">
                 <p className="text-xs text-gray-400 truncate mb-0.5">{account.providerName}</p>
-                <p className="text-xs font-semibold text-gray-900">
+                <p className="text-xs font-semibold text-gray-100">
                   {latest?.amountDue ? `$${Number(latest.amountDue).toFixed(0)}` : '—'}
                 </p>
                 <p className={`text-xs mt-0.5 ${isDue ? 'text-amber-500' : 'text-emerald-500'}`}>
@@ -149,7 +149,7 @@ function PropertyCard({ property }: { property: Property }) {
         <div className="flex items-center justify-between">
           <div>
             <p className="text-xs text-gray-400">Monthly total</p>
-            <p className="text-base font-semibold text-gray-900">${monthlyTotal.toFixed(0)}</p>
+            <p className="text-base font-semibold text-white">${monthlyTotal.toFixed(0)}</p>
           </div>
           <span className="text-xs text-gold-500">View detail →</span>
         </div>

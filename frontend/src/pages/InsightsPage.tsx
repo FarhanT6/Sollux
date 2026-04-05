@@ -36,7 +36,7 @@ export default function InsightsPage() {
           {(['all', 'ALERT', 'WARNING', 'INFO'] as const).map(f => (
             <button key={f} onClick={() => setFilter(f)}
               className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                filter === f ? 'bg-amber-50 border-amber-300 text-amber-800 font-medium' : 'bg-white border-gray-200 text-gray-500'
+                filter === f ? 'bg-amber-500/10 border border-amber-500/30 text-amber-400 font-medium' : 'bg-transparent border border-white/10 text-gray-400 hover:border-white/20 hover:text-gray-300'
               }`}
             >
               {f === 'all' ? 'All' : f.charAt(0) + f.slice(1).toLowerCase()}

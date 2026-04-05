@@ -21,10 +21,10 @@ export default function DocumentsPage() {
             <div className="grid grid-cols-3 gap-3">
               {statements.map(stmt => (
                 <div key={stmt.id} className="card p-3 hover:border-gold-300 transition-colors cursor-pointer">
-                  <div className="w-8 h-9 bg-red-50 rounded flex items-center justify-center mb-2">
+                  <div className="w-8 h-9 bg-red-500/10 rounded flex items-center justify-center mb-2">
                     <div className="w-3.5 h-4 bg-red-400 rounded-sm" />
                   </div>
-                  <p className="text-xs font-medium text-gray-900 truncate">
+                  <p className="text-xs font-medium text-gray-100 truncate">
                     {stmt.utilityAccount?.providerName}_{format(new Date(stmt.statementDate), 'MMMyyyy')}.pdf
                   </p>
                   <p className="text-xs text-gray-400 mt-0.5">
