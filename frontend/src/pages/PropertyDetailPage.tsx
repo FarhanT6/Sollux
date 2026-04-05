@@ -5,6 +5,7 @@ import type { Property, Statement, Payment, AIInsight, UtilityAccount } from '..
 import { CATEGORY_LABELS, CATEGORY_COLORS } from '../types';
 import { PageHeader, StatCard, InsightCard, Skeleton, EmptyState, Pill } from '../components/ui';
 import { format } from 'date-fns';
+import AddUtilityModal from '../components/utility/AddUtilityModal';
 
 type Tab = 'utilities' | 'payments' | 'insights' | 'documents';
 
@@ -17,6 +18,7 @@ export default function PropertyDetailPage() {
   const [tab, setTab] = useState<Tab>('utilities');
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState<string | null>(null);
+  const [showAddUtility, setShowAddUtility] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -117,7 +119,10 @@ export default function PropertyDetailPage() {
         {/* ── Utilities tab ─────────────────────────────── */}
         {tab === 'utilities' && (
           <>
-            <p className="section-label mb-3">Active utility accounts</p>
+            <div className="flex items-center justify-between mb-3">
+              <p className="section-label">Active utility accounts</p>
+              <button onClick={() => setShowAddUtility(true)} className="btn btn-primary text-xs">+ Add utility</button>
+            </div>
             {accounts.length === 0 ? (
               <EmptyState icon="⚡" title="No utility accounts" body="Add a utility account to start tracking bills for this property." />
             ) : (
@@ -222,6 +227,7 @@ export default function PropertyDetailPage() {
         )}
 
       </div>
+      {showAddUtility && <AddUtilityModal propertyId={property.id} onClose={() => setShowAddUtility(false)} onSuccess={() => { getProperty(id!).then(setProperty); }} />}
     </div>
   );
 }

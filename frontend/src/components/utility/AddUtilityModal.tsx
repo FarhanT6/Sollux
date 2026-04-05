@@ -123,8 +123,8 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
                   onClick={() => selectProvider(name)}
                   className={`text-xs px-2 py-2 rounded-lg border text-left transition-colors ${
                     form.providerName === name
-                      ? 'bg-amber-50 border-amber-300 text-amber-800 font-medium'
-                      : 'bg-white border-gray-200 text-gray-600 hover:border-gray-300'
+                      ? 'bg-amber-500/10 border-amber-500/30 text-amber-400 font-medium'
+                      : 'bg-white/5 border-white/10 text-gray-300 hover:border-white/20'
                   }`}
                 >
                   {name}
@@ -141,13 +141,13 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
         </div>
       ) : (
         <div>
-          <div className="mb-4 p-3 bg-amber-50 border border-amber-100 rounded-lg">
-            <p className="text-xs font-medium text-amber-900">{form.providerName}</p>
-            <p className="text-xs text-amber-700">Your credentials are encrypted with AES-256 before storage and never logged.</p>
+          <div className="mb-4 p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+            <p className="text-xs font-medium text-amber-300">{form.providerName}</p>
+            <p className="text-xs text-amber-400">Your credentials are encrypted with AES-256 before storage and never logged.</p>
           </div>
 
           {/* Gmail option */}
-          <div className="mb-4 p-3 bg-gray-50 rounded-lg flex items-start gap-2">
+          <div className="mb-4 p-3 bg-white/5 rounded-lg flex items-start gap-2">
             <input
               type="checkbox"
               id="use-gmail"
@@ -155,7 +155,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
               onChange={e => set('useGmail', e.target.checked)}
               className="mt-0.5"
             />
-            <label htmlFor="use-gmail" className="text-xs text-gray-700 cursor-pointer">
+            <label htmlFor="use-gmail" className="text-xs text-gray-300 cursor-pointer">
               <span className="font-medium">Use Gmail instead</span> — Parse bills from your email automatically (no password needed)
             </label>
           </div>
