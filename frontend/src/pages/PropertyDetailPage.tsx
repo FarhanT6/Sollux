@@ -85,7 +85,7 @@ export default function PropertyDetailPage() {
       />
 
       {/* Property hero stats */}
-      <div className="px-6 py-4 border-b border-gray-100">
+      <div className="px-6 py-4 border-b border-white/8">
         <div className="grid grid-cols-4 gap-3">
           <StatCard label="Monthly total" value={`$${monthlyTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} />
           <StatCard label="Last synced" value={lastSynced ? format(new Date(lastSynced), 'h:mm a') : 'Never'} sub={lastSynced ? format(new Date(lastSynced), 'MMM d') : ''} />
@@ -95,15 +95,15 @@ export default function PropertyDetailPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-gray-100 px-6 bg-white">
+      <div className="flex border-b border-white/8 px-6 bg-transparent">
         {TABS.map(t => (
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
             className={`text-sm py-3 px-4 border-b-2 transition-colors ${
               tab === t.key
-                ? 'border-gold-500 text-gold-600 font-medium'
-                : 'border-transparent text-gray-400 hover:text-gray-700'
+                ? 'border-amber-400 text-amber-400 font-medium'
+                : 'border-transparent text-gray-500 hover:text-gray-300'
             }`}
           >
             {t.label}
@@ -171,13 +171,13 @@ export default function PropertyDetailPage() {
         {/* ── Insights tab ──────────────────────────────── */}
         {tab === 'insights' && (
           <>
-            <div className="mb-4 flex items-center gap-3 bg-amber-50 border border-amber-100 rounded-xl p-4">
+            <div className="mb-4 flex items-center gap-3 bg-amber-500/10 border border-amber-500/20 rounded-xl p-4">
               <div className="w-10 h-10 rounded-full bg-gold-500 flex items-center justify-center flex-shrink-0">
                 <div className="w-5 h-5 rounded-full bg-white" />
               </div>
               <div>
-                <p className="text-sm font-medium text-amber-900">Sollux AI is monitoring {accounts.length} utility accounts</p>
-                <p className="text-xs text-amber-700">Last synced {lastSynced ? format(new Date(lastSynced), 'MMM d \'at\' h:mm a') : 'never'} · {insights.length} total insights</p>
+                <p className="text-sm font-medium text-amber-300">Sollux AI is monitoring {accounts.length} utility accounts</p>
+                <p className="text-xs text-amber-400">Last synced {lastSynced ? format(new Date(lastSynced), 'MMM d \'at\' h:mm a') : 'never'} · {insights.length} total insights</p>
               </div>
             </div>
             {insights.length === 0 ? (
@@ -205,10 +205,10 @@ export default function PropertyDetailPage() {
               <div className="grid grid-cols-3 gap-3">
                 {statements.filter(s => s.pdfS3Key).map(stmt => (
                   <div key={stmt.id} className="card p-3 hover:border-gold-300 transition-colors cursor-pointer">
-                    <div className="w-8 h-9 bg-red-50 rounded flex items-center justify-center mb-2">
+                    <div className="w-8 h-9 bg-red-500/10 rounded flex items-center justify-center mb-2">
                       <div className="w-3.5 h-4 bg-red-400 rounded-sm" />
                     </div>
-                    <p className="text-xs font-medium text-gray-900 truncate">
+                    <p className="text-xs font-medium text-gray-100 truncate">
                       {stmt.utilityAccount?.providerName}_{format(new Date(stmt.statementDate), 'MMMyyyy')}.pdf
                     </p>
                     <p className="text-xs text-gray-400 mt-0.5">
@@ -248,7 +248,7 @@ function UtilityAccountCard({
         <div className="flex items-center gap-2.5">
           <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: color }} />
           <div>
-            <p className="text-sm font-semibold text-gray-900">{account.providerName}</p>
+            <p className="text-sm font-semibold text-white">{account.providerName}</p>
             <p className="text-xs font-mono text-gray-400">{account.accountNumber || 'No account #'}</p>
           </div>
         </div>
@@ -259,7 +259,7 @@ function UtilityAccountCard({
 
       <div className="flex items-end justify-between">
         <div>
-          <p className="text-xl font-semibold text-gray-900">
+          <p className="text-xl font-semibold text-white">
             {latest?.amountDue ? `$${Number(latest.amountDue).toFixed(2)}` : '—'}
           </p>
           <p className="text-xs text-gray-400 mt-0.5">

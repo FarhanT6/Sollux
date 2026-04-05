@@ -23,12 +23,12 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/sign-in/*" element={
-          <div className="flex h-screen items-center justify-center bg-gray-50">
+          <div className="flex h-screen items-center justify-center bg-[#161616]">
             <SignIn routing="path" path="/sign-in" afterSignInUrl="/dashboard" />
           </div>
         } />
         <Route path="/sign-up/*" element={
-          <div className="flex h-screen items-center justify-center bg-gray-50">
+          <div className="flex h-screen items-center justify-center bg-[#161616]">
             <SignUp routing="path" path="/sign-up" afterSignUpUrl="/dashboard" />
           </div>
         } />
