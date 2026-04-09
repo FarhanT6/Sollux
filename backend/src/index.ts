@@ -16,15 +16,23 @@ import notificationsRouter from './routes/notifications';
 import authRouter from './routes/auth';
 import stripeRouter from './routes/stripe';
 import { errorHandler } from './middleware/errorHandler';
-import { requireAuth } from './middleware/requireAuth';
+import { requireAuth, clerkMiddleware } from './middleware/requireAuth';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 // ─── Security ────────────────────────────────────────────
+app.use(clerkMiddleware());
 app.use(helmet());
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  origin: (origin, callback) => {
+    // Allow any localhost port in development, or the configured FRONTEND_URL
+    if (!origin || origin.startsWith('http://localhost:') || origin === process.env.FRONTEND_URL) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
 }));
 

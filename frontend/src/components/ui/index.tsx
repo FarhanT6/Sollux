@@ -209,7 +209,7 @@ export function Input({ className = '', ...props }: React.InputHTMLAttributes<HT
   return (
     <input
       className={`w-full rounded-lg px-3 py-2 text-sm text-gray-100
-                  placeholder:text-gray-600 focus:outline-none focus:ring-2 focus:ring-gold-500
+                  placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-gold-500
                   focus:border-transparent ${className}`}
       style={{ background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)' }}
       {...props}

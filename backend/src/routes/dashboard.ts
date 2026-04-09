@@ -90,20 +90,31 @@ router.get('/recent-activity', async (req, res, next) => {
       },
     });
 
-    const upcomingBills = await db.statement.findMany({
-      where: {
-        utilityAccount: { property: { userId } },
-        dueDate: { gte: new Date() },
-        amountPaid: null,
-      },
-      orderBy: { dueDate: 'asc' },
-      take: 10,
+    // One upcoming bill per utility account — latest unpaid statement per account
+    const accountsWithBills = await db.utilityAccount.findMany({
+      where: { property: { userId }, syncEnabled: true },
       include: {
-        utilityAccount: {
-          select: { providerName: true, category: true, property: { select: { address: true, nickname: true } } },
+        property: { select: { id: true, address: true, nickname: true } },
+        statements: {
+          where: { dueDate: { gte: new Date() }, amountPaid: null },
+          orderBy: { statementDate: 'desc' },
+          take: 1,
         },
       },
     });
+
+    const upcomingBills = accountsWithBills
+      .filter(a => a.statements.length > 0)
+      .map(a => ({
+        ...a.statements[0],
+        utilityAccount: {
+          id: a.id,
+          providerName: a.providerName,
+          category: a.category,
+          property: a.property,
+        },
+      }))
+      .sort((a, b) => new Date(a.dueDate!).getTime() - new Date(b.dueDate!).getTime());
 
     res.json({ recentPayments, upcomingBills });
   } catch (err) {

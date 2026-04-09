@@ -5,6 +5,7 @@ import { getDashboardSummary, getRecentActivity, getInsights } from '../api/clie
 import type { DashboardSummary, AIInsight } from '../types';
 import { StatCard, InsightCard, Skeleton, EmptyState } from '../components/ui';
 import { format } from 'date-fns';
+import AddPropertyModal from '../components/property/AddPropertyModal';
 
 export default function DashboardPage() {
   const { user } = useUser();
@@ -12,6 +13,7 @@ export default function DashboardPage() {
   const [activity, setActivity] = useState<any>(null);
   const [insights, setInsights] = useState<AIInsight[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showAddProperty, setShowAddProperty] = useState(false);
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
@@ -42,9 +44,9 @@ export default function DashboardPage() {
             {summary?.billsDueSoon ? ` — ${summary.billsDueSoon} bill${summary.billsDueSoon === 1 ? '' : 's'} due this week` : ''}
           </p>
         </div>
-        <Link to="/properties/new" className="btn btn-primary text-xs">
+        <button onClick={() => setShowAddProperty(true)} className="btn btn-primary text-xs">
           + Add property
-        </Link>
+        </button>
       </div>
 
       <div className="px-6 py-5">
@@ -95,7 +97,7 @@ export default function DashboardPage() {
               <EmptyState icon="🏠" title="No properties yet" body="Add your first property to get started." />
             ) : (
               <div className="space-y-2">
-                {(activity?.upcomingBills || []).slice(0, 5).map((bill: any) => (
+                {(activity?.upcomingBills || []).map((bill: any) => (
                   <Link
                     key={bill.id}
                     to={`/properties/${bill.utilityAccount?.property?.id || ''}`}
@@ -143,6 +145,7 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+      {showAddProperty && <AddPropertyModal onClose={() => setShowAddProperty(false)} />}
     </div>
   );
 }

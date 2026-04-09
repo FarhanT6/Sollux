@@ -11,10 +11,10 @@ const PROVIDER_SLUGS: Record<string, string> = {
   'WM': 'wm',
   'Republic Services': 'republic-services',
   'Cox': 'cox',
+  'FPL': 'fpl',
   'Spectrum': 'spectrum',
   'T-Mobile': 'tmobile',
   'AT&T': 'att',
-  'FPL': 'fpl',
   'Brevard County Water': 'brevard-water',
   'Vista Irrigation District': 'vid',
   'City of Oceanside': 'city-oceanside',
@@ -26,6 +26,9 @@ const PROVIDER_SLUGS: Record<string, string> = {
   'Safeco Insurance': 'safeco',
   'Other': 'gmail-fallback',
 };
+
+// Providers with a live scraper (vs gmail-fallback only)
+const SCRAPER_SUPPORTED = new Set(['sdge', 'socal-gas', 'iid', 'wm', 'republic-services', 'cox', 'fpl']);
 
 interface Props {
   propertyId: string;
@@ -117,19 +120,26 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
 
           <Field label="Provider" required>
             <div className="grid grid-cols-3 gap-1.5 max-h-52 overflow-y-auto pr-1">
-              {Object.keys(PROVIDER_SLUGS).map(name => (
-                <button
-                  key={name}
-                  onClick={() => selectProvider(name)}
-                  className={`text-xs px-2 py-2 rounded-lg border text-left transition-colors ${
-                    form.providerName === name
-                      ? 'bg-amber-50 border-amber-300 text-amber-800 font-medium'
-                      : 'bg-white border-gray-200 text-gray-600 hover:border-gray-300'
-                  }`}
-                >
-                  {name}
-                </button>
-              ))}
+              {Object.keys(PROVIDER_SLUGS).map(name => {
+                const slug = PROVIDER_SLUGS[name];
+                const hasLiveScraper = SCRAPER_SUPPORTED.has(slug);
+                return (
+                  <button
+                    key={name}
+                    onClick={() => selectProvider(name)}
+                    className={`text-xs px-2 py-2 rounded-lg border text-left transition-colors relative ${
+                      form.providerName === name
+                        ? 'bg-amber-500/10 border-amber-500/30 text-amber-400 font-medium'
+                        : 'bg-white/5 border-white/10 text-gray-300 hover:border-white/20'
+                    }`}
+                  >
+                    {name}
+                    {hasLiveScraper && (
+                      <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-emerald-500" title="Auto-sync supported" />
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </Field>
 
@@ -141,13 +151,13 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
         </div>
       ) : (
         <div>
-          <div className="mb-4 p-3 bg-amber-50 border border-amber-100 rounded-lg">
-            <p className="text-xs font-medium text-amber-900">{form.providerName}</p>
-            <p className="text-xs text-amber-700">Your credentials are encrypted with AES-256 before storage and never logged.</p>
+          <div className="mb-4 p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+            <p className="text-xs font-medium text-amber-300">{form.providerName}</p>
+            <p className="text-xs text-amber-400">Your credentials are encrypted with AES-256 before storage and never logged.</p>
           </div>
 
           {/* Gmail option */}
-          <div className="mb-4 p-3 bg-gray-50 rounded-lg flex items-start gap-2">
+          <div className="mb-4 p-3 bg-white/5 rounded-lg flex items-start gap-2">
             <input
               type="checkbox"
               id="use-gmail"
@@ -155,7 +165,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
               onChange={e => set('useGmail', e.target.checked)}
               className="mt-0.5"
             />
-            <label htmlFor="use-gmail" className="text-xs text-gray-700 cursor-pointer">
+            <label htmlFor="use-gmail" className="text-xs text-gray-300 cursor-pointer">
               <span className="font-medium">Use Gmail instead</span> — Parse bills from your email automatically (no password needed)
             </label>
           </div>
@@ -185,12 +195,20 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
             </>
           )}
 
-          <Field label="Account number (optional)" htmlFor="acct">
+          <Field
+            label="Account number (optional)"
+            htmlFor="acct"
+            hint={
+              form.providerSlug === 'wm'
+                ? 'Enter full WM account number, e.g. 8-92846-35002 — used to match this property when one login has multiple service addresses'
+                : 'Enter the full account number from your bill — used to match this property when one login covers multiple accounts'
+            }
+          >
             <Input
               id="acct"
               value={form.accountNumber}
               onChange={e => set('accountNumber', e.target.value)}
-              placeholder="Last 4 digits shown for reference"
+              placeholder={form.providerSlug === 'wm' ? 'e.g. 8-92846-35002' : 'Full account number from your bill'}
             />
           </Field>
 

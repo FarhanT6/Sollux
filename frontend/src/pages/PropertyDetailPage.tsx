@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { getProperty, getStatements, getPayments, getInsights, syncUtility, markInsightRead, dismissInsight } from '../api/client';
+import { getProperty, getStatements, getPayments, getInsights, syncUtility, updateUtility, markInsightRead, dismissInsight } from '../api/client';
 import type { Property, Statement, Payment, AIInsight, UtilityAccount } from '../types';
 import { CATEGORY_LABELS, CATEGORY_COLORS } from '../types';
 import { PageHeader, StatCard, InsightCard, Skeleton, EmptyState, Pill } from '../components/ui';
 import { format } from 'date-fns';
+import AddUtilityModal from '../components/utility/AddUtilityModal';
+import StatementHistoryPanel from '../components/utility/StatementHistoryPanel';
 
 type Tab = 'utilities' | 'payments' | 'insights' | 'documents';
 
@@ -17,6 +19,7 @@ export default function PropertyDetailPage() {
   const [tab, setTab] = useState<Tab>('utilities');
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState<string | null>(null);
+  const [showAddUtility, setShowAddUtility] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -34,14 +37,29 @@ export default function PropertyDetailPage() {
   }, [id]);
 
   const accounts = property?.utilityAccounts || [];
-  const monthlyTotal = accounts.reduce((s, a) => s + Number(a.statements?.[0]?.amountDue ?? 0), 0);
+  const monthlyTotal = accounts.reduce((s, a) => {
+    const raw = a.statements?.[0]?.rawDataJson as Record<string, unknown> | undefined;
+    const bal = raw?.accountBalance as number | undefined;
+    return s + Number(bal ?? a.statements?.[0]?.amountDue ?? 0);
+  }, 0);
   const lastSynced = accounts.map(a => a.lastSyncedAt).filter(Boolean).sort().pop();
 
   async function handleSync(accountId: string) {
     setSyncing(accountId);
     try {
       await syncUtility(accountId);
-      setTimeout(() => setSyncing(null), 2000);
+      // Poll until the worker finishes (status leaves PENDING)
+      const poll = async () => {
+        const updated = await getProperty(id!);
+        setProperty(updated);
+        const acct = updated.utilityAccounts?.find((a: UtilityAccount) => a.id === accountId);
+        if (acct?.lastSyncStatus === 'PENDING' || acct?.lastSyncStatus === null) {
+          setTimeout(poll, 2000);
+        } else {
+          setSyncing(null);
+        }
+      };
+      setTimeout(poll, 2000);
     } catch { setSyncing(null); }
   }
 
@@ -117,17 +135,21 @@ export default function PropertyDetailPage() {
         {/* ── Utilities tab ─────────────────────────────── */}
         {tab === 'utilities' && (
           <>
-            <p className="section-label mb-3">Active utility accounts</p>
+            <div className="flex items-center justify-between mb-3">
+              <p className="section-label">Active utility accounts</p>
+              <button onClick={() => setShowAddUtility(true)} className="btn btn-primary text-xs">+ Add utility</button>
+            </div>
             {accounts.length === 0 ? (
               <EmptyState icon="⚡" title="No utility accounts" body="Add a utility account to start tracking bills for this property." />
             ) : (
               <div className="grid grid-cols-2 gap-3">
                 {accounts.map(account => (
-                  <UtilityAccountCard
+                  <UtilityAccountCardWithHistory
                     key={account.id}
                     account={account}
                     syncing={syncing === account.id}
                     onSync={() => handleSync(account.id)}
+                    onRefresh={() => getProperty(id!).then(setProperty)}
                   />
                 ))}
               </div>
@@ -222,13 +244,115 @@ export default function PropertyDetailPage() {
         )}
 
       </div>
+      {showAddUtility && <AddUtilityModal propertyId={property.id} onClose={() => setShowAddUtility(false)} onSuccess={() => { getProperty(id!).then(setProperty); }} />}
+    </div>
+  );
+}
+
+function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccount; onClose: () => void; onSaved: () => void }) {
+  const [form, setForm] = useState({ accountNumber: '', username: '', password: '' });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  async function handleSave() {
+    setLoading(true); setError('');
+    try {
+      const patch: Record<string, string> = {};
+      if (form.accountNumber.trim()) patch.accountNumber = form.accountNumber.trim();
+      if (form.username.trim()) patch.username = form.username.trim();
+      if (form.password.trim()) patch.password = form.password.trim();
+      if (Object.keys(patch).length === 0) { onClose(); return; }
+      await updateUtility(account.id, patch);
+      onSaved();
+      onClose();
+    } catch (err: any) {
+      setError(err?.response?.data?.error || 'Failed to update');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+      <div className="w-full max-w-sm rounded-2xl p-6 space-y-4" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.08)' }} onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-white">Edit {account.providerName}</h3>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-lg leading-none">×</button>
+        </div>
+        <p className="text-xs text-gray-500">Leave a field blank to keep the existing value.</p>
+
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">
+              Account number
+              {account.providerSlug === 'wm' && <span className="text-gray-600 ml-1">(e.g. 8-92846-35002)</span>}
+            </label>
+            <input
+              className="w-full rounded-lg px-3 py-2 text-sm text-white bg-white/5 border border-white/10 focus:border-amber-500/50 outline-none"
+              placeholder={account.accountNumber || 'Full account number from your bill'}
+              value={form.accountNumber}
+              onChange={e => setForm(f => ({ ...f, accountNumber: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Username / Email</label>
+            <input
+              className="w-full rounded-lg px-3 py-2 text-sm text-white bg-white/5 border border-white/10 focus:border-amber-500/50 outline-none"
+              placeholder="New username or email"
+              value={form.username}
+              onChange={e => setForm(f => ({ ...f, username: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Password</label>
+            <input
+              type="password"
+              className="w-full rounded-lg px-3 py-2 text-sm text-white bg-white/5 border border-white/10 focus:border-amber-500/50 outline-none"
+              placeholder="New password"
+              value={form.password}
+              onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
+            />
+          </div>
+        </div>
+
+        {error && <p className="text-xs text-red-400">{error}</p>}
+
+        <div className="flex gap-2 pt-1">
+          <button className="btn text-xs flex-1" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary text-xs flex-1" onClick={handleSave} disabled={loading}>
+            {loading ? 'Saving…' : 'Save changes'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UtilityAccountCardWithHistory({
+  account, syncing, onSync, onRefresh
+}: { account: UtilityAccount; syncing: boolean; onSync: () => void; onRefresh: () => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const [editing, setEditing] = useState(false);
+
+  return (
+    <div>
+      {editing && <EditUtilityModal account={account} onClose={() => setEditing(false)} onSaved={onRefresh} />}
+      <UtilityAccountCard account={account} syncing={syncing} onSync={onSync} onEdit={() => setEditing(true)} />
+      <button
+        onClick={() => setExpanded(v => !v)}
+        className="mt-1.5 ml-1 text-xs text-gray-500 hover:text-gray-300 transition-colors flex items-center gap-1"
+      >
+        <span style={{ display: 'inline-block', transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.15s' }}>›</span>
+        {expanded ? 'Hide statement history' : 'View statement history'}
+      </button>
+      {expanded && <StatementHistoryPanel utilityAccountId={account.id} />}
     </div>
   );
 }
 
 function UtilityAccountCard({
-  account, syncing, onSync
-}: { account: UtilityAccount; syncing: boolean; onSync: () => void }) {
+  account, syncing, onSync, onEdit
+}: { account: UtilityAccount; syncing: boolean; onSync: () => void; onEdit: () => void }) {
   const latest = account.statements?.[0];
   const dueDate = latest?.dueDate ? new Date(latest.dueDate) : null;
   const isDueSoon = dueDate && dueDate <= new Date(Date.now() + 7 * 86400000);
@@ -248,7 +372,16 @@ function UtilityAccountCard({
         <div className="flex items-center gap-2.5">
           <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: color }} />
           <div>
-            <p className="text-sm font-semibold text-white">{account.providerName}</p>
+            <div className="flex items-center gap-1.5">
+              <p className="text-sm font-semibold text-white">{account.providerName}</p>
+              <button
+                onClick={onEdit}
+                title="Edit account"
+                className="px-1.5 py-0.5 rounded text-xs text-gray-400 hover:text-white hover:bg-white/10 transition-colors leading-none border border-white/10 hover:border-white/20"
+              >
+                Edit
+              </button>
+            </div>
             <p className="text-xs font-mono text-gray-400">{account.accountNumber || 'No account #'}</p>
           </div>
         </div>
@@ -259,17 +392,43 @@ function UtilityAccountCard({
 
       <div className="flex items-end justify-between">
         <div>
-          <p className="text-xl font-semibold text-white">
-            {latest?.amountDue ? `$${Number(latest.amountDue).toFixed(2)}` : '—'}
-          </p>
-          <p className="text-xs text-gray-400 mt-0.5">
-            {dueDate ? `Due ${format(dueDate, 'MMM d')}` : 'No statement yet'}
-          </p>
-          {latest?.usageValue && (
-            <p className="text-xs text-gray-400">
-              {latest.usageValue} {latest.usageUnit}
-            </p>
-          )}
+          {(() => {
+            const raw = latest?.rawDataJson as Record<string, unknown> | undefined;
+            const accountBalance = raw?.accountBalance as number | undefined;
+
+            // Primary: total balance owed (from overview), fallback to statement amount
+            const displayAmt = accountBalance ?? latest?.amountDue;
+            // Current charge: this period's full charge (service + any overages/incidentals)
+            // Use statement.amountDue which is the total new charges for the period
+            const currentCharge = latest?.amountDue;
+            // Only show current charge separately if it differs from the primary balance
+            // (i.e. there's past due rolled in, making the balance higher than this month's charge)
+            const showCurrentCharge = currentCharge != null &&
+              displayAmt != null &&
+              Math.abs(displayAmt - currentCharge) > 0.01;
+            const fmt = (n: number) => `$${Number(n).toFixed(2)}`;
+
+            return (
+              <>
+                <p className="text-xl font-semibold text-white">
+                  {displayAmt ? fmt(displayAmt) : '—'}
+                </p>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  {dueDate ? `Due ${format(dueDate, 'MMM d')}` : 'No statement yet'}
+                </p>
+                {showCurrentCharge && (
+                  <p className="text-xs text-gray-500 mt-1">
+                    Current charge: <span className="text-gray-300">{fmt(currentCharge!)}</span>
+                  </p>
+                )}
+                {latest?.usageValue && (
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    {latest.usageValue} {latest.usageUnit}
+                  </p>
+                )}
+              </>
+            );
+          })()}
         </div>
         <button
           onClick={onSync}
@@ -280,7 +439,19 @@ function UtilityAccountCard({
         </button>
       </div>
 
-      {account.lastSyncedAt && (
+      {/* MFA required banner */}
+      {account.lastSyncStatus === 'FAILED' && account.lastSyncError?.startsWith('MFA_REQUIRED') && (
+        <div className="mt-3 px-3 py-2 rounded-lg text-xs space-y-1"
+          style={{ background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.25)' }}>
+          <p className="font-medium text-amber-400">Phone verification required</p>
+          <p className="text-gray-400">
+            Log in to <span className="text-gray-200">{account.providerName}</span> manually in your browser,
+            complete the verification code step, then click Sync — Sollux will reuse the trusted session automatically.
+          </p>
+        </div>
+      )}
+
+      {account.lastSyncedAt && account.lastSyncStatus !== 'FAILED' && (
         <p className="text-xs text-gray-300 mt-2">
           Last synced {format(new Date(account.lastSyncedAt), 'MMM d \'at\' h:mm a')}
         </p>

@@ -65,6 +65,9 @@ export interface Statement {
   ratePlan?: string;
   pdfS3Key?: string;
   createdAt: string;
+  // rawDataJson carries provider-specific fields:
+  // pastDue, currentCharges, accountName, accountNumber, serviceAddress
+  rawDataJson?: Record<string, unknown>;
   utilityAccount?: Pick<UtilityAccount, 'providerName' | 'category'> & {
     property?: Pick<Property, 'address' | 'nickname'>;
   };

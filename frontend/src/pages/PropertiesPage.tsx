@@ -4,6 +4,7 @@ import { getProperties } from '../api/client';
 import type { Property } from '../types';
 import { PageHeader, StatCard, Skeleton, EmptyState, Pill } from '../components/ui';
 import { PROPERTY_TYPE_LABELS, CATEGORY_COLORS } from '../types';
+import AddPropertyModal from '../components/property/AddPropertyModal';
 
 const TYPE_COLORS: Record<string, string> = {
   PRIMARY: 'bg-amber-500/10', RENTAL: 'bg-emerald-500/10',
@@ -22,9 +23,14 @@ export default function PropertiesPage() {
   const [properties, setProperties] = useState<Property[]>([]);
   const [filter, setFilter] = useState('all');
   const [loading, setLoading] = useState(true);
+  const [showAddProperty, setShowAddProperty] = useState(false);
+
+  function loadProperties() {
+    return getProperties().then(setProperties);
+  }
 
   useEffect(() => {
-    getProperties().then(setProperties).finally(() => setLoading(false));
+    loadProperties().finally(() => setLoading(false));
   }, []);
 
   const filtered = filter === 'all' ? properties : properties.filter(p => p.type === filter);
@@ -42,7 +48,7 @@ export default function PropertiesPage() {
         title="All properties"
         subtitle={`${properties.length} properties · ${totalAccounts} utility accounts`}
         action={
-          <Link to="/properties/new" className="btn btn-primary text-xs">+ Add property</Link>
+          <button onClick={() => setShowAddProperty(true)} className="btn btn-primary text-xs">+ Add property</button>
         }
       />
 
@@ -92,6 +98,7 @@ export default function PropertiesPage() {
           </div>
         )}
       </div>
+      {showAddProperty && <AddPropertyModal onClose={() => { setShowAddProperty(false); loadProperties(); }} />}
     </div>
   );
 }

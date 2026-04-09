@@ -30,10 +30,18 @@ function getOAuthClient(accessToken: string, refreshToken: string) {
  * Searches the last 30 days for emails from known utility senders.
  */
 export async function parseGmailForUser(userId: string): Promise<void> {
-  const tokenRecord = await db.gmailToken.findUnique({ where: { userId } });
-  if (!tokenRecord) return;
+  // Support multiple Gmail accounts per user
+  const tokenRecords = await db.gmailToken.findMany({ where: { userId } });
+  if (!tokenRecords.length) return;
 
-  const auth = getOAuthClient(tokenRecord.accessToken, tokenRecord.refreshToken);
+  for (const tokenRecord of tokenRecords) {
+    console.log(`[GmailParser] Scanning account: ${tokenRecord.email}`);
+    await parseGmailAccount(userId, tokenRecord.accessToken, tokenRecord.refreshToken);
+  }
+}
+
+async function parseGmailAccount(userId: string, accessToken: string, refreshToken: string): Promise<void> {
+  const auth = getOAuthClient(accessToken, refreshToken);
   const gmail = google.gmail({ version: 'v1', auth });
 
   // Build search query for utility senders
@@ -70,8 +78,50 @@ async function processEmailMessage(gmail: any, userId: string, messageId: string
   const subject = headers.find((h: any) => h.name === 'Subject')?.value || '';
   const date = headers.find((h: any) => h.name === 'Date')?.value || '';
 
-  // Find PDF attachments
+  // Match sender to a provider slug
+  const senderToSlug: Record<string, string> = {
+    'sdge.com': 'sdge',
+    'socalgas.com': 'socal-gas',
+    'wm.com': 'wm',
+    'cox.com': 'cox',
+    'fpl.com': 'fpl',
+    'iid.com': 'iid',
+    'republicservices.com': 'republic-services',
+    'tmobile.com': 'tmobile',
+    'att.com': 'att',
+    'spectrum.com': 'spectrum',
+  };
+
+  const matchedSlug = Object.entries(senderToSlug).find(([domain]) => from.includes(domain))?.[1];
+  if (!matchedSlug) return; // skip unknown senders
+
+  // Find utility account for this user + provider
+  const account = await db.utilityAccount.findFirst({
+    where: {
+      providerSlug: matchedSlug,
+      property: { userId },
+    },
+  });
+
+  if (!account) {
+    console.log(`[GmailParser] No account found for slug ${matchedSlug}, userId ${userId}`);
+    return;
+  }
+
+  // Derive statement date from email date header
+  const statementDate = date ? new Date(date) : new Date();
+  if (isNaN(statementDate.getTime())) return;
+
+  // Avoid duplicate statements
+  const existing = await db.statement.findFirst({
+    where: { utilityAccountId: account.id, statementDate },
+  });
+  if (existing) return;
+
+  // Find PDF attachments and extract billing data
   const parts = message.data.payload?.parts || [];
+  let extractedData: Record<string, any> = {};
+
   for (const part of parts) {
     if (part.mimeType === 'application/pdf' && part.body?.attachmentId) {
       const attachment = await gmail.users.messages.attachments.get({
@@ -82,8 +132,6 @@ async function processEmailMessage(gmail: any, userId: string, messageId: string
 
       const pdfBuffer = Buffer.from(attachment.data.data, 'base64');
 
-      // Extract text from PDF
-      let extractedData: Record<string, any> = {};
       try {
         const parsed = await pdf(pdfBuffer);
         extractedData = extractBillingData(parsed.text, from);
@@ -91,13 +139,27 @@ async function processEmailMessage(gmail: any, userId: string, messageId: string
         console.error('[GmailParser] PDF parse error:', pdfErr);
       }
 
-      console.log(`[GmailParser] Extracted from ${from}: amount=${extractedData.amountDue}, due=${extractedData.dueDate}`);
-
-      // TODO: Match to a utility account and create/update statement record
-      // This requires matching the sender to a user's utility accounts
-      // For now, log the extracted data for manual verification
+      // Use data from the first successfully parsed PDF
+      if (extractedData.amountDue !== undefined) break;
     }
   }
+
+  console.log(`[GmailParser] Extracted from ${from}: amount=${extractedData.amountDue}, due=${extractedData.dueDate}`);
+
+  // Save statement
+  await db.statement.create({
+    data: {
+      utilityAccountId: account.id,
+      statementDate,
+      dueDate: extractedData.dueDate,
+      amountDue: extractedData.amountDue,
+      usageValue: extractedData.usageValue,
+      usageUnit: extractedData.usageUnit,
+      sourceType: 'EMAIL',
+      rawDataJson: { from, subject, extractedData } as any,
+    },
+  });
+  console.log(`[GmailParser] Saved statement for ${account.providerName}: $${extractedData.amountDue}`);
 }
 
 /**
