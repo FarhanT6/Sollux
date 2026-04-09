@@ -86,7 +86,7 @@ router.post('/', async (req, res, next) => {
     // Queue initial scrape
     await scrapeQueue.add('scrape', { utilityAccountId: account.id }, {
       attempts: 3,
-      backoff: { type: 'exponential', delay: 5000 },
+      backoff: { type: 'exponential', delay: 120000 },
     });
 
     res.status(201).json(account);
@@ -108,7 +108,7 @@ router.post('/:id/sync', async (req, res, next) => {
 
     const job = await scrapeQueue.add('scrape', { utilityAccountId: account.id }, {
       attempts: 3,
-      backoff: { type: 'exponential', delay: 5000 },
+      backoff: { type: 'exponential', delay: 120000 },
     });
 
     res.json({ jobId: job.id, message: 'Sync queued' });

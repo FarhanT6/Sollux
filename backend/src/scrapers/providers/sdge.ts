@@ -37,6 +37,10 @@ export class SDGEScraper extends BaseScraperProvider {
       }
 
       const currentUrl = this.page!.url();
+
+      // Check for MFA / phone verification screen before declaring success
+      await this.throwIfMfaRequired();
+
       const success = /dashboard|account/i.test(currentUrl) && !/login|sign-in/i.test(currentUrl);
 
       if (!success) {

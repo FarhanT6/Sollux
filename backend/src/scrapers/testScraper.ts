@@ -3,7 +3,7 @@
  *   npx tsx src/scrapers/testScraper.ts sdge username password
  */
 import 'dotenv/config';
-import { getScraperProvider } from './base';
+import { getScraperProvider } from './registry';
 
 const [,, slug, username, password, accountNumber] = process.argv;
 

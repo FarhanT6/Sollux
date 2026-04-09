@@ -25,7 +25,14 @@ const PORT = process.env.PORT || 3001;
 app.use(clerkMiddleware());
 app.use(helmet());
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  origin: (origin, callback) => {
+    // Allow any localhost port in development, or the configured FRONTEND_URL
+    if (!origin || origin.startsWith('http://localhost:') || origin === process.env.FRONTEND_URL) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
 }));
 

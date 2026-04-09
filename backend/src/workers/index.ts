@@ -4,26 +4,43 @@ import './insightWorker';
 import './gmailWorker';
 import { scrapeQueue, insightQueue } from './queues';
 import { db } from '../config/db';
+import { decrypt } from '../crypto/encrypt';
 
 console.log('🔧 Sollux Workers started');
 
 // ── Scheduled Jobs ────────────────────────────────────────
-// Run all scrapes every 6 hours
+// Run all scrapes every 6 hours.
+// Accounts that share the same provider + login are grouped — only ONE job is
+// queued per credential group. The worker logs in once and handles all of them.
 async function scheduleAllScrapes() {
   const accounts = await db.utilityAccount.findMany({
     where: { syncEnabled: true },
-    select: { id: true },
+    include: { property: { select: { userId: true } } },
   });
 
-  console.log(`[Scheduler] Queuing ${accounts.length} scrape jobs`);
+  // Build credential groups: key = userId:providerSlug:username
+  const seen = new Set<string>();
+  const toQueue: string[] = [];
 
-  for (const account of accounts) {
+  for (const acct of accounts) {
+    let username = '';
+    try { username = acct.usernameEnc ? decrypt(acct.usernameEnc) : ''; } catch { /* skip */ }
+    const groupKey = `${acct.property.userId}:${acct.providerSlug}:${username}`;
+    if (!seen.has(groupKey)) {
+      seen.add(groupKey);
+      toQueue.push(acct.id); // one representative per credential group
+    }
+  }
+
+  console.log(`[Scheduler] Queuing ${toQueue.length} scrape job(s) (${accounts.length} accounts, deduped by login)`);
+
+  for (const accountId of toQueue) {
     await scrapeQueue.add(
       'scrape',
-      { utilityAccountId: account.id },
+      { utilityAccountId: accountId },
       {
         attempts: 3,
-        backoff: { type: 'exponential', delay: 10000 },
+        backoff: { type: 'exponential', delay: 120000 },
         removeOnComplete: { count: 100 },
         removeOnFail: { count: 50 },
       }

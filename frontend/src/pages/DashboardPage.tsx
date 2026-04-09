@@ -97,7 +97,7 @@ export default function DashboardPage() {
               <EmptyState icon="🏠" title="No properties yet" body="Add your first property to get started." />
             ) : (
               <div className="space-y-2">
-                {(activity?.upcomingBills || []).slice(0, 5).map((bill: any) => (
+                {(activity?.upcomingBills || []).map((bill: any) => (
                   <Link
                     key={bill.id}
                     to={`/properties/${bill.utilityAccount?.property?.id || ''}`}
