@@ -1,7 +1,7 @@
 /**
  * Cox Communications scraper
  * Login:   https://www.cox.com/content/dam/cox/okta/signin.html (Okta-based)
- * Billing: https://www.cox.com/resaccount/viewbill.html
+ * Billing: https://www.cox.com/ibill/home.html
  */
 import { BaseScraperProvider, ScraperCredentials, ScrapedStatement, ScrapedPayment } from '../base';
 import * as path from 'path';
@@ -13,13 +13,7 @@ export class CoxScraper extends BaseScraperProvider {
   // Okta-based login that redirects to Cox's "Welcome back" page with User ID field
   private readonly LOGIN_URL = 'https://www.cox.com/content/dam/cox/okta/signin.html';
 
-  // Candidate billing URLs — try in order until one loads billing data
-  private readonly BILLING_URLS = [
-    'https://www.cox.com/resaccount/viewbill.html',
-    'https://www.cox.com/resaccount/billing.html',
-    'https://www.cox.com/residential/account/billing.html',
-    'https://www.cox.com/residential/billing.html',
-  ];
+  private readonly BILLING_URL = 'https://www.cox.com/ibill/home.html';
 
   async login(credentials: ScraperCredentials): Promise<boolean> {
     try {
@@ -83,7 +77,7 @@ export class CoxScraper extends BaseScraperProvider {
       // Wait up to 30s for navigation away from the Okta signin page
       try {
         await this.page!.waitForURL(
-          url => !url.includes('content/dam/cox/okta/signin'),
+          url => !url.toString().includes('content/dam/cox/okta/signin'),
           { timeout: 30000 }
         );
       } catch { /* timed out — page may still be on login */ }
@@ -96,12 +90,12 @@ export class CoxScraper extends BaseScraperProvider {
       if (url.includes('intercept')) {
         console.log('[Cox] On intercept page, waiting for redirect...');
         try {
-          await this.page!.waitForURL(u => !u.includes('intercept'), { timeout: 15000 });
+          await this.page!.waitForURL(u => !u.toString().includes('intercept'), { timeout: 15000 });
         } catch {
           const continueBtn = await this.page!.$('button:has-text("Continue"), a:has-text("Continue"), button[type="submit"]');
           if (continueBtn) {
             await continueBtn.click();
-            await this.page!.waitForURL(u => !u.includes('intercept'), { timeout: 10000 }).catch(() => {});
+            await this.page!.waitForURL(u => !u.toString().includes('intercept'), { timeout: 10000 }).catch(() => {});
           }
         }
         url = this.page!.url();
@@ -145,125 +139,175 @@ export class CoxScraper extends BaseScraperProvider {
   async scrapeStatements(): Promise<ScrapedStatement[]> {
     const statements: ScrapedStatement[] = [];
     try {
-      // Try each billing URL until we find one with billing data
-      let found = false;
-      for (const billingUrl of this.BILLING_URLS) {
-        console.log(`[Cox] Trying billing URL: ${billingUrl}`);
-        await this.page!.goto(billingUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      // Navigate directly to the real Cox billing page
+      console.log(`[Cox] Navigating to billing page: ${this.BILLING_URL}`);
+      await this.page!.goto(this.BILLING_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await this.page!.waitForTimeout(4000);
+      await this.screenshot('cox-billing-ibill');
 
-        // Wait for React/SPA to render billing content
-        await this.page!.waitForTimeout(4000);
-        await this.screenshot(`cox-billing-${billingUrl.split('/').pop()}`);
-
-        // Check if this page has billing data
-        const hasBilling = await this.page!.evaluate(() => {
-          const text = document.body.innerText || '';
-          return /bill|statement|amount due|balance/i.test(text) &&
-            /\$[\d,]+\.\d{2}/.test(text);
-        });
-
-        if (hasBilling) {
-          console.log(`[Cox] Found billing content at ${billingUrl}`);
-          found = true;
-          break;
-        }
-
-        // Also try clicking a billing nav link if present
-        const navClicked = await this.page!.evaluate(() => {
-          const link = Array.from(document.querySelectorAll('a, button'))
-            .find(el => /bill|statement|payment/i.test(el.textContent || ''));
-          if (link) { (link as HTMLElement).click(); return true; }
-          return false;
-        });
-
-        if (navClicked) {
-          await this.page!.waitForTimeout(3000);
-          const hasBillingAfterNav = await this.page!.evaluate(() =>
-            /\$[\d,]+\.\d{2}/.test(document.body.innerText || '')
-          );
-          if (hasBillingAfterNav) { found = true; break; }
-        }
-      }
-
-      if (!found) {
-        console.warn('[Cox] Could not find billing page — dumping page text for debugging');
-        const pageText = await this.page!.evaluate(() => document.body.innerText?.slice(0, 500));
-        console.log('[Cox] Page text:', pageText);
-        await this.screenshot('cox-billing-notfound');
+      // Verify we landed on a valid billing page (not 404)
+      const is404 = await this.page!.evaluate(() =>
+        /404|can't find that page|page not found/i.test(document.body.innerText || '')
+      );
+      if (is404) {
+        console.error('[Cox] ibill/home.html returned 404 — dumping URL for debug');
+        console.log('[Cox] Current URL:', this.page!.url());
+        await this.screenshot('cox-billing-404');
         return [];
       }
 
-      // Wait a bit more for any lazy-loaded history rows
-      await this.page!.waitForTimeout(2000);
+      // ── Step 1: Scrape the current bill summary from ibill/home.html ──────
+      // The page shows: Total balance ($252), due date (April 16), due immediately ($132)
+      // and a "Bill summary" table with per-statement rows and "view PDF" links.
+      const ibillData = await this.page!.evaluate(() => {
+        const txt = (el: Element | null) => el?.textContent?.trim() || '';
 
-      const rows = await this.page!.evaluate(() => {
-        type Row = { text: string; cells: string[]; pdfHref?: string };
-        const results: Row[] = [];
+        // Total balance
+        const balanceEl = document.querySelector('.total-balance, [class*="total-balance"], [class*="totalBalance"]');
+        let totalBalance: string | null = null;
+        let dueDate: string | null = null;
+        let dueImmediately: string | null = null;
 
-        // 1. Standard table rows
-        const tableRows = Array.from(document.querySelectorAll('table tr')).slice(1);
-        for (const row of tableRows) {
-          const text = row.textContent?.trim() || '';
-          if (!/\$[\d,]+\.\d{2}/.test(text)) continue;
-          const cells = Array.from(row.querySelectorAll('td')).map(td => td.textContent?.trim() || '');
-          const pdfHref = (row.querySelector('a[href*=".pdf"], a[href*="bill"], a[href*="statement"]') as HTMLAnchorElement | null)?.href;
-          results.push({ text, cells, pdfHref });
+        // Scan all text nodes for the key amounts — ibill uses its own CSS classes
+        const allText = document.body.innerText || '';
+
+        // "Total balance due April 16" pattern
+        const dueDateM = allText.match(/Total balance due\s+(\w+ \d+)/i);
+        if (dueDateM) dueDate = dueDateM[1];
+
+        // First large dollar on page is usually total balance
+        const dollarMatches = [...allText.matchAll(/\$([\d,]+\.\d{2})/g)];
+        if (dollarMatches[0]) totalBalance = dollarMatches[0][1];
+        // "Due immediately: $132.00"
+        const dueImmM = allText.match(/Due immediately[:\s]+\$([\d,]+\.\d{2})/i);
+        if (dueImmM) dueImmediately = dueImmM[1];
+
+        // Bill summary table — each column header is a statement date (e.g. "Feb 26", "Mar 26")
+        // Each has a "view PDF" link
+        type BillEntry = { date: string; pdfHref?: string };
+        const billEntries: BillEntry[] = [];
+
+        // Look for "view PDF" links — they're typically <a> elements near date text
+        const pdfLinks = Array.from(document.querySelectorAll('a')) as HTMLAnchorElement[];
+        for (const link of pdfLinks) {
+          const linkText = link.textContent?.trim().toLowerCase() || '';
+          if (!linkText.includes('pdf') && !linkText.includes('view pdf')) continue;
+          // Walk up to find the nearest date text
+          let el: Element | null = link;
+          let dateText = '';
+          for (let i = 0; i < 5 && el; i++) {
+            const t = el.textContent || '';
+            const dm = t.match(/(\w{3}\s+\d{1,2}(?:,?\s*\d{4})?)/);
+            if (dm) { dateText = dm[1]; break; }
+            el = el.parentElement;
+          }
+          billEntries.push({ date: dateText || '', pdfHref: link.href || undefined });
         }
 
-        // 2. React/component-based rows
-        if (results.length === 0) {
-          const candidates = Array.from(document.querySelectorAll(
-            '[class*="bill" i], [class*="statement" i], [class*="invoice" i], [class*="history" i], [class*="payment" i]'
-          ));
-          for (const el of candidates) {
-            const text = el.textContent?.trim() || '';
-            if (!/\$[\d,]+\.\d{2}/.test(text)) continue;
-            if (!/\d{1,2}\/\d{1,2}\/\d{2,4}|\w{3}\s+\d{1,2},?\s+\d{4}/.test(text)) continue;
-            if (el.children.length > 8) continue; // skip big containers
-            const cells = Array.from(el.querySelectorAll('span, div, td, li'))
-              .map(c => c.textContent?.trim() || '').filter(Boolean);
-            const pdfHref = (el.querySelector('a[href*=".pdf"]') as HTMLAnchorElement | null)?.href;
-            results.push({ text, cells, pdfHref });
+        // Also check table header cells for dates paired with PDF links
+        if (billEntries.length === 0) {
+          const ths = Array.from(document.querySelectorAll('th, td'));
+          for (const th of ths) {
+            const t = th.textContent?.trim() || '';
+            const dm = t.match(/^(\w{3}\s+\d{1,2})$/);
+            if (!dm) continue;
+            const pdfLink = th.querySelector('a') as HTMLAnchorElement | null;
+            billEntries.push({ date: dm[1], pdfHref: pdfLink?.href });
           }
         }
 
-        // 3. Broad text scan — pull any line that looks like a billing row
-        if (results.length === 0) {
-          const allText = document.body.innerText || '';
-          const lines = allText.split('\n').map(l => l.trim()).filter(Boolean);
-          for (const line of lines) {
-            if (/\$[\d,]+\.\d{2}/.test(line) && /\d{1,2}\/\d{1,2}\/\d{2,4}/.test(line)) {
-              results.push({ text: line, cells: line.split(/\s{2,}|\t/) });
-            }
-          }
-        }
-
-        return results.slice(0, 24);
+        return { totalBalance, dueDate, dueImmediately, billEntries, rawText: allText.slice(0, 800) };
       });
 
-      console.log(`[Cox] Found ${rows.length} billing rows`);
+      console.log('[Cox] ibill data:', JSON.stringify({ ...ibillData, rawText: ibillData.rawText.slice(0, 200) }));
 
-      for (const row of rows) {
-        const text = row.text;
-        const dates = [...text.matchAll(/(\d{1,2}\/\d{1,2}\/\d{2,4})/g)].map(m => m[1]);
-        const statementDate = this.parseDate(dates[0] || null);
-        if (!statementDate) continue;
+      // ── Step 2: Navigate to "View statements" for full history ─────────────
+      // Click the "View statements" link on ibill/home.html
+      const viewStatementsClicked = await this.page!.evaluate(() => {
+        const link = Array.from(document.querySelectorAll('a'))
+          .find(a => /view\s+statements?/i.test(a.textContent || ''));
+        if (link) { (link as HTMLAnchorElement).click(); return true; }
+        return false;
+      });
 
-        const amountDue = this.parseDollarFromText(text);
-        const dueDate = this.parseDate(dates[1] || null);
+      let historyRows: Array<{ date: string; amount: string; pdfHref?: string }> = [];
 
-        let pdfBuffer: Buffer | undefined;
-        if (row.pdfHref) {
-          pdfBuffer = await this.downloadPdf(row.pdfHref);
+      if (viewStatementsClicked) {
+        await this.page!.waitForTimeout(4000);
+        await this.screenshot('cox-view-statements');
+        console.log('[Cox] View statements URL:', this.page!.url());
+
+        historyRows = await this.page!.evaluate(() => {
+          type HRow = { date: string; amount: string; pdfHref?: string };
+          const results: HRow[] = [];
+          // Table rows with date + amount + optional PDF link
+          const rows = Array.from(document.querySelectorAll('table tr, [class*="statement" i], [class*="history" i]'));
+          for (const row of rows) {
+            const text = row.textContent?.trim() || '';
+            if (!/\$[\d,]+\.\d{2}/.test(text)) continue;
+            const dateM = text.match(/(\w{3}\s+\d{1,2},?\s*\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})/);
+            const amtM = text.match(/\$([\d,]+\.\d{2})/);
+            if (!dateM || !amtM) continue;
+            const pdfHref = (row.querySelector('a[href*=".pdf"], a:has-text("PDF"), a:has-text("pdf")') as HTMLAnchorElement | null)?.href;
+            results.push({ date: dateM[1], amount: amtM[1], pdfHref });
+          }
+          return results.slice(0, 24);
+        });
+        console.log(`[Cox] History rows found: ${historyRows.length}`);
+      }
+
+      // ── Step 3: Build statements ───────────────────────────────────────────
+      if (historyRows.length > 0) {
+        // Use full statement history
+        for (const row of historyRows) {
+          const statementDate = this.parseDate(row.date);
+          if (!statementDate) continue;
+          const amountDue = parseFloat(row.amount.replace(/,/g, ''));
+          let pdfBuffer: Buffer | undefined;
+          if (row.pdfHref) pdfBuffer = await this.downloadPdf(row.pdfHref);
+          statements.push({
+            statementDate,
+            amountDue,
+            pdfBuffer,
+            pdfFilename: row.pdfHref ? `cox_${statementDate.toISOString().slice(0, 10)}.pdf` : undefined,
+          });
+        }
+      } else {
+        // Fall back: use bill summary PDF links from ibill/home.html + current balance
+        for (const entry of ibillData.billEntries) {
+          const statementDate = this.parseDate(entry.date + ' 2025') || this.parseDate(entry.date);
+          if (!statementDate) continue;
+          let pdfBuffer: Buffer | undefined;
+          if (entry.pdfHref) pdfBuffer = await this.downloadPdf(entry.pdfHref);
+          statements.push({
+            statementDate,
+            pdfBuffer,
+            pdfFilename: entry.pdfHref ? `cox_${statementDate.toISOString().slice(0, 10)}.pdf` : undefined,
+          });
         }
 
-        statements.push({
-          statementDate,
-          dueDate,
-          amountDue,
-          pdfBuffer,
-          pdfFilename: row.pdfHref ? `cox_${statementDate.toISOString().slice(0, 10)}.pdf` : undefined,
-        });
+        // If we got nothing from PDF links, at minimum save the current bill
+        if (statements.length === 0 && ibillData.totalBalance) {
+          const totalBalance = parseFloat(ibillData.totalBalance.replace(/,/g, ''));
+          const dueImmediately = ibillData.dueImmediately
+            ? parseFloat(ibillData.dueImmediately.replace(/,/g, ''))
+            : undefined;
+          // Current month charge = total balance - past due
+          const currentCharge = dueImmediately != null
+            ? Math.max(0, Math.round((totalBalance - dueImmediately) * 100) / 100)
+            : totalBalance;
+          const dueDate = ibillData.dueDate ? this.parseDate(ibillData.dueDate + ' 2025') : undefined;
+          statements.push({
+            statementDate: new Date(),
+            dueDate: dueDate ?? undefined,
+            amountDue: currentCharge,
+            rawData: {
+              accountBalance: totalBalance,
+              pastDue: dueImmediately,
+              currentCharge,
+            },
+          });
+        }
       }
     } catch (err) {
       console.error('[Cox] Statement scraping error:', err instanceof Error ? err.message : err);
