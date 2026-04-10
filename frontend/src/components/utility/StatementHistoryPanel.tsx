@@ -33,8 +33,8 @@ export default function StatementHistoryPanel({ utilityAccountId }: Props) {
   // ── Mini stats ──────────────────────────────────────────
   const latest = rows[0];
   const prev = rows[1];
-  const latestAmt = latest?.amountDue ?? null;
-  const prevAmt = prev?.amountDue ?? null;
+  const latestAmt = latest?.amountDue != null ? Number(latest.amountDue) : null;
+  const prevAmt = prev?.amountDue != null ? Number(prev.amountDue) : null;
 
   let momLabel = '—';
   let momColor: 'green' | 'red' | undefined;
@@ -48,7 +48,7 @@ export default function StatementHistoryPanel({ utilityAccountId }: Props) {
   const currentYear = new Date().getFullYear();
   const ytd = rows
     .filter(r => new Date(r.statementDate).getFullYear() === currentYear)
-    .reduce((sum, r) => sum + (r.amountDue ?? 0), 0);
+    .reduce((sum, r) => sum + Number(r.amountDue ?? 0), 0);
 
   return (
     <div className="mt-2 rounded-xl p-4" style={{ background: '#242424', border: '1px solid rgba(255,255,255,0.06)' }}>
