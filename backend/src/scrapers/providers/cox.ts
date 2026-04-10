@@ -1,7 +1,7 @@
 /**
  * Cox Communications scraper
  * Login:   https://www.cox.com/content/dam/cox/okta/signin.html (Okta-based)
- * Billing: https://www.cox.com/residential/billing.html
+ * Billing: https://www.cox.com/resaccount/viewbill.html
  */
 import { BaseScraperProvider, ScraperCredentials, ScrapedStatement, ScrapedPayment } from '../base';
 import * as path from 'path';
@@ -10,43 +10,97 @@ export class CoxScraper extends BaseScraperProvider {
   readonly providerSlug = 'cox';
   readonly providerName = 'Cox';
 
-  private readonly LOGIN_URL   = 'https://www.cox.com/content/dam/cox/okta/signin.html';
-  private readonly BILLING_URL = 'https://www.cox.com/residential/billing.html';
+  // Okta-based login that redirects to Cox's "Welcome back" page with User ID field
+  private readonly LOGIN_URL = 'https://www.cox.com/content/dam/cox/okta/signin.html';
+
+  // Candidate billing URLs — try in order until one loads billing data
+  private readonly BILLING_URLS = [
+    'https://www.cox.com/resaccount/viewbill.html',
+    'https://www.cox.com/resaccount/billing.html',
+    'https://www.cox.com/residential/account/billing.html',
+    'https://www.cox.com/residential/billing.html',
+  ];
 
   async login(credentials: ScraperCredentials): Promise<boolean> {
     try {
       await this.page!.goto(this.LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
       await this.page!.waitForTimeout(2000);
+
+      // Dismiss cookie/privacy banner before interacting with the form
+      try {
+        const cookieBtn = await this.page!.$('button:has-text("Accept"), button:has-text("Confirm My Choices"), button:has-text("Close"), #onetrust-accept-btn-handler');
+        if (cookieBtn) {
+          await cookieBtn.click();
+          await this.page!.waitForTimeout(800);
+        }
+      } catch { /* no banner */ }
+
       await this.screenshot('cox-login-loaded');
 
-      // Cox uses Okta — standard Okta widget selectors
-      const userSel = '#okta-signin-username, input[name="identifier"], input[type="email"], #username, [placeholder*="Email" i], [placeholder*="Username" i]';
-      const passSel = '#okta-signin-password, input[name="credentials.passcode"], input[type="password"], #password';
-      const submitSel = '#okta-signin-submit, input[type="submit"], button[type="submit"], button:has-text("Sign In")';
+      // Cox "Welcome back" page after Okta redirect — broad selectors for the User ID field
+      const userSel = 'input[name="userId"], #userId, input[name="username"], input[name="identifier"], input[type="email"], input[type="text"]';
+      const passSel = 'input[type="password"], input[name="password"], #password';
+      const submitSel = 'button[type="submit"], input[type="submit"], button:has-text("Sign In"), button:has-text("Sign in")';
 
-      await this.page!.waitForSelector(userSel, { timeout: 15000 });
+      // Wait for the page to fully resolve after Okta redirect (can take a few seconds)
+      await this.page!.waitForTimeout(3000);
+      await this.screenshot('cox-login-after-wait');
 
+      // Try to find the username field — wait up to 20s for Okta redirect to settle
+      let userFound = false;
+      for (const sel of userSel.split(', ')) {
+        try {
+          await this.page!.waitForSelector(sel.trim(), { timeout: 5000, state: 'visible' });
+          userFound = true;
+          break;
+        } catch { /* try next */ }
+      }
+      if (!userFound) {
+        // Last resort: any visible text input
+        await this.page!.waitForSelector('input:visible', { timeout: 10000 });
+      }
+
+      // Click to focus then type (more reliable than fill for Cox's form)
+      await this.page!.click(userSel);
+      await this.page!.waitForTimeout(200);
       await this.page!.type(userSel, credentials.username, { delay: 60 });
       await this.page!.waitForTimeout(400);
+      await this.page!.click(passSel);
+      await this.page!.waitForTimeout(200);
       await this.page!.type(passSel, credentials.password, { delay: 60 });
       await this.page!.waitForTimeout(300);
 
       await this.screenshot('cox-before-submit');
       await this.page!.click(submitSel);
 
-      // Okta may redirect or show MFA — wait for either success or error
+      // Wait for navigation away from login/Okta pages
       try {
-        await Promise.race([
-          this.page!.waitForURL(/myaccount|overview|residential(?!.*signin)/i, { timeout: 25000 }),
-          this.page!.waitForSelector('.okta-form-infobox-error, [class*="error" i]', { timeout: 25000 }),
-        ]);
-      } catch { /* timeout */ }
+        await this.page!.waitForURL(
+          url => !url.includes('login') && !url.includes('signin') && !url.includes('okta'),
+          { timeout: 25000 }
+        );
+      } catch { /* timeout — check URL below */ }
 
-      const url = this.page!.url();
+      // Handle intercept redirect page
+      let url = this.page!.url();
+      if (url.includes('intercept')) {
+        console.log('[Cox] On intercept page, waiting for redirect...');
+        try {
+          await this.page!.waitForURL(u => !u.includes('intercept'), { timeout: 15000 });
+        } catch {
+          const continueBtn = await this.page!.$('button:has-text("Continue"), a:has-text("Continue"), button[type="submit"]');
+          if (continueBtn) {
+            await continueBtn.click();
+            await this.page!.waitForURL(u => !u.includes('intercept'), { timeout: 10000 }).catch(() => {});
+          }
+        }
+        url = this.page!.url();
+      }
+
       await this.screenshot('cox-post-login');
       await this.throwIfMfaRequired();
 
-      if (/signin|login/i.test(url)) {
+      if (/\/login|\/signin|okta\.com/i.test(url)) {
         console.error('[Cox] Login failed — still on login page:', url);
         return false;
       }
@@ -63,28 +117,62 @@ export class CoxScraper extends BaseScraperProvider {
   async scrapeStatements(): Promise<ScrapedStatement[]> {
     const statements: ScrapedStatement[] = [];
     try {
-      await this.page!.goto(this.BILLING_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
-      await this.page!.waitForTimeout(3000);
-      await this.screenshot('cox-billing');
+      // Try each billing URL until we find one with billing data
+      let found = false;
+      for (const billingUrl of this.BILLING_URLS) {
+        console.log(`[Cox] Trying billing URL: ${billingUrl}`);
+        await this.page!.goto(billingUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-      const tableSel = [
-        '[class*="bill-history" i]',
-        '[class*="statement" i]',
-        '[class*="billing-history" i]',
-        'table',
-      ].join(', ');
+        // Wait for React/SPA to render billing content
+        await this.page!.waitForTimeout(4000);
+        await this.screenshot(`cox-billing-${billingUrl.split('/').pop()}`);
 
-      try {
-        await this.page!.waitForSelector(tableSel, { timeout: 10000 });
-      } catch {
-        await this.page!.waitForTimeout(2000);
+        // Check if this page has billing data
+        const hasBilling = await this.page!.evaluate(() => {
+          const text = document.body.innerText || '';
+          return /bill|statement|amount due|balance/i.test(text) &&
+            /\$[\d,]+\.\d{2}/.test(text);
+        });
+
+        if (hasBilling) {
+          console.log(`[Cox] Found billing content at ${billingUrl}`);
+          found = true;
+          break;
+        }
+
+        // Also try clicking a billing nav link if present
+        const navClicked = await this.page!.evaluate(() => {
+          const link = Array.from(document.querySelectorAll('a, button'))
+            .find(el => /bill|statement|payment/i.test(el.textContent || ''));
+          if (link) { (link as HTMLElement).click(); return true; }
+          return false;
+        });
+
+        if (navClicked) {
+          await this.page!.waitForTimeout(3000);
+          const hasBillingAfterNav = await this.page!.evaluate(() =>
+            /\$[\d,]+\.\d{2}/.test(document.body.innerText || '')
+          );
+          if (hasBillingAfterNav) { found = true; break; }
+        }
       }
+
+      if (!found) {
+        console.warn('[Cox] Could not find billing page — dumping page text for debugging');
+        const pageText = await this.page!.evaluate(() => document.body.innerText?.slice(0, 500));
+        console.log('[Cox] Page text:', pageText);
+        await this.screenshot('cox-billing-notfound');
+        return [];
+      }
+
+      // Wait a bit more for any lazy-loaded history rows
+      await this.page!.waitForTimeout(2000);
 
       const rows = await this.page!.evaluate(() => {
         type Row = { text: string; cells: string[]; pdfHref?: string };
         const results: Row[] = [];
 
-        // Table rows
+        // 1. Standard table rows
         const tableRows = Array.from(document.querySelectorAll('table tr')).slice(1);
         for (const row of tableRows) {
           const text = row.textContent?.trim() || '';
@@ -94,15 +182,31 @@ export class CoxScraper extends BaseScraperProvider {
           results.push({ text, cells, pdfHref });
         }
 
+        // 2. React/component-based rows
         if (results.length === 0) {
-          const candidates = Array.from(document.querySelectorAll('[class*="bill" i], [class*="statement" i], [class*="invoice" i]'));
+          const candidates = Array.from(document.querySelectorAll(
+            '[class*="bill" i], [class*="statement" i], [class*="invoice" i], [class*="history" i], [class*="payment" i]'
+          ));
           for (const el of candidates) {
             const text = el.textContent?.trim() || '';
-            if (!/\$[\d,]+\.\d{2}/.test(text) || !/\d{1,2}\/\d{1,2}\/\d{2,4}|\w{3}\s+\d{1,2},\s+\d{4}/.test(text)) continue;
-            if (el.children.length > 5) continue; // skip containers
-            const cells = Array.from(el.querySelectorAll('span, div, td')).map(c => c.textContent?.trim() || '').filter(Boolean);
+            if (!/\$[\d,]+\.\d{2}/.test(text)) continue;
+            if (!/\d{1,2}\/\d{1,2}\/\d{2,4}|\w{3}\s+\d{1,2},?\s+\d{4}/.test(text)) continue;
+            if (el.children.length > 8) continue; // skip big containers
+            const cells = Array.from(el.querySelectorAll('span, div, td, li'))
+              .map(c => c.textContent?.trim() || '').filter(Boolean);
             const pdfHref = (el.querySelector('a[href*=".pdf"]') as HTMLAnchorElement | null)?.href;
             results.push({ text, cells, pdfHref });
+          }
+        }
+
+        // 3. Broad text scan — pull any line that looks like a billing row
+        if (results.length === 0) {
+          const allText = document.body.innerText || '';
+          const lines = allText.split('\n').map(l => l.trim()).filter(Boolean);
+          for (const line of lines) {
+            if (/\$[\d,]+\.\d{2}/.test(line) && /\d{1,2}\/\d{1,2}\/\d{2,4}/.test(line)) {
+              results.push({ text: line, cells: line.split(/\s{2,}|\t/) });
+            }
           }
         }
 
@@ -118,7 +222,7 @@ export class CoxScraper extends BaseScraperProvider {
         if (!statementDate) continue;
 
         const amountDue = this.parseDollarFromText(text);
-        const dueDate   = this.parseDate(dates[1] || null);
+        const dueDate = this.parseDate(dates[1] || null);
 
         let pdfBuffer: Buffer | undefined;
         if (row.pdfHref) {
