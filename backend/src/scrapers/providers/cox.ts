@@ -156,140 +156,193 @@ export class CoxScraper extends BaseScraperProvider {
         return [];
       }
 
-      // ── Step 1: Scrape ibill/home.html for balance + PDF links ──────────────
+      // ── Step 1: Scrape ibill/home.html — total balance, past due, due date ──
       const ibillData = await this.page!.evaluate(() => {
         const allText = document.body.innerText || '';
 
         // "Total balance due April 16" pattern
-        const dueDateM = allText.match(/Total balance due\s+(\w+ \d+)/i);
+        const dueDateM = allText.match(/Total balance due\s+(\w+\s+\d+)/i);
         const dueDate = dueDateM ? dueDateM[1] : null;
 
-        // All dollar amounts — first one is usually total balance
-        const dollarMatches = allText.match(/\$([\d,]+\.\d{2})/g) || [];
-        const totalBalance = dollarMatches[0] ? dollarMatches[0].replace('$', '') : null;
+        // Total balance — the large dollar figure (e.g. $252.00)
+        const totalBalM = allText.match(/Total balance[\s\S]{0,40}\$([\d,]+\.\d{2})/i);
+        const totalBalance = totalBalM ? totalBalM[1] : null;
 
-        // "Due immediately: $132.00"
-        const dueImmM = allText.match(/Due immediately[:\s]+\$([\d,]+\.\d{2})/i);
+        // Due immediately (past due from prior month)
+        const dueImmM = allText.match(/Due immediately[\s\S]{0,10}\$([\d,]+\.\d{2})/i);
         const dueImmediately = dueImmM ? dueImmM[1] : null;
 
-        // Collect PDF links with nearby date text
-        const billEntries = [];
-        const allLinks = Array.from(document.querySelectorAll('a'));
-        for (let i = 0; i < allLinks.length; i++) {
-          const link = allLinks[i];
-          const linkText = (link.textContent || '').trim().toLowerCase();
-          if (!linkText.includes('pdf')) continue;
-          // Walk up ancestors to find a date
-          let el = link.parentElement;
-          let dateText = '';
-          for (let j = 0; j < 5 && el; j++) {
-            const t = el.textContent || '';
-            const dm = t.match(/(\w{3,9}\s+\d{1,2}(?:,?\s*\d{4})?)/);
-            if (dm) { dateText = dm[1].trim(); break; }
-            el = el.parentElement;
-          }
-          billEntries.push({ date: dateText, pdfHref: (link).href || '' });
-        }
-
-        // Also grab th/td cells that look like "Feb 26" with a sibling PDF link
-        const cells = Array.from(document.querySelectorAll('th, td'));
-        for (let i = 0; i < cells.length; i++) {
-          const cell = cells[i];
-          const t = (cell.textContent || '').trim();
-          const dm = t.match(/^(\w{3}\s+\d{1,2})$/);
-          if (!dm) continue;
-          const pdfA = cell.querySelector('a');
-          if (pdfA) billEntries.push({ date: dm[1], pdfHref: pdfA.href || '' });
-        }
-
-        return { totalBalance, dueDate, dueImmediately, billEntries, rawText: allText.slice(0, 600) };
+        return { totalBalance, dueDate, dueImmediately, rawText: allText.slice(0, 800) };
       });
 
-      console.log('[Cox] ibill raw text sample:', ibillData.rawText.slice(0, 300));
-      console.log('[Cox] ibill parsed — balance:', ibillData.totalBalance, '| dueDate:', ibillData.dueDate, '| dueImm:', ibillData.dueImmediately, '| pdfEntries:', ibillData.billEntries.length);
+      console.log('[Cox] ibill — balance:', ibillData.totalBalance, '| dueDate:', ibillData.dueDate, '| pastDue:', ibillData.dueImmediately);
+      console.log('[Cox] ibill raw text:', ibillData.rawText.slice(0, 400));
 
-      // ── Step 2: Navigate to "View statements" for full history ─────────────
-      const viewStatementsClicked = await this.page!.evaluate(() => {
-        const links = Array.from(document.querySelectorAll('a'));
-        for (let i = 0; i < links.length; i++) {
-          if (/view\s+statements?/i.test(links[i].textContent || '')) {
-            links[i].click();
-            return true;
-          }
-        }
-        return false;
-      });
+      // ── Step 2: Navigate to View statements page for full history ───────────
+      // Try direct URL first (most reliable), then fallback to clicking the link
+      const stmtUrls = [
+        'https://www.cox.com/ibill/statements.html',
+        'https://www.cox.com/ibill/statementhistory.html',
+      ];
+      let onStatementsPage = false;
 
-      const historyRows: Array<{ date: string; amount: string; pdfHref: string }> = [];
-
-      if (viewStatementsClicked) {
-        await this.page!.waitForTimeout(4000);
-        await this.screenshot('cox-view-statements');
-        console.log('[Cox] View statements URL:', this.page!.url());
-
-        const scraped = await this.page!.evaluate(() => {
-          const results = [];
-          const rows = Array.from(document.querySelectorAll('table tr, [class*="statement"], [class*="history"]'));
-          for (let i = 0; i < rows.length; i++) {
-            const row = rows[i];
-            const text = (row.textContent || '').trim();
-            if (!/\$[\d,]+\.\d{2}/.test(text)) continue;
-            const dateM = text.match(/(\w{3,9}\s+\d{1,2},?\s*\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})/);
-            const amtM = text.match(/\$([\d,]+\.\d{2})/);
-            if (!dateM || !amtM) continue;
-            const pdfA = row.querySelector('a[href*=".pdf"]');
-            results.push({ date: dateM[1], amount: amtM[1], pdfHref: pdfA ? pdfA.getAttribute('href') || '' : '' });
-          }
-          return results.slice(0, 24);
-        });
-        historyRows.push(...scraped);
-        console.log(`[Cox] History rows found: ${historyRows.length}`);
+      for (const url of stmtUrls) {
+        await this.page!.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+        await this.page!.waitForTimeout(3000);
+        const valid = await this.page!.evaluate(() =>
+          !/404|page not found/i.test(document.body.innerText || '') &&
+          /\$[\d,]+\.\d{2}/.test(document.body.innerText || '')
+        );
+        if (valid) { onStatementsPage = true; break; }
       }
 
-      // ── Step 3: Build statements ───────────────────────────────────────────
-      if (historyRows.length > 0) {
-        for (const row of historyRows) {
+      if (!onStatementsPage) {
+        // Fallback: go back to ibill and click View statements
+        await this.page!.goto(this.BILLING_URL, { waitUntil: 'domcontentloaded', timeout: 20000 });
+        await this.page!.waitForTimeout(3000);
+        const clicked = await this.page!.evaluate(() => {
+          const links = Array.from(document.querySelectorAll('a'));
+          for (let i = 0; i < links.length; i++) {
+            if (/view\s+statements?/i.test(links[i].textContent || '')) {
+              links[i].click(); return true;
+            }
+          }
+          return false;
+        });
+        if (clicked) {
+          await this.page!.waitForTimeout(4000);
+          onStatementsPage = true;
+        }
+      }
+
+      await this.screenshot('cox-statements-page');
+      console.log('[Cox] Statements page URL:', this.page!.url());
+
+      // ── Step 3: Scrape the full statement history with paid detection ────────
+      const stmtRows = await this.page!.evaluate(() => {
+        const results = [];
+
+        // Cox statements page typically has a table with rows per statement period
+        // Each row: date | amount | payment status | Pay button (if unpaid)
+        const allRows = Array.from(document.querySelectorAll('table tr, [class*="statement-row"], [class*="bill-row"], [class*="invoice-row"]'));
+
+        for (let i = 0; i < allRows.length; i++) {
+          const row = allRows[i];
+          const text = (row.textContent || '').trim();
+          if (!text || !/\$[\d,]+\.\d{2}/.test(text)) continue;
+
+          // Must have a date
+          const dateM = text.match(/(\w{3,9}\s+\d{1,2},?\s*\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})/);
+          if (!dateM) continue;
+
+          const amtM = text.match(/\$([\d,]+\.\d{2})/);
+          if (!amtM) continue;
+
+          // Detect paid status: no "Pay" / "Make a payment" button in this row = paid
+          const allBtns = Array.from(row.querySelectorAll('a, button'));
+          const hasPayBtn = allBtns.some(function(b) {
+            return /\bpay\b/i.test(b.textContent || '') || /\bpayment\b/i.test(b.textContent || '');
+          });
+
+          const pdfA = row.querySelector('a[href*=".pdf"]') as HTMLAnchorElement | null;
+
+          results.push({
+            date: dateM[1],
+            amount: amtM[1],
+            hasPayBtn: hasPayBtn,
+            pdfHref: pdfA ? pdfA.href : '',
+          });
+        }
+
+        // Fallback: broad text scan if table didn't work
+        if (results.length === 0) {
+          const lines = (document.body.innerText || '').split('\n');
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+            const dateM = line.match(/(\w{3,9}\s+\d{1,2},?\s*\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})/);
+            const amtM = line.match(/\$([\d,]+\.\d{2})/);
+            if (dateM && amtM) {
+              results.push({ date: dateM[1], amount: amtM[1], hasPayBtn: true, pdfHref: '' });
+            }
+          }
+        }
+
+        return results.slice(0, 24);
+      });
+
+      console.log(`[Cox] Statement rows found: ${stmtRows.length}`, stmtRows.slice(0, 3));
+
+      // ── Step 4: Build statements ────────────────────────────────────────────
+      // Parse out total balance and past due from ibill/home.html data
+      const totalBalance = ibillData.totalBalance
+        ? parseFloat(ibillData.totalBalance.replace(/,/g, ''))
+        : null;
+      const pastDueAmt = ibillData.dueImmediately
+        ? parseFloat(ibillData.dueImmediately.replace(/,/g, ''))
+        : null;
+      const currentCharge = (totalBalance != null && pastDueAmt != null)
+        ? Math.max(0, Math.round((totalBalance - pastDueAmt) * 100) / 100)
+        : totalBalance;
+      const dueDateParsed = ibillData.dueDate
+        ? this.parseDate(ibillData.dueDate + ' 2026')
+          ?? this.parseDate(ibillData.dueDate + ' 2025')
+        : undefined;
+
+      if (stmtRows.length > 0) {
+        // First row with a Pay button = most recent unpaid (current or past due)
+        // Rows without a Pay button = paid
+        let unpaidCount = 0;
+        for (const row of stmtRows) {
           const statementDate = this.parseDate(row.date);
           if (!statementDate) continue;
           const amountDue = parseFloat(row.amount.replace(/,/g, ''));
+
+          // Determine paid/unpaid status from Pay button presence
+          const isPaid = !row.hasPayBtn;
+
+          // For the unpaid statements, annotate with past due / current charge split
+          let rowRawData: Record<string, unknown> = { isPaid };
+          if (!isPaid) {
+            if (unpaidCount === 0) {
+              // Most recent unpaid = current charge
+              rowRawData = {
+                isPaid: false,
+                accountBalance: totalBalance,
+                pastDue: pastDueAmt,
+                currentCharge: currentCharge ?? amountDue,
+              };
+            } else {
+              // Older unpaid = past due portion
+              rowRawData = { isPaid: false, isPastDue: true };
+            }
+            unpaidCount++;
+          }
+
           let pdfBuffer: Buffer | undefined;
           if (row.pdfHref) pdfBuffer = await this.downloadPdf(row.pdfHref);
+
           statements.push({
             statementDate,
+            dueDate: !isPaid && unpaidCount === 1 ? dueDateParsed : undefined,
             amountDue,
             pdfBuffer,
             pdfFilename: row.pdfHref ? `cox_${statementDate.toISOString().slice(0, 10)}.pdf` : undefined,
+            rawData: rowRawData,
           });
         }
       } else {
-        // Fall back: use PDF links scraped from ibill/home.html
-        for (const entry of ibillData.billEntries) {
-          const statementDate = this.parseDate(entry.date + ' 2025') || this.parseDate(entry.date);
-          if (!statementDate) continue;
-          let pdfBuffer: Buffer | undefined;
-          if (entry.pdfHref) pdfBuffer = await this.downloadPdf(entry.pdfHref);
-          statements.push({
-            statementDate,
-            pdfBuffer,
-            pdfFilename: entry.pdfHref ? `cox_${statementDate.toISOString().slice(0, 10)}.pdf` : undefined,
-          });
-        }
-
-        // Last resort: save current balance as a statement
-        if (statements.length === 0 && ibillData.totalBalance) {
-          const totalBalance = parseFloat(ibillData.totalBalance.replace(/,/g, ''));
-          const dueImmediately = ibillData.dueImmediately
-            ? parseFloat(ibillData.dueImmediately.replace(/,/g, ''))
-            : undefined;
-          const currentCharge = dueImmediately != null
-            ? Math.max(0, Math.round((totalBalance - dueImmediately) * 100) / 100)
-            : totalBalance;
-          const dueDateParsed = ibillData.dueDate ? this.parseDate(ibillData.dueDate + ' 2025') : undefined;
+        // Fallback: create statements from ibill data only
+        // Current month statement
+        if (currentCharge != null && currentCharge > 0) {
           statements.push({
             statementDate: new Date(),
             dueDate: dueDateParsed ?? undefined,
             amountDue: currentCharge,
-            rawData: { accountBalance: totalBalance, pastDue: dueImmediately, currentCharge },
+            rawData: {
+              accountBalance: totalBalance,
+              pastDue: pastDueAmt,
+              currentCharge,
+            },
           });
         }
       }
