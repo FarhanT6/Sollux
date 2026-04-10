@@ -160,16 +160,26 @@ export class CoxScraper extends BaseScraperProvider {
       const ibillData = await this.page!.evaluate(() => {
         const allText = document.body.innerText || '';
 
-        // "Total balance due April 16" pattern
+        // "Total balance due April 16" — the due date line
         const dueDateM = allText.match(/Total balance due\s+(\w+\s+\d+)/i);
         const dueDate = dueDateM ? dueDateM[1] : null;
 
-        // Total balance — the large dollar figure (e.g. $252.00)
-        const totalBalM = allText.match(/Total balance[\s\S]{0,40}\$([\d,]+\.\d{2})/i);
-        const totalBalance = totalBalM ? totalBalM[1] : null;
+        // Total balance: extract the section between "Total balance" and "Due immediately"
+        // to avoid the greedy regex grabbing the Due immediately amount instead
+        let totalBalance: string | null = null;
+        const betweenM = allText.match(/Total balance([\s\S]*?)Due immediately/i);
+        if (betweenM) {
+          const m = betweenM[1].match(/\$([\d,]+\.\d{2})/);
+          if (m) totalBalance = m[1];
+        }
+        // Fallback: first dollar amount on page
+        if (!totalBalance) {
+          const m = allText.match(/\$([\d,]+\.\d{2})/);
+          if (m) totalBalance = m[1];
+        }
 
         // Due immediately (past due from prior month)
-        const dueImmM = allText.match(/Due immediately[\s\S]{0,10}\$([\d,]+\.\d{2})/i);
+        const dueImmM = allText.match(/Due immediately[\s\S]{0,20}\$([\d,]+\.\d{2})/i);
         const dueImmediately = dueImmM ? dueImmM[1] : null;
 
         return { totalBalance, dueDate, dueImmediately, rawText: allText.slice(0, 800) };
@@ -210,63 +220,76 @@ export class CoxScraper extends BaseScraperProvider {
       await this.screenshot('cox-statements-page');
       console.log('[Cox] Statements page URL:', this.page!.url());
 
-      // ── Step 3: Scrape statement history with paid detection ─────────────────
-      // Cox statements page layout (from actual portal):
-      // Columns: INVOICE DATE (link) | DUE DATE | INCIDENTAL CHARGES | CURRENT INVOICE CHARGES | [Pay button if unpaid]
-      // Invoice Date links are green (clickable). Paid rows have no Pay button.
+      // ── Step 3: Scrape statement history ──────────────────────────────────────
+      // Cox's statements page format (from actual portal text):
+      //   Statement date   Total due   Billing period
+      //   Mar 26, 2026   View bill (PDF)   $120.00   Mar 26, 2026 - Apr 25, 2026
+      //   Feb 25, 2026   View bill (PDF)   $132.00   Feb 26, 2026 - Mar 25, 2026
+      //
+      // Pay buttons are rendered as DOM elements but do NOT appear in innerText.
+      // Instead, we use the totalBalance + dueImmediately from ibill/home.html to
+      // determine paid status: walk newest-to-oldest, subtract from totalBalance.
+      // When remaining balance hits 0, the rest are paid.
       const stmtRows = await this.page!.evaluate(() => {
         const results = [];
         const pageText = document.body.innerText || '';
 
-        // Primary: table rows (Cox uses a standard HTML table on the statements page)
-        const tableRows = Array.from(document.querySelectorAll('table tbody tr, table tr'));
-        for (let i = 0; i < tableRows.length; i++) {
-          const row = tableRows[i];
-          const text = (row.textContent || '').trim();
-          if (!text) continue;
+        // Collect all PDF link hrefs in order so we can attach them to rows
+        const pdfLinks = Array.from(document.querySelectorAll('a[href*="pdf"], a[href*="PDF"], a[href*="view-bill"], a[href*="viewbill"]'));
+        const pdfHrefs = pdfLinks.map(function(a) { return (a as HTMLAnchorElement).href || ''; });
 
-          // Invoice date — MM/DD/YYYY format (e.g. 04/03/2026)
-          const allDates = text.match(/\d{1,2}\/\d{1,2}\/\d{4}/g) || [];
-          if (allDates.length === 0) continue;
+        // Parse text lines — each statement line starts with "Month DD, YYYY"
+        const lines = pageText.split('\n').map(function(l) { return l.trim(); }).filter(Boolean);
+        let pdfIdx = 0;
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          // Statement date: "Mar 26, 2026"
+          const dateM = line.match(/^(\w{3}\s+\d{1,2},\s+\d{4})/);
+          if (!dateM) continue;
+          const statementDate = dateM[1];
 
-          // Dollar amounts in this row
-          const allAmts = text.match(/\$([\d,]+\.\d{2})/g) || [];
-          if (allAmts.length === 0) continue;
+          // Dollar amount on same line or next few lines
+          let amount = '';
+          const amtOnLine = line.match(/\$([\d,]+\.\d{2})/);
+          if (amtOnLine) {
+            amount = amtOnLine[1];
+          } else {
+            for (let j = 1; j <= 3 && i + j < lines.length; j++) {
+              const nextAmt = lines[i + j].match(/^\$([\d,]+\.\d{2})$/);
+              if (nextAmt) { amount = nextAmt[1]; break; }
+            }
+          }
+          if (!amount) continue;
 
-          const invoiceDate = allDates[0];
-          // Due date is 2nd date if present (e.g. "Due Upon Receipt" or another MM/DD/YYYY)
-          const dueDateRaw = allDates[1] || null;
-          // Check for "Due Upon Receipt" text
-          const dueUponReceipt = /due upon receipt/i.test(text);
-
-          // Current invoice charge = last dollar amount (rightmost column)
-          const currentAmt = allAmts[allAmts.length - 1].replace('$', '');
-
-          // Pay button presence = unpaid. No Pay button = paid.
-          const btns = Array.from(row.querySelectorAll('a, button'));
-          const hasPayBtn = btns.some(function(b) {
-            return /\bpay\b/i.test((b.textContent || '').trim());
-          });
+          // Billing period: "Mar 26, 2026 - Apr 25, 2026" on same or adjacent line
+          let billingStart = '';
+          let billingEnd = '';
+          const periodM = line.match(/(\w{3}\s+\d{1,2},\s+\d{4})\s*[-–]\s*(\w{3}\s+\d{1,2},\s+\d{4})/);
+          if (periodM) {
+            billingStart = periodM[1];
+            billingEnd = periodM[2];
+          } else {
+            for (let j = 1; j <= 3 && i + j < lines.length; j++) {
+              const pm = lines[i + j].match(/(\w{3}\s+\d{1,2},\s+\d{4})\s*[-–]\s*(\w{3}\s+\d{1,2},\s+\d{4})/);
+              if (pm) { billingStart = pm[1]; billingEnd = pm[2]; break; }
+            }
+          }
 
           results.push({
-            invoiceDate: invoiceDate,
-            dueDateRaw: dueDateRaw,
-            dueUponReceipt: dueUponReceipt,
-            amount: currentAmt,
-            hasPayBtn: hasPayBtn,
+            statementDate: statementDate,
+            amount: amount,
+            billingStart: billingStart,
+            billingEnd: billingEnd,
+            pdfHref: pdfHrefs[pdfIdx] || '',
           });
+          pdfIdx++;
         }
 
-        // Log page text for debugging if no rows found
-        if (results.length === 0) {
-          return { rows: [], debugText: pageText.slice(0, 600) };
-        }
-
-        return { rows: results.slice(0, 24), debugText: '' };
-      }) as { rows: Array<{ invoiceDate: string; dueDateRaw: string | null; dueUponReceipt: boolean; amount: string; hasPayBtn: boolean }>; debugText: string };
+        return { rows: results.slice(0, 24), debugText: results.length === 0 ? pageText.slice(0, 600) : '' };
+      }) as { rows: Array<{ statementDate: string; amount: string; billingStart: string; billingEnd: string; pdfHref: string }>; debugText: string };
 
       if (stmtRows.debugText) {
-        console.log('[Cox] No table rows found, page text:', stmtRows.debugText);
+        console.log('[Cox] No statement rows parsed, page text:', stmtRows.debugText);
       }
       console.log(`[Cox] Statement rows found: ${stmtRows.rows.length}`, JSON.stringify(stmtRows.rows.slice(0, 3)));
 
@@ -277,39 +300,47 @@ export class CoxScraper extends BaseScraperProvider {
       const pastDueAmt = ibillData.dueImmediately
         ? parseFloat(ibillData.dueImmediately.replace(/,/g, ''))
         : null;
+      // Current charge = total balance minus past due
+      const currentCharge = (totalBalance != null && pastDueAmt != null)
+        ? Math.max(0, Math.round((totalBalance - pastDueAmt) * 100) / 100)
+        : totalBalance;
       const totalDueDateParsed = ibillData.dueDate
         ? this.parseDate(ibillData.dueDate + ' 2026') ?? this.parseDate(ibillData.dueDate + ' 2025')
         : undefined;
 
+      console.log(`[Cox] Balance breakdown — total: ${totalBalance}, pastDue: ${pastDueAmt}, current: ${currentCharge}, dueDate: ${ibillData.dueDate}`);
+
       if (stmtRows.rows.length > 0) {
-        // Rows are newest-first. Rows with Pay button = unpaid, without = paid.
-        // First unpaid row = most recent statement (current charge, due on due date)
-        // Second unpaid row = past due (overdue, due immediately)
-        let unpaidCount = 0;
+        // Paid detection: walk statements newest-first, subtract from totalBalance.
+        // Once remaining balance hits 0, all older statements are paid.
+        // This is reliable even when multiple months are past due.
+        let remainingUnpaid = totalBalance ?? 0;
+
         for (const row of stmtRows.rows) {
-          const statementDate = this.parseDate(row.invoiceDate);
+          const statementDate = this.parseDate(row.statementDate);
           if (!statementDate) continue;
           const amountDue = parseFloat(row.amount.replace(/,/g, ''));
           if (isNaN(amountDue) || amountDue <= 0) continue;
 
-          const isPaid = !row.hasPayBtn;
+          const isPaid = remainingUnpaid <= 0.01; // paid once balance is exhausted
+          if (!isPaid) remainingUnpaid = Math.round((remainingUnpaid - amountDue) * 100) / 100;
 
-          // Due date: scrape directly from the row (dueDateRaw), fall back to overall due date
+          // Determine due date and rawData for unpaid rows
           let rowDueDate: Date | undefined;
-          if (!isPaid) {
-            if (row.dueUponReceipt) {
-              rowDueDate = new Date(); // due immediately
-            } else if (row.dueDateRaw) {
-              rowDueDate = this.parseDate(row.dueDateRaw) ?? undefined;
-            } else if (unpaidCount === 0) {
-              rowDueDate = totalDueDateParsed; // use overall due date for newest statement
-            }
-          }
-
           let rowRawData: Record<string, unknown> = { isPaid };
+
           if (!isPaid) {
-            if (unpaidCount === 0) {
-              // Most recent unpaid = current month's charge
+            // First unpaid (newest) = current charge, due on the overall due date
+            // Subsequent unpaid = past due, due immediately (already overdue)
+            const isCurrentCharge = remainingUnpaid <= 0.01 && pastDueAmt == null
+              ? true
+              : amountDue === currentCharge && statements.filter(s => !(s.rawData?.isPaid)).length === 0;
+
+            // Simpler: if this is the most recent unpaid statement, it's current
+            const isFirst = statements.filter(s => !(s.rawData as any)?.isPaid).length === 0;
+
+            if (isFirst) {
+              rowDueDate = totalDueDateParsed;
               rowRawData = {
                 isPaid: false,
                 accountBalance: totalBalance,
@@ -317,30 +348,35 @@ export class CoxScraper extends BaseScraperProvider {
                 currentCharge: amountDue,
               };
             } else {
-              // Older unpaid = past due (overdue from prior month)
+              // Older unpaid = past due, no due date (already past due)
               rowRawData = { isPaid: false, isPastDue: true };
             }
-            unpaidCount++;
           }
+
+          let pdfBuffer: Buffer | undefined;
+          if (row.pdfHref) pdfBuffer = await this.downloadPdf(row.pdfHref).catch(() => undefined);
 
           statements.push({
             statementDate,
             dueDate: rowDueDate,
+            billingPeriodStart: this.parseDate(row.billingStart) ?? undefined,
+            billingPeriodEnd: this.parseDate(row.billingEnd) ?? undefined,
             amountDue,
+            pdfBuffer,
+            pdfFilename: row.pdfHref ? `cox_${statementDate.toISOString().slice(0, 10)}.pdf` : undefined,
             rawData: rowRawData,
           });
         }
       } else {
-        // Fallback: create a single statement from ibill/home.html data
-        if (totalBalance != null && totalBalance > 0) {
-          const currentCharge = (pastDueAmt != null)
-            ? Math.max(0, Math.round((totalBalance - pastDueAmt) * 100) / 100)
-            : totalBalance;
+        // Fallback: create a single current-charge statement from ibill data only
+        // (no full history available — at least show the current amount)
+        if (currentCharge != null && currentCharge > 0) {
           statements.push({
             statementDate: new Date(),
             dueDate: totalDueDateParsed ?? undefined,
             amountDue: currentCharge,
             rawData: {
+              isPaid: false,
               accountBalance: totalBalance,
               pastDue: pastDueAmt,
               currentCharge,
