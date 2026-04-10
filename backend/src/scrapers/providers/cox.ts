@@ -71,15 +71,25 @@ export class CoxScraper extends BaseScraperProvider {
       await this.page!.waitForTimeout(300);
 
       await this.screenshot('cox-before-submit');
-      await this.page!.click(submitSel);
 
-      // Wait for navigation away from login/Okta pages
+      // Click the Sign In button specifically (avoid accidental matches)
+      const signInBtn = await this.page!.$('button:has-text("Sign In"), button:has-text("Sign in"), button[type="submit"]');
+      if (signInBtn) {
+        await signInBtn.click();
+      } else {
+        await this.page!.click(submitSel);
+      }
+
+      // Wait up to 30s for navigation away from the Okta signin page
       try {
         await this.page!.waitForURL(
-          url => !url.includes('login') && !url.includes('signin') && !url.includes('okta'),
-          { timeout: 25000 }
+          url => !url.includes('content/dam/cox/okta/signin'),
+          { timeout: 30000 }
         );
-      } catch { /* timeout — check URL below */ }
+      } catch { /* timed out — page may still be on login */ }
+
+      // Give any redirect chain time to settle
+      await this.page!.waitForTimeout(3000);
 
       // Handle intercept redirect page
       let url = this.page!.url();
@@ -98,9 +108,27 @@ export class CoxScraper extends BaseScraperProvider {
       }
 
       await this.screenshot('cox-post-login');
+
+      // Capture any error message Okta/Cox shows on the page
+      const pageError = await this.page!.evaluate(() => {
+        const errSelectors = [
+          '[class*="error" i]', '[class*="alert" i]', '[id*="error" i]',
+          '.okta-form-infobox-error', '.o-form-error-container', '[data-se="o-form-error-container"]',
+        ];
+        for (const sel of errSelectors) {
+          const el = document.querySelector(sel);
+          if (el && el.textContent?.trim()) return el.textContent.trim();
+        }
+        return null;
+      });
+      if (pageError) {
+        console.error('[Cox] Login page error message:', pageError);
+      }
+
+      console.log('[Cox] Post-login URL:', url);
       await this.throwIfMfaRequired();
 
-      if (/\/login|\/signin|okta\.com/i.test(url)) {
+      if (url.includes('content/dam/cox/okta/signin') || /\/login|\/signin/i.test(url)) {
         console.error('[Cox] Login failed — still on login page:', url);
         return false;
       }
