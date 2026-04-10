@@ -63,6 +63,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
 
   async function handleSubmit() {
     if (!form.providerName) { setError('Please select a provider'); return; }
+    if (!form.useGmail && !form.accountNumber.trim()) { setError('Account number is required'); return; }
     setLoading(true);
     setError('');
     try {
@@ -196,12 +197,13 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
           )}
 
           <Field
-            label="Account number (optional)"
+            label="Account number"
             htmlFor="acct"
+            required
             hint={
               form.providerSlug === 'wm'
                 ? 'Enter full WM account number, e.g. 8-92846-35002 — used to match this property when one login has multiple service addresses'
-                : 'Enter the full account number from your bill — used to match this property when one login covers multiple accounts'
+                : 'Found on your bill or provider portal — used to match this property when one login covers multiple accounts'
             }
           >
             <Input

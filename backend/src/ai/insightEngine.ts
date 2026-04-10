@@ -192,26 +192,47 @@ interface ClaudeInsightResponse {
   estimatedSavings?: number;
 }
 
+// Known provider descriptions so the AI doesn't misidentify service types
+const PROVIDER_SERVICE_DESCRIPTIONS: Record<string, string> = {
+  'WM': 'waste management / trash & recycling collection',
+  'WM (Waste Management)': 'waste management / trash & recycling collection',
+  'Republic Services': 'waste management / trash & recycling collection',
+  'Cox': 'internet & cable',
+  'Spectrum': 'internet & cable',
+  'AT&T': 'internet & phone',
+  'T-Mobile': 'mobile phone',
+  'SDGE': 'electric & gas',
+  'SoCal Gas': 'natural gas',
+  'FPL': 'electric',
+  'IID': 'electric',
+  'Bamboo Insurance': 'property insurance',
+  'Safeco': 'property insurance',
+  'Service Finance': 'solar financing',
+};
+
 async function callClaudeForInsight(data: ClaudeInsightRequest): Promise<ClaudeInsightResponse> {
   try {
+    const serviceDesc = PROVIDER_SERVICE_DESCRIPTIONS[data.providerName]
+      ?? `${data.category.toLowerCase()} service`;
+
     const prompt = data.type === 'anomaly'
-      ? `You are an AI assistant for Sollux, a property utility management app. 
-         
-         A user's ${data.providerName} ${data.category.toLowerCase()} bill is ${data.deviation}% ${data.direction} than their 3-month average.
+      ? `You are an AI assistant for Sollux, a property utility management app.
+
+         A user's ${data.providerName} (${serviceDesc}) bill is ${data.deviation}% ${data.direction} than their 3-month average.
          Current bill: $${data.currentAmount.toFixed(2)}
          3-month average: $${data.averageAmount.toFixed(2)}
          Recent amounts: ${data.recentAmounts?.map(a => `$${a.toFixed(2)}`).join(', ')}
-         
+
          Write a concise, helpful insight (2-3 sentences) explaining possible reasons and what to check.
          Then write a short recommendation (1 sentence).
-         
+
          Respond in JSON: { "body": "...", "recommendation": "..." }`
       : `You are an AI assistant for Sollux, a property utility management app.
-         
-         A user's average ${data.providerName} ${data.category.toLowerCase()} bill is $${data.averageAmount.toFixed(2)}/month.
+
+         A user's average ${data.providerName} (${serviceDesc}) bill is $${data.averageAmount.toFixed(2)}/month.
          Write a concise savings tip (2-3 sentences) specific to this utility type.
          Include an estimated annual savings if they follow the recommendation.
-         
+
          Respond in JSON: { "body": "...", "recommendation": "...", "estimatedSavings": <number> }`;
 
     const response = await anthropic.messages.create({

@@ -14,6 +14,8 @@ function fmtMoney(v?: number | null) {
 
 function statusPill(s: Statement): { color: 'green' | 'amber' | 'red'; label: string } {
   if ((s.amountPaid ?? 0) > 0) return { color: 'green', label: 'Paid' };
+  // isPaid flag set by scraper when no "Pay" button is found (i.e. invoice is settled)
+  if ((s.rawDataJson as any)?.isPaid === true) return { color: 'green', label: 'Paid' };
   if (s.dueDate && isAfter(new Date(), new Date(s.dueDate))) return { color: 'red', label: 'Overdue' };
   return { color: 'amber', label: 'Due' };
 }

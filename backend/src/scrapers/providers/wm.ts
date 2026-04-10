@@ -220,6 +220,8 @@ export class WMScraper extends BaseScraperProvider {
             accountNumber: inv.accountNumber,
             serviceAddress: inv.serviceAddress,
             pastDue: inv.pastDue,
+            // isPaid from rawData (set when no Pay button found in history row)
+            isPaid: inv.rawData?.isPaid,
           },
         });
       }
@@ -329,30 +331,35 @@ export class WMScraper extends BaseScraperProvider {
 
     // Scrape the billing history table on the detail page
     const historyRows = await this.page!.evaluate(() => {
-      type HistRow = { text: string; cells: string[] };
-      const results: HistRow[] = [];
+      const results = [];
 
       // Look for history/statement rows — tables, lists, or MUI grids
       const containers = [
         ...Array.from(document.querySelectorAll('table tbody tr')),
-        ...Array.from(document.querySelectorAll('.MuiGrid-container')).filter(el =>
-          el.className.includes('d-md-flex') || el.className.includes('jss')
-        ),
+        ...Array.from(document.querySelectorAll('.MuiGrid-container')).filter(function(el) {
+          return el.className.includes('d-md-flex') || el.className.includes('jss');
+        }),
         ...Array.from(document.querySelectorAll('[class*="history-row"], [class*="statement-row"], [class*="billing-row"]')),
       ];
 
-      for (const row of containers) {
-        const text = row.textContent?.trim() || '';
+      for (var i = 0; i < containers.length; i++) {
+        var row = containers[i];
+        var text = (row.textContent || '').trim();
         // Must have a dollar amount
         if (!/\$[\d,]+\.\d{2}/.test(text)) continue;
-        // Must have at least 2 distinct MM/DD/YYYY dates — this filters out line-item rows
-        // (e.g. "Incidental Charges $5.00 01/15/2024") which only have one date
-        const rowDates = [...text.matchAll(/\d{2}\/\d{2}\/\d{4}/g)].map(m => m[0]);
-        const uniqueRowDates = new Set(rowDates);
-        if (uniqueRowDates.size < 2) continue;
-        const cells = Array.from(row.querySelectorAll('td, .MuiGrid-item, [class*="cell"]'))
-          .map(el => el.textContent?.trim() || '');
-        results.push({ text, cells });
+        // Must have at least 2 distinct MM/DD/YYYY dates
+        var rowDates: string[] = [];
+        var dateRegex = /\d{2}\/\d{2}\/\d{4}/g;
+        var dateMatch;
+        while ((dateMatch = dateRegex.exec(text)) !== null) rowDates.push(dateMatch[0]);
+        var uniqueDates = rowDates.filter(function(d, idx) { return rowDates.indexOf(d) === idx; });
+        if (uniqueDates.length < 2) continue;
+        var cells = Array.from(row.querySelectorAll('td, .MuiGrid-item, [class*="cell"]'))
+          .map(function(el) { return (el.textContent || '').trim(); });
+        // Check if this row has a "Pay" button — absence means invoice is paid
+        var allBtns = Array.from(row.querySelectorAll('button, a'));
+        var hasPayBtn = allBtns.some(function(b) { return /\bpay\b/i.test(b.textContent || ''); });
+        results.push({ text: text, cells: cells, hasPayBtn: hasPayBtn });
       }
       return results;
     });
@@ -366,27 +373,22 @@ export class WMScraper extends BaseScraperProvider {
       for (const row of historyRows) {
         const text = row.text;
 
-        // Extract dates — real invoice rows have BOTH an invoice date and a due date.
-        // Line-item rows (individual charges like "Incidental Charges") only have one date.
-        // Filter these out so we don't mistake incidental line items for invoice summaries.
         const dates = [...text.matchAll(/(\d{2}\/\d{2}\/\d{4})/g)].map(m => m[1]);
         const uniqueDates = [...new Set(dates)];
-        if (uniqueDates.length < 2) continue; // line item, not an invoice summary row
+        if (uniqueDates.length < 2) continue;
 
         const invoiceDate = dates[0];
         const dueDate = dates[1];
 
-        // Extract all dollar amounts from the row text.
-        // WM layouts amounts as: [incidental charges, service charges, ..., TOTAL]
-        // The total (rightmost column) is always the largest and always last — use it.
         const amounts = [...text.matchAll(/\$\s*([\d,]+\.\d{2})/g)]
           .map(m => parseFloat(m[1].replace(/,/g, '')));
         if (amounts.length === 0) continue;
 
-        // Last amount = total amount due for this invoice period (service + overages combined)
         const amountDue = amounts[amounts.length - 1];
-        // Second-to-last = previous balance carried (if row shows running balance)
         const balance = amounts.length >= 2 ? amounts[amounts.length - 2] : amountDue;
+
+        // No "Pay" button = invoice has been paid
+        const isPaid = !row.hasPayBtn;
 
         this.capturedInvoices.push({
           ...account,
@@ -394,13 +396,13 @@ export class WMScraper extends BaseScraperProvider {
           dueDate,
           amountDue,
           balance,
+          status: 'history', // ← CRITICAL: override overview-only status so deduplication works
           rawData: {
-            // accountBalance = overview total (what you owe including any past due)
-            // shown as the primary amount on the card
             accountBalance: account.amountDue,
             accountName: account.accountName,
             accountNumber: account.accountNumber,
             serviceAddress: account.serviceAddress,
+            isPaid,
             rawText: text.slice(0, 200),
           },
         });
