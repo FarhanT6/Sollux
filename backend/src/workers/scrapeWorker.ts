@@ -123,6 +123,8 @@ const worker = new Worker<ScrapeJobData>(
           });
 
           if (!existing) {
+            // If scraper flagged this as paid (no "Pay" button on portal), record amountPaid
+            const isPaid = stmt.rawData?.isPaid === true;
             await db.statement.create({
               data: {
                 utilityAccountId: acct.id,
@@ -131,6 +133,7 @@ const worker = new Worker<ScrapeJobData>(
                 billingPeriodStart: stmt.billingPeriodStart,
                 billingPeriodEnd: stmt.billingPeriodEnd,
                 amountDue: stmt.amountDue,
+                amountPaid: isPaid && stmt.amountDue ? stmt.amountDue : undefined,
                 usageValue: stmt.usageValue,
                 usageUnit: stmt.usageUnit,
                 ratePlan: stmt.ratePlan,

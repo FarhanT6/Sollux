@@ -391,40 +391,58 @@ function UtilityAccountCard({
       </div>
 
       <div className="flex items-end justify-between">
-        <div>
+        <div className="flex-1 min-w-0">
           {(() => {
             const raw = latest?.rawDataJson as Record<string, unknown> | undefined;
             const accountBalance = raw?.accountBalance as number | undefined;
-
-            // Primary: total balance owed (from overview), fallback to statement amount
-            const displayAmt = accountBalance ?? latest?.amountDue;
-            // Current charge: this period's full charge (service + any overages/incidentals)
-            // Use statement.amountDue which is the total new charges for the period
-            const currentCharge = latest?.amountDue;
-            // Only show current charge separately if it differs from the primary balance
-            // (i.e. there's past due rolled in, making the balance higher than this month's charge)
-            const showCurrentCharge = currentCharge != null &&
-              displayAmt != null &&
-              Math.abs(displayAmt - currentCharge) > 0.01;
+            const pastDue = raw?.pastDue as number | undefined;
             const fmt = (n: number) => `$${Number(n).toFixed(2)}`;
+
+            // Total balance = accountBalance (full amount owed including any past due)
+            // Current charge = amountDue on the latest statement (this billing period only)
+            // Past due = what's owed from prior periods (due immediately)
+            const totalBalance = accountBalance ?? latest?.amountDue;
+            const currentCharge = latest?.amountDue;
+            const pastDueAmt = pastDue && pastDue > 0 ? pastDue
+              : (totalBalance != null && currentCharge != null && totalBalance - currentCharge > 0.01)
+                ? Math.round((totalBalance - currentCharge) * 100) / 100
+                : undefined;
+
+            if (!latest) {
+              return (
+                <p className="text-sm text-gray-500">No statement yet</p>
+              );
+            }
 
             return (
               <>
+                {/* Total balance — big topline number */}
                 <p className="text-xl font-semibold text-white">
-                  {displayAmt ? fmt(displayAmt) : '—'}
+                  {totalBalance != null ? fmt(totalBalance) : '—'}
                 </p>
-                <p className="text-xs text-gray-400 mt-0.5">
-                  {dueDate ? `Due ${format(dueDate, 'MMM d')}` : 'No statement yet'}
-                </p>
-                {showCurrentCharge && (
-                  <p className="text-xs text-gray-500 mt-1">
-                    Current charge: <span className="text-gray-300">{fmt(currentCharge!)}</span>
-                  </p>
+
+                {/* Past due row — red, due immediately */}
+                {pastDueAmt != null && pastDueAmt > 0 && (
+                  <div className="mt-1 flex items-center gap-1.5">
+                    <span className="text-xs font-medium text-red-400">Past due: {fmt(pastDueAmt)}</span>
+                    <span className="text-xs text-red-500/70">· due immediately</span>
+                  </div>
                 )}
-                {latest?.usageValue && (
-                  <p className="text-xs text-gray-400 mt-0.5">
-                    {latest.usageValue} {latest.usageUnit}
-                  </p>
+
+                {/* Current charge row */}
+                {currentCharge != null && (
+                  <div className="mt-0.5 flex items-center gap-1.5">
+                    <span className="text-xs text-gray-400">
+                      Current: {fmt(currentCharge)}
+                    </span>
+                    {dueDate && (
+                      <span className="text-xs text-gray-500">· due {format(dueDate, 'MMM d')}</span>
+                    )}
+                  </div>
+                )}
+
+                {latest.usageValue && (
+                  <p className="text-xs text-gray-500 mt-0.5">{latest.usageValue} {latest.usageUnit}</p>
                 )}
               </>
             );
@@ -433,7 +451,7 @@ function UtilityAccountCard({
         <button
           onClick={onSync}
           disabled={syncing}
-          className="btn text-xs"
+          className="btn text-xs ml-3 flex-shrink-0"
         >
           {syncing ? 'Syncing…' : 'Sync ↻'}
         </button>

@@ -14,6 +14,8 @@ function fmtMoney(v?: number | null) {
 
 function statusPill(s: Statement): { color: 'green' | 'amber' | 'red'; label: string } {
   if ((s.amountPaid ?? 0) > 0) return { color: 'green', label: 'Paid' };
+  // isPaid flag set by scraper when no "Pay" button is found (i.e. invoice is settled)
+  if ((s.rawDataJson as any)?.isPaid === true) return { color: 'green', label: 'Paid' };
   if (s.dueDate && isAfter(new Date(), new Date(s.dueDate))) return { color: 'red', label: 'Overdue' };
   return { color: 'amber', label: 'Due' };
 }
@@ -31,8 +33,8 @@ export default function StatementHistoryPanel({ utilityAccountId }: Props) {
   // ── Mini stats ──────────────────────────────────────────
   const latest = rows[0];
   const prev = rows[1];
-  const latestAmt = latest?.amountDue ?? null;
-  const prevAmt = prev?.amountDue ?? null;
+  const latestAmt = latest?.amountDue != null ? Number(latest.amountDue) : null;
+  const prevAmt = prev?.amountDue != null ? Number(prev.amountDue) : null;
 
   let momLabel = '—';
   let momColor: 'green' | 'red' | undefined;
@@ -46,7 +48,7 @@ export default function StatementHistoryPanel({ utilityAccountId }: Props) {
   const currentYear = new Date().getFullYear();
   const ytd = rows
     .filter(r => new Date(r.statementDate).getFullYear() === currentYear)
-    .reduce((sum, r) => sum + (r.amountDue ?? 0), 0);
+    .reduce((sum, r) => sum + Number(r.amountDue ?? 0), 0);
 
   return (
     <div className="mt-2 rounded-xl p-4" style={{ background: '#242424', border: '1px solid rgba(255,255,255,0.06)' }}>
