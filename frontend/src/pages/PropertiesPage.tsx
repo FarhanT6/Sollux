@@ -36,8 +36,11 @@ export default function PropertiesPage() {
   const filtered = filter === 'all' ? properties : properties.filter(p => p.type === filter);
 
   const monthlyTotal = properties.reduce((sum, p) =>
-    sum + (p.utilityAccounts || []).reduce((s, a) =>
-      s + Number(a.statements?.[0]?.amountDue ?? 0), 0), 0);
+    sum + (p.utilityAccounts || []).reduce((s, a) => {
+      const raw = a.statements?.[0]?.rawDataJson as Record<string, unknown> | undefined;
+      const bal = raw?.accountBalance as number | undefined;
+      return s + Number(bal ?? a.statements?.[0]?.amountDue ?? 0);
+    }, 0), 0);
 
   const totalAccounts = properties.reduce((s, p) => s + (p.utilityAccounts?.length ?? 0), 0);
   const alertCount = properties.reduce((s, p) => s + (p._count?.insights ?? 0), 0);
@@ -105,7 +108,11 @@ export default function PropertiesPage() {
 
 function PropertyCard({ property }: { property: Property }) {
   const accounts = property.utilityAccounts || [];
-  const monthlyTotal = accounts.reduce((s, a) => s + Number(a.statements?.[0]?.amountDue ?? 0), 0);
+  const monthlyTotal = accounts.reduce((s, a) => {
+    const raw = a.statements?.[0]?.rawDataJson as Record<string, unknown> | undefined;
+    const bal = raw?.accountBalance as number | undefined;
+    return s + Number(bal ?? a.statements?.[0]?.amountDue ?? 0);
+  }, 0);
   const hasAlert = (property._count?.insights ?? 0) > 0;
   const syncStatus = accounts.some(a => a.lastSyncStatus === 'FAILED') ? 'error'
     : accounts.some(a => a.lastSyncStatus === 'PENDING') ? 'warning'
@@ -136,17 +143,40 @@ function PropertyCard({ property }: { property: Property }) {
         <div className="grid grid-cols-3 gap-1.5 mb-3">
           {accounts.slice(0, 6).map(account => {
             const latest = account.statements?.[0];
-            const dueDate = latest?.dueDate;
-            const isDue = dueDate && new Date(dueDate) <= new Date(Date.now() + 7 * 86400000);
+            const raw = latest?.rawDataJson as Record<string, unknown> | undefined;
+            const dueDate = latest?.dueDate ? new Date(latest.dueDate) : null;
+            const now = new Date();
+
+            // Determine true status
+            const isPaid = Number(latest?.amountPaid ?? 0) > 0 || raw?.isPaid === true;
+            const isPastDue = !isPaid && (raw?.isPastDue === true || (dueDate && dueDate < now));
+            const isDueSoon = !isPaid && !isPastDue && dueDate && dueDate <= new Date(now.getTime() + 7 * 86400000);
+            const pastDueAmt = raw?.pastDue != null ? Number(raw.pastDue) : 0;
+            const hasPastDueBalance = !isPaid && pastDueAmt > 0;
+
+            // Display amount — use accountBalance (total owed) if available, else amountDue
+            const accountBalance = raw?.accountBalance as number | undefined;
+            const displayAmt = accountBalance ?? (latest?.amountDue ? Number(latest.amountDue) : null);
+
+            let statusLabel = '—';
+            let statusColor = 'text-gray-500';
+            if (!latest) { statusLabel = 'No data'; statusColor = 'text-gray-600'; }
+            else if (isPaid) { statusLabel = 'Paid'; statusColor = 'text-emerald-500'; }
+            else if (isPastDue) { statusLabel = 'Overdue'; statusColor = 'text-red-400'; }
+            else if (isDueSoon) { statusLabel = 'Due soon'; statusColor = 'text-amber-500'; }
+            else if (dueDate) { statusLabel = `Due ${dueDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`; statusColor = 'text-blue-400'; }
+            else { statusLabel = 'Unpaid'; statusColor = 'text-amber-400'; }
+
             return (
               <div key={account.id} className="bg-white/5 rounded-lg p-2">
                 <p className="text-xs text-gray-400 truncate mb-0.5">{account.providerName}</p>
                 <p className="text-xs font-semibold text-gray-100">
-                  {latest?.amountDue ? `$${Number(latest.amountDue).toFixed(0)}` : '—'}
+                  {displayAmt != null ? `$${Number(displayAmt).toFixed(0)}` : '—'}
                 </p>
-                <p className={`text-xs mt-0.5 ${isDue ? 'text-amber-500' : 'text-emerald-500'}`}>
-                  {dueDate ? (isDue ? 'Due soon' : 'Paid') : '—'}
-                </p>
+                {hasPastDueBalance && (
+                  <p className="text-xs text-red-400">{`+$${pastDueAmt.toFixed(0)} past due`}</p>
+                )}
+                <p className={`text-xs mt-0.5 ${statusColor}`}>{statusLabel}</p>
               </div>
             );
           })}
