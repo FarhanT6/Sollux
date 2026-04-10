@@ -156,109 +156,98 @@ export class CoxScraper extends BaseScraperProvider {
         return [];
       }
 
-      // ── Step 1: Scrape the current bill summary from ibill/home.html ──────
-      // The page shows: Total balance ($252), due date (April 16), due immediately ($132)
-      // and a "Bill summary" table with per-statement rows and "view PDF" links.
+      // ── Step 1: Scrape ibill/home.html for balance + PDF links ──────────────
       const ibillData = await this.page!.evaluate(() => {
-        const txt = (el: Element | null) => el?.textContent?.trim() || '';
-
-        // Total balance
-        const balanceEl = document.querySelector('.total-balance, [class*="total-balance"], [class*="totalBalance"]');
-        let totalBalance: string | null = null;
-        let dueDate: string | null = null;
-        let dueImmediately: string | null = null;
-
-        // Scan all text nodes for the key amounts — ibill uses its own CSS classes
         const allText = document.body.innerText || '';
 
         // "Total balance due April 16" pattern
         const dueDateM = allText.match(/Total balance due\s+(\w+ \d+)/i);
-        if (dueDateM) dueDate = dueDateM[1];
+        const dueDate = dueDateM ? dueDateM[1] : null;
 
-        // First large dollar on page is usually total balance
-        const dollarMatches = [...allText.matchAll(/\$([\d,]+\.\d{2})/g)];
-        if (dollarMatches[0]) totalBalance = dollarMatches[0][1];
+        // All dollar amounts — first one is usually total balance
+        const dollarMatches = allText.match(/\$([\d,]+\.\d{2})/g) || [];
+        const totalBalance = dollarMatches[0] ? dollarMatches[0].replace('$', '') : null;
+
         // "Due immediately: $132.00"
         const dueImmM = allText.match(/Due immediately[:\s]+\$([\d,]+\.\d{2})/i);
-        if (dueImmM) dueImmediately = dueImmM[1];
+        const dueImmediately = dueImmM ? dueImmM[1] : null;
 
-        // Bill summary table — each column header is a statement date (e.g. "Feb 26", "Mar 26")
-        // Each has a "view PDF" link
-        type BillEntry = { date: string; pdfHref?: string };
-        const billEntries: BillEntry[] = [];
-
-        // Look for "view PDF" links — they're typically <a> elements near date text
-        const pdfLinks = Array.from(document.querySelectorAll('a')) as HTMLAnchorElement[];
-        for (const link of pdfLinks) {
-          const linkText = link.textContent?.trim().toLowerCase() || '';
-          if (!linkText.includes('pdf') && !linkText.includes('view pdf')) continue;
-          // Walk up to find the nearest date text
-          let el: Element | null = link;
+        // Collect PDF links with nearby date text
+        const billEntries = [];
+        const allLinks = Array.from(document.querySelectorAll('a'));
+        for (let i = 0; i < allLinks.length; i++) {
+          const link = allLinks[i];
+          const linkText = (link.textContent || '').trim().toLowerCase();
+          if (!linkText.includes('pdf')) continue;
+          // Walk up ancestors to find a date
+          let el = link.parentElement;
           let dateText = '';
-          for (let i = 0; i < 5 && el; i++) {
+          for (let j = 0; j < 5 && el; j++) {
             const t = el.textContent || '';
-            const dm = t.match(/(\w{3}\s+\d{1,2}(?:,?\s*\d{4})?)/);
-            if (dm) { dateText = dm[1]; break; }
+            const dm = t.match(/(\w{3,9}\s+\d{1,2}(?:,?\s*\d{4})?)/);
+            if (dm) { dateText = dm[1].trim(); break; }
             el = el.parentElement;
           }
-          billEntries.push({ date: dateText || '', pdfHref: link.href || undefined });
+          billEntries.push({ date: dateText, pdfHref: (link).href || '' });
         }
 
-        // Also check table header cells for dates paired with PDF links
-        if (billEntries.length === 0) {
-          const ths = Array.from(document.querySelectorAll('th, td'));
-          for (const th of ths) {
-            const t = th.textContent?.trim() || '';
-            const dm = t.match(/^(\w{3}\s+\d{1,2})$/);
-            if (!dm) continue;
-            const pdfLink = th.querySelector('a') as HTMLAnchorElement | null;
-            billEntries.push({ date: dm[1], pdfHref: pdfLink?.href });
-          }
+        // Also grab th/td cells that look like "Feb 26" with a sibling PDF link
+        const cells = Array.from(document.querySelectorAll('th, td'));
+        for (let i = 0; i < cells.length; i++) {
+          const cell = cells[i];
+          const t = (cell.textContent || '').trim();
+          const dm = t.match(/^(\w{3}\s+\d{1,2})$/);
+          if (!dm) continue;
+          const pdfA = cell.querySelector('a');
+          if (pdfA) billEntries.push({ date: dm[1], pdfHref: pdfA.href || '' });
         }
 
-        return { totalBalance, dueDate, dueImmediately, billEntries, rawText: allText.slice(0, 800) };
+        return { totalBalance, dueDate, dueImmediately, billEntries, rawText: allText.slice(0, 600) };
       });
 
-      console.log('[Cox] ibill data:', JSON.stringify({ ...ibillData, rawText: ibillData.rawText.slice(0, 200) }));
+      console.log('[Cox] ibill raw text sample:', ibillData.rawText.slice(0, 300));
+      console.log('[Cox] ibill parsed — balance:', ibillData.totalBalance, '| dueDate:', ibillData.dueDate, '| dueImm:', ibillData.dueImmediately, '| pdfEntries:', ibillData.billEntries.length);
 
       // ── Step 2: Navigate to "View statements" for full history ─────────────
-      // Click the "View statements" link on ibill/home.html
       const viewStatementsClicked = await this.page!.evaluate(() => {
-        const link = Array.from(document.querySelectorAll('a'))
-          .find(a => /view\s+statements?/i.test(a.textContent || ''));
-        if (link) { (link as HTMLAnchorElement).click(); return true; }
+        const links = Array.from(document.querySelectorAll('a'));
+        for (let i = 0; i < links.length; i++) {
+          if (/view\s+statements?/i.test(links[i].textContent || '')) {
+            links[i].click();
+            return true;
+          }
+        }
         return false;
       });
 
-      let historyRows: Array<{ date: string; amount: string; pdfHref?: string }> = [];
+      const historyRows: Array<{ date: string; amount: string; pdfHref: string }> = [];
 
       if (viewStatementsClicked) {
         await this.page!.waitForTimeout(4000);
         await this.screenshot('cox-view-statements');
         console.log('[Cox] View statements URL:', this.page!.url());
 
-        historyRows = await this.page!.evaluate(() => {
-          type HRow = { date: string; amount: string; pdfHref?: string };
-          const results: HRow[] = [];
-          // Table rows with date + amount + optional PDF link
-          const rows = Array.from(document.querySelectorAll('table tr, [class*="statement" i], [class*="history" i]'));
-          for (const row of rows) {
-            const text = row.textContent?.trim() || '';
+        const scraped = await this.page!.evaluate(() => {
+          const results = [];
+          const rows = Array.from(document.querySelectorAll('table tr, [class*="statement"], [class*="history"]'));
+          for (let i = 0; i < rows.length; i++) {
+            const row = rows[i];
+            const text = (row.textContent || '').trim();
             if (!/\$[\d,]+\.\d{2}/.test(text)) continue;
-            const dateM = text.match(/(\w{3}\s+\d{1,2},?\s*\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})/);
+            const dateM = text.match(/(\w{3,9}\s+\d{1,2},?\s*\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})/);
             const amtM = text.match(/\$([\d,]+\.\d{2})/);
             if (!dateM || !amtM) continue;
-            const pdfHref = (row.querySelector('a[href*=".pdf"], a:has-text("PDF"), a:has-text("pdf")') as HTMLAnchorElement | null)?.href;
-            results.push({ date: dateM[1], amount: amtM[1], pdfHref });
+            const pdfA = row.querySelector('a[href*=".pdf"]');
+            results.push({ date: dateM[1], amount: amtM[1], pdfHref: pdfA ? pdfA.getAttribute('href') || '' : '' });
           }
           return results.slice(0, 24);
         });
+        historyRows.push(...scraped);
         console.log(`[Cox] History rows found: ${historyRows.length}`);
       }
 
       // ── Step 3: Build statements ───────────────────────────────────────────
       if (historyRows.length > 0) {
-        // Use full statement history
         for (const row of historyRows) {
           const statementDate = this.parseDate(row.date);
           if (!statementDate) continue;
@@ -273,7 +262,7 @@ export class CoxScraper extends BaseScraperProvider {
           });
         }
       } else {
-        // Fall back: use bill summary PDF links from ibill/home.html + current balance
+        // Fall back: use PDF links scraped from ibill/home.html
         for (const entry of ibillData.billEntries) {
           const statementDate = this.parseDate(entry.date + ' 2025') || this.parseDate(entry.date);
           if (!statementDate) continue;
@@ -286,26 +275,21 @@ export class CoxScraper extends BaseScraperProvider {
           });
         }
 
-        // If we got nothing from PDF links, at minimum save the current bill
+        // Last resort: save current balance as a statement
         if (statements.length === 0 && ibillData.totalBalance) {
           const totalBalance = parseFloat(ibillData.totalBalance.replace(/,/g, ''));
           const dueImmediately = ibillData.dueImmediately
             ? parseFloat(ibillData.dueImmediately.replace(/,/g, ''))
             : undefined;
-          // Current month charge = total balance - past due
           const currentCharge = dueImmediately != null
             ? Math.max(0, Math.round((totalBalance - dueImmediately) * 100) / 100)
             : totalBalance;
-          const dueDate = ibillData.dueDate ? this.parseDate(ibillData.dueDate + ' 2025') : undefined;
+          const dueDateParsed = ibillData.dueDate ? this.parseDate(ibillData.dueDate + ' 2025') : undefined;
           statements.push({
             statementDate: new Date(),
-            dueDate: dueDate ?? undefined,
+            dueDate: dueDateParsed ?? undefined,
             amountDue: currentCharge,
-            rawData: {
-              accountBalance: totalBalance,
-              pastDue: dueImmediately,
-              currentCharge,
-            },
+            rawData: { accountBalance: totalBalance, pastDue: dueImmediately, currentCharge },
           });
         }
       }
