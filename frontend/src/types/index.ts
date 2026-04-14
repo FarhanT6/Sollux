@@ -85,9 +85,10 @@ export interface Payment {
   notes?: string;
   createdAt: string;
   utilityAccount?: {
+    propertyId?: string;
     providerName: string;
     category: UtilityCategory;
-    property?: Pick<Property, 'address' | 'nickname'>;
+    property?: Pick<Property, 'id' | 'address' | 'nickname'>;
   };
 }
 

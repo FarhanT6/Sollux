@@ -109,11 +109,16 @@ export default function PropertiesPage() {
 function PropertyCard({ property }: { property: Property }) {
   const accounts = property.utilityAccounts || [];
   const monthlyTotal = accounts.reduce((s, a) => {
-    const raw = a.statements?.[0]?.rawDataJson as Record<string, unknown> | undefined;
-    const bal = raw?.accountBalance as number | undefined;
-    return s + Number(bal ?? a.statements?.[0]?.amountDue ?? 0);
+    return s + Number(a.statements?.[0]?.amountDue ?? 0);
   }, 0);
   const hasAlert = (property._count?.insights ?? 0) > 0;
+  const hasPastDue = accounts.some(a => {
+    const raw = a.statements?.[0]?.rawDataJson as Record<string, unknown> | undefined;
+    const isPaid = Number(a.statements?.[0]?.amountPaid ?? 0) > 0 || raw?.isPaid === true;
+    if (isPaid) return false;
+    const pastDue = raw?.pastDue != null ? Number(raw.pastDue) : 0;
+    return pastDue > 0 || raw?.isPastDue === true;
+  });
   const syncStatus = accounts.some(a => a.lastSyncStatus === 'FAILED') ? 'error'
     : accounts.some(a => a.lastSyncStatus === 'PENDING') ? 'warning'
     : 'success';
@@ -133,6 +138,7 @@ function PropertyCard({ property }: { property: Property }) {
           <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
             <span className="pill pill-gray">{PROPERTY_TYPE_LABELS[property.type]}</span>
             <span className="pill pill-blue">{accounts.length} accounts</span>
+            {hasPastDue && <span className="pill pill-red">Past due</span>}
             {hasAlert && <span className="pill pill-red">Alert</span>}
           </div>
         </div>
@@ -154,15 +160,14 @@ function PropertyCard({ property }: { property: Property }) {
             const pastDueAmt = raw?.pastDue != null ? Number(raw.pastDue) : 0;
             const hasPastDueBalance = !isPaid && pastDueAmt > 0;
 
-            // Display amount — use accountBalance (total owed) if available, else amountDue
-            const accountBalance = raw?.accountBalance as number | undefined;
-            const displayAmt = accountBalance ?? (latest?.amountDue ? Number(latest.amountDue) : null);
+            // Display current charge only (amountDue); past due shown separately below
+            const displayAmt = latest?.amountDue != null ? Number(latest.amountDue) : null;
 
             let statusLabel = '—';
             let statusColor = 'text-gray-500';
             if (!latest) { statusLabel = 'No data'; statusColor = 'text-gray-600'; }
             else if (isPaid) { statusLabel = 'Paid'; statusColor = 'text-emerald-500'; }
-            else if (isPastDue) { statusLabel = 'Overdue'; statusColor = 'text-red-400'; }
+            else if (isPastDue) { statusLabel = 'Past due'; statusColor = 'text-red-400'; }
             else if (isDueSoon) { statusLabel = 'Due soon'; statusColor = 'text-amber-500'; }
             else if (dueDate) { statusLabel = `Due ${dueDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`; statusColor = 'text-blue-400'; }
             else { statusLabel = 'Unpaid'; statusColor = 'text-amber-400'; }

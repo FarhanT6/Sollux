@@ -77,5 +77,28 @@ setTimeout(() => {
   setInterval(scheduleAllInsights, 24 * 60 * 60 * 1000);
 }, msUntilNightly);
 
-// Run initial scrape on startup (after 30s delay)
-setTimeout(scheduleAllScrapes, 30_000);
+// NOTE: Removed startup auto-scrape. Scrapes run every 6 hours via setInterval above,
+// or on demand via the Sync button / POST /api/utilities/:id/sync.
+
+// ── One-time cleanup: clear bad placeholder confirmation numbers ─────────────
+(async () => {
+  try {
+    const confResult = await db.payment.updateMany({
+      where: { confirmationNumber: { in: ['Number', 'number', 'N/A', 'None', 'null', 'undefined'] } },
+      data: { confirmationNumber: null },
+    });
+    if (confResult.count > 0) {
+      console.log(`[Cleanup] Cleared ${confResult.count} bad confirmationNumber value(s)`);
+    }
+    // Also clear overly generic payment method values captured by old regex
+    const methodResult = await db.payment.updateMany({
+      where: { paymentMethod: { in: ['Online', 'online', 'Automatic', 'automatic', 'Checking', 'checking', 'Debit', 'debit'] } },
+      data: { paymentMethod: null },
+    });
+    if (methodResult.count > 0) {
+      console.log(`[Cleanup] Cleared ${methodResult.count} bad paymentMethod value(s)`);
+    }
+  } catch (err) {
+    console.warn('[Cleanup] Could not clean bad confirmationNumbers:', err);
+  }
+})();

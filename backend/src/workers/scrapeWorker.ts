@@ -81,7 +81,20 @@ const worker = new Worker<ScrapeJobData>(
         .map(a => (a.accountNumberEnc ? decrypt(a.accountNumberEnc) : null))
         .filter(Boolean) as string[];
 
-      const credentials = { username, password, accountNumbers };
+      // Find the most recent statement that already has a PDF stored.
+      // Statements without a PDF are re-scraped so we can download the PDF.
+      // This means: first run always fetches all PDFs; future runs skip dates already downloaded.
+      const latestStmt = await db.statement.findFirst({
+        where: {
+          utilityAccountId: { in: sameCredAccounts.map(a => a.id) },
+          pdfS3Key: { not: null },   // only count statements where PDF was actually stored
+        },
+        orderBy: { statementDate: 'desc' },
+        select: { statementDate: true },
+      });
+      const latestStatementDate = latestStmt?.statementDate ?? undefined;
+
+      const credentials = { username, password, accountNumbers, latestStatementDate };
       const result = await scraper.run(credentials, utilityAccountId);
 
       if (!result.success) throw new Error(result.error || 'Scraper returned failure');
@@ -118,13 +131,19 @@ const worker = new Worker<ScrapeJobData>(
             pdfS3Key = await uploadDocument(key, stmt.pdfBuffer);
           }
 
+          // Check for exact date match first, then same-month match (catches account summary
+          // rows that arrive with today's date instead of the real statement date)
+          const monthStart = new Date(stmt.statementDate.getFullYear(), stmt.statementDate.getMonth(), 1);
+          const monthEnd = new Date(stmt.statementDate.getFullYear(), stmt.statementDate.getMonth() + 1, 0, 23, 59, 59);
           const existing = await db.statement.findFirst({
-            where: { utilityAccountId: acct.id, statementDate: stmt.statementDate },
+            where: { utilityAccountId: acct.id, statementDate: { gte: monthStart, lte: monthEnd } },
+            orderBy: { createdAt: 'asc' }, // prefer the oldest (first scraped = real statement)
           });
 
+          const isPaid = stmt.rawData?.isPaid === true;
+          const amountPaid = isPaid && stmt.amountDue ? stmt.amountDue : undefined;
+
           if (!existing) {
-            // If scraper flagged this as paid (no "Pay" button on portal), record amountPaid
-            const isPaid = stmt.rawData?.isPaid === true;
             await db.statement.create({
               data: {
                 utilityAccountId: acct.id,
@@ -133,7 +152,7 @@ const worker = new Worker<ScrapeJobData>(
                 billingPeriodStart: stmt.billingPeriodStart,
                 billingPeriodEnd: stmt.billingPeriodEnd,
                 amountDue: stmt.amountDue,
-                amountPaid: isPaid && stmt.amountDue ? stmt.amountDue : undefined,
+                amountPaid,
                 usageValue: stmt.usageValue,
                 usageUnit: stmt.usageUnit,
                 ratePlan: stmt.ratePlan,
@@ -143,6 +162,23 @@ const worker = new Worker<ScrapeJobData>(
             });
             statementsInserted++;
             totalInserted++;
+          } else {
+            // Update existing statement if paid status has changed or rawData has new info.
+            // This handles the case where a user pays a past-due bill between syncs.
+            const wasUnpaid = !existing.amountPaid;
+            const rawChanged = JSON.stringify(existing.rawDataJson) !== JSON.stringify(stmt.rawData);
+            if ((isPaid && wasUnpaid) || rawChanged) {
+              await db.statement.update({
+                where: { id: existing.id },
+                data: {
+                  ...(isPaid && wasUnpaid ? { amountPaid } : {}),
+                  rawDataJson: stmt.rawData as Prisma.InputJsonValue,
+                  // Also update dueDate/amounts in case scraper got better data on re-scrape
+                  ...(stmt.dueDate ? { dueDate: stmt.dueDate } : {}),
+                  ...(stmt.amountDue ? { amountDue: stmt.amountDue } : {}),
+                },
+              });
+            }
           }
         }
 
@@ -152,18 +188,39 @@ const worker = new Worker<ScrapeJobData>(
             const existing = await db.payment.findFirst({
               where: { utilityAccountId: acct.id, paymentDate: pmt.paymentDate, amount: pmt.amount },
             });
+            // Helper: is this a "bad" placeholder value scraped incorrectly?
+            const isBadConfirmation = (s?: string | null) =>
+              !s || /^(number|n\/a|none|null|undefined)$/i.test(s.trim());
+            // Single generic words are not useful payment methods
+            const isBadMethod = (s?: string | null) =>
+              !s || /^(online|automatic|checking|debit|credit|bank|payment)$/i.test(s.trim());
+
             if (!existing) {
               await db.payment.create({
                 data: {
                   utilityAccountId: acct.id,
                   amount: pmt.amount,
                   paymentDate: pmt.paymentDate,
-                  confirmationNumber: pmt.confirmationNumber,
-                  paymentMethod: pmt.paymentMethod,
+                  confirmationNumber: isBadConfirmation(pmt.confirmationNumber) ? null : pmt.confirmationNumber,
+                  paymentMethod: isBadMethod(pmt.paymentMethod) ? null : pmt.paymentMethod,
                   status: 'PAID',
                 },
               });
               paymentsInserted++;
+            } else {
+              // Update if we now have better data (confirmation # was missing or bad before)
+              const needsUpdate =
+                (isBadConfirmation(existing.confirmationNumber) && !isBadConfirmation(pmt.confirmationNumber)) ||
+                (isBadMethod(existing.paymentMethod) && !isBadMethod(pmt.paymentMethod));
+              if (needsUpdate) {
+                await db.payment.update({
+                  where: { id: existing.id },
+                  data: {
+                    confirmationNumber: isBadConfirmation(pmt.confirmationNumber) ? existing.confirmationNumber : pmt.confirmationNumber,
+                    paymentMethod: isBadMethod(pmt.paymentMethod) ? null : pmt.paymentMethod,
+                  },
+                });
+              }
             }
           }
         }

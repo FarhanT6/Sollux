@@ -394,7 +394,250 @@ export class CoxScraper extends BaseScraperProvider {
   }
 
   async scrapePayments(): Promise<ScrapedPayment[]> {
-    return [];
+    const payments: ScrapedPayment[] = [];
+    try {
+      // Navigate directly to the transaction history page
+      // URL observed from browser: /ibill/transaction-history.html?selectedStatementCode=001
+      const TXN_URL = 'https://www.cox.com/ibill/transaction-history.html?selectedStatementCode=001';
+      console.log('[Cox] Navigating to transaction history:', TXN_URL);
+      await this.page!.goto(TXN_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await this.page!.waitForTimeout(5000);
+      await this.screenshot('cox-txn-history');
+      console.log('[Cox] Transaction history URL:', this.page!.url());
+
+      // Check for 404 or redirect away
+      const is404 = await this.page!.evaluate(() =>
+        /404|can't find that page/i.test(document.body.innerText || '')
+      );
+      if (is404 || !this.page!.url().includes('transaction-history')) {
+        // Fallback: go to ibill/home.html and click "View transaction history"
+        console.log('[Cox] Direct nav failed, trying from billing home...');
+        await this.page!.goto(this.BILLING_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await this.page!.waitForTimeout(4000);
+
+        const txnHref = await this.page!.evaluate(() => {
+          const links = Array.from(document.querySelectorAll('a'));
+          const a = links.find(el => /transaction\s*history/i.test(el.textContent || ''));
+          return a ? (a as HTMLAnchorElement).href : null;
+        });
+
+        if (!txnHref) {
+          console.warn('[Cox] No transaction history link found');
+          return payments;
+        }
+        console.log('[Cox] Found transaction history link:', txnHref);
+        await this.page!.goto(txnHref, { waitUntil: 'domcontentloaded', timeout: 25000 });
+        await this.page!.waitForTimeout(5000);
+        await this.screenshot('cox-txn-history-2');
+      }
+
+      // ── Expand date range to pull full history ────────────────────────────
+      // The page uses a calendar date-picker widget. We use evaluate() to set
+      // values directly on the inputs and fire change events, then press Escape
+      // to close any calendar popup before clicking Submit.
+      console.log('[Cox] Setting date range to get full history...');
+      try {
+        const today = new Date();
+        const endDateStr = `${String(today.getMonth() + 1).padStart(2, '0')}/${String(today.getDate()).padStart(2, '0')}/${today.getFullYear()}`;
+
+        // Set dates via evaluate to bypass the calendar picker
+        await this.page!.evaluate(({ start, end }) => {
+          const inputs = Array.from(document.querySelectorAll('input[type="text"], input[type="date"], input:not([type])'));
+          const startInput = inputs.find(el => {
+            const id = (el.id || '').toLowerCase();
+            const name = ((el as HTMLInputElement).name || '').toLowerCase();
+            const label = document.querySelector(`label[for="${el.id}"]`)?.textContent?.toLowerCase() || '';
+            return id.includes('start') || name.includes('start') || label.includes('start');
+          }) as HTMLInputElement | undefined;
+          const endInput = inputs.find(el => {
+            const id = (el.id || '').toLowerCase();
+            const name = ((el as HTMLInputElement).name || '').toLowerCase();
+            const label = document.querySelector(`label[for="${el.id}"]`)?.textContent?.toLowerCase() || '';
+            return id.includes('end') || name.includes('end') || label.includes('end');
+          }) as HTMLInputElement | undefined;
+
+          const setValue = (el: HTMLInputElement, val: string) => {
+            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+            nativeInputValueSetter?.call(el, val);
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+          };
+
+          if (startInput) setValue(startInput, start);
+          if (endInput) setValue(endInput, end);
+
+          return { startId: startInput?.id, endId: endInput?.id };
+        }, { start: '01/01/2019', end: endDateStr });
+
+        console.log('[Cox] Set date range 01/01/2019 →', endDateStr);
+        await this.page!.waitForTimeout(500);
+
+        // Press Escape to close any open calendar popup
+        await this.page!.keyboard.press('Escape');
+        await this.page!.waitForTimeout(500);
+
+        // Click Submit using evaluate to bypass visibility checks
+        const clicked = await this.page!.evaluate(() => {
+          const btns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
+          const submit = btns.find(el => /submit/i.test(el.textContent || '') || (el as HTMLInputElement).value === 'Submit') as HTMLElement | undefined;
+          if (submit) { submit.click(); return true; }
+          return false;
+        });
+        console.log('[Cox] Submit clicked via evaluate:', clicked);
+        await this.page!.waitForTimeout(6000);
+        await this.screenshot('cox-txn-full-range');
+        console.log('[Cox] After submit URL:', this.page!.url());
+
+        // Log how many rows are now showing
+        const listingText = await this.page!.evaluate(() => {
+          const el = Array.from(document.querySelectorAll('*')).find(e => /Listing\s+\d/.test(e.textContent || ''));
+          return el?.textContent?.match(/Listing[^\n]*/)?.[0] || '';
+        });
+        console.log('[Cox] Listing count after expand:', listingText);
+
+      } catch (err) {
+        console.warn('[Cox] Date range expansion failed:', err instanceof Error ? err.message : err);
+      }
+
+      // Wait for the table rows to appear
+      try {
+        await this.page!.waitForFunction(
+          () => document.querySelectorAll('table tr, [class*="transaction"], [class*="payment-row"]').length > 1,
+          { timeout: 15000 }
+        );
+      } catch {
+        console.warn('[Cox] Transaction rows did not appear in 15s');
+      }
+
+      // Dump raw page text for diagnostics
+      const rawText = await this.page!.evaluate(() => (document.body.innerText || ''));
+      console.log('[Cox] Transaction history raw text:\n', rawText.slice(0, 2000));
+
+      // ── Expand each row by clicking the ▶ arrow, then scrape details ──────
+      // The table has expand toggles (▶ buttons or clickable rows) next to each date.
+      // After clicking, the row expands to reveal confirmation # and payment method.
+      const expandButtons = await this.page!.$$('table tbody tr td:first-child button, table tbody tr td:first-child [role="button"], table tbody tr.expandable, button[aria-label*="expand"], td[class*="expand"] button, td[class*="toggle"]');
+      console.log(`[Cox] Found ${expandButtons.length} expand buttons`);
+
+      // Click all expand buttons to reveal details
+      for (const btn of expandButtons) {
+        try {
+          await btn.click();
+          await this.page!.waitForTimeout(800);
+        } catch { /* ignore */ }
+      }
+
+      // If no dedicated expand buttons found, try clicking the first cell of each data row
+      if (expandButtons.length === 0) {
+        const rows = await this.page!.$$('table tbody tr:not([class*="detail"]):not([class*="expand"])');
+        console.log(`[Cox] Trying to click ${rows.length} table rows to expand`);
+        for (const row of rows) {
+          try {
+            await row.click();
+            await this.page!.waitForTimeout(800);
+          } catch { /* ignore */ }
+        }
+      }
+
+      await this.screenshot('cox-txn-expanded');
+
+      // Now scrape the full page text with all expanded rows
+      const expandedText = await this.page!.evaluate(() => document.body.innerText || '');
+      console.log('[Cox] Expanded transaction text:\n', expandedText.slice(0, 2000));
+
+      // Parse rows: date format is MM/DD/YYYY from the table
+      // Each row: date | description ("Payment") | status ("Successful") | amount
+      // Expanded detail: confirmation #, payment method, etc.
+      const parsed = await this.page!.evaluate(() => {
+        const results: Array<{
+          date: string;
+          amount: string;
+          status: string;
+          confirmationNumber: string;
+          paymentMethod: string;
+          rawDetail: string;
+        }> = [];
+
+        // Walk all table rows
+        const rows = Array.from(document.querySelectorAll('table tbody tr'));
+        for (let i = 0; i < rows.length; i++) {
+          const cells = Array.from(rows[i].querySelectorAll('td'));
+          const rowText = (rows[i].textContent || '').replace(/\s+/g, ' ').trim();
+
+          // Main data row: has a date (MM/DD/YYYY) and a dollar amount
+          const dateM = rowText.match(/(\d{2}\/\d{2}\/\d{4})/);
+          const amtM  = rowText.match(/\$([\d,]+\.\d{2})/);
+          if (!dateM || !amtM) continue;
+
+          const statusM = rowText.match(/(Successful|Pending|Failed|Reversed)/i);
+
+          // Look for expanded detail — check the full row text first (detail may be inline),
+          // then check adjacent rows
+          let confirmationNumber = '';
+          let paymentMethod = '';
+          // The expanded detail is inline in rowText after clicking the toggle
+          const detailSources = [rowText];
+          for (let j = 1; j <= 5 && i + j < rows.length; j++) {
+            const next = (rows[i + j].textContent || '').replace(/\s+/g, ' ').trim();
+            if (/\d{2}\/\d{2}\/\d{4}/.test(next) && /\$[\d,]+\.\d{2}/.test(next)) break;
+            detailSources.push(next);
+          }
+          let rawDetail = detailSources.join(' ');
+          for (const detailText of detailSources) {
+
+                // Match "Confirmation Number: XXXXX" or "Conf#: XXXXX" or "Reference: XXXXX"
+            // Require a colon or # separator to avoid capturing label words like "Number"
+            const confM = detailText.match(/(?:confirm(?:ation)?(?:\s+number)?|reference|auth(?:orization)?(?:\s+code)?|transaction\s*id)\s*[:#]\s*([A-Z0-9\-]{4,30})/i);
+            if (confM && !confirmationNumber) confirmationNumber = confM[1];
+
+            // Cox expanded format: "Paid With: Visa ending in 5854" or "Paid With: Bank ending in 0705"
+            const paidWithM = detailText.match(/paid\s+with\s*:\s*(.+?)(?:\s+Statement:|$)/i);
+            if (paidWithM && !paymentMethod) {
+              paymentMethod = paidWithM[1].trim();
+            } else {
+              const methodM = detailText.match(/(visa|mastercard|amex|discover|bank\s+ending|checking\s+ending|credit\s+card|debit\s+card|e-?check|autopay|auto\s+pay)/i);
+              if (methodM && !paymentMethod) paymentMethod = methodM[1];
+            }
+          }
+
+          results.push({
+            date: dateM[1],
+            amount: amtM[1],
+            status: statusM ? statusM[1] : '',
+            confirmationNumber: confirmationNumber.trim(),
+            paymentMethod: paymentMethod.trim(),
+            rawDetail: rawDetail.trim().slice(0, 300),
+          });
+        }
+        return results;
+      });
+
+      console.log(`[Cox] Parsed payment rows: ${parsed.length}`, JSON.stringify(parsed));
+
+      for (const row of parsed) {
+        // Skip non-payment or failed transactions
+        if (row.status && /failed|reversed/i.test(row.status)) continue;
+
+        const paymentDate = this.parseDate(row.date);
+        if (!paymentDate) continue;
+        const amount = parseFloat(row.amount.replace(/,/g, ''));
+        if (isNaN(amount) || amount <= 0) continue;
+
+        payments.push({
+          paymentDate,
+          amount,
+          confirmationNumber: row.confirmationNumber || undefined,
+          paymentMethod: row.paymentMethod || undefined,
+        });
+      }
+
+    } catch (err) {
+      console.error('[Cox] Payment scraping error:', err instanceof Error ? err.message : err);
+      await this.screenshot('cox-payments-error');
+    }
+
+    console.log(`[Cox] Total payments found: ${payments.length}`);
+    return payments;
   }
 
   private parseDollarFromText(text: string): number | undefined {

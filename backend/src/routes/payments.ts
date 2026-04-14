@@ -39,9 +39,10 @@ router.get('/', async (req, res, next) => {
       include: {
         utilityAccount: {
           select: {
+            propertyId: true,
             providerName: true,
             category: true,
-            property: { select: { address: true, nickname: true } },
+            property: { select: { id: true, address: true, nickname: true } },
           },
         },
         statement: { select: { statementDate: true, amountDue: true } },
