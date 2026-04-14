@@ -197,6 +197,13 @@ export class RepublicServicesScraper extends BaseScraperProvider {
         const data = await response.json().catch(() => null);
         if (!data) return;
 
+        // Log all JSON API calls to/from republicservices.com for diagnosis
+        if (/republicservices\.com/i.test(url)) {
+          const preview = JSON.stringify(data).slice(0, 200);
+          console.log(`[RepublicServices] API ← ${url}`);
+          console.log(`[RepublicServices] API data: ${preview}`);
+        }
+
         // Accounts / service addresses
         if (/\/accounts?\b|\/customers?\b|\/services?\b/i.test(url)) {
           this.parseAccountResponse(url, data);
@@ -255,6 +262,12 @@ export class RepublicServicesScraper extends BaseScraperProvider {
       await this.dismissBanners();
       await this.screenshot('rs-dashboard');
 
+      // Log dashboard body to see account tiles / balances
+      const dashBody = await this.page!.evaluate(() =>
+        (document.body.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 600)
+      );
+      console.log(`[RepublicServices] Dashboard body: ${dashBody}`);
+
       // Extract all useful hrefs from the dashboard before navigating away
       const dashLinks = await this.page!.evaluate(() => {
         const links = Array.from(document.querySelectorAll('a[href]')) as HTMLAnchorElement[];
@@ -263,26 +276,24 @@ export class RepublicServicesScraper extends BaseScraperProvider {
           .filter(l => l.href && l.href.startsWith('http'));
       });
 
-      console.log(`[RepublicServices] Dashboard links found: ${dashLinks.length}`);
-      dashLinks.forEach(l => console.log(`  "${l.text}" → ${l.href}`));
-
       // Find the Pay Bill link href
       const payBillLink = dashLinks.find(l => /pay.?bill|pay\s+my/i.test(l.text));
       const billingHistoryLink = dashLinks.find(l => /billing.?history|bill.?history|statement/i.test(l.text));
 
-      // ── 2. Navigate to Pay Bill (current balance + account number) ────────
+      // ── 2. Navigate to Pay Bill via click (not goto) ──────────────────────
+      // The RS portal is a React Router SPA. Using page.goto() triggers a full
+      // page reload which resets React state (incl. the selected account). We
+      // must click the link so React Router handles it in-page, preserving
+      // the account context that was set during the post-login dashboard load.
       const payBillUrl = payBillLink?.href;
-      if (payBillUrl) {
-        await this.page!.goto(payBillUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-      } else {
-        // Fallback: click the "Pay Bill" shortcut in the header
-        await this.page!.evaluate(() => {
-          const el = Array.from(document.querySelectorAll('a, button'))
-            .find(e => /pay.?bill|pay\s+my/i.test(e.textContent || ''));
-          if (el) (el as HTMLElement).click();
-        });
-      }
-      // Wait for the React SPA to finish rendering (network idle = XHR done)
+      console.log(`[RepublicServices] Clicking Pay Bill: ${payBillUrl || '(not found, will evaluate-click)'}`);
+      await this.page!.evaluate(() => {
+        const el = Array.from(document.querySelectorAll('a'))
+          .find(a => /pay.?bill/i.test(a.textContent || '') && a.href?.includes('pay-bill'));
+        if (el) (el as HTMLElement).click();
+      });
+      // Wait for React Router to finish the client-side navigation + data fetch
+      await this.page!.waitForURL(/pay-bill/, { timeout: 15000 }).catch(() => {});
       await this.page!.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
       await this.page!.waitForTimeout(2000);
       await this.screenshot('rs-billing-overview');
@@ -312,41 +323,49 @@ export class RepublicServicesScraper extends BaseScraperProvider {
         `${this.PORTAL_BASE}/account/manage/billing-history`,
       );
 
-      // Deduplicate
-      const seenHistoryUrls = new Set<string>();
-      for (const historyUrl of derivedHistoryUrls) {
-        if (seenHistoryUrls.has(historyUrl)) continue;
-        seenHistoryUrls.add(historyUrl);
-        try {
-          await this.page!.goto(historyUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-          await this.page!.waitForLoadState('networkidle', { timeout: 12000 }).catch(() => {});
-          await this.page!.waitForTimeout(2000);
-          const finalUrl = this.page!.url();
-          const bodySnippet = await this.page!.evaluate(() =>
-            (document.body.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 300)
-          );
-          console.log(`[RepublicServices] History page ${historyUrl} → final URL: ${finalUrl}`);
-          console.log(`[RepublicServices] History page body snippet: ${bodySnippet}`);
-          await this.screenshot('rs-billing-history');
-          await this.domScrapeStatementRows();
-          console.log(`[RepublicServices] Billing history at ${historyUrl}: invoices=${this.capturedInvoices.length}`);
-          if (this.capturedInvoices.length > 1) break;
-        } catch { /* try next */ }
+      // ── 4. Navigate to Billing History via in-page click ─────────────────
+      // First try clicking a "billing history" link that's already on the
+      // pay-bill page (React Router — no reload, account context preserved).
+      const historyClicked = await this.page!.evaluate(() => {
+        const el = Array.from(document.querySelectorAll('a, button'))
+          .find(e => /billing.?history|bill.?history|view.*statement|statement.*history/i.test(e.textContent || ''));
+        if (el) { (el as HTMLElement).click(); return (el as HTMLAnchorElement).href || 'clicked'; }
+        return null;
+      });
+      if (historyClicked) {
+        await this.page!.waitForLoadState('networkidle', { timeout: 12000 }).catch(() => {});
+        await this.page!.waitForTimeout(2000);
+        const bodyAfterClick = await this.page!.evaluate(() =>
+          (document.body.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 300)
+        );
+        console.log(`[RepublicServices] After clicking history link "${historyClicked}": ${this.page!.url()}`);
+        console.log(`[RepublicServices] Body after history click: ${bodyAfterClick}`);
+        await this.screenshot('rs-billing-history-clicked');
+        await this.domScrapeStatementRows();
+        console.log(`[RepublicServices] Invoices after history click: ${this.capturedInvoices.length}`);
       }
 
-      // ── 4. If still no history, click "Billing History" from current page ─
+      // If click didn't work, try clicking the nav links from the account portal
+      // (these also use React Router so won't reset state)
       if (this.capturedInvoices.length <= 1) {
-        const clicked = await this.page!.evaluate(() => {
-          const el = Array.from(document.querySelectorAll('a, button'))
-            .find(e => /billing.?history|bill.?history|view.*statement|statement.*history/i.test(e.textContent || ''));
+        const navClicked = await this.page!.evaluate(() => {
+          // Try clicking any "Billing" or "History" nav item
+          const el = Array.from(document.querySelectorAll('nav a, [role="navigation"] a, [class*="nav"] a'))
+            .find(e => /billing|history|statement/i.test(e.textContent || ''));
           if (el) { (el as HTMLElement).click(); return (el as HTMLAnchorElement).href || 'clicked'; }
           return null;
         });
-        if (clicked) {
-          await this.page!.waitForTimeout(3000);
-          await this.screenshot('rs-billing-history-clicked');
+        if (navClicked) {
+          await this.page!.waitForLoadState('networkidle', { timeout: 12000 }).catch(() => {});
+          await this.page!.waitForTimeout(2000);
+          const bodyAfterNav = await this.page!.evaluate(() =>
+            (document.body.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 300)
+          );
+          console.log(`[RepublicServices] After clicking nav "${navClicked}": ${this.page!.url()}`);
+          console.log(`[RepublicServices] Body after nav click: ${bodyAfterNav}`);
+          await this.screenshot('rs-billing-history-nav');
           await this.domScrapeStatementRows();
-          console.log(`[RepublicServices] After clicking billing history ("${clicked}"): invoices=${this.capturedInvoices.length}`);
+          console.log(`[RepublicServices] Invoices after nav click: ${this.capturedInvoices.length}`);
         }
       }
 
