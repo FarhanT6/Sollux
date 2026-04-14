@@ -48,6 +48,10 @@ export interface ScraperCredentials {
    *  When multiple accounts share one login, each account gets its own cutoff
    *  so a new account (no statements yet) is never blocked by an older account's date. */
   latestStatementDates?: Record<string, Date>;
+  /** Per-account-number set of ALL statement dates that already have a PDF stored.
+   *  Use this for exact-date dedup: skip a row only if its date is in this set,
+   *  NOT if it's older than the latest — older gaps must still be backfilled. */
+  knownStatementDates?: Record<string, string[]>;  // YYYY-MM-DD strings for easy comparison
 }
 
 export abstract class BaseScraperProvider {

@@ -142,22 +142,25 @@ export class CityBrawleyScraper extends BaseScraperProvider {
         console.log(`[Brawley] ${accountNumber}: ${rows.length} transaction rows`);
 
         // ── Statements ────────────────────────────────────────────────────────
-        const datesMap = this.credentials?.latestStatementDates;
-        const rawCutoff = datesMap
-          ? (datesMap[accountNumber] ?? null)
-          : (this.credentials?.latestStatementDate ?? null);
-        const latestKnown = rawCutoff ? new Date(rawCutoff) : null;
+        // Use the exact-date set to skip only rows whose specific date is already
+        // stored in S3. DO NOT use a cutoff (latestKnown) — that would block older
+        // bills that were never downloaded (e.g. 2024 data when we only have 2025-26).
+        const knownDates: Set<string> = new Set(
+          this.credentials?.knownStatementDates?.[accountNumber] ?? []
+        );
+        console.log(`[Brawley] ${accountNumber}: ${knownDates.size} dates already stored`);
 
         const billRows = rows.filter(r => {
           if (!r.description.toLowerCase().includes('bill')) return false;
           if (!r.billUrl && !r.isClickable) return false;
-          if (latestKnown) {
-            const rowDate = this.parseDate(r.date);
-            if (rowDate && rowDate <= latestKnown) return false;
+          const rowDate = this.parseDate(r.date);
+          if (rowDate) {
+            const iso = rowDate.toISOString().slice(0, 10); // YYYY-MM-DD
+            if (knownDates.has(iso)) return false; // exact date already in S3, skip
           }
           return true;
         });
-        console.log(`[Brawley] ${accountNumber}: ${billRows.length} new bill rows (latestKnown=${latestKnown?.toISOString().slice(0,10) ?? 'none'})`);
+        console.log(`[Brawley] ${accountNumber}: ${billRows.length} new bill rows to scrape`);
 
         for (const row of billRows) {
           try {

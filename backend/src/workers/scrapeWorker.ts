@@ -93,20 +93,27 @@ const worker = new Worker<ScrapeJobData>(
         select: { utilityAccountId: true, statementDate: true },
       });
 
-      // latestStatementDates: accountNumber → most recent statement date
+      // latestStatementDates: accountNumber → most recent statement date (for new-account guard)
+      // knownStatementDates:  accountNumber → ALL stored dates as YYYY-MM-DD (for exact-date dedup)
       const latestStatementDates: Record<string, Date> = {};
+      const knownStatementDates: Record<string, string[]> = {};
       for (const acct of sameCredAccounts) {
         const acctNum = acct.accountNumberEnc ? decrypt(acct.accountNumberEnc) : null;
         if (!acctNum) continue;
-        const found = latestStmts.find(s => s.utilityAccountId === acct.id);
-        if (found) latestStatementDates[acctNum] = found.statementDate;
+        const acctStmts = latestStmts.filter(s => s.utilityAccountId === acct.id);
+        if (acctStmts.length > 0) {
+          latestStatementDates[acctNum] = acctStmts[0].statementDate; // already sorted desc
+          knownStatementDates[acctNum] = acctStmts.map(s =>
+            s.statementDate.toISOString().slice(0, 10)   // YYYY-MM-DD
+          );
+        }
       }
 
       // Legacy single-date field: the global maximum across all accounts (for scrapers
       // that don't yet support per-account maps, e.g. single-account scrapers).
       const latestStatementDate = latestStmts.length > 0 ? latestStmts[0].statementDate : undefined;
 
-      const credentials = { username, password, accountNumbers, latestStatementDate, latestStatementDates };
+      const credentials = { username, password, accountNumbers, latestStatementDate, latestStatementDates, knownStatementDates };
       const result = await scraper.run(credentials, utilityAccountId);
 
       if (!result.success) throw new Error(result.error || 'Scraper returned failure');
