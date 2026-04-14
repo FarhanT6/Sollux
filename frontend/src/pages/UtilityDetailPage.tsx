@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
-  getUtility, syncUtility, getStatementDownloadUrl,
+  getUtility, syncUtility, deleteUtility, getStatementDownloadUrl,
   getPaymentPlan, createPaymentPlan, updatePaymentPlan, deletePaymentPlan,
 } from '../api/client';
 import { CATEGORY_LABELS, CATEGORY_COLORS } from '../types';
@@ -203,9 +203,11 @@ function PaymentPlanCard({
 
 export default function UtilityDetailPage() {
   const { propertyId, accountId } = useParams<{ propertyId: string; accountId: string }>();
+  const navigate = useNavigate();
   const [account, setAccount] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [tab, setTab] = useState<Tab>('statements');
   const [search, setSearch] = useState('');
   const [yearFilter, setYearFilter] = useState<string>('all');
@@ -236,6 +238,21 @@ export default function UtilityDetailPage() {
       };
       setTimeout(poll, 2000);
     } catch { setSyncing(false); }
+  }
+
+  async function handleDelete() {
+    if (!accountId) return;
+    const confirmed = window.confirm(
+      `Delete "${account?.providerName}"?\n\nThis will permanently remove the account, all statements, payments, and PDFs. This cannot be undone.`
+    );
+    if (!confirmed) return;
+    setDeleting(true);
+    try {
+      await deleteUtility(accountId);
+      navigate(propertyId ? `/properties/${propertyId}` : '/properties');
+    } catch {
+      setDeleting(false);
+    }
   }
 
   const statements: any[] = useMemo(() => account?.statements || [], [account]);
@@ -348,9 +365,18 @@ export default function UtilityDetailPage() {
             )}
           </div>
         </div>
-        <button onClick={handleSync} disabled={syncing} className="btn btn-primary text-xs">
-          {syncing ? 'Syncing…' : 'Sync ↻'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={handleSync} disabled={syncing || deleting} className="btn btn-primary text-xs">
+            {syncing ? 'Syncing…' : 'Sync ↻'}
+          </button>
+          <button
+            onClick={handleDelete}
+            disabled={deleting || syncing}
+            className="text-xs px-3 py-1.5 rounded-lg text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors disabled:opacity-40"
+          >
+            {deleting ? 'Deleting…' : 'Delete'}
+          </button>
+        </div>
       </div>
 
       {/* Stats bar */}
