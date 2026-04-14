@@ -241,55 +241,92 @@ export class RepublicServicesScraper extends BaseScraperProvider {
     this._scraped = true;
 
     try {
-      // ── 1. Pay-bill page: current balance + account number ───────────────
-      await this.page!.goto(`${this.PORTAL_BASE}/account/pay-bill`, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      // ── 1. Start from dashboard — click header shortcuts to navigate ───────
+      // Direct URL navigation (e.g. /account/pay-bill) returns 404 because
+      // the portal requires a specific service account to be in session context.
+      // We must navigate via the page's own links from the dashboard.
+      await this.page!.goto(`${this.PORTAL_BASE}/account/dashboard`, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      await this.page!.waitForTimeout(3000);
+      await this.dismissBanners();
+      await this.screenshot('rs-dashboard');
+
+      // Extract all useful hrefs from the dashboard before navigating away
+      const dashLinks = await this.page!.evaluate(() => {
+        const links = Array.from(document.querySelectorAll('a[href]')) as HTMLAnchorElement[];
+        return links
+          .map(a => ({ text: (a.textContent || '').trim(), href: a.href }))
+          .filter(l => l.href && l.href.startsWith('http'));
+      });
+
+      console.log(`[RepublicServices] Dashboard links found: ${dashLinks.length}`);
+      dashLinks.slice(0, 30).forEach(l => console.log(`  "${l.text}" → ${l.href}`));
+
+      // Find the Pay Bill link href
+      const payBillLink = dashLinks.find(l => /pay.?bill|pay\s+my/i.test(l.text));
+      const billingHistoryLink = dashLinks.find(l => /billing.?history|bill.?history|statement/i.test(l.text));
+
+      // ── 2. Navigate to Pay Bill (current balance + account number) ────────
+      const payBillUrl = payBillLink?.href;
+      if (payBillUrl) {
+        await this.page!.goto(payBillUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      } else {
+        // Fallback: click the "Pay Bill" shortcut in the header
+        await this.page!.evaluate(() => {
+          const el = Array.from(document.querySelectorAll('a, button'))
+            .find(e => /pay.?bill|pay\s+my/i.test(e.textContent || ''));
+          if (el) (el as HTMLElement).click();
+        });
+      }
       await this.page!.waitForTimeout(3000);
       await this.screenshot('rs-billing-overview');
       await this.domScrapePayBillPage();
+      console.log(`[RepublicServices] After pay-bill nav: ${this.page!.url()}`);
 
-      // ── 2. Billing history page: list of past statements + PDF links ─────
-      const historyPaths = [
-        '/account/billing-history',
-        '/account/billing',
-        '/account/statements',
-      ];
-      for (const p of historyPaths) {
-        try {
-          await this.page!.goto(`${this.PORTAL_BASE}${p}`, { waitUntil: 'domcontentloaded', timeout: 12000 });
-          await this.page!.waitForTimeout(3000);
-          await this.screenshot(`rs-history${p.replace(/\//g, '-')}`);
-          await this.domScrapeStatementRows();
-          const hasRows = await this.page!.evaluate(() => /\$[\d,]+\.\d{2}/.test(document.body.textContent || ''));
-          if (hasRows || this.capturedInvoices.length > 0) break;
-        } catch { /* try next path */ }
+      // ── 3. Navigate to Billing History ────────────────────────────────────
+      const historyUrl = billingHistoryLink?.href;
+      if (historyUrl) {
+        await this.page!.goto(historyUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        await this.page!.waitForTimeout(3000);
+        await this.screenshot('rs-billing-history');
+        await this.domScrapeStatementRows();
+        console.log(`[RepublicServices] After billing-history nav: invoices=${this.capturedInvoices.length}`);
       }
 
-      // ── 3. Also try clicking "Billing History" nav link if still no data ──
-      if (this.capturedInvoices.length === 0) {
+      // ── 4. If still no history, click "Billing History" from current page ─
+      if (this.capturedInvoices.length <= 1) {
         const clicked = await this.page!.evaluate(() => {
-          const el = Array.from(document.querySelectorAll('a, button, li'))
-            .find(e => /billing.?history|statement.*history|view.*bill/i.test(e.textContent || ''));
-          if (el) { (el as HTMLElement).click(); return true; }
-          return false;
+          const el = Array.from(document.querySelectorAll('a, button'))
+            .find(e => /billing.?history|bill.?history|view.*statement|statement.*history/i.test(e.textContent || ''));
+          if (el) { (el as HTMLElement).click(); return (el as HTMLAnchorElement).href || 'clicked'; }
+          return null;
         });
         if (clicked) {
           await this.page!.waitForTimeout(3000);
-          await this.screenshot('rs-nav-billing-history');
+          await this.screenshot('rs-billing-history-clicked');
           await this.domScrapeStatementRows();
+          console.log(`[RepublicServices] After clicking billing history ("${clicked}"): invoices=${this.capturedInvoices.length}`);
         }
       }
 
       console.log(`[RepublicServices] Captured ${this.capturedAccounts.length} account(s), ${this.capturedInvoices.length} invoice(s)`);
 
-      // ── 4. Payment history ───────────────────────────────────────────────
-      const payPaths = ['/account/payment-history', '/account/billing-history', '/account/billing'];
-      for (const p of payPaths) {
+      // ── 5. Payment history ───────────────────────────────────────────────
+      const payHistoryLink = dashLinks.find(l => /payment.?history|pay.*history/i.test(l.text));
+      if (payHistoryLink?.href) {
+        await this.page!.goto(payHistoryLink.href, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await this.page!.waitForTimeout(2500);
+        await this.domScrapePayments();
+      } else {
+        // fall back — re-use dashboard billing-history URL which may have payment rows
+        const fallbackPaths = ['/account/payment-history'];
+        for (const p of fallbackPaths) {
         try {
           await this.page!.goto(`${this.PORTAL_BASE}${p}`, { waitUntil: 'domcontentloaded', timeout: 12000 });
           await this.page!.waitForTimeout(2500);
           await this.domScrapePayments();
           if (this.capturedPayments.length > 0) break;
         } catch { /* try next */ }
+        }
       }
     } catch (err) {
       console.error('[RepublicServices] _scrapeAll error:', err instanceof Error ? err.message : err);
