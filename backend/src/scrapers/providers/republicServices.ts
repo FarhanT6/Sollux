@@ -56,7 +56,9 @@ export class RepublicServicesScraper extends BaseScraperProvider {
   readonly providerSlug = 'republic-services';
   readonly providerName = 'Republic Services';
 
-  private readonly LOGIN_URL   = 'https://my.republicservices.com/u/login';
+  // The /u/login URL without an Auth0 state redirects to the marketing homepage.
+  // Start there and click the Login button to get a fresh Auth0 state redirect.
+  private readonly LOGIN_URL   = 'https://my.republicservices.com';
   private readonly PORTAL_BASE = 'https://my.republicservices.com';
 
   private capturedAccounts: RSAccount[]  = [];
@@ -67,16 +69,57 @@ export class RepublicServicesScraper extends BaseScraperProvider {
 
   async login(credentials: ScraperCredentials): Promise<boolean> {
     try {
+      // Navigate to portal home — /u/login without a state param redirects to
+      // the marketing site. We land on the marketing page, click Login to
+      // trigger a fresh Auth0 redirect, then fill in credentials.
       await this.page!.goto(this.LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
       await this.page!.waitForTimeout(2000);
       await this.screenshot('rs-login-page');
 
-      // Dismiss cookie / privacy banners
+      // Dismiss cookie / privacy banners first
       await this.dismissBanners();
+      await this.page!.waitForTimeout(500);
+
+      // ── Click the Login button on the marketing page ─────────────────────
+      // The page shows a centered "Login" card with a pink Login button.
+      // Clicking it triggers the OAuth/Auth0 redirect with a fresh state.
+      const emailSel = 'input[type="email"], input[name="email"], input[name="username"], #username, #email';
+      const alreadyOnAuthForm = await this.page!.locator(emailSel).count() > 0;
+
+      if (!alreadyOnAuthForm) {
+        // Find and click the Login button on the marketing landing page
+        const loginBtnClicked = await this.page!.evaluate(() => {
+          // The Login card has an <a> or <button> with text "Login" or "Log In"
+          const candidates = Array.from(document.querySelectorAll('a, button, input[type="submit"]'));
+          const btn = candidates.find(el => {
+            const txt = (el.textContent || (el as HTMLInputElement).value || '').trim();
+            return /^(log\s*in|login|sign\s*in)$/i.test(txt);
+          });
+          if (btn) { (btn as HTMLElement).click(); return true; }
+          return false;
+        });
+
+        if (!loginBtnClicked) {
+          // Fallback: try direct navigation to the auth endpoint
+          await this.page!.goto('https://my.republicservices.com/login', {
+            waitUntil: 'domcontentloaded', timeout: 15000,
+          }).catch(() => {});
+        }
+
+        await this.screenshot('rs-after-login-click');
+
+        // Wait for Auth0 form (redirected URL will contain /u/login?state=...)
+        try {
+          await this.page!.waitForURL(/\/u\/login|auth0|login/i, { timeout: 15000 });
+        } catch { /* may already be there */ }
+        await this.page!.waitForTimeout(2000);
+        await this.dismissBanners();
+      }
+
+      await this.screenshot('rs-auth-form');
 
       // ── Step 1: Email ────────────────────────────────────────────────────
-      const emailSel = 'input[type="email"], input[name="email"], input[name="username"], #username, #email';
-      await this.page!.waitForSelector(emailSel, { timeout: 15000 });
+      await this.page!.waitForSelector(emailSel, { timeout: 20000 });
       await this.page!.fill(emailSel, credentials.username);
       await this.page!.waitForTimeout(500 + Math.random() * 300);
 
@@ -101,12 +144,13 @@ export class RepublicServicesScraper extends BaseScraperProvider {
       const submitSel = 'button[name="action"][value="default"], button[type="submit"]:has-text("Log In"), button[type="submit"]:has-text("Sign In"), button[type="submit"]:has-text("Continue"), input[type="submit"]';
       await this.page!.click(submitSel);
 
-      // Wait for redirect away from Auth0
+      // Wait for redirect away from Auth0 login form
       try {
-        await this.page!.waitForURL(url => !url.toString().includes('/u/login'), { timeout: 30000 });
-      } catch {
-        // Check if we're on MFA page
-      }
+        await this.page!.waitForURL(
+          url => !url.toString().includes('/u/login'),
+          { timeout: 30000 }
+        );
+      } catch { /* may already be redirected, check below */ }
 
       await this.throwIfMfaRequired();
       await this.page!.waitForTimeout(3000);
@@ -114,9 +158,9 @@ export class RepublicServicesScraper extends BaseScraperProvider {
       const finalUrl = this.page!.url();
       await this.screenshot('rs-post-login');
 
-      if (finalUrl.includes('/u/login') || finalUrl.includes('/login')) {
-        // Check for wrong password message
-        const errText = await this.page!.locator('[class*="error"], [class*="alert"], .message').textContent().catch(() => '');
+      // Still on login page = bad credentials or unexpected state
+      if (/\/u\/login|auth0\.com.*\/login/i.test(finalUrl)) {
+        const errText = await this.page!.locator('[class*="error"], [class*="alert"], .ulp-error, [data-action-button-primary]').textContent().catch(() => '');
         console.error(`[RepublicServices] Login failed — URL: ${finalUrl}`, errText?.slice(0, 100));
         return false;
       }
