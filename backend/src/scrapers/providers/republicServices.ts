@@ -56,10 +56,10 @@ export class RepublicServicesScraper extends BaseScraperProvider {
   readonly providerSlug = 'republic-services';
   readonly providerName = 'Republic Services';
 
-  // The /u/login URL without an Auth0 state redirects to the marketing homepage.
-  // Start there and click the Login button to get a fresh Auth0 state redirect.
+  // Clicking Login on the marketing page triggers a fresh Auth0 redirect.
+  // After auth, the portal lives at www.republicservices.com/account/...
   private readonly LOGIN_URL   = 'https://my.republicservices.com';
-  private readonly PORTAL_BASE = 'https://my.republicservices.com';
+  private readonly PORTAL_BASE = 'https://www.republicservices.com';
 
   private capturedAccounts: RSAccount[]  = [];
   private capturedInvoices: RSInvoice[]  = [];
@@ -69,6 +69,10 @@ export class RepublicServicesScraper extends BaseScraperProvider {
 
   async login(credentials: ScraperCredentials): Promise<boolean> {
     try {
+      // Set up interceptors early — captures API responses from the post-login
+      // dashboard redirect (account/billing data fired on initial page load).
+      this.setupInterceptors();
+
       // Navigate to portal home — /u/login without a state param redirects to
       // the marketing site. We land on the marketing page, click Login to
       // trigger a fresh Auth0 redirect, then fill in credentials.
@@ -83,8 +87,8 @@ export class RepublicServicesScraper extends BaseScraperProvider {
       // ── Click the Login button on the marketing page ─────────────────────
       // The page shows a centered "Login" card with a pink Login button.
       // Clicking it triggers the OAuth/Auth0 redirect with a fresh state.
-      const emailSel = 'input[type="email"], input[name="email"], input[name="username"], #username, #email';
-      const alreadyOnAuthForm = await this.page!.locator(emailSel).count() > 0;
+      const marketingEmailSel = 'input[type="email"], input[name="email"], input[name="username"], #username, #email';
+      const alreadyOnAuthForm = await this.page!.locator(marketingEmailSel).count() > 0;
 
       if (!alreadyOnAuthForm) {
         // Find and click the Login button on the marketing landing page
@@ -118,30 +122,31 @@ export class RepublicServicesScraper extends BaseScraperProvider {
 
       await this.screenshot('rs-auth-form');
 
+      const emailSel = 'input[type="email"], input[name="email"], input[name="username"], #username, #email, input[placeholder*="Email" i]';
+      const passSel  = 'input[type="password"], input[name="password"], #password';
+      const submitSel = 'button[type="submit"]:has-text("Continue"), button[type="submit"]:has-text("Log In"), button[type="submit"]:has-text("Sign In"), button[name="action"], input[type="submit"]';
+
       // ── Step 1: Email ────────────────────────────────────────────────────
       await this.page!.waitForSelector(emailSel, { timeout: 20000 });
       await this.page!.fill(emailSel, credentials.username);
-      await this.page!.waitForTimeout(500 + Math.random() * 300);
+      await this.page!.waitForTimeout(400 + Math.random() * 200);
 
-      // Auth0 two-step: click Continue to reveal password field
-      const continueBtnSel = 'button[name="action"], button[type="submit"]:has-text("Continue"), button[type="submit"]:has-text("Next"), button:has-text("Continue")';
-      const hasContinue = await this.page!.locator(continueBtnSel).count() > 0;
-      if (hasContinue) {
-        await this.page!.click(continueBtnSel);
+      // ── Step 2: Password ─────────────────────────────────────────────────
+      // RS uses a single-page form (email + password visible together).
+      // If the password field is already visible, fill it directly.
+      // If not (true two-step), click Continue first to reveal it.
+      const passVisible = await this.page!.locator(passSel).isVisible().catch(() => false);
+      if (!passVisible) {
+        await this.page!.click(submitSel);
         await this.page!.waitForTimeout(1500);
         await this.screenshot('rs-after-continue');
       }
 
-      // ── Step 2: Password ─────────────────────────────────────────────────
-      const passSel = 'input[type="password"], input[name="password"], #password';
       await this.page!.waitForSelector(passSel, { timeout: 10000 });
       await this.page!.fill(passSel, credentials.password);
       await this.page!.waitForTimeout(400 + Math.random() * 200);
 
       await this.screenshot('rs-before-submit');
-
-      // Submit — Auth0 uses name="action" or type="submit"
-      const submitSel = 'button[name="action"][value="default"], button[type="submit"]:has-text("Log In"), button[type="submit"]:has-text("Sign In"), button[type="submit"]:has-text("Continue"), input[type="submit"]';
       await this.page!.click(submitSel);
 
       // Wait for redirect away from Auth0 login form
@@ -167,11 +172,9 @@ export class RepublicServicesScraper extends BaseScraperProvider {
 
       console.log('[RepublicServices] Login successful, URL:', finalUrl);
 
-      // Set up API interception AFTER login so session cookies are active
-      this.setupInterceptors();
-
-      // Give SPA time to fully boot and fire initial API calls
-      await this.page!.waitForTimeout(4000);
+      // Give the dashboard time to load and fire its initial API calls
+      // (interceptors already active — set up at start of login)
+      await this.page!.waitForTimeout(5000);
 
       return true;
     } catch (err) {
@@ -379,24 +382,40 @@ export class RepublicServicesScraper extends BaseScraperProvider {
   // ── Navigation helpers ────────────────────────────────────────────────────
 
   private async navigateToBillingOverview(): Promise<void> {
-    // Strategy 1: click nav link
-    const clicked = await this.page!.evaluate(() => {
-      const el = Array.from(document.querySelectorAll('a, button, [role="menuitem"]'))
-        .find(e => /billing|pay.*bill|my bill|account/i.test(e.textContent || ''));
-      if (el) { (el as HTMLElement).click(); return true; }
-      return false;
-    });
-    if (clicked) {
-      await this.page!.waitForTimeout(3000);
-      return;
+    // RS portal lives at www.republicservices.com/account/...
+    // Try known billing paths, fall back to clicking nav links.
+    const billingPaths = [
+      '/account/pay-bill',
+      '/account/billing',
+      '/account/billing-history',
+      '/account/dashboard',
+    ];
+
+    for (const p of billingPaths) {
+      try {
+        await this.page!.goto(`${this.PORTAL_BASE}${p}`, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        await this.page!.waitForTimeout(3000);
+        const hasMoney = await this.page!.evaluate(() => /\$[\d,]+\.\d{2}/.test(document.body.textContent || ''));
+        if (hasMoney) { await this.screenshot(`rs-billing-${p.replace(/\//g, '-')}`); return; }
+      } catch { /* try next */ }
     }
-    // Strategy 2: direct navigation
-    await this.page!.goto(`${this.PORTAL_BASE}/billing`, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+
+    // Fallback: click a billing/pay nav link from wherever we are
+    await this.page!.evaluate(() => {
+      const el = Array.from(document.querySelectorAll('a, button, [role="menuitem"]'))
+        .find(e => /pay.*bill|billing|bill.*history/i.test(e.textContent || ''));
+      if (el) (el as HTMLElement).click();
+    });
     await this.page!.waitForTimeout(3000);
   }
 
   private async navigateToBillingHistory(): Promise<void> {
-    const paths = ['/billing/history', '/billing/statements', '/billing', '/accounts'];
+    const paths = [
+      '/account/billing-history',
+      '/account/billing',
+      '/account/pay-bill',
+      '/account/statements',
+    ];
     for (const p of paths) {
       try {
         await this.page!.goto(`${this.PORTAL_BASE}${p}`, { waitUntil: 'domcontentloaded', timeout: 10000 });
@@ -408,7 +427,11 @@ export class RepublicServicesScraper extends BaseScraperProvider {
   }
 
   private async navigateToPaymentHistory(): Promise<void> {
-    const paths = ['/billing/payment-history', '/billing/payments', '/payments'];
+    const paths = [
+      '/account/payment-history',
+      '/account/billing-history',
+      '/account/billing',
+    ];
     for (const p of paths) {
       try {
         await this.page!.goto(`${this.PORTAL_BASE}${p}`, { waitUntil: 'domcontentloaded', timeout: 10000 });
@@ -416,7 +439,6 @@ export class RepublicServicesScraper extends BaseScraperProvider {
         return;
       } catch { /* try next */ }
     }
-    // Fallback: click link
     await this.page!.evaluate(() => {
       const el = Array.from(document.querySelectorAll('a, button'))
         .find(e => /payment history|payment.*record|paid/i.test(e.textContent || ''));
