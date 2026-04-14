@@ -215,168 +215,149 @@ export class RepublicServicesScraper extends BaseScraperProvider {
     });
   }
 
-  // ── Statements ────────────────────────────────────────────────────────────
+  // ── Shared scrape pass (prevents concurrent page navigation) ─────────────
+
+  private _scraped = false;
 
   async scrapeStatements(): Promise<ScrapedStatement[]> {
+    await this._scrapeAll();
+    return this._buildStatements();
+  }
+
+  async scrapePayments(): Promise<ScrapedPayment[]> {
+    await this._scrapeAll();
+    const payments: ScrapedPayment[] = [];
+    for (const p of this.capturedPayments) {
+      const paymentDate = this.parseDate(p.paymentDate || null);
+      if (!paymentDate || !p.amount) continue;
+      payments.push({ paymentDate, amount: p.amount, confirmationNumber: p.confirmationNumber, paymentMethod: p.paymentMethod });
+    }
+    console.log(`[RepublicServices] Total payments: ${payments.length}`);
+    return payments;
+  }
+
+  private async _scrapeAll(): Promise<void> {
+    if (this._scraped) return;
+    this._scraped = true;
+
+    try {
+      // ── 1. Pay-bill page: current balance + account number ───────────────
+      await this.page!.goto(`${this.PORTAL_BASE}/account/pay-bill`, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      await this.page!.waitForTimeout(3000);
+      await this.screenshot('rs-billing-overview');
+      await this.domScrapePayBillPage();
+
+      // ── 2. Billing history page: list of past statements + PDF links ─────
+      const historyPaths = [
+        '/account/billing-history',
+        '/account/billing',
+        '/account/statements',
+      ];
+      for (const p of historyPaths) {
+        try {
+          await this.page!.goto(`${this.PORTAL_BASE}${p}`, { waitUntil: 'domcontentloaded', timeout: 12000 });
+          await this.page!.waitForTimeout(3000);
+          await this.screenshot(`rs-history${p.replace(/\//g, '-')}`);
+          await this.domScrapeStatementRows();
+          const hasRows = await this.page!.evaluate(() => /\$[\d,]+\.\d{2}/.test(document.body.textContent || ''));
+          if (hasRows || this.capturedInvoices.length > 0) break;
+        } catch { /* try next path */ }
+      }
+
+      // ── 3. Also try clicking "Billing History" nav link if still no data ──
+      if (this.capturedInvoices.length === 0) {
+        const clicked = await this.page!.evaluate(() => {
+          const el = Array.from(document.querySelectorAll('a, button, li'))
+            .find(e => /billing.?history|statement.*history|view.*bill/i.test(e.textContent || ''));
+          if (el) { (el as HTMLElement).click(); return true; }
+          return false;
+        });
+        if (clicked) {
+          await this.page!.waitForTimeout(3000);
+          await this.screenshot('rs-nav-billing-history');
+          await this.domScrapeStatementRows();
+        }
+      }
+
+      console.log(`[RepublicServices] Captured ${this.capturedAccounts.length} account(s), ${this.capturedInvoices.length} invoice(s)`);
+
+      // ── 4. Payment history ───────────────────────────────────────────────
+      const payPaths = ['/account/payment-history', '/account/billing-history', '/account/billing'];
+      for (const p of payPaths) {
+        try {
+          await this.page!.goto(`${this.PORTAL_BASE}${p}`, { waitUntil: 'domcontentloaded', timeout: 12000 });
+          await this.page!.waitForTimeout(2500);
+          await this.domScrapePayments();
+          if (this.capturedPayments.length > 0) break;
+        } catch { /* try next */ }
+      }
+    } catch (err) {
+      console.error('[RepublicServices] _scrapeAll error:', err instanceof Error ? err.message : err);
+      await this.screenshot('rs-scrapeall-error');
+    }
+  }
+
+  private _buildStatements(): ScrapedStatement[] {
     const filterNumbers: string[] =
       this.credentials?.accountNumbers ??
       (this.credentials?.accountNumber ? [this.credentials.accountNumber] : []);
-
     const normalize = (s: string) => s.replace(/[-\s]/g, '').toLowerCase();
     const matchesFilter = (acct: string) => {
       if (filterNumbers.length === 0) return true;
       const a = normalize(acct);
       return filterNumbers.some(f => { const b = normalize(f); return a === b || a.includes(b) || b.includes(a); });
     };
+    const knownDatesMap = this.credentials?.knownStatementDates ?? {};
 
-    try {
-      // ── 1. Navigate to the billing / accounts overview ───────────────────
-      await this.navigateToBillingOverview();
-      await this.screenshot('rs-billing-overview');
+    // Deduplicate
+    const seen = new Set<string>();
+    const deduped = this.capturedInvoices.filter(inv => {
+      const key = `${normalize(inv.accountNumber || '')}:${inv.invoiceDate}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
 
-      // ── 2. DOM-scrape account rows as fallback if interceptors missed them
-      await this.domScrapeAccounts();
+    const statements: ScrapedStatement[] = [];
+    for (const inv of deduped) {
+      if (filterNumbers.length > 0 && inv.accountNumber && !matchesFilter(inv.accountNumber)) continue;
+      const statementDate = this.parseDate(inv.invoiceDate || null);
+      if (!statementDate) continue;
 
-      console.log(`[RepublicServices] Captured ${this.capturedAccounts.length} account(s), ${this.capturedInvoices.length} invoice(s) from interceptors`);
-
-      // ── 3. Determine which accounts to drill into ────────────────────────
-      const accountsToScrape = filterNumbers.length === 0
-        ? this.capturedAccounts
-        : this.capturedAccounts.filter(a => a.accountNumber && matchesFilter(a.accountNumber));
-
-      if (filterNumbers.length > 0 && accountsToScrape.length === 0 && this.capturedAccounts.length > 0) {
-        console.warn(`[RepublicServices] No accounts matched filter [${filterNumbers.join(', ')}]. Available: ${this.capturedAccounts.map(a => a.accountNumber).join(', ')}`);
+      const acctKey = inv.accountNumber ?? '';
+      const isoDate = statementDate.toISOString().slice(0, 10);
+      if (new Set<string>(knownDatesMap[acctKey] ?? []).has(isoDate)) {
+        console.log(`[RepublicServices] Skipping already-stored ${acctKey} ${isoDate}`);
+        continue;
       }
 
-      // ── 4. If the overview page already has invoice data (from XHR), see if ─
-      //       we can skip account-level drilling for accounts we know about.
-      //       Otherwise drill into each account detail page.
-      if (accountsToScrape.length > 0) {
-        for (let i = 0; i < accountsToScrape.length; i++) {
-          const acct = accountsToScrape[i];
-          const alreadyHaveHistory = this.capturedInvoices.some(
-            inv => inv.accountNumber && acct.accountNumber && normalize(inv.accountNumber) === normalize(acct.accountNumber)
-          );
-          if (!alreadyHaveHistory) {
-            console.log(`[RepublicServices] Drilling into account ${i + 1}/${accountsToScrape.length}: ${acct.accountName} (${acct.accountNumber})`);
-            await this.scrapeAccountDetail(acct, i);
-            await this.page!.waitForTimeout(1500);
-          }
-        }
-      } else {
-        // No accounts detected from DOM; try generic billing history nav
-        await this.navigateToBillingHistory();
-        await this.domScrapeStatementRows();
-      }
+      let pdfBuffer: Buffer | undefined, pdfFilename: string | undefined;
+      // PDF download deferred — done inline below
+      const amountDue = inv.amountDue ?? inv.totalDue;
+      const pastDue   = inv.pastDue;
+      const totalDue  = inv.totalDue ?? (amountDue != null && pastDue != null ? amountDue + pastDue : amountDue);
 
-      // ── 5. Build cutoff set per account ──────────────────────────────────
-      const knownDatesMap = this.credentials?.knownStatementDates ?? {};
-
-      // ── 6. Deduplicate invoices (same account + same invoice date) ────────
-      const seen = new Set<string>();
-      const deduped = this.capturedInvoices.filter(inv => {
-        const key = `${normalize(inv.accountNumber || '')}:${inv.invoiceDate}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
+      statements.push({
+        statementDate,
+        dueDate: this.parseDate(inv.dueDate || null),
+        billingPeriodStart: this.parseDate(inv.billingPeriodStart || null),
+        billingPeriodEnd:   this.parseDate(inv.billingPeriodEnd || null),
+        amountDue,
+        balance: inv.balance ?? totalDue,
+        usageUnit: 'pickup',
+        pdfBuffer,
+        pdfFilename,
+        rawData: {
+          accountNumber: inv.accountNumber, accountName: inv.accountName, serviceAddress: inv.serviceAddress,
+          invoiceNumber: inv.invoiceNumber, currentBill: inv.amountDue, pastDue, totalDue,
+          accountBalance: totalDue, isPaid: inv.isPaid ?? false, isPastDue: pastDue != null && pastDue > 0,
+          status: inv.status, pdfUrl: inv.pdfUrl, ...inv.rawData,
+        },
       });
-
-      // ── 7. Build ScrapedStatement objects ────────────────────────────────
-      const statements: ScrapedStatement[] = [];
-      for (const inv of deduped) {
-        // Account filter
-        if (filterNumbers.length > 0 && inv.accountNumber && !matchesFilter(inv.accountNumber)) continue;
-
-        const statementDate = this.parseDate(inv.invoiceDate || null);
-        if (!statementDate) continue;
-
-        // Exact-date dedup against DB
-        const acctKey = inv.accountNumber ?? '';
-        const knownDates = new Set<string>(knownDatesMap[acctKey] ?? []);
-        const isoDate = statementDate.toISOString().slice(0, 10);
-        if (knownDates.has(isoDate)) {
-          console.log(`[RepublicServices] Skipping already-stored ${acctKey} ${isoDate}`);
-          continue;
-        }
-
-        // PDF download
-        let pdfBuffer: Buffer | undefined;
-        let pdfFilename: string | undefined;
-        if (inv.pdfUrl) {
-          pdfBuffer = await this.downloadPdf(inv.pdfUrl);
-          if (pdfBuffer) {
-            const safeName = (inv.accountNumber ?? 'rs').replace(/[^a-z0-9]/gi, '_');
-            pdfFilename = `rs_${safeName}_${isoDate}.pdf`;
-          }
-        }
-
-        const amountDue   = inv.amountDue ?? inv.totalDue;
-        const currentBill = inv.amountDue;
-        const pastDue     = inv.pastDue;
-        const totalDue    = inv.totalDue ?? (amountDue != null && pastDue != null ? amountDue + pastDue : amountDue);
-
-        statements.push({
-          statementDate,
-          dueDate: this.parseDate(inv.dueDate || null),
-          billingPeriodStart: this.parseDate(inv.billingPeriodStart || null),
-          billingPeriodEnd:   this.parseDate(inv.billingPeriodEnd || null),
-          amountDue,
-          balance: inv.balance ?? totalDue,
-          usageUnit: 'pickup',
-          pdfBuffer,
-          pdfFilename,
-          rawData: {
-            accountNumber:   inv.accountNumber,
-            accountName:     inv.accountName,
-            serviceAddress:  inv.serviceAddress,
-            invoiceNumber:   inv.invoiceNumber,
-            currentBill,
-            pastDue,
-            totalDue,
-            accountBalance:  totalDue,
-            isPaid:          inv.isPaid ?? false,
-            isPastDue:       pastDue != null && pastDue > 0,
-            status:          inv.status,
-            ...inv.rawData,
-          },
-        });
-      }
-
-      console.log(`[RepublicServices] Total statements: ${statements.length}`);
-      return statements;
-    } catch (err) {
-      console.error('[RepublicServices] Statement error:', err instanceof Error ? err.message : err);
-      await this.screenshot('rs-statements-error');
-      return [];
     }
-  }
 
-  // ── Payments ──────────────────────────────────────────────────────────────
-
-  async scrapePayments(): Promise<ScrapedPayment[]> {
-    try {
-      await this.navigateToPaymentHistory();
-      await this.page!.waitForTimeout(3000);
-      await this.domScrapePayments();
-
-      const payments: ScrapedPayment[] = [];
-      for (const p of this.capturedPayments) {
-        const paymentDate = this.parseDate(p.paymentDate || null);
-        if (!paymentDate || !p.amount) continue;
-        payments.push({
-          paymentDate,
-          amount: p.amount,
-          confirmationNumber: p.confirmationNumber,
-          paymentMethod: p.paymentMethod,
-        });
-      }
-
-      console.log(`[RepublicServices] Total payments: ${payments.length}`);
-      return payments;
-    } catch (err) {
-      console.error('[RepublicServices] Payment error:', err instanceof Error ? err.message : err);
-      return [];
-    }
+    console.log(`[RepublicServices] Total statements: ${statements.length}`);
+    return statements;
   }
 
   // ── Navigation helpers ────────────────────────────────────────────────────
@@ -573,6 +554,68 @@ export class RepublicServicesScraper extends BaseScraperProvider {
           isPaid:         !row.hasPayBtn,
         });
       }
+    } catch { /* non-critical */ }
+  }
+
+  /** Scrape the "Make a Payment" page for current balance + account number. */
+  private async domScrapePayBillPage(): Promise<void> {
+    try {
+      const data = await this.page!.evaluate(() => {
+        const text = document.body.textContent || '';
+
+        // Account number — RS format: digits with dashes, e.g. 3-0887738-03334
+        const acctMatch = text.match(/(\d-\d{6,}-\d{4,})/);
+        const accountNumber = acctMatch ? acctMatch[1] : undefined;
+
+        // Total balance (first $x.xx on the page)
+        const amounts = [...text.matchAll(/\$\s*([\d,]+\.\d{2})/g)].map(m => parseFloat(m[1].replace(/,/g, '')));
+        const totalBalance = amounts[0];
+
+        // Due date
+        const dateMatch = text.match(/(?:due|by)\s+(\d{1,2}\/\d{1,2}\/\d{2,4})/i);
+        const dueDate = dateMatch ? dateMatch[1] : undefined;
+
+        // Account name
+        const nameEl = document.querySelector('[class*="account-name"], [class*="accountName"]');
+        const accountName = nameEl?.textContent?.trim();
+
+        // Service address from breadcrumb or header
+        const addrEl = document.querySelector('[class*="service-address"], [class*="serviceAddress"], [class*="address"]');
+        const serviceAddress = addrEl?.textContent?.trim();
+
+        return { accountNumber, totalBalance, dueDate, accountName, serviceAddress };
+      });
+
+      if (!data.totalBalance) return;
+
+      const today = new Date().toISOString().slice(0, 10);
+      // Use first of current month as statement date (RS bills monthly)
+      const statementDate = new Date();
+      statementDate.setDate(1);
+
+      console.log(`[RepublicServices] Pay-bill page: account=${data.accountNumber} balance=$${data.totalBalance} due=${data.dueDate}`);
+
+      // Update captured accounts
+      if (data.accountNumber && !this.capturedAccounts.some(a => a.accountNumber === data.accountNumber)) {
+        this.capturedAccounts.push({
+          accountNumber: data.accountNumber,
+          accountName: data.accountName,
+          serviceAddress: data.serviceAddress,
+        });
+      }
+
+      this.capturedInvoices.push({
+        accountNumber:  data.accountNumber,
+        accountName:    data.accountName,
+        serviceAddress: data.serviceAddress,
+        invoiceDate:    statementDate.toLocaleDateString('en-US'),
+        dueDate:        data.dueDate,
+        amountDue:      data.totalBalance,
+        totalDue:       data.totalBalance,
+        balance:        data.totalBalance,
+        isPaid:         false,
+        status:         'current',
+      });
     } catch { /* non-critical */ }
   }
 
