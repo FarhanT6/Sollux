@@ -162,16 +162,15 @@ export class CityBrawleyScraper extends BaseScraperProvider {
     const rows = await this.parseTransactionTable();
     console.log(`[Brawley] ${accountNumber}: ${rows.length} transaction rows`);
 
-    // Skip bills already in DB — compare against the per-account cutoff first,
-    // falling back to the global latestStatementDate for single-account scrapers.
-    // Using per-account dates ensures a brand-new account (no statements yet)
-    // is never blocked by another account's already-stored date.
-    const perAcct = this.credentials?.latestStatementDates?.[accountNumber];
-    const latestKnown = perAcct
-      ? new Date(perAcct)
-      : this.credentials?.latestStatementDate
-        ? new Date(this.credentials.latestStatementDate)
-        : null;
+    // Resolve the cutoff date for this specific account:
+    //   • If the per-account map exists → use map[accountNumber] (null if not in map = new account)
+    //   • If the map doesn't exist at all → fall back to the legacy single-date field
+    // This ensures a brand-new account is never blocked by a sibling account's stored date.
+    const datesMap = this.credentials?.latestStatementDates;
+    const rawCutoff = datesMap
+      ? (datesMap[accountNumber] ?? null)                     // map present but no entry → null
+      : (this.credentials?.latestStatementDate ?? null);      // no map → legacy field
+    const latestKnown = rawCutoff ? new Date(rawCutoff) : null;
 
     // Find all "Bill" rows newer than what's already stored.
     const billRows = rows.filter(r => {

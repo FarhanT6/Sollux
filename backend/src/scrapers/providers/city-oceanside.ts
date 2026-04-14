@@ -94,12 +94,11 @@ export class CityOceansideScraper extends BaseScraperProvider {
       this.credentials?.accountNumbers?.[0] || this.credentials?.accountNumber || ''
     ).replace(/\*/g, '').trim();
 
-    const perAcct = this.credentials?.latestStatementDates?.[accountNumber];
-    const latestKnown = perAcct
-      ? new Date(perAcct)
-      : this.credentials?.latestStatementDate
-        ? new Date(this.credentials.latestStatementDate)
-        : null;
+    const datesMap = this.credentials?.latestStatementDates;
+    const rawCutoff = datesMap
+      ? (datesMap[accountNumber] ?? null)
+      : (this.credentials?.latestStatementDate ?? null);
+    const latestKnown = rawCutoff ? new Date(rawCutoff) : null;
 
     console.log(`[Oceanside] Account: ${accountNumber} | latestKnown: ${latestKnown?.toISOString().slice(0, 10) ?? 'none'}`);
 
