@@ -118,3 +118,19 @@ export const getGmailStatus = () =>
 
 export const syncGmail = () =>
   api.post<{ jobId: string }>('/gmail/sync').then(r => r.data);
+
+// Payment plans
+export const getPaymentPlan = (utilityAccountId: string) =>
+  api.get(`/utilities/${utilityAccountId}/payment-plan`).then(r => r.data).catch(() => null);
+
+export const createPaymentPlan = (utilityAccountId: string, data: {
+  totalAmount: number; monthlyAmount: number; startDate: string; description?: string;
+}) => api.post(`/utilities/${utilityAccountId}/payment-plan`, data).then(r => r.data);
+
+export const updatePaymentPlan = (utilityAccountId: string, data: {
+  applyPayment?: number; remainingBalance?: number; monthlyAmount?: number;
+  status?: string; description?: string;
+}) => api.patch(`/utilities/${utilityAccountId}/payment-plan`, data).then(r => r.data);
+
+export const deletePaymentPlan = (utilityAccountId: string) =>
+  api.delete(`/utilities/${utilityAccountId}/payment-plan`);

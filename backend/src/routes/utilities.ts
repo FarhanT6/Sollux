@@ -179,4 +179,109 @@ router.delete('/:id', async (req, res, next) => {
   }
 });
 
+// ─── PAYMENT PLAN ROUTES ─────────────────────────────────
+
+const PaymentPlanSchema = z.object({
+  totalAmount:    z.number().positive(),
+  monthlyAmount:  z.number().positive(),
+  startDate:      z.string(),        // ISO date string
+  description:    z.string().optional(),
+});
+
+/** Verify the utility account belongs to the requesting user. */
+async function requireOwnedAccount(accountId: string, userId: string) {
+  return db.utilityAccount.findFirst({
+    where: { id: accountId, property: { userId } },
+  });
+}
+
+// GET /api/utilities/:id/payment-plan
+router.get('/:id/payment-plan', async (req, res, next) => {
+  try {
+    const account = await requireOwnedAccount(req.params.id, req.dbUserId!);
+    if (!account) return res.status(404).json({ error: 'Not found' });
+
+    const plan = await db.paymentPlan.findUnique({ where: { utilityAccountId: req.params.id } });
+    if (!plan) return res.status(404).json({ error: 'No payment plan' });
+    res.json(plan);
+  } catch (err) { next(err); }
+});
+
+// POST /api/utilities/:id/payment-plan  — create or replace
+router.post('/:id/payment-plan', async (req, res, next) => {
+  try {
+    const account = await requireOwnedAccount(req.params.id, req.dbUserId!);
+    if (!account) return res.status(404).json({ error: 'Not found' });
+
+    const body = PaymentPlanSchema.parse(req.body);
+    const plan = await db.paymentPlan.upsert({
+      where: { utilityAccountId: req.params.id },
+      create: {
+        utilityAccountId: req.params.id,
+        totalAmount:      body.totalAmount,
+        remainingBalance: body.totalAmount,  // starts at full amount
+        monthlyAmount:    body.monthlyAmount,
+        startDate:        new Date(body.startDate),
+        description:      body.description,
+        status:           'ACTIVE',
+      },
+      update: {
+        totalAmount:      body.totalAmount,
+        remainingBalance: body.totalAmount,  // reset on re-create
+        monthlyAmount:    body.monthlyAmount,
+        startDate:        new Date(body.startDate),
+        description:      body.description,
+        status:           'ACTIVE',
+      },
+    });
+    res.json(plan);
+  } catch (err) { next(err); }
+});
+
+// PATCH /api/utilities/:id/payment-plan  — update fields (including apply a payment)
+router.patch('/:id/payment-plan', async (req, res, next) => {
+  try {
+    const account = await requireOwnedAccount(req.params.id, req.dbUserId!);
+    if (!account) return res.status(404).json({ error: 'Not found' });
+
+    const plan = await db.paymentPlan.findUnique({ where: { utilityAccountId: req.params.id } });
+    if (!plan) return res.status(404).json({ error: 'No payment plan' });
+
+    const { applyPayment, remainingBalance, status, monthlyAmount, description } = req.body;
+
+    let newRemaining = Number(plan.remainingBalance);
+
+    if (typeof applyPayment === 'number' && applyPayment > 0) {
+      newRemaining = Math.max(0, newRemaining - applyPayment);
+    } else if (typeof remainingBalance === 'number') {
+      newRemaining = Math.max(0, remainingBalance);
+    }
+
+    const newStatus = newRemaining <= 0 ? 'COMPLETED'
+      : (status === 'CANCELLED' ? 'CANCELLED' : plan.status);
+
+    const updated = await db.paymentPlan.update({
+      where: { utilityAccountId: req.params.id },
+      data: {
+        remainingBalance: newRemaining,
+        status:           newStatus,
+        ...(typeof monthlyAmount === 'number' ? { monthlyAmount } : {}),
+        ...(description !== undefined ? { description } : {}),
+      },
+    });
+    res.json(updated);
+  } catch (err) { next(err); }
+});
+
+// DELETE /api/utilities/:id/payment-plan
+router.delete('/:id/payment-plan', async (req, res, next) => {
+  try {
+    const account = await requireOwnedAccount(req.params.id, req.dbUserId!);
+    if (!account) return res.status(404).json({ error: 'Not found' });
+
+    await db.paymentPlan.deleteMany({ where: { utilityAccountId: req.params.id } });
+    res.status(204).send();
+  } catch (err) { next(err); }
+});
+
 export default router;

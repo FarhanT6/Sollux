@@ -85,9 +85,10 @@ model UtilityAccount {
   createdAt             DateTime        @default(now())
   updatedAt             DateTime        @updatedAt
 
-  statements  Statement[]
-  payments    Payment[]
-  insights    AIInsight[]
+  statements   Statement[]
+  payments     Payment[]
+  insights     AIInsight[]
+  paymentPlan  PaymentPlan?
 
   @@map("utility_accounts")
 }
@@ -258,4 +259,30 @@ model SyncJob {
   createdAt        DateTime  @default(now())
 
   @@map("sync_jobs")
+}
+
+// ─── PAYMENT PLANS ───────────────────────────────────────
+// Tracks a utility payment arrangement / installment plan.
+// e.g. "I owe $2,000 in arrears; paying $81.36/month until paid off."
+model PaymentPlan {
+  id               String            @id @default(cuid())
+  utilityAccountId String            @unique
+  utilityAccount   UtilityAccount    @relation(fields: [utilityAccountId], references: [id], onDelete: Cascade)
+  totalAmount      Decimal           @db.Decimal(10, 2)   // original arrears amount
+  remainingBalance Decimal           @db.Decimal(10, 2)   // decremented as payments come in
+  monthlyAmount    Decimal           @db.Decimal(10, 2)   // installment per billing cycle
+  startDate        DateTime
+  endDate          DateTime?         // auto-computed or manually set
+  description      String?           // e.g. "COVID arrears payment plan"
+  status           PaymentPlanStatus @default(ACTIVE)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  @@map("payment_plans")
+}
+
+enum PaymentPlanStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
 }
