@@ -106,23 +106,86 @@ export class CityBrawleyScraper extends BaseScraperProvider {
     }
   }
 
+  // Cache populated by scrapeStatements() so that scrapePayments() (called concurrently
+  // by the base class via Promise.all) can return without re-navigating the same pages.
+  private _paymentCache: ScrapedPayment[] = [];
+  private _scraped = false;
+
   async scrapeStatements(): Promise<ScrapedStatement[]> {
-    const statements: ScrapedStatement[] = [];
+    await this._scrapeAll();
+    return this._statementCache;
+  }
+
+  async scrapePayments(): Promise<ScrapedPayment[]> {
+    await this._scrapeAll();
+    return this._paymentCache;
+  }
+
+  private _statementCache: ScrapedStatement[] = [];
+
+  /** Single combined pass: navigate each account once, collect both statements and payments. */
+  private async _scrapeAll(): Promise<void> {
+    if (this._scraped) return;   // already done (handles concurrent Promise.all calls)
+    this._scraped = true;
+
     const accountNumbers = this.getAccountNumbers();
-    console.log('[Brawley] Scraping statements for accounts:', accountNumbers);
+    console.log('[Brawley] Scraping accounts (combined pass):', accountNumbers);
 
     for (const accountNumber of accountNumbers) {
       try {
-        const acctStatements = await this.scrapeAccountStatements(accountNumber);
-        statements.push(...acctStatements);
+        await this.navigateToTransactionHistory(accountNumber);
+        await this.screenshot(`brawley-txn-${accountNumber}`);
+        console.log(`[Brawley] Transaction page URL: ${this.page!.url()}`);
+
+        await this.expandDateRange();
+        const rows = await this.parseAllPages();
+        console.log(`[Brawley] ${accountNumber}: ${rows.length} transaction rows`);
+
+        // ── Statements ────────────────────────────────────────────────────────
+        const datesMap = this.credentials?.latestStatementDates;
+        const rawCutoff = datesMap
+          ? (datesMap[accountNumber] ?? null)
+          : (this.credentials?.latestStatementDate ?? null);
+        const latestKnown = rawCutoff ? new Date(rawCutoff) : null;
+
+        const billRows = rows.filter(r => {
+          if (!r.description.toLowerCase().includes('bill')) return false;
+          if (!r.billUrl && !r.isClickable) return false;
+          if (latestKnown) {
+            const rowDate = this.parseDate(r.date);
+            if (rowDate && rowDate <= latestKnown) return false;
+          }
+          return true;
+        });
+        console.log(`[Brawley] ${accountNumber}: ${billRows.length} new bill rows (latestKnown=${latestKnown?.toISOString().slice(0,10) ?? 'none'})`);
+
+        for (const row of billRows) {
+          try {
+            const stmt = await this.scrapeBill(row, accountNumber);
+            if (stmt) this._statementCache.push(stmt);
+          } catch (err) {
+            console.warn(`[Brawley] Error scraping bill ${row.date}:`, err instanceof Error ? err.message : err);
+          }
+        }
+
+        // ── Payments ──────────────────────────────────────────────────────────
+        for (const row of rows) {
+          if (!/payment/i.test(row.description)) continue;
+          const paymentDate = this.parseDate(row.date);
+          if (!paymentDate) continue;
+          const amt = parseFloat(row.amount.replace(/[($,)\s]/g, ''));
+          if (isNaN(amt) || amt <= 0) continue;
+          this._paymentCache.push({ paymentDate, amount: amt });
+        }
+        console.log(`[Brawley] ${accountNumber}: ${this._paymentCache.length} payment(s) so far`);
+
       } catch (err) {
-        console.error(`[Brawley] Error scraping statements for ${accountNumber}:`, err instanceof Error ? err.message : err);
+        console.error(`[Brawley] Error scraping ${accountNumber}:`, err instanceof Error ? err.message : err);
         await this.screenshot(`brawley-error-${accountNumber}`);
       }
     }
 
-    console.log(`[Brawley] Total statements: ${statements.length}`);
-    return statements;
+    console.log(`[Brawley] Total: ${this._statementCache.length} statement(s), ${this._paymentCache.length} payment(s)`);
   }
 
   private async navigateToTransactionHistory(accountNumber: string): Promise<void> {
@@ -148,71 +211,21 @@ export class CityBrawleyScraper extends BaseScraperProvider {
     await this.page!.waitForTimeout(4000);
   }
 
-  private async scrapeAccountStatements(accountNumber: string): Promise<ScrapedStatement[]> {
-    const statements: ScrapedStatement[] = [];
-
-    await this.navigateToTransactionHistory(accountNumber);
-    await this.screenshot(`brawley-txn-${accountNumber}`);
-    console.log(`[Brawley] Transaction page URL: ${this.page!.url()}`);
-
-    // ── Expand date range to get full history ──────────────────────────────
-    await this.expandDateRange();
-
-    // ── Parse transaction table — with pagination ─────────────────────────
-    const rows = await this.parseAllPages();
-    console.log(`[Brawley] ${accountNumber}: ${rows.length} transaction rows`);
-
-    // Resolve the cutoff date for this specific account:
-    //   • If the per-account map exists → use map[accountNumber] (null if not in map = new account)
-    //   • If the map doesn't exist at all → fall back to the legacy single-date field
-    // This ensures a brand-new account is never blocked by a sibling account's stored date.
-    const datesMap = this.credentials?.latestStatementDates;
-    const rawCutoff = datesMap
-      ? (datesMap[accountNumber] ?? null)                     // map present but no entry → null
-      : (this.credentials?.latestStatementDate ?? null);      // no map → legacy field
-    const latestKnown = rawCutoff ? new Date(rawCutoff) : null;
-
-    // Find all "Bill" rows newer than what's already stored.
-    const billRows = rows.filter(r => {
-      if (!r.description.toLowerCase().includes('bill')) return false;
-      if (!r.billUrl && !r.isClickable) return false;
-      if (latestKnown) {
-        const rowDate = this.parseDate(r.date);
-        if (rowDate && rowDate <= latestKnown) return false; // already have this one
-      }
-      return true;
-    });
-    console.log(`[Brawley] ${accountNumber}: ${billRows.length} new bill rows to scrape (latestKnown=${latestKnown?.toISOString().slice(0,10) ?? 'none'})`);
-
-    for (const row of billRows) {
-      try {
-        const stmt = await this.scrapeBill(row, accountNumber);
-        if (stmt) statements.push(stmt);
-      } catch (err) {
-        console.warn(`[Brawley] Error scraping bill ${row.date}:`, err instanceof Error ? err.message : err);
-      }
-    }
-
-    return statements;
-  }
-
   private async expandDateRange(): Promise<void> {
     const today = new Date();
     const endStr = `${String(today.getMonth() + 1).padStart(2, '0')}/${String(today.getDate()).padStart(2, '0')}/${today.getFullYear()}`;
     const startStr = '01/01/2019';
 
     try {
-      // Wait for the page to settle — prevents "Execution context was destroyed" when
-      // the SPA is still mid-navigation when we call evaluate().
+      // Wait for the page to fully settle before touching anything.
       await this.page!.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
-      await this.page!.waitForTimeout(1000);
+      await this.page!.waitForTimeout(1500);
 
-      // Tyler Technologies Forge components render date inputs inside shadow roots.
-      // Standard querySelectorAll() can't reach them. We walk all shadow roots recursively
-      // to find every <input> on the page, then use the native value-setter trick so React/
-      // Angular picks up the change (same approach as React-controlled inputs elsewhere).
-      const filled = await this.page!.evaluate(`(function(start, end) {
-        // Walk the entire DOM including all open shadow roots and collect inputs.
+      // ── Step 1: find and focus the "from" date input via shadow-root traversal ──
+      // Forge date pickers put their <input> inside a shadow root. We can't use
+      // page.locator() to fill them, but we CAN focus() them in evaluate and then
+      // use page.keyboard to type — keyboard events reach any focused element.
+      const focusInfo = await this.page!.evaluate(`(function() {
         function allInputs(root) {
           var found = [];
           var walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, null);
@@ -223,98 +236,85 @@ export class CityBrawleyScraper extends BaseScraperProvider {
           }
           return found;
         }
-
         var inputs = allInputs(document);
-        console.log('[Brawley-eval] Total inputs found (incl shadow):', inputs.length,
-          inputs.map(function(i) { return i.placeholder + '|' + i.id + '|' + i.type; }).join(', '));
+        var textInputs = inputs.filter(function(i) { return i.type === 'text' || i.type === 'date'; });
 
-        function matchFromTo(el, keywords) {
-          var p = (el.placeholder || '').toLowerCase();
-          var id = (el.id || el.name || '').toLowerCase();
-          var lbl = '';
-          if (el.id) {
-            var lblEl = document.querySelector('label[for="' + el.id + '"]');
-            if (!lblEl) {
-              // Shadow roots: walk upward to find a label
-              var parent = el.parentElement;
-              for (var d = 0; d < 5 && parent; d++) {
-                var l = parent.querySelector('label');
-                if (l) { lbl = l.textContent.toLowerCase(); break; }
-                parent = parent.parentElement;
-              }
-            } else {
-              lbl = lblEl.textContent.toLowerCase();
-            }
-          }
-          return keywords.some(function(k) { return p.indexOf(k) >= 0 || id.indexOf(k) >= 0 || lbl.indexOf(k) >= 0; });
-        }
+        // Log all inputs for diagnostics
+        console.log('[Brawley-eval] Inputs:', textInputs.map(function(i) {
+          return (i.placeholder || i.id || i.name || i.type);
+        }).join(' | '));
 
-        var fromInput = inputs.find(function(el) { return matchFromTo(el, ['from', 'start', 'begin']); });
-        var toInput   = inputs.find(function(el) { return matchFromTo(el, ['to', 'end', 'through']); });
+        // Also log top-level forge-button / button elements for diagnostics
+        var topBtns = Array.from(document.querySelectorAll('forge-button, button'));
+        console.log('[Brawley-eval] Top-level buttons:', topBtns.map(function(b) {
+          return b.tagName + ':' + (b.textContent || '').trim().slice(0, 30);
+        }).join(' | '));
 
-        // Fallback: if we can't label-match, take the first two text/date inputs
-        if (!fromInput || !toInput) {
-          var textInputs = inputs.filter(function(el) { return el.type === 'text' || el.type === 'date'; });
-          if (textInputs.length >= 2) { fromInput = textInputs[0]; toInput = textInputs[1]; }
-        }
+        if (textInputs.length === 0) return { found: false };
 
-        var nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value') &&
-                           Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-
-        function setVal(input, val) {
-          if (!input || !nativeSetter) return false;
-          nativeSetter.call(input, val);
-          input.dispatchEvent(new Event('input',  { bubbles: true }));
-          input.dispatchEvent(new Event('change', { bubbles: true }));
-          input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
-          return true;
-        }
-
-        var setFrom = setVal(fromInput, start);
-        var setTo   = setVal(toInput,   end);
-        console.log('[Brawley-eval] Set from=' + setFrom + ' to=' + setTo);
-        return setFrom || setTo;
-      })('${startStr}', '${endStr}')`);
-
-      console.log(`[Brawley] Date inputs filled: ${filled}`);
-      await this.page!.waitForTimeout(800);
-      await this.page!.keyboard.press('Escape');
-      await this.page!.waitForTimeout(400);
-
-      // Find Apply button — also walk shadow roots
-      const applied = await this.page!.evaluate(`(function() {
-        function allButtons(root) {
-          var found = [];
-          var walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, null);
-          var node;
-          while ((node = walker.nextNode())) {
-            if (node.tagName === 'BUTTON' || (node.tagName === 'INPUT' && node.type === 'submit'))
-              found.push(node);
-            if (node.shadowRoot) found = found.concat(allButtons(node.shadowRoot));
-          }
-          return found;
-        }
-        var btns = allButtons(document);
-        console.log('[Brawley-eval] Buttons:', btns.map(function(b) { return b.textContent.trim() + '|' + b.value; }).join(', '));
-        var applyBtn = btns.find(function(el) {
-          return /apply/i.test(el.textContent || '') || /apply/i.test(el.value || '');
-        });
-        if (applyBtn) { applyBtn.click(); return true; }
-        return false;
+        // Focus the first input (Start / From date)
+        textInputs[0].focus();
+        textInputs[0].select();
+        return { found: true, count: textInputs.length };
       })()`);
 
-      if (applied) {
-        console.log('[Brawley] Apply clicked — waiting for table reload...');
-        await this.page!.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-        await this.page!.waitForTimeout(3000);
-        await this.screenshot('brawley-txn-full-range');
-        const listing = await this.page!.evaluate(
-          `document.body.innerText.match(/\\d+\\s*[-–]\\s*\\d+\\s*of\\s*\\d+/)?.[0] || ''`
-        );
-        console.log('[Brawley] Row listing after expand:', listing);
-      } else {
-        console.log('[Brawley] Apply button not found — table shows default range');
+      if (!(focusInfo as any)?.found) {
+        console.log('[Brawley] No date inputs found on page');
+        return;
       }
+      console.log(`[Brawley] Found ${(focusInfo as any).count} date input(s), typing start date...`);
+
+      // ── Step 2: type start date via real keyboard events ─────────────────────
+      // Forge components IGNORE the native setter trick — they respond only to
+      // real keyboard input events dispatched by the OS-level keyboard event path.
+      await this.page!.keyboard.press('Control+A');
+      await this.page!.keyboard.type(startStr, { delay: 50 });
+      await this.page!.waitForTimeout(400);
+      await this.page!.keyboard.press('Tab');          // move to "end" input
+      await this.page!.waitForTimeout(400);
+      await this.page!.keyboard.press('Control+A');
+      await this.page!.keyboard.type(endStr, { delay: 50 });
+      await this.page!.waitForTimeout(400);
+
+      // ── Step 3: trigger the filter ────────────────────────────────────────────
+      // Try pressing Enter first (auto-apply on Enter is common in Forge filters).
+      await this.page!.keyboard.press('Enter');
+      await this.page!.waitForTimeout(800);
+
+      // Also try clicking a forge-button or <button> with Apply/Search/Filter text.
+      // forge-button is a top-level custom element — NOT inside a shadow root —
+      // so a plain querySelectorAll finds it.
+      const clicked = await this.page!.evaluate(`(function() {
+        var candidates = Array.from(document.querySelectorAll(
+          'forge-button, button, [role="button"]'
+        ));
+        console.log('[Brawley-eval] Button candidates:', candidates.map(function(b) {
+          return b.tagName + ':' + (b.textContent || '').trim().slice(0, 40);
+        }).join(' | '));
+        var btn = candidates.find(function(b) {
+          var t = (b.textContent || b.getAttribute('aria-label') || b.getAttribute('title') || '').trim();
+          return /^(apply|search|filter|go|update)$/i.test(t);
+        });
+        if (btn) { btn.click(); return (btn.textContent || '').trim(); }
+        return null;
+      })()`);
+
+      if (clicked) {
+        console.log(`[Brawley] Clicked button: "${clicked}"`);
+      } else {
+        console.log('[Brawley] No Apply button found — relied on Enter key');
+      }
+
+      // Wait for table to reload after filter
+      await this.page!.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+      await this.page!.waitForTimeout(3000);
+      await this.screenshot('brawley-txn-full-range');
+
+      const listing = await this.page!.evaluate(
+        `document.body.innerText.match(/\\d+\\s*[-–]\\s*\\d+\\s*of\\s*\\d+/)?.[0] || ''`
+      );
+      console.log('[Brawley] Row listing after date expand:', listing || '(no pagination text found)');
+
     } catch (err) {
       console.warn('[Brawley] Date range expansion failed:', err instanceof Error ? err.message : err);
     }
@@ -604,46 +604,6 @@ export class CityBrawleyScraper extends BaseScraperProvider {
       console.warn('[Brawley] PDF parse error:', err instanceof Error ? err.message : err);
       return {};
     }
-  }
-
-  async scrapePayments(): Promise<ScrapedPayment[]> {
-    const payments: ScrapedPayment[] = [];
-    const accountNumbers = this.getAccountNumbers();
-
-    for (const accountNumber of accountNumbers) {
-      try {
-        const acctPayments = await this.scrapeAccountPayments(accountNumber);
-        payments.push(...acctPayments);
-      } catch (err) {
-        console.error(`[Brawley] Error scraping payments for ${accountNumber}:`, err instanceof Error ? err.message : err);
-      }
-    }
-
-    console.log(`[Brawley] Total payments: ${payments.length}`);
-    return payments;
-  }
-
-  private async scrapeAccountPayments(accountNumber: string): Promise<ScrapedPayment[]> {
-    const payments: ScrapedPayment[] = [];
-    await this.navigateToTransactionHistory(accountNumber);
-    await this.expandDateRange();
-
-    const rows = await this.parseAllPages();
-    for (const row of rows) {
-      if (!/payment/i.test(row.description)) continue;
-
-      const paymentDate = this.parseDate(row.date);
-      if (!paymentDate) continue;
-
-      // Amount is in parentheses for credits: ($500.00) → 500.00
-      const amt = parseFloat(row.amount.replace(/[($,)\s]/g, ''));
-      if (isNaN(amt) || amt <= 0) continue;
-
-      payments.push({ paymentDate, amount: amt });
-    }
-
-    console.log(`[Brawley] ${accountNumber}: ${payments.length} payment(s)`);
-    return payments;
   }
 
   private getAccountNumbers(): string[] {
