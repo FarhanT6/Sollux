@@ -219,9 +219,10 @@ export class WMScraper extends BaseScraperProvider {
             accountName: inv.accountName,
             accountNumber: inv.accountNumber,
             serviceAddress: inv.serviceAddress,
-            pastDue: inv.pastDue,
-            // isPaid from rawData (set when no Pay button found in history row)
+            // pastDue: prefer top-level inv.pastDue (overview-only entries), fall back to rawData.pastDue (history entries)
+            pastDue: inv.pastDue ?? (inv.rawData as Record<string, unknown> | undefined)?.pastDue,
             isPaid: inv.rawData?.isPaid,
+            isPastDue: (inv.rawData as Record<string, unknown> | undefined)?.isPastDue,
           },
         });
       }
@@ -333,11 +334,13 @@ export class WMScraper extends BaseScraperProvider {
     const historyRows = await this.page!.evaluate(() => {
       const results = [];
 
-      // Look for history/statement rows — tables, lists, or MUI grids
+      // Look for history/statement rows — tables or MUI grids.
+      // IMPORTANT: exclude .d-md-flex rows — those are the account overview rows from the
+      // billing overview section which remains mounted in the SPA and causes duplicates.
       const containers = [
         ...Array.from(document.querySelectorAll('table tbody tr')),
         ...Array.from(document.querySelectorAll('.MuiGrid-container')).filter(function(el) {
-          return el.className.includes('d-md-flex') || el.className.includes('jss');
+          return !el.className.includes('d-md-flex') && el.className.includes('jss');
         }),
         ...Array.from(document.querySelectorAll('[class*="history-row"], [class*="statement-row"], [class*="billing-row"]')),
       ];
@@ -370,15 +373,30 @@ export class WMScraper extends BaseScraperProvider {
       // No history found — keep the overview row as the latest statement
       this.capturedInvoices.push(account);
     } else {
+      // Parse all rows first so we can assign pastDue only to the correct statement
+      interface ParsedRow {
+        invoiceDate: string;
+        dueDate: string;
+        billingPeriodStart?: string;
+        billingPeriodEnd?: string;
+        amountDue: number;
+        balance: number;
+        isPaid: boolean;
+        rawText: string;
+      }
+      const parsed: ParsedRow[] = [];
+
       for (const row of historyRows) {
         const text = row.text;
-
         const dates = [...text.matchAll(/(\d{2}\/\d{2}\/\d{4})/g)].map(m => m[1]);
         const uniqueDates = [...new Set(dates)];
         if (uniqueDates.length < 2) continue;
 
-        const invoiceDate = dates[0];
-        const dueDate = dates[1];
+        // WM history columns: Invoice Date | Due Date | [Service From | Service To] | Amount
+        const invoiceDate = uniqueDates[0];
+        const dueDate = uniqueDates[1];
+        const billingPeriodStart = uniqueDates.length >= 3 ? uniqueDates[2] : undefined;
+        const billingPeriodEnd = uniqueDates.length >= 4 ? uniqueDates[3] : undefined;
 
         const amounts = [...text.matchAll(/\$\s*([\d,]+\.\d{2})/g)]
           .map(m => parseFloat(m[1].replace(/,/g, '')));
@@ -387,23 +405,69 @@ export class WMScraper extends BaseScraperProvider {
         const amountDue = amounts[amounts.length - 1];
         const balance = amounts.length >= 2 ? amounts[amounts.length - 2] : amountDue;
 
-        // No "Pay" button = invoice has been paid
-        const isPaid = !row.hasPayBtn;
+        parsed.push({
+          invoiceDate, dueDate, billingPeriodStart, billingPeriodEnd,
+          amountDue, balance, isPaid: !row.hasPayBtn, rawText: text.slice(0, 200),
+        });
+      }
+
+      // Deduplicate by invoice month (MM/YYYY). The account header/summary row shows the
+      // total balance for the current month (e.g. $75.28 = $36.14 + $39.14) and appears
+      // alongside the real statement row for the same month. Keep the smaller amount since
+      // the summary row is always ≥ any individual statement amount.
+      const monthKey = (d: string) => { const p = d.split('/'); return p[0] + '/' + p[2]; };
+      const byMonth = new Map<string, typeof parsed[0]>();
+      for (const p of parsed) {
+        const key = monthKey(p.invoiceDate);
+        const prev = byMonth.get(key);
+        if (!prev || p.amountDue < prev.amountDue) byMonth.set(key, p);
+      }
+      const dedupedParsed = Array.from(byMonth.values());
+
+      // Rows are newest-first from WM's table.
+      // First unpaid = current charge. Second unpaid = past-due statement.
+      // Past due amount: prefer explicitly scraped account.pastDue; otherwise derive it
+      // from (totalBalance - currentCharge) since WM rolls past due into the total.
+      const firstUnpaid = dedupedParsed.find(p => !p.isPaid);
+      const computedPastDue = (account.amountDue && firstUnpaid)
+        ? Math.round((account.amountDue - firstUnpaid.amountDue) * 100) / 100
+        : undefined;
+      const effectivePastDue = account.pastDue ?? (computedPastDue && computedPastDue > 0.01 ? computedPastDue : undefined);
+
+      let unpaidCount = 0;
+      for (const p of dedupedParsed) {
+        let rowPastDue: number | undefined;
+        let isPastDueStatement = false;
+        if (!p.isPaid) {
+          unpaidCount++;
+          if (unpaidCount === 1 && effectivePastDue) {
+            // Current statement — carry pastDue so the card header shows "Past due: $X"
+            rowPastDue = effectivePastDue;
+          } else if (unpaidCount === 2) {
+            // This is the overdue statement itself — mark it and attach the balance
+            rowPastDue = effectivePastDue;
+            isPastDueStatement = true;
+          }
+        }
 
         this.capturedInvoices.push({
           ...account,
-          invoiceDate,
-          dueDate,
-          amountDue,
-          balance,
-          status: 'history', // ← CRITICAL: override overview-only status so deduplication works
+          invoiceDate: p.invoiceDate,
+          dueDate: p.dueDate,
+          billingPeriodStart: p.billingPeriodStart,
+          billingPeriodEnd: p.billingPeriodEnd,
+          amountDue: p.amountDue,
+          balance: p.balance,
+          status: 'history',
           rawData: {
             accountBalance: account.amountDue,
             accountName: account.accountName,
             accountNumber: account.accountNumber,
             serviceAddress: account.serviceAddress,
-            isPaid,
-            rawText: text.slice(0, 200),
+            pastDue: rowPastDue,
+            isPaid: p.isPaid,
+            isPastDue: isPastDueStatement,
+            rawText: p.rawText,
           },
         });
       }
@@ -483,10 +547,31 @@ export class WMScraper extends BaseScraperProvider {
       for (const row of rowData) {
         const text = row.text;
 
-        const amountMatch = text.match(/\$\s*([\d,]+\.\d{2})/);
-        if (!amountMatch) continue;
-        const amount = parseFloat(amountMatch[1].replace(/,/g, ''));
+        // All dollar amounts in the row — first is often current charge, last is total due
+        const allAmounts = [...text.matchAll(/\$\s*([\d,]+\.\d{2})/g)]
+          .map(m => parseFloat(m[1].replace(/,/g, '')));
+        if (allAmounts.length === 0) continue;
+        const amount = allAmounts[allAmounts.length - 1]; // total due
         if (!amount || amount <= 0) continue;
+
+        // Past due — look for "Past Due $X.XX" in the row text or cells
+        let pastDue: number | undefined;
+        const pastDueMatch = text.match(/past\s*due[^$\d]*\$\s*([\d,]+\.\d{2})/i);
+        if (pastDueMatch) {
+          pastDue = parseFloat(pastDueMatch[1].replace(/,/g, ''));
+        } else {
+          // Also check each cell: a cell labeled "Past Due" followed by an amount cell
+          for (let ci = 0; ci < row.cells.length; ci++) {
+            if (/past\s*due/i.test(row.cells[ci])) {
+              const next = row.cells[ci + 1] || '';
+              const m = next.match(/\$([\d,]+\.\d{2})/);
+              if (m) { pastDue = parseFloat(m[1].replace(/,/g, '')); break; }
+              // amount may be embedded in same cell
+              const embedded = row.cells[ci].match(/\$([\d,]+\.\d{2})/);
+              if (embedded) { pastDue = parseFloat(embedded[1].replace(/,/g, '')); break; }
+            }
+          }
+        }
 
         const dateMatch = text.match(/(\d{2}\/\d{2}\/\d{4})/);
         const dueDate = dateMatch ? dateMatch[1] : undefined;
@@ -509,6 +594,7 @@ export class WMScraper extends BaseScraperProvider {
           invoiceDate: today,
           dueDate,
           amountDue: amount,
+          pastDue,
           accountName,
           accountNumber,
           serviceAddress,

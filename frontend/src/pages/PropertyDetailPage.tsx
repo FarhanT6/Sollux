@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { getProperty, getStatements, getPayments, getInsights, syncUtility, updateUtility, markInsightRead, dismissInsight } from '../api/client';
+import { useParams, Link, useNavigate } from 'react-router-dom';
+import { getProperty, getStatements, getPayments, getInsights, syncUtility, updateUtility, markInsightRead, dismissInsight, getStatementDownloadUrl } from '../api/client';
 import type { Property, Statement, Payment, AIInsight, UtilityAccount } from '../types';
 import { CATEGORY_LABELS, CATEGORY_COLORS } from '../types';
 import { PageHeader, StatCard, InsightCard, Skeleton, EmptyState, Pill } from '../components/ui';
 import { format } from 'date-fns';
 import AddUtilityModal from '../components/utility/AddUtilityModal';
-import StatementHistoryPanel from '../components/utility/StatementHistoryPanel';
 
 type Tab = 'utilities' | 'payments' | 'insights' | 'documents';
 
@@ -147,6 +146,7 @@ export default function PropertyDetailPage() {
                   <UtilityAccountCardWithHistory
                     key={account.id}
                     account={account}
+                    propertyId={id!}
                     syncing={syncing === account.id}
                     onSync={() => handleSync(account.id)}
                     onRefresh={() => getProperty(id!).then(setProperty)}
@@ -226,7 +226,18 @@ export default function PropertyDetailPage() {
             ) : (
               <div className="grid grid-cols-3 gap-3">
                 {statements.filter(s => s.pdfS3Key).map(stmt => (
-                  <div key={stmt.id} className="card p-3 hover:border-gold-300 transition-colors cursor-pointer">
+                  <div
+                    key={stmt.id}
+                    className="card p-3 hover:border-gold-300 transition-colors cursor-pointer"
+                    onClick={async () => {
+                      try {
+                        const res = await getStatementDownloadUrl(stmt.id);
+                        window.open(res.url, '_blank', 'noopener,noreferrer');
+                      } catch {
+                        alert('Could not open PDF. Please try again.');
+                      }
+                    }}
+                  >
                     <div className="w-8 h-9 bg-red-500/10 rounded flex items-center justify-center mb-2">
                       <div className="w-3.5 h-4 bg-red-400 rounded-sm" />
                     </div>
@@ -329,23 +340,22 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
 }
 
 function UtilityAccountCardWithHistory({
-  account, syncing, onSync, onRefresh
-}: { account: UtilityAccount; syncing: boolean; onSync: () => void; onRefresh: () => void }) {
-  const [expanded, setExpanded] = useState(false);
+  account, syncing, onSync, onRefresh, propertyId,
+}: { account: UtilityAccount; syncing: boolean; onSync: () => void; onRefresh: () => void; propertyId: string }) {
   const [editing, setEditing] = useState(false);
+  const navigate = useNavigate();
 
   return (
     <div>
       {editing && <EditUtilityModal account={account} onClose={() => setEditing(false)} onSaved={onRefresh} />}
       <UtilityAccountCard account={account} syncing={syncing} onSync={onSync} onEdit={() => setEditing(true)} />
       <button
-        onClick={() => setExpanded(v => !v)}
-        className="mt-1.5 ml-1 text-xs text-gray-500 hover:text-gray-300 transition-colors flex items-center gap-1"
+        onClick={() => navigate(`/properties/${propertyId}/utilities/${account.id}`)}
+        className="mt-1.5 ml-1 text-xs text-gray-500 hover:text-[#F5A623] transition-colors flex items-center gap-1"
       >
-        <span style={{ display: 'inline-block', transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.15s' }}>›</span>
-        {expanded ? 'Hide statement history' : 'View statement history'}
+        <span>›</span>
+        View statements &amp; payments
       </button>
-      {expanded && <StatementHistoryPanel utilityAccountId={account.id} />}
     </div>
   );
 }

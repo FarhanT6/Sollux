@@ -41,6 +41,9 @@ export interface ScraperCredentials {
    *  which accounts they drill into, skipping any not tracked in Sollux. */
   accountNumbers?: string[];
   loginUrl?: string;
+  /** Date of the most recent statement already in DB for this account.
+   *  Scrapers can use this to skip re-fetching already-stored statements. */
+  latestStatementDate?: Date;
 }
 
 export abstract class BaseScraperProvider {

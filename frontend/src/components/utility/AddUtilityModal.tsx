@@ -28,7 +28,7 @@ const PROVIDER_SLUGS: Record<string, string> = {
 };
 
 // Providers with a live scraper (vs gmail-fallback only)
-const SCRAPER_SUPPORTED = new Set(['sdge', 'socal-gas', 'iid', 'wm', 'republic-services', 'cox', 'fpl']);
+const SCRAPER_SUPPORTED = new Set(['sdge', 'socal-gas', 'iid', 'wm', 'republic-services', 'cox', 'fpl', 'city-brawley']);
 
 interface Props {
   propertyId: string;

@@ -95,6 +95,23 @@ router.post('/', async (req, res, next) => {
   }
 });
 
+// GET /api/utilities/:id — single utility account detail
+router.get('/:id', async (req, res, next) => {
+  try {
+    const account = await db.utilityAccount.findFirst({
+      where: { id: req.params.id, property: { userId: req.dbUserId! } },
+      include: {
+        property: { select: { id: true, address: true, nickname: true, city: true, state: true } },
+        statements: { orderBy: { statementDate: 'desc' }, take: 24 },
+        payments: { orderBy: { paymentDate: 'desc' }, take: 200 },
+      },
+    });
+    if (!account) return res.status(404).json({ error: 'Not found' });
+    const { accountNumberEnc, usernameEnc, passwordEnc, ...rest } = account;
+    res.json(rest);
+  } catch (err) { next(err); }
+});
+
 // POST /api/utilities/:id/sync — trigger manual scrape
 router.post('/:id/sync', async (req, res, next) => {
   try {

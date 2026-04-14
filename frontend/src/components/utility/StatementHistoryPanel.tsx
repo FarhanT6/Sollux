@@ -13,9 +13,12 @@ function fmtMoney(v?: number | null) {
 }
 
 function statusPill(s: Statement): { color: 'green' | 'amber' | 'red'; label: string } {
-  if ((s.amountPaid ?? 0) > 0) return { color: 'green', label: 'Paid' };
-  // isPaid flag set by scraper when no "Pay" button is found (i.e. invoice is settled)
+  if (Number(s.amountPaid ?? 0) > 0) return { color: 'green', label: 'Paid' };
+  // isPaid flag set by scraper when no Pay button found (invoice is settled)
   if ((s.rawDataJson as any)?.isPaid === true) return { color: 'green', label: 'Paid' };
+  // isPastDue flag set by scraper when this is a prior-month unpaid balance (already overdue)
+  if ((s.rawDataJson as any)?.isPastDue === true) return { color: 'red', label: 'Overdue' };
+  // Fall back to date check — if due date has passed and still unpaid = overdue
   if (s.dueDate && isAfter(new Date(), new Date(s.dueDate))) return { color: 'red', label: 'Overdue' };
   return { color: 'amber', label: 'Due' };
 }

@@ -5,6 +5,7 @@ import AppLayout from './components/layout/AppLayout';
 import DashboardPage from './pages/DashboardPage';
 import PropertiesPage from './pages/PropertiesPage';
 import PropertyDetailPage from './pages/PropertyDetailPage';
+import UtilityDetailPage from './pages/UtilityDetailPage';
 import InsightsPage from './pages/InsightsPage';
 import PaymentsPage from './pages/PaymentsPage';
 import DocumentsPage from './pages/DocumentsPage';
@@ -38,6 +39,7 @@ export default function App() {
           <Route path="dashboard" element={<DashboardPage />} />
           <Route path="properties" element={<PropertiesPage />} />
           <Route path="properties/:id" element={<PropertyDetailPage />} />
+          <Route path="properties/:propertyId/utilities/:accountId" element={<UtilityDetailPage />} />
           <Route path="insights" element={<InsightsPage />} />
           <Route path="payments" element={<PaymentsPage />} />
           <Route path="documents" element={<DocumentsPage />} />
