@@ -216,8 +216,10 @@ export class RepublicServicesScraper extends BaseScraperProvider {
   }
 
   // ── Shared scrape pass (prevents concurrent page navigation) ─────────────
+  // Use a Promise lock so a concurrent caller awaits the same run instead of
+  // returning immediately with empty data (the boolean flag was not enough).
 
-  private _scraped = false;
+  private _scrapeAllPromise: Promise<void> | null = null;
 
   async scrapeStatements(): Promise<ScrapedStatement[]> {
     await this._scrapeAll();
@@ -236,9 +238,12 @@ export class RepublicServicesScraper extends BaseScraperProvider {
     return payments;
   }
 
-  private async _scrapeAll(): Promise<void> {
-    if (this._scraped) return;
-    this._scraped = true;
+  private _scrapeAll(): Promise<void> {
+    if (!this._scrapeAllPromise) this._scrapeAllPromise = this._doScrapeAll();
+    return this._scrapeAllPromise;
+  }
+
+  private async _doScrapeAll(): Promise<void> {
 
     try {
       // ── 1. Start from dashboard — click header shortcuts to navigate ───────
@@ -298,18 +303,30 @@ export class RepublicServicesScraper extends BaseScraperProvider {
       }
       if (billingHistoryLink?.href) derivedHistoryUrls.unshift(billingHistoryLink.href);
 
-      // Also try fixed paths under the portal base
+      // Also try fixed paths under the portal base (incl. manage area)
       derivedHistoryUrls.push(
         `${this.PORTAL_BASE}/account/payment/billing-history`,
         `${this.PORTAL_BASE}/account/payment/history`,
         `${this.PORTAL_BASE}/account/billing-history`,
+        `${this.PORTAL_BASE}/account/manage/billing`,
+        `${this.PORTAL_BASE}/account/manage/billing-history`,
       );
 
+      // Deduplicate
+      const seenHistoryUrls = new Set<string>();
       for (const historyUrl of derivedHistoryUrls) {
+        if (seenHistoryUrls.has(historyUrl)) continue;
+        seenHistoryUrls.add(historyUrl);
         try {
           await this.page!.goto(historyUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
           await this.page!.waitForLoadState('networkidle', { timeout: 12000 }).catch(() => {});
           await this.page!.waitForTimeout(2000);
+          const finalUrl = this.page!.url();
+          const bodySnippet = await this.page!.evaluate(() =>
+            (document.body.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 300)
+          );
+          console.log(`[RepublicServices] History page ${historyUrl} → final URL: ${finalUrl}`);
+          console.log(`[RepublicServices] History page body snippet: ${bodySnippet}`);
           await this.screenshot('rs-billing-history');
           await this.domScrapeStatementRows();
           console.log(`[RepublicServices] Billing history at ${historyUrl}: invoices=${this.capturedInvoices.length}`);
@@ -622,15 +639,22 @@ export class RepublicServicesScraper extends BaseScraperProvider {
   /** Scrape the "Make a Payment" page for current balance + account number. */
   private async domScrapePayBillPage(): Promise<void> {
     try {
+      // Wait up to 10s for a dollar amount to appear (React SPA loads async)
+      await this.page!.waitForSelector('text=/\\$[\\d,]+\\.\\d{2}/', { timeout: 10000 }).catch(() => {});
+
       const data = await this.page!.evaluate(() => {
         const text = document.body.textContent || '';
+
+        // Debug: first 500 chars and dollar amounts found
+        const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 500);
+        const allAmounts = [...text.matchAll(/\$\s*([\d,]+\.\d{2})/g)].map(m => m[0]);
 
         // Account number — RS format: digits with dashes, e.g. 3-0887738-03334
         const acctMatch = text.match(/(\d-\d{6,}-\d{4,})/);
         const accountNumber = acctMatch ? acctMatch[1] : undefined;
 
         // Total balance (first $x.xx on the page)
-        const amounts = [...text.matchAll(/\$\s*([\d,]+\.\d{2})/g)].map(m => parseFloat(m[1].replace(/,/g, '')));
+        const amounts = allAmounts.map(s => parseFloat(s.replace(/[$,\s]/g, '')));
         const totalBalance = amounts[0];
 
         // Due date
@@ -645,10 +669,16 @@ export class RepublicServicesScraper extends BaseScraperProvider {
         const addrEl = document.querySelector('[class*="service-address"], [class*="serviceAddress"], [class*="address"]');
         const serviceAddress = addrEl?.textContent?.trim();
 
-        return { accountNumber, totalBalance, dueDate, accountName, serviceAddress };
+        return { accountNumber, totalBalance, dueDate, accountName, serviceAddress, snippet, allAmounts };
       });
 
-      if (!data.totalBalance) return;
+      console.log(`[RepublicServices] Pay-bill page body snippet: ${data.snippet}`);
+      console.log(`[RepublicServices] Pay-bill dollar amounts found: ${JSON.stringify(data.allAmounts)}`);
+
+      if (!data.totalBalance) {
+        console.log('[RepublicServices] Pay-bill: no balance found, skipping');
+        return;
+      }
 
       const today = new Date().toISOString().slice(0, 10);
       // Use first of current month as statement date (RS bills monthly)
