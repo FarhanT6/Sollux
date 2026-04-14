@@ -1,60 +1,134 @@
 /**
  * Republic Services scraper
- * Portal: https://www.republicservices.com/my-account
- * Login:  https://myaccount.republicservices.com/login
+ * Portal:  https://my.republicservices.com
+ * Login:   https://my.republicservices.com/u/login  (Auth0 universal login)
  *
- * Structure is similar to WM — React SPA, multiple service accounts per login.
- * Uses accountNumber to filter when one login has multiple service addresses.
+ * Auth0 flow: email → Continue → password → Sign In (two-step)
+ * SPA: React, intercept XHR/fetch for billing API calls.
+ * Multiple service addresses can share one login — uses accountNumbers to filter.
  */
 import { BaseScraperProvider, ScraperCredentials, ScrapedStatement, ScrapedPayment } from '../base';
 import * as path from 'path';
+
+// ── Internal shapes ───────────────────────────────────────────────────────────
+
+interface RSAccount {
+  accountId?: string;
+  accountNumber?: string;
+  accountName?: string;
+  serviceAddress?: string;
+  status?: string;
+  detailUrl?: string;
+}
+
+interface RSInvoice {
+  accountId?: string;
+  accountNumber?: string;
+  accountName?: string;
+  serviceAddress?: string;
+  invoiceId?: string;
+  invoiceNumber?: string;
+  invoiceDate?: string;
+  dueDate?: string;
+  billingPeriodStart?: string;
+  billingPeriodEnd?: string;
+  amountDue?: number;
+  balance?: number;
+  pastDue?: number;
+  totalDue?: number;
+  pdfUrl?: string;
+  status?: string;
+  isPaid?: boolean;
+  rawData?: Record<string, unknown>;
+}
+
+interface RSPayment {
+  paymentDate?: string;
+  amount?: number;
+  confirmationNumber?: string;
+  paymentMethod?: string;
+  accountNumber?: string;
+}
+
+// ── Scraper ───────────────────────────────────────────────────────────────────
 
 export class RepublicServicesScraper extends BaseScraperProvider {
   readonly providerSlug = 'republic-services';
   readonly providerName = 'Republic Services';
 
-  private readonly LOGIN_URL = 'https://myaccount.republicservices.com/login';
+  private readonly LOGIN_URL   = 'https://my.republicservices.com/u/login';
+  private readonly PORTAL_BASE = 'https://my.republicservices.com';
+
+  private capturedAccounts: RSAccount[]  = [];
+  private capturedInvoices: RSInvoice[]  = [];
+  private capturedPayments: RSPayment[]  = [];
+
+  // ── Login ─────────────────────────────────────────────────────────────────
 
   async login(credentials: ScraperCredentials): Promise<boolean> {
     try {
       await this.page!.goto(this.LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
       await this.page!.waitForTimeout(2000);
-      await this.screenshot('rs-login-loaded');
+      await this.screenshot('rs-login-page');
 
-      // Dismiss cookie banner if present
-      try {
-        await this.page!.waitForSelector('#onetrust-accept-btn-handler, button:has-text("Accept")', { timeout: 4000 });
-        await this.page!.click('#onetrust-accept-btn-handler, button:has-text("Accept")');
-        await this.page!.waitForTimeout(800);
-      } catch { }
+      // Dismiss cookie / privacy banners
+      await this.dismissBanners();
 
-      const userSel = 'input[placeholder*="Email" i], input[type="email"], #email, input[name="email"], input[name="username"]';
-      const passSel = 'input[type="password"], #password, input[name="password"]';
-      const submitSel = 'button[type="submit"], form button:has-text("Log In"), form button:has-text("Sign In"), input[type="submit"]';
+      // ── Step 1: Email ────────────────────────────────────────────────────
+      const emailSel = 'input[type="email"], input[name="email"], input[name="username"], #username, #email';
+      await this.page!.waitForSelector(emailSel, { timeout: 15000 });
+      await this.page!.fill(emailSel, credentials.username);
+      await this.page!.waitForTimeout(500 + Math.random() * 300);
 
-      await this.page!.waitForSelector(userSel, { timeout: 15000 });
+      // Auth0 two-step: click Continue to reveal password field
+      const continueBtnSel = 'button[name="action"], button[type="submit"]:has-text("Continue"), button[type="submit"]:has-text("Next"), button:has-text("Continue")';
+      const hasContinue = await this.page!.locator(continueBtnSel).count() > 0;
+      if (hasContinue) {
+        await this.page!.click(continueBtnSel);
+        await this.page!.waitForTimeout(1500);
+        await this.screenshot('rs-after-continue');
+      }
 
-      await this.page!.type(userSel, credentials.username, { delay: 60 });
-      await this.page!.waitForTimeout(400);
-      await this.page!.type(passSel, credentials.password, { delay: 60 });
-      await this.page!.waitForTimeout(300);
+      // ── Step 2: Password ─────────────────────────────────────────────────
+      const passSel = 'input[type="password"], input[name="password"], #password';
+      await this.page!.waitForSelector(passSel, { timeout: 10000 });
+      await this.page!.fill(passSel, credentials.password);
+      await this.page!.waitForTimeout(400 + Math.random() * 200);
 
       await this.screenshot('rs-before-submit');
+
+      // Submit — Auth0 uses name="action" or type="submit"
+      const submitSel = 'button[name="action"][value="default"], button[type="submit"]:has-text("Log In"), button[type="submit"]:has-text("Sign In"), button[type="submit"]:has-text("Continue"), input[type="submit"]';
       await this.page!.click(submitSel);
 
+      // Wait for redirect away from Auth0
       try {
-        await this.page!.waitForURL(/dashboard|my-account|overview/i, { timeout: 25000 });
-      } catch { }
+        await this.page!.waitForURL(url => !url.toString().includes('/u/login'), { timeout: 30000 });
+      } catch {
+        // Check if we're on MFA page
+      }
 
-      const url = this.page!.url();
+      await this.throwIfMfaRequired();
+      await this.page!.waitForTimeout(3000);
+
+      const finalUrl = this.page!.url();
       await this.screenshot('rs-post-login');
 
-      if (/login|sign-in/i.test(url)) {
-        console.error('[RepublicServices] Login failed — URL:', url);
+      if (finalUrl.includes('/u/login') || finalUrl.includes('/login')) {
+        // Check for wrong password message
+        const errText = await this.page!.locator('[class*="error"], [class*="alert"], .message').textContent().catch(() => '');
+        console.error(`[RepublicServices] Login failed — URL: ${finalUrl}`, errText?.slice(0, 100));
         return false;
       }
 
-      console.log('[RepublicServices] Login successful, URL:', url);
+      console.log('[RepublicServices] Login successful, URL:', finalUrl);
+
+      // Set up API interception AFTER login so session cookies are active
+      this.setupInterceptors();
+
+      // Give SPA time to fully boot and fire initial API calls
+      await this.page!.waitForTimeout(4000);
+
       return true;
     } catch (err) {
       console.error('[RepublicServices] Login error:', err instanceof Error ? err.message : err);
@@ -63,172 +137,601 @@ export class RepublicServicesScraper extends BaseScraperProvider {
     }
   }
 
+  // ── API interceptors ──────────────────────────────────────────────────────
+
+  private setupInterceptors(): void {
+    this.page!.on('response', async (response) => {
+      if (!response.ok()) return;
+      const url = response.url();
+      const ct  = response.headers()['content-type'] || '';
+      if (!ct.includes('application/json')) return;
+
+      try {
+        const data = await response.json().catch(() => null);
+        if (!data) return;
+
+        // Accounts / service addresses
+        if (/\/accounts?\b|\/customers?\b|\/services?\b/i.test(url)) {
+          this.parseAccountResponse(url, data);
+        }
+
+        // Invoices / bills / statements
+        if (/\/invoice|\/bill|\/statement/i.test(url)) {
+          this.parseInvoiceResponse(url, data);
+        }
+
+        // Payments / transactions
+        if (/\/payment|\/transaction|\/history/i.test(url)) {
+          this.parsePaymentResponse(url, data);
+        }
+      } catch { /* ignore parse errors */ }
+    });
+  }
+
+  // ── Statements ────────────────────────────────────────────────────────────
+
   async scrapeStatements(): Promise<ScrapedStatement[]> {
-    const filterAccountNumber = this.credentials?.accountNumber;
-    const statements: ScrapedStatement[] = [];
+    const filterNumbers: string[] =
+      this.credentials?.accountNumbers ??
+      (this.credentials?.accountNumber ? [this.credentials.accountNumber] : []);
+
+    const normalize = (s: string) => s.replace(/[-\s]/g, '').toLowerCase();
+    const matchesFilter = (acct: string) => {
+      if (filterNumbers.length === 0) return true;
+      const a = normalize(acct);
+      return filterNumbers.some(f => { const b = normalize(f); return a === b || a.includes(b) || b.includes(a); });
+    };
 
     try {
-      await this.page!.waitForTimeout(2000);
-
-      // Navigate to billing / account overview
-      await this.navigateToBilling();
+      // ── 1. Navigate to the billing / accounts overview ───────────────────
+      await this.navigateToBillingOverview();
       await this.screenshot('rs-billing-overview');
 
-      // Scrape account rows — Republic Services uses a similar card layout to WM
-      const rows = await this.page!.evaluate(() => {
-        type Row = { text: string; accountNumber?: string; amountDue?: number; dueDate?: string };
-        const results: Row[] = [];
+      // ── 2. DOM-scrape account rows as fallback if interceptors missed them
+      await this.domScrapeAccounts();
 
-        // Scan all elements with dollar amounts
-        const candidates = Array.from(document.querySelectorAll('[class*="account" i], [class*="service" i], [class*="bill" i]'));
-        for (const el of candidates) {
-          const text = el.textContent?.trim() || '';
-          if (!/\$[\d,]+\.\d{2}/.test(text)) continue;
-          if (el.children.length > 10) continue; // skip large containers
+      console.log(`[RepublicServices] Captured ${this.capturedAccounts.length} account(s), ${this.capturedInvoices.length} invoice(s) from interceptors`);
 
-          const amountMatch = text.match(/\$\s*([\d,]+\.\d{2})/);
-          const amountDue = amountMatch ? parseFloat(amountMatch[1].replace(/,/g, '')) : undefined;
+      // ── 3. Determine which accounts to drill into ────────────────────────
+      const accountsToScrape = filterNumbers.length === 0
+        ? this.capturedAccounts
+        : this.capturedAccounts.filter(a => a.accountNumber && matchesFilter(a.accountNumber));
 
-          // Account number patterns: RS uses formats like XXX-XXXXXX-X or similar
-          const acctMatch = text.match(/(\d[\d-]{6,})/);
-          const accountNumber = acctMatch ? acctMatch[1] : undefined;
+      if (filterNumbers.length > 0 && accountsToScrape.length === 0 && this.capturedAccounts.length > 0) {
+        console.warn(`[RepublicServices] No accounts matched filter [${filterNumbers.join(', ')}]. Available: ${this.capturedAccounts.map(a => a.accountNumber).join(', ')}`);
+      }
 
-          const dateMatch = text.match(/(\d{1,2}\/\d{1,2}\/\d{2,4})/);
-          const dueDate = dateMatch ? dateMatch[1] : undefined;
-
-          if (amountDue) results.push({ text, accountNumber, amountDue, dueDate });
+      // ── 4. If the overview page already has invoice data (from XHR), see if ─
+      //       we can skip account-level drilling for accounts we know about.
+      //       Otherwise drill into each account detail page.
+      if (accountsToScrape.length > 0) {
+        for (let i = 0; i < accountsToScrape.length; i++) {
+          const acct = accountsToScrape[i];
+          const alreadyHaveHistory = this.capturedInvoices.some(
+            inv => inv.accountNumber && acct.accountNumber && normalize(inv.accountNumber) === normalize(acct.accountNumber)
+          );
+          if (!alreadyHaveHistory) {
+            console.log(`[RepublicServices] Drilling into account ${i + 1}/${accountsToScrape.length}: ${acct.accountName} (${acct.accountNumber})`);
+            await this.scrapeAccountDetail(acct, i);
+            await this.page!.waitForTimeout(1500);
+          }
         }
+      } else {
+        // No accounts detected from DOM; try generic billing history nav
+        await this.navigateToBillingHistory();
+        await this.domScrapeStatementRows();
+      }
 
-        return results.slice(0, 10);
+      // ── 5. Build cutoff set per account ──────────────────────────────────
+      const knownDatesMap = this.credentials?.knownStatementDates ?? {};
+
+      // ── 6. Deduplicate invoices (same account + same invoice date) ────────
+      const seen = new Set<string>();
+      const deduped = this.capturedInvoices.filter(inv => {
+        const key = `${normalize(inv.accountNumber || '')}:${inv.invoiceDate}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
       });
 
-      console.log(`[RepublicServices] Found ${rows.length} account rows`);
+      // ── 7. Build ScrapedStatement objects ────────────────────────────────
+      const statements: ScrapedStatement[] = [];
+      for (const inv of deduped) {
+        // Account filter
+        if (filterNumbers.length > 0 && inv.accountNumber && !matchesFilter(inv.accountNumber)) continue;
 
-      // Navigate to statement history for each relevant account
-      await this.navigateToStatementHistory();
-      await this.screenshot('rs-statement-history');
+        const statementDate = this.parseDate(inv.invoiceDate || null);
+        if (!statementDate) continue;
 
-      const historyRows = await this.page!.evaluate(() => {
-        type HistRow = { text: string; cells: string[]; pdfHref?: string };
-        const results: HistRow[] = [];
-
-        const tableRows = Array.from(document.querySelectorAll('table tr')).slice(1);
-        for (const row of tableRows) {
-          const text = row.textContent?.trim() || '';
-          if (!/\$[\d,]+\.\d{2}/.test(text)) continue;
-          const cells = Array.from(row.querySelectorAll('td')).map(td => td.textContent?.trim() || '');
-          const pdfHref = (row.querySelector('a[href*=".pdf"], a[href*="statement"]') as HTMLAnchorElement | null)?.href;
-          results.push({ text, cells, pdfHref });
+        // Exact-date dedup against DB
+        const acctKey = inv.accountNumber ?? '';
+        const knownDates = new Set<string>(knownDatesMap[acctKey] ?? []);
+        const isoDate = statementDate.toISOString().slice(0, 10);
+        if (knownDates.has(isoDate)) {
+          console.log(`[RepublicServices] Skipping already-stored ${acctKey} ${isoDate}`);
+          continue;
         }
 
-        if (results.length === 0) {
-          const candidates = Array.from(document.querySelectorAll('[class*="bill" i], [class*="statement" i], [class*="invoice" i], [class*="history" i]'));
-          for (const el of candidates) {
-            const text = el.textContent?.trim() || '';
-            if (!/\$[\d,]+\.\d{2}/.test(text) || !/\d{1,2}\/\d{1,2}\/\d{2,4}/.test(text)) continue;
-            if (el.children.length > 6) continue;
-            const cells = Array.from(el.querySelectorAll('span, div, td')).map(c => c.textContent?.trim() || '').filter(Boolean);
-            const pdfHref = (el.querySelector('a[href*=".pdf"]') as HTMLAnchorElement | null)?.href;
-            results.push({ text, cells, pdfHref });
+        // PDF download
+        let pdfBuffer: Buffer | undefined;
+        let pdfFilename: string | undefined;
+        if (inv.pdfUrl) {
+          pdfBuffer = await this.downloadPdf(inv.pdfUrl);
+          if (pdfBuffer) {
+            const safeName = (inv.accountNumber ?? 'rs').replace(/[^a-z0-9]/gi, '_');
+            pdfFilename = `rs_${safeName}_${isoDate}.pdf`;
           }
         }
 
-        return results.slice(0, 24);
-      });
-
-      console.log(`[RepublicServices] Found ${historyRows.length} history rows`);
-
-      for (const row of historyRows) {
-        const text = row.text;
-        const dates = [...text.matchAll(/(\d{1,2}\/\d{1,2}\/\d{2,4})/g)].map(m => m[1]);
-        const statementDate = this.parseDate(dates[0] || null);
-        if (!statementDate) continue;
-
-        const amounts = [...text.matchAll(/\$\s*([\d,]+\.\d{2})/g)].map(m => parseFloat(m[1].replace(/,/g, '')));
-
-        let pdfBuffer: Buffer | undefined;
-        if (row.pdfHref) {
-          pdfBuffer = await this.downloadPdf(row.pdfHref);
-        }
+        const amountDue   = inv.amountDue ?? inv.totalDue;
+        const currentBill = inv.amountDue;
+        const pastDue     = inv.pastDue;
+        const totalDue    = inv.totalDue ?? (amountDue != null && pastDue != null ? amountDue + pastDue : amountDue);
 
         statements.push({
           statementDate,
-          dueDate: this.parseDate(dates[1] || null),
-          amountDue: amounts[0],
-          balance: amounts[1],
+          dueDate: this.parseDate(inv.dueDate || null),
+          billingPeriodStart: this.parseDate(inv.billingPeriodStart || null),
+          billingPeriodEnd:   this.parseDate(inv.billingPeriodEnd || null),
+          amountDue,
+          balance: inv.balance ?? totalDue,
           usageUnit: 'pickup',
           pdfBuffer,
-          pdfFilename: row.pdfHref ? `rs_${statementDate.toISOString().slice(0, 10)}.pdf` : undefined,
+          pdfFilename,
+          rawData: {
+            accountNumber:   inv.accountNumber,
+            accountName:     inv.accountName,
+            serviceAddress:  inv.serviceAddress,
+            invoiceNumber:   inv.invoiceNumber,
+            currentBill,
+            pastDue,
+            totalDue,
+            accountBalance:  totalDue,
+            isPaid:          inv.isPaid ?? false,
+            isPastDue:       pastDue != null && pastDue > 0,
+            status:          inv.status,
+            ...inv.rawData,
+          },
         });
       }
 
-      // If history nav failed but we have overview data, use that as a fallback
-      if (statements.length === 0 && rows.length > 0) {
-        const today = new Date().toISOString().slice(0, 10);
-        for (const row of rows) {
-          if (filterAccountNumber && row.accountNumber) {
-            const n = (s: string) => s.replace(/[-\s]/g, '');
-            if (!n(row.accountNumber).includes(n(filterAccountNumber)) && !n(filterAccountNumber).includes(n(row.accountNumber))) continue;
-          }
-          const statementDate = this.parseDate(today);
-          if (!statementDate) continue;
-          statements.push({
-            statementDate,
-            dueDate: this.parseDate(row.dueDate || null),
-            amountDue: row.amountDue,
-            usageUnit: 'pickup',
+      console.log(`[RepublicServices] Total statements: ${statements.length}`);
+      return statements;
+    } catch (err) {
+      console.error('[RepublicServices] Statement error:', err instanceof Error ? err.message : err);
+      await this.screenshot('rs-statements-error');
+      return [];
+    }
+  }
+
+  // ── Payments ──────────────────────────────────────────────────────────────
+
+  async scrapePayments(): Promise<ScrapedPayment[]> {
+    try {
+      await this.navigateToPaymentHistory();
+      await this.page!.waitForTimeout(3000);
+      await this.domScrapePayments();
+
+      const payments: ScrapedPayment[] = [];
+      for (const p of this.capturedPayments) {
+        const paymentDate = this.parseDate(p.paymentDate || null);
+        if (!paymentDate || !p.amount) continue;
+        payments.push({
+          paymentDate,
+          amount: p.amount,
+          confirmationNumber: p.confirmationNumber,
+          paymentMethod: p.paymentMethod,
+        });
+      }
+
+      console.log(`[RepublicServices] Total payments: ${payments.length}`);
+      return payments;
+    } catch (err) {
+      console.error('[RepublicServices] Payment error:', err instanceof Error ? err.message : err);
+      return [];
+    }
+  }
+
+  // ── Navigation helpers ────────────────────────────────────────────────────
+
+  private async navigateToBillingOverview(): Promise<void> {
+    // Strategy 1: click nav link
+    const clicked = await this.page!.evaluate(() => {
+      const el = Array.from(document.querySelectorAll('a, button, [role="menuitem"]'))
+        .find(e => /billing|pay.*bill|my bill|account/i.test(e.textContent || ''));
+      if (el) { (el as HTMLElement).click(); return true; }
+      return false;
+    });
+    if (clicked) {
+      await this.page!.waitForTimeout(3000);
+      return;
+    }
+    // Strategy 2: direct navigation
+    await this.page!.goto(`${this.PORTAL_BASE}/billing`, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+    await this.page!.waitForTimeout(3000);
+  }
+
+  private async navigateToBillingHistory(): Promise<void> {
+    const paths = ['/billing/history', '/billing/statements', '/billing', '/accounts'];
+    for (const p of paths) {
+      try {
+        await this.page!.goto(`${this.PORTAL_BASE}${p}`, { waitUntil: 'domcontentloaded', timeout: 10000 });
+        await this.page!.waitForTimeout(2500);
+        const hasMoney = await this.page!.evaluate(() => /\$[\d,]+\.\d{2}/.test(document.body.textContent || ''));
+        if (hasMoney) { await this.screenshot('rs-billing-history'); return; }
+      } catch { /* try next */ }
+    }
+  }
+
+  private async navigateToPaymentHistory(): Promise<void> {
+    const paths = ['/billing/payment-history', '/billing/payments', '/payments'];
+    for (const p of paths) {
+      try {
+        await this.page!.goto(`${this.PORTAL_BASE}${p}`, { waitUntil: 'domcontentloaded', timeout: 10000 });
+        await this.page!.waitForTimeout(2500);
+        return;
+      } catch { /* try next */ }
+    }
+    // Fallback: click link
+    await this.page!.evaluate(() => {
+      const el = Array.from(document.querySelectorAll('a, button'))
+        .find(e => /payment history|payment.*record|paid/i.test(e.textContent || ''));
+      if (el) (el as HTMLElement).click();
+    });
+    await this.page!.waitForTimeout(2500);
+  }
+
+  private async scrapeAccountDetail(account: RSAccount, idx: number): Promise<void> {
+    try {
+      if (account.detailUrl) {
+        await this.page!.goto(account.detailUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+      } else if (account.accountId) {
+        await this.page!.goto(`${this.PORTAL_BASE}/accounts/${account.accountId}/billing`, {
+          waitUntil: 'domcontentloaded', timeout: 20000,
+        });
+      } else {
+        return;
+      }
+      await this.page!.waitForTimeout(3500);
+      await this.screenshot(`rs-account-${idx}-detail`);
+      await this.domScrapeStatementRows(account);
+      await this.navigateToBillingOverview();
+    } catch (err) {
+      console.error(`[RepublicServices] Detail scrape error for ${account.accountNumber}:`, err instanceof Error ? err.message : err);
+    }
+  }
+
+  // ── DOM scrapers ──────────────────────────────────────────────────────────
+
+  private async domScrapeAccounts(): Promise<void> {
+    try {
+      const rows = await this.page!.evaluate(() => {
+        const results: Array<{
+          accountNumber?: string; accountName?: string;
+          serviceAddress?: string; detailUrl?: string; accountId?: string;
+        }> = [];
+
+        // Look for account/service address cards or rows
+        const candidates = Array.from(document.querySelectorAll(
+          '[class*="account"], [class*="service-address"], [class*="card"], [class*="row"], tr'
+        ));
+
+        for (const el of candidates) {
+          const text = el.textContent?.trim() || '';
+          if (!text || el.children.length > 12) continue;
+
+          // Must look like an account row: has an account-number-like string
+          const acctMatch = text.match(/(\d[\d-]{4,})/);
+          if (!acctMatch) continue;
+
+          const a = el.querySelector('a[href]') as HTMLAnchorElement | null;
+          const href = a?.href;
+          const idMatch = href?.match(/\/accounts?\/([^/]+)/);
+
+          results.push({
+            accountNumber: acctMatch[1],
+            accountName:   undefined,
+            serviceAddress: undefined,
+            detailUrl: href,
+            accountId: idMatch?.[1],
+          });
+        }
+
+        return results.slice(0, 20);
+      });
+
+      for (const r of rows) {
+        if (!this.capturedAccounts.some(a => a.accountNumber === r.accountNumber)) {
+          this.capturedAccounts.push(r);
+        }
+      }
+    } catch { /* non-critical */ }
+  }
+
+  private async domScrapeStatementRows(account?: RSAccount): Promise<void> {
+    try {
+      const rows = await this.page!.evaluate(() => {
+        const results: Array<{
+          text: string; cells: string[]; pdfHref?: string; hasPayBtn: boolean;
+        }> = [];
+
+        const containers: Element[] = [
+          ...Array.from(document.querySelectorAll('table tbody tr')),
+          ...Array.from(document.querySelectorAll('[class*="invoice"], [class*="statement"], [class*="bill-row"], [class*="history-row"]')),
+        ];
+
+        for (const el of containers) {
+          const text = el.textContent?.trim() || '';
+          if (!/\$[\d,]+\.\d{2}/.test(text)) continue;
+          const dates = text.match(/\d{1,2}\/\d{1,2}\/\d{2,4}/g) || [];
+          if (dates.length === 0) continue;
+
+          const cells = Array.from(el.querySelectorAll('td, [class*="cell"], [class*="col"]'))
+            .map(c => c.textContent?.trim() || '').filter(Boolean);
+
+          const pdfEl = el.querySelector('a[href*=".pdf"], a[href*="statement"], a[href*="invoice"], a[href*="download"]') as HTMLAnchorElement | null;
+
+          const btns = Array.from(el.querySelectorAll('button, a'));
+          const hasPayBtn = btns.some(b => /\bpay\b/i.test(b.textContent || ''));
+
+          results.push({ text, cells, pdfHref: pdfEl?.href, hasPayBtn });
+        }
+
+        return results.slice(0, 36);
+      });
+
+      const now = new Date();
+      for (const row of rows) {
+        const text = row.text;
+        const dates = [...text.matchAll(/(\d{1,2}\/\d{1,2}\/\d{2,4})/g)].map(m => m[1]);
+        const amounts = [...text.matchAll(/\$\s*([\d,]+\.\d{2})/g)].map(m => parseFloat(m[1].replace(/,/g, '')));
+
+        const invoiceDate = dates[0] ? new Date(dates[0]) : now;
+        const dueDate = dates[1] || undefined;
+        if (isNaN(invoiceDate.getTime())) continue;
+
+        const pastDueMatch = text.match(/past\s*due[^$]*\$\s*([\d,]+\.\d{2})/i);
+        const pastDue = pastDueMatch ? parseFloat(pastDueMatch[1].replace(/,/g, '')) : undefined;
+
+        this.capturedInvoices.push({
+          accountNumber:  account?.accountNumber,
+          accountName:    account?.accountName,
+          serviceAddress: account?.serviceAddress,
+          invoiceDate:    invoiceDate.toLocaleDateString('en-US'),
+          dueDate,
+          amountDue:      amounts[0],
+          balance:        amounts[1] ?? amounts[0],
+          pastDue,
+          totalDue:       amounts[amounts.length - 1],
+          pdfUrl:         row.pdfHref,
+          isPaid:         !row.hasPayBtn,
+        });
+      }
+    } catch { /* non-critical */ }
+  }
+
+  private async domScrapePayments(): Promise<void> {
+    try {
+      const rows = await this.page!.evaluate(() => {
+        const results: Array<{ text: string; cells: string[] }> = [];
+        const containers: Element[] = [
+          ...Array.from(document.querySelectorAll('table tbody tr')),
+          ...Array.from(document.querySelectorAll('[class*="payment"], [class*="transaction"]')),
+        ];
+        for (const el of containers) {
+          const text = el.textContent?.trim() || '';
+          if (!/\$[\d,]+\.\d{2}/.test(text)) continue;
+          if (!text.match(/\d{1,2}\/\d{1,2}\/\d{2,4}/)) continue;
+          const cells = Array.from(el.querySelectorAll('td, [class*="cell"]'))
+            .map(c => c.textContent?.trim() || '').filter(Boolean);
+          results.push({ text, cells });
+        }
+        return results.slice(0, 50);
+      });
+
+      for (const row of rows) {
+        const dates   = [...row.text.matchAll(/(\d{1,2}\/\d{1,2}\/\d{2,4})/g)].map(m => m[1]);
+        const amounts = [...row.text.matchAll(/\$\s*([\d,]+\.\d{2})/g)].map(m => parseFloat(m[1].replace(/,/g, '')));
+        if (!dates[0] || !amounts[0]) continue;
+
+        const confMatch = row.text.match(/conf[a-z#.:]*\s*([A-Z0-9-]{6,})/i);
+        this.capturedPayments.push({
+          paymentDate: dates[0],
+          amount: amounts[0],
+          confirmationNumber: confMatch?.[1],
+        });
+      }
+    } catch { /* non-critical */ }
+  }
+
+  // ── XHR response parsers ──────────────────────────────────────────────────
+
+  private parseAccountResponse(url: string, data: unknown): void {
+    const toArr = (d: unknown): unknown[] => {
+      if (Array.isArray(d)) return d;
+      if (d && typeof d === 'object') {
+        const o = d as Record<string, unknown>;
+        for (const k of ['accounts', 'data', 'items', 'results', 'services']) {
+          if (Array.isArray(o[k])) return o[k] as unknown[];
+        }
+      }
+      return [];
+    };
+
+    for (const item of toArr(data)) {
+      if (!item || typeof item !== 'object') continue;
+      const a = item as Record<string, unknown>;
+
+      const accountNumber = String(a.accountNumber || a.accountId || a.serviceAccountId || a.id || '');
+      if (!accountNumber || accountNumber === 'undefined') continue;
+
+      if (this.capturedAccounts.some(x => x.accountNumber === accountNumber)) continue;
+
+      const detailUrl = String(a.detailUrl || a.accountUrl || a.url || '');
+
+      this.capturedAccounts.push({
+        accountId:      String(a.id || a.accountId || ''),
+        accountNumber,
+        accountName:    String(a.name || a.accountName || a.nickname || ''),
+        serviceAddress: String(a.serviceAddress || a.address || a.location || ''),
+        status:         String(a.status || ''),
+        detailUrl:      detailUrl && detailUrl !== 'undefined' ? detailUrl : undefined,
+      });
+      console.log(`[RepublicServices] Captured account: ${accountNumber}`);
+    }
+  }
+
+  private parseInvoiceResponse(url: string, data: unknown): void {
+    const toArr = (d: unknown): unknown[] => {
+      if (Array.isArray(d)) return d;
+      if (d && typeof d === 'object') {
+        const o = d as Record<string, unknown>;
+        for (const k of ['invoices', 'bills', 'statements', 'data', 'items', 'results']) {
+          if (Array.isArray(o[k])) return o[k] as unknown[];
+        }
+      }
+      return [];
+    };
+
+    for (const item of toArr(data)) {
+      if (!item || typeof item !== 'object') continue;
+      const inv = item as Record<string, unknown>;
+
+      const invoiceDate = String(
+        inv.invoiceDate || inv.billDate || inv.statementDate || inv.date || inv.createdDate || ''
+      );
+      if (!invoiceDate || invoiceDate === 'undefined') continue;
+
+      const amountDue = this.toNumber(inv.amountDue || inv.currentCharges || inv.currentAmount || inv.amount);
+      const pastDue   = this.toNumber(inv.pastDueAmount || inv.pastDue || inv.previousBalance);
+      const totalDue  = this.toNumber(inv.totalAmountDue || inv.totalDue || inv.balance)
+        ?? (amountDue != null && pastDue != null ? amountDue + pastDue : amountDue);
+
+      const pdfUrl = String(inv.pdfUrl || inv.invoiceUrl || inv.documentUrl || inv.statementUrl || '');
+
+      const acctNum = String(inv.accountNumber || inv.serviceAccountId || inv.accountId || '');
+      if (acctNum) {
+        // Merge into capturedAccounts if not there
+        if (!this.capturedAccounts.some(a => a.accountNumber === acctNum)) {
+          this.capturedAccounts.push({
+            accountNumber: acctNum,
+            accountId:     String(inv.accountId || inv.serviceAccountId || ''),
+            accountName:   String(inv.accountName || ''),
+            serviceAddress: String(inv.serviceAddress || inv.address || ''),
           });
         }
       }
-    } catch (err) {
-      console.error('[RepublicServices] Statement scraping error:', err instanceof Error ? err.message : err);
-      await this.screenshot('rs-statements-error');
+
+      this.capturedInvoices.push({
+        accountNumber:      acctNum || undefined,
+        accountName:        String(inv.accountName || ''),
+        serviceAddress:     String(inv.serviceAddress || inv.address || ''),
+        invoiceId:          String(inv.invoiceId || inv.id || ''),
+        invoiceNumber:      String(inv.invoiceNumber || inv.billNumber || ''),
+        invoiceDate,
+        dueDate:            String(inv.dueDate || inv.payByDate || inv.dueDateDisplay || ''),
+        billingPeriodStart: String(inv.periodStart || inv.serviceStartDate || inv.fromDate || ''),
+        billingPeriodEnd:   String(inv.periodEnd   || inv.serviceEndDate   || inv.toDate   || ''),
+        amountDue,
+        pastDue,
+        totalDue,
+        balance:            totalDue ?? amountDue,
+        pdfUrl:             pdfUrl && pdfUrl !== 'undefined' ? pdfUrl : undefined,
+        status:             String(inv.status || inv.paymentStatus || ''),
+        isPaid:             String(inv.status || inv.paymentStatus || '').toLowerCase() === 'paid'
+                            || Boolean(inv.isPaid),
+        rawData:            { raw: inv },
+      });
+
+      console.log(`[RepublicServices] Captured invoice: ${acctNum} ${invoiceDate} $${totalDue ?? amountDue}`);
     }
-
-    console.log(`[RepublicServices] Total statements: ${statements.length}`);
-    return statements;
   }
 
-  async scrapePayments(): Promise<ScrapedPayment[]> {
-    return [];
+  private parsePaymentResponse(url: string, data: unknown): void {
+    const toArr = (d: unknown): unknown[] => {
+      if (Array.isArray(d)) return d;
+      if (d && typeof d === 'object') {
+        const o = d as Record<string, unknown>;
+        for (const k of ['payments', 'transactions', 'history', 'data', 'items']) {
+          if (Array.isArray(o[k])) return o[k] as unknown[];
+        }
+      }
+      return [];
+    };
+
+    for (const item of toArr(data)) {
+      if (!item || typeof item !== 'object') continue;
+      const p = item as Record<string, unknown>;
+
+      const paymentDate = String(p.paymentDate || p.date || p.transactionDate || p.paidDate || '');
+      const amount      = this.toNumber(p.amount || p.paymentAmount || p.total);
+      if (!paymentDate || paymentDate === 'undefined' || !amount) continue;
+
+      this.capturedPayments.push({
+        paymentDate,
+        amount,
+        confirmationNumber: String(p.confirmationNumber || p.confirmationId || p.transactionId || p.referenceId || ''),
+        paymentMethod:      String(p.paymentMethod || p.method || p.type || ''),
+        accountNumber:      String(p.accountNumber || ''),
+      });
+    }
   }
 
-  private async navigateToBilling(): Promise<void> {
-    try {
-      // Try SPA navigation first
-      await this.page!.evaluate(() => {
-        window.history.pushState({}, '', '/dashboard');
-        window.dispatchEvent(new PopStateEvent('popstate'));
-      });
-      await this.page!.waitForTimeout(2000);
+  // ── Utility helpers ───────────────────────────────────────────────────────
 
-      // Click billing/pay bill link if present
-      await this.page!.evaluate(() => {
-        const link = Array.from(document.querySelectorAll('a, button'))
-          .find(el => /billing|pay bill|my bills/i.test(el.textContent || ''));
-        if (link) (link as HTMLElement).click();
-      });
-      await this.page!.waitForTimeout(2000);
-    } catch { }
-  }
-
-  private async navigateToStatementHistory(): Promise<void> {
-    try {
-      await this.page!.evaluate(() => {
-        const link = Array.from(document.querySelectorAll('a, button'))
-          .find(el => /statement|bill history|billing history/i.test(el.textContent || ''));
-        if (link) (link as HTMLElement).click();
-      });
-      await this.page!.waitForTimeout(2000);
-    } catch { }
+  private async dismissBanners(): Promise<void> {
+    const bannerSels = [
+      '#onetrust-accept-btn-handler',
+      'button:has-text("Accept All")',
+      'button:has-text("Accept")',
+      'button:has-text("Got it")',
+      'button:has-text("I agree")',
+      '[aria-label="Close"]',
+    ];
+    for (const sel of bannerSels) {
+      try {
+        const el = this.page!.locator(sel).first();
+        if (await el.isVisible({ timeout: 2000 })) {
+          await el.click();
+          await this.page!.waitForTimeout(600);
+          break;
+        }
+      } catch { /* not found */ }
+    }
   }
 
   private async downloadPdf(url: string): Promise<Buffer | undefined> {
+    if (!url || url === 'undefined') return undefined;
     try {
-      const res = await this.page!.request.get(url, { timeout: 15000 });
-      if (res.ok()) return Buffer.from(await res.body());
-    } catch { }
+      const res = await this.page!.request.get(url, { timeout: 20000 });
+      if (res.ok()) {
+        const ct = res.headers()['content-type'] || '';
+        if (ct.includes('pdf') || ct.includes('octet')) return Buffer.from(await res.body());
+      }
+      // Try navigating and capturing download
+      const [download] = await Promise.all([
+        this.page!.waitForEvent('download', { timeout: 8000 }),
+        this.page!.goto(url, { waitUntil: 'domcontentloaded', timeout: 8000 }),
+      ]).catch(() => [null]);
+      if (download) {
+        const buf = await download.createReadStream().then(s => {
+          return new Promise<Buffer>((res, rej) => {
+            const chunks: Buffer[] = [];
+            s.on('data', (c: Buffer) => chunks.push(c));
+            s.on('end', () => res(Buffer.concat(chunks)));
+            s.on('error', rej);
+          });
+        });
+        return buf;
+      }
+    } catch { /* download failed */ }
     return undefined;
+  }
+
+  private toNumber(val: unknown): number | undefined {
+    if (val == null) return undefined;
+    const n = parseFloat(String(val).replace(/[$,\s]/g, ''));
+    return isNaN(n) ? undefined : n;
   }
 
   private async screenshot(name: string): Promise<void> {
@@ -236,6 +739,6 @@ export class RepublicServicesScraper extends BaseScraperProvider {
       const p = path.join('/tmp', `${name}-${Date.now()}.png`);
       await this.page!.screenshot({ path: p, fullPage: true });
       console.log(`[RepublicServices] Screenshot: ${p}`);
-    } catch { }
+    } catch { /* non-critical */ }
   }
 }
