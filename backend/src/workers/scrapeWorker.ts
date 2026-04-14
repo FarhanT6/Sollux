@@ -162,6 +162,13 @@ const worker = new Worker<ScrapeJobData>(
           const isPaid = stmt.rawData?.isPaid === true;
           const amountPaid = isPaid && stmt.amountDue ? stmt.amountDue : undefined;
 
+          // balance = total amount currently owed (current charge + any past due).
+          // Prefer the dedicated field from the scraper; fall back to totalDue / amountDue.
+          const rawBalance = (stmt.rawData?.accountBalance ?? stmt.rawData?.totalDue) as number | undefined;
+          const balance = rawBalance != null ? rawBalance
+            : stmt.balance != null ? stmt.balance
+            : undefined;
+
           if (!existing) {
             await db.statement.create({
               data: {
@@ -172,6 +179,7 @@ const worker = new Worker<ScrapeJobData>(
                 billingPeriodEnd: stmt.billingPeriodEnd,
                 amountDue: stmt.amountDue,
                 amountPaid,
+                balance,
                 usageValue: stmt.usageValue,
                 usageUnit: stmt.usageUnit,
                 ratePlan: stmt.ratePlan,
@@ -195,6 +203,7 @@ const worker = new Worker<ScrapeJobData>(
                   // Also update dueDate/amounts in case scraper got better data on re-scrape
                   ...(stmt.dueDate ? { dueDate: stmt.dueDate } : {}),
                   ...(stmt.amountDue ? { amountDue: stmt.amountDue } : {}),
+                  ...(balance != null ? { balance } : {}),
                 },
               });
             }

@@ -531,6 +531,9 @@ export class CityBrawleyScraper extends BaseScraperProvider {
         pastDue:         n('pastDue'),
         currentBill:     n('currentBill') ?? billAmt,
         totalDue:        n('totalDue'),
+        // accountBalance = canonical "total amount currently owed" field read by the frontend.
+        // Equal to totalDue (current charge + any past due); fall back to amountDue.
+        accountBalance:  n('totalDue') ?? (n('currentBill') ?? billAmt),
         afterDueDateAmt: n('afterDueDateAmt'),
         waterCharge:     n('water'),
         sewerCharge:     n('sewer'),

@@ -37,9 +37,10 @@ export default function PropertyDetailPage() {
 
   const accounts = property?.utilityAccounts || [];
   const monthlyTotal = accounts.reduce((s, a) => {
-    const raw = a.statements?.[0]?.rawDataJson as Record<string, unknown> | undefined;
-    const bal = raw?.accountBalance as number | undefined;
-    return s + Number(bal ?? a.statements?.[0]?.amountDue ?? 0);
+    const stmt = a.statements?.[0];
+    const raw = stmt?.rawDataJson as Record<string, unknown> | undefined;
+    const bal = (raw?.accountBalance ?? raw?.totalDue ?? (stmt as any)?.balance ?? stmt?.amountDue) as number | undefined;
+    return s + Number(bal ?? 0);
   }, 0);
   const lastSynced = accounts.map(a => a.lastSyncedAt).filter(Boolean).sort().pop();
 
@@ -404,13 +405,15 @@ function UtilityAccountCard({
         <div className="flex-1 min-w-0">
           {(() => {
             const raw = latest?.rawDataJson as Record<string, unknown> | undefined;
-            const accountBalance = raw?.accountBalance as number | undefined;
+            // accountBalance / totalDue = total amount owed (current + past due).
+            // balance is the DB-level field; fall back to amountDue if nothing else is available.
+            const accountBalance = (raw?.accountBalance ?? raw?.totalDue ?? (latest as any)?.balance) as number | undefined;
             const pastDue = raw?.pastDue as number | undefined;
             const fmt = (n: number) => `$${Number(n).toFixed(2)}`;
 
-            // Total balance = accountBalance (full amount owed including any past due)
-            // Current charge = amountDue on the latest statement (this billing period only)
-            // Past due = what's owed from prior periods (due immediately)
+            // Total balance = full amount owed including any past due
+            // Current charge = this billing period only (amountDue)
+            // Past due = amount from prior unpaid periods (due immediately)
             const totalBalance = accountBalance ?? latest?.amountDue;
             const currentCharge = latest?.amountDue;
             const pastDueAmt = pastDue && pastDue > 0 ? pastDue

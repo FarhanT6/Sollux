@@ -37,9 +37,12 @@ export default function PropertiesPage() {
 
   const monthlyTotal = properties.reduce((sum, p) =>
     sum + (p.utilityAccounts || []).reduce((s, a) => {
-      const raw = a.statements?.[0]?.rawDataJson as Record<string, unknown> | undefined;
-      const bal = raw?.accountBalance as number | undefined;
-      return s + Number(bal ?? a.statements?.[0]?.amountDue ?? 0);
+      const stmt = a.statements?.[0];
+      const raw = stmt?.rawDataJson as Record<string, unknown> | undefined;
+      // accountBalance = total owed (set by scraper); totalDue = same field under alternate name;
+      // balance = DB-level field populated by scrapeWorker; fall back to amountDue.
+      const bal = (raw?.accountBalance ?? raw?.totalDue ?? stmt?.balance ?? stmt?.amountDue) as number | undefined;
+      return s + Number(bal ?? 0);
     }, 0), 0);
 
   const totalAccounts = properties.reduce((s, p) => s + (p.utilityAccounts?.length ?? 0), 0);
