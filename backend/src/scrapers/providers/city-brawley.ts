@@ -158,8 +158,8 @@ export class CityBrawleyScraper extends BaseScraperProvider {
     // ── Expand date range to get full history ──────────────────────────────
     await this.expandDateRange();
 
-    // ── Parse transaction table ────────────────────────────────────────────
-    const rows = await this.parseTransactionTable();
+    // ── Parse transaction table — with pagination ─────────────────────────
+    const rows = await this.parseAllPages();
     console.log(`[Brawley] ${accountNumber}: ${rows.length} transaction rows`);
 
     // Resolve the cutoff date for this specific account:
@@ -199,49 +199,103 @@ export class CityBrawleyScraper extends BaseScraperProvider {
   private async expandDateRange(): Promise<void> {
     const today = new Date();
     const endStr = `${String(today.getMonth() + 1).padStart(2, '0')}/${String(today.getDate()).padStart(2, '0')}/${today.getFullYear()}`;
+    const startStr = '01/01/2019';
 
     try {
-      // Pass as raw string — tsx/esbuild never transforms string arguments,
-      // so __name() is never injected and the code runs cleanly in the browser.
-      await this.page!.evaluate(`(function(start, end) {
-        var inputs = Array.from(document.querySelectorAll('input'));
-        var fromInput = inputs.find(function(el) {
-          var p = (el.placeholder || '').toLowerCase();
-          var lblEl = document.querySelector('label[for="' + el.id + '"]');
-          var l = lblEl && lblEl.textContent ? lblEl.textContent.toLowerCase() : '';
-          var id = (el.id || '').toLowerCase();
-          return p.indexOf('from') >= 0 || l.indexOf('from') >= 0 || id.indexOf('from') >= 0
-              || p.indexOf('start') >= 0 || l.indexOf('start') >= 0 || id.indexOf('start') >= 0;
-        });
-        var toInput = inputs.find(function(el) {
-          var p = (el.placeholder || '').toLowerCase();
-          var lblEl = document.querySelector('label[for="' + el.id + '"]');
-          var l = lblEl && lblEl.textContent ? lblEl.textContent.toLowerCase() : '';
-          var id = (el.id || '').toLowerCase();
-          return p.indexOf('to') >= 0 || l.indexOf('to') >= 0 || id.indexOf('to') >= 0
-              || p.indexOf('end') >= 0 || l.indexOf('end') >= 0 || id.indexOf('end') >= 0;
-        });
-        var desc = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
-        var nativeSetter = desc && desc.set;
-        if (fromInput && nativeSetter) {
-          nativeSetter.call(fromInput, start);
-          fromInput.dispatchEvent(new Event('input', { bubbles: true }));
-          fromInput.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-        if (toInput && nativeSetter) {
-          nativeSetter.call(toInput, end);
-          toInput.dispatchEvent(new Event('input', { bubbles: true }));
-          toInput.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-      })('01/01/2019', '${endStr}')`);
+      // Wait for the page to settle — prevents "Execution context was destroyed" when
+      // the SPA is still mid-navigation when we call evaluate().
+      await this.page!.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+      await this.page!.waitForTimeout(1000);
 
-      await this.page!.waitForTimeout(500);
+      // Tyler Technologies Forge components render date inputs inside shadow roots.
+      // Standard querySelectorAll() can't reach them. We walk all shadow roots recursively
+      // to find every <input> on the page, then use the native value-setter trick so React/
+      // Angular picks up the change (same approach as React-controlled inputs elsewhere).
+      const filled = await this.page!.evaluate(`(function(start, end) {
+        // Walk the entire DOM including all open shadow roots and collect inputs.
+        function allInputs(root) {
+          var found = [];
+          var walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, null);
+          var node;
+          while ((node = walker.nextNode())) {
+            if (node.tagName === 'INPUT') found.push(node);
+            if (node.shadowRoot) found = found.concat(allInputs(node.shadowRoot));
+          }
+          return found;
+        }
+
+        var inputs = allInputs(document);
+        console.log('[Brawley-eval] Total inputs found (incl shadow):', inputs.length,
+          inputs.map(function(i) { return i.placeholder + '|' + i.id + '|' + i.type; }).join(', '));
+
+        function matchFromTo(el, keywords) {
+          var p = (el.placeholder || '').toLowerCase();
+          var id = (el.id || el.name || '').toLowerCase();
+          var lbl = '';
+          if (el.id) {
+            var lblEl = document.querySelector('label[for="' + el.id + '"]');
+            if (!lblEl) {
+              // Shadow roots: walk upward to find a label
+              var parent = el.parentElement;
+              for (var d = 0; d < 5 && parent; d++) {
+                var l = parent.querySelector('label');
+                if (l) { lbl = l.textContent.toLowerCase(); break; }
+                parent = parent.parentElement;
+              }
+            } else {
+              lbl = lblEl.textContent.toLowerCase();
+            }
+          }
+          return keywords.some(function(k) { return p.indexOf(k) >= 0 || id.indexOf(k) >= 0 || lbl.indexOf(k) >= 0; });
+        }
+
+        var fromInput = inputs.find(function(el) { return matchFromTo(el, ['from', 'start', 'begin']); });
+        var toInput   = inputs.find(function(el) { return matchFromTo(el, ['to', 'end', 'through']); });
+
+        // Fallback: if we can't label-match, take the first two text/date inputs
+        if (!fromInput || !toInput) {
+          var textInputs = inputs.filter(function(el) { return el.type === 'text' || el.type === 'date'; });
+          if (textInputs.length >= 2) { fromInput = textInputs[0]; toInput = textInputs[1]; }
+        }
+
+        var nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value') &&
+                           Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+
+        function setVal(input, val) {
+          if (!input || !nativeSetter) return false;
+          nativeSetter.call(input, val);
+          input.dispatchEvent(new Event('input',  { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+          return true;
+        }
+
+        var setFrom = setVal(fromInput, start);
+        var setTo   = setVal(toInput,   end);
+        console.log('[Brawley-eval] Set from=' + setFrom + ' to=' + setTo);
+        return setFrom || setTo;
+      })('${startStr}', '${endStr}')`);
+
+      console.log(`[Brawley] Date inputs filled: ${filled}`);
+      await this.page!.waitForTimeout(800);
       await this.page!.keyboard.press('Escape');
-      await this.page!.waitForTimeout(300);
+      await this.page!.waitForTimeout(400);
 
-      // Click Apply button — also as string to avoid __name
+      // Find Apply button — also walk shadow roots
       const applied = await this.page!.evaluate(`(function() {
-        var btns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
+        function allButtons(root) {
+          var found = [];
+          var walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, null);
+          var node;
+          while ((node = walker.nextNode())) {
+            if (node.tagName === 'BUTTON' || (node.tagName === 'INPUT' && node.type === 'submit'))
+              found.push(node);
+            if (node.shadowRoot) found = found.concat(allButtons(node.shadowRoot));
+          }
+          return found;
+        }
+        var btns = allButtons(document);
+        console.log('[Brawley-eval] Buttons:', btns.map(function(b) { return b.textContent.trim() + '|' + b.value; }).join(', '));
         var applyBtn = btns.find(function(el) {
           return /apply/i.test(el.textContent || '') || /apply/i.test(el.value || '');
         });
@@ -250,17 +304,77 @@ export class CityBrawleyScraper extends BaseScraperProvider {
       })()`);
 
       if (applied) {
-        console.log('[Brawley] Date range expanded, waiting for table reload...');
-        await this.page!.waitForTimeout(5000);
+        console.log('[Brawley] Apply clicked — waiting for table reload...');
+        await this.page!.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+        await this.page!.waitForTimeout(3000);
         await this.screenshot('brawley-txn-full-range');
         const listing = await this.page!.evaluate(
-          `document.body.innerText.match(/\\d+\\s*-\\s*\\d+\\s*of\\s*\\d+/)?.[0] || ''`
+          `document.body.innerText.match(/\\d+\\s*[-–]\\s*\\d+\\s*of\\s*\\d+/)?.[0] || ''`
         );
-        console.log('[Brawley] Listing after expand:', listing);
+        console.log('[Brawley] Row listing after expand:', listing);
+      } else {
+        console.log('[Brawley] Apply button not found — table shows default range');
       }
     } catch (err) {
       console.warn('[Brawley] Date range expansion failed:', err instanceof Error ? err.message : err);
     }
+  }
+
+  /** Walk through all pagination pages and collect every transaction row. */
+  private async parseAllPages(): Promise<Array<{
+    date: string; description: string; amount: string; runningBalance: string;
+    billUrl: string | null; rowIndex: number; isClickable: boolean;
+  }>> {
+    const allRows: Array<{
+      date: string; description: string; amount: string; runningBalance: string;
+      billUrl: string | null; rowIndex: number; isClickable: boolean;
+    }> = [];
+
+    let pageNum = 0;
+    while (true) {
+      pageNum++;
+      const rows = await this.parseTransactionTable();
+      allRows.push(...rows);
+
+      // Check for a "Next page" button that is enabled
+      const hasNext = await this.page!.evaluate(`(function() {
+        function allElements(root, tag) {
+          var found = [];
+          var walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, null);
+          var node;
+          while ((node = walker.nextNode())) {
+            if (node.tagName === tag.toUpperCase()) found.push(node);
+            if (node.shadowRoot) found = found.concat(allElements(node.shadowRoot, tag));
+          }
+          return found;
+        }
+        var btns = allElements(document, 'button');
+        // Forge pagination uses aria-label="Next page" or title="Next" or ›/» text
+        var next = btns.find(function(b) {
+          var label = (b.getAttribute('aria-label') || b.title || b.textContent || '').toLowerCase();
+          return (label.indexOf('next') >= 0 || label === '›' || label === '»' || label === '>') &&
+                 !b.disabled && !b.hasAttribute('disabled');
+        });
+        if (next) { next.click(); return true; }
+        return false;
+      })()`);
+
+      if (!hasNext) {
+        console.log(`[Brawley] Pagination: ${pageNum} page(s), ${allRows.length} total rows`);
+        break;
+      }
+
+      console.log(`[Brawley] Pagination: loaded page ${pageNum}, clicking Next...`);
+      await this.page!.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+      await this.page!.waitForTimeout(2000);
+
+      if (pageNum > 20) {
+        console.warn('[Brawley] Pagination safety limit (20 pages) reached');
+        break;
+      }
+    }
+
+    return allRows;
   }
 
   private async parseTransactionTable(): Promise<Array<{
@@ -514,7 +628,7 @@ export class CityBrawleyScraper extends BaseScraperProvider {
     await this.navigateToTransactionHistory(accountNumber);
     await this.expandDateRange();
 
-    const rows = await this.parseTransactionTable();
+    const rows = await this.parseAllPages();
     for (const row of rows) {
       if (!/payment/i.test(row.description)) continue;
 
