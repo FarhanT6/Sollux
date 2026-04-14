@@ -44,6 +44,10 @@ export interface ScraperCredentials {
   /** Date of the most recent statement already in DB for this account.
    *  Scrapers can use this to skip re-fetching already-stored statements. */
   latestStatementDate?: Date;
+  /** Per-account-number map of latest statement dates.
+   *  When multiple accounts share one login, each account gets its own cutoff
+   *  so a new account (no statements yet) is never blocked by an older account's date. */
+  latestStatementDates?: Record<string, Date>;
 }
 
 export abstract class BaseScraperProvider {

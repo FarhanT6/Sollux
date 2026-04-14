@@ -81,20 +81,32 @@ const worker = new Worker<ScrapeJobData>(
         .map(a => (a.accountNumberEnc ? decrypt(a.accountNumberEnc) : null))
         .filter(Boolean) as string[];
 
-      // Find the most recent statement that already has a PDF stored.
-      // Statements without a PDF are re-scraped so we can download the PDF.
-      // This means: first run always fetches all PDFs; future runs skip dates already downloaded.
-      const latestStmt = await db.statement.findFirst({
+      // Build a per-account-number map of latest statement dates.
+      // Each account gets its own cutoff so a brand-new account (zero statements)
+      // is never blocked by another account's already-stored date.
+      const latestStmts = await db.statement.findMany({
         where: {
           utilityAccountId: { in: sameCredAccounts.map(a => a.id) },
           pdfS3Key: { not: null },   // only count statements where PDF was actually stored
         },
         orderBy: { statementDate: 'desc' },
-        select: { statementDate: true },
+        select: { utilityAccountId: true, statementDate: true },
       });
-      const latestStatementDate = latestStmt?.statementDate ?? undefined;
 
-      const credentials = { username, password, accountNumbers, latestStatementDate };
+      // latestStatementDates: accountNumber → most recent statement date
+      const latestStatementDates: Record<string, Date> = {};
+      for (const acct of sameCredAccounts) {
+        const acctNum = acct.accountNumberEnc ? decrypt(acct.accountNumberEnc) : null;
+        if (!acctNum) continue;
+        const found = latestStmts.find(s => s.utilityAccountId === acct.id);
+        if (found) latestStatementDates[acctNum] = found.statementDate;
+      }
+
+      // Legacy single-date field: the global maximum across all accounts (for scrapers
+      // that don't yet support per-account maps, e.g. single-account scrapers).
+      const latestStatementDate = latestStmts.length > 0 ? latestStmts[0].statementDate : undefined;
+
+      const credentials = { username, password, accountNumbers, latestStatementDate, latestStatementDates };
       const result = await scraper.run(credentials, utilityAccountId);
 
       if (!result.success) throw new Error(result.error || 'Scraper returned failure');

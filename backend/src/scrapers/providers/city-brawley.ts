@@ -162,11 +162,16 @@ export class CityBrawleyScraper extends BaseScraperProvider {
     const rows = await this.parseTransactionTable();
     console.log(`[Brawley] ${accountNumber}: ${rows.length} transaction rows`);
 
-    // Skip bills already in DB — compare against latestStatementDate from credentials.
-    // This prevents re-downloading PDFs for statements we've already scraped.
-    const latestKnown = this.credentials?.latestStatementDate
-      ? new Date(this.credentials.latestStatementDate)
-      : null;
+    // Skip bills already in DB — compare against the per-account cutoff first,
+    // falling back to the global latestStatementDate for single-account scrapers.
+    // Using per-account dates ensures a brand-new account (no statements yet)
+    // is never blocked by another account's already-stored date.
+    const perAcct = this.credentials?.latestStatementDates?.[accountNumber];
+    const latestKnown = perAcct
+      ? new Date(perAcct)
+      : this.credentials?.latestStatementDate
+        ? new Date(this.credentials.latestStatementDate)
+        : null;
 
     // Find all "Bill" rows newer than what's already stored.
     const billRows = rows.filter(r => {
