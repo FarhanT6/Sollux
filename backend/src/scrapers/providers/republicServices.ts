@@ -766,134 +766,192 @@ export class RepublicServicesScraper extends BaseScraperProvider {
 
   // ── XHR response parsers ──────────────────────────────────────────────────
 
-  private parseAccountResponse(url: string, data: unknown): void {
-    const toArr = (d: unknown): unknown[] => {
-      if (Array.isArray(d)) return d;
-      if (d && typeof d === 'object') {
-        const o = d as Record<string, unknown>;
-        for (const k of ['accounts', 'data', 'items', 'results', 'services']) {
-          if (Array.isArray(o[k])) return o[k] as unknown[];
-        }
-      }
-      return [];
-    };
+  // ── RS API shape helpers ──────────────────────────────────────────────────
+  // RS wraps all responses: {statusCode:200, data:{bills:[...]} | data:[...]}
+  // We must unwrap two levels to get to the actual array.
 
-    for (const item of toArr(data)) {
+  private rsToArr(data: unknown, arrayKeys: string[]): unknown[] {
+    if (Array.isArray(data)) return data;
+    if (!data || typeof data !== 'object') return [];
+    const outer = data as Record<string, unknown>;
+
+    // First unwrap the outer {statusCode, data:...} shell
+    const inner = outer.data !== undefined ? outer.data : outer;
+
+    if (Array.isArray(inner)) return inner;
+
+    if (inner && typeof inner === 'object') {
+      const i = inner as Record<string, unknown>;
+      for (const k of arrayKeys) {
+        if (Array.isArray(i[k])) return i[k] as unknown[];
+      }
+    }
+    // Also check the outer object directly
+    for (const k of arrayKeys) {
+      if (Array.isArray(outer[k])) return outer[k] as unknown[];
+    }
+    return [];
+  }
+
+  /** Extract a number from a plain number, string, or RS amount object {amount, currency, display} */
+  private rsAmount(val: unknown): number | undefined {
+    if (val == null) return undefined;
+    if (typeof val === 'number') return val;
+    if (typeof val === 'string') {
+      const n = parseFloat(val.replace(/[$,\s]/g, ''));
+      return isNaN(n) ? undefined : n;
+    }
+    if (typeof val === 'object') {
+      const o = val as Record<string, unknown>;
+      // RS: {amount: 653.58, currency: "USD", display: "$653.58"}
+      if (typeof o.amount === 'number') return o.amount;
+      if (typeof o.amount === 'string') {
+        const n = parseFloat((o.amount as string).replace(/[$,\s]/g, ''));
+        return isNaN(n) ? undefined : n;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Normalize RS date strings to a form parseDate() can handle.
+   * RS uses: "2026-03-30" (ISO), "03302026" (MMDDYYYY), "20260330" (YYYYMMDD),
+   *          "20260410T141836.820 GMT" (ISO-ish), "04/14/2026" (US)
+   */
+  private rsDate(val: unknown): string {
+    if (!val) return '';
+    const s = String(val).trim();
+    if (!s || s === 'undefined') return '';
+    // MMDDYYYY: "03302026"
+    if (/^\d{8}$/.test(s)) {
+      const mm = s.slice(0, 2), dd = s.slice(2, 4), yyyy = s.slice(4, 8);
+      const y = parseInt(yyyy);
+      if (y > 2000 && y < 2100) return `${yyyy}-${mm}-${dd}`;
+      // YYYYMMDD: "20260330"
+      const yyyy2 = s.slice(0, 4), mm2 = s.slice(4, 6), dd2 = s.slice(6, 8);
+      if (parseInt(yyyy2) > 2000) return `${yyyy2}-${mm2}-${dd2}`;
+    }
+    // ISO with time: "20260410T141836.820 GMT"
+    if (/^\d{8}T/.test(s)) {
+      return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
+    }
+    return s; // "2026-03-30", "04/14/2026" — parseDate handles these
+  }
+
+  private parseAccountResponse(url: string, data: unknown): void {
+    const items = this.rsToArr(data, ['accounts', 'items', 'results', 'services']);
+    // Also handle single-account responses: {statusCode, data:{accountId,...}}
+    const dataObj = (data && typeof data === 'object') ? (data as Record<string, unknown>).data : null;
+    const candidates = items.length > 0 ? items
+      : (dataObj && typeof dataObj === 'object' && !Array.isArray(dataObj)
+          && (dataObj as Record<string, unknown>).accountId ? [dataObj] : []);
+
+    for (const item of candidates) {
       if (!item || typeof item !== 'object') continue;
       const a = item as Record<string, unknown>;
 
-      const accountNumber = String(a.accountNumber || a.accountId || a.serviceAccountId || a.id || '');
+      // RS uses infoProId as the human-visible account number
+      const accountNumber = String(a.infoProId || a.accountNumber || a.accountId || a.serviceAccountId || '');
       if (!accountNumber || accountNumber === 'undefined') continue;
 
       if (this.capturedAccounts.some(x => x.accountNumber === accountNumber)) continue;
 
-      const detailUrl = String(a.detailUrl || a.accountUrl || a.url || '');
-
       this.capturedAccounts.push({
-        accountId:      String(a.id || a.accountId || ''),
+        accountId:      String(a.accountId || a.id || ''),
         accountNumber,
         accountName:    String(a.name || a.accountName || a.nickname || ''),
         serviceAddress: String(a.serviceAddress || a.address || a.location || ''),
-        status:         String(a.status || ''),
-        detailUrl:      detailUrl && detailUrl !== 'undefined' ? detailUrl : undefined,
+        status:         String(a.status || a.accountStatus || ''),
       });
-      console.log(`[RepublicServices] Captured account: ${accountNumber}`);
+      console.log(`[RepublicServices] Captured account: ${accountNumber} (${a.name || ''})`);
     }
   }
 
   private parseInvoiceResponse(url: string, data: unknown): void {
-    const toArr = (d: unknown): unknown[] => {
-      if (Array.isArray(d)) return d;
-      if (d && typeof d === 'object') {
-        const o = d as Record<string, unknown>;
-        for (const k of ['invoices', 'bills', 'statements', 'data', 'items', 'results']) {
-          if (Array.isArray(o[k])) return o[k] as unknown[];
-        }
-      }
-      return [];
-    };
+    const items = this.rsToArr(data, ['bills', 'invoices', 'statements', 'items', 'results']);
 
-    for (const item of toArr(data)) {
+    for (const item of items) {
       if (!item || typeof item !== 'object') continue;
       const inv = item as Record<string, unknown>;
 
-      const invoiceDate = String(
-        inv.invoiceDate || inv.billDate || inv.statementDate || inv.date || inv.createdDate || ''
+      // RS bills: billDate, issueDate, or statementDate
+      const invoiceDate = this.rsDate(
+        inv.billDate || inv.invoiceDate || inv.statementDate || inv.issueDate || inv.date || inv.createdDate
       );
-      if (!invoiceDate || invoiceDate === 'undefined') continue;
+      if (!invoiceDate) continue;
 
-      const amountDue = this.toNumber(inv.amountDue || inv.currentCharges || inv.currentAmount || inv.amount);
-      const pastDue   = this.toNumber(inv.pastDueAmount || inv.pastDue || inv.previousBalance);
-      const totalDue  = this.toNumber(inv.totalAmountDue || inv.totalDue || inv.balance)
+      const amountDue = this.rsAmount(inv.amountDue || inv.currentCharges || inv.currentAmount);
+      const pastDue   = this.rsAmount(inv.pastDueAmount || inv.pastDue || inv.previousBalance);
+      const totalDue  = this.rsAmount(inv.totalAmountDue || inv.totalDue || inv.balance)
         ?? (amountDue != null && pastDue != null ? amountDue + pastDue : amountDue);
 
       const pdfUrl = String(inv.pdfUrl || inv.invoiceUrl || inv.documentUrl || inv.statementUrl || '');
 
-      const acctNum = String(inv.accountNumber || inv.serviceAccountId || inv.accountId || '');
-      if (acctNum) {
-        // Merge into capturedAccounts if not there
-        if (!this.capturedAccounts.some(a => a.accountNumber === acctNum)) {
-          this.capturedAccounts.push({
-            accountNumber: acctNum,
-            accountId:     String(inv.accountId || inv.serviceAccountId || ''),
-            accountName:   String(inv.accountName || ''),
-            serviceAddress: String(inv.serviceAddress || inv.address || ''),
-          });
-        }
+      // RS uses infoProId on the account side; bills just have accountId ("304670038334")
+      // Store accountId as-is — _buildStatements will match by filter
+      const acctNum = String(inv.infoProId || inv.accountNumber || inv.serviceAccountId || inv.accountId || '');
+
+      if (acctNum && !this.capturedAccounts.some(a => a.accountNumber === acctNum || a.accountId === acctNum)) {
+        this.capturedAccounts.push({
+          accountNumber: acctNum,
+          accountId:     String(inv.accountId || ''),
+          accountName:   String(inv.accountName || ''),
+          serviceAddress: String(inv.serviceAddress || inv.address || ''),
+        });
       }
+
+      const dueDate = this.rsDate(inv.dueDate || inv.payByDate || inv.dueDateDisplay);
+      const billId  = String(inv.billId || inv.invoiceId || inv.id || '');
 
       this.capturedInvoices.push({
         accountNumber:      acctNum || undefined,
         accountName:        String(inv.accountName || ''),
         serviceAddress:     String(inv.serviceAddress || inv.address || ''),
-        invoiceId:          String(inv.invoiceId || inv.id || ''),
-        invoiceNumber:      String(inv.invoiceNumber || inv.billNumber || ''),
+        invoiceId:          billId,
+        invoiceNumber:      String(inv.billReferenceId || inv.invoiceNumber || inv.billNumber || billId),
         invoiceDate,
-        dueDate:            String(inv.dueDate || inv.payByDate || inv.dueDateDisplay || ''),
-        billingPeriodStart: String(inv.periodStart || inv.serviceStartDate || inv.fromDate || ''),
-        billingPeriodEnd:   String(inv.periodEnd   || inv.serviceEndDate   || inv.toDate   || ''),
+        dueDate:            dueDate || undefined,
+        billingPeriodStart: this.rsDate(inv.periodStart || inv.serviceStartDate || inv.fromDate) || undefined,
+        billingPeriodEnd:   this.rsDate(inv.periodEnd   || inv.serviceEndDate   || inv.toDate)   || undefined,
         amountDue,
         pastDue,
         totalDue,
         balance:            totalDue ?? amountDue,
         pdfUrl:             pdfUrl && pdfUrl !== 'undefined' ? pdfUrl : undefined,
-        status:             String(inv.status || inv.paymentStatus || ''),
-        isPaid:             String(inv.status || inv.paymentStatus || '').toLowerCase() === 'paid'
+        status:             String(inv.status || inv.paymentStatus || inv.billStatus || ''),
+        isPaid:             /paid|closed/i.test(String(inv.status || inv.paymentStatus || inv.billStatus || ''))
                             || Boolean(inv.isPaid),
         rawData:            { raw: inv },
       });
 
-      console.log(`[RepublicServices] Captured invoice: ${acctNum} ${invoiceDate} $${totalDue ?? amountDue}`);
+      console.log(`[RepublicServices] Captured invoice: acct=${acctNum} date=${invoiceDate} due=${dueDate} amount=$${totalDue ?? amountDue}`);
     }
   }
 
   private parsePaymentResponse(url: string, data: unknown): void {
-    const toArr = (d: unknown): unknown[] => {
-      if (Array.isArray(d)) return d;
-      if (d && typeof d === 'object') {
-        const o = d as Record<string, unknown>;
-        for (const k of ['payments', 'transactions', 'history', 'data', 'items']) {
-          if (Array.isArray(o[k])) return o[k] as unknown[];
-        }
-      }
-      return [];
-    };
+    const items = this.rsToArr(data, ['payments', 'transactions', 'history', 'items', 'results']);
 
-    for (const item of toArr(data)) {
+    for (const item of items) {
       if (!item || typeof item !== 'object') continue;
       const p = item as Record<string, unknown>;
 
-      const paymentDate = String(p.paymentDate || p.date || p.transactionDate || p.paidDate || '');
-      const amount      = this.toNumber(p.amount || p.paymentAmount || p.total);
-      if (!paymentDate || paymentDate === 'undefined' || !amount) continue;
+      const paymentDate = this.rsDate(p.date || p.paymentDate || p.transactionDate || p.paidDate || p.creationDate);
+      const amount      = this.rsAmount(p.amount || p.paymentAmount || p.total);
+      if (!paymentDate || !amount) continue;
+
+      // Skip negative amounts from the applied-payments ledger (debit entries)
+      // Actual customer payments are positive in /payments, negative in /applied-payments
+      const absAmount = Math.abs(amount);
 
       this.capturedPayments.push({
         paymentDate,
-        amount,
-        confirmationNumber: String(p.confirmationNumber || p.confirmationId || p.transactionId || p.referenceId || ''),
+        amount: absAmount,
+        confirmationNumber: String(p.confirmationNumber || p.confirmationId || p.transactionId
+                                   || p.paymentId || p.referenceId || ''),
         paymentMethod:      String(p.paymentMethod || p.method || p.type || ''),
-        accountNumber:      String(p.accountNumber || ''),
+        accountNumber:      String(p.accountNumber || p.accountId || ''),
       });
+      console.log(`[RepublicServices] Captured payment: ${paymentDate} $${absAmount}`);
     }
   }
 
