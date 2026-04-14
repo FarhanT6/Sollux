@@ -259,7 +259,7 @@ export class RepublicServicesScraper extends BaseScraperProvider {
       });
 
       console.log(`[RepublicServices] Dashboard links found: ${dashLinks.length}`);
-      dashLinks.slice(0, 30).forEach(l => console.log(`  "${l.text}" → ${l.href}`));
+      dashLinks.forEach(l => console.log(`  "${l.text}" → ${l.href}`));
 
       // Find the Pay Bill link href
       const payBillLink = dashLinks.find(l => /pay.?bill|pay\s+my/i.test(l.text));
@@ -277,19 +277,44 @@ export class RepublicServicesScraper extends BaseScraperProvider {
           if (el) (el as HTMLElement).click();
         });
       }
-      await this.page!.waitForTimeout(3000);
+      // Wait for the React SPA to finish rendering (network idle = XHR done)
+      await this.page!.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+      await this.page!.waitForTimeout(2000);
       await this.screenshot('rs-billing-overview');
       await this.domScrapePayBillPage();
-      console.log(`[RepublicServices] After pay-bill nav: ${this.page!.url()}`);
+      const payBillFinalUrl = this.page!.url();
+      console.log(`[RepublicServices] After pay-bill nav: ${payBillFinalUrl}`);
 
       // ── 3. Navigate to Billing History ────────────────────────────────────
-      const historyUrl = billingHistoryLink?.href;
-      if (historyUrl) {
-        await this.page!.goto(historyUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-        await this.page!.waitForTimeout(3000);
-        await this.screenshot('rs-billing-history');
-        await this.domScrapeStatementRows();
-        console.log(`[RepublicServices] After billing-history nav: invoices=${this.capturedInvoices.length}`);
+      // Derive billing history URL: try replacing "pay-bill" segment in pay-bill URL,
+      // then fall back to the explicit dashboard link if found.
+      const derivedHistoryUrls: string[] = [];
+      if (payBillFinalUrl.includes('pay-bill')) {
+        derivedHistoryUrls.push(
+          payBillFinalUrl.replace('pay-bill', 'billing-history'),
+          payBillFinalUrl.replace('pay-bill', 'history'),
+          payBillFinalUrl.replace(/\/payment\/pay-bill.*$/, '/billing-history'),
+        );
+      }
+      if (billingHistoryLink?.href) derivedHistoryUrls.unshift(billingHistoryLink.href);
+
+      // Also try fixed paths under the portal base
+      derivedHistoryUrls.push(
+        `${this.PORTAL_BASE}/account/payment/billing-history`,
+        `${this.PORTAL_BASE}/account/payment/history`,
+        `${this.PORTAL_BASE}/account/billing-history`,
+      );
+
+      for (const historyUrl of derivedHistoryUrls) {
+        try {
+          await this.page!.goto(historyUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+          await this.page!.waitForLoadState('networkidle', { timeout: 12000 }).catch(() => {});
+          await this.page!.waitForTimeout(2000);
+          await this.screenshot('rs-billing-history');
+          await this.domScrapeStatementRows();
+          console.log(`[RepublicServices] Billing history at ${historyUrl}: invoices=${this.capturedInvoices.length}`);
+          if (this.capturedInvoices.length > 1) break;
+        } catch { /* try next */ }
       }
 
       // ── 4. If still no history, click "Billing History" from current page ─
