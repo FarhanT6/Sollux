@@ -199,7 +199,7 @@ export class RepublicServicesScraper extends BaseScraperProvider {
 
         // Log all JSON API calls to/from republicservices.com for diagnosis
         if (/republicservices\.com/i.test(url)) {
-          const preview = JSON.stringify(data).slice(0, 200);
+          const preview = JSON.stringify(data).slice(0, 600);
           console.log(`[RepublicServices] API ← ${url}`);
           console.log(`[RepublicServices] API data: ${preview}`);
         }
@@ -869,6 +869,12 @@ export class RepublicServicesScraper extends BaseScraperProvider {
 
   private parseInvoiceResponse(url: string, data: unknown): void {
     const items = this.rsToArr(data, ['bills', 'invoices', 'statements', 'items', 'results']);
+
+    if (items.length > 0) {
+      const first = items[0] as Record<string, unknown>;
+      console.log(`[RepublicServices] Invoice array length: ${items.length}, first bill keys: ${Object.keys(first).join(', ')}`);
+      console.log(`[RepublicServices] First bill sample: ${JSON.stringify(first).slice(0, 600)}`);
+    }
 
     for (const item of items) {
       if (!item || typeof item !== 'object') continue;
