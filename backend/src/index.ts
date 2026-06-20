@@ -15,6 +15,7 @@ import gmailRouter from './routes/gmail';
 import notificationsRouter from './routes/notifications';
 import authRouter from './routes/auth';
 import stripeRouter from './routes/stripe';
+import importRouter from './routes/import';
 import { errorHandler } from './middleware/errorHandler';
 import { requireAuth, clerkMiddleware } from './middleware/requireAuth';
 
@@ -48,6 +49,7 @@ app.use('/api/', limiter);
 // ─── Body parsing ─────────────────────────────────────────
 // Stripe webhook needs raw body — mount before json()
 app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }));
+app.use('/api/import', express.json({ limit: '100mb' })); // PDFs can be large
 app.use(express.json({ limit: '10mb' }));
 
 // ─── Health check ─────────────────────────────────────────
@@ -68,6 +70,7 @@ app.use('/api/insights', insightsRouter);
 app.use('/api/documents', documentsRouter);
 app.use('/api/gmail', gmailRouter);
 app.use('/api/notifications', notificationsRouter);
+app.use('/api/import', importRouter);
 
 // ─── Error handling ───────────────────────────────────────
 app.use(errorHandler);
@@ -77,3 +80,4 @@ app.listen(PORT, () => {
 });
 
 export default app;
+

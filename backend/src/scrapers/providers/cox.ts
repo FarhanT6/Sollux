@@ -188,32 +188,71 @@ export class CoxScraper extends BaseScraperProvider {
       console.log('[Cox] ibill — balance:', ibillData.totalBalance, '| dueDate:', ibillData.dueDate, '| pastDue:', ibillData.dueImmediately);
       console.log('[Cox] ibill raw text:', ibillData.rawText.slice(0, 400));
 
-      // ── Step 2: Click "View statements" from ibill/home.html ───────────────
-      // We are already on ibill/home.html — find and click the link, then wait
-      // for the actual statements page to load with invoice history rows.
+      // ── Step 2: Navigate to statement history page ──────────────────────────
+      // Try to find an explicit link first; if not found, try known Cox URL patterns.
       const statementsHref = await this.page!.evaluate(() => {
         const links = Array.from(document.querySelectorAll('a'));
         for (let i = 0; i < links.length; i++) {
-          if (/view\s+statements?/i.test(links[i].textContent || '')) {
-            return (links[i] as HTMLAnchorElement).href || null;
+          const text = (links[i].textContent || '').trim();
+          const href = (links[i] as HTMLAnchorElement).href || '';
+          // Match a variety of link text / href patterns Cox has used over time.
+          // Newer Cox portals use "Billing details" / "Billing overview" instead of
+          // "View statements" / "Statement history".
+          if (/view\s+statements?|billing\s+history|statement\s+history|billing\s+details|billing\s+overview|all\s+bills|all\s+statements?/i.test(text) ||
+              /statement-history|billing-history|billing-overview|billing-details|statements/i.test(href)) {
+            return href || null;
           }
         }
         return null;
       });
 
+      let onStatementsPage = false;
+
       if (statementsHref) {
         console.log('[Cox] Navigating to statements URL:', statementsHref);
         await this.page!.goto(statementsHref, { waitUntil: 'domcontentloaded', timeout: 25000 });
+        onStatementsPage = true;
       } else {
-        // Fallback: click directly
-        await this.page!.evaluate(() => {
-          const links = Array.from(document.querySelectorAll('a'));
-          for (let i = 0; i < links.length; i++) {
-            if (/view\s+statements?/i.test(links[i].textContent || '')) {
-              (links[i] as HTMLAnchorElement).click(); return;
+        // Try known Cox statement history URLs directly (portal varies by market/version)
+        const candidateUrls = [
+          'https://www.cox.com/ibill/billing-overview.html',
+          'https://www.cox.com/ibill/statement-history.html',
+          'https://www.cox.com/ibill/billing-history.html',
+          'https://www.cox.com/ibill/billing-details.html',
+          'https://www.cox.com/ibill/statements.html',
+          'https://www.cox.com/ibill/billing.html',
+        ];
+        for (const url of candidateUrls) {
+          try {
+            console.log('[Cox] Trying direct URL:', url);
+            await this.page!.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+            await this.page!.waitForTimeout(3000);
+            const is404 = await this.page!.evaluate(() =>
+              /404|can't find that page|page not found/i.test(document.body.innerText || '')
+            );
+            const currentUrl = this.page!.url();
+            // Accept if we landed on a real page (not 404, not login redirect, ibill domain)
+            if (!is404 && currentUrl.includes('ibill') && !currentUrl.includes('login')) {
+              console.log('[Cox] Direct URL accepted:', currentUrl);
+              onStatementsPage = true;
+              break;
             }
-          }
-        });
+          } catch { /* try next */ }
+        }
+
+        if (!onStatementsPage) {
+          // Last resort: click any billing-related link visible on ibill/home.html
+          await this.page!.goto(this.BILLING_URL, { waitUntil: 'domcontentloaded', timeout: 20000 });
+          await this.page!.waitForTimeout(3000);
+          await this.page!.evaluate(() => {
+            const links = Array.from(document.querySelectorAll('a'));
+            for (let i = 0; i < links.length; i++) {
+              if (/view\s+statements?|billing\s+history|statement\s+history|all\s+bills|see\s+all/i.test(links[i].textContent || '')) {
+                (links[i] as HTMLAnchorElement).click(); return;
+              }
+            }
+          });
+        }
       }
 
       await this.page!.waitForTimeout(5000);
@@ -439,37 +478,45 @@ export class CoxScraper extends BaseScraperProvider {
       try {
         const today = new Date();
         const endDateStr = `${String(today.getMonth() + 1).padStart(2, '0')}/${String(today.getDate()).padStart(2, '0')}/${today.getFullYear()}`;
+        // Cox rejects ranges older than ~2 years with "no payments for the dates selected".
+        // 24 months captures all recent payment activity reliably.
+        const startDate = new Date(today);
+        startDate.setFullYear(today.getFullYear() - 2);
+        const startDateStr = `${String(startDate.getMonth() + 1).padStart(2, '0')}/${String(startDate.getDate()).padStart(2, '0')}/${startDate.getFullYear()}`;
 
-        // Set dates via evaluate to bypass the calendar picker
-        await this.page!.evaluate(({ start, end }) => {
-          const inputs = Array.from(document.querySelectorAll('input[type="text"], input[type="date"], input:not([type])'));
-          const startInput = inputs.find(el => {
-            const id = (el.id || '').toLowerCase();
-            const name = ((el as HTMLInputElement).name || '').toLowerCase();
-            const label = document.querySelector(`label[for="${el.id}"]`)?.textContent?.toLowerCase() || '';
-            return id.includes('start') || name.includes('start') || label.includes('start');
-          }) as HTMLInputElement | undefined;
-          const endInput = inputs.find(el => {
-            const id = (el.id || '').toLowerCase();
-            const name = ((el as HTMLInputElement).name || '').toLowerCase();
-            const label = document.querySelector(`label[for="${el.id}"]`)?.textContent?.toLowerCase() || '';
-            return id.includes('end') || name.includes('end') || label.includes('end');
-          }) as HTMLInputElement | undefined;
+        // Set dates via evaluate to bypass the calendar picker.
+        // RAW ES5 STRING — avoids tsx/esbuild __name() injection on named inner functions.
+        await this.page!.evaluate(`(function(start, end) {
+          var inputs = Array.from(document.querySelectorAll('input[type="text"], input[type="date"], input:not([type])'));
+          function matchSide(side) {
+            return inputs.find(function(el) {
+              var id = (el.id || '').toLowerCase();
+              var name = (el.name || '').toLowerCase();
+              var lbl = '';
+              try {
+                var lblEl = document.querySelector('label[for="' + el.id + '"]');
+                if (lblEl && lblEl.textContent) lbl = lblEl.textContent.toLowerCase();
+              } catch (e) { lbl = ''; }
+              return id.indexOf(side) !== -1 || name.indexOf(side) !== -1 || lbl.indexOf(side) !== -1;
+            });
+          }
+          var startInput = matchSide('start');
+          var endInput = matchSide('end');
 
-          const setValue = (el: HTMLInputElement, val: string) => {
-            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-            nativeInputValueSetter?.call(el, val);
+          function setValue(el, val) {
+            var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+            if (setter && setter.set) setter.set.call(el, val);
+            else el.value = val;
             el.dispatchEvent(new Event('input', { bubbles: true }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
-          };
+          }
 
           if (startInput) setValue(startInput, start);
           if (endInput) setValue(endInput, end);
+          return { startId: startInput && startInput.id, endId: endInput && endInput.id };
+        })(${JSON.stringify(startDateStr)}, ${JSON.stringify(endDateStr)})`);
 
-          return { startId: startInput?.id, endId: endInput?.id };
-        }, { start: '01/01/2019', end: endDateStr });
-
-        console.log('[Cox] Set date range 01/01/2019 →', endDateStr);
+        console.log(`[Cox] Set date range ${startDateStr} → ${endDateStr}`);
         await this.page!.waitForTimeout(500);
 
         // Press Escape to close any open calendar popup

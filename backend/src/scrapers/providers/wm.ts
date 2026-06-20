@@ -10,6 +10,7 @@ interface WMInvoice {
   billingPeriodStart?: string;
   billingPeriodEnd?: string;
   pdfUrl?: string;
+  pdfBuffer?: Buffer;  // populated by click-into-invoice PDF fetch
   status?: string;
   // Multi-account fields
   accountName?: string;
@@ -26,6 +27,7 @@ interface WMPayment {
   amount?: number;
   confirmationNumber?: string;
   paymentMethod?: string;
+  accountNumber?: string;
 }
 
 export class WMScraper extends BaseScraperProvider {
@@ -197,11 +199,15 @@ export class WMScraper extends BaseScraperProvider {
 
         let pdfBuffer: Buffer | undefined;
         let pdfFilename: string | undefined;
-        if (inv.pdfUrl) {
+        // Prefer the buffer captured by the click-into-invoice fetch (canonical),
+        // fall back to downloading via pdfUrl if a direct anchor was on the row.
+        if (inv.pdfBuffer) {
+          pdfBuffer = inv.pdfBuffer;
+        } else if (inv.pdfUrl) {
           pdfBuffer = await this.downloadPdf(inv.pdfUrl);
-          if (pdfBuffer) {
-            pdfFilename = `wm_${inv.accountNumber}_${inv.invoiceDate?.replace(/\//g, '-') ?? statementDate.toISOString().slice(0, 10)}.pdf`;
-          }
+        }
+        if (pdfBuffer) {
+          pdfFilename = `wm_${inv.accountNumber}_${inv.invoiceDate?.replace(/\//g, '-') ?? statementDate.toISOString().slice(0, 10)}.pdf`;
         }
 
         statements.push({
@@ -330,6 +336,19 @@ export class WMScraper extends BaseScraperProvider {
     console.log(`[WM] Account ${index} URL: ${urlBefore} → ${urlAfter}`);
     await this.screenshot(`wm-account-${index}-detail`);
 
+    // Explicitly click "Invoice History" tab — WM's SPA persists the last-active tab across
+    // account navigations, so after we scrape Payment History on one account the next
+    // account-dashboard renders with Payment History selected, hiding the invoice table.
+    await this.page!.evaluate(`(function() {
+      var tabs = Array.from(document.querySelectorAll('button, a, [role="tab"], div'));
+      var tab = tabs.find(function(el) {
+        var t = (el.textContent || '').trim();
+        return /^invoice\\s+history$/i.test(t);
+      });
+      if (tab) tab.click();
+    })()`);
+    await this.page!.waitForTimeout(1500);
+
     // Scrape the billing history table on the detail page
     const historyRows = await this.page!.evaluate(() => {
       const results = [];
@@ -337,10 +356,11 @@ export class WMScraper extends BaseScraperProvider {
       // Look for history/statement rows — tables or MUI grids.
       // IMPORTANT: exclude .d-md-flex rows — those are the account overview rows from the
       // billing overview section which remains mounted in the SPA and causes duplicates.
+      // NOTE: do NOT filter by 'jss' — those are dynamic MUI class names that change each session.
       const containers = [
         ...Array.from(document.querySelectorAll('table tbody tr')),
         ...Array.from(document.querySelectorAll('.MuiGrid-container')).filter(function(el) {
-          return !el.className.includes('d-md-flex') && el.className.includes('jss');
+          return !el.className.includes('d-md-flex');
         }),
         ...Array.from(document.querySelectorAll('[class*="history-row"], [class*="statement-row"], [class*="billing-row"]')),
       ];
@@ -362,7 +382,38 @@ export class WMScraper extends BaseScraperProvider {
         // Check if this row has a "Pay" button — absence means invoice is paid
         var allBtns = Array.from(row.querySelectorAll('button, a'));
         var hasPayBtn = allBtns.some(function(b) { return /\bpay\b/i.test(b.textContent || ''); });
-        results.push({ text: text, cells: cells, hasPayBtn: hasPayBtn });
+        // Extract PDF / invoice download link from the row
+        var pdfAnchor = Array.from(row.querySelectorAll('a')).find(function(a) {
+          var href = (a as HTMLAnchorElement).href || '';
+          var linkText = ((a as HTMLAnchorElement).textContent || '').toLowerCase().trim();
+          return href.includes('.pdf') || /download|invoice|receipt/i.test(href) ||
+                 /view|invoice|pdf|download|receipt/i.test(linkText);
+        }) as HTMLAnchorElement | undefined;
+        // The invoice date is rendered as a clickable <button> (no href) — capture the
+        // button's text so we can find and click it later for the click-into-invoice flow.
+        var dateBtn = Array.from(row.querySelectorAll('button')).find(function(b) {
+          var t = ((b as HTMLButtonElement).textContent || '').replace(/\s+/g, ' ').trim();
+          return /^\d{2}\/\d{2}\/\d{4}$/.test(t);
+        }) as HTMLButtonElement | undefined;
+        // Also support the rare case where it IS an anchor with href
+        var dateAnchor = Array.from(row.querySelectorAll('a')).find(function(a) {
+          var t = ((a as HTMLAnchorElement).textContent || '').replace(/\s+/g, ' ').trim();
+          return /^\d{2}\/\d{2}\/\d{4}$/.test(t) && (a as HTMLAnchorElement).href;
+        }) as HTMLAnchorElement | undefined;
+        // Check for "Overdue" red pill text in the row (explicit past-due signal)
+        var hasOverdueBadge = /overdue/i.test(text);
+        var dateBtnText = dateBtn ? ((dateBtn.textContent || '').replace(/\s+/g, ' ').trim()) : null;
+        var dateAnchorText = dateAnchor ? ((dateAnchor.textContent || '').replace(/\s+/g, ' ').trim()) : null;
+        results.push({
+          text: text,
+          cells: cells,
+          hasPayBtn: hasPayBtn,
+          pdfHref: pdfAnchor ? pdfAnchor.href : null,
+          invoiceLinkHref: dateAnchor ? dateAnchor.href : null,
+          invoiceLinkText: dateAnchorText || dateBtnText,
+          dateButtonText: dateBtnText,
+          hasOverdueBadge: hasOverdueBadge,
+        });
       }
       return results;
     });
@@ -382,6 +433,11 @@ export class WMScraper extends BaseScraperProvider {
         amountDue: number;
         balance: number;
         isPaid: boolean;
+        pdfUrl?: string;
+        pdfBuffer?: Buffer;        // populated by click-into-invoice fetch
+        invoiceLinkHref?: string;  // navigation URL for clicking into the invoice detail page (rare)
+        dateButtonText?: string;   // text of the date <button> (common — used to find+click for PDF)
+        hasOverdueBadge?: boolean; // explicit "Overdue" red pill in this row
         rawText: string;
       }
       const parsed: ParsedRow[] = [];
@@ -393,21 +449,37 @@ export class WMScraper extends BaseScraperProvider {
         if (uniqueDates.length < 2) continue;
 
         // WM history columns: Invoice Date | Due Date | [Service From | Service To] | Amount
-        const invoiceDate = uniqueDates[0];
-        const dueDate = uniqueDates[1];
-        const billingPeriodStart = uniqueDates.length >= 3 ? uniqueDates[2] : undefined;
-        const billingPeriodEnd = uniqueDates.length >= 4 ? uniqueDates[3] : undefined;
+        // Prefer the date captured from the clickable date anchor (invoiceLinkText) when present;
+        // it's authoritative compared to the first date found via regex (which could match a
+        // due-date column if the invoice date column was empty).
+        const invoiceDate = (row as Record<string, unknown>).invoiceLinkText as string | undefined || uniqueDates[0];
+        const dueDate = uniqueDates.find(d => d !== invoiceDate) || uniqueDates[1] || uniqueDates[0];
+        const remainingDates = uniqueDates.filter(d => d !== invoiceDate && d !== dueDate);
+        const billingPeriodStart = remainingDates[0];
+        const billingPeriodEnd = remainingDates[1];
 
         const amounts = [...text.matchAll(/\$\s*([\d,]+\.\d{2})/g)]
           .map(m => parseFloat(m[1].replace(/,/g, '')));
         if (amounts.length === 0) continue;
 
-        const amountDue = amounts[amounts.length - 1];
-        const balance = amounts.length >= 2 ? amounts[amounts.length - 2] : amountDue;
+        // WM's Billing Details columns are: Invoice Date | Due Date | Incidental Charges | Current Invoice Charges
+        // The FIRST dollar amount in the row text is the Current Invoice Charges (the bill).
+        // Subsequent amounts on paid rows are payment totals — not what we want for amountDue.
+        const amountDue = amounts[0];
+        const balance = amountDue;
 
+        const r = row as Record<string, unknown>;
+        const hasOverdueBadge = r.hasOverdueBadge === true;
+        // An "Overdue" badge or a "Pay" button both mean unpaid. Old paid invoices have neither.
+        const isPaid = !row.hasPayBtn && !hasOverdueBadge;
         parsed.push({
           invoiceDate, dueDate, billingPeriodStart, billingPeriodEnd,
-          amountDue, balance, isPaid: !row.hasPayBtn, rawText: text.slice(0, 200),
+          amountDue, balance, isPaid,
+          pdfUrl: row.pdfHref || undefined,
+          invoiceLinkHref: (r.invoiceLinkHref as string | null) || undefined,
+          dateButtonText: (r.dateButtonText as string | null) || undefined,
+          hasOverdueBadge,
+          rawText: text.slice(0, 200),
         });
       }
 
@@ -423,6 +495,71 @@ export class WMScraper extends BaseScraperProvider {
         if (!prev || p.amountDue < prev.amountDue) byMonth.set(key, p);
       }
       const dedupedParsed = Array.from(byMonth.values());
+
+      // ── Click into each invoice to fetch its real PDF ──────────────────
+      // Strategy: backfill all months we don't yet have a PDF for, then on
+      // subsequent syncs only the new month gets fetched. We use the worker-supplied
+      // `knownStatementDates` map (statement dates that already have pdfS3Key in DB)
+      // to skip months we've already archived. Safety cap of 24 prevents runaway if
+      // the DB lookup ever misses.
+      const MAX_PDFS = 24;
+      const acctNum = account.accountNumber || '';
+      // Match by YYYY-MM (not full date) — PDF-parsed bill dates often differ by 1-2 days
+      // from the WM Billing Details row date. e.g., row 06/03/2026 → DB 2026-06-02. Same
+      // statement, so we should skip re-fetching.
+      const knownMonths = new Set<string>(
+        (this.credentials?.knownStatementDates?.[acctNum] ?? []).map(d => d.slice(0, 7))
+      );
+      // Convert WM's MM/DD/YYYY to YYYY-MM for set lookup
+      const mdyToYm = (mdy: string): string => {
+        const p = mdy.split('/');
+        if (p.length !== 3) return mdy.slice(0, 7);
+        return `${p[2]}-${p[0].padStart(2, '0')}`;
+      };
+      const pdfCandidates = dedupedParsed
+        .filter(p => (p.invoiceLinkHref || p.dateButtonText) && !p.pdfUrl)
+        .filter(p => !knownMonths.has(mdyToYm(p.invoiceDate)))
+        .slice(0, MAX_PDFS);
+      if (pdfCandidates.length === 0) {
+        // Diagnostic: nothing to fetch. Log a sample of what anchors exist in the rows
+        // so we can refine the selector if WM uses buttons / different structure.
+        const sample = await this.page!.evaluate(`(function() {
+          var rows = Array.from(document.querySelectorAll('table tbody tr, .MuiGrid-container'))
+            .filter(function(r) { return /\\d{2}\\/\\d{2}\\/\\d{4}/.test(r.textContent || ''); })
+            .slice(0, 2);
+          return rows.map(function(r) {
+            var anchors = Array.from(r.querySelectorAll('a')).map(function(a) {
+              return { tag: 'a', text: (a.textContent || '').slice(0, 30), href: a.href };
+            });
+            var buttons = Array.from(r.querySelectorAll('button')).map(function(b) {
+              return { tag: 'button', text: (b.textContent || '').slice(0, 30) };
+            });
+            return { anchors: anchors, buttons: buttons };
+          });
+        })()`);
+        console.log(`[WM] No PDF candidates for ${account.accountNumber}. Sample row anchors/buttons:`, JSON.stringify(sample).slice(0, 500));
+      }
+      if (pdfCandidates.length > 0) {
+        console.log(`[WM] Fetching PDFs for ${pdfCandidates.length} invoice(s) for ${account.accountNumber}`);
+        for (const c of pdfCandidates) {
+          try {
+            let buf: Buffer | undefined;
+            if (c.invoiceLinkHref) {
+              buf = await this.fetchInvoicePdfFromUrl(c.invoiceLinkHref);
+            } else if (c.dateButtonText) {
+              buf = await this.fetchInvoicePdfByButtonClick(c.dateButtonText);
+            }
+            if (buf) {
+              c.pdfBuffer = buf;
+              console.log(`[WM]   ✓ ${c.invoiceDate}: ${buf.length} bytes`);
+            } else {
+              console.log(`[WM]   ✗ ${c.invoiceDate}: no PDF found`);
+            }
+          } catch (err) {
+            console.warn(`[WM]   ${c.invoiceDate} PDF fetch error:`, err instanceof Error ? err.message : err);
+          }
+        }
+      }
 
       // Rows are newest-first from WM's table.
       // First unpaid = current charge. Second unpaid = past-due statement.
@@ -458,9 +595,13 @@ export class WMScraper extends BaseScraperProvider {
           billingPeriodEnd: p.billingPeriodEnd,
           amountDue: p.amountDue,
           balance: p.balance,
+          pdfUrl: p.pdfUrl,
+          pdfBuffer: p.pdfBuffer,
           status: 'history',
           rawData: {
-            accountBalance: account.amountDue,
+            // Per-statement records intentionally do NOT include account-level totals
+            // (was setting accountBalance: account.amountDue, which made every statement's
+            // `balance` display the same account-wide total — confusing in the history table).
             accountName: account.accountName,
             accountNumber: account.accountNumber,
             serviceAddress: account.serviceAddress,
@@ -473,22 +614,296 @@ export class WMScraper extends BaseScraperProvider {
       }
     }
 
+    // ── Click the "Payment History" tab on this same /account-dashboard page ──
+    // The tab swaps content in place (no URL change). Parse the payments table directly.
+    await this.scrapePaymentHistoryTab(account, index);
+
     // Navigate back to billing overview (pushState is more reliable than history.back() for SPAs)
     await this.ensureBillingOverview();
     await this.screenshot(`wm-back-to-overview-${index}`);
   }
 
+  // Open an invoice URL in a new tab (cookies inherited from this.context), look for the
+  // embedded PDF (iframe.src, anchor[href*=.pdf], or the URL itself returning a PDF),
+  // fetch it as binary, and return the buffer. Returns undefined if no PDF found.
+  private async fetchInvoicePdfFromUrl(invoiceUrl: string): Promise<Buffer | undefined> {
+    // First try: maybe the URL is already a direct PDF
+    try {
+      const res = await this.page!.request.get(invoiceUrl, { timeout: 20000 });
+      if (res.ok()) {
+        const buf = Buffer.from(await res.body());
+        if (buf.slice(0, 4).toString() === '%PDF') return buf;
+      }
+    } catch { /* fall through */ }
+
+    // Otherwise open in a new tab and look for the PDF in the DOM
+    const newPage = await this.context!.newPage();
+    try {
+      await newPage.goto(invoiceUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await newPage.waitForTimeout(3500);
+
+      const pdfHref = await newPage.evaluate(`(function() {
+        // Iframe with PDF src
+        var iframes = Array.from(document.querySelectorAll('iframe'));
+        for (var i = 0; i < iframes.length; i++) {
+          var src = iframes[i].src || '';
+          if (src && (src.indexOf('.pdf') !== -1 || /\\/pdf/i.test(src))) return src;
+        }
+        // Embed / object tags
+        var embeds = Array.from(document.querySelectorAll('embed[type*="pdf"], object[type*="pdf"]'));
+        for (var i = 0; i < embeds.length; i++) {
+          var src2 = embeds[i].src || embeds[i].data || '';
+          if (src2) return src2;
+        }
+        // Anchors that look like PDF/download links
+        var anchors = Array.from(document.querySelectorAll('a'));
+        for (var i = 0; i < anchors.length; i++) {
+          var a = anchors[i];
+          var href = a.href || '';
+          var txt = (a.textContent || '').trim();
+          if (href && href.indexOf('.pdf') !== -1) return href;
+          if (/^(download|print|view\\s+pdf|download\\s+pdf)$/i.test(txt) && href) return href;
+        }
+        return null;
+      })()`) as string | null;
+
+      if (pdfHref) {
+        const res = await newPage.request.get(pdfHref, { timeout: 20000 });
+        if (res.ok()) {
+          const buf = Buffer.from(await res.body());
+          const ct = res.headers()['content-type'] || '';
+          if (ct.includes('pdf') || buf.slice(0, 4).toString() === '%PDF') return buf;
+        }
+      }
+    } catch { /* swallow */ } finally {
+      await newPage.close().catch(() => {});
+    }
+    return undefined;
+  }
+
+  // WM's date "links" are <button> elements (no href) that open the invoice detail modal,
+  // navigate to an invoice page, OR trigger a direct download. This method handles all
+  // three: clicks the button by exact date text, races against a download event and a
+  // popup, falls back to searching the resulting DOM, then restores prior state.
+  private wmDiagDumped = false; // log diagnostics once per scraper run
+  private async fetchInvoicePdfByButtonClick(dateText: string): Promise<Buffer | undefined> {
+    const beforeUrl = this.page!.url();
+
+    // Listen for any download or popup the click might trigger
+    const downloadPromise = this.page!.waitForEvent('download', { timeout: 6000 }).catch(() => null);
+    const popupPromise = this.context!.waitForEvent('page', { timeout: 6000 }).catch(() => null);
+
+    const clicked = await this.page!.evaluate(`(function(target) {
+      var btns = Array.from(document.querySelectorAll('button'));
+      var btn = btns.find(function(b) {
+        return (b.textContent || '').replace(/\\s+/g, ' ').trim() === target;
+      });
+      if (btn) { btn.click(); return true; }
+      return false;
+    })(${JSON.stringify(dateText)})`) as boolean;
+
+    if (!clicked) return undefined;
+
+    // Wait for whichever happens first: download, popup, or settling time
+    const [download, popup] = await Promise.all([downloadPromise, popupPromise]);
+    let buf: Buffer | undefined;
+
+    // 1. Direct download event — most likely for WM
+    if (download) {
+      try {
+        const fs = await import('fs/promises');
+        const path = await download.path();
+        if (path) {
+          buf = await fs.readFile(path);
+        }
+      } catch { /* fall through */ }
+      if (buf) return buf;
+    }
+
+    // 2. Popup opened — find PDF in popup
+    if (popup) {
+      try {
+        await popup.waitForLoadState('domcontentloaded', { timeout: 8000 });
+        await popup.waitForTimeout(2000);
+        // If the popup URL itself is a PDF, fetch it directly
+        const popupUrl = popup.url();
+        if (popupUrl.includes('.pdf') || /pdf/i.test(popupUrl)) {
+          const res = await popup.request.get(popupUrl, { timeout: 15000 });
+          if (res.ok()) {
+            const candidate = Buffer.from(await res.body());
+            if (candidate.slice(0, 4).toString() === '%PDF') buf = candidate;
+          }
+        }
+      } catch { /* swallow */ } finally {
+        await popup.close().catch(() => {});
+      }
+      if (buf) return buf;
+    }
+
+    // 3. Look in the current main page (modal or in-page nav)
+    try {
+      const pdfHref = await this.page!.evaluate(`(function() {
+        // 1. Iframe with PDF src — common for inline PDF previews
+        var iframes = Array.from(document.querySelectorAll('iframe'));
+        for (var i = 0; i < iframes.length; i++) {
+          var src = iframes[i].src || '';
+          if (src && (src.indexOf('.pdf') !== -1 || /\\/pdf/i.test(src))) return src;
+        }
+        // 2. Embed / object tags
+        var embeds = Array.from(document.querySelectorAll('embed[type*="pdf"], object[type*="pdf"]'));
+        for (var i = 0; i < embeds.length; i++) {
+          var src2 = embeds[i].src || embeds[i].data || '';
+          if (src2) return src2;
+        }
+        // 3. Anchor with PDF href or download text
+        var anchors = Array.from(document.querySelectorAll('a'));
+        for (var i = 0; i < anchors.length; i++) {
+          var href = anchors[i].href || '';
+          var txt = (anchors[i].textContent || '').trim();
+          if (href && href.indexOf('.pdf') !== -1) return href;
+          if (/^(download|download\\s+pdf|view\\s+pdf|print|invoice|view\\s+invoice)$/i.test(txt) && href) return href;
+        }
+        return null;
+      })()`) as string | null;
+
+      if (pdfHref) {
+        const res = await this.page!.request.get(pdfHref, { timeout: 20000 });
+        if (res.ok()) {
+          const candidate = Buffer.from(await res.body());
+          const ct = res.headers()['content-type'] || '';
+          if (ct.includes('pdf') || candidate.slice(0, 4).toString() === '%PDF') buf = candidate;
+        }
+      }
+    } catch { /* swallow */ }
+
+    // First-time diagnostic when nothing was found — dump current page state so we can
+    // refine the implementation. Logs URL, title, text snippet, and counts of likely PDF
+    // containers.
+    if (!buf && !this.wmDiagDumped) {
+      this.wmDiagDumped = true;
+      try {
+        const diag = await this.page!.evaluate(`(function() {
+          var anchors = Array.from(document.querySelectorAll('a')).slice(0, 30).map(function(a) {
+            return { text: (a.textContent || '').slice(0, 40).trim(), href: a.href };
+          });
+          var btns = Array.from(document.querySelectorAll('button')).slice(0, 30).map(function(b) {
+            return (b.textContent || '').slice(0, 40).trim();
+          });
+          var iframeCount = document.querySelectorAll('iframe').length;
+          var dialogCount = document.querySelectorAll('[role="dialog"], [aria-modal="true"], .modal, .MuiDialog-root').length;
+          var bodyText = (document.body.innerText || '').replace(/\\s+/g, ' ').slice(0, 600);
+          return {
+            url: location.href,
+            title: document.title,
+            iframeCount: iframeCount,
+            dialogCount: dialogCount,
+            bodyText: bodyText,
+            anchors: anchors,
+            buttons: btns,
+          };
+        })()`);
+        console.log(`[WM] DIAG after click on "${dateText}":`, JSON.stringify(diag).slice(0, 1500));
+        await this.screenshot(`wm-pdf-diag-${dateText.replace(/\//g, '-')}`);
+      } catch { /* ignore diagnostic errors */ }
+    }
+
+    // Restore — go back if URL changed, otherwise close modal with Escape
+    const afterUrl = this.page!.url();
+    if (afterUrl !== beforeUrl) {
+      try { await this.page!.goBack({ waitUntil: 'domcontentloaded', timeout: 10000 }); } catch { /* ignore */ }
+      await this.page!.waitForTimeout(1500);
+      // Re-click Invoice History tab in case nav re-rendered the page in a different state
+      await this.page!.evaluate(`(function() {
+        var tabs = Array.from(document.querySelectorAll('button, a, [role="tab"], div'));
+        var tab = tabs.find(function(el) {
+          var t = (el.textContent || '').trim();
+          return /^invoice\\s+history$/i.test(t);
+        });
+        if (tab) tab.click();
+      })()`);
+      await this.page!.waitForTimeout(800);
+    } else {
+      await this.page!.keyboard.press('Escape').catch(() => {});
+      await this.page!.waitForTimeout(800);
+    }
+
+    return buf;
+  }
+
+  // Click the Payment History tab on the Billing Details page and parse the table.
+  // Columns: Payment Date | Payment Amount (USD) | Payment Method | Status | Confirmation Number
+  private async scrapePaymentHistoryTab(account: WMInvoice, index: number): Promise<void> {
+    try {
+      const clicked = await this.page!.evaluate(`(function() {
+        var tabs = Array.from(document.querySelectorAll('button, a, [role="tab"], div'));
+        var tab = tabs.find(function(el) {
+          var t = (el.textContent || '').trim();
+          return /^payment\\s+history$/i.test(t);
+        });
+        if (tab) { tab.click(); return true; }
+        return false;
+      })()`) as boolean;
+
+      if (!clicked) {
+        console.warn(`[WM] No Payment History tab found for ${account.accountNumber}`);
+        return;
+      }
+      await this.page!.waitForTimeout(2500);
+      await this.screenshot(`wm-payment-history-${index}`);
+
+      const rows = await this.page!.evaluate(`(function() {
+        var results = [];
+        // Find table rows whose text has a MM/DD/YYYY date and a $X.XX amount
+        var trs = Array.from(document.querySelectorAll('table tbody tr, [class*="MuiGrid-container"]'));
+        for (var i = 0; i < trs.length; i++) {
+          var tr = trs[i];
+          var text = (tr.textContent || '').replace(/\\s+/g, ' ').trim();
+          var dateM = text.match(/(\\d{2}\\/\\d{2}\\/\\d{4})/);
+          var amtM = text.match(/\\$\\s*([\\d,]+\\.\\d{2})/);
+          if (!dateM || !amtM) continue;
+          // Look for: confirmation number (8-11 digits), payment method (CARD/CHECK keywords + 4 digits), status
+          var confM = text.match(/\\b(\\d{8,12})\\b/);
+          var methodM = text.match(/(VISA|MASTERCARD|AMEX|DISCOVER|CHECKING|SAVINGS|CHECK|CARD|PAYPAL|VENMO)[^\\d]*([\\d*]{4,12})?/i);
+          var statusM = text.match(/\\b(PROCESSED|PENDING|DECLINED|FAILED|RETURNED)\\b/i);
+          // De-dupe by date+amount+confirmation
+          var key = dateM[1] + '|' + amtM[1] + '|' + (confM ? confM[1] : '');
+          if (results.some(function(r) { return r.key === key; })) continue;
+          results.push({
+            key: key,
+            paymentDate: dateM[1],
+            amount: parseFloat(amtM[1].replace(/,/g, '')),
+            confirmationNumber: confM ? confM[1] : null,
+            paymentMethod: methodM ? methodM[0].trim() : null,
+            status: statusM ? statusM[1].toUpperCase() : null,
+          });
+        }
+        return results;
+      })()`) as Array<{ key: string; paymentDate: string; amount: number; confirmationNumber: string | null; paymentMethod: string | null; status: string | null }>;
+
+      // Only keep successful payments; declined / failed shouldn't enter the DB as PAID
+      let kept = 0;
+      for (const r of rows) {
+        if (r.status && r.status !== 'PROCESSED') continue;
+        this.capturedPayments.push({
+          paymentDate: r.paymentDate,
+          amount: r.amount,
+          confirmationNumber: r.confirmationNumber || undefined,
+          paymentMethod: r.paymentMethod || undefined,
+          accountNumber: account.accountNumber,
+        });
+        kept++;
+      }
+      console.log(`[WM] Payment History for ${account.accountNumber}: parsed ${rows.length} rows, kept ${kept} processed`);
+    } catch (err) {
+      console.warn(`[WM] Payment History tab error for ${account.accountNumber}:`, err instanceof Error ? err.message : err);
+    }
+  }
+
   async scrapePayments(): Promise<ScrapedPayment[]> {
     try {
-      // Use SPA navigation for payment history tab
-      await this.page!.evaluate(() => {
-        window.history.pushState({}, '', '/us/en/mywm/user/my-payment/billing');
-        window.dispatchEvent(new PopStateEvent('popstate'));
-      });
-
-      await this.page!.waitForTimeout(3000);
-
-      console.log(`[WM] Captured ${this.capturedPayments.length} payments from XHR`);
+      // Payments are collected during scrapeAccountHistory() — by the time this runs,
+      // capturedPayments already contains entries from every account's Payment History tab.
+      console.log(`[WM] Total captured payments across all accounts: ${this.capturedPayments.length}`);
 
       const payments: ScrapedPayment[] = [];
       for (const pmt of this.capturedPayments) {
@@ -499,6 +914,7 @@ export class WMScraper extends BaseScraperProvider {
           amount: pmt.amount,
           confirmationNumber: pmt.confirmationNumber,
           paymentMethod: pmt.paymentMethod,
+          accountNumber: pmt.accountNumber,
         });
       }
 

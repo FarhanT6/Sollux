@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { format, isAfter } from 'date-fns';
-import { getStatements } from '../../api/client';
+import { getStatements, deleteStatement } from '../../api/client';
 import type { Statement } from '../../types';
 import { Skeleton, Pill } from '../ui';
 
@@ -26,12 +26,26 @@ function statusPill(s: Statement): { color: 'green' | 'amber' | 'red'; label: st
 export default function StatementHistoryPanel({ utilityAccountId }: Props) {
   const [rows, setRows] = useState<Statement[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
   useEffect(() => {
     getStatements({ utilityAccountId })
       .then(data => setRows([...data].sort((a, b) => b.statementDate.localeCompare(a.statementDate))))
       .finally(() => setLoading(false));
   }, [utilityAccountId]);
+
+  async function handleDelete(id: string) {
+    if (!confirm('Delete this statement? The next sync will re-download a fresh copy.')) return;
+    setDeleting(id);
+    try {
+      await deleteStatement(id);
+      setRows(prev => prev.filter(r => r.id !== id));
+    } catch {
+      alert('Failed to delete statement. Please try again.');
+    } finally {
+      setDeleting(null);
+    }
+  }
 
   // ── Mini stats ──────────────────────────────────────────
   const latest = rows[0];
@@ -98,7 +112,7 @@ export default function StatementHistoryPanel({ utilityAccountId }: Props) {
           <table className="w-full text-xs">
             <thead>
               <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-                {['Statement', 'Billing period', 'Amount due', 'Past due', 'Balance', 'Status'].map(h => (
+                {['Statement', 'Billing period', 'Amount due', 'Past due', 'Balance', 'Status', ''].map(h => (
                   <th key={h} className="text-left text-gray-500 font-medium pb-2 pr-4 whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -111,7 +125,7 @@ export default function StatementHistoryPanel({ utilityAccountId }: Props) {
                 return (
                   <tr
                     key={s.id}
-                    className="transition-colors"
+                    className="group transition-colors"
                     style={{
                       borderLeft: isFirst ? '3px solid #F5A623' : '3px solid transparent',
                       background: 'transparent',
@@ -143,6 +157,17 @@ export default function StatementHistoryPanel({ utilityAccountId }: Props) {
                     </td>
                     <td className="py-2">
                       <Pill color={color}>{label}</Pill>
+                    </td>
+                    <td className="py-2 pl-2">
+                      <button
+                        onClick={() => handleDelete(s.id)}
+                        disabled={deleting === s.id}
+                        title="Delete statement (will be re-fetched on next sync)"
+                        className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-600 hover:text-red-400 disabled:opacity-30"
+                        style={{ fontSize: '14px', lineHeight: 1, padding: '2px 4px', background: 'none', border: 'none', cursor: 'pointer' }}
+                      >
+                        {deleting === s.id ? '…' : '✕'}
+                      </button>
                     </td>
                   </tr>
                 );
