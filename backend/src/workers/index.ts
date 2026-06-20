@@ -80,6 +80,28 @@ setTimeout(() => {
 // NOTE: Removed startup auto-scrape. Scrapes run every 6 hours via setInterval above,
 // or on demand via the Sync button / POST /api/utilities/:id/sync.
 
+// ── Startup cleanup: fix accounts/jobs stuck at PENDING from a previous crash ──
+// If the worker process is killed mid-job (SIGINT, OOM, crash), accounts remain
+// forever in PENDING state and the UI shows "Syncing..." indefinitely.
+// On every worker restart, flip those stale records to FAILED so the UI is honest.
+(async () => {
+  try {
+    const stuckAccounts = await db.utilityAccount.updateMany({
+      where: { lastSyncStatus: 'PENDING' },
+      data: { lastSyncStatus: 'FAILED', lastSyncError: 'Sync interrupted — worker restarted. Click Sync to retry.' },
+    });
+    const stuckJobs = await db.syncJob.updateMany({
+      where: { status: 'PENDING', completedAt: null },
+      data: { status: 'FAILED', completedAt: new Date(), error: 'Job interrupted (worker restarted)' },
+    });
+    if (stuckAccounts.count > 0 || stuckJobs.count > 0) {
+      console.log(`[Startup] Cleared ${stuckAccounts.count} stuck account(s) and ${stuckJobs.count} stuck job(s) from previous crash`);
+    }
+  } catch (err) {
+    console.warn('[Startup] Could not clean stuck sync state:', err);
+  }
+})();
+
 // ── One-time cleanup: clear bad placeholder confirmation numbers ─────────────
 (async () => {
   try {

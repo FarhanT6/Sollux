@@ -51,6 +51,25 @@ router.get('/', async (req, res, next) => {
   }
 });
 
+// DELETE /api/statements/:id — remove a single statement (admin/cleanup use)
+router.delete('/:id', async (req, res, next) => {
+  try {
+    const statement = await db.statement.findFirst({
+      where: {
+        id: req.params.id,
+        utilityAccount: { property: { userId: req.dbUserId! } },
+      },
+    });
+
+    if (!statement) return res.status(404).json({ error: 'Statement not found' });
+
+    await db.statement.delete({ where: { id: statement.id } });
+    res.json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /api/statements/:id/download — signed S3 URL for PDF
 router.get('/:id/download', async (req, res, next) => {
   try {
