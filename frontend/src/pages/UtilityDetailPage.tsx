@@ -20,8 +20,25 @@ function fmtMoney(v?: number | string | null) {
   return isNaN(n) ? '—' : `$${n.toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
 }
 
-function statementStatus(s: any): { color: 'green' | 'amber' | 'red'; label: string } {
-  if ((s.rawDataJson as any)?.isPaid === true) return { color: 'green', label: 'Paid' };
+// Determine if a statement is paid, including reconciliation against payments that
+// may not yet have posted on the provider's API. Sums all payments dated on/after
+// the statement date; if the sum covers the open balance, treat as paid.
+function isStatementPaid(s: any, payments: any[] = []): boolean {
+  const raw = s.rawDataJson as any;
+  if (Number(s.amountPaid ?? 0) > 0 || raw?.isPaid === true) return true;
+  const openBalance = (raw?.accountBalance ?? raw?.totalDue ?? s.balance ?? s.amountDue) as number | undefined;
+  if (openBalance == null) return false;
+  if (openBalance <= 0.01) return true;
+  const stmtDate = s.statementDate ? new Date(s.statementDate) : null;
+  if (!stmtDate) return false;
+  const sumSinceStmt = payments
+    .filter(p => new Date(p.paymentDate) >= stmtDate)
+    .reduce((acc, p) => acc + Number(p.amount ?? 0), 0);
+  return sumSinceStmt >= openBalance - 0.01;
+}
+
+function statementStatus(s: any, payments: any[] = []): { color: 'green' | 'amber' | 'red'; label: string } {
+  if (isStatementPaid(s, payments)) return { color: 'green', label: 'Paid' };
   if ((s.rawDataJson as any)?.isPastDue === true) return { color: 'red', label: 'Overdue' };
   if (s.dueDate && isAfter(new Date(), new Date(s.dueDate))) return { color: 'red', label: 'Overdue' };
   return { color: 'amber', label: 'Due' };
@@ -324,7 +341,11 @@ export default function UtilityDetailPage() {
   // Past due from latest statement
   const latestRaw = statements[0]?.rawDataJson as Record<string, unknown> | undefined;
   const latestPastDue = latestRaw?.pastDue != null ? Number(latestRaw.pastDue) : null;
-  const latestTotalDue = (latestRaw?.accountBalance ?? latestRaw?.totalDue) as number | undefined;
+  const rawTotalDue = (latestRaw?.accountBalance ?? latestRaw?.totalDue) as number | undefined;
+  // Reconcile the displayed current balance against recent payments. If the user paid
+  // a bill but the provider's API hasn't reflected it yet, we still want $0 here.
+  const isLatestPaid = statements[0] ? isStatementPaid(statements[0], payments) : false;
+  const latestTotalDue = isLatestPaid ? 0 : rawTotalDue;
 
   if (loading) return <div className="p-6 space-y-4"><Skeleton className="h-24" /><Skeleton className="h-64" /></div>;
   if (!account) return <div className="p-6 text-gray-400">Account not found</div>;
@@ -385,10 +406,12 @@ export default function UtilityDetailPage() {
         {[
           {
             label: 'Current balance',
-            value: fmtMoney(latestTotalDue ?? latestAmt),
-            sub: latestPastDue && latestPastDue > 0
-              ? <span className="text-red-400">{fmtMoney(latestPastDue)} past due</span>
-              : undefined,
+            value: fmtMoney(isLatestPaid ? 0 : (latestTotalDue ?? latestAmt)),
+            sub: isLatestPaid
+              ? <span className="text-emerald-400">Paid</span>
+              : (latestPastDue && latestPastDue > 0
+                ? <span className="text-red-400">{fmtMoney(latestPastDue)} past due</span>
+                : undefined),
           },
           {
             label: 'Month over month',
@@ -469,7 +492,7 @@ export default function UtilityDetailPage() {
             : (
               <div className="space-y-2 pb-8">
                 {filteredStatements.map((s, idx) => {
-                  const { color: sc, label: sl } = statementStatus(s);
+                  const { color: sc, label: sl } = statementStatus(s, payments);
                   const raw = s.rawDataJson as Record<string, unknown> | undefined;
                   const pastDue     = raw?.pastDue      != null ? Number(raw.pastDue)      : null;
                   const totalDue    = (raw?.accountBalance ?? raw?.totalDue) != null
@@ -512,19 +535,30 @@ export default function UtilityDetailPage() {
                         {s.dueDate && (
                           <p className="text-xs text-gray-500">Due {format(new Date(s.dueDate), 'MMM d')}</p>
                         )}
-                        {currentBill != null && totalDue != null && totalDue !== currentBill && (
-                          <p className="text-xs text-gray-600 mt-0.5">Bill: {fmtMoney(currentBill)}</p>
-                        )}
                       </div>
 
-                      {/* Amount — show totalDue if different from amountDue */}
+                      {/* Amount column.
+                       *  - Paid statement (balance/totalDue is 0): show the actual bill amount
+                       *    that was paid (amountDue) — the user wants history of what was billed.
+                       *  - Unpaid statement: show the current open balance. If it equals the
+                       *    bill amount, no sub-line. If it's larger (past-due rolled in),
+                       *    show "Bill: $X" so the per-period charge is still visible. */}
                       <div className="text-right flex-shrink-0 w-28">
-                        <p className="text-base font-semibold text-white">
-                          {fmtMoney(totalDue ?? s.amountDue)}
-                        </p>
-                        {totalDue != null && Number(s.amountDue) !== totalDue && (
-                          <p className="text-xs text-gray-500">Current: {fmtMoney(s.amountDue)}</p>
-                        )}
+                        {(() => {
+                          const isFullyPaid = (totalDue === 0 && s.amountPaid != null) || raw?.isPaid === true || (totalDue === 0 && Number(s.amountDue ?? 0) > 0);
+                          const amt = Number(s.amountDue ?? 0);
+                          const owed = totalDue ?? amt;
+                          const primary = isFullyPaid ? amt : owed;
+                          const showBillSubline = !isFullyPaid && owed > amt && amt > 0;
+                          return (
+                            <>
+                              <p className="text-base font-semibold text-white">{fmtMoney(primary)}</p>
+                              {showBillSubline && (
+                                <p className="text-xs text-gray-500">Bill: {fmtMoney(amt)}</p>
+                              )}
+                            </>
+                          );
+                        })()}
                       </div>
 
                       <div className="flex-shrink-0 w-20 text-right">

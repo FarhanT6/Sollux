@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { getProperty, getStatements, getPayments, getInsights, syncUtility, updateUtility, markInsightRead, dismissInsight, getStatementDownloadUrl } from '../api/client';
+import { getProperty, getStatements, getPayments, getInsights, syncUtility, updateUtility, deleteUtility, updateProperty, deleteProperty, markInsightRead, dismissInsight, getStatementDownloadUrl } from '../api/client';
 import type { Property, Statement, Payment, AIInsight, UtilityAccount } from '../types';
 import { CATEGORY_LABELS, CATEGORY_COLORS } from '../types';
 import { PageHeader, StatCard, InsightCard, Skeleton, EmptyState, Pill } from '../components/ui';
@@ -17,8 +17,11 @@ export default function PropertyDetailPage() {
   const [insights, setInsights] = useState<AIInsight[]>([]);
   const [tab, setTab] = useState<Tab>('utilities');
   const [loading, setLoading] = useState(true);
+  const navigate = useNavigate();
   const [syncing, setSyncing] = useState<string | null>(null);
   const [showAddUtility, setShowAddUtility] = useState(false);
+  const [showEditProperty, setShowEditProperty] = useState(false);
+  const [showDeleteProperty, setShowDeleteProperty] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -93,12 +96,21 @@ export default function PropertyDetailPage() {
           { label: property.nickname || property.address },
         ]}
         action={
-          <button
-            onClick={() => accounts.forEach(a => handleSync(a.id))}
-            className="btn btn-primary text-xs"
-          >
-            Sync all
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setShowEditProperty(true)} className="btn text-xs">Edit property</button>
+            <button
+              onClick={() => setShowDeleteProperty(true)}
+              className="btn text-xs text-red-400 border-red-500/30 hover:border-red-500/60"
+            >
+              Delete
+            </button>
+            <button
+              onClick={() => accounts.forEach(a => handleSync(a.id))}
+              className="btn btn-primary text-xs"
+            >
+              Sync all
+            </button>
+          </div>
         }
       />
 
@@ -147,6 +159,7 @@ export default function PropertyDetailPage() {
                   <UtilityAccountCardWithHistory
                     key={account.id}
                     account={account}
+                    payments={payments.filter(p => p.utilityAccountId === account.id)}
                     propertyId={id!}
                     syncing={syncing === account.id}
                     onSync={() => handleSync(account.id)}
@@ -219,60 +232,123 @@ export default function PropertyDetailPage() {
         )}
 
         {/* ── Documents tab ─────────────────────────────── */}
-        {tab === 'documents' && (
-          <>
-            <p className="section-label mb-3">Statements auto-saved</p>
-            {statements.filter(s => s.pdfS3Key).length === 0 ? (
-              <EmptyState icon="📄" title="No documents yet" body="PDF statements will appear here automatically once accounts are synced." />
-            ) : (
-              <div className="grid grid-cols-3 gap-3">
-                {statements.filter(s => s.pdfS3Key).map(stmt => (
-                  <div
-                    key={stmt.id}
-                    className="card p-3 hover:border-gold-300 transition-colors cursor-pointer"
-                    onClick={async () => {
-                      try {
-                        const res = await getStatementDownloadUrl(stmt.id);
-                        window.open(res.url, '_blank', 'noopener,noreferrer');
-                      } catch {
-                        alert('Could not open PDF. Please try again.');
-                      }
-                    }}
-                  >
-                    <div className="w-8 h-9 bg-red-500/10 rounded flex items-center justify-center mb-2">
-                      <div className="w-3.5 h-4 bg-red-400 rounded-sm" />
+        {tab === 'documents' && (() => {
+          // Group statements by utility account (already filtered to this property)
+          const byAccount = accounts
+            .map(acct => ({
+              acct,
+              stmts: statements.filter(s => s.utilityAccountId === acct.id),
+            }))
+            .filter(g => g.stmts.length > 0);
+
+          // Statements for accounts not in the accounts list (shouldn't happen, but guard)
+          const knownIds = new Set(accounts.map(a => a.id));
+          const orphaned = statements.filter(s => !knownIds.has(s.utilityAccountId));
+
+          const allGroups = [...byAccount, ...(orphaned.length > 0 ? [{ acct: null, stmts: orphaned }] : [])];
+
+          return (
+            <>
+              {allGroups.length === 0 ? (
+                <EmptyState icon="📄" title="No statements yet" body="Statements will appear here automatically once accounts are synced." />
+              ) : (
+                <div className="space-y-6 pb-8">
+                  {allGroups.map(({ acct, stmts }) => (
+                    <div key={acct?.id || 'orphaned'}>
+                      <div className="flex items-center gap-2 mb-3">
+                        <p className="section-label mb-0">{acct?.providerName || 'Unknown account'}</p>
+                        <span className="text-xs text-gray-600">{stmts.length} statement{stmts.length !== 1 ? 's' : ''}</span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-3">
+                        {stmts.map(stmt => (
+                          <div
+                            key={stmt.id}
+                            className={`card p-3 transition-colors ${stmt.pdfS3Key ? 'hover:border-amber-500/40 cursor-pointer' : 'cursor-default'}`}
+                            onClick={async () => {
+                              if (!stmt.pdfS3Key) return;
+                              try {
+                                const res = await getStatementDownloadUrl(stmt.id);
+                                window.open(res.url, '_blank', 'noopener,noreferrer');
+                              } catch {
+                                alert('Could not open PDF. Please try again.');
+                              }
+                            }}
+                          >
+                            <div className={`w-8 h-9 rounded flex items-center justify-center mb-2 ${stmt.pdfS3Key ? 'bg-red-500/10' : 'bg-white/4'}`}>
+                              {stmt.pdfS3Key
+                                ? <div className="w-3.5 h-4 bg-red-400 rounded-sm" />
+                                : <span className="text-sm">📋</span>
+                              }
+                            </div>
+                            <p className="text-xs font-medium text-gray-200 truncate">
+                              {format(new Date(stmt.statementDate), 'MMM d, yyyy')}
+                            </p>
+                            <p className="text-xs text-gray-400 mt-0.5">
+                              {stmt.amountDue ? `$${Number(stmt.amountDue).toFixed(2)}` : 'No amount'}
+                              {stmt.dueDate ? ` · Due ${format(new Date(stmt.dueDate), 'MMM d')}` : ''}
+                            </p>
+                            <p className="text-xs mt-1" style={{ color: stmt.pdfS3Key ? '#ef4444' : '#6b7280' }}>
+                              {stmt.pdfS3Key ? '📄 PDF' : 'No PDF'}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                    <p className="text-xs font-medium text-gray-100 truncate">
-                      {stmt.utilityAccount?.providerName}_{format(new Date(stmt.statementDate), 'MMMyyyy')}.pdf
-                    </p>
-                    <p className="text-xs text-gray-400 mt-0.5">
-                      {stmt.amountDue ? `$${Number(stmt.amountDue).toFixed(2)} · ` : ''}{format(new Date(stmt.statementDate), 'MMM d, yyyy')}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
-        )}
+                  ))}
+                </div>
+              )}
+            </>
+          );
+        })()}
 
       </div>
       {showAddUtility && <AddUtilityModal propertyId={property.id} onClose={() => setShowAddUtility(false)} onSuccess={() => { getProperty(id!).then(setProperty); }} />}
+
+      {showEditProperty && (
+        <EditPropertyModal
+          property={property}
+          onClose={() => setShowEditProperty(false)}
+          onSaved={updated => { setProperty(updated); setShowEditProperty(false); }}
+        />
+      )}
+
+      {showDeleteProperty && (
+        <DeletePropertyModal
+          property={property}
+          onClose={() => setShowDeleteProperty(false)}
+          onDeleted={() => navigate('/properties')}
+        />
+      )}
     </div>
   );
 }
 
+const UTILITY_CATEGORIES = ['ELECTRIC','GAS','WATER','SEWER','TRASH','SOLAR','INTERNET','PHONE','INSURANCE','HOA','TAXES','OTHER'];
+
 function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccount; onClose: () => void; onSaved: () => void }) {
-  const [form, setForm] = useState({ accountNumber: '', username: '', password: '' });
+  const [form, setForm] = useState({
+    providerName:  account.providerName || '',
+    category:      account.category     || 'OTHER',
+    accountNumber: '',
+    username:      '',
+    password:      '',
+    notes:         (account as any).notes || '',
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  const fieldCls = 'w-full rounded-lg px-3 py-2 text-sm text-white bg-white/5 border border-white/10 focus:border-amber-500/50 outline-none';
 
   async function handleSave() {
     setLoading(true); setError('');
     try {
       const patch: Record<string, string> = {};
+      if (form.providerName.trim()  !== account.providerName) patch.providerName = form.providerName.trim();
+      if (form.category             !== account.category)     patch.category     = form.category;
       if (form.accountNumber.trim()) patch.accountNumber = form.accountNumber.trim();
-      if (form.username.trim()) patch.username = form.username.trim();
-      if (form.password.trim()) patch.password = form.password.trim();
+      if (form.username.trim())      patch.username      = form.username.trim();
+      if (form.password.trim())      patch.password      = form.password.trim();
+      if (form.notes.trim()         !== ((account as any).notes || '')) patch.notes = form.notes.trim();
       if (Object.keys(patch).length === 0) { onClose(); return; }
       await updateUtility(account.id, patch);
       onSaved();
@@ -288,44 +364,46 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
       <div className="w-full max-w-sm rounded-2xl p-6 space-y-4" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.08)' }} onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-white">Edit {account.providerName}</h3>
+          <h3 className="text-sm font-semibold text-white">Edit utility account</h3>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-lg leading-none">×</button>
         </div>
-        <p className="text-xs text-gray-500">Leave a field blank to keep the existing value.</p>
 
         <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Provider name</label>
+              <input className={fieldCls} value={form.providerName} onChange={e => setForm(f => ({ ...f, providerName: e.target.value }))} />
+            </div>
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Category</label>
+              <select className={fieldCls} value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value as any }))}>
+                {UTILITY_CATEGORIES.map(c => <option key={c} value={c}>{c.charAt(0) + c.slice(1).toLowerCase()}</option>)}
+              </select>
+            </div>
+          </div>
           <div>
             <label className="text-xs text-gray-400 block mb-1">
               Account number
               {account.providerSlug === 'wm' && <span className="text-gray-600 ml-1">(e.g. 8-92846-35002)</span>}
             </label>
-            <input
-              className="w-full rounded-lg px-3 py-2 text-sm text-white bg-white/5 border border-white/10 focus:border-amber-500/50 outline-none"
-              placeholder={account.accountNumber || 'Full account number from your bill'}
-              value={form.accountNumber}
-              onChange={e => setForm(f => ({ ...f, accountNumber: e.target.value }))}
-            />
+            <input className={fieldCls} placeholder={account.accountNumber || 'Full account number'} value={form.accountNumber} onChange={e => setForm(f => ({ ...f, accountNumber: e.target.value }))} />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Username / Email</label>
+              <input className={fieldCls} placeholder="New login" value={form.username} onChange={e => setForm(f => ({ ...f, username: e.target.value }))} />
+            </div>
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Password</label>
+              <input type="password" className={fieldCls} placeholder="New password" value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} />
+            </div>
           </div>
           <div>
-            <label className="text-xs text-gray-400 block mb-1">Username / Email</label>
-            <input
-              className="w-full rounded-lg px-3 py-2 text-sm text-white bg-white/5 border border-white/10 focus:border-amber-500/50 outline-none"
-              placeholder="New username or email"
-              value={form.username}
-              onChange={e => setForm(f => ({ ...f, username: e.target.value }))}
-            />
-          </div>
-          <div>
-            <label className="text-xs text-gray-400 block mb-1">Password</label>
-            <input
-              type="password"
-              className="w-full rounded-lg px-3 py-2 text-sm text-white bg-white/5 border border-white/10 focus:border-amber-500/50 outline-none"
-              placeholder="New password"
-              value={form.password}
-              onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
-            />
+            <label className="text-xs text-gray-400 block mb-1">Notes (optional)</label>
+            <input className={fieldCls} placeholder="Any notes about this account" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
           </div>
         </div>
+        <p className="text-xs text-gray-600">Credential fields left blank keep their existing value.</p>
 
         {error && <p className="text-xs text-red-400">{error}</p>}
 
@@ -340,16 +418,179 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
   );
 }
 
+function DeleteUtilityModal({ account, onClose, onDeleted }: { account: UtilityAccount; onClose: () => void; onDeleted: () => void }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState('');
+
+  async function handleDelete() {
+    setLoading(true);
+    try {
+      await deleteUtility(account.id);
+      onDeleted();
+    } catch (err: any) {
+      setError(err?.response?.data?.error || 'Failed to delete');
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+      <div className="w-full max-w-sm rounded-2xl p-6 space-y-4" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.08)' }} onClick={e => e.stopPropagation()}>
+        <h3 className="text-sm font-semibold text-white">Delete {account.providerName}?</h3>
+        <p className="text-xs text-gray-400">
+          This will permanently delete the utility account and all its statements, payments, and history.
+          This cannot be undone.
+        </p>
+        {error && <p className="text-xs text-red-400">{error}</p>}
+        <div className="flex gap-2">
+          <button className="btn text-xs flex-1" onClick={onClose}>Cancel</button>
+          <button
+            className="flex-1 rounded-lg px-3 py-2 text-xs font-medium bg-red-500/15 text-red-400 border border-red-500/30 hover:bg-red-500/25 transition-colors disabled:opacity-40"
+            onClick={handleDelete}
+            disabled={loading}
+          >
+            {loading ? 'Deleting…' : 'Delete permanently'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EditPropertyModal({ property, onClose, onSaved }: { property: Property; onClose: () => void; onSaved: (p: Property) => void }) {
+  const [form, setForm] = useState({
+    address:  property.address  || '',
+    city:     property.city     || '',
+    state:    property.state    || '',
+    zip:      property.zip      || '',
+    nickname: property.nickname || '',
+    type:     property.type     || 'RENTAL',
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState('');
+
+  const fieldCls = 'w-full rounded-lg px-3 py-2 text-sm text-white bg-white/5 border border-white/10 focus:border-amber-500/50 outline-none';
+
+  async function handleSave() {
+    setLoading(true); setError('');
+    try {
+      const updated = await updateProperty(property.id, form);
+      onSaved(updated);
+    } catch (err: any) {
+      setError(err?.response?.data?.error || 'Failed to update');
+    } finally { setLoading(false); }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+      <div className="w-full max-w-md rounded-2xl p-6 space-y-4" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.08)' }} onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-white">Edit property</h3>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-lg leading-none">×</button>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Street address</label>
+            <input className={fieldCls} value={form.address} onChange={e => setForm(f => ({ ...f, address: e.target.value }))} />
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">City</label>
+              <input className={fieldCls} value={form.city} onChange={e => setForm(f => ({ ...f, city: e.target.value }))} />
+            </div>
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">State</label>
+              <input className={fieldCls} maxLength={2} value={form.state} onChange={e => setForm(f => ({ ...f, state: e.target.value.toUpperCase().slice(0,2) }))} />
+            </div>
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">ZIP</label>
+              <input className={fieldCls} value={form.zip} onChange={e => setForm(f => ({ ...f, zip: e.target.value }))} />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Nickname (optional)</label>
+              <input className={fieldCls} placeholder="e.g. Beach House" value={form.nickname} onChange={e => setForm(f => ({ ...f, nickname: e.target.value }))} />
+            </div>
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Type</label>
+              <select className={fieldCls} value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value as any }))}>
+                {['PRIMARY','RENTAL','INVESTMENT','COMMERCIAL'].map(t => (
+                  <option key={t} value={t}>{t.charAt(0) + t.slice(1).toLowerCase()}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+        {error && <p className="text-xs text-red-400">{error}</p>}
+        <div className="flex gap-2 pt-1">
+          <button className="btn text-xs flex-1" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary text-xs flex-1" onClick={handleSave} disabled={loading || !form.address || !form.city || !form.state}>
+            {loading ? 'Saving…' : 'Save changes'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeletePropertyModal({ property, onClose, onDeleted }: { property: Property; onClose: () => void; onDeleted: () => void }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState('');
+  const accountCount = property.utilityAccounts?.length ?? 0;
+
+  async function handleDelete() {
+    setLoading(true);
+    try {
+      await deleteProperty(property.id);
+      onDeleted();
+    } catch (err: any) {
+      setError(err?.response?.data?.error || 'Failed to delete');
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+      <div className="w-full max-w-sm rounded-2xl p-6 space-y-4" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.08)' }} onClick={e => e.stopPropagation()}>
+        <h3 className="text-sm font-semibold text-white">Delete {property.nickname || property.address}?</h3>
+        <div className="text-xs text-gray-400 space-y-1.5">
+          <p>This will permanently delete:</p>
+          <ul className="list-disc pl-4 space-y-0.5 text-gray-500">
+            <li>The property record</li>
+            <li>{accountCount} utility account{accountCount !== 1 ? 's' : ''}</li>
+            <li>All statements, payments, and AI insights for this property</li>
+          </ul>
+          <p className="text-red-400 font-medium pt-1">This cannot be undone.</p>
+        </div>
+        {error && <p className="text-xs text-red-400">{error}</p>}
+        <div className="flex gap-2">
+          <button className="btn text-xs flex-1" onClick={onClose}>Cancel</button>
+          <button
+            className="flex-1 rounded-lg px-3 py-2 text-xs font-medium bg-red-500/15 text-red-400 border border-red-500/30 hover:bg-red-500/25 transition-colors disabled:opacity-40"
+            onClick={handleDelete}
+            disabled={loading}
+          >
+            {loading ? 'Deleting…' : 'Delete permanently'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function UtilityAccountCardWithHistory({
-  account, syncing, onSync, onRefresh, propertyId,
-}: { account: UtilityAccount; syncing: boolean; onSync: () => void; onRefresh: () => void; propertyId: string }) {
-  const [editing, setEditing] = useState(false);
+  account, payments, syncing, onSync, onRefresh, propertyId,
+}: { account: UtilityAccount; payments: Payment[]; syncing: boolean; onSync: () => void; onRefresh: () => void; propertyId: string }) {
+  const [editing,  setEditing]  = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const navigate = useNavigate();
 
   return (
     <div>
-      {editing && <EditUtilityModal account={account} onClose={() => setEditing(false)} onSaved={onRefresh} />}
-      <UtilityAccountCard account={account} syncing={syncing} onSync={onSync} onEdit={() => setEditing(true)} />
+      {editing  && <EditUtilityModal   account={account} onClose={() => setEditing(false)}  onSaved={onRefresh} />}
+      {deleting && <DeleteUtilityModal account={account} onClose={() => setDeleting(false)} onDeleted={onRefresh} />}
+      <UtilityAccountCard account={account} payments={payments} syncing={syncing} onSync={onSync} onEdit={() => setEditing(true)} onDelete={() => setDeleting(true)} />
       <button
         onClick={() => navigate(`/properties/${propertyId}/utilities/${account.id}`)}
         className="mt-1.5 ml-1 text-xs text-gray-500 hover:text-[#F5A623] transition-colors flex items-center gap-1"
@@ -362,19 +603,46 @@ function UtilityAccountCardWithHistory({
 }
 
 function UtilityAccountCard({
-  account, syncing, onSync, onEdit
-}: { account: UtilityAccount; syncing: boolean; onSync: () => void; onEdit: () => void }) {
+  account, payments, syncing, onSync, onEdit, onDelete
+}: { account: UtilityAccount; payments: Payment[]; syncing: boolean; onSync: () => void; onEdit: () => void; onDelete: () => void }) {
   const latest = account.statements?.[0];
   const dueDate = latest?.dueDate ? new Date(latest.dueDate) : null;
-  const isDueSoon = dueDate && dueDate <= new Date(Date.now() + 7 * 86400000);
   const color = CATEGORY_COLORS[account.category] || '#888';
 
-  const statusLabel = account.lastSyncStatus === 'SUCCESS' ? 'Synced'
+  // Reconcile balance against recent payments so a payment that hasn't yet posted
+  // to the provider's API still shows up correctly. If the latest payment is after
+  // the latest statement AND covers the open balance, treat the bill as paid.
+  const raw = latest?.rawDataJson as Record<string, unknown> | undefined;
+  const openBalance = (raw?.accountBalance ?? raw?.totalDue ?? (latest as any)?.balance ?? latest?.amountDue) as number | undefined;
+  const stmtDate = latest?.statementDate ? new Date(latest.statementDate) : null;
+  const recentPmt = payments
+    .filter(p => stmtDate ? new Date(p.paymentDate) >= stmtDate : true)
+    .sort((a, b) => new Date(b.paymentDate).getTime() - new Date(a.paymentDate).getTime())[0];
+  const recentPaidSum = payments
+    .filter(p => stmtDate ? new Date(p.paymentDate) >= stmtDate : false)
+    .reduce((s, p) => s + Number(p.amount ?? 0), 0);
+  const isPaidViaPayment = !!recentPmt && openBalance != null && recentPaidSum >= openBalance - 0.01;
+  const isPaidViaStatement = (latest?.amountPaid != null && Number(latest.amountPaid) > 0) || raw?.isPaid === true;
+  const isPaid = isPaidViaPayment || isPaidViaStatement;
+
+  const now = new Date();
+  const isPastDue = !isPaid && dueDate != null && dueDate < now;
+  const isDueSoon = !isPaid && !isPastDue && dueDate != null && dueDate <= new Date(Date.now() + 7 * 86400000);
+
+  // Status pill: paid > past due > due soon > sync status.
+  // Bill state takes priority over sync state because the user cares about whether they owe money.
+  const statusLabel = isPaid ? 'Paid'
+    : isPastDue ? 'Past due'
+    : isDueSoon ? 'Due soon'
+    : account.lastSyncStatus === 'SUCCESS' ? 'Synced'
     : account.lastSyncStatus === 'FAILED' ? 'Sync failed'
     : account.lastSyncStatus === 'PENDING' ? 'Syncing…'
     : 'Not synced';
 
-  const pillColor: any = account.lastSyncStatus === 'SUCCESS' ? 'green'
+  const pillColor: any = isPaid ? 'green'
+    : isPastDue ? 'red'
+    : isDueSoon ? 'amber'
+    : account.lastSyncStatus === 'SUCCESS' ? 'green'
     : account.lastSyncStatus === 'FAILED' ? 'red' : 'gray';
 
   return (
@@ -383,7 +651,7 @@ function UtilityAccountCard({
         <div className="flex items-center gap-2.5">
           <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: color }} />
           <div>
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 flex-wrap">
               <p className="text-sm font-semibold text-white">{account.providerName}</p>
               <button
                 onClick={onEdit}
@@ -392,13 +660,18 @@ function UtilityAccountCard({
               >
                 Edit
               </button>
+              <button
+                onClick={onDelete}
+                title="Delete account"
+                className="px-1.5 py-0.5 rounded text-xs text-red-500/60 hover:text-red-400 hover:bg-red-500/10 transition-colors leading-none border border-red-500/20 hover:border-red-500/40"
+              >
+                Delete
+              </button>
             </div>
             <p className="text-xs font-mono text-gray-400">{account.accountNumber || 'No account #'}</p>
           </div>
         </div>
-        <Pill color={isDueSoon ? 'amber' : pillColor}>
-          {isDueSoon ? 'Due soon' : statusLabel}
-        </Pill>
+        <Pill color={pillColor}>{statusLabel}</Pill>
       </div>
 
       <div className="flex items-end justify-between">
@@ -427,15 +700,29 @@ function UtilityAccountCard({
               );
             }
 
+            // When the bill is paid (either via amountPaid in DB OR by a recent matching payment
+            // that hasn't yet posted on the provider's side), show $0 as the topline and a small
+            // "paid" sub-line instead of repeating the now-stale balance.
+            const displayBalance = isPaid ? 0 : (totalBalance ?? 0);
             return (
               <>
                 {/* Total balance — big topline number */}
                 <p className="text-xl font-semibold text-white">
-                  {totalBalance != null ? fmt(totalBalance) : '—'}
+                  {totalBalance != null ? fmt(displayBalance) : '—'}
                 </p>
 
+                {/* Paid sub-line: reassures the user their payment is recognized even when
+                    the provider's API hasn't reflected it yet. */}
+                {isPaid && recentPmt && !isPaidViaStatement && (
+                  <div className="mt-1 flex items-center gap-1.5">
+                    <span className="text-xs text-emerald-400">
+                      Paid {fmt(Number(recentPmt.amount))} on {format(new Date(recentPmt.paymentDate), 'MMM d')}
+                    </span>
+                  </div>
+                )}
+
                 {/* Past due row — red, due immediately */}
-                {pastDueAmt != null && pastDueAmt > 0 && (
+                {!isPaid && pastDueAmt != null && pastDueAmt > 0 && (
                   <div className="mt-1 flex items-center gap-1.5">
                     <span className="text-xs font-medium text-red-400">Past due: {fmt(pastDueAmt)}</span>
                     <span className="text-xs text-red-500/70">· due immediately</span>
@@ -443,7 +730,7 @@ function UtilityAccountCard({
                 )}
 
                 {/* Current charge row */}
-                {currentCharge != null && (
+                {!isPaid && currentCharge != null && (
                   <div className="mt-0.5 flex items-center gap-1.5">
                     <span className="text-xs text-gray-400">
                       Current: {fmt(currentCharge)}
