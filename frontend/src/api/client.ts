@@ -84,6 +84,9 @@ export const getStatements = (params: { utilityAccountId?: string; propertyId?: 
 export const getStatementDownloadUrl = (id: string) =>
   api.get<{ url: string }>(`/statements/${id}/download`).then(r => r.data);
 
+export const deleteStatement = (id: string) =>
+  api.delete<{ success: boolean }>(`/statements/${id}`).then(r => r.data);
+
 // Payments
 export const getPayments = (params: { utilityAccountId?: string; propertyId?: string }) =>
   api.get<Payment[]>('/payments', { params }).then(r => r.data);

@@ -10,6 +10,7 @@ const NAV = [
   { to: '/insights',      label: 'AI insights',      color: '#5DCAA5' },
   { to: '/payments',      label: 'Payments',         color: '#7F77DD' },
   { to: '/documents',     label: 'Document vault',   color: '#D4537E' },
+  { to: '/import',        label: 'Import bills',     color: '#60a5fa' },
 ];
 
 const NAV_ACCOUNT = [
