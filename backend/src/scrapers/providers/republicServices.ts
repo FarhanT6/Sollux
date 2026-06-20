@@ -37,6 +37,7 @@ interface RSInvoice {
   pastDue?: number;
   totalDue?: number;
   pdfUrl?: string;
+  pdfBuffer?: Buffer;  // populated by _downloadInvoicePdfs()
   status?: string;
   isPaid?: boolean;
   rawData?: Record<string, unknown>;
@@ -64,6 +65,10 @@ export class RepublicServicesScraper extends BaseScraperProvider {
   private capturedAccounts: RSAccount[]  = [];
   private capturedInvoices: RSInvoice[]  = [];
   private capturedPayments: RSPayment[]  = [];
+
+  // Auth headers captured from the portal's own API calls (bearer token etc.)
+  // Used for direct API fetches in step 6 of _doScrapeAll.
+  private _rsAuthHeaders: Record<string, string> = {};
 
   // ── Login ─────────────────────────────────────────────────────────────────
 
@@ -187,6 +192,29 @@ export class RepublicServicesScraper extends BaseScraperProvider {
   // ── API interceptors ──────────────────────────────────────────────────────
 
   private setupInterceptors(): void {
+    // Capture auth headers from the portal's own API calls so we can reuse
+    // them in direct per-account API fetches (step 6 of _doScrapeAll).
+    // The RS portal uses Auth0 bearer tokens stored in JS memory — they are
+    // NOT in cookies, so page.request.get() alone won't authenticate.
+    this.page!.on('request', (request) => {
+      try {
+        const url = request.url();
+        if (!/republicservices\.com/i.test(url)) return;
+        const headers = request.headers();
+        const auth = headers['authorization'];
+        if (auth && auth.toLowerCase().startsWith('bearer ')) {
+          if (!this._rsAuthHeaders['authorization']) {
+            console.log('[RepublicServices] Captured bearer token from portal request');
+          }
+          this._rsAuthHeaders['authorization'] = auth;
+          // Carry over any other API-key style headers
+          for (const h of ['x-api-key', 'x-amzn-requestid', 'x-client-id', 'x-api-version']) {
+            if (headers[h]) this._rsAuthHeaders[h] = headers[h];
+          }
+        }
+      } catch { /* non-critical */ }
+    });
+
     this.page!.on('response', async (response) => {
       if (!response.ok()) return;
       const url = response.url();
@@ -209,7 +237,18 @@ export class RepublicServicesScraper extends BaseScraperProvider {
           this.parseAccountResponse(url, data);
         }
 
-        // Invoices / bills / statements
+        // Obligations endpoint — PREFERRED source. Returns per-invoice charges
+        // (originalAmount) and remaining balance (openAmount). This is the data the
+        // RS portal's "Invoice History" page uses. Check BEFORE bills so obligations
+        // populate first and bills get de-duped against them.
+        if (/\/obligations?/i.test(url)) {
+          // Extract accountId from the URL path: /accounts/{accountId}/obligations
+          const acctMatch = url.match(/\/accounts\/(\d+)\/obligations/i);
+          this.parseObligationsResponse(url, data, acctMatch ? acctMatch[1] : '');
+        }
+
+        // Invoices / bills / statements — fallback when obligations isn't available.
+        // Bills give the running balance, not the per-invoice charge.
         if (/\/invoice|\/bill|\/statement/i.test(url)) {
           this.parseInvoiceResponse(url, data);
         }
@@ -230,7 +269,35 @@ export class RepublicServicesScraper extends BaseScraperProvider {
 
   async scrapeStatements(): Promise<ScrapedStatement[]> {
     await this._scrapeAll();
+    await this._downloadInvoicePdfs();
     return this._buildStatements();
+  }
+
+  /** Download PDFs for all captured invoices that have a pdfUrl. */
+  private async _downloadInvoicePdfs(): Promise<void> {
+    const toDl = this.capturedInvoices.filter(inv => inv.pdfUrl && !inv.pdfBuffer);
+    if (toDl.length === 0) return;
+    console.log(`[RepublicServices] Downloading ${toDl.length} invoice PDFs...`);
+
+    for (const inv of toDl) {
+      if (!inv.pdfUrl) continue;
+      try {
+        // RS portal may return relative paths — resolve against the my. subdomain
+        const url = inv.pdfUrl.startsWith('http')
+          ? inv.pdfUrl
+          : `https://my.republicservices.com${inv.pdfUrl.startsWith('/') ? '' : '/'}${inv.pdfUrl}`;
+
+        const res = await this.page!.request.get(url, { timeout: 20000 });
+        if (res.ok()) {
+          inv.pdfBuffer = Buffer.from(await res.body());
+          console.log(`[RepublicServices] PDF for invoice ${inv.invoiceId || inv.invoiceNumber}: ${inv.pdfBuffer.length} bytes`);
+        } else {
+          console.log(`[RepublicServices] PDF fetch HTTP ${res.status()} for ${url}`);
+        }
+      } catch (err) {
+        console.warn(`[RepublicServices] PDF download failed for invoice ${inv.invoiceId}:`, err instanceof Error ? err.message : err);
+      }
+    }
   }
 
   async scrapePayments(): Promise<ScrapedPayment[]> {
@@ -389,6 +456,146 @@ export class RepublicServicesScraper extends BaseScraperProvider {
         } catch { /* try next */ }
         }
       }
+
+      // ── 6. Direct API fetch for EACH stored account number ──────────────
+      // The RS portal defaults to one account after login. Any additional accounts
+      // (e.g. a second service address under the same login) are never loaded by
+      // the portal unless the user manually switches accounts — so the XHR
+      // interceptor misses them entirely.
+      //
+      // Fix: after the normal portal scraping, directly call the RS REST API
+      // for every account number the user has stored in Sollux.  The Playwright
+      // session is already authenticated, so page.request.get() inherits all
+      // session cookies and tokens.
+      //
+      // Account ID mapping:
+      //   user-stored "3-04670-041160" → strip dashes → "304670041160" = RS accountId
+      //   RS bills API: /api/v2/mr/accounts/{accountId}/bills?limit=10000000
+      //   RS payments:  /api/v2/mr/accounts/{accountId}/payments?includeDetails=false&limit=10000000&refresh=true
+      {
+        const storedAccountNumbers: string[] =
+          this.credentials?.accountNumbers ??
+          (this.credentials?.accountNumber ? [this.credentials.accountNumber] : []);
+
+        console.log(`[RepublicServices] Direct API fetch for ${storedAccountNumbers.length} stored account(s): ${storedAccountNumbers.join(', ')}`);
+
+        for (const storedNum of storedAccountNumbers) {
+          // Strip dashes/spaces to get the RS internal accountId
+          const accountId = storedNum.replace(/[-\s]/g, '');
+          if (!accountId) continue;
+
+          console.log(`[RepublicServices] Direct API fetch for accountId=${accountId} (stored: ${storedNum}), bearer=${!!this._rsAuthHeaders['authorization']}`);
+
+          // Helper: fetch a URL using the captured bearer token first, then fall back
+          // to page.evaluate(fetch) which runs inside the browser context and
+          // automatically carries whatever auth the React app has in memory.
+          const fetchJson = async (url: string): Promise<unknown> => {
+            // Attempt 1: page.request.get with captured auth headers (fast path)
+            if (this._rsAuthHeaders['authorization']) {
+              try {
+                const res = await this.page!.request.get(url, {
+                  timeout: 25000,
+                  headers: {
+                    'Accept': 'application/json',
+                    ...this._rsAuthHeaders,
+                  },
+                });
+                if (res.ok()) {
+                  const data = await res.json().catch(() => null);
+                  if (data) {
+                    console.log(`[RepublicServices] API (bearer) ${res.status()} ← ${url}`);
+                    return data;
+                  }
+                } else {
+                  console.log(`[RepublicServices] API (bearer) HTTP ${res.status()} ← ${url}`);
+                }
+              } catch (e) {
+                console.log(`[RepublicServices] API (bearer) error for ${url}: ${e instanceof Error ? e.message : e}`);
+              }
+            }
+
+            // Attempt 2: run fetch() from inside the browser (inherits all in-memory tokens)
+            // We're currently on a www.republicservices.com page, so same-origin — no CORS.
+            try {
+              const data: unknown = await this.page!.evaluate(async (reqUrl: string) => {
+                try {
+                  const r = await fetch(reqUrl, {
+                    credentials: 'include',
+                    headers: { 'Accept': 'application/json' },
+                  });
+                  if (!r.ok) return null;
+                  return await r.json();
+                } catch { return null; }
+              }, url);
+              if (data) {
+                console.log(`[RepublicServices] API (browser-fetch) OK ← ${url}`);
+                return data;
+              }
+              console.log(`[RepublicServices] API (browser-fetch) returned null ← ${url}`);
+            } catch (e) {
+              console.log(`[RepublicServices] API (browser-fetch) error for ${url}: ${e instanceof Error ? e.message : e}`);
+            }
+
+            return null;
+          };
+
+          try {
+            // 6a. Account details — populates capturedAccounts with infoProId
+            const acctUrl = `${this.PORTAL_BASE}/api/v2/mr/accounts/${accountId}`;
+            const acctData = await fetchJson(acctUrl);
+            if (acctData) {
+              console.log(`[RepublicServices] Account ${accountId}: ${JSON.stringify(acctData).slice(0, 400)}`);
+              this.parseAccountResponse(acctUrl, acctData);
+            }
+          } catch (err) {
+            console.warn(`[RepublicServices] Account fetch failed for ${accountId}:`, err instanceof Error ? err.message : err);
+          }
+
+          try {
+            // 6b. Obligations — PREFERRED source. Gives per-invoice originalAmount and
+            // openAmount (what's still owed) instead of running account balance.
+            // Use a wide startDate to capture full history since service started.
+            const oblUrl = `${this.PORTAL_BASE}/api/v1/mr/accounts/${accountId}/obligations?limit=10000000&startDate=01012020`;
+            const oblData = await fetchJson(oblUrl);
+            if (oblData) {
+              console.log(`[RepublicServices] Obligations ${accountId}: ${JSON.stringify(oblData).slice(0, 400)}`);
+              this.parseObligationsResponse(oblUrl, oblData, accountId);
+            } else {
+              console.log(`[RepublicServices] No obligations data returned for ${accountId}`);
+            }
+          } catch (err) {
+            console.warn(`[RepublicServices] Obligations fetch failed for ${accountId}:`, err instanceof Error ? err.message : err);
+          }
+
+          try {
+            // 6b.2. Bills — fallback. Will dedupe against obligations by billReferenceId.
+            const billsUrl = `${this.PORTAL_BASE}/api/v2/mr/accounts/${accountId}/bills?limit=10000000`;
+            const billsData = await fetchJson(billsUrl);
+            if (billsData) {
+              console.log(`[RepublicServices] Bills ${accountId}: ${JSON.stringify(billsData).slice(0, 400)}`);
+              this.parseInvoiceResponse(billsUrl, billsData);
+            } else {
+              console.log(`[RepublicServices] No bills data returned for ${accountId}`);
+            }
+          } catch (err) {
+            console.warn(`[RepublicServices] Bills fetch failed for ${accountId}:`, err instanceof Error ? err.message : err);
+          }
+
+          try {
+            // 6c. Payments
+            const pmtUrl = `${this.PORTAL_BASE}/api/v2/mr/accounts/${accountId}/payments?includeDetails=false&limit=10000000&refresh=true`;
+            const pmtData = await fetchJson(pmtUrl);
+            if (pmtData) {
+              console.log(`[RepublicServices] Payments ${accountId}: ${JSON.stringify(pmtData).slice(0, 400)}`);
+              this.parsePaymentResponse(pmtUrl, pmtData);
+            }
+          } catch (err) {
+            console.warn(`[RepublicServices] Payments fetch failed for ${accountId}:`, err instanceof Error ? err.message : err);
+          }
+        }
+
+        console.log(`[RepublicServices] After direct fetch: ${this.capturedInvoices.length} invoice(s), ${this.capturedPayments.length} payment(s)`);
+      }
     } catch (err) {
       console.error('[RepublicServices] _scrapeAll error:', err instanceof Error ? err.message : err);
       await this.screenshot('rs-scrapeall-error');
@@ -416,21 +623,34 @@ export class RepublicServicesScraper extends BaseScraperProvider {
       return true;
     });
 
+    // RS bills carry the internal accountId, not the human-visible infoProId entered by the user.
+    // The scraper-side filter often produces 0 results due to account number format mismatches.
+    // Skip the filter here — the worker's rawData.accountNumber matching handles multi-account
+    // distribution, and falls back to sameCredAccounts.length===1 when no accountNumber is set.
+    if (filterNumbers.length > 0) {
+      const filterHit = deduped.some(inv => inv.accountNumber && matchesFilter(inv.accountNumber));
+      if (!filterHit) {
+        console.log(`[RepublicServices] Account number filter (${filterNumbers.join(',')}) matched no invoices — bypassing filter (RS uses internal accountId in bills, not infoProId). User may need to update account number.`);
+      }
+    }
+
     const statements: ScrapedStatement[] = [];
     for (const inv of deduped) {
-      if (filterNumbers.length > 0 && inv.accountNumber && !matchesFilter(inv.accountNumber)) continue;
       const statementDate = this.parseDate(inv.invoiceDate || null);
       if (!statementDate) continue;
 
-      const acctKey = inv.accountNumber ?? '';
+      // knownStatementDates is keyed by the user's stored account number, but inv.accountNumber
+      // is the RS infoProId which may differ. Check both keys to avoid unnecessary re-imports.
       const isoDate = statementDate.toISOString().slice(0, 10);
-      if (new Set<string>(knownDatesMap[acctKey] ?? []).has(isoDate)) {
-        console.log(`[RepublicServices] Skipping already-stored ${acctKey} ${isoDate}`);
+      const knownForAcct = new Set<string>([
+        ...(knownDatesMap[inv.accountNumber ?? ''] ?? []),
+        ...filterNumbers.flatMap(f => knownDatesMap[f] ?? []),
+      ]);
+      if (knownForAcct.has(isoDate)) {
+        console.log(`[RepublicServices] Skipping already-stored ${inv.accountNumber} ${isoDate}`);
         continue;
       }
 
-      let pdfBuffer: Buffer | undefined, pdfFilename: string | undefined;
-      // PDF download deferred — done inline below
       const amountDue = inv.amountDue ?? inv.totalDue;
       const pastDue   = inv.pastDue;
       const totalDue  = inv.totalDue ?? (amountDue != null && pastDue != null ? amountDue + pastDue : amountDue);
@@ -443,15 +663,53 @@ export class RepublicServicesScraper extends BaseScraperProvider {
         amountDue,
         balance: inv.balance ?? totalDue,
         usageUnit: 'pickup',
-        pdfBuffer,
-        pdfFilename,
+        pdfBuffer: inv.pdfBuffer,
+        pdfFilename: inv.pdfBuffer
+          ? `republic_services_${inv.accountNumber || 'acct'}_${isoDate}.pdf`
+          : undefined,
         rawData: {
-          accountNumber: inv.accountNumber, accountName: inv.accountName, serviceAddress: inv.serviceAddress,
+          // Omit accountNumber so the worker falls back to sameCredAccounts.length===1 assignment
+          // (RS bills carry the internal accountId, not the user-entered account number).
+          // Store it under rsInfoProId for reference only.
+          rsInfoProId: inv.accountNumber,
+          accountName: inv.accountName, serviceAddress: inv.serviceAddress,
           invoiceNumber: inv.invoiceNumber, currentBill: inv.amountDue, pastDue, totalDue,
-          accountBalance: totalDue, isPaid: inv.isPaid ?? false, isPastDue: pastDue != null && pastDue > 0,
+          accountBalance: totalDue, isPaid: inv.isPaid ?? false,
+          isPastDue: !(inv.isPaid ?? false) && pastDue != null && pastDue > 0,
           status: inv.status, pdfUrl: inv.pdfUrl, ...inv.rawData,
         },
       });
+    }
+
+    // ── Mark older statements as paid (per-account) ─────────────────────────
+    // RS's API gives bill.amountDue = running ACCOUNT BALANCE at bill issue time,
+    // not the per-period charge. So once a newer bill arrives, the prior bill's balance
+    // has been rolled into it — we treat older bills as paid by definition.
+    //
+    // Important: group by account number BEFORE finding "latest", or bills from
+    // different accounts get mixed together and the wrong ones stay flagged unpaid.
+    if (statements.length > 0) {
+      const byAcct = new Map<string, ScrapedStatement[]>();
+      for (const s of statements) {
+        const acct = ((s.rawData as Record<string, unknown> | undefined)?.rsInfoProId as string | undefined) || 'unknown';
+        if (!byAcct.has(acct)) byAcct.set(acct, []);
+        byAcct.get(acct)!.push(s);
+      }
+
+      for (const [, arr] of byAcct) {
+        // Sort ascending so the LAST entry is the most recent bill
+        arr.sort((a, b) => a.statementDate.getTime() - b.statementDate.getTime());
+        for (let i = 0; i < arr.length - 1; i++) {
+          const raw = (arr[i].rawData ?? {}) as Record<string, unknown>;
+          // If this came from the obligations endpoint, openAmount-based isPaid is
+          // authoritative — don't override (it correctly handles cases where a user
+          // is behind on multiple bills). Only apply the "older=paid" heuristic when
+          // only bills data exists (running balance, no per-invoice paid status).
+          if (raw.source === 'obligations') continue;
+          raw.isPaid = true;
+          arr[i].rawData = raw;
+        }
+      }
     }
 
     console.log(`[RepublicServices] Total statements: ${statements.length}`);
@@ -880,22 +1138,41 @@ export class RepublicServicesScraper extends BaseScraperProvider {
       if (!item || typeof item !== 'object') continue;
       const inv = item as Record<string, unknown>;
 
-      // RS bills: billDate, issueDate, or statementDate
+      // RS bills: prefer creation date fields; fall back to dueDate (RS bills API only returns dueDate)
       const invoiceDate = this.rsDate(
-        inv.billDate || inv.invoiceDate || inv.statementDate || inv.issueDate || inv.date || inv.createdDate
+        inv.billDate || inv.invoiceDate || inv.statementDate || inv.issueDate
+        || inv.date || inv.createdDate || inv.dueDate
       );
       if (!invoiceDate) continue;
 
       const amountDue = this.rsAmount(inv.amountDue || inv.currentCharges || inv.currentAmount);
+
+      // Skip negative-amount bill entries. These are running-balance "credit events"
+      // (the user had a credit balance at bill issue time) and not actual invoices —
+      // RS doesn't issue an invoice obligation for these months. The obligations
+      // endpoint is the source of truth for real invoices.
+      if (amountDue != null && amountDue < 0) {
+        console.log(`[RepublicServices] Skipping negative-amount bill (credit event): $${amountDue}`);
+        continue;
+      }
+
       const pastDue   = this.rsAmount(inv.pastDueAmount || inv.pastDue || inv.previousBalance);
       const totalDue  = this.rsAmount(inv.totalAmountDue || inv.totalDue || inv.balance)
         ?? (amountDue != null && pastDue != null ? amountDue + pastDue : amountDue);
 
       const pdfUrl = String(inv.pdfUrl || inv.invoiceUrl || inv.documentUrl || inv.statementUrl || '');
 
-      // RS uses infoProId on the account side; bills just have accountId ("304670038334")
-      // Store accountId as-is — _buildStatements will match by filter
-      const acctNum = String(inv.infoProId || inv.accountNumber || inv.serviceAccountId || inv.accountId || '');
+      // RS bills only carry the internal accountId ("304670038334"), not the human-readable infoProId.
+      // Look up the infoProId from capturedAccounts (set by parseAccountResponse) so that
+      // _buildStatements and the worker can match against what the user actually entered.
+      const rawAccountId = String(inv.accountId || '');
+      const matchedAcct = rawAccountId
+        ? this.capturedAccounts.find(a => a.accountId === rawAccountId)
+        : undefined;
+      const acctNum = String(
+        matchedAcct?.accountNumber  // infoProId, e.g. "4670038334"
+        || inv.infoProId || inv.accountNumber || inv.serviceAccountId || rawAccountId || ''
+      );
 
       if (acctNum && !this.capturedAccounts.some(a => a.accountNumber === acctNum || a.accountId === acctNum)) {
         this.capturedAccounts.push({
@@ -908,6 +1185,14 @@ export class RepublicServicesScraper extends BaseScraperProvider {
 
       const dueDate = this.rsDate(inv.dueDate || inv.payByDate || inv.dueDateDisplay);
       const billId  = String(inv.billId || inv.invoiceId || inv.id || '');
+      const billRefId = String(inv.billReferenceId || inv.invoiceNumber || '');
+
+      // Deduplicate by billId, AND by billReferenceId — the latter matches obligationId
+      // from the obligations endpoint, so if obligations data already exists for this
+      // invoice (with the better originalAmount/openAmount fields), we skip the bills
+      // version here.
+      if (billId && this.capturedInvoices.some(x => x.invoiceId === billId)) continue;
+      if (billRefId && this.capturedInvoices.some(x => x.invoiceNumber === billRefId)) continue;
 
       this.capturedInvoices.push({
         accountNumber:      acctNum || undefined,
@@ -925,12 +1210,83 @@ export class RepublicServicesScraper extends BaseScraperProvider {
         balance:            totalDue ?? amountDue,
         pdfUrl:             pdfUrl && pdfUrl !== 'undefined' ? pdfUrl : undefined,
         status:             String(inv.status || inv.paymentStatus || inv.billStatus || ''),
-        isPaid:             /paid|closed/i.test(String(inv.status || inv.paymentStatus || inv.billStatus || ''))
-                            || Boolean(inv.isPaid),
+        isPaid:             /paid|closed|complete|processed/i.test(String(inv.status || inv.paymentStatus || inv.billStatus || ''))
+                            || Boolean(inv.isPaid)
+                            || (amountDue != null && amountDue === 0),
         rawData:            { raw: inv },
       });
 
       console.log(`[RepublicServices] Captured invoice: acct=${acctNum} date=${invoiceDate} due=${dueDate} amount=$${totalDue ?? amountDue}`);
+    }
+  }
+
+  /**
+   * Parse the obligations endpoint response.
+   *
+   * This is the data source RS's "Invoice History" page uses. Each obligation of
+   * `type === "invoice"` represents one billing period and gives:
+   *   - originalAmount: per-invoice charge (what was billed that period)
+   *   - openAmount:     remaining balance (0 → fully paid)
+   *   - creationDate:   when the invoice was generated
+   *   - invoiceDueDate: when payment is due
+   *   - obligationId:   matches billReferenceId from the /bills endpoint
+   *
+   * This is materially better than /bills (which returns running account balance,
+   * not per-invoice charges), so we run obligations FIRST and let bills dedupe.
+   */
+  private parseObligationsResponse(url: string, data: unknown, accountIdFromUrl: string): void {
+    const items = this.rsToArr(data, ['obligations', 'items', 'results', 'data']);
+    if (items.length === 0) return;
+
+    // Try to match this account against a captured account so we get the
+    // human-readable infoProId (matches what the user stored).
+    const matchedAcct = accountIdFromUrl
+      ? this.capturedAccounts.find(a => a.accountId === accountIdFromUrl)
+      : undefined;
+    const acctNum = matchedAcct?.accountNumber || accountIdFromUrl;
+
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue;
+      const obl = item as Record<string, unknown>;
+
+      // Only count invoice-type obligations. RS also returns adjustment, fee, payment-event,
+      // and other non-invoice obligations on this endpoint. Require type === 'invoice'
+      // strictly (was lenient when type was empty, which let through some payment events).
+      const type = String(obl.type || '').toLowerCase();
+      if (type !== 'invoice') continue;
+
+      const obligationId = String(obl.obligationId || obl.id || '');
+      // Dedup against already-captured (either obligations or bills)
+      if (obligationId && this.capturedInvoices.some(x =>
+        x.invoiceId === obligationId || x.invoiceNumber === obligationId
+      )) continue;
+
+      const originalAmount = this.rsAmount(obl.originalAmount);
+      const openAmount = this.rsAmount(obl.openAmount);
+      const invoiceDate = this.rsDate(obl.creationDate || obl.invoiceDate || obl.date);
+      const dueDate = this.rsDate(obl.invoiceDueDate || obl.dueDate);
+      if (!invoiceDate || originalAmount == null) continue;
+
+      const isFullyPaid = openAmount != null && openAmount <= 0.01;
+
+      this.capturedInvoices.push({
+        accountNumber:  acctNum || undefined,
+        accountName:    matchedAcct?.accountName || '',
+        serviceAddress: matchedAcct?.serviceAddress || '',
+        invoiceId:      obligationId,
+        invoiceNumber:  obligationId,
+        invoiceDate,
+        dueDate:        dueDate || undefined,
+        amountDue:      originalAmount,   // ← per-invoice charge (the actual bill amount)
+        balance:        openAmount ?? originalAmount,  // ← what's still owed
+        totalDue:       openAmount ?? originalAmount,
+        pdfUrl:         undefined,
+        status:         isFullyPaid ? 'paid' : (obl.isDue ? 'due' : 'open'),
+        isPaid:         isFullyPaid,
+        rawData:        { obligation: obl, source: 'obligations' },
+      });
+
+      console.log(`[RepublicServices] Captured obligation: acct=${acctNum} date=${invoiceDate} original=$${originalAmount} open=$${openAmount ?? '?'} paid=${isFullyPaid}`);
     }
   }
 
@@ -949,11 +1305,16 @@ export class RepublicServicesScraper extends BaseScraperProvider {
       // Actual customer payments are positive in /payments, negative in /applied-payments
       const absAmount = Math.abs(amount);
 
+      const confNum = String(p.confirmationNumber || p.confirmationId || p.transactionId
+                             || p.paymentId || p.referenceId || '');
+
+      // Deduplicate: the interceptor can fire multiple times per session (re-login + navigation)
+      if (confNum && this.capturedPayments.some(x => x.confirmationNumber === confNum)) continue;
+
       this.capturedPayments.push({
         paymentDate,
         amount: absAmount,
-        confirmationNumber: String(p.confirmationNumber || p.confirmationId || p.transactionId
-                                   || p.paymentId || p.referenceId || ''),
+        confirmationNumber: confNum,
         paymentMethod:      String(p.paymentMethod || p.method || p.type || ''),
         accountNumber:      String(p.accountNumber || p.accountId || ''),
       });

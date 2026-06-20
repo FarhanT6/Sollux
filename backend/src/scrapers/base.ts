@@ -30,6 +30,10 @@ export interface ScrapedPayment {
   amount: number;
   confirmationNumber?: string;
   paymentMethod?: string;
+  /** Optional account number — set by scrapers that capture payments per-account
+   *  (e.g. WM) so the worker can route each payment to the correct utility account
+   *  instead of dumping them all on the triggering account. */
+  accountNumber?: string;
 }
 
 export interface ScraperCredentials {
@@ -101,7 +105,37 @@ export abstract class BaseScraperProvider {
     }
 
     await this.context.addInitScript(() => {
+      // Hide webdriver flag
       Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+
+      // Spoof plugins — headless Chrome has 0 plugins, real Chrome has several
+      Object.defineProperty(navigator, 'plugins', {
+        get: () => {
+          const fakePlugins = [
+            { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+            { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+            { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
+          ];
+          return Object.assign(fakePlugins, { length: fakePlugins.length, item: (i: number) => fakePlugins[i], namedItem: (n: string) => fakePlugins.find(p => p.name === n) ?? null, refresh: () => {} });
+        },
+      });
+
+      // Spoof languages
+      Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+
+      // window.chrome — present in real Chrome, missing in headless
+      if (!(window as any).chrome) {
+        (window as any).chrome = { runtime: {}, loadTimes: () => {}, csi: () => {}, app: {} };
+      }
+
+      // Permissions API — headless returns 'denied' for notifications; real browsers return 'default'
+      const origQuery = window.navigator.permissions?.query?.bind(window.navigator.permissions);
+      if (origQuery) {
+        (window.navigator.permissions as any).query = (params: any) =>
+          params?.name === 'notifications'
+            ? Promise.resolve({ state: 'default', onchange: null } as unknown as PermissionStatus)
+            : origQuery(params);
+      }
     });
     this.page = await this.context.newPage();
   }
@@ -138,10 +172,11 @@ export abstract class BaseScraperProvider {
         return { success: false, statements: [], payments: [], error: 'Login failed' };
       }
 
-      const [statements, payments] = await Promise.all([
-        this.scrapeStatements(),
-        this.scrapePayments(),
-      ]);
+      // Run sequentially: both methods share `this.page`, so parallel goto() calls
+      // cancel each other with net::ERR_ABORTED. Scrape statements first since
+      // payment data is generally less critical if something fails.
+      const statements = await this.scrapeStatements();
+      const payments = await this.scrapePayments();
 
       return { success: true, statements, payments };
     } catch (error) {

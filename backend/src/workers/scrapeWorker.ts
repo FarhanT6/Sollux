@@ -127,15 +127,47 @@ const worker = new Worker<ScrapeJobData>(
         let paymentsInserted = 0;
 
         // Match statements to this utility account
-        const matchingStmts = acctNum
-          ? result.statements.filter(stmt => {
-              const stmtAcctNum = stmt.rawData?.accountNumber as string | undefined;
-              if (!stmtAcctNum) return sameCredAccounts.length === 1; // single-account: take all
-              const a = normalizeAcct(stmtAcctNum);
-              const b = normalizeAcct(acctNum);
-              return a === b || a.includes(b) || b.includes(a);
-            })
-          : result.statements; // no account number stored — take all (single account case)
+        let matchingStmts: typeof result.statements;
+        if (acctNum) {
+          const filtered = result.statements.filter(stmt => {
+            // Check rawData.accountNumber first; fall back to rsInfoProId for providers
+            // that store their account identifier under a different key (e.g. Republic Services)
+            const stmtAcctNum = (stmt.rawData?.accountNumber ?? stmt.rawData?.rsInfoProId) as string | undefined;
+            if (!stmtAcctNum) return sameCredAccounts.length === 1; // single-account: take all
+            const a = normalizeAcct(stmtAcctNum);
+            const b = normalizeAcct(acctNum);
+            // Strict match: exact OR one is a suffix of the other.
+            // (RS stores "3-04670-041160" but API returns "4670041160" — same account, suffix match.)
+            // Substring `includes` was too permissive — when account A's number contains
+            // digit subsequences of account B's number, it falsely matched.
+            if (a === b) return true;
+            if (a.length >= 6 && b.endsWith(a)) return true;
+            if (b.length >= 6 && a.endsWith(b)) return true;
+            return false;
+          });
+          // Debug: log filter result so cross-account contamination is visible
+          if (filtered.length !== result.statements.length) {
+            console.log(`[ScrapeWorker] Account ${acct.accountNumber} filter: ${filtered.length}/${result.statements.length} statements kept (b=${normalizeAcct(acctNum)})`);
+          }
+          // If the account number filter matched nothing but this is the only account with
+          // these credentials, the stored account number likely has a format mismatch
+          // (e.g. RS uses infoProId "4670038334" but user stored "3-04670-038334").
+          // Fall back to assigning all statements rather than silently importing nothing.
+          if (filtered.length === 0 && sameCredAccounts.length === 1) {
+            console.log(`[ScrapeWorker] Account number filter matched 0 statements for single account ${acct.id} — bypassing filter (format mismatch)`);
+            matchingStmts = result.statements;
+          } else {
+            matchingStmts = filtered;
+          }
+        } else {
+          // No account number stored on this Sollux account:
+          // only assign statements to the account that triggered this sync job.
+          // (If multiple accounts share the same creds and none has a stored number,
+          //  assigning ALL statements to every account would create duplicates.)
+          matchingStmts = sameCredAccounts.length === 1 || acct.id === utilityAccountId
+            ? result.statements
+            : [];
+        }
 
         for (const stmt of matchingStmts) {
           let pdfS3Key: string | undefined;
@@ -190,31 +222,74 @@ const worker = new Worker<ScrapeJobData>(
             statementsInserted++;
             totalInserted++;
           } else {
-            // Update existing statement if paid status has changed or rawData has new info.
-            // This handles the case where a user pays a past-due bill between syncs.
+            // Update existing statement if:
+            //  - paid status changed (user paid between syncs)
+            //  - rawData has new/better info
+            //  - existing is a stub (no PDF) but we now have a real PDF
             const wasUnpaid = !existing.amountPaid;
             const rawChanged = JSON.stringify(existing.rawDataJson) !== JSON.stringify(stmt.rawData);
-            if ((isPaid && wasUnpaid) || rawChanged) {
+            const isStubUpgrade = !!pdfS3Key && !existing.pdfS3Key;
+
+            if ((isPaid && wasUnpaid) || rawChanged || isStubUpgrade) {
               await db.statement.update({
                 where: { id: existing.id },
                 data: {
                   ...(isPaid && wasUnpaid ? { amountPaid } : {}),
                   rawDataJson: stmt.rawData as Prisma.InputJsonValue,
-                  // Also update dueDate/amounts in case scraper got better data on re-scrape
+                  // Update rich fields when upgrading from a stub or when scraper got better data
                   ...(stmt.dueDate ? { dueDate: stmt.dueDate } : {}),
                   ...(stmt.amountDue ? { amountDue: stmt.amountDue } : {}),
                   ...(balance != null ? { balance } : {}),
+                  ...(stmt.billingPeriodStart ? { billingPeriodStart: stmt.billingPeriodStart } : {}),
+                  ...(stmt.billingPeriodEnd ? { billingPeriodEnd: stmt.billingPeriodEnd } : {}),
+                  ...(stmt.usageValue != null ? { usageValue: stmt.usageValue } : {}),
+                  ...(stmt.usageUnit ? { usageUnit: stmt.usageUnit } : {}),
+                  ...(stmt.ratePlan ? { ratePlan: stmt.ratePlan } : {}),
+                  // Key: attach the real PDF when upgrading a stub
+                  ...(isStubUpgrade ? { pdfS3Key } : {}),
                 },
               });
+              if (isStubUpgrade) {
+                console.log(`[ScrapeWorker] Upgraded stub → real PDF for statement ${existing.id} (${stmt.statementDate.toISOString().slice(0, 10)})`);
+                statementsInserted++;
+                totalInserted++;
+              }
             }
           }
         }
 
-        // Payments — only assign to the triggering account (payments aren't account-specific in WM)
-        if (acct.id === utilityAccountId) {
-          for (const pmt of result.payments) {
+        // Payments routing:
+        //  - If the scraped payment carries an accountNumber, route it to THAT account
+        //    (WM scrapes Payment History per-account, so each payment is account-specific).
+        //  - Otherwise (legacy single-account scrapers) fall back to assigning all payments
+        //    to the triggering account only.
+        const paymentsForAcct = acctNum
+          ? result.payments.filter(pmt => {
+              if (!pmt.accountNumber) {
+                // No account tag → only the triggering account takes the payment, to avoid duplicates
+                return acct.id === utilityAccountId;
+              }
+              return normalizeAcct(pmt.accountNumber) === normalizeAcct(acctNum);
+            })
+          : (acct.id === utilityAccountId ? result.payments : []);
+
+        if (paymentsForAcct.length > 0) {
+          for (const pmt of paymentsForAcct) {
+            // Wrap amount in Prisma.Decimal explicitly. Passing a raw JS number lets
+            // Prisma serialize it via a path where some IEEE-754 values (e.g. 961.57)
+            // do NOT compare equal to the stored NUMERIC(10,2) value, so dedup misses
+            // and a fresh copy gets inserted on every sync run. Using Decimal ensures
+            // string-based exact comparison.
+            // Dedup also includes confirmationNumber when present — without it, multiple
+            // legit same-day same-amount payments (different transactions) would collide.
+            const amtDecimal = new Prisma.Decimal(String(pmt.amount));
             const existing = await db.payment.findFirst({
-              where: { utilityAccountId: acct.id, paymentDate: pmt.paymentDate, amount: pmt.amount },
+              where: {
+                utilityAccountId: acct.id,
+                paymentDate: pmt.paymentDate,
+                amount: amtDecimal,
+                ...(pmt.confirmationNumber ? { confirmationNumber: pmt.confirmationNumber } : {}),
+              },
             });
             // Helper: is this a "bad" placeholder value scraped incorrectly?
             const isBadConfirmation = (s?: string | null) =>

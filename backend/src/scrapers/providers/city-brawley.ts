@@ -172,13 +172,16 @@ export class CityBrawleyScraper extends BaseScraperProvider {
         }
 
         // ── Payments ──────────────────────────────────────────────────────────
+        // Tag each payment with the account number it was scraped from so the worker
+        // can route it to the correct Sollux account (otherwise payments from other
+        // accounts under the same login bleed into the single tracked Sollux account).
         for (const row of rows) {
           if (!/payment/i.test(row.description)) continue;
           const paymentDate = this.parseDate(row.date);
           if (!paymentDate) continue;
           const amt = parseFloat(row.amount.replace(/[($,)\s]/g, ''));
           if (isNaN(amt) || amt <= 0) continue;
-          this._paymentCache.push({ paymentDate, amount: amt });
+          this._paymentCache.push({ paymentDate, amount: amt, accountNumber });
         }
         console.log(`[Brawley] ${accountNumber}: ${this._paymentCache.length} payment(s) so far`);
 

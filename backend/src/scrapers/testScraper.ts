@@ -7,9 +7,9 @@ import { getScraperProvider } from './registry';
 
 const [,, slug, username, password, accountNumber] = process.argv;
 
-if (!slug || !username || !password) {
-  console.error('Usage: npx tsx src/scrapers/testScraper.ts <slug> <username> <password> [accountNumber]');
-  console.error('Slugs: sdge, socal-gas, cox, wm, fpl');
+if (!slug) {
+  console.error('Usage: npx tsx src/scrapers/testScraper.ts <slug> [username] [password] [accountNumber]');
+  console.error('Slugs: sdge, socal-gas, cox, wm, fpl, iid, republic-services, city-oceanside, city-oceanside-ic, city-brawley, gmail-fallback');
   process.exit(1);
 }
 
