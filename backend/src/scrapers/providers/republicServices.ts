@@ -41,6 +41,9 @@ interface RSInvoice {
   status?: string;
   isPaid?: boolean;
   rawData?: Record<string, unknown>;
+  // Internal fields populated when merging bills data into obligations
+  _billId?: string;       // RS numeric bill ID (e.g. "570150464") — used for document API
+  _rawAccountId?: string; // RS internal accountId (e.g. "304670038334") — used for document API
 }
 
 interface RSPayment {
@@ -273,29 +276,74 @@ export class RepublicServicesScraper extends BaseScraperProvider {
     return this._buildStatements();
   }
 
-  /** Download PDFs for all captured invoices that have a pdfUrl. */
+  /** Download PDFs for all captured invoices via the RS document API. */
   private async _downloadInvoicePdfs(): Promise<void> {
-    const toDl = this.capturedInvoices.filter(inv => inv.pdfUrl && !inv.pdfBuffer);
-    if (toDl.length === 0) return;
-    console.log(`[RepublicServices] Downloading ${toDl.length} invoice PDFs...`);
+    // Bills with a direct pdfUrl (DOM-scraped)
+    const byUrl = this.capturedInvoices.filter(inv => inv.pdfUrl && !inv.pdfBuffer);
+    // Bills with a billId + accountId (merged from bills API response) — use document endpoint
+    const byBillId = this.capturedInvoices.filter(inv => !inv.pdfBuffer && !inv.pdfUrl && inv._billId && inv._rawAccountId);
 
-    for (const inv of toDl) {
-      if (!inv.pdfUrl) continue;
+    const total = byUrl.length + byBillId.length;
+    if (total === 0) {
+      console.log('[RepublicServices] No invoices eligible for PDF download');
+      return;
+    }
+    console.log(`[RepublicServices] Downloading PDFs: ${byUrl.length} via pdfUrl, ${byBillId.length} via document API`);
+
+    // ── pdfUrl path (DOM-scraped links) ──────────────────────────────────────
+    for (const inv of byUrl) {
       try {
-        // RS portal may return relative paths — resolve against the my. subdomain
-        const url = inv.pdfUrl.startsWith('http')
-          ? inv.pdfUrl
-          : `https://my.republicservices.com${inv.pdfUrl.startsWith('/') ? '' : '/'}${inv.pdfUrl}`;
-
+        const url = inv.pdfUrl!.startsWith('http')
+          ? inv.pdfUrl!
+          : `https://my.republicservices.com${inv.pdfUrl!.startsWith('/') ? '' : '/'}${inv.pdfUrl!}`;
         const res = await this.page!.request.get(url, { timeout: 20000 });
         if (res.ok()) {
           inv.pdfBuffer = Buffer.from(await res.body());
-          console.log(`[RepublicServices] PDF for invoice ${inv.invoiceId || inv.invoiceNumber}: ${inv.pdfBuffer.length} bytes`);
+          console.log(`[RepublicServices] PDF (url) for ${inv.invoiceId}: ${inv.pdfBuffer.length} bytes`);
         } else {
-          console.log(`[RepublicServices] PDF fetch HTTP ${res.status()} for ${url}`);
+          console.log(`[RepublicServices] PDF (url) HTTP ${res.status()} for ${url}`);
         }
       } catch (err) {
-        console.warn(`[RepublicServices] PDF download failed for invoice ${inv.invoiceId}:`, err instanceof Error ? err.message : err);
+        console.warn(`[RepublicServices] PDF (url) failed for ${inv.invoiceId}:`, err instanceof Error ? err.message : err);
+      }
+    }
+
+    // ── Document API path — RS serves PDFs at /api/v1/mr/accounts/{acct}/bills/{billId}/document ──
+    // The feature flag "mr-fis-bill-pdf-soap": true indicates this endpoint is active.
+    for (const inv of byBillId) {
+      const acctId  = inv._rawAccountId!;
+      const billId  = inv._billId!;
+      const docUrls = [
+        `${this.PORTAL_BASE}/api/v1/mr/accounts/${acctId}/bills/${billId}/document`,
+        `${this.PORTAL_BASE}/api/v2/mr/accounts/${acctId}/bills/${billId}/document`,
+        `${this.PORTAL_BASE}/api/v1/mr/bills/${billId}/document`,
+      ];
+
+      let fetched = false;
+      for (const url of docUrls) {
+        try {
+          const res = await this.page!.request.get(url, {
+            timeout: 25000,
+            headers: {
+              'Accept': 'application/pdf, application/octet-stream, */*',
+              ...this._rsAuthHeaders,
+            },
+          });
+          const ct = res.headers()['content-type'] || '';
+          if (res.ok() && (ct.includes('pdf') || ct.includes('octet'))) {
+            inv.pdfBuffer = Buffer.from(await res.body());
+            console.log(`[RepublicServices] PDF (doc API) for bill ${billId}: ${inv.pdfBuffer.length} bytes via ${url}`);
+            fetched = true;
+            break;
+          }
+          console.log(`[RepublicServices] PDF (doc API) HTTP ${res.status()} ct="${ct}" for ${url}`);
+        } catch (err) {
+          console.log(`[RepublicServices] PDF (doc API) error for ${url}: ${err instanceof Error ? err.message : err}`);
+        }
+      }
+
+      if (!fetched) {
+        console.log(`[RepublicServices] PDF not available via document API for bill ${billId} (account ${acctId})`);
       }
     }
   }
@@ -1191,8 +1239,31 @@ export class RepublicServicesScraper extends BaseScraperProvider {
       // from the obligations endpoint, so if obligations data already exists for this
       // invoice (with the better originalAmount/openAmount fields), we skip the bills
       // version here.
-      if (billId && this.capturedInvoices.some(x => x.invoiceId === billId)) continue;
-      if (billRefId && this.capturedInvoices.some(x => x.invoiceNumber === billRefId)) continue;
+      // BUT: the obligations endpoint never returns a pdfUrl (it's a financial ledger API),
+      // while the bills endpoint often does. Merge the pdfUrl into the existing entry
+      // rather than throwing it away.
+      const mergedPdfUrl = pdfUrl && pdfUrl !== 'undefined' ? pdfUrl : undefined;
+      if (billId) {
+        const existingById = this.capturedInvoices.find(x => x.invoiceId === billId);
+        if (existingById) {
+          if (mergedPdfUrl && !existingById.pdfUrl) existingById.pdfUrl = mergedPdfUrl;
+          if (billId && !existingById._billId) existingById._billId = billId;
+          if (rawAccountId && !existingById._rawAccountId) existingById._rawAccountId = rawAccountId;
+          continue;
+        }
+      }
+      if (billRefId) {
+        const existingByRef = this.capturedInvoices.find(x => x.invoiceNumber === billRefId);
+        if (existingByRef) {
+          if (mergedPdfUrl && !existingByRef.pdfUrl) existingByRef.pdfUrl = mergedPdfUrl;
+          if (billId && !existingByRef._billId) {
+            existingByRef._billId = billId;
+            console.log(`[RepublicServices] Stored billId=${billId} accountId=${rawAccountId} on obligation ${billRefId}`);
+          }
+          if (rawAccountId && !existingByRef._rawAccountId) existingByRef._rawAccountId = rawAccountId;
+          continue;
+        }
+      }
 
       this.capturedInvoices.push({
         accountNumber:      acctNum || undefined,
@@ -1266,6 +1337,11 @@ export class RepublicServicesScraper extends BaseScraperProvider {
       const invoiceDate = this.rsDate(obl.creationDate || obl.invoiceDate || obl.date);
       const dueDate = this.rsDate(obl.invoiceDueDate || obl.dueDate);
       if (!invoiceDate || originalAmount == null) continue;
+
+      // Log obligation keys on the first one so we can spot any document/pdf fields
+      if (this.capturedInvoices.filter(x => (x.rawData as any)?.source === 'obligations').length === 0) {
+        console.log(`[RepublicServices] Obligation keys: ${Object.keys(obl).join(', ')}`);
+      }
 
       const isFullyPaid = openAmount != null && openAmount <= 0.01;
 
