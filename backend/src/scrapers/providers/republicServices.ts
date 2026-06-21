@@ -403,12 +403,22 @@ export class RepublicServicesScraper extends BaseScraperProvider {
 
     // ── 5. Collect visible invoice # links ────────────────────────────────────
     // Invoice numbers look like "0467-001781903" (4 digits, dash, 9 digits).
-    const invoiceNums = await this.page!.evaluate(() =>
-      Array.from(document.querySelectorAll('a'))
-        .filter(a => /^\d{4}-\d{9}$/.test((a.textContent || '').trim()))
-        .slice(0, 8)
-        .map(a => (a.textContent || '').trim())
-    );
+    // Use .match() rather than exact-test so child elements (icons, sr-only
+    // text) inside the <a> don't break the match.
+    const invoiceNums = await this.page!.evaluate(() => {
+      const seen = new Set<string>();
+      const result: string[] = [];
+      for (const a of Array.from(document.querySelectorAll('a'))) {
+        const text = (a.textContent || '').replace(/\s+/g, ' ').trim();
+        const m = text.match(/(\d{4}-\d{9})/);
+        if (m && !seen.has(m[1])) {
+          seen.add(m[1]);
+          result.push(m[1]);
+          if (result.length >= 10) break;
+        }
+      }
+      return result;
+    });
 
     console.log(`[RepublicServices] Invoice links for x${last4}: ${invoiceNums.join(', ') || '(none)'}`);
     if (invoiceNums.length === 0) return;
@@ -426,12 +436,13 @@ export class RepublicServicesScraper extends BaseScraperProvider {
       }
 
       try {
-        // Click the invoice link and wait for the new tab (popup)
+        // Click the invoice link and wait for the new tab (popup).
+        // Use evaluate with .includes() so child elements don't break the match.
         const [popup] = await Promise.all([
           this.page!.context().waitForEvent('page', { timeout: 20000 }),
           this.page!.evaluate((num: string) => {
             const link = Array.from(document.querySelectorAll('a'))
-              .find(a => (a.textContent || '').trim() === num);
+              .find(a => (a.textContent || '').includes(num));
             if (link) (link as HTMLElement).click();
           }, invoiceNum),
         ]);
