@@ -338,7 +338,35 @@ export class RepublicServicesScraper extends BaseScraperProvider {
         await this.page!.waitForTimeout(3000);
       }
 
+      // Wait for React to render the billing history table — poll for dollar amounts
+      // (networkidle alone isn't enough; the SPA fires XHRs after initial paint)
+      let rendered = false;
+      for (let i = 0; i < 12; i++) {
+        await this.page!.waitForTimeout(1500);
+        const hasContent = await this.page!.evaluate(() =>
+          /\$[\d,]+\.\d{2}/.test(document.body.textContent || '')
+        );
+        if (hasContent) { rendered = true; break; }
+      }
+      console.log(`[RepublicServices] Billing history rendered: ${rendered}, url: ${this.page!.url()}`);
+
       await this.screenshot('rs-billing-history-for-pdf');
+
+      // Log some of the page content to understand the structure
+      const pageBodySnippet = await this.page!.evaluate(() =>
+        (document.body.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 600)
+      );
+      console.log(`[RepublicServices] Billing history body: ${pageBodySnippet}`);
+
+      // Also log all button/link text on the page
+      const allBtnText = await this.page!.evaluate(() =>
+        Array.from(document.querySelectorAll('button, a'))
+          .map(el => (el.textContent || '').trim())
+          .filter(t => t && t.length < 60)
+          .slice(0, 40)
+          .join(' | ')
+      );
+      console.log(`[RepublicServices] All button/link text: ${allBtnText}`);
 
       const pageUrl = this.page!.url();
       console.log(`[RepublicServices] PDF download page: ${pageUrl}`);
