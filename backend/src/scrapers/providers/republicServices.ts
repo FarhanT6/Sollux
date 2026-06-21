@@ -309,189 +309,178 @@ export class RepublicServicesScraper extends BaseScraperProvider {
     await this._downloadPdfsViaClick(MAX_PDF_DOWNLOADS);
   }
 
-  private async _downloadPdfsViaClick(maxDownloads: number): Promise<void> {
-    try {
-      // The RS portal is a React SPA — direct page.goto() to billing-history doesn't
-      // work because the app needs account context that's only established after the
-      // dashboard loads. We must navigate in-page (React Router), exactly like pay-bill.
-      //
-      // Path: dashboard → click "Manage My Account" → click "Billing History"
+  private async _downloadPdfsViaClick(maxPerAccount: number): Promise<void> {
+    // RS PDFs are on secure3.billerweb.com. Path per account:
+    //   dashboard → (switch account if needed) → "View invoice history"
+    //   → /account/payment → "Invoice History" tab → click invoice # → new tab with PDF
+    //
+    // Each invoice # link opens a self-contained billerweb.com URL (auth embedded in
+    // the sessionHandle query param), so we can fetch the PDF bytes directly from it.
 
-      // Step 1: Go to dashboard (this always works)
-      await this.page!.goto(`${this.PORTAL_BASE}/account/dashboard`, {
-        waitUntil: 'domcontentloaded', timeout: 20000,
-      });
-      await this.page!.waitForTimeout(3000);
+    const storedNums: string[] =
+      this.credentials?.accountNumbers ??
+      (this.credentials?.accountNumber ? [this.credentials.accountNumber] : []);
 
-      // Step 2: Click "Manage My Account" in-page (React Router, no full reload)
-      const manageClicked = await this.page!.evaluate(() => {
-        const el = Array.from(document.querySelectorAll('a'))
-          .find(a => /manage.*(my\s*)?account|my\s*account/i.test(a.textContent || '')
-            || (a as HTMLAnchorElement).href?.includes('/account/manage'));
-        if (el) { (el as HTMLElement).click(); return (el as HTMLAnchorElement).href || 'clicked'; }
-        return null;
-      });
-      console.log(`[RepublicServices] Manage click: ${manageClicked}`);
-      await this.page!.waitForTimeout(2500);
+    if (storedNums.length === 0) return;
 
-      // Step 3: Click "Billing History" in-page
-      const historyClicked = await this.page!.evaluate(() => {
-        const el = Array.from(document.querySelectorAll('a, button'))
-          .find(e => /billing.?history|bill.?history|invoice.?history|view\s+bill/i.test(e.textContent || '')
-            || (e as HTMLAnchorElement).href?.includes('billing-history'));
-        if (el) { (el as HTMLElement).click(); return (el as HTMLAnchorElement).href || 'clicked'; }
-        return null;
+    let totalDownloaded = 0;
+
+    for (const storedNum of storedNums) {
+      try {
+        await this._downloadPdfsForAccount(storedNum, maxPerAccount, totalDownloaded);
+      } catch (err) {
+        console.error(`[RepublicServices] PDF download failed for ${storedNum}:`, err instanceof Error ? err.message : err);
+      }
+      // Count PDFs assigned so far
+      totalDownloaded = this.capturedInvoices.filter(i => i.pdfBuffer).length;
+    }
+
+    console.log(`[RepublicServices] PDF download complete: ${totalDownloaded} file(s)`);
+  }
+
+  private async _downloadPdfsForAccount(storedNum: string, maxPdfs: number, alreadyHave: number): Promise<void> {
+    // ── 1. Go to dashboard ────────────────────────────────────────────────────
+    await this.page!.goto(`${this.PORTAL_BASE}/account/dashboard`, {
+      waitUntil: 'domcontentloaded', timeout: 20000,
+    });
+    // Wait for React to mount the account header
+    for (let i = 0; i < 8; i++) {
+      const has = await this.page!.evaluate(() => /\$[\d,]+\.\d{2}|Balance Due/.test(document.body.textContent || ''));
+      if (has) break;
+      await this.page!.waitForTimeout(1500);
+    }
+
+    // ── 2. Switch to the right account if needed ──────────────────────────────
+    const last4 = storedNum.replace(/[-\s]/g, '').slice(-4);
+    const displayedAcct = await this.page!.evaluate(() => {
+      const el = document.querySelector('[class*="account-number"], [class*="accountNumber"]');
+      return (el?.textContent || '').replace(/[^0-9]/g, '');
+    });
+    const alreadyOnAccount = displayedAcct.endsWith(last4);
+
+    if (!alreadyOnAccount) {
+      console.log(`[RepublicServices] Switching to account ending ${last4} (current ends ${displayedAcct.slice(-4)})`);
+
+      // Click "Switch Account" button
+      await this.page!.evaluate(() => {
+        const btn = Array.from(document.querySelectorAll('button'))
+          .find(b => /switch.?account/i.test(b.textContent || ''));
+        if (btn) btn.click();
       });
-      console.log(`[RepublicServices] Billing history click: ${historyClicked}`);
-      await this.page!.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
       await this.page!.waitForTimeout(2000);
 
-      // Step 4: Poll for React to render the billing rows (XHRs fire after initial paint)
-      let rendered = false;
-      for (let i = 0; i < 14; i++) {
-        await this.page!.waitForTimeout(1500);
-        const hasContent = await this.page!.evaluate(() =>
-          /\$[\d,]+\.\d{2}/.test(document.body.textContent || '')
-        );
-        if (hasContent) { rendered = true; break; }
-      }
-      console.log(`[RepublicServices] Billing history rendered: ${rendered}, url: ${this.page!.url()}`);
+      // Click the target row in the modal
+      const switched = await this.page!.evaluate((l4: string) => {
+        // Modal rows typically have the account number ending in x<last4>
+        const rows = Array.from(document.querySelectorAll('tr, li, [role="row"], [class*="account"]'));
+        const target = rows.find(el => el.textContent?.includes(`x${l4}`) || el.textContent?.replace(/\D/g, '').endsWith(l4));
+        if (target) {
+          const link = target.querySelector('a') ?? target;
+          (link as HTMLElement).click();
+          return true;
+        }
+        return false;
+      }, last4);
 
-      await this.screenshot('rs-billing-history-for-pdf');
-
-      // Log some of the page content to understand the structure
-      const pageBodySnippet = await this.page!.evaluate(() =>
-        (document.body.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 600)
-      );
-      console.log(`[RepublicServices] Billing history body: ${pageBodySnippet}`);
-
-      // Also log all button/link text on the page
-      const allBtnText = await this.page!.evaluate(() =>
-        Array.from(document.querySelectorAll('button, a'))
-          .map(el => (el.textContent || '').trim())
-          .filter(t => t && t.length < 60)
-          .slice(0, 40)
-          .join(' | ')
-      );
-      console.log(`[RepublicServices] All button/link text: ${allBtnText}`);
-
-      const pageUrl = this.page!.url();
-      console.log(`[RepublicServices] PDF download page: ${pageUrl}`);
-
-      // Find download/PDF buttons and their adjacent date text
-      const buttonInfo = await this.page!.evaluate(() => {
-        const results: Array<{ idx: number; dateText: string; amountText: string }> = [];
-        const btns = Array.from(document.querySelectorAll('button, a'))
-          .filter(el => {
-            const txt = (el.textContent || '').trim().toLowerCase();
-            const aria = ((el as HTMLElement).getAttribute('aria-label') || '').toLowerCase();
-            return txt.includes('download') || txt.includes('pdf') || txt.includes('view bill')
-              || aria.includes('download') || aria.includes('pdf');
-          });
-
-        btns.forEach((btn, idx) => {
-          // Walk up to find the row/card containing this button
-          let container: Element | null = btn;
-          for (let i = 0; i < 5; i++) {
-            container = container?.parentElement ?? null;
-            if (!container) break;
-            const text = container.textContent || '';
-            if (/\$[\d,]+\.\d{2}/.test(text) && /\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{2}-\d{2}/.test(text)) {
-              const dateMatch = text.match(/(\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{2}-\d{2})/);
-              const amtMatch  = text.match(/\$([\d,]+\.\d{2})/);
-              results.push({
-                idx,
-                dateText:   dateMatch?.[1] || '',
-                amountText: amtMatch?.[1]  || '',
-              });
-              break;
-            }
-          }
-        });
-        return results;
-      });
-
-      console.log(`[RepublicServices] Found ${buttonInfo.length} PDF download button(s) on billing history page`);
-      if (buttonInfo.length === 0) {
-        console.log('[RepublicServices] No PDF download buttons found — skipping click-based PDF download');
+      if (!switched) {
+        console.log(`[RepublicServices] Could not switch to account x${last4} — skipping PDF download for this account`);
         return;
       }
+      await this.page!.waitForTimeout(3000);
+      console.log(`[RepublicServices] Switched to account x${last4}`);
+    }
 
-      let downloaded = 0;
-      for (const info of buttonInfo.slice(0, maxDownloads)) {
-        if (downloaded >= maxDownloads) break;
+    // ── 3. Click "View invoice history" (in-page, React Router) ──────────────
+    const histClicked = await this.page!.evaluate(() => {
+      const el = Array.from(document.querySelectorAll('a'))
+        .find(a => /view\s+invoice\s+history/i.test(a.textContent || ''));
+      if (el) { (el as HTMLElement).click(); return true; }
+      return false;
+    });
 
-        // Find the matching invoice by date (parsed from the button's row text)
-        const rowDate = info.dateText ? new Date(info.dateText) : null;
-        const targetInv = rowDate && !isNaN(rowDate.getTime())
-          ? this.capturedInvoices.find(inv => {
-              if (inv.pdfBuffer) return false;
-              const d = this.parseDate(inv.invoiceDate || null);
-              return d && Math.abs(d.getTime() - rowDate.getTime()) < 15 * 24 * 60 * 60 * 1000; // within 15 days
-            })
-          : null;
+    if (!histClicked) {
+      console.log(`[RepublicServices] "View invoice history" not found for account x${last4}`);
+      return;
+    }
 
-        try {
-          const downloadPromise = this.page!.waitForEvent('download', { timeout: 30000 });
+    await this.page!.waitForURL(/\/account\/payment/, { timeout: 15000 }).catch(() => {});
+    await this.page!.waitForTimeout(3000);
 
-          // Re-query buttons each iteration (React may have re-rendered)
-          const clicked = await this.page!.evaluate((btnIdx: number) => {
-            const btns = Array.from(document.querySelectorAll('button, a'))
-              .filter(el => {
-                const txt = (el.textContent || '').trim().toLowerCase();
-                const aria = ((el as HTMLElement).getAttribute('aria-label') || '').toLowerCase();
-                return txt.includes('download') || txt.includes('pdf') || txt.includes('view bill')
-                  || aria.includes('download') || aria.includes('pdf');
-              });
-            if (btns[btnIdx]) {
-              (btns[btnIdx] as HTMLElement).click();
-              return true;
-            }
-            return false;
-          }, info.idx);
+    // ── 4. Click "Invoice History" tab ────────────────────────────────────────
+    await this.page!.evaluate(() => {
+      const tab = Array.from(document.querySelectorAll('button, a, [role="tab"], li'))
+        .find(el => /^invoice\s+history$/i.test((el.textContent || '').trim()));
+      if (tab) (tab as HTMLElement).click();
+    });
+    await this.page!.waitForTimeout(2500);
+    await this.screenshot(`rs-invoice-history-${last4}`);
 
-          if (!clicked) {
-            downloadPromise.catch(() => {});
-            continue;
-          }
+    // ── 5. Collect visible invoice # links ────────────────────────────────────
+    // Invoice numbers look like "0467-001781903" (4 digits, dash, 9 digits).
+    const invoiceNums = await this.page!.evaluate(() =>
+      Array.from(document.querySelectorAll('a'))
+        .filter(a => /^\d{4}-\d{9}$/.test((a.textContent || '').trim()))
+        .slice(0, 8)
+        .map(a => (a.textContent || '').trim())
+    );
 
-          const download = await downloadPromise;
-          const stream = await download.createReadStream();
-          const chunks: Buffer[] = [];
-          await new Promise<void>((res, rej) => {
-            stream.on('data', (c: Buffer) => chunks.push(c));
-            stream.on('end', res);
-            stream.on('error', rej);
-          });
-          const buf = Buffer.concat(chunks);
-          console.log(`[RepublicServices] PDF (click) downloaded: ${buf.length} bytes, row date=${info.dateText} amount=$${info.amountText}`);
+    console.log(`[RepublicServices] Invoice links for x${last4}: ${invoiceNums.join(', ') || '(none)'}`);
+    if (invoiceNums.length === 0) return;
 
-          if (targetInv) {
-            targetInv.pdfBuffer = buf;
-            console.log(`[RepublicServices] Assigned PDF to invoice ${targetInv.invoiceNumber} (${targetInv.invoiceDate})`);
-          } else {
-            // No matching invoice — store on the first unmatched obligation that has the right amount
-            const amtNum = info.amountText ? parseFloat(info.amountText.replace(/,/g, '')) : NaN;
-            const fallback = isNaN(amtNum) ? null
-              : this.capturedInvoices.find(inv => !inv.pdfBuffer && inv.amountDue != null && Math.abs(inv.amountDue - amtNum) < 0.02);
-            if (fallback) {
-              fallback.pdfBuffer = buf;
-              console.log(`[RepublicServices] Assigned PDF to invoice ${fallback.invoiceNumber} by amount match ($${amtNum})`);
-            } else {
-              console.log(`[RepublicServices] PDF downloaded but no matching invoice found (date=${info.dateText} amt=$${info.amountText})`);
-            }
-          }
+    // ── 6. Click each invoice # and capture the billerweb PDF URL ─────────────
+    for (const invoiceNum of invoiceNums) {
+      if (alreadyHave + this.capturedInvoices.filter(i => i.pdfBuffer).length - alreadyHave >= maxPdfs) break;
 
-          downloaded++;
-          await this.page!.waitForTimeout(1000); // brief pause between clicks
-        } catch (err) {
-          console.log(`[RepublicServices] PDF click download failed for row ${info.idx}: ${err instanceof Error ? err.message : err}`);
-        }
+      const targetInv = this.capturedInvoices.find(inv =>
+        !inv.pdfBuffer && (inv.invoiceNumber === invoiceNum || inv.invoiceId === invoiceNum)
+      );
+      if (!targetInv) {
+        console.log(`[RepublicServices] No captured invoice for ${invoiceNum} — skipping`);
+        continue;
       }
 
-      console.log(`[RepublicServices] Click-based PDF download complete: ${downloaded} file(s)`);
-    } catch (err) {
-      console.error('[RepublicServices] _downloadPdfsViaClick error:', err instanceof Error ? err.message : err);
+      try {
+        // Click the invoice link and wait for the new tab (popup)
+        const [popup] = await Promise.all([
+          this.page!.context().waitForEvent('page', { timeout: 20000 }),
+          this.page!.evaluate((num: string) => {
+            const link = Array.from(document.querySelectorAll('a'))
+              .find(a => (a.textContent || '').trim() === num);
+            if (link) (link as HTMLElement).click();
+          }, invoiceNum),
+        ]);
+
+        // Wait for the popup to navigate to its final URL (billerweb.com)
+        await popup.waitForURL(url => !url.toString().includes('about:blank') && !url.toString().includes('republicservices.com'), { timeout: 15000 }).catch(() => {});
+        await popup.waitForTimeout(1000);
+        const pdfUrl = popup.url();
+        console.log(`[RepublicServices] ${invoiceNum} → ${pdfUrl.slice(0, 120)}`);
+        await popup.close().catch(() => {});
+
+        if (!pdfUrl || pdfUrl.includes('about:blank')) continue;
+
+        // Fetch the PDF — the sessionHandle in the URL is self-contained (no extra cookies needed)
+        const res = await this.page!.request.get(pdfUrl, {
+          timeout: 30000,
+          headers: { 'Accept': 'application/pdf, application/octet-stream, */*' },
+        });
+        const ct = res.headers()['content-type'] || '';
+        if (res.ok()) {
+          const buf = Buffer.from(await res.body());
+          if (buf.length > 500) {
+            targetInv.pdfBuffer = buf;
+            console.log(`[RepublicServices] PDF captured for ${invoiceNum}: ${buf.length} bytes (ct=${ct})`);
+          } else {
+            console.log(`[RepublicServices] PDF response too small (${buf.length} bytes) for ${invoiceNum}`);
+          }
+        } else {
+          console.log(`[RepublicServices] PDF fetch HTTP ${res.status()} for ${invoiceNum}`);
+        }
+
+        await this.page!.waitForTimeout(800);
+      } catch (err) {
+        console.log(`[RepublicServices] PDF popup failed for ${invoiceNum}: ${err instanceof Error ? err.message : err}`);
+      }
     }
   }
 
