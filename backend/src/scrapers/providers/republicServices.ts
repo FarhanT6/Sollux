@@ -311,37 +311,44 @@ export class RepublicServicesScraper extends BaseScraperProvider {
 
   private async _downloadPdfsViaClick(maxDownloads: number): Promise<void> {
     try {
-      // Navigate to billing history (try in-page click first to preserve React Router state)
-      const historyNaved = await this.page!.evaluate(() => {
-        const el = Array.from(document.querySelectorAll('a'))
-          .find(a => /billing.?history|bill.?history|invoice.?history/i.test(a.textContent || ''));
-        if (el) { (el as HTMLElement).click(); return true; }
-        return false;
+      // The RS portal is a React SPA — direct page.goto() to billing-history doesn't
+      // work because the app needs account context that's only established after the
+      // dashboard loads. We must navigate in-page (React Router), exactly like pay-bill.
+      //
+      // Path: dashboard → click "Manage My Account" → click "Billing History"
+
+      // Step 1: Go to dashboard (this always works)
+      await this.page!.goto(`${this.PORTAL_BASE}/account/dashboard`, {
+        waitUntil: 'domcontentloaded', timeout: 20000,
       });
+      await this.page!.waitForTimeout(3000);
 
-      if (!historyNaved) {
-        // Fall back to direct navigation
-        for (const path of [
-          '/account/payment/billing-history',
-          '/account/billing-history',
-          '/account/manage/billing-history',
-        ]) {
-          try {
-            await this.page!.goto(`${this.PORTAL_BASE}${path}`, { waitUntil: 'domcontentloaded', timeout: 15000 });
-            await this.page!.waitForTimeout(3000);
-            const hasContent = await this.page!.evaluate(() => /\$[\d,]+\.\d{2}/.test(document.body.textContent || ''));
-            if (hasContent) break;
-          } catch { /* try next */ }
-        }
-      } else {
-        await this.page!.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-        await this.page!.waitForTimeout(3000);
-      }
+      // Step 2: Click "Manage My Account" in-page (React Router, no full reload)
+      const manageClicked = await this.page!.evaluate(() => {
+        const el = Array.from(document.querySelectorAll('a'))
+          .find(a => /manage.*(my\s*)?account|my\s*account/i.test(a.textContent || '')
+            || (a as HTMLAnchorElement).href?.includes('/account/manage'));
+        if (el) { (el as HTMLElement).click(); return (el as HTMLAnchorElement).href || 'clicked'; }
+        return null;
+      });
+      console.log(`[RepublicServices] Manage click: ${manageClicked}`);
+      await this.page!.waitForTimeout(2500);
 
-      // Wait for React to render the billing history table — poll for dollar amounts
-      // (networkidle alone isn't enough; the SPA fires XHRs after initial paint)
+      // Step 3: Click "Billing History" in-page
+      const historyClicked = await this.page!.evaluate(() => {
+        const el = Array.from(document.querySelectorAll('a, button'))
+          .find(e => /billing.?history|bill.?history|invoice.?history|view\s+bill/i.test(e.textContent || '')
+            || (e as HTMLAnchorElement).href?.includes('billing-history'));
+        if (el) { (el as HTMLElement).click(); return (el as HTMLAnchorElement).href || 'clicked'; }
+        return null;
+      });
+      console.log(`[RepublicServices] Billing history click: ${historyClicked}`);
+      await this.page!.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+      await this.page!.waitForTimeout(2000);
+
+      // Step 4: Poll for React to render the billing rows (XHRs fire after initial paint)
       let rendered = false;
-      for (let i = 0; i < 12; i++) {
+      for (let i = 0; i < 14; i++) {
         await this.page!.waitForTimeout(1500);
         const hasContent = await this.page!.evaluate(() =>
           /\$[\d,]+\.\d{2}/.test(document.body.textContent || '')
