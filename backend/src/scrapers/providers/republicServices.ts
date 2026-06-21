@@ -339,67 +339,52 @@ export class RepublicServicesScraper extends BaseScraperProvider {
   }
 
   private async _downloadPdfsForAccount(storedNum: string, maxPdfs: number, alreadyHave: number): Promise<void> {
-    // ── 1. Go to dashboard ────────────────────────────────────────────────────
+    const last4 = storedNum.replace(/[-\s]/g, '').slice(-4);
+
+    // ── 1. Go to dashboard, wait for React to fully mount ─────────────────────
+    // networkidle waits until in-flight requests settle, which means React has
+    // finished its initial data fetch and rendered the account header.
     await this.page!.goto(`${this.PORTAL_BASE}/account/dashboard`, {
-      waitUntil: 'domcontentloaded', timeout: 20000,
-    });
-    // Wait for React to mount the account header
-    for (let i = 0; i < 8; i++) {
-      const has = await this.page!.evaluate(() => /\$[\d,]+\.\d{2}|Balance Due/.test(document.body.textContent || ''));
-      if (has) break;
-      await this.page!.waitForTimeout(1500);
-    }
+      waitUntil: 'networkidle', timeout: 45000,
+    }).catch(err => console.log(`[RepublicServices] Dashboard goto warning: ${err.message}`));
+
+    // Extra settle time — React state updates can fire after networkidle
+    await this.page!.waitForTimeout(3000);
+
+    const bodySnippet = await this.page!.evaluate(() => (document.body.textContent || '').slice(0, 800));
+    console.log(`[RepublicServices] Dashboard body (x${last4}): ${bodySnippet}`);
 
     // ── 2. Switch to the right account if needed ──────────────────────────────
-    const last4 = storedNum.replace(/[-\s]/g, '').slice(-4);
-    const displayedAcct = await this.page!.evaluate(() => {
-      const el = document.querySelector('[class*="account-number"], [class*="accountNumber"]');
-      return (el?.textContent || '').replace(/[^0-9]/g, '');
-    });
-    const alreadyOnAccount = displayedAcct.endsWith(last4);
+    // Determine current account by checking whether our target last4 already
+    // appears in the rendered page text (RS shows accounts as "x8334" etc.).
+    const fullBodyText = await this.page!.evaluate(() => document.body.textContent || '');
+    const alreadyOnAccount = fullBodyText.includes(`x${last4}`);
 
     if (!alreadyOnAccount) {
-      console.log(`[RepublicServices] Switching to account ending ${last4} (current ends ${displayedAcct.slice(-4)})`);
+      console.log(`[RepublicServices] Switching to account x${last4}`);
+      try {
+        // Use Playwright locator so it auto-retries until the button appears
+        await this.page!.locator('button', { hasText: /switch\s+account/i }).click({ timeout: 10000 });
+        await this.page!.waitForTimeout(2000);
 
-      // Click "Switch Account" button
-      await this.page!.evaluate(() => {
-        const btn = Array.from(document.querySelectorAll('button'))
-          .find(b => /switch.?account/i.test(b.textContent || ''));
-        if (btn) btn.click();
-      });
-      await this.page!.waitForTimeout(2000);
-
-      // Click the target row in the modal
-      const switched = await this.page!.evaluate((l4: string) => {
-        // Modal rows typically have the account number ending in x<last4>
-        const rows = Array.from(document.querySelectorAll('tr, li, [role="row"], [class*="account"]'));
-        const target = rows.find(el => el.textContent?.includes(`x${l4}`) || el.textContent?.replace(/\D/g, '').endsWith(l4));
-        if (target) {
-          const link = target.querySelector('a') ?? target;
-          (link as HTMLElement).click();
-          return true;
-        }
-        return false;
-      }, last4);
-
-      if (!switched) {
-        console.log(`[RepublicServices] Could not switch to account x${last4} — skipping PDF download for this account`);
-        return;
+        // Modal row contains "x{last4}" — click it
+        await this.page!.locator(`text=x${last4}`).first().click({ timeout: 8000 });
+        await this.page!.waitForTimeout(3000);
+        console.log(`[RepublicServices] Switched to account x${last4}`);
+      } catch (switchErr) {
+        const msg = switchErr instanceof Error ? switchErr.message : String(switchErr);
+        console.log(`[RepublicServices] Switch to x${last4} failed: ${msg} — proceeding anyway`);
+        // Don't return: proceed optimistically; invoice # matching will filter mismatches
       }
-      await this.page!.waitForTimeout(3000);
-      console.log(`[RepublicServices] Switched to account x${last4}`);
+    } else {
+      console.log(`[RepublicServices] Already on account x${last4}`);
     }
 
     // ── 3. Click "View invoice history" (in-page, React Router) ──────────────
-    const histClicked = await this.page!.evaluate(() => {
-      const el = Array.from(document.querySelectorAll('a'))
-        .find(a => /view\s+invoice\s+history/i.test(a.textContent || ''));
-      if (el) { (el as HTMLElement).click(); return true; }
-      return false;
-    });
-
-    if (!histClicked) {
-      console.log(`[RepublicServices] "View invoice history" not found for account x${last4}`);
+    try {
+      await this.page!.locator('a', { hasText: /view\s+invoice\s+history/i }).first().click({ timeout: 10000 });
+    } catch {
+      console.log(`[RepublicServices] "View invoice history" link not found for x${last4}`);
       return;
     }
 
@@ -407,11 +392,12 @@ export class RepublicServicesScraper extends BaseScraperProvider {
     await this.page!.waitForTimeout(3000);
 
     // ── 4. Click "Invoice History" tab ────────────────────────────────────────
-    await this.page!.evaluate(() => {
-      const tab = Array.from(document.querySelectorAll('button, a, [role="tab"], li'))
-        .find(el => /^invoice\s+history$/i.test((el.textContent || '').trim()));
-      if (tab) (tab as HTMLElement).click();
-    });
+    try {
+      await this.page!.locator('button, a, [role="tab"], li').filter({ hasText: /^invoice\s+history$/i }).first().click({ timeout: 8000 });
+    } catch {
+      // Tab might already be active, or label differs — continue
+      console.log(`[RepublicServices] Invoice History tab click failed for x${last4} — continuing`);
+    }
     await this.page!.waitForTimeout(2500);
     await this.screenshot(`rs-invoice-history-${last4}`);
 
