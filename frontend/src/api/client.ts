@@ -113,6 +113,10 @@ export const deleteExpense = (id: string) =>
 // Loans
 export const getLoans = (params?: { propertyId?: string; isPersonal?: boolean; isActive?: boolean }) =>
   api.get<Loan[]>('/loans', { params }).then(r => r.data);
+export const getLoan = (id: string) =>
+  api.get<Loan>(`/loans/${id}`).then(r => r.data);
+export const getLoanAmortization = (id: string) =>
+  api.get(`/loans/${id}/amortization`).then(r => r.data);
 export const createLoan = (data: Partial<Loan>) =>
   api.post<Loan>('/loans', data).then(r => r.data);
 export const updateLoan = (id: string, data: Partial<Loan>) =>

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
+import { calculateCurrentBalance, buildAmortizationSchedule } from '../lib/amortization';
 
 const router = Router();
 router.use(attachDbUser);
@@ -53,6 +54,53 @@ router.get('/', async (req, res, next) => {
       orderBy: { createdAt: 'asc' },
     });
     res.json(loans);
+  } catch (err) { next(err); }
+});
+
+router.get('/:id', async (req, res, next) => {
+  try {
+    const loan = await db.loan.findFirst({
+      where: { id: req.params.id, userId: req.dbUserId! },
+      include: {
+        property: { select: { id: true, address: true, nickname: true } },
+        loanPayments: { orderBy: { date: 'desc' } },
+      },
+    });
+    if (!loan) return res.status(404).json({ error: 'Loan not found' });
+    res.json(loan);
+  } catch (err) { next(err); }
+});
+
+// GET /api/loans/:id/amortization — auto-calculated balance + payoff projection
+router.get('/:id/amortization', async (req, res, next) => {
+  try {
+    const loan = await db.loan.findFirst({
+      where: { id: req.params.id, userId: req.dbUserId! },
+      include: { loanPayments: { orderBy: { date: 'desc' } } },
+    });
+    if (!loan) return res.status(404).json({ error: 'Loan not found' });
+
+    const loanInput = {
+      originalAmount: loan.originalAmount != null ? Number(loan.originalAmount) : null,
+      interestRate: loan.interestRate != null ? Number(loan.interestRate) : null,
+      originationDate: loan.originationDate,
+      maturityDate: loan.maturityDate,
+      monthlyPayment: loan.monthlyPayment != null ? Number(loan.monthlyPayment) : null,
+      currentBalance: loan.currentBalance != null ? Number(loan.currentBalance) : null,
+      loanType: loan.loanType,
+    };
+    const paymentsInput = loan.loanPayments.map(p => ({
+      date: p.date,
+      amount: Number(p.amount),
+      principal: p.principal != null ? Number(p.principal) : null,
+      interest: p.interest != null ? Number(p.interest) : null,
+      balanceAfter: p.balanceAfter != null ? Number(p.balanceAfter) : null,
+    }));
+
+    const balanceResult = calculateCurrentBalance(loanInput, paymentsInput);
+    const amortization = buildAmortizationSchedule(loanInput, balanceResult, paymentsInput);
+
+    res.json({ balance: balanceResult, amortization });
   } catch (err) { next(err); }
 });
 
