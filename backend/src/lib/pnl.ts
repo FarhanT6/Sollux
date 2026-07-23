@@ -110,15 +110,15 @@ export async function getMonthlyPnL(year: number, userId: string, propertyId?: s
     ? { lease: { unit: { propertyId } } }
     : { lease: { unit: { property: { userId } } } };
   const loanFilter = propertyId
-    ? { loan: { propertyId } }
-    : { loan: { userId } };
+    ? { loan: { propertyId, isPersonal: false, isActive: true } }
+    : { loan: { userId, isPersonal: false, isActive: true } };
 
   const [rentPayments, expenses, policies, taxAssessments, loanPayments] = await Promise.all([
     db.rentPayment.findMany({ where: { paidDate: { gte: yearStart, lt: yearEnd }, ...leaseFilter } }),
     db.expense.findMany({ where: { date: { gte: yearStart, lt: yearEnd }, isCapEx: false, isPersonal: false, ...propertyFilter } }),
     db.insurancePolicy.findMany({ where: { isPersonal: false, isActive: true, ...propertyFilter } }),
     db.taxAssessment.findMany({ where: propertyFilter }),
-    db.loanPayment.findMany({ where: { date: { gte: yearStart, lt: yearEnd }, loan: { isPersonal: false, isActive: true }, ...loanFilter } }),
+    db.loanPayment.findMany({ where: { date: { gte: yearStart, lt: yearEnd }, ...loanFilter } }),
   ]);
 
   return Array.from({ length: 12 }, (_, i) => {
