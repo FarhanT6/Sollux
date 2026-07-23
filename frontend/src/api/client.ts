@@ -235,8 +235,8 @@ export const getDriveStatus = () =>
   api.get<{ connected: boolean; accounts: { id: string; email: string }[] }>('/drive/status').then(r => r.data);
 export const disconnectDrive = (id: string) =>
   api.delete(`/drive/disconnect/${id}`);
-export const browseDrive = (tokenId: string, folderId?: string) =>
-  api.get<{ files: { id: string; name: string; mimeType: string }[] }>('/drive/browse', { params: { tokenId, folderId } }).then(r => r.data);
+export const getDriveAccessToken = (tokenId: string) =>
+  api.get<{ accessToken: string }>('/drive/access-token', { params: { tokenId } }).then(r => r.data);
 export const startDriveImport = (tokenId: string, folderId: string, folderName?: string) =>
   api.post<{ jobId: string }>('/drive/import', { tokenId, folderId, folderName }).then(r => r.data);
 export const getDriveImportJob = (jobId: string) =>

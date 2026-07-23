@@ -87,7 +87,7 @@ router.delete('/disconnect/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-async function getDriveClientForToken(tokenId: string, userId: string) {
+async function getOAuth2ClientForToken(tokenId: string, userId: string) {
   const token = await db.driveToken.findFirst({ where: { id: tokenId, userId } });
   if (!token) throw new Error('Drive account not found');
 
@@ -98,7 +98,7 @@ async function getDriveClientForToken(tokenId: string, userId: string) {
     expiry_date: token.expiresAt.getTime(),
   });
 
-  // Persist refreshed tokens so future jobs don't need to re-auth.
+  // Persist refreshed tokens so future jobs (and future picker sessions) don't need to re-auth.
   oauth2Client.on('tokens', async (newTokens) => {
     try {
       await db.driveToken.update({
@@ -112,27 +112,22 @@ async function getDriveClientForToken(tokenId: string, userId: string) {
     } catch { /* best-effort */ }
   });
 
-  return google.drive({ version: 'v3', auth: oauth2Client });
+  return oauth2Client;
 }
 
-// GET /api/drive/browse?tokenId=&folderId= — list folders + PDFs one level deep
-// (folderId omitted browses the account's root)
-router.get('/browse', async (req, res, next) => {
+// GET /api/drive/access-token?tokenId= — short-lived OAuth token for the Google Picker widget.
+// The picker runs client-side and needs a raw access token to list the user's own Drive
+// (including "Shared with me") with the same drive.readonly access this account already granted.
+router.get('/access-token', async (req, res, next) => {
   try {
-    const { tokenId, folderId } = req.query as { tokenId?: string; folderId?: string };
+    const { tokenId } = req.query as { tokenId?: string };
     if (!tokenId) return res.status(400).json({ error: 'tokenId required' });
 
-    const drive = await getDriveClientForToken(tokenId, req.dbUserId!);
-    const parent = folderId || 'root';
+    const oauth2Client = await getOAuth2ClientForToken(tokenId, req.dbUserId!);
+    const { token } = await oauth2Client.getAccessToken();
+    if (!token) return res.status(500).json({ error: 'Could not obtain an access token' });
 
-    const result = await drive.files.list({
-      q: `'${parent}' in parents and trashed = false and (mimeType = 'application/vnd.google-apps.folder' or mimeType = 'application/pdf')`,
-      fields: 'files(id, name, mimeType)',
-      orderBy: 'folder,name',
-      pageSize: 200,
-    });
-
-    res.json({ files: result.data.files || [] });
+    res.json({ accessToken: token });
   } catch (err) { next(err); }
 });
 

@@ -1,7 +1,7 @@
 import { useCallback, useState, useRef, useEffect } from 'react';
 import { format } from 'date-fns';
 import { PageHeader } from '../components/ui';
-import api, { getDriveStatus, getDriveConnectUrl, browseDrive, startDriveImport, getDriveImportJob, getProperties } from '../api/client';
+import api, { getDriveStatus, getDriveConnectUrl, getDriveAccessToken, startDriveImport, getDriveImportJob, getProperties } from '../api/client';
 import type { Property } from '../types';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -203,7 +203,6 @@ function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
-interface DriveFile { id: string; name: string; mimeType: string; }
 interface DriveJobStatus {
   id: string;
   status: string;
@@ -213,15 +212,31 @@ interface DriveJobStatus {
   needsReview: { filename: string; s3Key: string; extracted: ExtractedBill; match: MatchResult; pdfUrl: string }[];
 }
 
+// Lazily loads Google's API + Picker client libraries (not an npm package —
+// Google only ships these as browser globals from their own CDN).
+let gapiLoadPromise: Promise<void> | null = null;
+function loadGooglePicker(): Promise<void> {
+  if (gapiLoadPromise) return gapiLoadPromise;
+  gapiLoadPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://apis.google.com/js/api.js';
+    script.onload = () => {
+      (window as any).gapi.load('picker', () => resolve());
+    };
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
+  return gapiLoadPromise;
+}
+
 function DriveImportPanel({ onResolved }: {
   onResolved: (bills: ParsedBill[], properties: PropertyWithAccounts[], autoImported: number) => void;
 }) {
   const [status, setStatus] = useState<{ connected: boolean; accounts: { id: string; email: string }[] } | null>(null);
   const [tokenId, setTokenId] = useState('');
-  const [stack, setStack] = useState<{ id?: string; name: string }[]>([{ id: undefined, name: 'My Drive' }]);
-  const [files, setFiles] = useState<DriveFile[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [opening, setOpening] = useState(false);
   const [job, setJob] = useState<DriveJobStatus | null>(null);
+  const [folderName, setFolderName] = useState('');
   const [resolving, setResolving] = useState(false);
 
   useEffect(() => {
@@ -231,32 +246,40 @@ function DriveImportPanel({ onResolved }: {
     }).catch(() => {});
   }, []);
 
-  const loadFolder = useCallback((tid: string, folderId: string | undefined) => {
-    setLoading(true);
-    browseDrive(tid, folderId).then(r => setFiles(r.files)).finally(() => setLoading(false));
-  }, []);
+  const openPicker = async () => {
+    const apiKey = import.meta.env.VITE_GOOGLE_PICKER_API_KEY;
+    if (!apiKey) {
+      alert('Google Picker API key is not configured (VITE_GOOGLE_PICKER_API_KEY).');
+      return;
+    }
+    setOpening(true);
+    try {
+      await loadGooglePicker();
+      const { accessToken } = await getDriveAccessToken(tokenId);
+      const google = (window as any).google;
 
-  useEffect(() => {
-    if (tokenId) loadFolder(tokenId, stack[stack.length - 1].id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tokenId]);
+      const view = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
+        .setSelectFolderEnabled(true)
+        .setIncludeFolders(true);
 
-  const openFolder = (f: DriveFile) => {
-    const next = [...stack, { id: f.id, name: f.name }];
-    setStack(next);
-    loadFolder(tokenId, f.id);
-  };
+      const picker = new google.picker.PickerBuilder()
+        .addView(view)
+        .setOAuthToken(accessToken)
+        .setDeveloperKey(apiKey)
+        .setCallback(async (data: any) => {
+          if (data.action === google.picker.Action.PICKED) {
+            const doc = data.docs[0];
+            setFolderName(doc.name);
+            const { jobId } = await startDriveImport(tokenId, doc.id, doc.name);
+            setJob({ id: jobId, status: 'RUNNING', totalFiles: 0, processedFiles: 0, autoImported: 0, needsReview: [] });
+          }
+        })
+        .build();
 
-  const goToCrumb = (index: number) => {
-    const next = stack.slice(0, index + 1);
-    setStack(next);
-    loadFolder(tokenId, next[next.length - 1].id);
-  };
-
-  const importCurrentFolder = async () => {
-    const current = stack[stack.length - 1];
-    const { jobId } = await startDriveImport(tokenId, current.id || 'root', current.name);
-    setJob({ id: jobId, status: 'RUNNING', totalFiles: 0, processedFiles: 0, autoImported: 0, needsReview: [] });
+      picker.setVisible(true);
+    } finally {
+      setOpening(false);
+    }
   };
 
   // Poll job progress until it finishes.
@@ -311,7 +334,7 @@ function DriveImportPanel({ onResolved }: {
     return (
       <div className="rounded-xl p-5 mb-5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
         <p className="text-sm font-medium text-gray-200 mb-2">
-          {done ? 'Drive import finished' : `Importing “${stack[stack.length - 1].name}”…`}
+          {done ? 'Drive import finished' : `Importing “${folderName}”…`}
         </p>
         {!done ? (
           <>
@@ -343,44 +366,14 @@ function DriveImportPanel({ onResolved }: {
   }
 
   return (
-    <div className="rounded-xl p-5 mb-5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
-      <div className="flex items-center justify-between mb-3">
+    <div className="rounded-xl p-5 mb-5 flex items-center justify-between" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+      <div>
         <p className="text-sm font-medium text-gray-200">Import from Google Drive</p>
-        <button onClick={importCurrentFolder} className="btn btn-primary text-xs">
-          Import this folder ({stack[stack.length - 1].name})
-        </button>
+        <p className="text-xs text-gray-500 mt-0.5">Pick a folder from My Drive or Shared with me — every PDF inside (including subfolders) gets pulled in.</p>
       </div>
-
-      <div className="flex items-center gap-1 text-xs text-gray-500 mb-3 flex-wrap">
-        {stack.map((c, i) => (
-          <span key={i} className="flex items-center gap-1">
-            {i > 0 && <span>/</span>}
-            <button onClick={() => goToCrumb(i)} className="hover:text-gray-300">{c.name}</button>
-          </span>
-        ))}
-      </div>
-
-      {loading ? (
-        <p className="text-xs text-gray-600 py-6 text-center">Loading…</p>
-      ) : files.length === 0 ? (
-        <p className="text-xs text-gray-600 py-6 text-center">Empty folder</p>
-      ) : (
-        <div className="space-y-1 max-h-64 overflow-y-auto">
-          {files.map(f => {
-            const isFolder = f.mimeType === 'application/vnd.google-apps.folder';
-            return (
-              <div
-                key={f.id}
-                onClick={() => isFolder && openFolder(f)}
-                className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm ${isFolder ? 'cursor-pointer hover:bg-white/5 text-gray-200' : 'text-gray-500'}`}
-              >
-                <span>{isFolder ? '📁' : '📄'}</span>
-                <span className="truncate">{f.name}</span>
-              </div>
-            );
-          })}
-        </div>
-      )}
+      <button onClick={openPicker} disabled={opening} className="btn btn-primary text-xs disabled:opacity-40">
+        {opening ? 'Opening…' : 'Choose folder'}
+      </button>
     </div>
   );
 }

@@ -4,7 +4,7 @@ import { getLoans, createLoan, updateLoan, deleteLoan, getProperties } from '../
 import type { Loan, Property, LoanType } from '../types';
 import { format } from 'date-fns';
 
-const money = (n: number | undefined) => n == null ? '—' : n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+const money = (n: number | string | undefined) => n == null ? '—' : Number(n).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 
 const LOAN_TYPES: LoanType[] = ['MORTGAGE','HELOC','AUTO','PERSONAL','STUDENT','INSTALLMENT_PLAN','CREDIT_LINE','OTHER'];
 
@@ -52,8 +52,8 @@ export default function LoansPage() {
     } finally { setSaving(false); }
   }
 
-  const totalDebt = loans.filter(l => l.isActive && !l.isPersonal).reduce((s, l) => s + (l.currentBalance ?? 0), 0);
-  const monthlyDebt = loans.filter(l => l.isActive && !l.isPersonal).reduce((s, l) => s + (l.monthlyPayment ?? 0), 0);
+  const totalDebt = loans.filter(l => l.isActive && !l.isPersonal).reduce((s, l) => s + Number(l.currentBalance ?? 0), 0);
+  const monthlyDebt = loans.filter(l => l.isActive && !l.isPersonal).reduce((s, l) => s + Number(l.monthlyPayment ?? 0), 0);
 
   return (
     <div className="p-6">
