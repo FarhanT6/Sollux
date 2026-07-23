@@ -57,7 +57,7 @@ export default function NoticeDetailPage() {
   return (
     <div className="p-6">
       {/* Controls — hidden on print */}
-      <div className="flex items-center justify-between mb-6" style={{ printVisibility: 'hidden' }}>
+      <div className="flex items-center justify-between mb-6 print:hidden">
         <div>
           <h1 className="text-xl font-semibold text-white">3-Day Notice</h1>
           <p className="text-sm text-gray-400">{property?.nickname || property?.address} — {tenantNames} · served {fmtDate(notice.noticeDate)}</p>
