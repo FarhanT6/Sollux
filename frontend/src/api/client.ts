@@ -224,6 +224,20 @@ export const getGmailStatus = () =>
 export const syncGmail = () =>
   api.post<{ jobId: string }>('/gmail/sync').then(r => r.data);
 
+// Google Drive
+export const getDriveConnectUrl = () =>
+  api.post<{ url: string }>('/drive/connect').then(r => r.data);
+export const getDriveStatus = () =>
+  api.get<{ connected: boolean; accounts: { id: string; email: string }[] }>('/drive/status').then(r => r.data);
+export const disconnectDrive = (id: string) =>
+  api.delete(`/drive/disconnect/${id}`);
+export const browseDrive = (tokenId: string, folderId?: string) =>
+  api.get<{ files: { id: string; name: string; mimeType: string }[] }>('/drive/browse', { params: { tokenId, folderId } }).then(r => r.data);
+export const startDriveImport = (tokenId: string, folderId: string, folderName?: string) =>
+  api.post<{ jobId: string }>('/drive/import', { tokenId, folderId, folderName }).then(r => r.data);
+export const getDriveImportJob = (jobId: string) =>
+  api.get(`/drive/jobs/${jobId}`).then(r => r.data);
+
 // Payment plans
 export const getPaymentPlan = (utilityAccountId: string) =>
   api.get(`/utilities/${utilityAccountId}/payment-plan`).then(r => r.data).catch(() => null);

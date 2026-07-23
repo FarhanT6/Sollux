@@ -2,6 +2,7 @@ import 'dotenv/config';
 import './scrapeWorker';
 import './insightWorker';
 import './gmailWorker';
+import './driveImportWorker';
 import { scrapeQueue, insightQueue } from './queues';
 import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';

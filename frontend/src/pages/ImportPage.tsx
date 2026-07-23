@@ -1,7 +1,7 @@
-import { useCallback, useState, useRef } from 'react';
+import { useCallback, useState, useRef, useEffect } from 'react';
 import { format } from 'date-fns';
 import { PageHeader } from '../components/ui';
-import api from '../api/client';
+import api, { getDriveStatus, getDriveConnectUrl, browseDrive, startDriveImport, getDriveImportJob, getProperties } from '../api/client';
 import type { Property } from '../types';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -188,6 +188,199 @@ function Dropzone({ onFiles }: { onFiles: (files: File[]) => void }) {
         <p className="text-sm font-medium text-gray-200">Drop utility bill PDFs here</p>
         <p className="text-xs text-gray-500 mt-1">or click to browse · any utility · any format · up to 50 at once</p>
       </div>
+    </div>
+  );
+}
+
+// ── Google Drive import ──────────────────────────────────────────────────────
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload  = e => resolve((e.target!.result as string).split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+interface DriveFile { id: string; name: string; mimeType: string; }
+interface DriveJobStatus {
+  id: string;
+  status: string;
+  totalFiles: number;
+  processedFiles: number;
+  autoImported: number;
+  needsReview: { filename: string; s3Key: string; extracted: ExtractedBill; match: MatchResult; pdfUrl: string }[];
+}
+
+function DriveImportPanel({ onResolved }: {
+  onResolved: (bills: ParsedBill[], properties: PropertyWithAccounts[], autoImported: number) => void;
+}) {
+  const [status, setStatus] = useState<{ connected: boolean; accounts: { id: string; email: string }[] } | null>(null);
+  const [tokenId, setTokenId] = useState('');
+  const [stack, setStack] = useState<{ id?: string; name: string }[]>([{ id: undefined, name: 'My Drive' }]);
+  const [files, setFiles] = useState<DriveFile[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [job, setJob] = useState<DriveJobStatus | null>(null);
+  const [resolving, setResolving] = useState(false);
+
+  useEffect(() => {
+    getDriveStatus().then(s => {
+      setStatus(s);
+      if (s.accounts[0]) setTokenId(s.accounts[0].id);
+    }).catch(() => {});
+  }, []);
+
+  const loadFolder = useCallback((tid: string, folderId: string | undefined) => {
+    setLoading(true);
+    browseDrive(tid, folderId).then(r => setFiles(r.files)).finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    if (tokenId) loadFolder(tokenId, stack[stack.length - 1].id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tokenId]);
+
+  const openFolder = (f: DriveFile) => {
+    const next = [...stack, { id: f.id, name: f.name }];
+    setStack(next);
+    loadFolder(tokenId, f.id);
+  };
+
+  const goToCrumb = (index: number) => {
+    const next = stack.slice(0, index + 1);
+    setStack(next);
+    loadFolder(tokenId, next[next.length - 1].id);
+  };
+
+  const importCurrentFolder = async () => {
+    const current = stack[stack.length - 1];
+    const { jobId } = await startDriveImport(tokenId, current.id || 'root', current.name);
+    setJob({ id: jobId, status: 'RUNNING', totalFiles: 0, processedFiles: 0, autoImported: 0, needsReview: [] });
+  };
+
+  // Poll job progress until it finishes.
+  useEffect(() => {
+    if (!job || job.status !== 'RUNNING') return;
+    const interval = setInterval(async () => {
+      const data = await getDriveImportJob(job.id) as DriveJobStatus;
+      setJob(data);
+      if (data.status !== 'RUNNING') clearInterval(interval);
+    }, 1500);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job?.id, job?.status]);
+
+  const finishReview = async () => {
+    if (!job) return;
+    setResolving(true);
+    try {
+      const withData: ParsedBill[] = await Promise.all(
+        job.needsReview.map(async item => {
+          const res   = await fetch(item.pdfUrl);
+          const blob  = await res.blob();
+          const data  = await blobToBase64(blob);
+          return { filename: item.filename, extracted: item.extracted, match: item.match, fileData: data };
+        })
+      );
+      const properties = await getProperties() as unknown as PropertyWithAccounts[];
+      onResolved(withData, properties, job.autoImported);
+    } finally {
+      setResolving(false);
+    }
+  };
+
+  if (!status) return null;
+
+  if (!status.connected) {
+    return (
+      <div className="rounded-xl p-5 mb-5 flex items-center justify-between" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+        <div>
+          <p className="text-sm font-medium text-gray-200">Import from Google Drive</p>
+          <p className="text-xs text-gray-500 mt-0.5">Connect a Drive account to bulk-import a whole folder of statements at once.</p>
+        </div>
+        <button className="btn text-xs" onClick={() => getDriveConnectUrl().then(r => { window.location.href = r.url; })}>
+          + Connect Drive
+        </button>
+      </div>
+    );
+  }
+
+  if (job) {
+    const done = job.status !== 'RUNNING';
+    return (
+      <div className="rounded-xl p-5 mb-5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+        <p className="text-sm font-medium text-gray-200 mb-2">
+          {done ? 'Drive import finished' : `Importing “${stack[stack.length - 1].name}”…`}
+        </p>
+        {!done ? (
+          <>
+            <div className="w-full h-1.5 rounded-full bg-white/10 overflow-hidden mb-2">
+              <div
+                className="h-full bg-amber-500 transition-all"
+                style={{ width: job.totalFiles ? `${(job.processedFiles / job.totalFiles) * 100}%` : '4%' }}
+              />
+            </div>
+            <p className="text-xs text-gray-500">{job.processedFiles} / {job.totalFiles || '…'} files processed</p>
+          </>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-xs text-green-400">{job.autoImported} statement{job.autoImported !== 1 ? 's' : ''} auto-filed</p>
+            {job.needsReview.length > 0 ? (
+              <>
+                <p className="text-xs text-amber-400">{job.needsReview.length} need{job.needsReview.length === 1 ? 's' : ''} your review — couldn't confidently match a property/utility</p>
+                <button onClick={finishReview} disabled={resolving} className="btn btn-primary text-xs disabled:opacity-40">
+                  {resolving ? 'Loading…' : `Review ${job.needsReview.length} statement${job.needsReview.length !== 1 ? 's' : ''}`}
+                </button>
+              </>
+            ) : (
+              <button onClick={() => setJob(null)} className="btn text-xs">Import another folder</button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-xl p-5 mb-5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-sm font-medium text-gray-200">Import from Google Drive</p>
+        <button onClick={importCurrentFolder} className="btn btn-primary text-xs">
+          Import this folder ({stack[stack.length - 1].name})
+        </button>
+      </div>
+
+      <div className="flex items-center gap-1 text-xs text-gray-500 mb-3 flex-wrap">
+        {stack.map((c, i) => (
+          <span key={i} className="flex items-center gap-1">
+            {i > 0 && <span>/</span>}
+            <button onClick={() => goToCrumb(i)} className="hover:text-gray-300">{c.name}</button>
+          </span>
+        ))}
+      </div>
+
+      {loading ? (
+        <p className="text-xs text-gray-600 py-6 text-center">Loading…</p>
+      ) : files.length === 0 ? (
+        <p className="text-xs text-gray-600 py-6 text-center">Empty folder</p>
+      ) : (
+        <div className="space-y-1 max-h-64 overflow-y-auto">
+          {files.map(f => {
+            const isFolder = f.mimeType === 'application/vnd.google-apps.folder';
+            return (
+              <div
+                key={f.id}
+                onClick={() => isFolder && openFolder(f)}
+                className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm ${isFolder ? 'cursor-pointer hover:bg-white/5 text-gray-200' : 'text-gray-500'}`}
+              >
+                <span>{isFolder ? '📁' : '📄'}</span>
+                <span className="truncate">{f.name}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -738,6 +931,7 @@ export default function ImportPage() {
   const [bills, setBills]           = useState<ParsedBill[]>([]);
   const [properties, setProperties] = useState<PropertyWithAccounts[]>([]);
   const [result, setResult]         = useState<{ imported: number; skipped: number; errors: string[] } | null>(null);
+  const [driveNote, setDriveNote]   = useState<string | null>(null);
   const [progress, setProgress]     = useState('');
 
   const handleFiles = async (files: File[]) => {
@@ -803,6 +997,22 @@ export default function ImportPage() {
     setBills(prev => prev.filter(b => b.filename !== filename));
   };
 
+  const handleDriveResolved = (driveBills: ParsedBill[], props: PropertyWithAccounts[], autoImported: number) => {
+    if (driveBills.length === 0) {
+      setResult({ imported: autoImported, skipped: 0, errors: [] });
+      setStage('done');
+      return;
+    }
+    setBills(prev => [...prev, ...driveBills]);
+    setProperties(props);
+    setDriveNote(
+      autoImported > 0
+        ? `${autoImported} statement${autoImported !== 1 ? 's' : ''} already auto-filed from Drive — these ${driveBills.length} need a quick check.`
+        : `${driveBills.length} statement${driveBills.length !== 1 ? 's' : ''} from Drive need a quick check before they can be filed.`
+    );
+    setStage('review');
+  };
+
   const handleImport = async () => {
     const ready = bills.filter(isBillReady);
     if (ready.length === 0) return;
@@ -836,6 +1046,7 @@ export default function ImportPage() {
     setProperties([]);
     setResult(null);
     setProgress('');
+    setDriveNote(null);
   };
 
   const readyCount      = bills.filter(isBillReady).length;
@@ -853,7 +1064,10 @@ export default function ImportPage() {
 
         {/* Drop stage */}
         {stage === 'drop' && (
-          <Dropzone onFiles={handleFiles} />
+          <>
+            <DriveImportPanel onResolved={handleDriveResolved} />
+            <Dropzone onFiles={handleFiles} />
+          </>
         )}
 
         {/* Analyzing */}
@@ -868,6 +1082,9 @@ export default function ImportPage() {
         {/* Review */}
         {stage === 'review' && (
           <div className="space-y-6">
+            {driveNote && (
+              <div className="text-xs text-blue-400 bg-blue-500/10 rounded-lg px-4 py-2.5">{driveNote}</div>
+            )}
             {/* Summary bar */}
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-4 text-sm">

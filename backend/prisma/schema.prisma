@@ -26,6 +26,7 @@ model User {
   properties              Property[]
   notificationPreferences NotificationPreference[]
   gmailTokens             GmailToken[]
+  driveTokens             DriveToken[]
   paymentRecipient        PaymentRecipient?
 
   @@map("users")
@@ -286,6 +287,50 @@ model GmailToken {
 
   @@unique([userId, email])
   @@map("gmail_tokens")
+}
+
+// ─── DRIVE TOKENS ────────────────────────────────────────
+model DriveToken {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken  String
+  refreshToken String
+  expiresAt    DateTime
+  email        String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([userId, email])
+  @@map("drive_tokens")
+}
+
+enum DriveImportStatus {
+  RUNNING
+  SUCCESS
+  PARTIAL
+  FAILED
+}
+
+// A single "import this folder" run — tracks progress for large folders and
+// holds the leftover statements the auto-matcher couldn't confidently file,
+// staged in S3 under pending-review/ until a human resolves them via the
+// normal Import Bills review screen.
+model DriveImportJob {
+  id              String            @id @default(cuid())
+  userId          String
+  driveTokenId    String
+  folderName      String?
+  status          DriveImportStatus @default(RUNNING)
+  totalFiles      Int               @default(0)
+  processedFiles  Int               @default(0)
+  autoImported    Int               @default(0)
+  needsReviewJson Json?
+  errorLog        String?
+  startedAt       DateTime          @default(now())
+  finishedAt      DateTime?
+
+  @@map("drive_import_jobs")
 }
 
 // ─── SYNC JOBS ───────────────────────────────────────────
