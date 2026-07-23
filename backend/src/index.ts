@@ -16,6 +16,18 @@ import notificationsRouter from './routes/notifications';
 import authRouter from './routes/auth';
 import stripeRouter from './routes/stripe';
 import importRouter from './routes/import';
+import unitsRouter from './routes/units';
+import tenantsRouter from './routes/tenants';
+import leasesRouter from './routes/leases';
+import rentPaymentsRouter from './routes/rentPayments';
+import noticesRouter from './routes/notices';
+import expensesRouter from './routes/expenses';
+import loansRouter from './routes/loans';
+import insuranceRouter from './routes/insurance';
+import taxesRouter from './routes/taxes';
+import improvementsRouter from './routes/improvements';
+import legalRouter from './routes/legal';
+import pnlRouter from './routes/pnl';
 import { errorHandler } from './middleware/errorHandler';
 import { requireAuth, clerkMiddleware } from './middleware/requireAuth';
 
@@ -27,7 +39,6 @@ app.use(clerkMiddleware());
 app.use(helmet());
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow any localhost port in development, or the configured FRONTEND_URL
     if (!origin || origin.startsWith('http://localhost:') || origin === process.env.FRONTEND_URL) {
       callback(null, true);
     } else {
@@ -37,9 +48,8 @@ app.use(cors({
   credentials: true,
 }));
 
-// Rate limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: 200,
   standardHeaders: true,
   legacyHeaders: false,
@@ -47,9 +57,8 @@ const limiter = rateLimit({
 app.use('/api/', limiter);
 
 // ─── Body parsing ─────────────────────────────────────────
-// Stripe webhook needs raw body — mount before json()
 app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }));
-app.use('/api/import', express.json({ limit: '100mb' })); // PDFs can be large
+app.use('/api/import', express.json({ limit: '100mb' }));
 app.use(express.json({ limit: '10mb' }));
 
 // ─── Health check ─────────────────────────────────────────
@@ -71,6 +80,19 @@ app.use('/api/documents', documentsRouter);
 app.use('/api/gmail', gmailRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/import', importRouter);
+// Property management
+app.use('/api/units', unitsRouter);
+app.use('/api/tenants', tenantsRouter);
+app.use('/api/leases', leasesRouter);
+app.use('/api/rent-payments', rentPaymentsRouter);
+app.use('/api/notices', noticesRouter);
+app.use('/api/expenses', expensesRouter);
+app.use('/api/loans', loansRouter);
+app.use('/api/insurance', insuranceRouter);
+app.use('/api/taxes', taxesRouter);
+app.use('/api/improvements', improvementsRouter);
+app.use('/api/legal', legalRouter);
+app.use('/api/pnl', pnlRouter);
 
 // ─── Error handling ───────────────────────────────────────
 app.use(errorHandler);
@@ -80,4 +102,3 @@ app.listen(PORT, () => {
 });
 
 export default app;
-

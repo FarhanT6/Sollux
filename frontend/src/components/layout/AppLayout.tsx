@@ -1,16 +1,25 @@
-import { Outlet, NavLink, useLocation } from 'react-router-dom';
+import { Outlet, NavLink } from 'react-router-dom';
 import { useUser, useClerk } from '@clerk/clerk-react';
 import { useEffect, useState } from 'react';
 import { getDashboardSummary } from '../../api/client';
 import type { DashboardSummary } from '../../types';
 
-const NAV = [
+const NAV_UTILITY = [
   { to: '/dashboard',     label: 'Dashboard',       color: '#F5A623' },
   { to: '/properties',    label: 'Properties',       color: '#F0997B' },
-  { to: '/insights',      label: 'AI insights',      color: '#5DCAA5' },
-  { to: '/payments',      label: 'Payments',         color: '#7F77DD' },
-  { to: '/documents',     label: 'Document vault',   color: '#D4537E' },
-  { to: '/import',        label: 'Import bills',     color: '#60a5fa' },
+  { to: '/insights',      label: 'AI Insights',      color: '#5DCAA5' },
+  { to: '/payments',      label: 'Utility Payments', color: '#7F77DD' },
+  { to: '/documents',     label: 'Document Vault',   color: '#D4537E' },
+  { to: '/import',        label: 'Import Bills',     color: '#60a5fa' },
+];
+
+const NAV_PROPERTY = [
+  { to: '/rent-roll',     label: 'Rent Roll',        color: '#5DCAA5' },
+  { to: '/tenants',       label: 'Tenants',          color: '#F0997B' },
+  { to: '/expenses',      label: 'Expenses',         color: '#D4537E' },
+  { to: '/loans',         label: 'Loans',            color: '#7F77DD' },
+  { to: '/pnl',           label: 'P&L',              color: '#F5A623' },
+  { to: '/notices',       label: '3-Day Notices',    color: '#E24B4A' },
 ];
 
 const NAV_ACCOUNT = [
@@ -43,11 +52,9 @@ export default function AppLayout() {
 
         {/* Nav */}
         <nav className="flex-1 px-2 py-3 overflow-y-auto">
-          <p className="section-label px-2 mt-1 mb-1">Overview</p>
-          {NAV.map(n => (
-            <NavLink key={n.to} to={n.to} className={({ isActive }) =>
-              `sidebar-link ${isActive ? 'active' : ''}`
-            }>
+          <p className="section-label px-2 mt-1 mb-1 text-xs text-gray-600 uppercase tracking-widest">Utility Intel</p>
+          {NAV_UTILITY.map(n => (
+            <NavLink key={n.to} to={n.to} className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
               <span className="w-3.5 h-3.5 rounded flex-shrink-0" style={{ background: n.color }} />
               <span>{n.label}</span>
               {n.to === '/insights' && summary?.unreadInsights ? (
@@ -59,11 +66,17 @@ export default function AppLayout() {
             </NavLink>
           ))}
 
-          <p className="section-label px-2 mt-4 mb-1">Account</p>
+          <p className="section-label px-2 mt-4 mb-1 text-xs text-gray-600 uppercase tracking-widest">Property Mgmt</p>
+          {NAV_PROPERTY.map(n => (
+            <NavLink key={n.to} to={n.to} className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
+              <span className="w-3.5 h-3.5 rounded flex-shrink-0" style={{ background: n.color }} />
+              <span>{n.label}</span>
+            </NavLink>
+          ))}
+
+          <p className="section-label px-2 mt-4 mb-1 text-xs text-gray-600 uppercase tracking-widest">Account</p>
           {NAV_ACCOUNT.map(n => (
-            <NavLink key={n.to} to={n.to} className={({ isActive }) =>
-              `sidebar-link ${isActive ? 'active' : ''}`
-            }>
+            <NavLink key={n.to} to={n.to} className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
               <span className="w-3.5 h-3.5 rounded flex-shrink-0" style={{ background: n.color }} />
               <span>{n.label}</span>
             </NavLink>
@@ -83,13 +96,7 @@ export default function AppLayout() {
                 {summary ? `${summary.totalProperties} properties` : 'Pro plan'}
               </p>
             </div>
-            <button
-              onClick={() => signOut()}
-              className="text-xs text-gray-500 hover:text-gray-300 flex-shrink-0"
-              title="Sign out"
-            >
-              ↩
-            </button>
+            <button onClick={() => signOut()} className="text-xs text-gray-500 hover:text-gray-300 flex-shrink-0" title="Sign out">↩</button>
           </div>
         </div>
       </aside>

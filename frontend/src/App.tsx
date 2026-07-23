@@ -12,6 +12,14 @@ import DocumentsPage from './pages/DocumentsPage';
 import ImportPage from './pages/ImportPage';
 import NotificationsPage from './pages/NotificationsPage';
 import SettingsPage from './pages/SettingsPage';
+// Property management
+import RentRollPage from './pages/RentRollPage';
+import TenantsPage from './pages/TenantsPage';
+import ExpensesPage from './pages/ExpensesPage';
+import LoansPage from './pages/LoansPage';
+import PnLPage from './pages/PnLPage';
+import NoticesPage from './pages/NoticesPage';
+import NoticeDetailPage from './pages/NoticeDetailPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isSignedIn, isLoaded } = useAuth();
@@ -47,6 +55,14 @@ export default function App() {
           <Route path="import" element={<ImportPage />} />
           <Route path="notifications" element={<NotificationsPage />} />
           <Route path="settings" element={<SettingsPage />} />
+          {/* Property Mgmt */}
+          <Route path="rent-roll" element={<RentRollPage />} />
+          <Route path="tenants" element={<TenantsPage />} />
+          <Route path="expenses" element={<ExpensesPage />} />
+          <Route path="loans" element={<LoansPage />} />
+          <Route path="pnl" element={<PnLPage />} />
+          <Route path="notices" element={<NoticesPage />} />
+          <Route path="notices/:id" element={<NoticeDetailPage />} />
         </Route>
 
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
