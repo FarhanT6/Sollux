@@ -1,12 +1,28 @@
 export type SubscriptionTier = 'BASIC' | 'PRO' | 'BUSINESS';
-export type PropertyType = 'PRIMARY' | 'RENTAL' | 'INVESTMENT' | 'COMMERCIAL';
+export type PropertyType =
+  | 'PRIMARY' | 'RENTAL' | 'INVESTMENT' | 'COMMERCIAL'
+  | 'RESIDENTIAL_SINGLE' | 'RESIDENTIAL_MULTI' | 'LAND' | 'GOLF_COURSE' | 'OTHER';
+export type PropertyStatus = 'ACTIVE' | 'SOLD' | 'UNDER_CONTRACT' | 'INACTIVE';
 export type UtilityCategory =
   | 'ELECTRIC' | 'GAS' | 'WATER' | 'SEWER' | 'TRASH'
   | 'SOLAR' | 'INTERNET' | 'PHONE' | 'INSURANCE' | 'HOA' | 'TAXES' | 'OTHER';
 export type InsightType = 'ANOMALY' | 'SAVINGS' | 'REMINDER' | 'INFO' | 'OUTAGE';
 export type InsightSeverity = 'INFO' | 'WARNING' | 'ALERT';
 export type PaymentStatus = 'PAID' | 'PENDING' | 'FAILED' | 'PARTIAL';
+export type BillStatus = 'UNPAID' | 'PAID' | 'ON_PAYMENT_PLAN' | 'PAST_DUE';
 export type SyncStatus = 'SUCCESS' | 'FAILED' | 'PENDING' | 'PARTIAL';
+export type LeaseType = 'FIXED_TERM' | 'MONTH_TO_MONTH';
+export type LeaseStatus = 'ACTIVE' | 'ENDED' | 'PENDING' | 'TERMINATED';
+export type RentPaymentMethod = 'CASH' | 'CHECK' | 'ZELLE' | 'ACH' | 'MONEY_ORDER' | 'CARD' | 'OTHER';
+export type LoanType = 'MORTGAGE' | 'HELOC' | 'AUTO' | 'PERSONAL' | 'STUDENT' | 'INSTALLMENT_PLAN' | 'CREDIT_LINE' | 'OTHER';
+export type InsuranceType = 'PROPERTY' | 'LIABILITY' | 'FLOOD' | 'UMBRELLA' | 'OTHER';
+export type PremiumFrequency = 'MONTHLY' | 'ANNUAL' | 'SEMI_ANNUAL';
+export type TaxStatus = 'UNPAID' | 'PAID' | 'PARTIALLY_PAID' | 'DELINQUENT';
+export type LegalStatus = 'OPEN' | 'CLOSED' | 'ON_HOLD';
+export type ExpenseCategory =
+  | 'UTILITIES' | 'REPAIRS_MAINTENANCE' | 'LANDSCAPING' | 'PROPERTY_MANAGEMENT'
+  | 'LEGAL' | 'INSURANCE' | 'PROPERTY_TAX' | 'HOA' | 'MORTGAGE_DEBT_SERVICE'
+  | 'CAPITAL_IMPROVEMENT' | 'SUPPLIES' | 'TRAVEL' | 'ADVERTISING' | 'OTHER';
 
 export interface User {
   id: string;
@@ -22,14 +38,247 @@ export interface Property {
   userId: string;
   nickname?: string;
   address: string;
+  addressLine2?: string;
   city: string;
+  county?: string;
   state: string;
   zip: string;
+  country: string;
+  region?: string;
   type: PropertyType;
+  status: PropertyStatus;
+  acquisitionDate?: string;
+  acquisitionPrice?: number;
+  ownerEntity?: string;
+  notes?: string;
+  estimatedValue?: number;
+  landValue?: number;
+  valuationDate?: string;
+  valuationNotes?: string;
+  lotSqft?: number;
+  parcelGroupName?: string;
   createdAt: string;
   utilityAccounts?: UtilityAccount[];
   insights?: AIInsight[];
+  units?: Unit[];
   _count?: { insights: number };
+}
+
+export interface Unit {
+  id: string;
+  propertyId: string;
+  unitLabel: string;
+  bedrooms?: number;
+  bathrooms?: number;
+  sqft?: number;
+  notes?: string;
+  leases?: Lease[];
+}
+
+export interface Tenant {
+  id: string;
+  userId: string;
+  fullName: string;
+  email?: string;
+  phone?: string;
+  notes?: string;
+  createdAt: string;
+  leaseTenants?: LeaseTenant[];
+}
+
+export interface LeaseTenant {
+  id: string;
+  leaseId: string;
+  tenantId: string;
+  tenant: Tenant;
+  isPrimary: boolean;
+}
+
+export interface Lease {
+  id: string;
+  unitId: string;
+  unit?: Unit & { property?: Pick<Property, 'id' | 'address' | 'nickname'> };
+  startDate: string;
+  endDate?: string;
+  rentAmount: number;
+  section8Amount?: number;
+  securityDeposit?: number;
+  leaseType: LeaseType;
+  status: LeaseStatus;
+  documentUrl?: string;
+  notes?: string;
+  arrearsBalance: number;
+  arrearsCaughtUpThrough?: string;
+  createdAt: string;
+  leaseTenants?: LeaseTenant[];
+  rentPayments?: RentPayment[];
+  rentNotices?: RentNotice[];
+}
+
+export interface RentPayment {
+  id: string;
+  leaseId: string;
+  periodDate: string;
+  amount: number;
+  appliedToArrears: number;
+  paidDate: string;
+  method: RentPaymentMethod;
+  notes?: string;
+  createdAt: string;
+  lease?: Lease & { unit?: Unit & { property?: Pick<Property, 'id' | 'address' | 'nickname'> } };
+}
+
+export interface RentNotice {
+  id: string;
+  leaseId: string;
+  noticeDate: string;
+  lineItems: { amount: number; dueDate: string }[];
+  totalDue: number;
+  signedByName: string;
+  signedByPhone?: string;
+  signedByEmail?: string;
+  signedByAddress?: string;
+  createdAt: string;
+  lease?: Lease & { unit?: Unit & { property?: Property }; leaseTenants?: LeaseTenant[] };
+}
+
+export interface Expense {
+  id: string;
+  propertyId: string;
+  category: ExpenseCategory;
+  amount: number;
+  date: string;
+  vendor?: string;
+  description?: string;
+  isCapEx: boolean;
+  isPersonal: boolean;
+  documentUrl?: string;
+  createdAt: string;
+  property?: Pick<Property, 'id' | 'address' | 'nickname'>;
+}
+
+export interface Loan {
+  id: string;
+  propertyId?: string;
+  userId: string;
+  loanType: LoanType;
+  lender: string;
+  accountLast4?: string;
+  originalAmount?: number;
+  interestRate?: number;
+  originationDate?: string;
+  maturityDate?: string;
+  monthlyPayment?: number;
+  currentBalance?: number;
+  notes?: string;
+  isPersonal: boolean;
+  isActive: boolean;
+  createdAt: string;
+  property?: Pick<Property, 'id' | 'address' | 'nickname'>;
+  loanPayments?: LoanPayment[];
+}
+
+export interface LoanPayment {
+  id: string;
+  loanId: string;
+  date: string;
+  billAmount?: number;
+  amount: number;
+  lateFee?: number;
+  status: BillStatus;
+  principal?: number;
+  interest?: number;
+  escrow?: number;
+  balanceAfter?: number;
+  confirmationNumber?: string;
+  notes?: string;
+}
+
+export interface InsurancePolicy {
+  id: string;
+  propertyId: string;
+  carrier: string;
+  policyNumber?: string;
+  policyType: InsuranceType;
+  premiumAmount: number;
+  premiumFrequency: PremiumFrequency;
+  effectiveDate?: string;
+  expirationDate?: string;
+  documentUrl?: string;
+  notes?: string;
+  isPersonal: boolean;
+  isActive: boolean;
+  property?: Pick<Property, 'id' | 'address' | 'nickname'>;
+}
+
+export interface TaxAssessment {
+  id: string;
+  propertyId: string;
+  taxYear: string;
+  assessedValue?: number;
+  annualTaxAmount: number;
+  installment1Due?: string;
+  installment2Due?: string;
+  installment1Paid?: string;
+  installment2Paid?: string;
+  status: TaxStatus;
+  notes?: string;
+  property?: Pick<Property, 'id' | 'address' | 'nickname'>;
+}
+
+export interface Improvement {
+  id: string;
+  propertyId: string;
+  description: string;
+  category?: string;
+  cost: number;
+  contractor?: string;
+  startDate?: string;
+  completionDate?: string;
+  documentUrl?: string;
+  notes?: string;
+  property?: Pick<Property, 'id' | 'address' | 'nickname'>;
+}
+
+export interface LegalMatter {
+  id: string;
+  propertyId?: string;
+  userId: string;
+  title: string;
+  matterType: string;
+  status: LegalStatus;
+  filedDate?: string;
+  closedDate?: string;
+  attorney?: string;
+  caseNumber?: string;
+  description?: string;
+  documentUrl?: string;
+  createdAt: string;
+  property?: Pick<Property, 'id' | 'address' | 'nickname'>;
+}
+
+export interface PropertyPnL {
+  propertyId: string;
+  propertyName: string;
+  rentalIncome: number;
+  operatingExpenses: number;
+  insuranceExpense: number;
+  propertyTaxExpense: number;
+  noi: number;
+  debtService: number;
+  cashFlow: number;
+}
+
+export interface MonthlyPnL {
+  month: string;
+  label: string;
+  rentalIncome: number;
+  operatingExpenses: number;
+  insuranceExpense: number;
+  propertyTaxExpense: number;
+  noi: number;
+  debtService: number;
+  cashFlow: number;
 }
 
 export interface UtilityAccount {
@@ -42,6 +291,7 @@ export interface UtilityAccount {
   category: UtilityCategory;
   notes?: string;
   syncEnabled: boolean;
+  isActive: boolean;
   lastSyncedAt?: string;
   lastSyncStatus?: SyncStatus;
   lastSyncError?: string;
@@ -65,8 +315,6 @@ export interface Statement {
   ratePlan?: string;
   pdfS3Key?: string;
   createdAt: string;
-  // rawDataJson carries provider-specific fields:
-  // pastDue, currentCharges, accountName, accountNumber, serviceAddress
   rawDataJson?: Record<string, unknown>;
   utilityAccount?: Pick<UtilityAccount, 'providerName' | 'category'> & {
     property?: Pick<Property, 'address' | 'nickname'>;
@@ -134,8 +382,19 @@ export const CATEGORY_COLORS: Record<UtilityCategory, string> = {
 
 export const PROPERTY_TYPE_LABELS: Record<PropertyType, string> = {
   PRIMARY: 'Primary home', RENTAL: 'Rental', INVESTMENT: 'Investment', COMMERCIAL: 'Commercial',
+  RESIDENTIAL_SINGLE: 'Single-family', RESIDENTIAL_MULTI: 'Multi-family',
+  LAND: 'Land', GOLF_COURSE: 'Golf course', OTHER: 'Other',
 };
 
 export const SEVERITY_PILL: Record<InsightSeverity, string> = {
   ALERT: 'pill-red', WARNING: 'pill-amber', INFO: 'pill-blue',
+};
+
+export const EXPENSE_CATEGORY_LABELS: Record<ExpenseCategory, string> = {
+  UTILITIES: 'Utilities', REPAIRS_MAINTENANCE: 'Repairs & Maintenance',
+  LANDSCAPING: 'Landscaping', PROPERTY_MANAGEMENT: 'Property Management',
+  LEGAL: 'Legal', INSURANCE: 'Insurance', PROPERTY_TAX: 'Property Tax',
+  HOA: 'HOA', MORTGAGE_DEBT_SERVICE: 'Mortgage / Debt Service',
+  CAPITAL_IMPROVEMENT: 'Capital Improvement', SUPPLIES: 'Supplies',
+  TRAVEL: 'Travel', ADVERTISING: 'Advertising', OTHER: 'Other',
 };

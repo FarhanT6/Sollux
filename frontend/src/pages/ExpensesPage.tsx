@@ -1,0 +1,187 @@
+import { useEffect, useState } from 'react';
+import { getExpenses, createExpense, updateExpense, deleteExpense, getProperties } from '../api/client';
+import type { Expense, Property, ExpenseCategory } from '../types';
+import { EXPENSE_CATEGORY_LABELS } from '../types';
+import { format } from 'date-fns';
+
+const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+
+const CATEGORIES: ExpenseCategory[] = [
+  'UTILITIES','REPAIRS_MAINTENANCE','LANDSCAPING','PROPERTY_MANAGEMENT','LEGAL',
+  'INSURANCE','PROPERTY_TAX','HOA','MORTGAGE_DEBT_SERVICE','CAPITAL_IMPROVEMENT',
+  'SUPPLIES','TRAVEL','ADVERTISING','OTHER',
+];
+
+export default function ExpensesPage() {
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [properties, setProperties] = useState<Property[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filterPropId, setFilterPropId] = useState('');
+  const [filterCat, setFilterCat] = useState('');
+  const [filterPersonal, setFilterPersonal] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({
+    propertyId: '', category: 'REPAIRS_MAINTENANCE' as ExpenseCategory,
+    amount: '', date: new Date().toISOString().slice(0, 10),
+    vendor: '', description: '', isCapEx: false, isPersonal: false,
+  });
+  const [saving, setSaving] = useState(false);
+
+  const loadExpenses = () =>
+    getExpenses({ propertyId: filterPropId || undefined, isPersonal: filterPersonal || undefined })
+      .then(setExpenses);
+
+  useEffect(() => {
+    Promise.all([loadExpenses(), getProperties().then(setProperties)]).finally(() => setLoading(false));
+  }, [filterPropId, filterPersonal]);
+
+  const filtered = filterCat ? expenses.filter(e => e.category === filterCat) : expenses;
+  const total = filtered.filter(e => !e.isPersonal && !e.isCapEx).reduce((s, e) => s + Number(e.amount), 0);
+
+  async function handleCreate(ev: React.FormEvent) {
+    ev.preventDefault();
+    if (!form.propertyId || !form.amount) return;
+    setSaving(true);
+    try {
+      await createExpense({ ...form, amount: parseFloat(form.amount) });
+      await loadExpenses();
+      setShowForm(false);
+      setForm(f => ({ ...f, amount: '', vendor: '', description: '' }));
+    } finally { setSaving(false); }
+  }
+
+  async function togglePersonal(expense: Expense) {
+    const updated = await updateExpense(expense.id, { isPersonal: !expense.isPersonal });
+    setExpenses(prev => prev.map(e => e.id === expense.id ? { ...e, isPersonal: updated.isPersonal } : e));
+  }
+
+  return (
+    <div className="p-6">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-xl font-semibold text-white">Expenses</h1>
+          <p className="text-sm text-gray-400 mt-0.5">{filtered.length} records · {money(total)} operating</p>
+        </div>
+        <button onClick={() => setShowForm(v => !v)} className="btn-primary text-sm">
+          {showForm ? 'Cancel' : '+ Log Expense'}
+        </button>
+      </div>
+
+      {/* Filters */}
+      <div className="flex gap-3 mb-4 flex-wrap">
+        <select value={filterPropId} onChange={e => setFilterPropId(e.target.value)} className="input-dark text-sm max-w-xs">
+          <option value="">All properties</option>
+          {properties.map(p => <option key={p.id} value={p.id}>{p.nickname || p.address}</option>)}
+        </select>
+        <select value={filterCat} onChange={e => setFilterCat(e.target.value)} className="input-dark text-sm w-52">
+          <option value="">All categories</option>
+          {CATEGORIES.map(c => <option key={c} value={c}>{EXPENSE_CATEGORY_LABELS[c]}</option>)}
+        </select>
+        <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer select-none">
+          <input type="checkbox" checked={filterPersonal} onChange={e => setFilterPersonal(e.target.checked)} />
+          Show personal
+        </label>
+      </div>
+
+      {showForm && (
+        <form onSubmit={handleCreate} className="rounded-xl p-5 mb-5" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
+          <div className="grid grid-cols-3 gap-4 mb-4">
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Property *</label>
+              <select value={form.propertyId} onChange={e => setForm(f => ({ ...f, propertyId: e.target.value }))} className="input-dark w-full" required>
+                <option value="">Select…</option>
+                {properties.map(p => <option key={p.id} value={p.id}>{p.nickname || p.address}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Category *</label>
+              <select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value as ExpenseCategory }))} className="input-dark w-full">
+                {CATEGORIES.map(c => <option key={c} value={c}>{EXPENSE_CATEGORY_LABELS[c]}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Amount *</label>
+              <input type="number" step="0.01" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} className="input-dark w-full" required />
+            </div>
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Date *</label>
+              <input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} className="input-dark w-full" required />
+            </div>
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Vendor</label>
+              <input value={form.vendor} onChange={e => setForm(f => ({ ...f, vendor: e.target.value }))} className="input-dark w-full" />
+            </div>
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Description</label>
+              <input value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} className="input-dark w-full" />
+            </div>
+          </div>
+          <div className="flex gap-4 mb-4">
+            <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
+              <input type="checkbox" checked={form.isCapEx} onChange={e => setForm(f => ({ ...f, isCapEx: e.target.checked }))} />
+              Capital improvement (CapEx)
+            </label>
+            <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
+              <input type="checkbox" checked={form.isPersonal} onChange={e => setForm(f => ({ ...f, isPersonal: e.target.checked }))} />
+              Personal (exclude from P&L)
+            </label>
+          </div>
+          <button type="submit" disabled={saving} className="btn-primary text-sm">{saving ? 'Saving…' : 'Log Expense'}</button>
+        </form>
+      )}
+
+      {loading ? (
+        <div className="text-gray-500 text-sm">Loading…</div>
+      ) : filtered.length === 0 ? (
+        <div className="text-center py-16 text-gray-500">No expenses found</div>
+      ) : (
+        <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
+          <table className="w-full text-sm">
+            <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
+              <tr className="text-left text-gray-400">
+                <th className="px-4 py-3">Date</th>
+                <th className="px-4 py-3">Property</th>
+                <th className="px-4 py-3">Category</th>
+                <th className="px-4 py-3">Vendor</th>
+                <th className="px-4 py-3">Amount</th>
+                <th className="px-4 py-3">Flags</th>
+                <th className="px-4 py-3"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/5">
+              {filtered.map(e => (
+                <tr key={e.id} className={`hover:bg-white/[0.02] ${e.isPersonal ? 'opacity-50' : ''}`}>
+                  <td className="px-4 py-3 text-gray-400 text-xs">{format(new Date(e.date), 'MMM d, yyyy')}</td>
+                  <td className="px-4 py-3 text-gray-300 text-xs">{e.property?.nickname || e.property?.address || '—'}</td>
+                  <td className="px-4 py-3">
+                    <span className="text-xs bg-white/5 text-gray-300 px-2 py-0.5 rounded">
+                      {EXPENSE_CATEGORY_LABELS[e.category]}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-gray-400 text-xs">{e.vendor || e.description || '—'}</td>
+                  <td className="px-4 py-3 font-medium text-white">{money(Number(e.amount))}</td>
+                  <td className="px-4 py-3">
+                    <div className="flex gap-1.5">
+                      {e.isCapEx && <span className="text-xs bg-blue-900/40 text-blue-300 px-1.5 py-0.5 rounded">CapEx</span>}
+                      {e.isPersonal && <span className="text-xs bg-purple-900/40 text-purple-300 px-1.5 py-0.5 rounded">Personal</span>}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <button
+                      onClick={() => togglePersonal(e)}
+                      className="text-xs text-gray-500 hover:text-gray-300 mr-3"
+                      title={e.isPersonal ? 'Mark as property expense' : 'Mark as personal'}
+                    >
+                      {e.isPersonal ? 'Unmk personal' : 'Mk personal'}
+                    </button>
+                    <button onClick={async () => { if (confirm('Delete?')) { await deleteExpense(e.id); setExpenses(prev => prev.filter(x => x.id !== e.id)); } }} className="text-xs text-red-500 hover:text-red-400">Del</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
