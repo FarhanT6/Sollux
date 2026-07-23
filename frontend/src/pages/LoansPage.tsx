@@ -33,17 +33,17 @@ export default function LoansPage() {
     setSaving(true);
     try {
       await createLoan({
-        propertyId: form.propertyId || null,
+        propertyId: form.propertyId || undefined,
         loanType: form.loanType,
         lender: form.lender,
-        accountLast4: form.accountLast4 || null,
-        originalAmount: form.originalAmount ? parseFloat(form.originalAmount) : null,
-        interestRate: form.interestRate ? parseFloat(form.interestRate) : null,
-        originationDate: form.originationDate || null,
-        maturityDate: form.maturityDate || null,
-        monthlyPayment: form.monthlyPayment ? parseFloat(form.monthlyPayment) : null,
-        currentBalance: form.currentBalance ? parseFloat(form.currentBalance) : null,
-        notes: form.notes || null,
+        accountLast4: form.accountLast4 || undefined,
+        originalAmount: form.originalAmount ? parseFloat(form.originalAmount) : undefined,
+        interestRate: form.interestRate ? parseFloat(form.interestRate) : undefined,
+        originationDate: form.originationDate || undefined,
+        maturityDate: form.maturityDate || undefined,
+        monthlyPayment: form.monthlyPayment ? parseFloat(form.monthlyPayment) : undefined,
+        currentBalance: form.currentBalance ? parseFloat(form.currentBalance) : undefined,
+        notes: form.notes || undefined,
         isPersonal: form.isPersonal,
         isActive: form.isActive,
       });

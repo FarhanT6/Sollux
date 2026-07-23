@@ -91,6 +91,7 @@ export interface LeaseTenant {
   leaseId: string;
   tenantId: string;
   tenant: Tenant;
+  lease?: Lease;
   isPrimary: boolean;
 }
 
