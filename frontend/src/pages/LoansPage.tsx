@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { getLoans, createLoan, updateLoan, deleteLoan, getProperties } from '../api/client';
 import type { Loan, Property, LoanType } from '../types';
 import { format } from 'date-fns';
 
-const money = (n: number | undefined) => n == null ? '—' : n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+const money = (n: number | string | undefined) => n == null ? '—' : Number(n).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 
 const LOAN_TYPES: LoanType[] = ['MORTGAGE','HELOC','AUTO','PERSONAL','STUDENT','INSTALLMENT_PLAN','CREDIT_LINE','OTHER'];
 
@@ -51,8 +52,8 @@ export default function LoansPage() {
     } finally { setSaving(false); }
   }
 
-  const totalDebt = loans.filter(l => l.isActive && !l.isPersonal).reduce((s, l) => s + (l.currentBalance ?? 0), 0);
-  const monthlyDebt = loans.filter(l => l.isActive && !l.isPersonal).reduce((s, l) => s + (l.monthlyPayment ?? 0), 0);
+  const totalDebt = loans.filter(l => l.isActive && !l.isPersonal).reduce((s, l) => s + Number(l.currentBalance ?? 0), 0);
+  const monthlyDebt = loans.filter(l => l.isActive && !l.isPersonal).reduce((s, l) => s + Number(l.monthlyPayment ?? 0), 0);
 
   return (
     <div className="p-6">
@@ -145,13 +146,15 @@ export default function LoansPage() {
             <tbody className="divide-y divide-white/5">
               {loans.map(loan => (
                 <tr key={loan.id} className={`hover:bg-white/[0.02] ${!loan.isActive ? 'opacity-40' : ''}`}>
-                  <td className="px-4 py-3 font-medium text-white text-xs">
-                    {loan.lender}
+                  <td className="px-4 py-3 font-medium text-xs">
+                    <Link to={`/loans/${loan.id}`} className="text-white hover:text-amber-400">
+                      {loan.lender}
+                    </Link>
                     {loan.accountLast4 && <span className="text-gray-500 ml-1">···{loan.accountLast4}</span>}
                   </td>
                   <td className="px-4 py-3 text-gray-400 text-xs">{loan.property?.nickname || loan.property?.address || <span className="text-gray-600">Unattached</span>}</td>
                   <td className="px-4 py-3 text-gray-400 text-xs">{loan.loanType.replace('_', ' ')}</td>
-                  <td className="px-4 py-3 text-right text-white text-xs font-medium">{money(loan.currentBalance ?? undefined)}</td>
+                  <td className="px-4 py-3 text-right text-red-400 text-xs font-medium">{money(loan.currentBalance ?? undefined)}</td>
                   <td className="px-4 py-3 text-right text-gray-300 text-xs">{money(loan.monthlyPayment ?? undefined)}</td>
                   <td className="px-4 py-3 text-right text-gray-400 text-xs">{loan.interestRate != null ? `${loan.interestRate}%` : '—'}</td>
                   <td className="px-4 py-3">

@@ -12,6 +12,7 @@ import insightsRouter from './routes/insights';
 import documentsRouter from './routes/documents';
 import dashboardRouter from './routes/dashboard';
 import gmailRouter from './routes/gmail';
+import driveRouter from './routes/drive';
 import notificationsRouter from './routes/notifications';
 import authRouter from './routes/auth';
 import stripeRouter from './routes/stripe';
@@ -78,6 +79,7 @@ app.use('/api/payments', paymentsRouter);
 app.use('/api/insights', insightsRouter);
 app.use('/api/documents', documentsRouter);
 app.use('/api/gmail', gmailRouter);
+app.use('/api/drive', driveRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/import', importRouter);
 // Property management

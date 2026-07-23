@@ -1,7 +1,7 @@
-import { useCallback, useState, useRef } from 'react';
+import { useCallback, useState, useRef, useEffect } from 'react';
 import { format } from 'date-fns';
 import { PageHeader } from '../components/ui';
-import api from '../api/client';
+import api, { getDriveStatus, getDriveConnectUrl, getDriveAccessToken, startDriveImport, getDriveImportJob, getProperties } from '../api/client';
 import type { Property } from '../types';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -188,6 +188,192 @@ function Dropzone({ onFiles }: { onFiles: (files: File[]) => void }) {
         <p className="text-sm font-medium text-gray-200">Drop utility bill PDFs here</p>
         <p className="text-xs text-gray-500 mt-1">or click to browse · any utility · any format · up to 50 at once</p>
       </div>
+    </div>
+  );
+}
+
+// ── Google Drive import ──────────────────────────────────────────────────────
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload  = e => resolve((e.target!.result as string).split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+interface DriveJobStatus {
+  id: string;
+  status: string;
+  totalFiles: number;
+  processedFiles: number;
+  autoImported: number;
+  needsReview: { filename: string; s3Key: string; extracted: ExtractedBill; match: MatchResult; pdfUrl: string }[];
+}
+
+// Lazily loads Google's API + Picker client libraries (not an npm package —
+// Google only ships these as browser globals from their own CDN).
+let gapiLoadPromise: Promise<void> | null = null;
+function loadGooglePicker(): Promise<void> {
+  if (gapiLoadPromise) return gapiLoadPromise;
+  gapiLoadPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://apis.google.com/js/api.js';
+    script.onload = () => {
+      (window as any).gapi.load('picker', () => resolve());
+    };
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
+  return gapiLoadPromise;
+}
+
+function DriveImportPanel({ onResolved }: {
+  onResolved: (bills: ParsedBill[], properties: PropertyWithAccounts[], autoImported: number) => void;
+}) {
+  const [status, setStatus] = useState<{ connected: boolean; accounts: { id: string; email: string }[] } | null>(null);
+  const [tokenId, setTokenId] = useState('');
+  const [opening, setOpening] = useState(false);
+  const [job, setJob] = useState<DriveJobStatus | null>(null);
+  const [folderName, setFolderName] = useState('');
+  const [resolving, setResolving] = useState(false);
+
+  useEffect(() => {
+    getDriveStatus().then(s => {
+      setStatus(s);
+      if (s.accounts[0]) setTokenId(s.accounts[0].id);
+    }).catch(() => {});
+  }, []);
+
+  const openPicker = async () => {
+    const apiKey = import.meta.env.VITE_GOOGLE_PICKER_API_KEY;
+    if (!apiKey) {
+      alert('Google Picker API key is not configured (VITE_GOOGLE_PICKER_API_KEY).');
+      return;
+    }
+    setOpening(true);
+    try {
+      await loadGooglePicker();
+      const { accessToken } = await getDriveAccessToken(tokenId);
+      const google = (window as any).google;
+
+      const view = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
+        .setSelectFolderEnabled(true)
+        .setIncludeFolders(true);
+
+      const picker = new google.picker.PickerBuilder()
+        .addView(view)
+        .setOAuthToken(accessToken)
+        .setDeveloperKey(apiKey)
+        .setCallback(async (data: any) => {
+          if (data.action === google.picker.Action.PICKED) {
+            const doc = data.docs[0];
+            setFolderName(doc.name);
+            const { jobId } = await startDriveImport(tokenId, doc.id, doc.name);
+            setJob({ id: jobId, status: 'RUNNING', totalFiles: 0, processedFiles: 0, autoImported: 0, needsReview: [] });
+          }
+        })
+        .build();
+
+      picker.setVisible(true);
+    } finally {
+      setOpening(false);
+    }
+  };
+
+  // Poll job progress until it finishes.
+  useEffect(() => {
+    if (!job || job.status !== 'RUNNING') return;
+    const interval = setInterval(async () => {
+      const data = await getDriveImportJob(job.id) as DriveJobStatus;
+      setJob(data);
+      if (data.status !== 'RUNNING') clearInterval(interval);
+    }, 1500);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job?.id, job?.status]);
+
+  const finishReview = async () => {
+    if (!job) return;
+    setResolving(true);
+    try {
+      const withData: ParsedBill[] = await Promise.all(
+        job.needsReview.map(async item => {
+          const res   = await fetch(item.pdfUrl);
+          const blob  = await res.blob();
+          const data  = await blobToBase64(blob);
+          return { filename: item.filename, extracted: item.extracted, match: item.match, fileData: data };
+        })
+      );
+      const properties = await getProperties() as unknown as PropertyWithAccounts[];
+      onResolved(withData, properties, job.autoImported);
+    } finally {
+      setResolving(false);
+    }
+  };
+
+  if (!status) return null;
+
+  if (!status.connected) {
+    return (
+      <div className="rounded-xl p-5 mb-5 flex items-center justify-between" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+        <div>
+          <p className="text-sm font-medium text-gray-200">Import from Google Drive</p>
+          <p className="text-xs text-gray-500 mt-0.5">Connect a Drive account to bulk-import a whole folder of statements at once.</p>
+        </div>
+        <button className="btn text-xs" onClick={() => getDriveConnectUrl().then(r => { window.location.href = r.url; })}>
+          + Connect Drive
+        </button>
+      </div>
+    );
+  }
+
+  if (job) {
+    const done = job.status !== 'RUNNING';
+    return (
+      <div className="rounded-xl p-5 mb-5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+        <p className="text-sm font-medium text-gray-200 mb-2">
+          {done ? 'Drive import finished' : `Importing “${folderName}”…`}
+        </p>
+        {!done ? (
+          <>
+            <div className="w-full h-1.5 rounded-full bg-white/10 overflow-hidden mb-2">
+              <div
+                className="h-full bg-amber-500 transition-all"
+                style={{ width: job.totalFiles ? `${(job.processedFiles / job.totalFiles) * 100}%` : '4%' }}
+              />
+            </div>
+            <p className="text-xs text-gray-500">{job.processedFiles} / {job.totalFiles || '…'} files processed</p>
+          </>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-xs text-green-400">{job.autoImported} statement{job.autoImported !== 1 ? 's' : ''} auto-filed</p>
+            {job.needsReview.length > 0 ? (
+              <>
+                <p className="text-xs text-amber-400">{job.needsReview.length} need{job.needsReview.length === 1 ? 's' : ''} your review — couldn't confidently match a property/utility</p>
+                <button onClick={finishReview} disabled={resolving} className="btn btn-primary text-xs disabled:opacity-40">
+                  {resolving ? 'Loading…' : `Review ${job.needsReview.length} statement${job.needsReview.length !== 1 ? 's' : ''}`}
+                </button>
+              </>
+            ) : (
+              <button onClick={() => setJob(null)} className="btn text-xs">Import another folder</button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-xl p-5 mb-5 flex items-center justify-between" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+      <div>
+        <p className="text-sm font-medium text-gray-200">Import from Google Drive</p>
+        <p className="text-xs text-gray-500 mt-0.5">Pick a folder from My Drive or Shared with me — every PDF inside (including subfolders) gets pulled in.</p>
+      </div>
+      <button onClick={openPicker} disabled={opening} className="btn btn-primary text-xs disabled:opacity-40">
+        {opening ? 'Opening…' : 'Choose folder'}
+      </button>
     </div>
   );
 }
@@ -738,6 +924,7 @@ export default function ImportPage() {
   const [bills, setBills]           = useState<ParsedBill[]>([]);
   const [properties, setProperties] = useState<PropertyWithAccounts[]>([]);
   const [result, setResult]         = useState<{ imported: number; skipped: number; errors: string[] } | null>(null);
+  const [driveNote, setDriveNote]   = useState<string | null>(null);
   const [progress, setProgress]     = useState('');
 
   const handleFiles = async (files: File[]) => {
@@ -803,6 +990,22 @@ export default function ImportPage() {
     setBills(prev => prev.filter(b => b.filename !== filename));
   };
 
+  const handleDriveResolved = (driveBills: ParsedBill[], props: PropertyWithAccounts[], autoImported: number) => {
+    if (driveBills.length === 0) {
+      setResult({ imported: autoImported, skipped: 0, errors: [] });
+      setStage('done');
+      return;
+    }
+    setBills(prev => [...prev, ...driveBills]);
+    setProperties(props);
+    setDriveNote(
+      autoImported > 0
+        ? `${autoImported} statement${autoImported !== 1 ? 's' : ''} already auto-filed from Drive — these ${driveBills.length} need a quick check.`
+        : `${driveBills.length} statement${driveBills.length !== 1 ? 's' : ''} from Drive need a quick check before they can be filed.`
+    );
+    setStage('review');
+  };
+
   const handleImport = async () => {
     const ready = bills.filter(isBillReady);
     if (ready.length === 0) return;
@@ -836,6 +1039,7 @@ export default function ImportPage() {
     setProperties([]);
     setResult(null);
     setProgress('');
+    setDriveNote(null);
   };
 
   const readyCount      = bills.filter(isBillReady).length;
@@ -853,7 +1057,10 @@ export default function ImportPage() {
 
         {/* Drop stage */}
         {stage === 'drop' && (
-          <Dropzone onFiles={handleFiles} />
+          <>
+            <DriveImportPanel onResolved={handleDriveResolved} />
+            <Dropzone onFiles={handleFiles} />
+          </>
         )}
 
         {/* Analyzing */}
@@ -868,6 +1075,9 @@ export default function ImportPage() {
         {/* Review */}
         {stage === 'review' && (
           <div className="space-y-6">
+            {driveNote && (
+              <div className="text-xs text-blue-400 bg-blue-500/10 rounded-lg px-4 py-2.5">{driveNote}</div>
+            )}
             {/* Summary bar */}
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-4 text-sm">

@@ -113,6 +113,10 @@ export const deleteExpense = (id: string) =>
 // Loans
 export const getLoans = (params?: { propertyId?: string; isPersonal?: boolean; isActive?: boolean }) =>
   api.get<Loan[]>('/loans', { params }).then(r => r.data);
+export const getLoan = (id: string) =>
+  api.get<Loan>(`/loans/${id}`).then(r => r.data);
+export const getLoanAmortization = (id: string) =>
+  api.get(`/loans/${id}/amortization`).then(r => r.data);
 export const createLoan = (data: Partial<Loan>) =>
   api.post<Loan>('/loans', data).then(r => r.data);
 export const updateLoan = (id: string, data: Partial<Loan>) =>
@@ -223,6 +227,20 @@ export const getGmailStatus = () =>
   api.get<{ connected: boolean; email?: string }>('/gmail/status').then(r => r.data);
 export const syncGmail = () =>
   api.post<{ jobId: string }>('/gmail/sync').then(r => r.data);
+
+// Google Drive
+export const getDriveConnectUrl = () =>
+  api.post<{ url: string }>('/drive/connect').then(r => r.data);
+export const getDriveStatus = () =>
+  api.get<{ connected: boolean; accounts: { id: string; email: string }[] }>('/drive/status').then(r => r.data);
+export const disconnectDrive = (id: string) =>
+  api.delete(`/drive/disconnect/${id}`);
+export const getDriveAccessToken = (tokenId: string) =>
+  api.get<{ accessToken: string }>('/drive/access-token', { params: { tokenId } }).then(r => r.data);
+export const startDriveImport = (tokenId: string, folderId: string, folderName?: string) =>
+  api.post<{ jobId: string }>('/drive/import', { tokenId, folderId, folderName }).then(r => r.data);
+export const getDriveImportJob = (jobId: string) =>
+  api.get(`/drive/jobs/${jobId}`).then(r => r.data);
 
 // Payment plans
 export const getPaymentPlan = (utilityAccountId: string) =>

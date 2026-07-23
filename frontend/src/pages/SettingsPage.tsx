@@ -1,20 +1,27 @@
 import { useUser, useClerk } from '@clerk/clerk-react';
 import { useEffect, useState } from 'react';
 import { PageHeader } from '../components/ui';
-import api, { getGmailConnectUrl } from '../api/client';
+import api, { getGmailConnectUrl, getDriveConnectUrl } from '../api/client';
 
 export default function SettingsPage() {
   const { user } = useUser();
   const { signOut } = useClerk();
   const [gmailStatus, setGmailStatus] = useState<{ connected: boolean; accounts: { id: string; email: string; label?: string }[] } | null>(null);
   const [gmailSuccessMsg, setGmailSuccessMsg] = useState('');
+  const [driveStatus, setDriveStatus] = useState<{ connected: boolean; accounts: { id: string; email: string }[] } | null>(null);
+  const [driveSuccessMsg, setDriveSuccessMsg] = useState('');
 
   useEffect(() => {
     api.get('/gmail/status').then(r => setGmailStatus(r.data)).catch(() => {});
+    api.get('/drive/status').then(r => setDriveStatus(r.data)).catch(() => {});
 
     if (window.location.search.includes('gmail=connected')) {
       setGmailSuccessMsg('Gmail connected successfully!');
       setTimeout(() => setGmailSuccessMsg(''), 4000);
+    }
+    if (window.location.search.includes('drive=connected')) {
+      setDriveSuccessMsg('Google Drive connected successfully!');
+      setTimeout(() => setDriveSuccessMsg(''), 4000);
     }
   }, []);
 
@@ -94,6 +101,45 @@ export default function SettingsPage() {
             <button
               className="btn text-xs"
               onClick={() => getGmailConnectUrl().then(r => { window.location.href = r.url; })}
+            >
+              + Connect
+            </button>
+          </div>
+        </div>
+
+        <div className="card p-5 mb-4">
+          <h2 className="text-sm font-semibold text-white mb-4">Google Drive</h2>
+          {driveSuccessMsg && (
+            <p className="text-xs text-green-400 mb-3">{driveSuccessMsg}</p>
+          )}
+          {(driveStatus?.accounts || []).map(acct => (
+            <div key={acct.id} className="flex items-center justify-between py-2.5 border-b border-white/8 last:border-0">
+              <div className="flex items-center gap-2">
+                <div className="w-6 h-6 bg-blue-500/10 rounded flex items-center justify-center text-xs text-gray-300">D</div>
+                <p className="text-sm text-gray-100">{acct.email}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="pill pill-green">&#x2713; Connected</span>
+                <button
+                  className="btn text-xs text-red-400 border-red-500/30 hover:bg-red-500/10"
+                  onClick={() => api.delete(`/drive/disconnect/${acct.id}`)
+                    .then(() => api.get('/drive/status').then(r => setDriveStatus(r.data)))}
+                >
+                  Remove
+                </button>
+              </div>
+            </div>
+          ))}
+          <div className="flex items-center justify-between pt-2.5">
+            <div className="flex items-center gap-2">
+              <div className="w-6 h-6 bg-blue-500/10 rounded flex items-center justify-center text-xs text-gray-300">D</div>
+              <p className="text-sm text-gray-400">
+                {driveStatus?.connected ? 'Add another Drive account' : 'Connect Drive to bulk-import statements from a folder'}
+              </p>
+            </div>
+            <button
+              className="btn text-xs"
+              onClick={() => getDriveConnectUrl().then(r => { window.location.href = r.url; })}
             >
               + Connect
             </button>

@@ -17,6 +17,7 @@ import RentRollPage from './pages/RentRollPage';
 import TenantsPage from './pages/TenantsPage';
 import ExpensesPage from './pages/ExpensesPage';
 import LoansPage from './pages/LoansPage';
+import LoanDetailPage from './pages/LoanDetailPage';
 import PnLPage from './pages/PnLPage';
 import NoticesPage from './pages/NoticesPage';
 import NoticeDetailPage from './pages/NoticeDetailPage';
@@ -60,6 +61,7 @@ export default function App() {
           <Route path="tenants" element={<TenantsPage />} />
           <Route path="expenses" element={<ExpensesPage />} />
           <Route path="loans" element={<LoansPage />} />
+          <Route path="loans/:id" element={<LoanDetailPage />} />
           <Route path="pnl" element={<PnLPage />} />
           <Route path="notices" element={<NoticesPage />} />
           <Route path="notices/:id" element={<NoticeDetailPage />} />

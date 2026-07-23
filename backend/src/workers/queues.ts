@@ -9,5 +9,6 @@ export const scrapeQueue = new Queue('scrape', { connection });
 export const insightQueue = new Queue('insights', { connection });
 export const notificationQueue = new Queue('notifications', { connection });
 export const gmailQueue = new Queue('gmail', { connection });
+export const driveImportQueue = new Queue('drive-import', { connection });
 
 export { connection as redisConnection };
