@@ -40,7 +40,12 @@ app.use(clerkMiddleware());
 app.use(helmet());
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || origin.startsWith('http://localhost:') || origin === process.env.FRONTEND_URL) {
+    if (
+      !origin ||
+      origin.startsWith('http://localhost:') ||
+      origin === process.env.FRONTEND_URL ||
+      /^https:\/\/sollux[a-z0-9-]*\.vercel\.app$/.test(origin)
+    ) {
       callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));
