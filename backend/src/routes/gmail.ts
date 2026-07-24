@@ -4,7 +4,9 @@ import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 
 const router = Router();
-router.use(attachDbUser);
+// attachDbUser is applied per-route below, NOT via router.use — the /callback
+// route below is hit by Google's redirect (no Clerk session cookie context
+// guaranteed), so it must stay exempt.
 
 function getOAuthClient() {
   return new google.auth.OAuth2(
@@ -15,7 +17,7 @@ function getOAuthClient() {
 }
 
 // POST /api/gmail/connect — returns OAuth URL
-router.post('/connect', async (req, res, next) => {
+router.post('/connect', attachDbUser, async (req, res, next) => {
   try {
     const oauth2Client = getOAuthClient();
     const url = oauth2Client.generateAuthUrl({
@@ -66,7 +68,7 @@ router.get('/callback', async (req, res, next) => {
 });
 
 // GET /api/gmail/status — returns all connected Gmail accounts
-router.get('/status', async (req, res, next) => {
+router.get('/status', attachDbUser, async (req, res, next) => {
   try {
     const tokens = await db.gmailToken.findMany({
       where: { userId: req.dbUserId! },
@@ -78,7 +80,7 @@ router.get('/status', async (req, res, next) => {
 });
 
 // DELETE /api/gmail/disconnect/:id — remove a connected Gmail account
-router.delete('/disconnect/:id', async (req, res, next) => {
+router.delete('/disconnect/:id', attachDbUser, async (req, res, next) => {
   try {
     const token = await db.gmailToken.findFirst({
       where: { id: req.params.id, userId: req.dbUserId! },
@@ -90,7 +92,7 @@ router.delete('/disconnect/:id', async (req, res, next) => {
 });
 
 // POST /api/gmail/sync — queue Gmail parse for ALL connected accounts
-router.post('/sync', async (req, res, next) => {
+router.post('/sync', attachDbUser, async (req, res, next) => {
   try {
     const tokens = await db.gmailToken.findMany({ where: { userId: req.dbUserId! } });
     if (!tokens.length) return res.status(400).json({ error: 'No Gmail accounts connected' });
