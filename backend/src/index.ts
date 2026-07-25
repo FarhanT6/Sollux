@@ -32,6 +32,16 @@ import pnlRouter from './routes/pnl';
 import { errorHandler } from './middleware/errorHandler';
 import { requireAuth, clerkMiddleware } from './middleware/requireAuth';
 
+// Run the Drive-import and Gmail workers in the API process. Ideally these
+// live in a separate Render service, but a Background Worker costs extra —
+// and these two workers only need Redis (no Playwright, no browser profiles),
+// so co-hosting is safe. Importing the file starts the BullMQ Worker instance
+// that consumes the queue and processes jobs. Without this, POST /drive/import
+// enqueues a job that no one ever consumes.
+import './workers/driveImportWorker';
+import './workers/gmailWorker';
+console.log('🔧 Inline workers started: driveImport, gmail');
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 
