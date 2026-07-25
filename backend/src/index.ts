@@ -42,7 +42,17 @@ const PORT = process.env.PORT || 3001;
 app.set('trust proxy', 1);
 
 // ─── Security ────────────────────────────────────────────
-app.use(clerkMiddleware());
+// clerkMiddleware() intercepts any request without a Clerk dev-browser
+// handshake and 302s it to "/" when a pk_test_ key is in production use.
+// Google's OAuth redirect back to /api/{gmail,drive}/callback obviously
+// can't carry that handshake, so those routes must skip Clerk entirely.
+const clerkMw = clerkMiddleware();
+app.use((req, res, next) => {
+  if (req.path === '/api/gmail/callback' || req.path === '/api/drive/callback') {
+    return next();
+  }
+  return clerkMw(req, res, next);
+});
 app.use(helmet());
 app.use(cors({
   origin: (origin, callback) => {
