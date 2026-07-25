@@ -5,7 +5,9 @@ import { attachDbUser } from '../middleware/requireAuth';
 import { getSignedDocumentUrl } from '../services/s3Service';
 
 const router = Router();
-router.use(attachDbUser);
+// attachDbUser is applied per-route below, NOT via router.use — the /callback
+// route below is hit by Google's redirect (no Clerk session cookie context
+// guaranteed), so it must stay exempt.
 
 function getOAuthClient() {
   return new google.auth.OAuth2(
@@ -16,7 +18,7 @@ function getOAuthClient() {
 }
 
 // POST /api/drive/connect — returns OAuth URL
-router.post('/connect', async (req, res, next) => {
+router.post('/connect', attachDbUser, async (req, res, next) => {
   try {
     const oauth2Client = getOAuthClient();
     const url = oauth2Client.generateAuthUrl({
@@ -64,7 +66,7 @@ router.get('/callback', async (req, res, next) => {
 });
 
 // GET /api/drive/status — returns all connected Drive accounts
-router.get('/status', async (req, res, next) => {
+router.get('/status', attachDbUser, async (req, res, next) => {
   try {
     const tokens = await db.driveToken.findMany({
       where: { userId: req.dbUserId! },
@@ -76,7 +78,7 @@ router.get('/status', async (req, res, next) => {
 });
 
 // DELETE /api/drive/disconnect/:id
-router.delete('/disconnect/:id', async (req, res, next) => {
+router.delete('/disconnect/:id', attachDbUser, async (req, res, next) => {
   try {
     const token = await db.driveToken.findFirst({
       where: { id: req.params.id, userId: req.dbUserId! },
@@ -118,7 +120,7 @@ async function getOAuth2ClientForToken(tokenId: string, userId: string) {
 // GET /api/drive/access-token?tokenId= — short-lived OAuth token for the Google Picker widget.
 // The picker runs client-side and needs a raw access token to list the user's own Drive
 // (including "Shared with me") with the same drive.readonly access this account already granted.
-router.get('/access-token', async (req, res, next) => {
+router.get('/access-token', attachDbUser, async (req, res, next) => {
   try {
     const { tokenId } = req.query as { tokenId?: string };
     if (!tokenId) return res.status(400).json({ error: 'tokenId required' });
@@ -132,7 +134,7 @@ router.get('/access-token', async (req, res, next) => {
 });
 
 // POST /api/drive/import  { tokenId, folderId, folderName? } — queues background import
-router.post('/import', async (req, res, next) => {
+router.post('/import', attachDbUser, async (req, res, next) => {
   try {
     const { tokenId, folderId, folderName } = req.body as { tokenId: string; folderId: string; folderName?: string };
     if (!tokenId || !folderId) return res.status(400).json({ error: 'tokenId and folderId required' });
@@ -161,7 +163,7 @@ router.post('/import', async (req, res, next) => {
 });
 
 // GET /api/drive/jobs/:id — poll progress; needsReview items get fresh signed S3 URLs
-router.get('/jobs/:id', async (req, res, next) => {
+router.get('/jobs/:id', attachDbUser, async (req, res, next) => {
   try {
     const job = await db.driveImportJob.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
     if (!job) return res.status(404).json({ error: 'Not found' });

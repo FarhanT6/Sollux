@@ -35,6 +35,12 @@ import { requireAuth, clerkMiddleware } from './middleware/requireAuth';
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Render sits in front of this app behind its own reverse proxy, so every
+// request carries an X-Forwarded-For header. Without this, express-rate-limit
+// throws ERR_ERL_UNEXPECTED_X_FORWARDED_FOR on every request under the
+// limiter (all of /api/), since it refuses to trust that header by default.
+app.set('trust proxy', 1);
+
 // ─── Security ────────────────────────────────────────────
 app.use(clerkMiddleware());
 app.use(helmet());
