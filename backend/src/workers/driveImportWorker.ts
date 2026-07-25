@@ -1,7 +1,7 @@
 import { Worker, Job } from 'bullmq';
 import { google, drive_v3 } from 'googleapis';
 import { Prisma } from '@prisma/client';
-import { redisConnection } from './queues';
+import { createWorkerConnection } from './queues';
 import { db } from '../config/db';
 import { parseBill } from '../services/pdfImportService';
 import { uploadDocument, buildStatementKey } from '../services/s3Service';
@@ -125,6 +125,8 @@ function buildRawData(ex: Awaited<ReturnType<typeof parseBill>>['extracted']) {
 const worker = new Worker<DriveImportJobData>(
   'drive-import',
   async (job: Job<DriveImportJobData>) => {
+    console.log(`[DriveImportWorker] Received job ${job.id}`);
+
     const { jobId, tokenId, folderId, fileIds, userId } = job.data;
     console.log(`[DriveImportWorker] Starting job ${jobId} for user ${userId}`);
 
@@ -274,10 +276,11 @@ const worker = new Worker<DriveImportJobData>(
       });
     }
   },
-  { connection: redisConnection, concurrency: 1 }
+  { connection: createWorkerConnection(), concurrency: 1 }
 );
 
 worker.on('completed', job => console.log(`[DriveImportWorker] Job ${job.id} completed`));
 worker.on('failed', (job, err) => console.error(`[DriveImportWorker] Job ${job?.id} failed:`, err.message));
+worker.on('error', (err) => console.error('[DriveImportWorker] Worker error:', err.message));
 
 export default worker;

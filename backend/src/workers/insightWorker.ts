@@ -1,6 +1,6 @@
 import { Worker, Job } from 'bullmq';
 import { generateInsightsForProperty } from '../ai/insightEngine';
-import { redisConnection } from './queues';
+import { createWorkerConnection } from './queues';
 
 const worker = new Worker(
   'insights',
@@ -10,11 +10,13 @@ const worker = new Worker(
     await generateInsightsForProperty(propertyId);
     console.log(`[InsightWorker] Done for property ${propertyId}`);
   },
-  { connection: redisConnection, concurrency: 5 }
+  { connection: createWorkerConnection(), concurrency: 5 }
 );
 
 worker.on('failed', (job, err) => {
   console.error(`[InsightWorker] Job ${job?.id} failed:`, err.message);
 });
+
+worker.on('error', (err) => console.error('[InsightWorker] Worker error:', err.message));
 
 export default worker;
