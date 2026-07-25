@@ -28,6 +28,8 @@ model User {
   gmailTokens             GmailToken[]
   driveTokens             DriveToken[]
   paymentRecipient        PaymentRecipient?
+  bankAccounts            BankAccount[]
+  otherIncome             OtherIncome[]
 
   @@map("users")
 }
@@ -726,4 +728,79 @@ enum LegalStatus {
   OPEN
   CLOSED
   ON_HOLD
+}
+
+// ─── BANK ACCOUNTS ───────────────────────────────────────
+model BankAccount {
+  id          String          @id @default(cuid())
+  userId      String
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String          // e.g. "Fahim Chase", "Dad WF"
+  last4       String?         // e.g. "4821"
+  bank        String?         // e.g. "Chase", "Wells Fargo"
+  accountType BankAccountType @default(CHECKING)
+  isActive    Boolean         @default(true)
+  sortOrder   Int             @default(0)
+  notes       String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  balances BankBalance[]
+
+  @@index([userId])
+  @@map("bank_accounts")
+}
+
+enum BankAccountType {
+  CHECKING
+  SAVINGS
+  CREDIT_CARD
+  CASH_POOL   // cash on hand, Venmo, etc.
+}
+
+model BankBalance {
+  id            String      @id @default(cuid())
+  bankAccountId String
+  bankAccount   BankAccount @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
+  balance       Decimal     @db.Decimal(12, 2)
+  creditLimit   Decimal?    @db.Decimal(12, 2)
+  asOfDate      DateTime
+  notes         String?
+  createdAt     DateTime    @default(now())
+
+  @@index([bankAccountId, asOfDate])
+  @@map("bank_balances")
+}
+
+// ─── OTHER INCOME ────────────────────────────────────────
+// Non-rent income: appliance biz, SSI/govt benefits, international transfers, etc.
+model OtherIncome {
+  id           String              @id @default(cuid())
+  userId       String
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category     OtherIncomeCategory
+  description  String?
+  amount       Decimal             @db.Decimal(10, 2)
+  receivedDate DateTime
+  method       String?             // cash, Zelle, Venmo, TapTap, check, etc.
+  isRecurring  Boolean             @default(false)
+  notes        String?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  @@index([userId, receivedDate])
+  @@map("other_income")
+}
+
+enum OtherIncomeCategory {
+  APPLIANCE_SERVICE    // service call fee
+  APPLIANCE_DELIVERY   // delivery fee
+  APPLIANCE_SALE       // appliance sold
+  GOVERNMENT_BENEFIT   // SSI, Section 8 admin fee, etc.
+  INTERNATIONAL        // TapTap / Bangladesh remittance received back
+  LOAN_RECEIVED        // personal loan received
+  SECURITY_DEPOSIT     // deposit collected from new tenant
+  DEPOSIT_REFUND_IN    // deposit returned that you previously paid
+  LAUNDRY              // laundry machine income
+  OTHER
 }

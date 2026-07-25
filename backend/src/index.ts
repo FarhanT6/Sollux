@@ -29,6 +29,9 @@ import taxesRouter from './routes/taxes';
 import improvementsRouter from './routes/improvements';
 import legalRouter from './routes/legal';
 import pnlRouter from './routes/pnl';
+import bankAccountsRouter from './routes/bankAccounts';
+import otherIncomeRouter from './routes/otherIncome';
+import budgetRouter from './routes/budget';
 import { errorHandler } from './middleware/errorHandler';
 import { requireAuth, clerkMiddleware } from './middleware/requireAuth';
 
@@ -134,6 +137,9 @@ app.use('/api/taxes', taxesRouter);
 app.use('/api/improvements', improvementsRouter);
 app.use('/api/legal', legalRouter);
 app.use('/api/pnl', pnlRouter);
+app.use('/api/bank-accounts', bankAccountsRouter);
+app.use('/api/other-income', otherIncomeRouter);
+app.use('/api/budget', budgetRouter);
 
 // ─── Error handling ───────────────────────────────────────
 app.use(errorHandler);

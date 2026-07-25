@@ -238,6 +238,7 @@ function DriveImportPanel({ onResolved }: {
   const [job, setJob] = useState<DriveJobStatus | null>(null);
   const [folderName, setFolderName] = useState('');
   const [resolving, setResolving] = useState(false);
+  const [driveError, setDriveError] = useState<string | null>(null);
 
   useEffect(() => {
     getDriveStatus().then(s => {
@@ -316,17 +317,14 @@ function DriveImportPanel({ onResolved }: {
   const finishReview = async () => {
     if (!job) return;
     setResolving(true);
+    setDriveError(null);
     try {
-      const withData: ParsedBill[] = await Promise.all(
-        job.needsReview.map(async item => {
-          const res   = await fetch(item.pdfUrl);
-          const blob  = await res.blob();
-          const data  = await blobToBase64(blob);
-          return { filename: item.filename, extracted: item.extracted, match: item.match, fileData: data };
-        })
-      );
+      const res = await api.get(`/drive/jobs/${job.id}/review-data`);
+      const { items, autoImported } = res.data;
       const properties = await getProperties() as unknown as PropertyWithAccounts[];
-      onResolved(withData, properties, job.autoImported);
+      onResolved(items, properties, autoImported ?? job.autoImported);
+    } catch (err) {
+      setDriveError(`Failed to load review data: ${(err as Error).message}`);
     } finally {
       setResolving(false);
     }
@@ -374,6 +372,7 @@ function DriveImportPanel({ onResolved }: {
                 <button onClick={finishReview} disabled={resolving} className="btn btn-primary text-xs disabled:opacity-40">
                   {resolving ? 'Loading…' : `Review ${job.needsReview.length} statement${job.needsReview.length !== 1 ? 's' : ''}`}
                 </button>
+                {driveError && <p className="text-xs text-red-400 mt-1">{driveError}</p>}
               </>
             ) : (
               <button onClick={() => setJob(null)} className="btn text-xs">Import another folder</button>

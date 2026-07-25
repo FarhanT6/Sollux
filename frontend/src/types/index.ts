@@ -399,3 +399,118 @@ export const EXPENSE_CATEGORY_LABELS: Record<ExpenseCategory, string> = {
   CAPITAL_IMPROVEMENT: 'Capital Improvement', SUPPLIES: 'Supplies',
   TRAVEL: 'Travel', ADVERTISING: 'Advertising', OTHER: 'Other',
 };
+
+// ─── Budget / Bank ─────────────────────────────────────────
+
+export type BankAccountType = 'CHECKING' | 'SAVINGS' | 'CREDIT_CARD' | 'CASH_POOL';
+export type OtherIncomeCategory =
+  | 'APPLIANCE_SERVICE' | 'APPLIANCE_DELIVERY' | 'APPLIANCE_SALE'
+  | 'GOVERNMENT_BENEFIT' | 'INTERNATIONAL' | 'LOAN_RECEIVED'
+  | 'SECURITY_DEPOSIT' | 'DEPOSIT_REFUND_IN' | 'LAUNDRY' | 'OTHER';
+
+export interface BankAccount {
+  id: string;
+  name: string;
+  last4?: string;
+  bank?: string;
+  accountType: BankAccountType;
+  isActive: boolean;
+  sortOrder: number;
+  notes?: string;
+  balance: number;
+  creditLimit?: number;
+  asOfDate?: string;
+}
+
+export interface OtherIncome {
+  id: string;
+  category: OtherIncomeCategory;
+  description?: string;
+  amount: number;
+  receivedDate: string;
+  method?: string;
+  isRecurring: boolean;
+  notes?: string;
+  createdAt: string;
+}
+
+export interface BudgetRentRow {
+  leaseId: string;
+  tenant: string;
+  unit: string;
+  property: string;
+  propertyId: string;
+  expected: number;
+  collected: number;
+  remaining: number;
+  arrearsBalance: number;
+  status: 'paid' | 'partial' | 'unpaid';
+}
+
+export interface BudgetMortgageRow {
+  loanId: string;
+  lender: string;
+  property: string;
+  monthlyPayment: number;
+  paid: number;
+  paidDate: string | null;
+  status: 'paid' | 'unpaid';
+}
+
+export interface DelinquencyTenant {
+  leaseId: string;
+  tenant: string;
+  unit: string;
+  property: string;
+  propertyId: string;
+  monthlyRent: number;
+  arrears: number;
+  lastPaymentDate: string | null;
+  lastPaymentAmount: number;
+  daysSincePay: number;
+  recentMonthlyAvg: number;
+  score: number;
+  likelihood: 'high' | 'medium' | 'low' | 'none';
+  expectedCollection: number;
+}
+
+export interface BudgetSummary {
+  year: number;
+  month: number;
+  rent: {
+    rows: BudgetRentRow[];
+    expected: number;
+    collected: number;
+    outstanding: number;
+  };
+  mortgages: {
+    rows: BudgetMortgageRow[];
+    total: number;
+    paid: number;
+    unpaid: number;
+  };
+  otherIncome: { rows: OtherIncome[]; total: number };
+  expenses: { total: number };
+  bankAccounts: BankAccount[];
+  cashSummary: { totalBankBalance: number; totalCash: number; totalCashOnHand: number };
+  summary: {
+    totalIncome: number;
+    totalExpected: number;
+    totalExpenses: number;
+    realisticNet: number;
+    idealNet: number;
+  };
+}
+
+export const OTHER_INCOME_LABELS: Record<OtherIncomeCategory, string> = {
+  APPLIANCE_SERVICE:   'Appliance – Service Call',
+  APPLIANCE_DELIVERY:  'Appliance – Delivery',
+  APPLIANCE_SALE:      'Appliance – Sale',
+  GOVERNMENT_BENEFIT:  'Govt Benefit (SSI / Section 8)',
+  INTERNATIONAL:       'International Transfer (TapTap)',
+  LOAN_RECEIVED:       'Loan Received',
+  SECURITY_DEPOSIT:    'Security Deposit Collected',
+  DEPOSIT_REFUND_IN:   'Deposit Refund Received',
+  LAUNDRY:             'Laundry Income',
+  OTHER:               'Other',
+};

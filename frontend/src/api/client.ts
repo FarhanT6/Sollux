@@ -28,6 +28,7 @@ import type {
   Property, UtilityAccount, Statement, Payment, AIInsight, DashboardSummary,
   Unit, Tenant, Lease, RentPayment, RentNotice, Expense, Loan, LoanPayment,
   InsurancePolicy, TaxAssessment, Improvement, LegalMatter, PropertyPnL, MonthlyPnL,
+  BankAccount, OtherIncome, BudgetSummary, DelinquencyTenant,
 } from '../types';
 
 // Dashboard
@@ -257,3 +258,31 @@ export const updatePaymentPlan = (utilityAccountId: string, data: {
 }) => api.patch(`/utilities/${utilityAccountId}/payment-plan`, data).then(r => r.data);
 export const deletePaymentPlan = (utilityAccountId: string) =>
   api.delete(`/utilities/${utilityAccountId}/payment-plan`);
+
+// Bank Accounts
+export const getBankAccounts = () =>
+  api.get<BankAccount[]>('/bank-accounts').then(r => r.data);
+export const createBankAccount = (data: Partial<BankAccount>) =>
+  api.post<BankAccount>('/bank-accounts', data).then(r => r.data);
+export const updateBankAccount = (id: string, data: Partial<BankAccount>) =>
+  api.patch<BankAccount>(`/bank-accounts/${id}`, data).then(r => r.data);
+export const deleteBankAccount = (id: string) =>
+  api.delete(`/bank-accounts/${id}`);
+export const recordBankBalance = (id: string, data: { balance: number; creditLimit?: number; asOfDate?: string; notes?: string }) =>
+  api.post(`/bank-accounts/${id}/balance`, data).then(r => r.data);
+
+// Other Income
+export const getOtherIncome = (params?: { year?: number; month?: number }) =>
+  api.get<OtherIncome[]>('/other-income', { params }).then(r => r.data);
+export const createOtherIncome = (data: Partial<OtherIncome>) =>
+  api.post<OtherIncome>('/other-income', data).then(r => r.data);
+export const updateOtherIncome = (id: string, data: Partial<OtherIncome>) =>
+  api.patch<OtherIncome>(`/other-income/${id}`, data).then(r => r.data);
+export const deleteOtherIncome = (id: string) =>
+  api.delete(`/other-income/${id}`);
+
+// Budget
+export const getBudgetMonthly = (year: number, month: number) =>
+  api.get<BudgetSummary>('/budget/monthly', { params: { year, month } }).then(r => r.data);
+export const getBudgetDelinquency = () =>
+  api.get<{ tenants: DelinquencyTenant[]; totalArrears: number; totalExpectedCollection: number }>('/budget/delinquency').then(r => r.data);
