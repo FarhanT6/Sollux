@@ -245,6 +245,15 @@ function DriveImportPanel({ onResolved }: {
       setStatus(s);
       if (s.accounts[0]) setTokenId(s.accounts[0].id);
     }).catch(() => {});
+
+    // Rehydrate last job from localStorage so Review button survives page reloads
+    const savedJobId = localStorage.getItem('sollux_last_drive_job');
+    if (savedJobId) {
+      getDriveImportJob(savedJobId).then(data => {
+        const j = data as DriveJobStatus;
+        if (j && j.needsReview?.length > 0) setJob(j);
+      }).catch(() => {});
+    }
   }, []);
 
   const openPicker = async () => {
@@ -291,6 +300,7 @@ function DriveImportPanel({ onResolved }: {
               fileIds: files.map(f => f.id),
               folderName: displayName,
             });
+            localStorage.setItem('sollux_last_drive_job', jobId);
             setJob({ id: jobId, status: 'RUNNING', totalFiles: 0, processedFiles: 0, autoImported: 0, needsReview: [] });
           }
         })
@@ -322,6 +332,7 @@ function DriveImportPanel({ onResolved }: {
       const res = await api.get(`/drive/jobs/${job.id}/review-data`);
       const { items, autoImported } = res.data;
       const properties = await getProperties() as unknown as PropertyWithAccounts[];
+      localStorage.removeItem('sollux_last_drive_job');
       onResolved(items, properties, autoImported ?? job.autoImported);
     } catch (err) {
       setDriveError(`Failed to load review data: ${(err as Error).message}`);

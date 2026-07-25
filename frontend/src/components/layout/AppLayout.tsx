@@ -38,9 +38,9 @@ export default function AppLayout() {
   }, []);
 
   return (
-    <div className="flex h-screen overflow-hidden" style={{ background: '#0B1D2E' }}>
+    <div className="flex h-screen overflow-hidden" style={{ background: '#1e1e1e' }}>
       {/* Sidebar */}
-      <aside className="w-52 flex-shrink-0 flex flex-col" style={{ background: '#011425', borderRight: '1px solid rgba(255,255,255,0.07)' }}>
+      <aside className="w-52 flex-shrink-0 flex flex-col" style={{ background: '#161616', borderRight: '1px solid rgba(255,255,255,0.07)' }}>
         {/* Logo */}
         <div className="px-4 py-4 flex items-center gap-2" style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
           <div className="w-7 h-7 rounded-lg bg-gold-500 flex items-center justify-center">
@@ -85,7 +85,7 @@ export default function AppLayout() {
         <div className="px-3 py-3" style={{ borderTop: '1px solid rgba(255,255,255,0.07)' }}>
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0"
-              style={{ background: 'rgba(62,122,147,0.25)', color: '#7DA8B7' }}>
+              style={{ background: 'rgba(245,166,35,0.2)', color: '#F5A623' }}>
               {user?.firstName?.[0]}{user?.lastName?.[0]}
             </div>
             <div className="min-w-0 flex-1">
@@ -100,7 +100,7 @@ export default function AppLayout() {
       </aside>
 
       {/* Main content */}
-      <main className="flex-1 overflow-y-auto" style={{ background: '#0B1D2E' }}>
+      <main className="flex-1 overflow-y-auto" style={{ background: '#1e1e1e' }}>
         <Outlet />
       </main>
     </div>
