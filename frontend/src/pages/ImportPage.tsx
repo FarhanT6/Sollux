@@ -258,19 +258,38 @@ function DriveImportPanel({ onResolved }: {
       const { accessToken } = await getDriveAccessToken(tokenId);
       const google = (window as any).google;
 
-      const view = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
+      // Show folders AND PDFs, with multi-select so the user can pick a whole
+      // folder, a specific handful of files, or any mix of the two.
+      const foldersView = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
         .setSelectFolderEnabled(true)
         .setIncludeFolders(true);
+      const pdfView = new google.picker.DocsView(google.picker.ViewId.DOCS)
+        .setMimeTypes('application/pdf')
+        .setIncludeFolders(true)
+        .setSelectFolderEnabled(true);
 
       const picker = new google.picker.PickerBuilder()
-        .addView(view)
+        .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
+        .addView(foldersView)
+        .addView(pdfView)
         .setOAuthToken(accessToken)
         .setDeveloperKey(apiKey)
         .setCallback(async (data: any) => {
           if (data.action === google.picker.Action.PICKED) {
-            const doc = data.docs[0];
-            setFolderName(doc.name);
-            const { jobId } = await startDriveImport(tokenId, doc.id, doc.name);
+            const docs: any[] = data.docs || [];
+            if (!docs.length) return;
+            const folders = docs.filter(d => d.mimeType === 'application/vnd.google-apps.folder');
+            const files = docs.filter(d => d.mimeType !== 'application/vnd.google-apps.folder');
+            const displayName =
+              folders.length > 0 ? folders[0].name :
+              files.length === 1 ? files[0].name :
+              `${files.length} files`;
+            setFolderName(displayName);
+            const { jobId } = await startDriveImport(tokenId, {
+              folderId: folders[0]?.id,
+              fileIds: files.map(f => f.id),
+              folderName: displayName,
+            });
             setJob({ id: jobId, status: 'RUNNING', totalFiles: 0, processedFiles: 0, autoImported: 0, needsReview: [] });
           }
         })

@@ -9,7 +9,8 @@ import { uploadDocument, buildStatementKey } from '../services/s3Service';
 interface DriveImportJobData {
   jobId: string;
   tokenId: string;
-  folderId: string;
+  folderId?: string;
+  fileIds?: string[];
   userId: string;
 }
 
@@ -124,7 +125,7 @@ function buildRawData(ex: Awaited<ReturnType<typeof parseBill>>['extracted']) {
 const worker = new Worker<DriveImportJobData>(
   'drive-import',
   async (job: Job<DriveImportJobData>) => {
-    const { jobId, tokenId, folderId, userId } = job.data;
+    const { jobId, tokenId, folderId, fileIds, userId } = job.data;
     console.log(`[DriveImportWorker] Starting job ${jobId} for user ${userId}`);
 
     const needsReview: any[] = [];
@@ -134,7 +135,25 @@ const worker = new Worker<DriveImportJobData>(
 
     try {
       const drive = await getDriveClient(tokenId);
-      const files = await listPdfsRecursive(drive, folderId);
+      const collected: { id: string; name: string }[] = [];
+      if (folderId) {
+        collected.push(...await listPdfsRecursive(drive, folderId));
+      }
+      if (fileIds?.length) {
+        for (const id of fileIds) {
+          try {
+            const meta = await drive.files.get({ fileId: id, fields: 'id, name, mimeType' });
+            if (meta.data.mimeType === 'application/pdf') {
+              collected.push({ id: meta.data.id!, name: meta.data.name || 'untitled.pdf' });
+            }
+          } catch (e: any) {
+            errors.push(`Could not fetch file ${id}: ${e.message}`);
+          }
+        }
+      }
+      // Dedupe in case a picked file also sat inside a picked folder.
+      const seen = new Set<string>();
+      const files = collected.filter(f => !seen.has(f.id) && seen.add(f.id));
 
       await db.driveImportJob.update({ where: { id: jobId }, data: { totalFiles: files.length } });
 

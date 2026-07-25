@@ -237,8 +237,11 @@ export const disconnectDrive = (id: string) =>
   api.delete(`/drive/disconnect/${id}`);
 export const getDriveAccessToken = (tokenId: string) =>
   api.get<{ accessToken: string }>('/drive/access-token', { params: { tokenId } }).then(r => r.data);
-export const startDriveImport = (tokenId: string, folderId: string, folderName?: string) =>
-  api.post<{ jobId: string }>('/drive/import', { tokenId, folderId, folderName }).then(r => r.data);
+export const startDriveImport = (
+  tokenId: string,
+  selection: { folderId?: string; fileIds?: string[]; folderName?: string }
+) =>
+  api.post<{ jobId: string }>('/drive/import', { tokenId, ...selection }).then(r => r.data);
 export const getDriveImportJob = (jobId: string) =>
   api.get(`/drive/jobs/${jobId}`).then(r => r.data);
 

@@ -133,11 +133,21 @@ router.get('/access-token', attachDbUser, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /api/drive/import  { tokenId, folderId, folderName? } — queues background import
+// POST /api/drive/import  { tokenId, folderId?, fileIds?, folderName? } — queues background import
+// Either folderId (import everything in it recursively), fileIds (import just
+// this specific list of files), or both (import that folder AND the loose files).
 router.post('/import', attachDbUser, async (req, res, next) => {
   try {
-    const { tokenId, folderId, folderName } = req.body as { tokenId: string; folderId: string; folderName?: string };
-    if (!tokenId || !folderId) return res.status(400).json({ error: 'tokenId and folderId required' });
+    const { tokenId, folderId, fileIds, folderName } = req.body as {
+      tokenId: string;
+      folderId?: string;
+      fileIds?: string[];
+      folderName?: string;
+    };
+    if (!tokenId) return res.status(400).json({ error: 'tokenId required' });
+    if (!folderId && (!fileIds || fileIds.length === 0)) {
+      return res.status(400).json({ error: 'folderId or fileIds required' });
+    }
 
     const token = await db.driveToken.findFirst({ where: { id: tokenId, userId: req.dbUserId! } });
     if (!token) return res.status(404).json({ error: 'Drive account not found' });
@@ -154,7 +164,7 @@ router.post('/import', attachDbUser, async (req, res, next) => {
     const { driveImportQueue } = await import('../workers/queues');
     await driveImportQueue.add(
       'import',
-      { jobId: job.id, tokenId, folderId, userId: req.dbUserId! },
+      { jobId: job.id, tokenId, folderId, fileIds, userId: req.dbUserId! },
       { attempts: 1 }
     );
 
