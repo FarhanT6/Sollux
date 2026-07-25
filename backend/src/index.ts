@@ -91,7 +91,15 @@ app.use('/api/auth', authRouter);
 app.use('/api/stripe', stripeRouter);
 
 // ─── Protected routes ─────────────────────────────────────
-app.use('/api', requireAuth);
+// requireAuth() redirects unauthed requests to "/" — Google's redirect back
+// to our OAuth callbacks obviously isn't authed, so those two paths need to
+// bypass this the same way they bypass clerkMiddleware above.
+app.use('/api', (req, res, next) => {
+  if (req.path === '/gmail/callback' || req.path === '/drive/callback') {
+    return next();
+  }
+  return requireAuth(req, res, next);
+});
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api/properties', propertiesRouter);
 app.use('/api/utilities', utilitiesRouter);
