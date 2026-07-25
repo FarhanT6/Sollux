@@ -21,6 +21,7 @@ import LoanDetailPage from './pages/LoanDetailPage';
 import PnLPage from './pages/PnLPage';
 import NoticesPage from './pages/NoticesPage';
 import NoticeDetailPage from './pages/NoticeDetailPage';
+import BudgetPage from './pages/BudgetPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isSignedIn, isLoaded } = useAuth();
@@ -34,12 +35,12 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/sign-in/*" element={
-          <div className="flex h-screen items-center justify-center bg-[#161616]">
+          <div className="flex h-screen items-center justify-center bg-[#011425]">
             <SignIn routing="path" path="/sign-in" afterSignInUrl="/dashboard" />
           </div>
         } />
         <Route path="/sign-up/*" element={
-          <div className="flex h-screen items-center justify-center bg-[#161616]">
+          <div className="flex h-screen items-center justify-center bg-[#011425]">
             <SignUp routing="path" path="/sign-up" afterSignUpUrl="/dashboard" />
           </div>
         } />
@@ -65,6 +66,7 @@ export default function App() {
           <Route path="pnl" element={<PnLPage />} />
           <Route path="notices" element={<NoticesPage />} />
           <Route path="notices/:id" element={<NoticeDetailPage />} />
+          <Route path="budget" element={<BudgetPage />} />
         </Route>
 
         <Route path="*" element={<Navigate to="/dashboard" replace />} />

@@ -19,6 +19,7 @@ const NAV_PROPERTY = [
   { to: '/expenses',      label: 'Expenses' },
   { to: '/loans',         label: 'Loans' },
   { to: '/pnl',           label: 'P&L' },
+  { to: '/budget',        label: 'Budget' },
   { to: '/notices',       label: '3-Day Notices' },
 ];
 
@@ -31,30 +32,23 @@ export default function AppLayout() {
   const { user } = useUser();
   const { signOut } = useClerk();
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   useEffect(() => {
     getDashboardSummary().then(setSummary).catch(() => {});
   }, []);
 
   return (
-    <div className="flex h-screen overflow-hidden" style={{ background: '#1e1e1e' }}>
+    <div className="flex h-screen overflow-hidden" style={{ background: '#0B1D2E' }}>
       {/* Sidebar */}
-      {sidebarOpen ? (
-      <aside className="w-52 flex-shrink-0 flex flex-col" style={{ background: '#161616', borderRight: '1px solid rgba(255,255,255,0.07)' }}>
+      <aside className="w-52 flex-shrink-0 flex flex-col" style={{ background: '#011425', borderRight: '1px solid rgba(255,255,255,0.07)' }}>
         {/* Logo */}
-        <div className="px-4 py-4 flex items-center justify-between" style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-gold-500 flex items-center justify-center">
-              <div className="w-3 h-3 rounded-full bg-white" />
-            </div>
-            <span className="text-base font-semibold tracking-tight text-white">
-              Sol<span className="text-gold-500">lux</span>
-            </span>
+        <div className="px-4 py-4 flex items-center gap-2" style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+          <div className="w-7 h-7 rounded-lg bg-gold-500 flex items-center justify-center">
+            <div className="w-3 h-3 rounded-full bg-white" />
           </div>
-          <button onClick={() => setSidebarOpen(false)} className="text-gray-500 hover:text-gray-300" title="Collapse sidebar">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 4H14M2 8H14M2 12H14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-          </button>
+          <span className="text-base font-semibold tracking-tight text-white">
+            Sol<span className="text-gold-500">lux</span>
+          </span>
         </div>
 
         {/* Nav */}
@@ -91,7 +85,7 @@ export default function AppLayout() {
         <div className="px-3 py-3" style={{ borderTop: '1px solid rgba(255,255,255,0.07)' }}>
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0"
-              style={{ background: 'rgba(245,166,35,0.2)' }}>
+              style={{ background: 'rgba(62,122,147,0.25)', color: '#7DA8B7' }}>
               {user?.firstName?.[0]}{user?.lastName?.[0]}
             </div>
             <div className="min-w-0 flex-1">
@@ -104,20 +98,9 @@ export default function AppLayout() {
           </div>
         </div>
       </aside>
-      ) : (
-      <div className="w-11 flex-shrink-0 flex flex-col items-center pt-4" style={{ background: '#161616', borderRight: '1px solid rgba(255,255,255,0.07)' }}>
-        <button
-          onClick={() => setSidebarOpen(true)}
-          className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-500 hover:text-gray-300 hover:bg-white/5"
-          title="Expand sidebar"
-        >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 4H14M2 8H14M2 12H14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-        </button>
-      </div>
-      )}
 
       {/* Main content */}
-      <main className="flex-1 overflow-y-auto" style={{ background: '#1e1e1e' }}>
+      <main className="flex-1 overflow-y-auto" style={{ background: '#0B1D2E' }}>
         <Outlet />
       </main>
     </div>
