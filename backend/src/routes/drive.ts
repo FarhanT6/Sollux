@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { google } from 'googleapis';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
-import { getSignedDocumentUrl } from '../services/s3Service';
+import { getSignedDocumentUrl, downloadDocument } from '../services/s3Service';
 
 const router = Router();
 // attachDbUser is applied per-route below, NOT via router.use — the /callback
@@ -195,6 +195,29 @@ router.get('/jobs/:id', attachDbUser, async (req, res, next) => {
       needsReview: withUrls,
       errorLog: job.errorLog,
     });
+  } catch (err) { next(err); }
+});
+
+// GET /api/drive/jobs/:id/review-data — downloads pending PDFs server-side and returns
+// base64 so the browser never fetches S3 directly (avoids CORS on the S3 bucket).
+router.get('/jobs/:id/review-data', attachDbUser, async (req, res, next) => {
+  try {
+    const job = await db.driveImportJob.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
+    if (!job) return res.status(404).json({ error: 'Not found' });
+
+    const needsReview = (job.needsReviewJson as any[]) || [];
+    const withData = await Promise.all(
+      needsReview.map(async (item) => {
+        const buffer = await downloadDocument(item.s3Key);
+        return {
+          filename: item.filename,
+          extracted: item.extracted,
+          match: item.match,
+          fileData: buffer.toString('base64'),
+        };
+      })
+    );
+    res.json({ items: withData, autoImported: job.autoImported });
   } catch (err) { next(err); }
 });
 
