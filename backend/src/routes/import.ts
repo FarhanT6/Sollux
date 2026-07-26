@@ -34,36 +34,42 @@ router.get('/accounts', async (req: Request, res: Response) => {
   }
 });
 
-// ── Analyze: parse PDFs, return extracted data + match suggestions ────────────
+// ── Analyze: parse PDFs, stream results back via SSE ─────────────────────────
+// Each bill is sent as soon as it finishes parsing — no waiting for the batch.
 
 router.post('/analyze', async (req: Request, res: Response) => {
+  const userId = req.dbUserId!;
+  const { files } = req.body as { files: { name: string; data: string }[] };
+
+  if (!Array.isArray(files) || files.length === 0) {
+    return res.status(400).json({ error: 'No files provided' });
+  }
+  if (files.length > 50) {
+    return res.status(400).json({ error: 'Maximum 50 files per import' });
+  }
+
+  // SSE headers — keep connection open while Claude processes each file
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no'); // disable Nginx buffering on Render
+  res.flushHeaders();
+
+  const send = (data: object) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+
+  console.log(`[Import] Streaming analysis of ${files.length} PDF(s) for user ${userId}`);
+
   try {
-    const userId = req.dbUserId!;
-    const { files } = req.body as { files: { name: string; data: string }[] };
+    // Process ALL files in parallel — each streams its result the moment it's done
+    await Promise.all(
+      files.map(async (f) => {
+        const buffer = Buffer.from(f.data, 'base64');
+        const result = await parseBill(buffer, f.name, userId);
+        send({ type: 'bill', ...result });
+      })
+    );
 
-    if (!Array.isArray(files) || files.length === 0) {
-      return res.status(400).json({ error: 'No files provided' });
-    }
-    if (files.length > 50) {
-      return res.status(400).json({ error: 'Maximum 50 files per import' });
-    }
-
-    console.log(`[Import] Analyzing ${files.length} PDF(s) for user ${userId}`);
-
-    // Process in parallel batches of 5 to avoid rate limits
-    const results = [];
-    for (let i = 0; i < files.length; i += 5) {
-      const batch = files.slice(i, i + 5);
-      const batchResults = await Promise.all(
-        batch.map(async (f) => {
-          const buffer = Buffer.from(f.data, 'base64');
-          return parseBill(buffer, f.name, userId);
-        })
-      );
-      results.push(...batchResults);
-    }
-
-    // Fetch all user properties + their utility accounts for the dropdown
+    // After all files done, send the accounts list for the dropdowns
     const properties = await db.property.findMany({
       where: { userId },
       include: {
@@ -75,10 +81,12 @@ router.post('/analyze', async (req: Request, res: Response) => {
       orderBy: { address: 'asc' },
     });
 
-    return res.json({ bills: results, properties });
+    send({ type: 'done', properties });
   } catch (err) {
     console.error('[Import] Analyze error:', err);
-    return res.status(500).json({ error: 'Failed to analyze PDFs' });
+    send({ type: 'error', message: 'Failed to analyze one or more PDFs' });
+  } finally {
+    res.end();
   }
 });
 

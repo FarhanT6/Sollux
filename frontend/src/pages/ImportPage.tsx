@@ -975,35 +975,76 @@ export default function ImportPage() {
   const handleFiles = async (files: File[]) => {
     setStage('analyzing');
     setProgress(`Reading ${files.length} file${files.length !== 1 ? 's' : ''}…`);
+    setBills([]);
 
     try {
       const filePayloads = await Promise.all(
-        files.map(async f => ({
-          name: f.name,
-          data: await readFileAsBase64(f),
-        }))
+        files.map(async f => ({ name: f.name, data: await readFileAsBase64(f) }))
       );
 
-      setProgress(`Extracting data from ${files.length} PDF${files.length !== 1 ? 's' : ''} with AI…`);
+      // Build a lookup so we can attach fileData as each result streams in
+      const dataByName = Object.fromEntries(filePayloads.map(f => [f.name, f.data]));
 
-      const res = await api.post('/import/analyze', { files: filePayloads });
-      const { bills: parsed, properties: props } = res.data as {
-        bills: Omit<ParsedBill, 'fileData' | 'newProperty' | 'newAccount'>[];
-        properties: PropertyWithAccounts[];
-      };
+      setProgress(`Analyzing 0 / ${files.length} with AI…`);
 
-      const withData: ParsedBill[] = parsed.map((b, i) => ({
-        ...b,
-        fileData: filePayloads[i]?.data || '',
-      }));
+      // Get Clerk token the same way the axios interceptor does
+      // @ts-ignore
+      const token = await window.Clerk?.session?.getToken();
+      const base  = import.meta.env.VITE_API_URL || '/api';
 
-      setBills(withData);
-      setProperties(props);
+      const response = await fetch(`${base}/import/analyze`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ files: filePayloads }),
+      });
+
+      if (!response.ok || !response.body) throw new Error('Stream failed');
+
+      const reader  = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buf     = '';
+      let done    = false;
+      let counted = 0;
+
+      // Switch to review immediately so cards appear as they stream in
       setStage('review');
+
+      while (!done) {
+        const { value, done: streamDone } = await reader.read();
+        done = streamDone;
+        buf += decoder.decode(value ?? new Uint8Array(), { stream: !streamDone });
+
+        // SSE lines are separated by \n\n; split and process complete events
+        const parts = buf.split('\n\n');
+        buf = parts.pop() ?? '';   // keep the incomplete tail
+
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith('data: ')) continue;
+          const event = JSON.parse(line.slice(6));
+
+          if (event.type === 'bill') {
+            counted++;
+            setProgress(`Analyzed ${counted} / ${files.length} files…`);
+            setBills(prev => [...prev, {
+              ...event,
+              fileData: dataByName[event.filename] ?? '',
+            }]);
+          } else if (event.type === 'done') {
+            setProperties(event.properties);
+            setProgress('');
+          } else if (event.type === 'error') {
+            console.error('[Import] stream error:', event.message);
+          }
+        }
+      }
     } catch (err) {
       console.error(err);
       setProgress('Error analyzing files. Please try again.');
-      setTimeout(() => setStage('drop'), 3000);
+      setTimeout(() => { setStage('drop'); setBills([]); }, 3000);
     }
   };
 
@@ -1123,6 +1164,14 @@ export default function ImportPage() {
             {driveNote && (
               <div className="text-xs text-blue-400 bg-blue-500/10 rounded-lg px-4 py-2.5">{driveNote}</div>
             )}
+            {/* Live progress bar while streaming */}
+            {progress && (
+              <div className="flex items-center gap-3 rounded-lg px-4 py-2.5" style={{ background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.2)' }}>
+                <div className="w-4 h-4 border-2 border-amber-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                <span className="text-xs text-amber-400">{progress}</span>
+              </div>
+            )}
+
             {/* Summary bar */}
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-4 text-sm">
