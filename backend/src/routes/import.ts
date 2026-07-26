@@ -316,19 +316,21 @@ router.post('/confirm', async (req: Request, res: Response) => {
         }
 
         if (existing) {
-          // Update with better data + PDF if we now have one
+          // Overwrite with better data from the new extraction
           await db.statement.update({
             where: { id: existing.id },
             data: {
+              statementDate:      statementDate,
               dueDate:            ex.dueDate            ? new Date(ex.dueDate)            : existing.dueDate,
               billingPeriodStart: ex.billingPeriodStart ? new Date(ex.billingPeriodStart) : existing.billingPeriodStart,
               billingPeriodEnd:   ex.billingPeriodEnd   ? new Date(ex.billingPeriodEnd)   : existing.billingPeriodEnd,
               amountDue:          ex.amountDue          ?? existing.amountDue,
+              balance:            ex.amountDue          ?? existing.balance,
               usageValue:         ex.usageValue         ?? existing.usageValue,
               usageUnit:          ex.usageUnit          ?? existing.usageUnit,
               ratePlan:           ex.ratePlan           ?? existing.ratePlan,
               rawDataJson:        buildRawData(ex)      as Prisma.InputJsonValue,
-              ...(pdfS3Key && !existing.pdfS3Key ? { pdfS3Key } : {}),
+              ...(pdfS3Key ? { pdfS3Key } : {}),
             },
           });
           skipped++;
