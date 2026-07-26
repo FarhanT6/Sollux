@@ -38,12 +38,12 @@
   .pill {
     @apply text-xs font-medium px-2 py-0.5 rounded-full;
   }
-  .pill-green  { background: rgba(16,185,129,0.15); color: #34d399; }
-  .pill-amber  { background: rgba(245,166,35,0.15);  color: #fbbf24; }
-  .pill-red    { background: rgba(239,68,68,0.15);   color: #f87171; }
-  .pill-blue   { background: rgba(59,130,246,0.15);  color: #60a5fa; }
+  .pill-green  { background: rgba(16,185,129,0.12);  color: #10b981; }
+  .pill-amber  { background: rgba(245,158,11,0.12);  color: #f59e0b; }
+  .pill-red    { background: rgba(220,38,38,0.12);   color: #dc2626; }
+  .pill-blue   { background: rgba(37,99,235,0.12);   color: #3b82f6; }
   .pill-gray   { background: rgba(255,255,255,0.08); color: #9ca3af; }
-  .pill-purple { background: rgba(139,92,246,0.15);  color: #a78bfa; }
+  .pill-purple { background: rgba(124,58,237,0.12);  color: #7c3aed; }
 
   .card {
     background: #2a2a2a;
@@ -79,6 +79,28 @@
   .input-dark::placeholder { color: #6b7280; }
   .input-dark:focus { border-color: rgba(245,166,35,0.5); }
   .input-dark option { background: #2a2a2a; color: #e5e7eb; }
+
+  /* Semantic color helpers */
+  .text-pos { color: #10b981; }
+  .text-neg { color: #dc2626; }
+
+  /* Modal form fields (used in BudgetPage modals) */
+  .field-label { @apply block text-xs font-medium mb-1; color: #9ca3af; }
+  .field-input {
+    background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.12);
+    color: #e5e7eb;
+    @apply rounded-lg px-3 py-2 outline-none transition-colors text-sm w-full;
+  }
+  .field-input:focus { border-color: rgba(245,166,35,0.5); }
+  .field-input option { background: #2a2a2a; color: #e5e7eb; }
+  .btn-ghost {
+    @apply inline-flex items-center px-3 py-1.5 rounded-lg text-sm cursor-pointer transition-colors;
+    color: #9ca3af;
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+  .btn-ghost:hover { color: #d1d5db; background: rgba(255,255,255,0.05); }
 
   .table-base {
     @apply w-full border-collapse text-sm;

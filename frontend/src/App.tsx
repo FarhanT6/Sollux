@@ -10,6 +10,9 @@ import InsightsPage from './pages/InsightsPage';
 import SettingsPage from './pages/SettingsPage';
 import FinancesPage from './pages/FinancesPage';
 import TenantsHubPage from './pages/TenantsHubPage';
+import PortfolioPage from './pages/PortfolioPage';
+import PropertyHubPage from './pages/PropertyHubPage';
+import ImportPage from './pages/ImportPage';
 // Still used for deep-link detail pages
 import LoanDetailPage from './pages/LoanDetailPage';
 import NoticeDetailPage from './pages/NoticeDetailPage';
@@ -49,6 +52,10 @@ export default function App() {
           <Route path="finances" element={<FinancesPage />} />
           <Route path="loans/:id" element={<LoanDetailPage />} />
 
+          {/* Portfolio hub */}
+          <Route path="portfolio" element={<PortfolioPage />} />
+          <Route path="portfolio/:id" element={<PropertyHubPage />} />
+
           {/* Tenants hub */}
           <Route path="tenants" element={<TenantsHubPage />} />
           <Route path="notices/:id" element={<NoticeDetailPage />} />
@@ -56,6 +63,9 @@ export default function App() {
           {/* Standalone pages */}
           <Route path="insights" element={<InsightsPage />} />
           <Route path="settings" element={<SettingsPage />} />
+
+          {/* Import */}
+          <Route path="import" element={<ImportPage />} />
 
           {/* Legacy redirects — preserve old bookmarks and back-nav */}
           <Route path="rent-roll"     element={<Navigate to="/tenants" replace />} />
@@ -66,7 +76,6 @@ export default function App() {
           <Route path="expenses"      element={<Navigate to="/finances?tab=expenses" replace />} />
           <Route path="payments"      element={<Navigate to="/properties" replace />} />
           <Route path="documents"     element={<Navigate to="/properties" replace />} />
-          <Route path="import"        element={<Navigate to="/properties" replace />} />
           <Route path="notifications" element={<Navigate to="/settings?tab=notifications" replace />} />
 
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
