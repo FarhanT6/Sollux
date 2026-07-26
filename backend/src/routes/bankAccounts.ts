@@ -63,12 +63,18 @@ router.post('/:id/balance', async (req, res, next) => {
     const acct = await db.bankAccount.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
     if (!acct) return res.status(404).json({ error: 'Not found' });
     const { balance, creditLimit, asOfDate, notes } = req.body;
-    const snapshot = await db.bankBalance.create({
-      data: {
+    // Always truncate to midnight UTC — one snapshot per account per day
+    const dateKey = asOfDate ? new Date(asOfDate) : new Date();
+    dateKey.setUTCHours(0, 0, 0, 0);
+    const snapshot = await db.bankBalance.upsert({
+      where: { bankAccountId_asOfDate: { bankAccountId: acct.id, asOfDate: dateKey } },
+      update: { balance, creditLimit: creditLimit ?? null, notes, source: 'manual' },
+      create: {
         bankAccountId: acct.id,
         balance,
-        creditLimit: creditLimit ?? null,
-        asOfDate: asOfDate ? new Date(asOfDate) : new Date(),
+        creditLimit:   creditLimit ?? null,
+        asOfDate:      dateKey,
+        source:        'manual',
         notes,
       },
     });

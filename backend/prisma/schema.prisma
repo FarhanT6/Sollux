@@ -29,6 +29,7 @@ model User {
   driveTokens             DriveToken[]
   paymentRecipient        PaymentRecipient?
   bankAccounts            BankAccount[]
+  plaidItems              PlaidItem[]
   otherIncome             OtherIncome[]
 
   @@map("users")
@@ -732,23 +733,47 @@ enum LegalStatus {
 
 // ─── BANK ACCOUNTS ───────────────────────────────────────
 model BankAccount {
-  id          String          @id @default(cuid())
-  userId      String
-  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  name        String          // e.g. "Fahim Chase", "Dad WF"
-  last4       String?         // e.g. "4821"
-  bank        String?         // e.g. "Chase", "Wells Fargo"
-  accountType BankAccountType @default(CHECKING)
-  isActive    Boolean         @default(true)
-  sortOrder   Int             @default(0)
-  notes       String?
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  id             String          @id @default(cuid())
+  userId         String
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plaidItemId    String?
+  plaidItem      PlaidItem?      @relation(fields: [plaidItemId], references: [id])
+  plaidAccountId String?         @unique
+  name           String          // e.g. "Fahim Chase Checking", "Dad WF Savings"
+  last4          String?         // e.g. "4821"
+  bank           String?         // e.g. "Chase", "Wells Fargo"
+  ownerLabel     String?         // e.g. "Farhan", "Joint", "LLC"
+  accountType    BankAccountType @default(CHECKING)
+  isActive       Boolean         @default(true)
+  sortOrder      Int             @default(0)
+  notes          String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 
   balances BankBalance[]
 
   @@index([userId])
+  @@index([plaidItemId])
   @@map("bank_accounts")
+}
+
+model PlaidItem {
+  id              String      @id @default(cuid())
+  userId          String
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plaidItemId     String      @unique
+  accessTokenEnc  String
+  institutionId   String
+  institutionName String
+  isActive        Boolean     @default(true)
+  lastSyncedAt    DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  accounts BankAccount[]
+
+  @@index([userId])
+  @@map("plaid_items")
 }
 
 enum BankAccountType {
@@ -762,13 +787,15 @@ model BankBalance {
   id            String      @id @default(cuid())
   bankAccountId String
   bankAccount   BankAccount @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
-  balance       Decimal     @db.Decimal(12, 2)
+  balance       Decimal     @db.Decimal(12, 2)  // current/ledger balance
+  available     Decimal?    @db.Decimal(12, 2)  // available (current minus pending)
   creditLimit   Decimal?    @db.Decimal(12, 2)
-  asOfDate      DateTime
+  asOfDate      DateTime    // always stored as midnight UTC for daily dedup
+  source        String?     // "plaid" | "manual"
   notes         String?
   createdAt     DateTime    @default(now())
 
-  @@index([bankAccountId, asOfDate])
+  @@unique([bankAccountId, asOfDate])
   @@map("bank_balances")
 }
 

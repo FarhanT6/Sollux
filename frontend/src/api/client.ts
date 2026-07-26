@@ -290,3 +290,38 @@ export const getBudgetDelinquency = () =>
 // AI portfolio query
 export const queryPortfolio = (query: string) =>
   api.post<{ answer: string }>('/ai/query', { query }).then(r => r.data);
+
+// Plaid bank sync
+export const createPlaidLinkToken = () =>
+  api.post<{ link_token: string }>('/plaid/link-token').then(r => r.data);
+export const exchangePlaidToken = (public_token: string, metadata: any) =>
+  api.post('/plaid/exchange-token', { public_token, metadata }).then(r => r.data);
+export const getPlaidItems = () =>
+  api.get<PlaidItem[]>('/plaid/items').then(r => r.data);
+export const deletePlaidItem = (id: string) =>
+  api.delete(`/plaid/items/${id}`);
+export const syncPlaidBalances = () =>
+  api.post<{ synced: number; failed: number }>('/plaid/sync').then(r => r.data);
+
+export interface PlaidItem {
+  id: string;
+  institutionName: string;
+  institutionId: string;
+  isActive: boolean;
+  lastSyncedAt: string | null;
+  accounts: Array<{
+    id: string;
+    name: string;
+    last4: string | null;
+    ownerLabel: string | null;
+    accountType: string;
+    isActive: boolean;
+    balances: Array<{
+      balance: number;
+      available: number | null;
+      creditLimit: number | null;
+      asOfDate: string;
+      source: string | null;
+    }>;
+  }>;
+}

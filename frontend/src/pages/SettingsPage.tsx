@@ -1,10 +1,20 @@
 import { useUser, useClerk } from '@clerk/clerk-react';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { usePlaidLink } from 'react-plaid-link';
 import { PageHeader } from '../components/ui';
-import api, { getGmailConnectUrl, getDriveConnectUrl } from '../api/client';
+import api, {
+  getGmailConnectUrl,
+  getDriveConnectUrl,
+  createPlaidLinkToken,
+  exchangePlaidToken,
+  getPlaidItems,
+  deletePlaidItem,
+  syncPlaidBalances,
+} from '../api/client';
+import type { PlaidItem } from '../api/client';
 
-type SettingsTab = 'account' | 'notifications';
+type SettingsTab = 'account' | 'notifications' | 'banking';
 
 export default function SettingsPage() {
   const { user } = useUser();
@@ -32,10 +42,17 @@ export default function SettingsPage() {
 
   return (
     <div>
-      <PageHeader title="Settings" subtitle={tab === 'notifications' ? 'Configure how and when Sollux alerts you' : 'Manage your account and subscription'} />
+      <PageHeader
+        title="Settings"
+        subtitle={
+          tab === 'notifications' ? 'Configure how and when Sollux alerts you'
+          : tab === 'banking'     ? 'Connect bank accounts for automatic daily balance snapshots'
+          : 'Manage your account and subscription'
+        }
+      />
 
       <div className="flex border-b px-6" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
-        {(['account', 'notifications'] as SettingsTab[]).map(t => (
+        {(['account', 'notifications', 'banking'] as SettingsTab[]).map(t => (
           <button
             key={t}
             onClick={() => setSearchParams({ tab: t }, { replace: true })}
@@ -50,7 +67,9 @@ export default function SettingsPage() {
         ))}
       </div>
 
-      {tab === 'notifications' ? (
+      {tab === 'banking' ? (
+        <BankingTab />
+      ) : tab === 'notifications' ? (
         <div className="px-6 py-5 max-w-2xl">
           <div className="card p-5 mb-4">
             <h2 className="text-sm font-semibold text-white mb-4">Alert channels</h2>
@@ -241,6 +260,186 @@ export default function SettingsPage() {
 
       </div>
       )}
+    </div>
+  );
+}
+
+// ── Banking Tab ───────────────────────────────────────────────────────────────
+
+const money = (n: number | null | undefined) =>
+  n == null ? '—' : Number(n).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+
+const fmtDate = (d: string | null | undefined) =>
+  d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+
+const ACCOUNT_TYPE_LABELS: Record<string, string> = {
+  CHECKING: 'Checking', SAVINGS: 'Savings', CREDIT_CARD: 'Credit card', CASH_POOL: 'Cash',
+};
+
+function PlaidConnectButton({ onSuccess }: { onSuccess: () => void }) {
+  const [linkToken, setLinkToken] = useState<string | null>(null);
+  const [loading, setLoading]     = useState(false);
+
+  useEffect(() => {
+    createPlaidLinkToken().then(r => setLinkToken(r.link_token)).catch(() => {});
+  }, []);
+
+  const { open, ready } = usePlaidLink({
+    token: linkToken ?? '',
+    onSuccess: useCallback(async (public_token: string | null, metadata: any) => {
+      if (!public_token) return;
+      setLoading(true);
+      try {
+        await exchangePlaidToken(public_token, metadata);
+        onSuccess();
+      } catch (e: any) {
+        alert(e?.response?.data?.error || 'Failed to connect account');
+      } finally {
+        setLoading(false);
+      }
+    }, [onSuccess]),
+  });
+
+  return (
+    <button
+      onClick={() => open()}
+      disabled={!ready || !linkToken || loading}
+      className="btn btn-primary text-xs"
+    >
+      {loading ? 'Connecting…' : '+ Connect bank'}
+    </button>
+  );
+}
+
+function BankingTab() {
+  const [items, setItems] = useState<PlaidItem[]>([]);
+  const [loading, setLoading]   = useState(true);
+  const [syncing, setSyncing]   = useState(false);
+  const [syncMsg, setSyncMsg]   = useState('');
+
+  const loadItems = useCallback(() =>
+    getPlaidItems().then(setItems).catch(() => {}), []);
+
+  useEffect(() => {
+    loadItems().finally(() => setLoading(false));
+  }, [loadItems]);
+
+  async function handleSync() {
+    setSyncing(true); setSyncMsg('');
+    try {
+      const { synced, failed } = await syncPlaidBalances();
+      setSyncMsg(`Synced ${synced} connection${synced !== 1 ? 's' : ''}${failed ? ` · ${failed} failed` : ''}`);
+      await loadItems();
+    } finally { setSyncing(false); }
+  }
+
+  async function handleDisconnect(id: string, name: string) {
+    if (!confirm(`Disconnect ${name}? Balance history will be kept.`)) return;
+    await deletePlaidItem(id);
+    setItems(prev => prev.filter(i => i.id !== id));
+  }
+
+  const allAccounts = items.flatMap(i => i.accounts);
+  const totalCash = allAccounts
+    .filter(a => a.accountType !== 'CREDIT_CARD' && a.isActive)
+    .reduce((s, a) => s + Number(a.balances[0]?.available ?? a.balances[0]?.balance ?? 0), 0);
+
+  return (
+    <div className="px-6 py-5 max-w-2xl">
+      {/* Summary */}
+      {allAccounts.length > 0 && (
+        <div className="card p-4 mb-4 flex items-center justify-between">
+          <div>
+            <p className="text-xs text-gray-400 mb-0.5">Total available cash</p>
+            <p className="text-2xl font-semibold text-white">{money(totalCash)}</p>
+            <p className="text-xs text-gray-500">Across {allAccounts.filter(a => a.accountType !== 'CREDIT_CARD').length} deposit accounts</p>
+          </div>
+          <div className="text-right">
+            <button
+              onClick={handleSync}
+              disabled={syncing}
+              className="btn text-xs mb-1"
+            >
+              {syncing ? 'Syncing…' : '↻ Sync now'}
+            </button>
+            {syncMsg && <p className="text-xs text-emerald-400">{syncMsg}</p>}
+          </div>
+        </div>
+      )}
+
+      {/* Connected items */}
+      {loading ? (
+        <div className="text-gray-500 text-sm py-8 text-center">Loading…</div>
+      ) : items.length === 0 ? (
+        <div className="card p-8 text-center mb-4">
+          <p className="text-sm font-medium text-gray-300 mb-1">No bank accounts connected</p>
+          <p className="text-xs text-gray-500 mb-4">Connect your accounts to get automatic end-of-day balance snapshots. Works with Chase, Bank of America, Wells Fargo, and 12,000+ other institutions.</p>
+        </div>
+      ) : (
+        <div className="space-y-3 mb-4">
+          {items.map(item => (
+            <div key={item.id} className="card p-4">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <p className="text-sm font-semibold text-white">{item.institutionName}</p>
+                  <p className="text-xs text-gray-500">
+                    Last synced: {item.lastSyncedAt ? fmtDate(item.lastSyncedAt) : 'Never'}
+                  </p>
+                </div>
+                <button
+                  onClick={() => handleDisconnect(item.id, item.institutionName)}
+                  className="text-xs text-red-400 hover:text-red-300 border border-red-500/20 hover:border-red-500/40 rounded-lg px-2.5 py-1.5 transition-colors"
+                >
+                  Disconnect
+                </button>
+              </div>
+              <div className="space-y-2">
+                {item.accounts.map(acct => {
+                  const bal = acct.balances[0];
+                  const displayBal = acct.accountType === 'CREDIT_CARD'
+                    ? Number(bal?.balance ?? 0)
+                    : Number(bal?.available ?? bal?.balance ?? 0);
+                  return (
+                    <div key={acct.id} className="flex items-center justify-between py-2 border-t border-white/5">
+                      <div>
+                        <p className="text-sm text-gray-100">
+                          {acct.name}
+                          {acct.last4 && <span className="text-gray-500 ml-1">···{acct.last4}</span>}
+                        </p>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <span className="text-xs text-gray-500">{ACCOUNT_TYPE_LABELS[acct.accountType] ?? acct.accountType}</span>
+                          {acct.ownerLabel && (
+                            <span className="text-xs bg-amber-500/10 text-amber-400 px-1.5 py-0.5 rounded">{acct.ownerLabel}</span>
+                          )}
+                          {bal?.source === 'plaid' && (
+                            <span className="text-xs text-gray-600">· Auto-synced {fmtDate(bal.asOfDate)}</span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className={`text-sm font-semibold ${acct.accountType === 'CREDIT_CARD' ? 'text-red-400' : 'text-white'}`}>
+                          {acct.accountType === 'CREDIT_CARD' ? `(${money(displayBal)})` : money(displayBal)}
+                        </p>
+                        {bal?.available != null && acct.accountType !== 'CREDIT_CARD' && (
+                          <p className="text-xs text-gray-500">{money(Number(bal.balance))} ledger</p>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <PlaidConnectButton onSuccess={() => loadItems()} />
+
+      <div className="mt-4 rounded-xl px-4 py-3" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
+        <p className="text-xs text-gray-500">
+          Bank connections are read-only. Sollux uses Plaid to securely fetch balances — your credentials are never stored. Balances snapshot automatically at 11:55 PM every night.
+        </p>
+      </div>
     </div>
   );
 }
