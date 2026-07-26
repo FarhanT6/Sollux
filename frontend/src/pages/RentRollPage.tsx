@@ -30,9 +30,15 @@ export default function RentRollPage({ embedded }: { embedded?: boolean } = {}) 
     }).finally(() => setLoading(false));
   }, [filterStatus]);
 
-  const filtered = filterPropId
+  const filtered = (filterPropId
     ? leases.filter(l => l.unit?.property?.id === filterPropId)
-    : leases;
+    : leases
+  ).slice().sort((a, b) => {
+    const pa = a.unit?.property?.nickname || a.unit?.property?.address || '';
+    const pb = b.unit?.property?.nickname || b.unit?.property?.address || '';
+    const cmp = pa.localeCompare(pb);
+    return cmp !== 0 ? cmp : (a.unit?.unitLabel || '').localeCompare(b.unit?.unitLabel || '');
+  });
 
   async function logPayment(leaseId: string) {
     if (!payAmount || !payDate) return;
