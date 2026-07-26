@@ -198,26 +198,38 @@ router.get('/jobs/:id', attachDbUser, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// GET /api/drive/jobs/:id/review-data — downloads pending PDFs server-side and returns
-// base64 so the browser never fetches S3 directly (avoids CORS on the S3 bucket).
+// GET /api/drive/jobs/:id/review-data — streams pending PDFs via SSE so the
+// browser can show bill cards as each S3 download finishes (no waiting for all).
 router.get('/jobs/:id/review-data', attachDbUser, async (req, res, next) => {
   try {
     const job = await db.driveImportJob.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
     if (!job) return res.status(404).json({ error: 'Not found' });
 
     const needsReview = (job.needsReviewJson as any[]) || [];
-    const withData = await Promise.all(
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    const send = (data: object) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+
+    await Promise.all(
       needsReview.map(async (item) => {
         const buffer = await downloadDocument(item.s3Key);
-        return {
+        send({
+          type: 'bill',
           filename: item.filename,
           extracted: item.extracted,
           match: item.match,
           fileData: buffer.toString('base64'),
-        };
+        });
       })
     );
-    res.json({ items: withData, autoImported: job.autoImported });
+
+    send({ type: 'done', autoImported: job.autoImported });
+    res.end();
   } catch (err) { next(err); }
 });
 
