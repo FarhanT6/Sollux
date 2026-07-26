@@ -38,10 +38,6 @@ const NAV = [
     to: '/insights', label: 'Insights',
     icon: <Ico d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z" />,
   },
-  {
-    to: '/settings', label: 'Settings',
-    icon: <Ico><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></Ico>,
-  },
 ];
 
 export default function AppLayout() {
@@ -84,7 +80,7 @@ export default function AppLayout() {
         </nav>
 
         <div className="px-3 py-3" style={{ borderTop: '1px solid rgba(255,255,255,0.07)' }}>
-          <div className="flex items-center gap-2">
+          <NavLink to="/settings" className="flex items-center gap-2 rounded-lg px-1 py-1 transition-colors hover:bg-white/5 cursor-pointer">
             <div
               className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0"
               style={{ background: 'rgba(245,166,35,0.2)', color: '#F5A623' }}
@@ -97,8 +93,8 @@ export default function AppLayout() {
                 {summary ? `${summary.totalProperties} properties` : 'Pro plan'}
               </p>
             </div>
-            <button onClick={() => signOut()} className="text-xs text-gray-500 hover:text-gray-300 flex-shrink-0" title="Sign out">↩</button>
-          </div>
+          </NavLink>
+          <button onClick={() => signOut()} className="mt-1 w-full text-left text-xs text-gray-500 hover:text-gray-300 px-1 py-0.5 transition-colors" title="Sign out">Sign out</button>
         </div>
       </aside>
 
