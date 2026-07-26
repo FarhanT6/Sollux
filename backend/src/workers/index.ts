@@ -6,6 +6,7 @@ import './driveImportWorker';
 import { scrapeQueue, insightQueue } from './queues';
 import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';
+import { runDailyBalanceSnapshot } from './balanceSnapshotWorker';
 
 console.log('🔧 Sollux Workers started');
 
@@ -65,6 +66,19 @@ async function scheduleAllInsights() {
 
 // Run scrapes every 6 hours
 setInterval(scheduleAllScrapes, 6 * 60 * 60 * 1000);
+
+// Run Plaid balance snapshots every night at 11:55 PM
+(function scheduleDailyBalanceSnapshot() {
+  const now = new Date();
+  const next = new Date();
+  next.setHours(23, 55, 0, 0);
+  if (next <= now) next.setDate(next.getDate() + 1);
+  setTimeout(() => {
+    runDailyBalanceSnapshot();
+    setInterval(runDailyBalanceSnapshot, 24 * 60 * 60 * 1000);
+  }, next.getTime() - now.getTime());
+  console.log(`[BalanceSnapshot] Scheduled — next run at ${next.toLocaleTimeString()}`);
+})();
 
 // Run insights nightly at 2am
 const now = new Date();
