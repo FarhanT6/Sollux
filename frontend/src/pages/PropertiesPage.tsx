@@ -22,6 +22,7 @@ const FILTER_CHIPS = [
 export default function PropertiesPage() {
   const [properties, setProperties] = useState<Property[]>([]);
   const [filter, setFilter] = useState('all');
+  const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [showAddProperty, setShowAddProperty] = useState(false);
   const [editingProperty, setEditingProperty]   = useState<Property | null>(null);
@@ -35,7 +36,13 @@ export default function PropertiesPage() {
     loadProperties().finally(() => setLoading(false));
   }, []);
 
-  const filtered = filter === 'all' ? properties : properties.filter(p => p.type === filter);
+  const typeFiltered = filter === 'all' ? properties : properties.filter(p => p.type === filter);
+  const searchLower = search.toLowerCase();
+  const filtered = !searchLower ? typeFiltered : typeFiltered.filter(p =>
+    (p.nickname || '').toLowerCase().includes(searchLower) ||
+    (p.address || '').toLowerCase().includes(searchLower) ||
+    (p.city || '').toLowerCase().includes(searchLower)
+  );
 
   const monthlyTotal = properties.reduce((sum, p) =>
     sum + (p.utilityAccounts || []).reduce((s, a) => {
@@ -67,6 +74,22 @@ export default function PropertiesPage() {
           <StatCard label="Utility accounts" value={totalAccounts} />
           <StatCard label="Monthly spend" value={`$${monthlyTotal.toLocaleString('en-US', { minimumFractionDigits: 0 })}`} />
           <StatCard label="Active alerts" value={alertCount} subColor={alertCount > 0 ? 'red' : 'neutral'} />
+        </div>
+
+        {/* Search */}
+        <div className="relative mb-4">
+          <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search by address, nickname, or city…"
+            className="w-full max-w-sm pl-8 pr-3 py-1.5 text-sm rounded-lg bg-white/5 border border-white/10 text-white placeholder-gray-600 focus:border-amber-500/40 outline-none transition-colors"
+          />
+          {search && (
+            <button onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 text-xs leading-none">×</button>
+          )}
         </div>
 
         {/* Filter chips */}

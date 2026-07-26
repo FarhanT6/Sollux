@@ -12,13 +12,19 @@ const CATEGORIES: ExpenseCategory[] = [
   'SUPPLIES','TRAVEL','ADVERTISING','OTHER',
 ];
 
-export default function ExpensesPage() {
+type SortKey = 'date-desc' | 'date-asc' | 'amount-desc' | 'amount-asc';
+
+export default function ExpensesPage({ embedded }: { embedded?: boolean } = {}) {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [properties, setProperties] = useState<Property[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterPropId, setFilterPropId] = useState('');
   const [filterCat, setFilterCat] = useState('');
   const [filterPersonal, setFilterPersonal] = useState(false);
+  const [search, setSearch] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [sortBy, setSortBy] = useState<SortKey>('date-desc');
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
     propertyId: '', category: 'REPAIRS_MAINTENANCE' as ExpenseCategory,
@@ -35,8 +41,21 @@ export default function ExpensesPage() {
     Promise.all([loadExpenses(), getProperties().then(setProperties)]).finally(() => setLoading(false));
   }, [filterPropId, filterPersonal]);
 
-  const filtered = filterCat ? expenses.filter(e => e.category === filterCat) : expenses;
+  const searchLower = search.toLowerCase();
+  const filtered = expenses.filter(e => {
+    if (filterCat && e.category !== filterCat) return false;
+    if (searchLower && !(e.vendor || '').toLowerCase().includes(searchLower) && !(e.description || '').toLowerCase().includes(searchLower)) return false;
+    if (dateFrom && e.date < dateFrom) return false;
+    if (dateTo && e.date > dateTo + 'T23:59:59') return false;
+    return true;
+  }).sort((a, b) => {
+    if (sortBy === 'date-desc') return new Date(b.date).getTime() - new Date(a.date).getTime();
+    if (sortBy === 'date-asc') return new Date(a.date).getTime() - new Date(b.date).getTime();
+    if (sortBy === 'amount-desc') return Number(b.amount) - Number(a.amount);
+    return Number(a.amount) - Number(b.amount);
+  });
   const total = filtered.filter(e => !e.isPersonal && !e.isCapEx).reduce((s, e) => s + Number(e.amount), 0);
+  const capexTotal = filtered.filter(e => e.isCapEx && !e.isPersonal).reduce((s, e) => s + Number(e.amount), 0);
 
   async function handleCreate(ev: React.FormEvent) {
     ev.preventDefault();
@@ -56,19 +75,28 @@ export default function ExpensesPage() {
   }
 
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-xl font-semibold text-white">Expenses</h1>
-          <p className="text-sm text-gray-400 mt-0.5">{filtered.length} records · {money(total)} operating</p>
+    <div className={embedded ? '' : 'p-6'}>
+      {!embedded ? (
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-xl font-semibold text-white">Expenses</h1>
+            <p className="text-sm text-gray-400 mt-0.5">{filtered.length} records · {money(total)} operating</p>
+          </div>
+          <button onClick={() => setShowForm(v => !v)} className="btn-primary text-sm">
+            {showForm ? 'Cancel' : '+ Log Expense'}
+          </button>
         </div>
-        <button onClick={() => setShowForm(v => !v)} className="btn-primary text-sm">
-          {showForm ? 'Cancel' : '+ Log Expense'}
-        </button>
-      </div>
+      ) : (
+        <div className="flex items-center justify-between mb-4">
+          <p className="section-label mb-0">{filtered.length} records · {money(total)} operating{capexTotal > 0 ? ` · ${money(capexTotal)} CapEx` : ''}</p>
+          <button onClick={() => setShowForm(v => !v)} className="btn text-xs">
+            {showForm ? 'Cancel' : '+ Log expense'}
+          </button>
+        </div>
+      )}
 
       {/* Filters */}
-      <div className="flex gap-3 mb-4 flex-wrap">
+      <div className="flex gap-3 mb-3 flex-wrap items-center">
         <select value={filterPropId} onChange={e => setFilterPropId(e.target.value)} className="input-dark text-sm max-w-xs">
           <option value="">All properties</option>
           {properties.map(p => <option key={p.id} value={p.id}>{p.nickname || p.address}</option>)}
@@ -81,6 +109,33 @@ export default function ExpensesPage() {
           <input type="checkbox" checked={filterPersonal} onChange={e => setFilterPersonal(e.target.checked)} />
           Show personal
         </label>
+      </div>
+      <div className="flex gap-3 mb-4 flex-wrap items-center">
+        {/* Text search */}
+        <div className="relative">
+          <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search vendor / description…"
+            className="pl-7 pr-3 py-1.5 text-xs rounded-lg bg-white/5 border border-white/10 text-white placeholder-gray-600 focus:border-amber-500/40 outline-none w-52 transition-colors"
+          />
+          {search && <button onClick={() => setSearch('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 text-xs leading-none">×</button>}
+        </div>
+        {/* Date range */}
+        <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="input-dark text-xs py-1.5" title="From date" />
+        <span className="text-gray-600 text-xs">—</span>
+        <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="input-dark text-xs py-1.5" title="To date" />
+        {(dateFrom || dateTo) && <button onClick={() => { setDateFrom(''); setDateTo(''); }} className="text-xs text-gray-500 hover:text-gray-300">Clear dates</button>}
+        {/* Sort */}
+        <select value={sortBy} onChange={e => setSortBy(e.target.value as SortKey)} className="input-dark text-xs py-1.5 ml-auto">
+          <option value="date-desc">Newest first</option>
+          <option value="date-asc">Oldest first</option>
+          <option value="amount-desc">Highest amount</option>
+          <option value="amount-asc">Lowest amount</option>
+        </select>
       </div>
 
       {showForm && (

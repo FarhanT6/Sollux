@@ -48,7 +48,7 @@ const ACCT_TYPE_LABELS: Record<BankAccountType, string> = {
   CASH_POOL:   'Cash / Venmo',
 };
 
-export default function BudgetPage() {
+export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
   const now = new Date();
   const [year,  setYear]  = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
@@ -86,26 +86,23 @@ export default function BudgetPage() {
   const idealNet   = budget?.summary.idealNet ?? 0;
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
+    <div className={embedded ? 'max-w-7xl' : 'p-6 max-w-7xl mx-auto'}>
+      {!embedded && (
+        <div className="mb-2">
           <h1 className="text-2xl font-bold text-white">Budget</h1>
           <p className="text-sm text-gray-400 mt-0.5">Monthly cash position, rent collection &amp; delinquency analysis</p>
         </div>
-        {/* Month picker */}
-        <div className="flex items-center gap-2">
-          <select value={year} onChange={e => setYear(+e.target.value)}
-            className="bg-navy-800 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white">
-            {[2024,2025,2026,2027].map(y => <option key={y} value={y}>{y}</option>)}
-          </select>
-          <select value={month} onChange={e => setMonth(+e.target.value)}
-            className="bg-navy-800 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white">
-            {MONTHS.map((m, i) => <option key={i} value={i+1}>{m}</option>)}
-          </select>
-        </div>
+      )}
+      <div className="flex items-center gap-2 mb-6">
+        <select value={year} onChange={e => setYear(+e.target.value)}
+          className="bg-navy-800 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white">
+          {[2024,2025,2026,2027].map(y => <option key={y} value={y}>{y}</option>)}
+        </select>
+        <select value={month} onChange={e => setMonth(+e.target.value)}
+          className="bg-navy-800 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white">
+          {MONTHS.map((m, i) => <option key={i} value={i+1}>{m}</option>)}
+        </select>
       </div>
-
       {/* KPI row */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <KpiCard label="Cash On Hand" value={fmt(cashOnHand)} sub="bank + cash pools" color="blue" />

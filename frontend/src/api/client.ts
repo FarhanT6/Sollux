@@ -286,3 +286,7 @@ export const getBudgetMonthly = (year: number, month: number) =>
   api.get<BudgetSummary>('/budget/monthly', { params: { year, month } }).then(r => r.data);
 export const getBudgetDelinquency = () =>
   api.get<{ tenants: DelinquencyTenant[]; totalArrears: number; totalExpectedCollection: number }>('/budget/delinquency').then(r => r.data);
+
+// AI portfolio query
+export const queryPortfolio = (query: string) =>
+  api.post<{ answer: string }>('/ai/query', { query }).then(r => r.data);

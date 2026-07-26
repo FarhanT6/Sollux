@@ -7,7 +7,7 @@ const pct = (a: number, b: number) => b === 0 ? '—' : `${Math.round((a / b) * 
 
 const CURRENT_YEAR = new Date().getFullYear();
 
-export default function PnLPage() {
+export default function PnLPage({ embedded }: { embedded?: boolean } = {}) {
   const [year, setYear] = useState(CURRENT_YEAR);
   const [properties, setProperties] = useState<Property[]>([]);
   const [byProp, setByProp] = useState<PropertyPnL[]>([]);
@@ -35,30 +35,30 @@ export default function PnLPage() {
   }, [year]);
 
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <div>
+    <div className={embedded ? '' : 'p-6'}>
+      {!embedded && (
+        <div className="mb-2">
           <h1 className="text-xl font-semibold text-white">P&L</h1>
           <p className="text-sm text-gray-400 mt-0.5">Net operating income and cash flow</p>
         </div>
-        <div className="flex items-center gap-3">
-          <select value={year} onChange={e => setYear(Number(e.target.value))} className="input-dark text-sm">
-            {[CURRENT_YEAR + 1, CURRENT_YEAR, CURRENT_YEAR - 1, CURRENT_YEAR - 2].map(y => (
-              <option key={y} value={y}>{y}</option>
-            ))}
-          </select>
-          <div className="flex rounded-lg overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.1)' }}>
-            {(['portfolio', 'monthly'] as const).map(t => (
-              <button
-                key={t}
-                onClick={() => setTab(t)}
-                className="text-xs px-3 py-1.5 transition-colors"
-                style={{ background: tab === t ? 'rgba(245,166,35,0.15)' : 'transparent', color: tab === t ? '#F5A623' : '#9CA3AF' }}
-              >
-                {t === 'portfolio' ? 'By property' : 'Monthly'}
-              </button>
-            ))}
-          </div>
+      )}
+      <div className="flex items-center gap-3 mb-6">
+        <select value={year} onChange={e => setYear(Number(e.target.value))} className="input-dark text-sm">
+          {[CURRENT_YEAR + 1, CURRENT_YEAR, CURRENT_YEAR - 1, CURRENT_YEAR - 2].map(y => (
+            <option key={y} value={y}>{y}</option>
+          ))}
+        </select>
+        <div className="flex rounded-lg overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.1)' }}>
+          {(['portfolio', 'monthly'] as const).map(t => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className="text-xs px-3 py-1.5 transition-colors"
+              style={{ background: tab === t ? 'rgba(245,166,35,0.15)' : 'transparent', color: tab === t ? '#F5A623' : '#9CA3AF' }}
+            >
+              {t === 'portfolio' ? 'By property' : 'Monthly'}
+            </button>
+          ))}
         </div>
       </div>
 
