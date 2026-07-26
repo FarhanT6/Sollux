@@ -14,8 +14,9 @@ function toNum(d: Decimal | null | undefined): number {
 // Full monthly budget summary: cash, rent, mortgages, other income, net
 router.get('/monthly', async (req, res, next) => {
   try {
-    const year  = parseInt((req.query.year  as string) || String(new Date().getFullYear()));
-    const month = parseInt((req.query.month as string) || String(new Date().getMonth() + 1));
+    const year           = parseInt((req.query.year  as string) || String(new Date().getFullYear()));
+    const month          = parseInt((req.query.month as string) || String(new Date().getMonth() + 1));
+    const includePersonal = req.query.includePersonal === 'true';
 
     const monthStart = new Date(year, month - 1, 1);
     const monthEnd   = new Date(year, month, 0, 23, 59, 59);
@@ -110,7 +111,7 @@ router.get('/monthly', async (req, res, next) => {
       where: {
         property: { userId },
         date: { gte: monthStart, lte: monthEnd },
-        isPersonal: false,
+        ...(includePersonal ? {} : { isPersonal: false }),
       },
     });
     const expensesTotal = expenses.reduce((s, e) => s + toNum(e.amount), 0);

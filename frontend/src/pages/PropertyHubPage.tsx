@@ -570,7 +570,7 @@ function ExpensesTab({ propertyId, expenses, setExpenses }: {
   propertyId: string; expenses: Expense[]; setExpenses: (e: Expense[]) => void;
 }) {
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ category: 'REPAIRS_MAINTENANCE', amount: '', date: new Date().toISOString().slice(0, 10), vendor: '', description: '', isCapEx: false });
+  const [form, setForm] = useState({ category: 'REPAIRS_MAINTENANCE', amount: '', date: new Date().toISOString().slice(0, 10), vendor: '', description: '', isCapEx: false, isPersonal: false });
   const [saving, setSaving] = useState(false);
   const [filterCat, setFilterCat] = useState('');
 
@@ -595,12 +595,12 @@ function ExpensesTab({ propertyId, expenses, setExpenses }: {
         vendor: form.vendor || undefined,
         description: form.description || undefined,
         isCapEx: form.isCapEx,
-        isPersonal: false,
+        isPersonal: form.isPersonal,
       });
       const updated = await getExpenses({ propertyId });
       setExpenses(updated);
       setShowForm(false);
-      setForm({ category: 'REPAIRS_MAINTENANCE', amount: '', date: new Date().toISOString().slice(0, 10), vendor: '', description: '', isCapEx: false });
+      setForm({ category: 'REPAIRS_MAINTENANCE', amount: '', date: new Date().toISOString().slice(0, 10), vendor: '', description: '', isCapEx: false, isPersonal: false });
     } finally { setSaving(false); }
   }
 
@@ -633,9 +633,16 @@ function ExpensesTab({ propertyId, expenses, setExpenses }: {
             <input type="checkbox" checked={form.isCapEx} onChange={e => setForm(f => ({ ...f, isCapEx: e.target.checked }))} />
             Capital expenditure (CapEx)
           </label>
-          <div className="col-span-2 flex gap-2 justify-end">
-            <button onClick={() => setShowForm(false)} className="btn text-xs">Cancel</button>
-            <button onClick={save} disabled={saving || !form.amount} className="btn btn-primary text-xs">{saving ? '…' : 'Save'}</button>
+          <label className="col-span-2 flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
+            <input type="checkbox" checked={form.isPersonal} onChange={e => setForm(f => ({ ...f, isPersonal: e.target.checked }))} />
+            Personal expense (excluded from P&L)
+          </label>
+          <div className="col-span-4 flex gap-2 items-center justify-between">
+            {form.isPersonal && <span className="text-xs text-amber-400">This expense will be excluded from P&L and budget</span>}
+            <div className="flex gap-2 ml-auto">
+              <button onClick={() => setShowForm(false)} className="btn text-xs">Cancel</button>
+              <button onClick={save} disabled={saving || !form.amount} className="btn btn-primary text-xs">{saving ? '…' : 'Save'}</button>
+            </div>
           </div>
         </div>
       )}
@@ -664,7 +671,10 @@ function ExpensesTab({ propertyId, expenses, setExpenses }: {
                   <td className="px-4 py-3 text-gray-400">{e.description || '—'}</td>
                   <td className="px-4 py-3 font-medium text-white">{money(Number(e.amount))}</td>
                   <td className="px-4 py-3">
-                    <span className={`pill ${e.isCapEx ? 'pill-purple' : 'pill-gray'}`}>{e.isCapEx ? 'CapEx' : 'OpEx'}</span>
+                    <div className="flex gap-1 flex-wrap">
+                      <span className={`pill ${e.isCapEx ? 'pill-purple' : 'pill-gray'}`}>{e.isCapEx ? 'CapEx' : 'OpEx'}</span>
+                      {e.isPersonal && <span className="pill pill-amber">Personal</span>}
+                    </div>
                   </td>
                 </tr>
               ))}

@@ -257,7 +257,23 @@ export default function DashboardPage() {
 const money = (n: number) =>
   n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 
+function EyeIcon({ hidden }: { hidden: boolean }) {
+  return hidden ? (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
+      <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
+      <line x1="1" y1="1" x2="23" y2="23"/>
+    </svg>
+  ) : (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+      <circle cx="12" cy="12" r="3"/>
+    </svg>
+  );
+}
+
 function CashPositionCard({ items }: { items: PlaidItem[] }) {
+  const [hidden, setHidden] = useState(false);
   const accounts = items.flatMap(i => i.accounts).filter(a => a.isActive);
   const depositAccounts = accounts.filter(a => a.accountType !== 'CREDIT_CARD');
   const creditAccounts  = accounts.filter(a => a.accountType === 'CREDIT_CARD');
@@ -271,6 +287,8 @@ function CashPositionCard({ items }: { items: PlaidItem[] }) {
     .sort()
     .at(-1);
 
+  const mask = '••••••';
+
   return (
     <div className="mb-6">
       <div className="flex items-center justify-between mb-2.5">
@@ -280,11 +298,20 @@ function CashPositionCard({ items }: { items: PlaidItem[] }) {
       <div className="card p-4">
         <div className="flex items-start justify-between mb-4">
           <div>
-            <p className="text-xs text-gray-400 mb-0.5">Available cash</p>
-            <p className="text-2xl font-semibold text-white">{money(totalCash)}</p>
+            <div className="flex items-center gap-1.5 mb-0.5">
+              <p className="text-xs text-gray-400">Available cash</p>
+              <button
+                onClick={() => setHidden(h => !h)}
+                className="text-gray-600 hover:text-gray-400 transition-colors"
+                title={hidden ? 'Show balances' : 'Hide balances'}
+              >
+                <EyeIcon hidden={hidden} />
+              </button>
+            </div>
+            <p className="text-2xl font-semibold text-white">{hidden ? mask : money(totalCash)}</p>
             {creditAccounts.length > 0 && (
               <p className="text-xs text-gray-500 mt-0.5">
-                {money(totalCredit)} credit balance outstanding
+                {hidden ? mask : money(totalCredit)} credit balance outstanding
               </p>
             )}
           </div>
@@ -307,7 +334,7 @@ function CashPositionCard({ items }: { items: PlaidItem[] }) {
                   <p className="text-xs text-amber-500/70 mb-0.5">{acct.ownerLabel}</p>
                 )}
                 <p className={`text-sm font-semibold ${acct.accountType === 'CREDIT_CARD' ? 'text-red-400' : 'text-white'}`}>
-                  {acct.accountType === 'CREDIT_CARD' ? `(${money(displayBal)})` : money(displayBal)}
+                  {hidden ? mask : acct.accountType === 'CREDIT_CARD' ? `(${money(displayBal)})` : money(displayBal)}
                 </p>
               </div>
             );
