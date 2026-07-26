@@ -132,14 +132,25 @@ async function extractWithClaude(pdfBuffer: Buffer, filename: string): Promise<E
 
   let content: Anthropic.MessageParam['content'];
 
-  if (pdfText.length > 80) {
+  // pdf-parse often scrambles columnar layouts: labels appear but values are
+  // stripped out. Detect this by checking that dollar amounts appear when
+  // "amount due" labels are present — if not, fall back to vision.
+  const hasAmountLabels = /amount\s*due|total\s*due|balance\s*due|amount\s*owed/i.test(pdfText);
+  const hasDollarValues = /\$\s*[\d,]+\.\d{2}/.test(pdfText);
+  const isScrambled     = pdfText.length > 80 && hasAmountLabels && !hasDollarValues;
+
+  if (pdfText.length > 80 && !isScrambled) {
     // Text-based extraction — fast and accurate for digital PDFs
     content = [
       { type: 'text', text: `${EXTRACTION_PROMPT}\n\nDocument text:\n${pdfText.slice(0, 15000)}` },
     ];
   } else {
-    // Scanned / image-based PDF — send as document for vision parsing
-    console.log(`[PDFImport] ${filename}: sparse text (${pdfText.length} chars), using Claude vision`);
+    // Scanned / image-based PDF, or pdf-parse lost the spatial layout — use vision
+    if (isScrambled) {
+      console.log(`[PDFImport] ${filename}: columnar layout scrambled by pdf-parse, using Claude vision`);
+    } else {
+      console.log(`[PDFImport] ${filename}: sparse text (${pdfText.length} chars), using Claude vision`);
+    }
     content = [
       {
         type: 'document',

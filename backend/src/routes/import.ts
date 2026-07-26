@@ -278,18 +278,28 @@ router.post('/confirm', async (req: Request, res: Response) => {
         }
 
         const ex = item.extracted;
-        const statementDate = ex.statementDate ? new Date(ex.statementDate) : new Date();
+        const filenameDate   = parseDateFromFilename(item.filename);
+        const hasReliableDate = !!(ex.statementDate || filenameDate);
+        const statementDate  = ex.statementDate
+          ? new Date(ex.statementDate)
+          : (filenameDate ?? new Date());
+
         if (isNaN(statementDate.getTime())) {
           errors.push(`${item.filename}: invalid statement date`);
           continue;
         }
 
-        // Same-month dedup check
-        const monthStart = new Date(statementDate.getFullYear(), statementDate.getMonth(), 1);
-        const monthEnd   = new Date(statementDate.getFullYear(), statementDate.getMonth() + 1, 0, 23, 59, 59);
-        const existing   = await db.statement.findFirst({
-          where: { utilityAccountId, statementDate: { gte: monthStart, lte: monthEnd } },
-        });
+        // Same-month dedup only when we have a reliable date (extracted or from filename).
+        // Without one, all statements default to today — skipping dedup prevents false
+        // "already exists" collisions when importing multiple undated statements at once.
+        let existing = null;
+        if (hasReliableDate) {
+          const monthStart = new Date(statementDate.getFullYear(), statementDate.getMonth(), 1);
+          const monthEnd   = new Date(statementDate.getFullYear(), statementDate.getMonth() + 1, 0, 23, 59, 59);
+          existing = await db.statement.findFirst({
+            where: { utilityAccountId, statementDate: { gte: monthStart, lte: monthEnd } },
+          });
+        }
 
         // Upload PDF to S3
         let pdfS3Key: string | undefined;
@@ -357,6 +367,19 @@ router.post('/confirm', async (req: Request, res: Response) => {
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/** Try to parse a date from the filename, e.g. "7-8-26" → 2026-07-08 */
+function parseDateFromFilename(filename: string): Date | null {
+  const name = filename.replace(/\.[^.]+$/, '');
+  // M-D-YY or MM-DD-YY or M-D-YYYY
+  const m = name.match(/^(\d{1,2})[-_](\d{1,2})[-_](\d{2,4})$/);
+  if (m) {
+    const year = m[3].length === 2 ? 2000 + parseInt(m[3]) : parseInt(m[3]);
+    const d = new Date(year, parseInt(m[1]) - 1, parseInt(m[2]));
+    if (!isNaN(d.getTime()) && d.getFullYear() >= 2000) return d;
+  }
+  return null;
+}
 
 function buildRawData(ex: ExtractedBillData): Record<string, unknown> {
   return {
