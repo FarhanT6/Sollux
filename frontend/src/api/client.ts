@@ -282,8 +282,8 @@ export const deleteOtherIncome = (id: string) =>
   api.delete(`/other-income/${id}`);
 
 // Budget
-export const getBudgetMonthly = (year: number, month: number) =>
-  api.get<BudgetSummary>('/budget/monthly', { params: { year, month } }).then(r => r.data);
+export const getBudgetMonthly = (year: number, month: number, includePersonal = false) =>
+  api.get<BudgetSummary>('/budget/monthly', { params: { year, month, includePersonal } }).then(r => r.data);
 export const getBudgetDelinquency = () =>
   api.get<{ tenants: DelinquencyTenant[]; totalArrears: number; totalExpectedCollection: number }>('/budget/delinquency').then(r => r.data);
 
