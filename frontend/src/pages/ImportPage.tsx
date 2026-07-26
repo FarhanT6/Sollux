@@ -244,8 +244,10 @@ function loadGooglePicker(): Promise<void> {
   return gapiLoadPromise;
 }
 
-function DriveImportPanel({ onResolved }: {
-  onResolved: (bills: ParsedBill[], properties: PropertyWithAccounts[], autoImported: number) => void;
+function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed }: {
+  onResolved:     (bills: ParsedBill[], properties: PropertyWithAccounts[], autoImported: number) => void;
+  onStreamStart?: (properties: PropertyWithAccounts[], autoImported: number) => void;
+  onBillStreamed?:(bill: ParsedBill) => void;
 }) {
   const [status, setStatus] = useState<{ connected: boolean; accounts: { id: string; email: string }[] } | null>(null);
   const [tokenId, setTokenId] = useState('');
@@ -344,14 +346,55 @@ function DriveImportPanel({ onResolved }: {
     setResolving(true);
     setDriveError(null);
     try {
-      const res = await api.get(`/drive/jobs/${job.id}/review-data`);
-      const { items, autoImported } = res.data;
+      // @ts-ignore
+      const token = await window.Clerk?.session?.getToken();
+      const base  = import.meta.env.VITE_API_URL || '/api';
+
+      const response = await fetch(`${base}/drive/jobs/${job.id}/review-data`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!response.ok || !response.body) throw new Error('Stream failed');
+
       const properties = await getProperties() as unknown as PropertyWithAccounts[];
       localStorage.removeItem('sollux_last_drive_job');
-      onResolved(items, properties, autoImported ?? job.autoImported);
+
+      const reader  = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buf  = '';
+      let done = false;
+      let started = false;
+
+      while (!done) {
+        const { value, done: streamDone } = await reader.read();
+        done = streamDone;
+        buf += decoder.decode(value ?? new Uint8Array(), { stream: !streamDone });
+
+        const parts = buf.split('\n\n');
+        buf = parts.pop() ?? '';
+
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith('data: ')) continue;
+          const event = JSON.parse(line.slice(6));
+
+          if (event.type === 'bill') {
+            if (!started) {
+              // Switch to review stage on first bill
+              onStreamStart?.(properties, job.autoImported);
+              started = true;
+              setResolving(false);
+            }
+            onBillStreamed?.({ filename: event.filename, extracted: event.extracted, match: event.match, fileData: event.fileData });
+          } else if (event.type === 'done') {
+            if (!started) {
+              // No bills needed review — call original callback to handle done state
+              onResolved([], properties, event.autoImported ?? job.autoImported);
+            }
+          }
+        }
+      }
     } catch (err) {
       setDriveError(`Failed to load review data: ${(err as Error).message}`);
-    } finally {
       setResolving(false);
     }
   };
@@ -1151,10 +1194,14 @@ export default function ImportPage() {
 
   const handleDriveResolved = (driveBills: ParsedBill[], props: PropertyWithAccounts[], autoImported: number) => {
     if (driveBills.length === 0) {
-      setResult({ imported: autoImported, skipped: 0, errors: [] });
-      setStage('done');
+      // Called when there are no bills to review (all auto-filed) OR at end of stream
+      if (stage !== 'review') {
+        setResult({ imported: autoImported, skipped: 0, errors: [] });
+        setStage('done');
+      }
       return;
     }
+    // Fallback non-streaming path
     setBills(prev => [...prev, ...driveBills]);
     setProperties(props);
     setDriveNote(
@@ -1163,6 +1210,20 @@ export default function ImportPage() {
         : `${driveBills.length} statement${driveBills.length !== 1 ? 's' : ''} from Drive need a quick check before they can be filed.`
     );
     setStage('review');
+  };
+
+  const handleDriveStreamStart = (props: PropertyWithAccounts[], autoImported: number) => {
+    setProperties(props);
+    setDriveNote(
+      autoImported > 0
+        ? `${autoImported} statement${autoImported !== 1 ? 's' : ''} already auto-filed from Drive — reviewing the rest.`
+        : 'Loading statements from Drive…'
+    );
+    setStage('review');
+  };
+
+  const handleDriveBillStreamed = (bill: ParsedBill) => {
+    setBills(prev => [...prev, bill]);
   };
 
   const handleImport = async () => {
@@ -1217,7 +1278,11 @@ export default function ImportPage() {
         {/* Drop stage */}
         {stage === 'drop' && (
           <>
-            <DriveImportPanel onResolved={handleDriveResolved} />
+            <DriveImportPanel
+              onResolved={handleDriveResolved}
+              onStreamStart={handleDriveStreamStart}
+              onBillStreamed={handleDriveBillStreamed}
+            />
             <Dropzone onFiles={handleFiles} />
           </>
         )}
