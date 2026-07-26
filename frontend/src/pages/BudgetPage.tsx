@@ -32,10 +32,10 @@ function daysAgoLabel(days: number) {
 
 function LikelihoodBadge({ likelihood }: { likelihood: DelinquencyTenant['likelihood'] }) {
   const map = {
-    high:   { label: 'Likely',   cls: 'bg-emerald-900/50 text-emerald-400 border border-emerald-700' },
-    medium: { label: 'Uncertain',cls: 'bg-amber-900/50  text-amber-400  border border-amber-700'  },
+    high:   { label: 'Likely',   cls: 'bg-emerald-900/40 text-emerald-500 border border-emerald-700' },
+    medium: { label: 'Uncertain',cls: 'bg-amber-900/50  text-amber-500  border border-amber-700'  },
     low:    { label: 'Unlikely', cls: 'bg-orange-900/50 text-orange-400 border border-orange-700' },
-    none:   { label: 'Write-off',cls: 'bg-red-900/50    text-red-400    border border-red-700'    },
+    none:   { label: 'Write-off',cls: 'bg-red-900/50    text-red-500    border border-red-700'    },
   };
   const { label, cls } = map[likelihood];
   return <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${cls}`}>{label}</span>;
@@ -94,12 +94,10 @@ export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
         </div>
       )}
       <div className="flex items-center gap-2 mb-6">
-        <select value={year} onChange={e => setYear(+e.target.value)}
-          className="bg-navy-800 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white">
+        <select value={year} onChange={e => setYear(+e.target.value)} className="input-dark text-sm">
           {[2024,2025,2026,2027].map(y => <option key={y} value={y}>{y}</option>)}
         </select>
-        <select value={month} onChange={e => setMonth(+e.target.value)}
-          className="bg-navy-800 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white">
+        <select value={month} onChange={e => setMonth(+e.target.value)} className="input-dark text-sm">
           {MONTHS.map((m, i) => <option key={i} value={i+1}>{m}</option>)}
         </select>
       </div>
@@ -222,14 +220,14 @@ function OverviewTab({ budget }: { budget: BudgetSummary }) {
                   <td className="py-2 text-white font-medium">{row.tenant}</td>
                   <td className="py-2 text-gray-400">{row.unit} · {row.property}</td>
                   <td className="py-2 text-right text-gray-300">{fmt(row.expected)}</td>
-                  <td className="py-2 text-right text-emerald-400">{fmt(row.collected)}</td>
-                  <td className="py-2 text-right text-amber-400">{row.remaining > 0 ? fmt(row.remaining) : '—'}</td>
-                  <td className="py-2 text-right text-red-400">{row.arrearsBalance > 0 ? fmt(row.arrearsBalance) : '—'}</td>
+                  <td className="py-2 text-right text-emerald-500">{fmt(row.collected)}</td>
+                  <td className="py-2 text-right text-amber-500">{row.remaining > 0 ? fmt(row.remaining) : '—'}</td>
+                  <td className="py-2 text-right text-red-500">{row.arrearsBalance > 0 ? fmt(row.arrearsBalance) : '—'}</td>
                   <td className="py-2 pl-3">
                     <span className={`text-xs px-2 py-0.5 rounded-full ${
-                      row.status === 'paid'    ? 'bg-emerald-900/50 text-emerald-400' :
-                      row.status === 'partial' ? 'bg-amber-900/50 text-amber-400' :
-                                                 'bg-red-900/50 text-red-400'
+                      row.status === 'paid'    ? 'bg-emerald-900/40 text-emerald-500' :
+                      row.status === 'partial' ? 'bg-amber-900/50 text-amber-500' :
+                                                 'bg-red-900/50 text-red-500'
                     }`}>
                       {row.status}
                     </span>
@@ -241,9 +239,9 @@ function OverviewTab({ budget }: { budget: BudgetSummary }) {
               <tr className="text-sm font-semibold text-white border-t border-white/10">
                 <td colSpan={2} className="pt-2">Total</td>
                 <td className="pt-2 text-right">{fmt(rent.expected)}</td>
-                <td className="pt-2 text-right text-emerald-400">{fmt(rent.collected)}</td>
-                <td className="pt-2 text-right text-amber-400">{rent.outstanding > 0 ? fmt(rent.outstanding) : '—'}</td>
-                <td className="pt-2 text-right text-red-400">{fmt(rent.rows.reduce((s, r) => s + r.arrearsBalance, 0))}</td>
+                <td className="pt-2 text-right text-emerald-500">{fmt(rent.collected)}</td>
+                <td className="pt-2 text-right text-amber-500">{rent.outstanding > 0 ? fmt(rent.outstanding) : '—'}</td>
+                <td className="pt-2 text-right text-red-500">{fmt(rent.rows.reduce((s, r) => s + r.arrearsBalance, 0))}</td>
                 <td />
               </tr>
             </tfoot>
@@ -271,12 +269,12 @@ function OverviewTab({ budget }: { budget: BudgetSummary }) {
                   <td className="py-2 text-white">{row.lender}</td>
                   <td className="py-2 text-gray-400">{row.property}</td>
                   <td className="py-2 text-right text-gray-300">{fmt(row.monthlyPayment)}</td>
-                  <td className="py-2 text-right text-emerald-400">{row.paid > 0 ? fmt(row.paid) : '—'}</td>
+                  <td className="py-2 text-right text-emerald-500">{row.paid > 0 ? fmt(row.paid) : '—'}</td>
                   <td className="py-2 pl-3">
                     <span className={`text-xs px-2 py-0.5 rounded-full ${
                       row.status === 'paid'
-                        ? 'bg-emerald-900/50 text-emerald-400'
-                        : 'bg-red-900/50 text-red-400'
+                        ? 'bg-emerald-900/40 text-emerald-500'
+                        : 'bg-red-900/50 text-red-500'
                     }`}>{row.status}</span>
                   </td>
                 </tr>
@@ -286,8 +284,8 @@ function OverviewTab({ budget }: { budget: BudgetSummary }) {
               <tr className="text-sm font-semibold text-white border-t border-white/10">
                 <td colSpan={2} className="pt-2">Total</td>
                 <td className="pt-2 text-right">{fmt(mortgages.total)}</td>
-                <td className="pt-2 text-right text-emerald-400">{fmt(mortgages.paid)}</td>
-                <td className="pt-2 pl-3 text-red-400">{mortgages.unpaid > 0 ? `${fmt(mortgages.unpaid)} left` : '✓'}</td>
+                <td className="pt-2 text-right text-emerald-500">{fmt(mortgages.paid)}</td>
+                <td className="pt-2 pl-3 text-red-500">{mortgages.unpaid > 0 ? `${fmt(mortgages.unpaid)} left` : '✓'}</td>
               </tr>
             </tfoot>
           </table>
@@ -321,11 +319,11 @@ function DelinquencyTab({ data }: { data: { tenants: DelinquencyTenant[]; totalA
       <div className="flex items-center gap-6 p-4 rounded-xl border border-white/10 bg-white/3 mb-2">
         <div>
           <p className="text-xs text-gray-500 uppercase tracking-wider">Total Outstanding Arrears</p>
-          <p className="text-2xl font-bold text-red-400 mt-0.5">{fmt(data.totalArrears)}</p>
+          <p className="text-2xl font-bold text-red-500 mt-0.5">{fmt(data.totalArrears)}</p>
         </div>
         <div>
           <p className="text-xs text-gray-500 uppercase tracking-wider">Realistically Collectible</p>
-          <p className="text-2xl font-bold text-amber-400 mt-0.5">{fmt(data.totalExpectedCollection)}</p>
+          <p className="text-2xl font-bold text-amber-500 mt-0.5">{fmt(data.totalExpectedCollection)}</p>
         </div>
         <div>
           <p className="text-xs text-gray-500 uppercase tracking-wider">Likely Write-off</p>
@@ -358,9 +356,9 @@ function DelinquencyTab({ data }: { data: { tenants: DelinquencyTenant[]; totalA
                 <td className="py-2 text-white font-medium">{t.tenant}</td>
                 <td className="py-2 text-gray-400">{t.unit} · {t.property}</td>
                 <td className="py-2 text-right text-gray-300">{fmt(t.monthlyRent)}</td>
-                <td className="py-2 text-right text-red-400 font-semibold">{fmt(t.arrears)}</td>
+                <td className="py-2 text-right text-red-500 font-semibold">{fmt(t.arrears)}</td>
                 <td className="py-2 text-right">
-                  <span className={t.daysSincePay > 30 ? 'text-red-400' : 'text-gray-300'}>
+                  <span className={t.daysSincePay > 30 ? 'text-red-500' : 'text-gray-300'}>
                     {daysAgoLabel(t.daysSincePay)}
                   </span>
                   {t.lastPaymentAmount > 0 && (
@@ -373,7 +371,7 @@ function DelinquencyTab({ data }: { data: { tenants: DelinquencyTenant[]; totalA
                 </td>
                 <td className="py-2 text-center"><LikelihoodBadge likelihood={t.likelihood} /></td>
                 <td className="py-2 text-right font-semibold">
-                  <span className={t.likelihood === 'none' ? 'text-gray-500 line-through' : 'text-amber-400'}>
+                  <span className={t.likelihood === 'none' ? 'text-gray-500 line-through' : 'text-amber-500'}>
                     {fmt(t.expectedCollection)}
                   </span>
                 </td>
@@ -440,10 +438,10 @@ function AccountGroup({ title, accounts, onBalance, onDelete }: {
               <div className="flex gap-1">
                 <button onClick={() => onBalance(a)} className="text-xs text-blue-400 hover:text-blue-300 px-2 py-1 rounded border border-blue-800 hover:border-blue-600">Update</button>
                 <button onClick={() => { if (confirm('Delete this account?')) onDelete(a.id); }}
-                  className="text-xs text-red-400 hover:text-red-300 px-1.5 py-1">✕</button>
+                  className="text-xs text-red-500 hover:text-red-300 px-1.5 py-1">✕</button>
               </div>
             </div>
-            <p className={`text-2xl font-bold mt-2 ${a.balance < 0 ? 'text-red-400' : 'text-white'}`}>
+            <p className={`text-2xl font-bold mt-2 ${a.balance < 0 ? 'text-red-500' : 'text-white'}`}>
               {fmt(a.balance)}
             </p>
             {a.creditLimit ? (
@@ -470,7 +468,7 @@ function OtherIncomeTab({ rows, total, onAdd, onDelete }: {
       <div className="flex justify-between items-center">
         <div>
           <p className="text-xs text-gray-500 uppercase tracking-wider">Total Other Income This Month</p>
-          <p className="text-2xl font-bold text-emerald-400 mt-0.5">{fmt(total)}</p>
+          <p className="text-2xl font-bold text-emerald-500 mt-0.5">{fmt(total)}</p>
         </div>
         <button onClick={onAdd} className="btn-primary text-sm px-4 py-2">+ Add Income</button>
       </div>
@@ -493,10 +491,10 @@ function OtherIncomeTab({ rows, total, onAdd, onDelete }: {
               <td className="py-2 text-gray-300">{OTHER_INCOME_LABELS[r.category]}</td>
               <td className="py-2 text-gray-400">{r.description || '—'}</td>
               <td className="py-2 text-gray-500">{r.method || '—'}</td>
-              <td className="py-2 text-right text-emerald-400 font-semibold">{fmt(r.amount)}</td>
+              <td className="py-2 text-right text-emerald-500 font-semibold">{fmt(r.amount)}</td>
               <td className="py-2 text-right">
                 <button onClick={() => { if (confirm('Delete?')) onDelete(r.id); }}
-                  className="text-red-400 hover:text-red-300 text-xs">✕</button>
+                  className="text-red-500 hover:text-red-300 text-xs">✕</button>
               </td>
             </tr>
           ))}
@@ -513,7 +511,7 @@ function OtherIncomeTab({ rows, total, onAdd, onDelete }: {
 
 function KpiCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color: string }) {
   const colors: Record<string, string> = {
-    blue: 'text-blue-400', green: 'text-emerald-400', red: 'text-red-400', amber: 'text-amber-400',
+    blue: 'text-blue-500', green: 'text-emerald-500', red: 'text-red-600', amber: 'text-amber-500',
   };
   return (
     <div className="rounded-xl border border-white/10 bg-white/3 p-4">
@@ -547,7 +545,7 @@ function ProgressBar({ value, total, color }: { value: number; total: number; co
 }
 
 function SummaryLine({ label, value, color, bold }: { label: string; value: string; color: string; bold?: boolean }) {
-  const colors: Record<string, string> = { emerald: 'text-emerald-400', red: 'text-red-400', amber: 'text-amber-400' };
+  const colors: Record<string, string> = { emerald: 'text-emerald-500', red: 'text-red-600', amber: 'text-amber-500' };
   return (
     <div className="flex justify-between items-center py-1">
       <span className={`text-gray-400 ${bold ? 'font-semibold text-gray-300' : ''}`}>{label}</span>
