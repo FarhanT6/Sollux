@@ -6,7 +6,7 @@ import { format } from 'date-fns';
 
 const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 
-export default function RentRollPage() {
+export default function RentRollPage({ embedded }: { embedded?: boolean } = {}) {
   const [leases, setLeases] = useState<Lease[]>([]);
   const [properties, setProperties] = useState<Property[]>([]);
   const [units, setUnits] = useState<Unit[]>([]);
@@ -59,14 +59,21 @@ export default function RentRollPage() {
   const totalArrears = filtered.filter(l => l.status === 'ACTIVE').reduce((s, l) => s + Number(l.arrearsBalance), 0);
 
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-xl font-semibold text-white">Rent Roll</h1>
-          <p className="text-sm text-gray-400 mt-0.5">{filtered.length} leases · {money(totalRent)}/mo · {money(totalArrears)} arrears</p>
+    <div className={embedded ? '' : 'p-6'}>
+      {!embedded ? (
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-xl font-semibold text-white">Rent Roll</h1>
+            <p className="text-sm text-gray-400 mt-0.5">{filtered.length} leases · {money(totalRent)}/mo · {money(totalArrears)} arrears</p>
+          </div>
+          <Link to="/leases/new" className="btn-primary text-sm">+ New Lease</Link>
         </div>
-        <Link to="/leases/new" className="btn-primary text-sm">+ New Lease</Link>
-      </div>
+      ) : (
+        <div className="flex items-center justify-between mb-4">
+          <p className="section-label mb-0">{filtered.length} leases · {money(totalRent)}/mo · {money(totalArrears)} arrears</p>
+          <Link to="/leases/new" className="btn text-xs">+ New lease</Link>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="flex gap-3 mb-4">

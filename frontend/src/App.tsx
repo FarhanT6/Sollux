@@ -7,21 +7,12 @@ import PropertiesPage from './pages/PropertiesPage';
 import PropertyDetailPage from './pages/PropertyDetailPage';
 import UtilityDetailPage from './pages/UtilityDetailPage';
 import InsightsPage from './pages/InsightsPage';
-import PaymentsPage from './pages/PaymentsPage';
-import DocumentsPage from './pages/DocumentsPage';
-import ImportPage from './pages/ImportPage';
-import NotificationsPage from './pages/NotificationsPage';
 import SettingsPage from './pages/SettingsPage';
-// Property management
-import RentRollPage from './pages/RentRollPage';
-import TenantsPage from './pages/TenantsPage';
-import ExpensesPage from './pages/ExpensesPage';
-import LoansPage from './pages/LoansPage';
+import FinancesPage from './pages/FinancesPage';
+import TenantsHubPage from './pages/TenantsHubPage';
+// Still used for deep-link detail pages
 import LoanDetailPage from './pages/LoanDetailPage';
-import PnLPage from './pages/PnLPage';
-import NoticesPage from './pages/NoticesPage';
 import NoticeDetailPage from './pages/NoticeDetailPage';
-import BudgetPage from './pages/BudgetPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isSignedIn, isLoaded } = useAuth();
@@ -48,25 +39,37 @@ export default function App() {
         <Route path="/" element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard" element={<DashboardPage />} />
+
+          {/* Properties */}
           <Route path="properties" element={<PropertiesPage />} />
           <Route path="properties/:id" element={<PropertyDetailPage />} />
           <Route path="properties/:propertyId/utilities/:accountId" element={<UtilityDetailPage />} />
-          <Route path="insights" element={<InsightsPage />} />
-          <Route path="payments" element={<PaymentsPage />} />
-          <Route path="documents" element={<DocumentsPage />} />
-          <Route path="import" element={<ImportPage />} />
-          <Route path="notifications" element={<NotificationsPage />} />
-          <Route path="settings" element={<SettingsPage />} />
-          {/* Property Mgmt */}
-          <Route path="rent-roll" element={<RentRollPage />} />
-          <Route path="tenants" element={<TenantsPage />} />
-          <Route path="expenses" element={<ExpensesPage />} />
-          <Route path="loans" element={<LoansPage />} />
+
+          {/* Finances hub */}
+          <Route path="finances" element={<FinancesPage />} />
           <Route path="loans/:id" element={<LoanDetailPage />} />
-          <Route path="pnl" element={<PnLPage />} />
-          <Route path="notices" element={<NoticesPage />} />
+
+          {/* Tenants hub */}
+          <Route path="tenants" element={<TenantsHubPage />} />
           <Route path="notices/:id" element={<NoticeDetailPage />} />
-          <Route path="budget" element={<BudgetPage />} />
+
+          {/* Standalone pages */}
+          <Route path="insights" element={<InsightsPage />} />
+          <Route path="settings" element={<SettingsPage />} />
+
+          {/* Legacy redirects — preserve old bookmarks and back-nav */}
+          <Route path="rent-roll"     element={<Navigate to="/tenants" replace />} />
+          <Route path="notices"       element={<Navigate to="/tenants?tab=notices" replace />} />
+          <Route path="pnl"           element={<Navigate to="/finances?tab=pnl" replace />} />
+          <Route path="budget"        element={<Navigate to="/finances?tab=budget" replace />} />
+          <Route path="loans"         element={<Navigate to="/finances?tab=loans" replace />} />
+          <Route path="expenses"      element={<Navigate to="/finances?tab=expenses" replace />} />
+          <Route path="payments"      element={<Navigate to="/properties" replace />} />
+          <Route path="documents"     element={<Navigate to="/properties" replace />} />
+          <Route path="import"        element={<Navigate to="/properties" replace />} />
+          <Route path="notifications" element={<Navigate to="/settings?tab=notifications" replace />} />
+
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Route>
 
         <Route path="*" element={<Navigate to="/dashboard" replace />} />

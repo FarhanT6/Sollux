@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { getTenants, createTenant, deleteTenant } from '../api/client';
 import type { Tenant } from '../types';
 
-export default function TenantsPage() {
+export default function TenantsPage({ embedded }: { embedded?: boolean } = {}) {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -32,16 +32,25 @@ export default function TenantsPage() {
   }
 
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-xl font-semibold text-white">Tenants</h1>
-          <p className="text-sm text-gray-400 mt-0.5">{tenants.length} tenants</p>
+    <div className={embedded ? '' : 'p-6'}>
+      {!embedded ? (
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-xl font-semibold text-white">Tenants</h1>
+            <p className="text-sm text-gray-400 mt-0.5">{tenants.length} tenants</p>
+          </div>
+          <button onClick={() => setShowForm(v => !v)} className="btn-primary text-sm">
+            {showForm ? 'Cancel' : '+ Add Tenant'}
+          </button>
         </div>
-        <button onClick={() => setShowForm(v => !v)} className="btn-primary text-sm">
-          {showForm ? 'Cancel' : '+ Add Tenant'}
-        </button>
-      </div>
+      ) : (
+        <div className="flex items-center justify-between mb-4">
+          <p className="section-label mb-0">{tenants.length} tenants</p>
+          <button onClick={() => setShowForm(v => !v)} className="btn text-xs">
+            {showForm ? 'Cancel' : '+ Add tenant'}
+          </button>
+        </div>
+      )}
 
       {showForm && (
         <form onSubmit={handleCreate} className="rounded-xl p-5 mb-5" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>

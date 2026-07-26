@@ -1,0 +1,60 @@
+import { useSearchParams } from 'react-router-dom';
+import { PageHeader } from '../components/ui';
+import PnLPage from './PnLPage';
+import BudgetPage from './BudgetPage';
+import LoansPage from './LoansPage';
+import ExpensesPage from './ExpensesPage';
+
+type Tab = 'pnl' | 'budget' | 'loans' | 'expenses';
+
+const TABS: { key: Tab; label: string }[] = [
+  { key: 'pnl',      label: 'P&L'      },
+  { key: 'budget',   label: 'Budget'   },
+  { key: 'loans',    label: 'Loans'    },
+  { key: 'expenses', label: 'Expenses' },
+];
+
+export default function FinancesPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab = (searchParams.get('tab') as Tab) || 'pnl';
+
+  function setTab(t: Tab) {
+    setSearchParams({ tab: t }, { replace: true });
+  }
+
+  const subtitles: Record<Tab, string> = {
+    pnl:      'Net operating income and cash flow by property',
+    budget:   'Monthly cash position, rent collection, and delinquency',
+    loans:    'Mortgages, HELOCs, and installment plans',
+    expenses: 'Operating and capital expenditures across all properties',
+  };
+
+  return (
+    <div>
+      <PageHeader title="Finances" subtitle={subtitles[tab]} />
+
+      <div className="flex border-b px-6" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
+        {TABS.map(t => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={`text-sm py-3 px-4 border-b-2 transition-colors ${
+              tab === t.key
+                ? 'border-amber-400 text-amber-400 font-medium'
+                : 'border-transparent text-gray-500 hover:text-gray-300'
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="px-6 py-5">
+        {tab === 'pnl'      && <PnLPage embedded />}
+        {tab === 'budget'   && <BudgetPage embedded />}
+        {tab === 'loans'    && <LoansPage embedded />}
+        {tab === 'expenses' && <ExpensesPage embedded />}
+      </div>
+    </div>
+  );
+}

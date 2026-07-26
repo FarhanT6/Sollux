@@ -6,7 +6,7 @@ import { format } from 'date-fns';
 
 const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 
-export default function NoticesPage() {
+export default function NoticesPage({ embedded }: { embedded?: boolean } = {}) {
   const [notices, setNotices] = useState<RentNotice[]>([]);
   const [activeLeases, setActiveLeases] = useState<Lease[]>([]);
   const [loading, setLoading] = useState(true);
@@ -54,16 +54,25 @@ export default function NoticesPage() {
   }
 
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-xl font-semibold text-white">3-Day Notices</h1>
-          <p className="text-sm text-gray-400 mt-0.5">{notices.length} notices on file</p>
+    <div className={embedded ? '' : 'p-6'}>
+      {!embedded ? (
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-xl font-semibold text-white">3-Day Notices</h1>
+            <p className="text-sm text-gray-400 mt-0.5">{notices.length} notices on file</p>
+          </div>
+          <button onClick={() => setShowNewForm(v => !v)} className="btn-primary text-sm">
+            {showNewForm ? 'Cancel' : '+ New Notice'}
+          </button>
         </div>
-        <button onClick={() => setShowNewForm(v => !v)} className="btn-primary text-sm">
-          {showNewForm ? 'Cancel' : '+ New Notice'}
-        </button>
-      </div>
+      ) : (
+        <div className="flex items-center justify-between mb-4">
+          <p className="section-label mb-0">{notices.length} notices on file</p>
+          <button onClick={() => setShowNewForm(v => !v)} className="btn text-xs">
+            {showNewForm ? 'Cancel' : '+ New notice'}
+          </button>
+        </div>
+      )}
 
       {showNewForm && (
         <div className="rounded-xl p-5 mb-5" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
