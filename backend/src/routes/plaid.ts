@@ -42,7 +42,11 @@ router.post('/link-token', async (req: Request, res: Response, next) => {
       redirect_uri: process.env.PLAID_REDIRECT_URI ?? undefined,
     });
     res.json({ link_token: resp.data.link_token });
-  } catch (err) { next(err); }
+  } catch (err: any) {
+    const plaidErr = err?.response?.data;
+    if (plaidErr) console.error('[Plaid] link-token error:', JSON.stringify(plaidErr));
+    next(err);
+  }
 });
 
 // POST /api/plaid/exchange-token — exchange public_token, create PlaidItem + BankAccounts
