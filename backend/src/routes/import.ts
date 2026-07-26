@@ -132,6 +132,16 @@ router.post('/confirm', async (req: Request, res: Response) => {
     let skipped  = 0;
     const errors: string[] = [];
 
+    // Dedup maps — keyed by normalized address / `propertyId:providerName`
+    // so multiple statements for the same new property/account don't create duplicates
+    const createdProperties: Record<string, string> = {};  // addrKey → propertyId
+    const createdAccounts:   Record<string, string> = {};  // `${propId}:${provider}` → accountId
+
+    const addrKey = (np: NewPropertyPayload) =>
+      `${np.address}|${np.city}|${np.state}`.toLowerCase().replace(/\s+/g, ' ').trim();
+    const acctKey = (propId: string, providerName: string) =>
+      `${propId}:${providerName.toLowerCase().trim()}`;
+
     for (const item of items) {
       try {
         let utilityAccountId = item.utilityAccountId;
@@ -151,18 +161,35 @@ router.post('/confirm', async (req: Request, res: Response) => {
             continue;
           }
 
-          const acct = await db.utilityAccount.create({
-            data: {
-              propertyId:    existingProp.id,
-              providerName:  na.providerName,
-              providerSlug:  na.providerSlug,
-              category:      (na.category as any) || 'OTHER',
-              accountNumber: na.accountNumber ? na.accountNumber.slice(-4) : null,
-            },
-          });
-          utilityAccountId = acct.id;
+          // Dedup: reuse account created earlier in this batch
+          const key = acctKey(existingProp.id, na.providerName);
+          if (createdAccounts[key]) {
+            utilityAccountId = createdAccounts[key];
+          } else {
+            // Also check DB for an account that already exists with same provider
+            const existingAcct = await db.utilityAccount.findFirst({
+              where: { propertyId: existingProp.id, providerName: { equals: na.providerName, mode: 'insensitive' } },
+              select: { id: true },
+            });
+            if (existingAcct) {
+              utilityAccountId = existingAcct.id;
+              createdAccounts[key] = existingAcct.id;
+            } else {
+              const acct = await db.utilityAccount.create({
+                data: {
+                  propertyId:    existingProp.id,
+                  providerName:  na.providerName,
+                  providerSlug:  na.providerSlug,
+                  category:      (na.category as any) || 'OTHER',
+                  accountNumber: na.accountNumber ? na.accountNumber.slice(-4) : null,
+                },
+              });
+              utilityAccountId = acct.id;
+              createdAccounts[key] = acct.id;
+              console.log(`[Import] Created account ${acct.id} on existing property ${existingProp.id}`);
+            }
+          }
           propertyId = existingProp.id;
-          console.log(`[Import] Created account ${acct.id} on existing property ${existingProp.id}`);
         }
 
         // ── Auto-create property + account if requested ────────────────────
@@ -170,32 +197,68 @@ router.post('/confirm', async (req: Request, res: Response) => {
           const np = item.newProperty;
           const na = item.newAccount;
 
-          // Create property
-          const prop = await db.property.create({
-            data: {
-              userId,
-              address:  np.address,
-              city:     np.city,
-              state:    np.state,
-              zip:      np.zip || '00000',
-              nickname: np.nickname || null,
-              type:     (np.type as any) || 'RENTAL',
-            },
-          });
-          propertyId = prop.id;
+          // Dedup property: reuse one created earlier in this batch
+          const pKey = addrKey(np);
+          if (createdProperties[pKey]) {
+            propertyId = createdProperties[pKey];
+          } else {
+            // Also check DB for an existing property with the same address
+            const existingProp = await db.property.findFirst({
+              where: {
+                userId,
+                address: { equals: np.address, mode: 'insensitive' },
+                city:    { equals: np.city,    mode: 'insensitive' },
+              },
+              select: { id: true },
+            });
+            if (existingProp) {
+              propertyId = existingProp.id;
+              createdProperties[pKey] = existingProp.id;
+            } else {
+              const prop = await db.property.create({
+                data: {
+                  userId,
+                  address:  np.address,
+                  city:     np.city,
+                  state:    np.state,
+                  zip:      np.zip || '00000',
+                  nickname: np.nickname || null,
+                  type:     (np.type as any) || 'RENTAL',
+                },
+              });
+              propertyId = prop.id;
+              createdProperties[pKey] = prop.id;
+              console.log(`[Import] Created property ${prop.id}`);
+            }
+          }
 
-          // Create utility account
-          const acct = await db.utilityAccount.create({
-            data: {
-              propertyId:   prop.id,
-              providerName: na.providerName,
-              providerSlug: na.providerSlug,
-              category:     (na.category as any) || 'OTHER',
-              accountNumber: na.accountNumber ? na.accountNumber.slice(-4) : null,
-            },
-          });
-          utilityAccountId = acct.id;
-          console.log(`[Import] Created property ${prop.id} + account ${acct.id}`);
+          // Dedup account on that property
+          const aKey = acctKey(propertyId, na.providerName);
+          if (createdAccounts[aKey]) {
+            utilityAccountId = createdAccounts[aKey];
+          } else {
+            const existingAcct = await db.utilityAccount.findFirst({
+              where: { propertyId, providerName: { equals: na.providerName, mode: 'insensitive' } },
+              select: { id: true },
+            });
+            if (existingAcct) {
+              utilityAccountId = existingAcct.id;
+              createdAccounts[aKey] = existingAcct.id;
+            } else {
+              const acct = await db.utilityAccount.create({
+                data: {
+                  propertyId,
+                  providerName: na.providerName,
+                  providerSlug: na.providerSlug,
+                  category:     (na.category as any) || 'OTHER',
+                  accountNumber: na.accountNumber ? na.accountNumber.slice(-4) : null,
+                },
+              });
+              utilityAccountId = acct.id;
+              createdAccounts[aKey] = acct.id;
+              console.log(`[Import] Created account ${acct.id} on property ${propertyId}`);
+            }
+          }
         }
 
         if (!utilityAccountId) {
