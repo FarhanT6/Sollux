@@ -86,30 +86,39 @@ export interface ParsedBill {
 
 // ── Claude extraction ─────────────────────────────────────────────────────────
 
-const EXTRACTION_PROMPT = `You are parsing a utility bill. Extract every piece of billing information available.
+const EXTRACTION_PROMPT = `You are extracting structured data from a property-related bill or statement. This could be a utility bill, HOA statement, property management fee, insurance premium notice, debt collection notice, or any other bill associated with a property.
 
-Return ONLY valid JSON matching this exact schema (use null for any field not found):
+Extract every piece of available information. Return ONLY valid JSON — no markdown fences, no explanation.
+
+Schema (use null for any field not present in the document):
 
 {
-  "providerName": "string — utility company name",
-  "serviceAddress": "string — the property address being billed (NOT the mailing address)",
-  "accountNumber": "string — service or account number",
-  "statementDate": "YYYY-MM-DD — date the bill was issued",
+  "providerName": "string — company or organization name sending this bill",
+  "serviceAddress": "string — the property/service address (NOT the mailing/remittance address)",
+  "accountNumber": "string — account, customer, or reference number",
+  "statementDate": "YYYY-MM-DD — date the bill was issued or generated",
   "dueDate": "YYYY-MM-DD — payment due date",
-  "billingPeriodStart": "YYYY-MM-DD",
-  "billingPeriodEnd": "YYYY-MM-DD",
-  "amountDue": number — total amount currently owed,
-  "previousBalance": number — balance from previous bill,
-  "paymentsReceived": number — payments received since last bill,
-  "currentCharges": number — new charges this billing period,
-  "usageValue": number — usage quantity (kWh, CCF, gallons, therms, etc.),
-  "usageUnit": "string — kWh | CCF | therms | gallons | HCF | pickup | other",
-  "ratePlan": "string — rate plan or schedule name",
-  "isPaid": boolean — true only if bill shows a $0 balance or paid stamp,
+  "billingPeriodStart": "YYYY-MM-DD — start of billing period if shown",
+  "billingPeriodEnd": "YYYY-MM-DD — end of billing period if shown",
+  "amountDue": number or null — total dollar amount currently owed (look for 'Amount Due', 'Total Due', 'Balance Due', 'Please Pay'),
+  "previousBalance": number or null — prior balance carried forward,
+  "paymentsReceived": number or null — payments or credits applied since last bill,
+  "currentCharges": number or null — new charges this period,
+  "usageValue": number or null — consumption quantity if applicable (kWh, CCF, gallons, etc.),
+  "usageUnit": "string or null — kWh | CCF | therms | gallons | HCF | pickup | other",
+  "ratePlan": "string or null — rate schedule, plan name, or tier",
+  "isPaid": boolean — true ONLY if balance is $0.00 or document shows 'Paid in Full' / paid stamp,
   "utilityType": "electric | gas | water | sewer | trash | solar | internet | phone | other",
-  "chargeBreakdown": { "charge name": dollar_amount } — all line items as an object,
-  "alerts": ["array of strings"] — any flags on the bill: high usage warning, leak detected, outage credit, payment plan, past due notice, CARE/FERA discount, demand charge spike, etc.
-}`;
+  "chargeBreakdown": { "line item name": dollar_amount, ... } or null — all individual charges listed,
+  "alerts": ["string", ...] — notable flags: past due, late fees, NSF, payment plan, high usage, leak, outage credit, SCRA, debt collection notice, legal action warning, etc.
+}
+
+Important extraction tips:
+- For amountDue: look for the largest prominently displayed dollar amount labeled as due or payable. On debt collection statements it may be labeled 'Current Balance' or 'Total Balance'.
+- If this is a debt collection or management statement (not a direct utility bill), still fill in all fields you can find.
+- serviceAddress: if multiple addresses appear, pick the one labeled 'Service Address', 'Property Address', or that matches a street address format for a building (not a PO Box).
+- accountNumber: include dashes and spaces as they appear; do not normalize.
+- statementDate: if not explicit, infer from postmark, billing period end, or document date.`;
 
 async function extractWithClaude(pdfBuffer: Buffer, filename: string): Promise<ExtractedBillData> {
   const anthropic = getAnthropic();
@@ -123,10 +132,10 @@ async function extractWithClaude(pdfBuffer: Buffer, filename: string): Promise<E
 
   let content: Anthropic.MessageParam['content'];
 
-  if (pdfText.length > 200) {
+  if (pdfText.length > 80) {
     // Text-based extraction — fast and accurate for digital PDFs
     content = [
-      { type: 'text', text: `${EXTRACTION_PROMPT}\n\nBill text:\n${pdfText.slice(0, 12000)}` },
+      { type: 'text', text: `${EXTRACTION_PROMPT}\n\nDocument text:\n${pdfText.slice(0, 15000)}` },
     ];
   } else {
     // Scanned / image-based PDF — send as document for vision parsing
@@ -146,7 +155,7 @@ async function extractWithClaude(pdfBuffer: Buffer, filename: string): Promise<E
 
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 2048,
+    max_tokens: 4096,
     messages: [{ role: 'user', content }],
   });
 

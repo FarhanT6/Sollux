@@ -14,6 +14,26 @@ const router = Router();
 // All import routes need the DB user
 router.use(attachDbUser);
 
+// ── Accounts refresh — called when user creates a new account mid-review ──────
+router.get('/accounts', async (req: Request, res: Response) => {
+  try {
+    const properties = await db.property.findMany({
+      where: { userId: req.dbUserId! },
+      include: {
+        utilityAccounts: {
+          select: { id: true, providerName: true, category: true },
+          orderBy: { providerName: 'asc' },
+        },
+      },
+      orderBy: { address: 'asc' },
+    });
+    return res.json({ properties });
+  } catch (err) {
+    console.error('[Import] Accounts refresh error:', err);
+    return res.status(500).json({ error: 'Failed to fetch accounts' });
+  }
+});
+
 // ── Analyze: parse PDFs, return extracted data + match suggestions ────────────
 
 router.post('/analyze', async (req: Request, res: Response) => {

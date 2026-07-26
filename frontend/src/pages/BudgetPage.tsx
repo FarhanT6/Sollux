@@ -57,7 +57,8 @@ export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
   const [delinquency,  setDelinquency]  = useState<{ tenants: DelinquencyTenant[]; totalArrears: number; totalExpectedCollection: number } | null>(null);
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
   const [loading,      setLoading]      = useState(true);
-  const [activeTab,    setActiveTab]    = useState<'overview' | 'delinquency' | 'banks' | 'income'>('overview');
+  const [activeTab,       setActiveTab]       = useState<'overview' | 'delinquency' | 'banks' | 'income'>('overview');
+  const [includePersonal, setIncludePersonal] = useState(false);
 
   // Modals / forms
   const [showAddBank,   setShowAddBank]   = useState(false);
@@ -68,7 +69,7 @@ export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
     setLoading(true);
     try {
       const [b, d, ba] = await Promise.all([
-        getBudgetMonthly(year, month),
+        getBudgetMonthly(year, month, includePersonal),
         getBudgetDelinquency(),
         getBankAccounts(),
       ]);
@@ -77,7 +78,7 @@ export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
       setBankAccounts(ba);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
-  }, [year, month]);
+  }, [year, month, includePersonal]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -93,13 +94,26 @@ export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
           <p className="text-sm text-gray-400 mt-0.5">Monthly cash position, rent collection &amp; delinquency analysis</p>
         </div>
       )}
-      <div className="flex items-center gap-2 mb-6">
+      <div className="flex items-center gap-3 mb-6 flex-wrap">
         <select value={year} onChange={e => setYear(+e.target.value)} className="input-dark text-sm">
           {[2024,2025,2026,2027].map(y => <option key={y} value={y}>{y}</option>)}
         </select>
         <select value={month} onChange={e => setMonth(+e.target.value)} className="input-dark text-sm">
           {MONTHS.map((m, i) => <option key={i} value={i+1}>{m}</option>)}
         </select>
+        <label className="flex items-center gap-2 cursor-pointer select-none ml-auto">
+          <div
+            onClick={() => setIncludePersonal(v => !v)}
+            className="relative w-8 h-4 rounded-full transition-colors flex-shrink-0"
+            style={{ background: includePersonal ? '#F5A623' : 'rgba(255,255,255,0.15)' }}
+          >
+            <div
+              className="absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform"
+              style={{ transform: includePersonal ? 'translateX(18px)' : 'translateX(2px)' }}
+            />
+          </div>
+          <span className="text-xs text-gray-400">Include personal expenses</span>
+        </label>
       </div>
       {/* KPI row */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">

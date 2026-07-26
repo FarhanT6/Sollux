@@ -948,6 +948,11 @@ function isBillReady(bill: ParsedBill): boolean {
   return false;
 }
 
+async function refreshAccounts(): Promise<PropertyWithAccounts[]> {
+  const res = await api.get('/import/accounts');
+  return (res.data as { properties: PropertyWithAccounts[] }).properties;
+}
+
 export default function ImportPage() {
   const [stage, setStage]           = useState<Stage>('drop');
   const [bills, setBills]           = useState<ParsedBill[]>([]);
@@ -955,6 +960,17 @@ export default function ImportPage() {
   const [result, setResult]         = useState<{ imported: number; skipped: number; errors: string[] } | null>(null);
   const [driveNote, setDriveNote]   = useState<string | null>(null);
   const [progress, setProgress]     = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+
+  const handleRefreshAccounts = async () => {
+    setRefreshing(true);
+    try {
+      const fresh = await refreshAccounts();
+      setProperties(fresh);
+    } catch { /* silent */ } finally {
+      setRefreshing(false);
+    }
+  };
 
   const handleFiles = async (files: File[]) => {
     setStage('analyzing');
@@ -1118,6 +1134,14 @@ export default function ImportPage() {
               </div>
               <div className="flex gap-2">
                 <button onClick={reset} className="btn text-xs">Start over</button>
+                <button
+                  onClick={handleRefreshAccounts}
+                  disabled={refreshing}
+                  className="btn text-xs disabled:opacity-40"
+                  title="Reload accounts — use this if you just created a new account"
+                >
+                  {refreshing ? 'Refreshing…' : '↺ Refresh accounts'}
+                </button>
                 <button
                   onClick={handleImport}
                   disabled={readyCount === 0}
