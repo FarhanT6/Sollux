@@ -38,6 +38,13 @@ export default function SettingsPage() {
       setDriveSuccessMsg('Google Drive connected successfully!');
       setTimeout(() => setDriveSuccessMsg(''), 4000);
     }
+    // Auto-switch to banking tab when returning from Plaid OAuth redirect
+    // Preserve oauth_state_id so PlaidConnectButton can detect it
+    if (window.location.search.includes('oauth_state_id')) {
+      const params = new URLSearchParams(window.location.search);
+      params.set('tab', 'banking');
+      setSearchParams(params, { replace: true });
+    }
   }, []);
 
   return (
