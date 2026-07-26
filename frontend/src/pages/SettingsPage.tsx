@@ -280,17 +280,25 @@ function PlaidConnectButton({ onSuccess }: { onSuccess: () => void }) {
   const [linkToken, setLinkToken] = useState<string | null>(null);
   const [loading, setLoading]     = useState(false);
 
+  // Detect OAuth return: Plaid redirects back with ?oauth_state_id=...
+  const oauthRedirectUri = window.location.href.includes('oauth_state_id')
+    ? window.location.href
+    : undefined;
+
   useEffect(() => {
     createPlaidLinkToken().then(r => setLinkToken(r.link_token)).catch(() => {});
   }, []);
 
   const { open, ready } = usePlaidLink({
     token: linkToken ?? '',
+    receivedRedirectUri: oauthRedirectUri,
     onSuccess: useCallback(async (public_token: string | null, metadata: any) => {
       if (!public_token) return;
       setLoading(true);
       try {
         await exchangePlaidToken(public_token, metadata);
+        // Strip oauth_state_id from URL after success
+        window.history.replaceState({}, '', '/settings?tab=banking');
         onSuccess();
       } catch (e: any) {
         alert(e?.response?.data?.error || 'Failed to connect account');
@@ -299,6 +307,11 @@ function PlaidConnectButton({ onSuccess }: { onSuccess: () => void }) {
       }
     }, [onSuccess]),
   });
+
+  // Auto-open when returning from OAuth redirect
+  useEffect(() => {
+    if (oauthRedirectUri && ready) open();
+  }, [oauthRedirectUri, ready, open]);
 
   return (
     <button

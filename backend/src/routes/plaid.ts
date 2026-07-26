@@ -38,7 +38,8 @@ router.post('/link-token', async (req: Request, res: Response, next) => {
       products: [Products.Auth, Products.Transactions],
       country_codes: [CountryCode.Us],
       language: 'en',
-      webhook: process.env.PLAID_WEBHOOK_URL ?? undefined,
+      webhook:      process.env.PLAID_WEBHOOK_URL  ?? undefined,
+      redirect_uri: process.env.PLAID_REDIRECT_URI ?? undefined,
     });
     res.json({ link_token: resp.data.link_token });
   } catch (err) { next(err); }
