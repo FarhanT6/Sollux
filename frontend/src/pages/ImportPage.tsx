@@ -114,6 +114,21 @@ function toSlug(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 }
 
+/** Normalize an address line for loose matching (street number + name only) */
+function normAddr(s: string) {
+  return s.toLowerCase().split(',')[0].replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+/** Return the first property whose address fuzzy-matches `addr`, or null */
+function findExistingProperty(addr: string, properties: PropertyWithAccounts[]): PropertyWithAccounts | null {
+  if (!addr.trim()) return null;
+  const input = normAddr(addr);
+  return properties.find(p => {
+    const stored = normAddr(p.address);
+    return input && stored && (input.includes(stored) || stored.includes(input));
+  }) || null;
+}
+
 /** Best-effort parse of "123 Main St, San Diego, CA 92101" or similar formats */
 function parseServiceAddress(addr: string | null): Partial<NewPropertyPayload> {
   if (!addr) return {};
@@ -665,13 +680,17 @@ function BillCard({
   onAddToProperty,
   onAssignNew,
   onRemove,
+  sameProviderUnassigned,
+  onApplyToAll,
 }: {
-  bill:            ParsedBill;
-  properties:      PropertyWithAccounts[];
-  onAssign:        (utilityAccountId: string) => void;
-  onAddToProperty: (propertyId: string, acct: NewAccountPayload) => void;
-  onAssignNew:     (prop: NewPropertyPayload, acct: NewAccountPayload) => void;
-  onRemove:        () => void;
+  bill:                   ParsedBill;
+  properties:             PropertyWithAccounts[];
+  onAssign:               (utilityAccountId: string) => void;
+  onAddToProperty:        (propertyId: string, acct: NewAccountPayload) => void;
+  onAssignNew:            (prop: NewPropertyPayload, acct: NewAccountPayload) => void;
+  onRemove:               () => void;
+  sameProviderUnassigned: number;
+  onApplyToAll:           () => void;
 }) {
   const { extracted: ex, match, error } = bill;
   const confColor = CONFIDENCE_COLORS[match.confidence];
@@ -679,9 +698,10 @@ function BillCard({
   // Default to 'add-existing' when the backend found the property but no account
   const defaultMode: CardMode = match.method === 'property_exists_no_account' ? 'add-existing' : 'select';
 
-  const [selectedAcctId, setSelectedAcctId] = useState(match.utilityAccountId || '');
-  const [mode, setMode]       = useState<CardMode>(defaultMode);
-  const [applied, setApplied] = useState(false);
+  const [selectedAcctId, setSelectedAcctId]           = useState(match.utilityAccountId || '');
+  const [mode, setMode]                               = useState<CardMode>(defaultMode);
+  const [applied, setApplied]                         = useState(false);
+  const [resolvedPropertyName, setResolvedPropertyName] = useState<string | null>(null);
 
   // Pre-fill forms from extracted data
   const addrParts = parseServiceAddress(ex.serviceAddress);
@@ -720,7 +740,15 @@ function BillCard({
   };
 
   const handleSaveNew = () => {
-    onAssignNew(propForm, acctForm);
+    // Reuse an existing property if the address already matches — prevents duplicates
+    const matchedProp = findExistingProperty(propForm.address, properties);
+    if (matchedProp) {
+      setResolvedPropertyName(matchedProp.nickname || matchedProp.address);
+      onAddToProperty(matchedProp.id, acctForm);
+    } else {
+      setResolvedPropertyName(null);
+      onAssignNew(propForm, acctForm);
+    }
     setApplied(true);
   };
 
@@ -737,8 +765,11 @@ function BillCard({
   };
 
   // Status label for the badge
+  const resolvedPropName = resolvedPropertyName || match.propertyName;
   const statusLabel = applied
-    ? (mode === 'add-existing' ? `New ${acctForm.category.toLowerCase()} account → ${match.propertyName}` : 'New property & account will be created')
+    ? (mode === 'add-existing' || resolvedPropertyName != null)
+      ? `New ${acctForm.category.toLowerCase()} account → ${resolvedPropName}`
+      : 'New property & account will be created'
     : CONFIDENCE_LABELS[match.confidence];
 
   return (
@@ -838,21 +869,32 @@ function BillCard({
 
         {/* Compact confirmed summary */}
         {applied && (
-          <div className="rounded-lg px-3 py-2.5 space-y-0.5" style={{ background: 'rgba(52,211,153,0.07)', border: '1px solid rgba(52,211,153,0.2)' }}>
-            {mode === 'add-existing' ? (
-              <p className="text-xs text-emerald-300 font-medium">{match.propertyName}</p>
-            ) : (
-              <p className="text-xs text-emerald-300 font-medium">
-                {propForm.address}, {propForm.city}, {propForm.state} {propForm.zip}
+          <div className="space-y-2">
+            <div className="rounded-lg px-3 py-2.5 space-y-0.5" style={{ background: 'rgba(52,211,153,0.07)', border: '1px solid rgba(52,211,153,0.2)' }}>
+              {(mode === 'add-existing' || resolvedPropertyName != null) ? (
+                <p className="text-xs text-emerald-300 font-medium">{resolvedPropName}</p>
+              ) : (
+                <p className="text-xs text-emerald-300 font-medium">
+                  {propForm.address}, {propForm.city}, {propForm.state} {propForm.zip}
+                </p>
+              )}
+              <p className="text-xs text-gray-400">
+                {acctForm.providerName} · {acctForm.category.toLowerCase()}
+                {acctForm.accountNumber ? ` · #${acctForm.accountNumber.slice(-4)}` : ''}
               </p>
+              <button onClick={() => setApplied(false)} className="text-xs text-gray-500 hover:text-gray-400 transition-colors mt-0.5">
+                Edit
+              </button>
+            </div>
+            {sameProviderUnassigned > 0 && (
+              <button
+                onClick={onApplyToAll}
+                className="w-full text-left rounded-lg px-3 py-2 text-xs transition-colors"
+                style={{ background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.2)', color: '#F5A623' }}
+              >
+                Apply same account to {sameProviderUnassigned} other {ex.providerName || ''} statement{sameProviderUnassigned > 1 ? 's' : ''}
+              </button>
             )}
-            <p className="text-xs text-gray-400">
-              {acctForm.providerName} · {acctForm.category.toLowerCase()}
-              {acctForm.accountNumber ? ` · #${acctForm.accountNumber.slice(-4)}` : ''}
-            </p>
-            <button onClick={() => setApplied(false)} className="text-xs text-gray-500 hover:text-gray-400 transition-colors mt-0.5">
-              Edit
-            </button>
           </div>
         )}
 
@@ -975,35 +1017,76 @@ export default function ImportPage() {
   const handleFiles = async (files: File[]) => {
     setStage('analyzing');
     setProgress(`Reading ${files.length} file${files.length !== 1 ? 's' : ''}…`);
+    setBills([]);
 
     try {
       const filePayloads = await Promise.all(
-        files.map(async f => ({
-          name: f.name,
-          data: await readFileAsBase64(f),
-        }))
+        files.map(async f => ({ name: f.name, data: await readFileAsBase64(f) }))
       );
 
-      setProgress(`Extracting data from ${files.length} PDF${files.length !== 1 ? 's' : ''} with AI…`);
+      // Build a lookup so we can attach fileData as each result streams in
+      const dataByName = Object.fromEntries(filePayloads.map(f => [f.name, f.data]));
 
-      const res = await api.post('/import/analyze', { files: filePayloads });
-      const { bills: parsed, properties: props } = res.data as {
-        bills: Omit<ParsedBill, 'fileData' | 'newProperty' | 'newAccount'>[];
-        properties: PropertyWithAccounts[];
-      };
+      setProgress(`Analyzing 0 / ${files.length} with AI…`);
 
-      const withData: ParsedBill[] = parsed.map((b, i) => ({
-        ...b,
-        fileData: filePayloads[i]?.data || '',
-      }));
+      // Get Clerk token the same way the axios interceptor does
+      // @ts-ignore
+      const token = await window.Clerk?.session?.getToken();
+      const base  = import.meta.env.VITE_API_URL || '/api';
 
-      setBills(withData);
-      setProperties(props);
+      const response = await fetch(`${base}/import/analyze`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ files: filePayloads }),
+      });
+
+      if (!response.ok || !response.body) throw new Error('Stream failed');
+
+      const reader  = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buf     = '';
+      let done    = false;
+      let counted = 0;
+
+      // Switch to review immediately so cards appear as they stream in
       setStage('review');
+
+      while (!done) {
+        const { value, done: streamDone } = await reader.read();
+        done = streamDone;
+        buf += decoder.decode(value ?? new Uint8Array(), { stream: !streamDone });
+
+        // SSE lines are separated by \n\n; split and process complete events
+        const parts = buf.split('\n\n');
+        buf = parts.pop() ?? '';   // keep the incomplete tail
+
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith('data: ')) continue;
+          const event = JSON.parse(line.slice(6));
+
+          if (event.type === 'bill') {
+            counted++;
+            setProgress(`Analyzed ${counted} / ${files.length} files…`);
+            setBills(prev => [...prev, {
+              ...event,
+              fileData: dataByName[event.filename] ?? '',
+            }]);
+          } else if (event.type === 'done') {
+            setProperties(event.properties);
+            setProgress('');
+          } else if (event.type === 'error') {
+            console.error('[Import] stream error:', event.message);
+          }
+        }
+      }
     } catch (err) {
       console.error(err);
       setProgress('Error analyzing files. Please try again.');
-      setTimeout(() => setStage('drop'), 3000);
+      setTimeout(() => { setStage('drop'); setBills([]); }, 3000);
     }
   };
 
@@ -1033,6 +1116,37 @@ export default function ImportPage() {
 
   const handleRemove = (filename: string) => {
     setBills(prev => prev.filter(b => b.filename !== filename));
+  };
+
+  const handleApplyToAll = (sourceBill: ParsedBill) => {
+    const provider = sourceBill.extracted.providerName?.toLowerCase().trim();
+    if (!provider) return;
+    setBills(prev => prev.map(b => {
+      if (b.filename === sourceBill.filename) return b;
+      if (b.extracted.providerName?.toLowerCase().trim() !== provider) return b;
+      if (isBillReady(b)) return b;
+      // Copy whichever assignment method the source used
+      if (sourceBill.match.utilityAccountId) {
+        return { ...b, match: { ...b.match, utilityAccountId: sourceBill.match.utilityAccountId }, newProperty: undefined, newAccount: undefined, addToPropertyId: undefined };
+      }
+      if (sourceBill.addToPropertyId && sourceBill.newAccount) {
+        return { ...b, match: { ...b.match, utilityAccountId: null }, addToPropertyId: sourceBill.addToPropertyId, newAccount: sourceBill.newAccount, newProperty: undefined };
+      }
+      if (sourceBill.newProperty && sourceBill.newAccount) {
+        return { ...b, match: { ...b.match, utilityAccountId: null }, newProperty: sourceBill.newProperty, newAccount: sourceBill.newAccount, addToPropertyId: undefined };
+      }
+      return b;
+    }));
+  };
+
+  const getSameProviderUnassigned = (bill: ParsedBill): number => {
+    const provider = bill.extracted.providerName?.toLowerCase().trim();
+    if (!provider || !isBillReady(bill)) return 0;
+    return bills.filter(b =>
+      b.filename !== bill.filename &&
+      b.extracted.providerName?.toLowerCase().trim() === provider &&
+      !isBillReady(b)
+    ).length;
   };
 
   const handleDriveResolved = (driveBills: ParsedBill[], props: PropertyWithAccounts[], autoImported: number) => {
@@ -1123,6 +1237,14 @@ export default function ImportPage() {
             {driveNote && (
               <div className="text-xs text-blue-400 bg-blue-500/10 rounded-lg px-4 py-2.5">{driveNote}</div>
             )}
+            {/* Live progress bar while streaming */}
+            {progress && (
+              <div className="flex items-center gap-3 rounded-lg px-4 py-2.5" style={{ background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.2)' }}>
+                <div className="w-4 h-4 border-2 border-amber-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                <span className="text-xs text-amber-400">{progress}</span>
+              </div>
+            )}
+
             {/* Summary bar */}
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-4 text-sm">
@@ -1169,6 +1291,8 @@ export default function ImportPage() {
                   onAddToProperty={(propId, acct) => handleAddToProperty(bill.filename, propId, acct)}
                   onAssignNew={(prop, acct) => handleAssignNew(bill.filename, prop, acct)}
                   onRemove={() => handleRemove(bill.filename)}
+                  sameProviderUnassigned={getSameProviderUnassigned(bill)}
+                  onApplyToAll={() => handleApplyToAll(bill)}
                 />
               ))}
             </div>
