@@ -10,6 +10,8 @@ import InsightsPage from './pages/InsightsPage';
 import SettingsPage from './pages/SettingsPage';
 import FinancesPage from './pages/FinancesPage';
 import TenantsHubPage from './pages/TenantsHubPage';
+import PortfolioPage from './pages/PortfolioPage';
+import PropertyHubPage from './pages/PropertyHubPage';
 // Still used for deep-link detail pages
 import LoanDetailPage from './pages/LoanDetailPage';
 import NoticeDetailPage from './pages/NoticeDetailPage';
@@ -48,6 +50,10 @@ export default function App() {
           {/* Finances hub */}
           <Route path="finances" element={<FinancesPage />} />
           <Route path="loans/:id" element={<LoanDetailPage />} />
+
+          {/* Portfolio hub */}
+          <Route path="portfolio" element={<PortfolioPage />} />
+          <Route path="portfolio/:id" element={<PropertyHubPage />} />
 
           {/* Tenants hub */}
           <Route path="tenants" element={<TenantsHubPage />} />
