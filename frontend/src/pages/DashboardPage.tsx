@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useUser } from '@clerk/clerk-react';
-import { getDashboardSummary, getRecentActivity, getInsights, queryPortfolio } from '../api/client';
+import { getDashboardSummary, getRecentActivity, getInsights, queryPortfolio, getPlaidItems } from '../api/client';
 import type { DashboardSummary, AIInsight } from '../types';
+import type { PlaidItem } from '../api/client';
 import { StatCard, InsightCard, Skeleton, EmptyState } from '../components/ui';
 import { format } from 'date-fns';
 import AddPropertyModal from '../components/property/AddPropertyModal';
@@ -19,6 +20,7 @@ export default function DashboardPage() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [activity, setActivity] = useState<any>(null);
   const [insights, setInsights] = useState<AIInsight[]>([]);
+  const [plaidItems, setPlaidItems] = useState<PlaidItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddProperty, setShowAddProperty] = useState(false);
 
@@ -37,10 +39,12 @@ export default function DashboardPage() {
       getDashboardSummary(),
       getRecentActivity(),
       getInsights({ unread: true }),
-    ]).then(([s, a, i]) => {
+      getPlaidItems().catch(() => []),
+    ]).then(([s, a, i, p]) => {
       setSummary(s);
       setActivity(a);
       setInsights(i.slice(0, 4));
+      setPlaidItems(p as PlaidItem[]);
     }).finally(() => setLoading(false));
   }, []);
 
@@ -119,6 +123,9 @@ export default function DashboardPage() {
             </>
           )}
         </div>
+
+        {/* Cash Position */}
+        {plaidItems.length > 0 && <CashPositionCard items={plaidItems} />}
 
         {/* AI Search Bar */}
         <div className="mb-6">
@@ -241,6 +248,72 @@ export default function DashboardPage() {
         </div>
       </div>
       {showAddProperty && <AddPropertyModal onClose={() => setShowAddProperty(false)} />}
+    </div>
+  );
+}
+
+// ── Cash Position Card ────────────────────────────────────────────────────────
+
+const money = (n: number) =>
+  n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+
+function CashPositionCard({ items }: { items: PlaidItem[] }) {
+  const accounts = items.flatMap(i => i.accounts).filter(a => a.isActive);
+  const depositAccounts = accounts.filter(a => a.accountType !== 'CREDIT_CARD');
+  const creditAccounts  = accounts.filter(a => a.accountType === 'CREDIT_CARD');
+
+  const totalCash   = depositAccounts.reduce((s, a) => s + Number(a.balances[0]?.available ?? a.balances[0]?.balance ?? 0), 0);
+  const totalCredit = creditAccounts.reduce((s, a) => s + Number(a.balances[0]?.balance ?? 0), 0);
+
+  const lastSync = items
+    .map(i => i.lastSyncedAt)
+    .filter(Boolean)
+    .sort()
+    .at(-1);
+
+  return (
+    <div className="mb-6">
+      <div className="flex items-center justify-between mb-2.5">
+        <p className="section-label">Cash position</p>
+        <Link to="/settings?tab=banking" className="text-xs text-gold-500 hover:underline">Manage accounts →</Link>
+      </div>
+      <div className="card p-4">
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <p className="text-xs text-gray-400 mb-0.5">Available cash</p>
+            <p className="text-2xl font-semibold text-white">{money(totalCash)}</p>
+            {creditAccounts.length > 0 && (
+              <p className="text-xs text-gray-500 mt-0.5">
+                {money(totalCredit)} credit balance outstanding
+              </p>
+            )}
+          </div>
+          {lastSync && (
+            <span className="text-xs text-gray-600">
+              Synced {new Date(lastSync).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+            </span>
+          )}
+        </div>
+        <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(accounts.length, 4)}, 1fr)` }}>
+          {accounts.slice(0, 8).map(acct => {
+            const bal = acct.balances[0];
+            const displayBal = acct.accountType === 'CREDIT_CARD'
+              ? Number(bal?.balance ?? 0)
+              : Number(bal?.available ?? bal?.balance ?? 0);
+            return (
+              <div key={acct.id} className="rounded-lg p-2.5" style={{ background: 'rgba(255,255,255,0.04)' }}>
+                <p className="text-xs text-gray-400 truncate mb-0.5">{acct.name}</p>
+                {acct.ownerLabel && (
+                  <p className="text-xs text-amber-500/70 mb-0.5">{acct.ownerLabel}</p>
+                )}
+                <p className={`text-sm font-semibold ${acct.accountType === 'CREDIT_CARD' ? 'text-red-400' : 'text-white'}`}>
+                  {acct.accountType === 'CREDIT_CARD' ? `(${money(displayBal)})` : money(displayBal)}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }

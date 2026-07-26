@@ -33,6 +33,7 @@ import bankAccountsRouter from './routes/bankAccounts';
 import otherIncomeRouter from './routes/otherIncome';
 import budgetRouter from './routes/budget';
 import aiRouter from './routes/ai';
+import plaidRouter from './routes/plaid';
 import { errorHandler } from './middleware/errorHandler';
 import { requireAuth, clerkMiddleware } from './middleware/requireAuth';
 
@@ -142,6 +143,7 @@ app.use('/api/bank-accounts', bankAccountsRouter);
 app.use('/api/other-income', otherIncomeRouter);
 app.use('/api/budget', budgetRouter);
 app.use('/api/ai', aiRouter);
+app.use('/api/plaid', plaidRouter);
 
 // ─── Error handling ───────────────────────────────────────
 app.use(errorHandler);
