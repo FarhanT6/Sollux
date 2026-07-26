@@ -70,6 +70,16 @@
     border-color: #F5A623;
   }
 
+  .input-dark {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: #e5e7eb;
+    @apply rounded-lg px-3 py-1.5 outline-none transition-colors;
+  }
+  .input-dark::placeholder { color: #6b7280; }
+  .input-dark:focus { border-color: rgba(245,166,35,0.5); }
+  .input-dark option { background: #2a2a2a; color: #e5e7eb; }
+
   .table-base {
     @apply w-full border-collapse text-sm;
   }
