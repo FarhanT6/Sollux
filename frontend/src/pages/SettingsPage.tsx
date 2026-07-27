@@ -490,8 +490,6 @@ function BankingTab() {
   const [editingBalVal, setEditingBalVal] = useState('');
   const [savingBal, setSavingBal] = useState(false);
 
-  const plaidAccountIds = useMemo(() => new Set(items.flatMap(i => i.accounts.map(a => a.id))), [items]);
-
   const sortedItems = useMemo(() => {
     if (!itemIds.length) return items;
     const idx = Object.fromEntries(itemIds.map((id, i) => [id, i]));
@@ -503,8 +501,8 @@ function BankingTab() {
   const loadAll = useCallback(async () => {
     const [plaidItems, allAccounts] = await Promise.all([getPlaidItems(), getBankAccounts()]);
     setItems(plaidItems);
-    const plaidIds = new Set(plaidItems.flatMap(i => i.accounts.map((a: any) => a.id)));
-    setManualAccounts((allAccounts as any[]).filter((a: any) => !plaidIds.has(a.id)));
+    // accounts with a plaidAccountId are Plaid-managed; everything else is manual
+    setManualAccounts((allAccounts as any[]).filter((a: any) => !a.plaidAccountId));
   }, []);
 
   useEffect(() => { loadAll().finally(() => setLoading(false)); }, [loadAll]);
@@ -556,7 +554,7 @@ function BankingTab() {
     ...allPlaidAccounts.filter(a => a.accountType !== 'CREDIT_CARD' && a.isActive)
       .map(a => Number(a.balances[0]?.available ?? a.balances[0]?.balance ?? 0)),
     ...manualAccounts.filter(a => a.accountType !== 'CREDIT_CARD' && a.isActive)
-      .map(a => Number(a.balance ?? 0)),
+      .map(a => Number((a as any).balances?.[0]?.balance ?? 0)),
   ].reduce((s, v) => s + v, 0);
 
   return (
@@ -642,9 +640,9 @@ function BankingTab() {
                         </>
                       ) : (
                         <>
-                          <button onClick={() => { setEditingBal(acct.id); setEditingBalVal(String(acct.balance ?? '')); }}
+                          <button onClick={() => { setEditingBal(acct.id); setEditingBalVal(String((acct as any).balances?.[0]?.balance ?? '')); }}
                             className="text-sm font-semibold text-white hover:text-amber-400 transition-colors">
-                            {balVisible ? money(acct.balance) : '••••'}
+                            {balVisible ? money((acct as any).balances?.[0]?.balance ?? null) : '••••'}
                           </button>
                           <button onClick={() => handleDeleteManual(acct.id)} className="text-xs text-gray-600 hover:text-red-400 transition-colors ml-1">✕</button>
                         </>
