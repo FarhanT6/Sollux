@@ -220,8 +220,11 @@ function scanAllAmounts(text: string): AmountHit[] {
 /** Pick the best amount-due candidate from a label-free scan. */
 function guessAmountDue(hits: AmountHit[]): number | null {
   if (hits.length === 0) return null;
-  // Exclude amounts that are clearly principal/remaining balances
-  const notPrincipal = hits.filter(h =>
+  // Never treat $0.00 as the amount due — it means the balance was cleared/paid
+  const nonZero = hits.filter(h => h.amount > 0);
+  if (nonZero.length === 0) return null;
+  // Exclude amounts clearly tied to principal/remaining balance
+  const notPrincipal = nonZero.filter(h =>
     !/unpaid\s+principal|principal\s+balance|remaining\s+balance|loan\s+balance/i.test(h.context)
   );
   // Prefer hits whose context contains payment-due keywords (not just "balance")
@@ -235,9 +238,8 @@ function guessAmountDue(hits: AmountHit[]): number | null {
   const pool = paymentPrio.length > 0 ? paymentPrio
     : generalPrio.length > 0 ? generalPrio
     : notPrincipal.length > 0 ? notPrincipal
-    : hits;
-  // For loan statements the monthly payment is smaller than the balance;
-  // prefer the smallest value in the priority pool to avoid picking the principal.
+    : nonZero;
+  // Prefer the smallest non-zero amount — monthly payments are smaller than principal balances
   return pool.reduce((min, h) => h.amount < min ? h.amount : min, pool[0].amount);
 }
 
@@ -313,9 +315,11 @@ function scanAccountNumbers(text: string): string[] {
 function detectUtilityType(text: string, provider: string | null): ExtractedBillData['utilityType'] {
   const t = (text + ' ' + (provider || '')).toLowerCase();
   // Financial/loan statements — check first so keywords like "gas" in legal boilerplate don't misfire
-  if (/auto\s+loan|vehicle\s+loan|car\s+(?:loan|payment)|mortgage|home\s+loan|personal\s+loan|installment\s+loan|land\s+rover|bmw\s+financial|ford\s+motor\s+credit|toyota\s+financial|honda\s+financial|chase\s+auto|ally\s+financial|capital\s+one\s+auto/.test(t)) return 'other';
-  if (/insurance\s+premium|homeowner|renters\s+insurance|policy\s+number|safeco|bamboo|lemonade/.test(t)) return 'other';
-  if (/hoa|homeowner.*association|association\s+fee|keystone/.test(t)) return 'other';
+  if (/auto\s+loan|vehicle\s+loan|car\s+(?:loan|payment)|mortgage|home\s+loan|personal\s+loan|installment\s+loan/.test(t)) return 'other';
+  // Named financial institutions — any statement from these is non-utility
+  if (/land\s+rover\s+financial|bmw\s+financial|ford\s+motor\s+credit|toyota\s+financial|honda\s+financial|chase\s+(?:auto|bank|financial)|chase\s+bank|\bchase\b.*(?:loan|auto|vehicle)|\bally\s+(?:financial|bank)|capital\s+one\s+(?:auto|bank)|wells\s+fargo|bank\s+of\s+america|citibank|\brushmore\b|\bcarrington\b|select\s+portfolio|\bsps\b|\busaa\b/.test(t)) return 'other';
+  if (/insurance\s+premium|homeowner['s]*\s+insurance|renters\s+insurance|policy\s+(?:number|no\.)|safeco|bamboo|lemonade/.test(t)) return 'other';
+  if (/\bhoa\b|homeowner.*association|association\s+fee|keystone/.test(t)) return 'other';
   // Utility types
   if (/electric|kwh|kilo.?watt|sdge|fpl|pg&e|pge|edison|sce|aps|xcel/.test(t)) return 'electric';
   if (/natural gas|therms?|socal gas|atmos|southwest gas|piedmont gas/.test(t)) return 'gas';
@@ -527,6 +531,9 @@ async function extractWithRegex(pdfBuffer: Buffer, filename: string): Promise<Ex
     /(?:total\s+)?amount\s+(?:of\s+)?(?:this\s+)?payment/i,
   ];
   let amountDue: number | null = findDollarNear(text, amountDueLabels);
+  // $0.00 from a label means the balance was cleared (auto-pay applied, etc.) — treat as
+  // "not found" so the fallback scanner can find the actual billing amount instead.
+  if (amountDue === 0) amountDue = null;
   if (amountDue == null) amountDue = guessAmountDue(scanAllAmounts(text));
 
   // ── Previous balance ──────────────────────────────────────────────────────
@@ -677,7 +684,8 @@ async function extractWithRegex(pdfBuffer: Buffer, filename: string): Promise<Ex
   if (/late\s+(?:fee|charge|penalty)/i.test(text))        alerts.push('Late fee');
   if (/disconnect|shut.?off|service\s+termination/i.test(text)) alerts.push('Disconnect notice');
   // NSF — require fee/charge context to avoid boilerplate false positives
-  if (/nsf|returned\s+(?:check|payment).*(?:fee|charge|\$)|(?:fee|charge).*returned\s+(?:check|payment)/i.test(text)) alerts.push('Returned payment');
+  // Flag actual NSF events — avoid fee-schedule boilerplate ("if your payment is returned, a fee may apply")
+  if (/\bnsf\b|your\s+(?:check|payment)\s+(?:was|has\s+been)\s+returned|payment\s+returned\s+(?:on|dated?|by)|returned\s+(?:check|payment)\s+fee\s*:\s*\$[\d]|\$[\d].*returned\s+payment\s+fee/i.test(text)) alerts.push('Returned payment');
   if (/debt\s+collection|collections?\s+agency|third.party\s+collect/i.test(text)) alerts.push('Debt collection');
   if (/account\s+is\s+current/i.test(text))               alerts.push('Account is current');
   // Electric
