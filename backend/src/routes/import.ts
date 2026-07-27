@@ -284,6 +284,14 @@ router.post('/confirm', async (req: Request, res: Response) => {
           ? new Date(ex.statementDate)
           : (filenameDate ?? new Date());
 
+        // Infer billing period from statement month when not extracted (e.g. management fees)
+        const billingPeriodStart = ex.billingPeriodStart
+          ? new Date(ex.billingPeriodStart)
+          : new Date(statementDate.getFullYear(), statementDate.getMonth(), 1);
+        const billingPeriodEnd = ex.billingPeriodEnd
+          ? new Date(ex.billingPeriodEnd)
+          : new Date(statementDate.getFullYear(), statementDate.getMonth() + 1, 0);
+
         if (isNaN(statementDate.getTime())) {
           errors.push(`${item.filename}: invalid statement date`);
           continue;
@@ -320,42 +328,63 @@ router.post('/confirm', async (req: Request, res: Response) => {
           await db.statement.update({
             where: { id: existing.id },
             data: {
-              statementDate:      statementDate,
-              dueDate:            ex.dueDate            ? new Date(ex.dueDate)            : existing.dueDate,
-              billingPeriodStart: ex.billingPeriodStart ? new Date(ex.billingPeriodStart) : existing.billingPeriodStart,
-              billingPeriodEnd:   ex.billingPeriodEnd   ? new Date(ex.billingPeriodEnd)   : existing.billingPeriodEnd,
-              amountDue:          ex.amountDue          ?? existing.amountDue,
-              balance:            ex.amountDue          ?? existing.balance,
-              usageValue:         ex.usageValue         ?? existing.usageValue,
-              usageUnit:          ex.usageUnit          ?? existing.usageUnit,
-              ratePlan:           ex.ratePlan           ?? existing.ratePlan,
-              rawDataJson:        buildRawData(ex)      as Prisma.InputJsonValue,
+              statementDate,
+              dueDate:            ex.dueDate ? new Date(ex.dueDate) : existing.dueDate,
+              billingPeriodStart,
+              billingPeriodEnd,
+              amountDue:   ex.amountDue  ?? existing.amountDue,
+              balance:     ex.amountDue  ?? existing.balance,
+              usageValue:  ex.usageValue ?? existing.usageValue,
+              usageUnit:   ex.usageUnit  ?? existing.usageUnit,
+              ratePlan:    ex.ratePlan   ?? existing.ratePlan,
+              rawDataJson: buildRawData(ex) as Prisma.InputJsonValue,
               ...(pdfS3Key ? { pdfS3Key } : {}),
             },
           });
           skipped++;
-          continue;
+        } else {
+          await db.statement.create({
+            data: {
+              utilityAccountId,
+              statementDate,
+              dueDate:            ex.dueDate ? new Date(ex.dueDate) : null,
+              billingPeriodStart,
+              billingPeriodEnd,
+              amountDue:   ex.amountDue  ?? null,
+              balance:     ex.amountDue  ?? null,
+              amountPaid:  ex.isPaid     ? (ex.amountDue ?? null) : null,
+              usageValue:  ex.usageValue ?? null,
+              usageUnit:   ex.usageUnit  ?? null,
+              ratePlan:    ex.ratePlan   ?? null,
+              pdfS3Key:    pdfS3Key      ?? null,
+              sourceType:  'MANUAL',
+              rawDataJson: buildRawData(ex) as Prisma.InputJsonValue,
+            },
+          });
+          imported++;
         }
 
-        await db.statement.create({
-          data: {
-            utilityAccountId,
-            statementDate,
-            dueDate:            ex.dueDate            ? new Date(ex.dueDate)            : null,
-            billingPeriodStart: ex.billingPeriodStart ? new Date(ex.billingPeriodStart) : null,
-            billingPeriodEnd:   ex.billingPeriodEnd   ? new Date(ex.billingPeriodEnd)   : null,
-            amountDue:          ex.amountDue          ?? null,
-            balance:            ex.amountDue          ?? null,
-            amountPaid:         ex.isPaid             ? (ex.amountDue ?? null) : null,
-            usageValue:         ex.usageValue         ?? null,
-            usageUnit:          ex.usageUnit          ?? null,
-            ratePlan:           ex.ratePlan           ?? null,
-            pdfS3Key:           pdfS3Key              ?? null,
-            sourceType:         'MANUAL',
-            rawDataJson:        buildRawData(ex)      as Prisma.InputJsonValue,
-          },
-        });
-        imported++;
+        // If this statement shows paymentsReceived > 0, the prior statement was paid.
+        // Find the most recent prior statement with no amountPaid and mark it paid.
+        if (ex.paymentsReceived && ex.paymentsReceived > 0) {
+          const priorStmt = await db.statement.findFirst({
+            where: {
+              utilityAccountId,
+              statementDate: { lt: statementDate },
+              amountPaid: null,
+            },
+            orderBy: { statementDate: 'desc' },
+          });
+          if (priorStmt && priorStmt.amountDue != null) {
+            const priorDue = Number(priorStmt.amountDue);
+            if (ex.paymentsReceived >= priorDue - 0.01) {
+              await db.statement.update({
+                where: { id: priorStmt.id },
+                data: { amountPaid: priorDue },
+              });
+            }
+          }
+        }
       } catch (err) {
         errors.push(`${item.filename}: ${err instanceof Error ? err.message : 'unknown error'}`);
       }

@@ -757,6 +757,18 @@ function UtilityAccountCard({
         </button>
       </div>
 
+      {/* No credentials banner */}
+      {account.lastSyncStatus === 'FAILED' && account.lastSyncError?.startsWith('No credentials') && (
+        <div className="mt-3 px-3 py-2 rounded-lg text-xs space-y-1"
+          style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.25)' }}>
+          <p className="font-medium text-indigo-400">Credentials required to sync</p>
+          <p className="text-gray-400">
+            Click <span className="text-gray-200">Edit</span> and add the username and password you use to log in to the{' '}
+            <span className="text-gray-200">{account.providerName}</span> portal.
+          </p>
+        </div>
+      )}
+
       {/* MFA required banner */}
       {account.lastSyncStatus === 'FAILED' && account.lastSyncError?.startsWith('MFA_REQUIRED') && (
         <div className="mt-3 px-3 py-2 rounded-lg text-xs space-y-1"

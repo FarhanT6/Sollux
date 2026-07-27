@@ -3,6 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   getUtility, syncUtility, deleteUtility, getStatementDownloadUrl,
   getPaymentPlan, createPaymentPlan, updatePaymentPlan, deletePaymentPlan,
+  upsertUtilityLoan, deleteUtilityLoan,
 } from '../api/client';
 import { CATEGORY_LABELS, CATEGORY_COLORS } from '../types';
 import { Pill, Skeleton, EmptyState } from '../components/ui';
@@ -37,8 +38,14 @@ function isStatementPaid(s: any, payments: any[] = []): boolean {
   return sumSinceStmt >= openBalance - 0.01;
 }
 
-function statementStatus(s: any, payments: any[] = []): { color: 'green' | 'amber' | 'red'; label: string } {
+function statementStatus(s: any, payments: any[] = [], newerStmt?: any): { color: 'green' | 'amber' | 'red'; label: string } {
   if (isStatementPaid(s, payments)) return { color: 'green', label: 'Paid' };
+  // The next (more recent) statement's paymentsReceived represents payment for THIS statement.
+  if (newerStmt) {
+    const nextPayments = Number((newerStmt.rawDataJson as any)?.paymentsReceived ?? 0);
+    const thisDue = Number(s.amountDue ?? 0);
+    if (thisDue > 0 && nextPayments >= thisDue - 0.01) return { color: 'green', label: 'Paid' };
+  }
   if ((s.rawDataJson as any)?.isPastDue === true) return { color: 'red', label: 'Overdue' };
   if (s.dueDate && isAfter(new Date(), new Date(s.dueDate))) return { color: 'red', label: 'Overdue' };
   return { color: 'amber', label: 'Due' };
@@ -112,6 +119,198 @@ function PaymentPlanModal({
         </div>
       </div>
     </div>
+  );
+}
+
+// ── Loan Card ────────────────────────────────────────────────────────────────
+
+const LOAN_TYPE_LABELS: Record<string, string> = {
+  MORTGAGE: 'Mortgage', HELOC: 'HELOC', AUTO: 'Auto', PERSONAL: 'Personal',
+  STUDENT: 'Student', INSTALLMENT_PLAN: 'Installment Plan',
+  CREDIT_LINE: 'Credit Line', OTHER: 'Other',
+};
+
+function LoanModal({ accountId, existing, onClose, onSave }: {
+  accountId: string; existing: any | null; onClose: () => void; onSave: (l: any) => void;
+}) {
+  const [lender,          setLender]          = useState(existing?.lender || '');
+  const [loanType,        setLoanType]        = useState(existing?.loanType || 'OTHER');
+  const [interestRate,    setInterestRate]    = useState(existing?.interestRate != null ? String(existing.interestRate) : '');
+  const [originalAmount,  setOriginalAmount]  = useState(existing?.originalAmount != null ? String(existing.originalAmount) : '');
+  const [monthlyPayment,  setMonthlyPayment]  = useState(existing?.monthlyPayment != null ? String(existing.monthlyPayment) : '');
+  const [currentBalance,  setCurrentBalance]  = useState(existing?.currentBalance != null ? String(existing.currentBalance) : '');
+  const [originationDate, setOriginationDate] = useState(existing?.originationDate ? existing.originationDate.slice(0, 10) : '');
+  const [maturityDate,    setMaturityDate]    = useState(existing?.maturityDate    ? existing.maturityDate.slice(0, 10)    : '');
+  const [accountLast4,    setAccountLast4]    = useState(existing?.accountLast4 || '');
+  const [notes,           setNotes]           = useState(existing?.notes || '');
+  const [saving,          setSaving]          = useState(false);
+
+  async function handleSave() {
+    if (!lender) return;
+    setSaving(true);
+    try {
+      const result = await upsertUtilityLoan(accountId, {
+        lender, loanType,
+        interestRate:    interestRate    ? parseFloat(interestRate)    : null,
+        originalAmount:  originalAmount  ? parseFloat(originalAmount)  : null,
+        monthlyPayment:  monthlyPayment  ? parseFloat(monthlyPayment)  : null,
+        currentBalance:  currentBalance  ? parseFloat(currentBalance)  : null,
+        originationDate: originationDate || null,
+        maturityDate:    maturityDate    || null,
+        accountLast4:    accountLast4    || null,
+        notes:           notes           || null,
+      });
+      onSave(result);
+      onClose();
+    } catch { setSaving(false); }
+  }
+
+  const inputCls = 'w-full rounded-lg px-3 py-2 text-sm text-white bg-black/30 border border-white/10 focus:outline-none focus:border-amber-500';
+  const labelCls = 'text-xs text-gray-400 block mb-1';
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 overflow-y-auto py-8">
+      <div className="rounded-2xl p-6 w-full max-w-md space-y-4" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.1)' }}>
+        <div className="flex items-center justify-between">
+          <h3 className="text-base font-semibold text-white">Loan Details</h3>
+          <button onClick={onClose} className="text-gray-500 hover:text-white text-lg">×</button>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="col-span-2">
+            <label className={labelCls}>Lender / servicer *</label>
+            <input value={lender} onChange={e => setLender(e.target.value)} className={inputCls} placeholder="e.g. Westlake Portfolio Mgmt" />
+          </div>
+          <div>
+            <label className={labelCls}>Loan type</label>
+            <select value={loanType} onChange={e => setLoanType(e.target.value)} className={inputCls}>
+              {Object.entries(LOAN_TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className={labelCls}>Account last 4</label>
+            <input value={accountLast4} onChange={e => setAccountLast4(e.target.value.slice(-4))} className={inputCls} placeholder="9823" maxLength={4} />
+          </div>
+          <div>
+            <label className={labelCls}>Interest rate (%)</label>
+            <input type="number" step="0.001" value={interestRate} onChange={e => setInterestRate(e.target.value)} className={inputCls} placeholder="e.g. 6.5" />
+          </div>
+          <div>
+            <label className={labelCls}>Monthly payment ($)</label>
+            <input type="number" step="0.01" value={monthlyPayment} onChange={e => setMonthlyPayment(e.target.value)} className={inputCls} placeholder="e.g. 722.49" />
+          </div>
+          <div>
+            <label className={labelCls}>Original loan amount ($)</label>
+            <input type="number" step="0.01" value={originalAmount} onChange={e => setOriginalAmount(e.target.value)} className={inputCls} placeholder="e.g. 50000" />
+          </div>
+          <div>
+            <label className={labelCls}>Current balance ($)</label>
+            <input type="number" step="0.01" value={currentBalance} onChange={e => setCurrentBalance(e.target.value)} className={inputCls} placeholder="e.g. 42000" />
+          </div>
+          <div>
+            <label className={labelCls}>Origination date</label>
+            <input type="date" value={originationDate} onChange={e => setOriginationDate(e.target.value)} className={inputCls} />
+          </div>
+          <div>
+            <label className={labelCls}>Maturity date</label>
+            <input type="date" value={maturityDate} onChange={e => setMaturityDate(e.target.value)} className={inputCls} />
+          </div>
+          <div className="col-span-2">
+            <label className={labelCls}>Notes (optional)</label>
+            <input value={notes} onChange={e => setNotes(e.target.value)} className={inputCls} placeholder="Solar loan, car financing, etc." />
+          </div>
+        </div>
+        <div className="flex gap-2 pt-1">
+          <button onClick={onClose} className="flex-1 py-2 rounded-lg text-sm text-gray-400 hover:text-white" style={{ background: 'rgba(255,255,255,0.06)' }}>Cancel</button>
+          <button onClick={handleSave} disabled={saving || !lender}
+            className="flex-1 py-2 rounded-lg text-sm font-medium text-black bg-amber-500 disabled:opacity-50">
+            {saving ? 'Saving...' : 'Save'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LoanCard({ loan, accountId, onUpdate, onDelete }: {
+  loan: any; accountId: string; onUpdate: (l: any) => void; onDelete: () => void;
+}) {
+  const [showEdit, setShowEdit] = useState(false);
+  const [removing, setRemoving] = useState(false);
+
+  const monthlyPayment  = loan.monthlyPayment  != null ? Number(loan.monthlyPayment)  : null;
+  const originalAmount  = loan.originalAmount  != null ? Number(loan.originalAmount)  : null;
+  const currentBalance  = loan.currentBalance  != null ? Number(loan.currentBalance)  : null;
+  const interestRate    = loan.interestRate    != null ? Number(loan.interestRate)    : null;
+  const originationDate = loan.originationDate ? new Date(loan.originationDate) : null;
+  const maturityDate    = loan.maturityDate    ? new Date(loan.maturityDate)    : null;
+
+  // Estimate terms remaining from current balance and monthly payment
+  let termsRemaining: number | null = null;
+  if (currentBalance != null && monthlyPayment != null && monthlyPayment > 0 && interestRate != null && interestRate > 0) {
+    const r = interestRate / 100 / 12;
+    termsRemaining = Math.ceil(Math.log(monthlyPayment / (monthlyPayment - r * currentBalance)) / Math.log(1 + r));
+  } else if (currentBalance != null && monthlyPayment != null && monthlyPayment > 0) {
+    termsRemaining = Math.ceil(currentBalance / monthlyPayment);
+  }
+
+  const paidOff = originalAmount != null && currentBalance != null ? originalAmount - currentBalance : null;
+  const pct     = originalAmount != null && paidOff != null && originalAmount > 0
+    ? Math.min(100, (paidOff / originalAmount) * 100) : null;
+
+  async function handleRemove() {
+    if (!confirm('Unlink this loan from the account?')) return;
+    setRemoving(true);
+    try { await deleteUtilityLoan(accountId); onDelete(); } finally { setRemoving(false); }
+  }
+
+  return (
+    <>
+      {showEdit && <LoanModal accountId={accountId} existing={loan} onClose={() => setShowEdit(false)} onSave={onUpdate} />}
+      <div className="rounded-xl px-5 py-4 mb-4" style={{ background: '#1e1e1e', border: '1px solid rgba(99,102,241,0.3)' }}>
+        <div className="flex items-start justify-between mb-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-white">🏦 {loan.lender}</span>
+              <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: 'rgba(99,102,241,0.15)', color: '#a5b4fc' }}>
+                {LOAN_TYPE_LABELS[loan.loanType] || loan.loanType}
+              </span>
+            </div>
+            {loan.accountLast4 && <p className="text-xs text-gray-500 mt-0.5">····{loan.accountLast4}</p>}
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => setShowEdit(true)} className="text-xs text-gray-500 hover:text-white px-2 py-1 rounded" style={{ background: 'rgba(255,255,255,0.06)' }}>Edit</button>
+            <button onClick={handleRemove} disabled={removing} className="text-xs text-red-400 hover:text-red-300 px-2 py-1 rounded" style={{ background: 'rgba(255,0,0,0.08)' }}>Remove</button>
+          </div>
+        </div>
+
+        {/* Payoff progress bar */}
+        {pct != null && (
+          <div className="mb-3">
+            <div className="flex justify-between text-xs text-gray-400 mb-1">
+              <span>Paid off: {fmtMoney(paidOff)}</span>
+              <span>Remaining: <span className="text-indigo-300 font-medium">{fmtMoney(currentBalance)}</span></span>
+            </div>
+            <div className="h-2 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.08)' }}>
+              <div className="h-full rounded-full transition-all duration-500" style={{ width: `${pct}%`, background: 'linear-gradient(90deg,#6366f1,#a5b4fc)' }} />
+            </div>
+            <div className="flex justify-between text-xs text-gray-600 mt-1">
+              <span>{pct.toFixed(1)}% paid off</span>
+              {originalAmount != null && <span>of {fmtMoney(originalAmount)}</span>}
+            </div>
+          </div>
+        )}
+
+        {/* Key stats */}
+        <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-xs">
+          {interestRate    != null && <div><span className="text-gray-500">Interest rate: </span><span className="text-white font-medium">{interestRate.toFixed(3)}%</span></div>}
+          {monthlyPayment  != null && <div><span className="text-gray-500">Monthly payment: </span><span className="text-white font-medium">{fmtMoney(monthlyPayment)}</span></div>}
+          {termsRemaining  != null && <div><span className="text-gray-500">Terms remaining: </span><span className="text-white font-medium">~{termsRemaining} mo</span></div>}
+          {maturityDate    != null && <div><span className="text-gray-500">Maturity: </span><span className="text-white font-medium">{format(maturityDate, 'MMM yyyy')}</span></div>}
+          {originationDate != null && <div><span className="text-gray-500">Originated: </span><span className="text-gray-300">{format(originationDate, 'MMM d, yyyy')}</span></div>}
+        </div>
+        {loan.notes && <p className="text-xs text-gray-500 mt-2 italic">{loan.notes}</p>}
+      </div>
+    </>
   );
 }
 
@@ -228,13 +427,15 @@ export default function UtilityDetailPage() {
   const [tab, setTab] = useState<Tab>('statements');
   const [search, setSearch] = useState('');
   const [yearFilter, setYearFilter] = useState<string>('all');
-  const [plan, setPlan] = useState<any>(null);
+  const [plan, setPlan]           = useState<any>(null);
   const [showPlanModal, setShowPlanModal] = useState(false);
+  const [loan, setLoan]           = useState<any>(null);
+  const [showLoanModal, setShowLoanModal] = useState(false);
 
   useEffect(() => {
     if (!accountId) return;
     Promise.all([
-      getUtility(accountId).then(setAccount),
+      getUtility(accountId).then(a => { setAccount(a); setLoan((a as any).loan ?? null); }),
       getPaymentPlan(accountId).then(setPlan),
     ]).finally(() => setLoading(false));
   }, [accountId]);
@@ -362,6 +563,11 @@ export default function UtilityDetailPage() {
           onClose={() => setShowPlanModal(false)}
           onSave={p => { setPlan(p); setShowPlanModal(false); }} />
       )}
+      {showLoanModal && (
+        <LoanModal accountId={accountId!} existing={loan}
+          onClose={() => setShowLoanModal(false)}
+          onSave={l => { setLoan(l); setShowLoanModal(false); }} />
+      )}
 
       {/* Header */}
       <div className="px-6 py-4 sticky top-0 z-10 flex items-center justify-between"
@@ -437,6 +643,21 @@ export default function UtilityDetailPage() {
 
       <div className="px-6 pt-4">
         {/* Payment Plan section */}
+        {/* Loan Details */}
+        {loan ? (
+          <LoanCard loan={loan} accountId={accountId!}
+            onUpdate={setLoan} onDelete={() => setLoan(null)} />
+        ) : (
+          <button
+            onClick={() => setShowLoanModal(true)}
+            className="w-full mb-4 py-2.5 rounded-xl text-xs text-gray-500 hover:text-gray-300 transition-colors text-left px-4"
+            style={{ background: 'rgba(255,255,255,0.03)', border: '1px dashed rgba(255,255,255,0.1)' }}
+          >
+            + Add loan details (interest rate, term, maturity date, etc.)
+          </button>
+        )}
+
+        {/* Payment Plan */}
         {plan ? (
           <PaymentPlanCard plan={plan} accountId={accountId!}
             onUpdate={setPlan} onDelete={() => setPlan(null)} />
@@ -492,7 +713,8 @@ export default function UtilityDetailPage() {
             : (
               <div className="space-y-2 pb-8">
                 {filteredStatements.map((s, idx) => {
-                  const { color: sc, label: sl } = statementStatus(s, payments);
+                  // filteredStatements is sorted DESC; [idx-1] is the more recent statement
+                  const { color: sc, label: sl } = statementStatus(s, payments, filteredStatements[idx - 1]);
                   const raw = s.rawDataJson as Record<string, unknown> | undefined;
                   const pastDue     = raw?.pastDue      != null ? Number(raw.pastDue)      : null;
                   const totalDue    = (raw?.accountBalance ?? raw?.totalDue) != null

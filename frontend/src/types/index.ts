@@ -292,6 +292,7 @@ export interface UtilityAccount {
   category: UtilityCategory;
   notes?: string;
   syncEnabled: boolean;
+  hasCredentials?: boolean;
   isActive: boolean;
   lastSyncedAt?: string;
   lastSyncStatus?: SyncStatus;
