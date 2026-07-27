@@ -80,8 +80,8 @@ const CONFIDENCE_COLORS: Record<string, string> = {
 
 const CONFIDENCE_LABELS: Record<string, string> = {
   high:   'Auto-matched',
-  medium: 'Likely match — verify',
-  low:    'Possible match — verify',
+  medium: 'Likely match  -  verify',
+  low:    'Possible match  -  verify',
   none:   'No match found',
 };
 
@@ -98,7 +98,7 @@ const UTILITY_TYPE_TO_CATEGORY: Record<string, string> = {
 };
 
 function fmt$(n: number | null | undefined) {
-  return n != null ? `$${Number(n).toFixed(2)}` : '—';
+  return n != null ? `$${Number(n).toFixed(2)}` : ' - ';
 }
 
 function readFileAsBase64(file: File): Promise<string> {
@@ -227,7 +227,7 @@ interface DriveJobStatus {
   needsReview: { filename: string; s3Key: string; extracted: ExtractedBill; match: MatchResult; pdfUrl: string }[];
 }
 
-// Lazily loads Google's API + Picker client libraries (not an npm package —
+// Lazily loads Google's API + Picker client libraries (not an npm package  - 
 // Google only ships these as browser globals from their own CDN).
 let gapiLoadPromise: Promise<void> | null = null;
 function loadGooglePicker(): Promise<void> {
@@ -273,6 +273,10 @@ function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed }: {
     }
   }, []);
 
+  const [streaming, setStreaming] = useState(false);
+  const [streamTotal, setStreamTotal] = useState(0);
+  const [streamDone, setStreamDone]   = useState(0);
+
   const openPicker = async () => {
     const apiKey = import.meta.env.VITE_GOOGLE_PICKER_API_KEY;
     if (!apiKey) {
@@ -285,8 +289,6 @@ function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed }: {
       const { accessToken } = await getDriveAccessToken(tokenId);
       const google = (window as any).google;
 
-      // Show folders AND PDFs, with multi-select so the user can pick a whole
-      // folder, a specific handful of files, or any mix of the two.
       const foldersView = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
         .setSelectFolderEnabled(true)
         .setIncludeFolders(true);
@@ -306,19 +308,13 @@ function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed }: {
             const docs: any[] = data.docs || [];
             if (!docs.length) return;
             const folders = docs.filter(d => d.mimeType === 'application/vnd.google-apps.folder');
-            const files = docs.filter(d => d.mimeType !== 'application/vnd.google-apps.folder');
+            const files   = docs.filter(d => d.mimeType !== 'application/vnd.google-apps.folder');
             const displayName =
               folders.length > 0 ? folders[0].name :
               files.length === 1 ? files[0].name :
               `${files.length} files`;
             setFolderName(displayName);
-            const { jobId } = await startDriveImport(tokenId, {
-              folderId: folders[0]?.id,
-              fileIds: files.map(f => f.id),
-              folderName: displayName,
-            });
-            localStorage.setItem('sollux_last_drive_job', jobId);
-            setJob({ id: jobId, status: 'RUNNING', totalFiles: 0, processedFiles: 0, autoImported: 0, needsReview: [] });
+            await startStream(tokenId, folders[0]?.id, files.map((f: any) => f.id));
           }
         })
         .build();
@@ -329,40 +325,34 @@ function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed }: {
     }
   };
 
-  // Poll job progress until it finishes.
-  useEffect(() => {
-    if (!job || job.status !== 'RUNNING') return;
-    const interval = setInterval(async () => {
-      const data = await getDriveImportJob(job.id) as DriveJobStatus;
-      setJob(data);
-      if (data.status !== 'RUNNING') clearInterval(interval);
-    }, 1500);
-    return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [job?.id, job?.status]);
-
-  const finishReview = async () => {
-    if (!job) return;
-    setResolving(true);
+  const startStream = async (tId: string, folderId?: string, fileIds?: string[]) => {
+    setStreaming(true);
+    setStreamTotal(0);
+    setStreamDone(0);
     setDriveError(null);
+
     try {
       // @ts-ignore
       const token = await window.Clerk?.session?.getToken();
       const base  = import.meta.env.VITE_API_URL || '/api';
 
-      const response = await fetch(`${base}/drive/jobs/${job.id}/review-data`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      const response = await fetch(`${base}/drive/stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ tokenId: tId, folderId, fileIds }),
       });
-      if (!response.ok || !response.body) throw new Error('Stream failed');
 
-      const properties = await getProperties() as unknown as PropertyWithAccounts[];
-      localStorage.removeItem('sollux_last_drive_job');
+      if (!response.ok || !response.body) throw new Error('Stream failed');
 
       const reader  = response.body.getReader();
       const decoder = new TextDecoder();
-      let buf  = '';
-      let done = false;
+      let buf     = '';
+      let done    = false;
       let started = false;
+      let counted = 0;
 
       while (!done) {
         const { value, done: streamDone } = await reader.read();
@@ -377,25 +367,33 @@ function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed }: {
           if (!line.startsWith('data: ')) continue;
           const event = JSON.parse(line.slice(6));
 
-          if (event.type === 'bill') {
+          if (event.type === 'total') {
+            setStreamTotal(event.count);
+          } else if (event.type === 'bill') {
+            counted++;
+            setStreamDone(counted);
             if (!started) {
-              // Switch to review stage on first bill
-              onStreamStart?.(properties, job.autoImported);
+              onStreamStart?.({} as any, 0); // switch to review stage immediately
               started = true;
-              setResolving(false);
             }
             onBillStreamed?.({ filename: event.filename, extracted: event.extracted, match: event.match, fileData: event.fileData });
+          } else if (event.type === 'auto_imported') {
+            counted++;
+            setStreamDone(counted);
           } else if (event.type === 'done') {
             if (!started) {
-              // No bills needed review — call original callback to handle done state
-              onResolved([], properties, event.autoImported ?? job.autoImported);
+              // All auto-imported, nothing to review
+              onResolved([], event.properties || [], event.autoImported ?? 0);
+            } else {
+              onStreamStart?.(event.properties || [], event.autoImported ?? 0);
             }
           }
         }
       }
     } catch (err) {
-      setDriveError(`Failed to load review data: ${(err as Error).message}`);
-      setResolving(false);
+      setDriveError(`Import failed: ${(err as Error).message}`);
+    } finally {
+      setStreaming(false);
     }
   };
 
@@ -415,39 +413,24 @@ function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed }: {
     );
   }
 
-  if (job) {
-    const done = job.status !== 'RUNNING';
+  if (streaming) {
+    const pct = streamTotal > 0 ? Math.round((streamDone / streamTotal) * 100) : 0;
     return (
       <div className="rounded-xl p-5 mb-5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
-        <p className="text-sm font-medium text-gray-200 mb-2">
-          {done ? 'Drive import finished' : `Importing “${folderName}”…`}
-        </p>
-        {!done ? (
-          <>
-            <div className="w-full h-1.5 rounded-full bg-white/10 overflow-hidden mb-2">
-              <div
-                className="h-full bg-amber-500 transition-all"
-                style={{ width: job.totalFiles ? `${(job.processedFiles / job.totalFiles) * 100}%` : '4%' }}
-              />
-            </div>
-            <p className="text-xs text-gray-500">{job.processedFiles} / {job.totalFiles || '…'} files processed</p>
-          </>
-        ) : (
-          <div className="space-y-2">
-            <p className="text-xs text-green-400">{job.autoImported} statement{job.autoImported !== 1 ? 's' : ''} auto-filed</p>
-            {job.needsReview.length > 0 ? (
-              <>
-                <p className="text-xs text-amber-400">{job.needsReview.length} need{job.needsReview.length === 1 ? 's' : ''} your review — couldn't confidently match a property/utility</p>
-                <button onClick={finishReview} disabled={resolving} className="btn btn-primary text-xs disabled:opacity-40">
-                  {resolving ? 'Loading…' : `Review ${job.needsReview.length} statement${job.needsReview.length !== 1 ? 's' : ''}`}
-                </button>
-                {driveError && <p className="text-xs text-red-400 mt-1">{driveError}</p>}
-              </>
-            ) : (
-              <button onClick={() => setJob(null)} className="btn text-xs">Import another folder</button>
-            )}
+        <div className="flex items-center gap-3 mb-3">
+          <div className="w-4 h-4 border-2 border-amber-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+          <p className="text-sm font-medium text-gray-200">
+            {streamTotal > 0
+              ? `Processing ${folderName}  -  ${streamDone} / ${streamTotal} files`
+              : 'Connecting to Drive...'}
+          </p>
+        </div>
+        {streamTotal > 0 && (
+          <div className="w-full h-1.5 rounded-full bg-white/10 overflow-hidden">
+            <div className="h-full bg-amber-500 transition-all" style={{ width: `${pct}%` }} />
           </div>
         )}
+        {driveError && <p className="text-xs text-red-400 mt-2">{driveError}</p>}
       </div>
     );
   }
@@ -456,10 +439,10 @@ function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed }: {
     <div className="rounded-xl p-5 mb-5 flex items-center justify-between" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
       <div>
         <p className="text-sm font-medium text-gray-200">Import from Google Drive</p>
-        <p className="text-xs text-gray-500 mt-0.5">Pick a folder from My Drive or Shared with me — every PDF inside (including subfolders) gets pulled in.</p>
+        <p className="text-xs text-gray-500 mt-0.5">Pick a folder from My Drive or Shared with me  -  every PDF inside (including subfolders) gets pulled in.</p>
       </div>
       <button onClick={openPicker} disabled={opening} className="btn btn-primary text-xs disabled:opacity-40">
-        {opening ? 'Opening…' : 'Choose folder'}
+        {opening ? 'Opening...' : 'Choose folder'}
       </button>
     </div>
   );
@@ -783,7 +766,7 @@ function BillCard({
   };
 
   const handleSaveNew = () => {
-    // Reuse an existing property if the address already matches — prevents duplicates
+    // Reuse an existing property if the address already matches  -  prevents duplicates
     const matchedProp = findExistingProperty(propForm.address, properties);
     if (matchedProp) {
       setResolvedPropertyName(matchedProp.nickname || matchedProp.address);
@@ -852,16 +835,16 @@ function BillCard({
       {!error && (
         <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
           {[
-            ['Date',         ex.statementDate   ? format(new Date(ex.statementDate + 'T12:00:00'),   'MMM d, yyyy') : '—'],
-            ['Due',          ex.dueDate         ? format(new Date(ex.dueDate         + 'T12:00:00'), 'MMM d, yyyy') : '—'],
+            ['Date',         ex.statementDate   ? format(new Date(ex.statementDate + 'T12:00:00'),   'MMM d, yyyy') : ' - '],
+            ['Due',          ex.dueDate         ? format(new Date(ex.dueDate         + 'T12:00:00'), 'MMM d, yyyy') : ' - '],
             ['Amount due',   fmt$(ex.amountDue)],
             ['Current chgs', fmt$(ex.currentCharges)],
             ['Prev balance', fmt$(ex.previousBalance)],
             ['Payments',     fmt$(ex.paymentsReceived)],
-            ['Usage',        ex.usageValue != null ? `${ex.usageValue} ${ex.usageUnit || ''}` : '—'],
-            ['Rate plan',    ex.ratePlan || '—'],
-            ['Acct #',       ex.accountNumber  || '—'],
-            ['Type',         ex.utilityType    || '—'],
+            ['Usage',        ex.usageValue != null ? `${ex.usageValue} ${ex.usageUnit || ''}` : ' - '],
+            ['Rate plan',    ex.ratePlan || ' - '],
+            ['Acct #',       ex.accountNumber  || ' - '],
+            ['Type',         ex.utilityType    || ' - '],
           ].map(([label, value]) => (
             <div key={label} className="flex gap-1.5">
               <span className="text-gray-500 w-20 flex-shrink-0">{label}</span>
@@ -952,7 +935,7 @@ function BillCard({
                   className="w-full rounded-lg px-3 py-2 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-amber-500/50"
                   style={{ background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)' }}
                 >
-                  <option value="">— Select utility account —</option>
+                  <option value=""> -  Select utility account  - </option>
                   {properties.map(prop => (
                     <optgroup key={prop.id} label={prop.nickname || prop.address}>
                       {prop.utilityAccounts.map(acct => (
@@ -1059,7 +1042,7 @@ export default function ImportPage() {
 
   const handleFiles = async (files: File[]) => {
     setStage('analyzing');
-    setProgress(`Reading ${files.length} file${files.length !== 1 ? 's' : ''}…`);
+    setProgress(`Reading ${files.length} file${files.length !== 1 ? 's' : ''}...`);
     setBills([]);
 
     try {
@@ -1070,7 +1053,7 @@ export default function ImportPage() {
       // Build a lookup so we can attach fileData as each result streams in
       const dataByName = Object.fromEntries(filePayloads.map(f => [f.name, f.data]));
 
-      setProgress(`Analyzing 0 / ${files.length} with AI…`);
+      setProgress(`Analyzing 0 / ${files.length} with AI...`);
 
       // Get Clerk token the same way the axios interceptor does
       // @ts-ignore
@@ -1113,7 +1096,7 @@ export default function ImportPage() {
 
           if (event.type === 'bill') {
             counted++;
-            setProgress(`Analyzed ${counted} / ${files.length} files…`);
+            setProgress(`Analyzed ${counted} / ${files.length} files...`);
             setBills(prev => [...prev, {
               ...event,
               fileData: dataByName[event.filename] ?? '',
@@ -1206,18 +1189,18 @@ export default function ImportPage() {
     setProperties(props);
     setDriveNote(
       autoImported > 0
-        ? `${autoImported} statement${autoImported !== 1 ? 's' : ''} already auto-filed from Drive — these ${driveBills.length} need a quick check.`
+        ? `${autoImported} statement${autoImported !== 1 ? 's' : ''} already auto-filed from Drive  -  these ${driveBills.length} need a quick check.`
         : `${driveBills.length} statement${driveBills.length !== 1 ? 's' : ''} from Drive need a quick check before they can be filed.`
     );
     setStage('review');
   };
 
   const handleDriveStreamStart = (props: PropertyWithAccounts[], autoImported: number) => {
-    setProperties(props);
+    if (props && (props as any).length > 0) setProperties(props);
     setDriveNote(
       autoImported > 0
-        ? `${autoImported} statement${autoImported !== 1 ? 's' : ''} already auto-filed from Drive — reviewing the rest.`
-        : 'Loading statements from Drive…'
+        ? `${autoImported} statement${autoImported !== 1 ? 's' : ''} already auto-filed from Drive  -  reviewing the rest.`
+        : 'Reviewing statements from Drive...'
     );
     setStage('review');
   };
@@ -1270,7 +1253,7 @@ export default function ImportPage() {
     <div>
       <PageHeader
         title="Import bills"
-        subtitle="Upload utility bill PDFs — Claude extracts and auto-matches them to your properties"
+        subtitle="Upload utility bill PDFs  -  Claude extracts and auto-matches them to your properties"
       />
 
       <div className="px-6 py-5 max-w-5xl">
@@ -1325,9 +1308,9 @@ export default function ImportPage() {
                   onClick={handleRefreshAccounts}
                   disabled={refreshing}
                   className="btn text-xs disabled:opacity-40"
-                  title="Reload accounts — use this if you just created a new account"
+                  title="Reload accounts  -  use this if you just created a new account"
                 >
-                  {refreshing ? 'Refreshing…' : '↺ Refresh accounts'}
+                  {refreshing ? 'Refreshing...' : '↺ Refresh accounts'}
                 </button>
                 <button
                   onClick={handleImport}
@@ -1382,7 +1365,7 @@ export default function ImportPage() {
         {stage === 'importing' && (
           <div className="flex flex-col items-center justify-center py-24 gap-4">
             <div className="w-10 h-10 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
-            <p className="text-sm text-gray-400">Saving statements and uploading PDFs…</p>
+            <p className="text-sm text-gray-400">Saving statements and uploading PDFs...</p>
           </div>
         )}
 
