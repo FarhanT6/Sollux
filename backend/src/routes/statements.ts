@@ -51,6 +51,23 @@ router.get('/', async (req, res, next) => {
   }
 });
 
+// PATCH /api/statements/:id — update amountPaid (mark paid / unpaid)
+router.patch('/:id', async (req, res, next) => {
+  try {
+    const statement = await db.statement.findFirst({
+      where: { id: req.params.id, utilityAccount: { property: { userId: req.dbUserId! } } },
+    });
+    if (!statement) return res.status(404).json({ error: 'Statement not found' });
+
+    const { amountPaid } = req.body;
+    const updated = await db.statement.update({
+      where: { id: req.params.id },
+      data: { amountPaid: amountPaid != null ? amountPaid : null },
+    });
+    res.json(updated);
+  } catch (err) { next(err); }
+});
+
 // DELETE /api/statements/:id — remove a single statement (admin/cleanup use)
 router.delete('/:id', async (req, res, next) => {
   try {
