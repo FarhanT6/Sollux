@@ -79,6 +79,7 @@ router.get('/:id', async (req, res, next) => {
       include: {
         property: { select: { id: true, address: true, nickname: true } },
         loanPayments: { orderBy: { date: 'desc' } },
+        utilityAccount: { select: { id: true, providerName: true, category: true } },
       },
     });
     if (!loan) return res.status(404).json({ error: 'Loan not found' });

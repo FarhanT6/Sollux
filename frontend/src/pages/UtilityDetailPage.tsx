@@ -307,6 +307,11 @@ function LoanCard({ loan, accountId, onUpdate, onDelete }: {
             {loan.accountLast4 && <p className="text-xs text-gray-500 mt-0.5">····{loan.accountLast4}</p>}
           </div>
           <div className="flex gap-2">
+            {loan.id && (
+              <Link to={`/loans/${loan.id}`} className="text-xs text-indigo-400 hover:text-indigo-300 px-2 py-1 rounded transition-colors" style={{ background: 'rgba(99,102,241,0.08)' }}>
+                Full details →
+              </Link>
+            )}
             <button onClick={() => setShowEdit(true)} className="text-xs text-gray-500 hover:text-white px-2 py-1 rounded" style={{ background: 'rgba(255,255,255,0.06)' }}>Edit</button>
             <button onClick={handleRemove} disabled={removing} className="text-xs text-red-400 hover:text-red-300 px-2 py-1 rounded" style={{ background: 'rgba(255,0,0,0.08)' }}>Remove</button>
           </div>
