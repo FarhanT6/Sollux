@@ -244,11 +244,12 @@ function loadGooglePicker(): Promise<void> {
   return gapiLoadPromise;
 }
 
-function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed, onProgress }: {
-  onResolved:     (bills: ParsedBill[], properties: PropertyWithAccounts[], autoImported: number) => void;
-  onStreamStart?: (properties: PropertyWithAccounts[], autoImported: number) => void;
-  onBillStreamed?:(bill: ParsedBill) => void;
-  onProgress?:    (done: number, total: number) => void;
+function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed, onProgress, extractionMethod }: {
+  onResolved:       (bills: ParsedBill[], properties: PropertyWithAccounts[], autoImported: number) => void;
+  onStreamStart?:   (properties: PropertyWithAccounts[], autoImported: number) => void;
+  onBillStreamed?:  (bill: ParsedBill) => void;
+  onProgress?:      (done: number, total: number) => void;
+  extractionMethod: 'ai' | 'regex';
 }) {
   const [status, setStatus] = useState<{ connected: boolean; accounts: { id: string; email: string }[] } | null>(null);
   const [tokenId, setTokenId] = useState('');
@@ -353,7 +354,7 @@ function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed, onProgres
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ tokenId: tId, folderId, fileIds }),
+        body: JSON.stringify({ tokenId: tId, folderId, fileIds, method: extractionMethod }),
         signal: controller.signal,
       });
 
@@ -1132,6 +1133,7 @@ export default function ImportPage() {
   const [progress, setProgress]             = useState('');
   const [refreshing, setRefreshing]         = useState(false);
   const [driveProgress, setDriveProgress]   = useState<{ done: number; total: number } | null>(null);
+  const [extractionMethod, setExtractionMethod] = useState<'ai' | 'regex'>('regex');
 
   const handleRefreshAccounts = async () => {
     setRefreshing(true);
@@ -1156,7 +1158,7 @@ export default function ImportPage() {
       // Build a lookup so we can attach fileData as each result streams in
       const dataByName = Object.fromEntries(filePayloads.map(f => [f.name, f.data]));
 
-      setProgress(`Analyzing 0 / ${files.length} with AI...`);
+      setProgress(`Analyzing 0 / ${files.length} ${extractionMethod === 'regex' ? '(free text parsing)' : 'with AI'}...`);
 
       // Get Clerk token the same way the axios interceptor does
       // @ts-ignore
@@ -1169,7 +1171,7 @@ export default function ImportPage() {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ files: filePayloads }),
+        body: JSON.stringify({ files: filePayloads, method: extractionMethod }),
       });
 
       if (!response.ok || !response.body) throw new Error('Stream failed');
@@ -1382,11 +1384,42 @@ export default function ImportPage() {
         {/* Drop stage */}
         {stage === 'drop' && (
           <>
+            {/* Extraction method toggle */}
+            <div className="flex items-center justify-between mb-4 rounded-xl px-4 py-3"
+              style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+              <div>
+                <p className="text-sm font-medium text-gray-200">
+                  {extractionMethod === 'regex' ? 'Free extraction' : 'AI extraction'}
+                </p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {extractionMethod === 'regex'
+                    ? 'Text parsing — no API cost, works for most standard utility bills'
+                    : 'Claude reads the PDF directly — higher accuracy, uses Anthropic credits'}
+                </p>
+              </div>
+              <button
+                onClick={() => setExtractionMethod(m => m === 'regex' ? 'ai' : 'regex')}
+                className="flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-all"
+                style={{
+                  background: extractionMethod === 'ai' ? 'rgba(245,166,35,0.15)' : 'rgba(255,255,255,0.06)',
+                  border: extractionMethod === 'ai' ? '1px solid rgba(245,166,35,0.4)' : '1px solid rgba(255,255,255,0.1)',
+                  color: extractionMethod === 'ai' ? '#F5A623' : '#9ca3af',
+                }}
+              >
+                <div className="w-7 h-4 rounded-full relative transition-colors flex-shrink-0"
+                  style={{ background: extractionMethod === 'ai' ? '#F5A623' : 'rgba(255,255,255,0.15)' }}>
+                  <div className="absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all"
+                    style={{ left: extractionMethod === 'ai' ? '14px' : '2px' }} />
+                </div>
+                {extractionMethod === 'ai' ? 'AI (uses credits)' : 'Free mode'}
+              </button>
+            </div>
             <DriveImportPanel
               onResolved={handleDriveResolved}
               onStreamStart={handleDriveStreamStart}
               onBillStreamed={handleDriveBillStreamed}
               onProgress={handleDriveProgress}
+              extractionMethod={extractionMethod}
             />
             <Dropzone onFiles={handleFiles} />
           </>

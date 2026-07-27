@@ -39,7 +39,7 @@ router.get('/accounts', async (req: Request, res: Response) => {
 
 router.post('/analyze', async (req: Request, res: Response) => {
   const userId = req.dbUserId!;
-  const { files } = req.body as { files: { name: string; data: string }[] };
+  const { files, method } = req.body as { files: { name: string; data: string }[]; method?: 'ai' | 'regex' };
 
   if (!Array.isArray(files) || files.length === 0) {
     return res.status(400).json({ error: 'No files provided' });
@@ -64,7 +64,7 @@ router.post('/analyze', async (req: Request, res: Response) => {
     await Promise.all(
       files.map(async (f) => {
         const buffer = Buffer.from(f.data, 'base64');
-        const result = await parseBill(buffer, f.name, userId);
+        const result = await parseBill(buffer, f.name, userId, method === 'regex' ? 'regex' : 'ai');
         send({ type: 'bill', ...result });
       })
     );
