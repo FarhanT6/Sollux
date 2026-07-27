@@ -151,6 +151,26 @@ function LoanModal({ accountId, existing, onClose, onSave }: {
   const [notes,           setNotes]           = useState(existing?.notes || '');
   const [saving,          setSaving]          = useState(false);
 
+  function autoCalcBalance() {
+    const P = parseFloat(originalAmount);
+    const r = parseFloat(interestRate) / 12 / 100;
+    const PMT = parseFloat(monthlyPayment);
+    const origin = originationDate ? new Date(originationDate) : null;
+    if (!origin || isNaN(P) || isNaN(PMT) || P <= 0 || PMT <= 0) return;
+    const today = new Date();
+    const n = Math.max(0, Math.floor(
+      (today.getFullYear() - origin.getFullYear()) * 12 + (today.getMonth() - origin.getMonth())
+    ));
+    let balance: number;
+    if (!isNaN(r) && r > 0) {
+      const factor = Math.pow(1 + r, n);
+      balance = P * factor - PMT * (factor - 1) / r;
+    } else {
+      balance = P - PMT * n;
+    }
+    setCurrentBalance(String(Math.max(0, Math.round(balance * 100) / 100)));
+  }
+
   async function handleSave() {
     if (!lender) return;
     setSaving(true);
@@ -209,7 +229,10 @@ function LoanModal({ accountId, existing, onClose, onSave }: {
             <input type="number" step="0.01" value={originalAmount} onChange={e => setOriginalAmount(e.target.value)} className={inputCls} placeholder="e.g. 50000" />
           </div>
           <div>
-            <label className={labelCls}>Current balance ($)</label>
+            <div className="flex items-center justify-between mb-1">
+              <label className={labelCls} style={{ marginBottom: 0 }}>Current balance ($)</label>
+              <button type="button" onClick={autoCalcBalance} className="text-xs text-amber-400 hover:text-amber-300 transition-colors">⟳ Auto-calc</button>
+            </div>
             <input type="number" step="0.01" value={currentBalance} onChange={e => setCurrentBalance(e.target.value)} className={inputCls} placeholder="e.g. 42000" />
           </div>
           <div>
