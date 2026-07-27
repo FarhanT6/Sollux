@@ -39,7 +39,10 @@ function loadAnthropicKey(): string {
 }
 
 function getAnthropic() {
-  return new Anthropic({ apiKey: loadAnthropicKey() });
+  return new Anthropic({
+    apiKey: loadAnthropicKey(),
+    defaultHeaders: { 'anthropic-beta': 'pdfs-2024-09-25' },
+  });
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -134,7 +137,7 @@ async function extractWithClaude(pdfBuffer: Buffer, filename: string): Promise<E
         media_type: 'application/pdf',
         data: pdfBuffer.toString('base64'),
       },
-    } as any,
+    } as Anthropic.DocumentBlockParam,
     { type: 'text', text: EXTRACTION_PROMPT },
   ];
 
