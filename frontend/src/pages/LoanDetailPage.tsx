@@ -200,6 +200,26 @@ function EditModal({ loan, properties, onClose, onSave }: {
   const [penalty, setPenalty] = useState<PrepaymentPenalty | null>(loan.prepaymentPenaltyJson ?? null);
   const [saving, setSaving] = useState(false);
 
+  function autoCalcBalance() {
+    const P = parseFloat(form.originalAmount);
+    const r = parseFloat(form.interestRate) / 12 / 100;
+    const PMT = parseFloat(form.monthlyPayment);
+    const origin = form.originationDate ? new Date(form.originationDate) : null;
+    if (!origin || isNaN(P) || isNaN(PMT) || P <= 0 || PMT <= 0) return;
+    const today = new Date();
+    const n = Math.max(0, Math.floor(
+      (today.getFullYear() - origin.getFullYear()) * 12 + (today.getMonth() - origin.getMonth())
+    ));
+    let balance: number;
+    if (!isNaN(r) && r > 0) {
+      const factor = Math.pow(1 + r, n);
+      balance = P * factor - PMT * (factor - 1) / r;
+    } else {
+      balance = P - PMT * n;
+    }
+    setForm(prev => ({ ...prev, currentBalance: String(Math.max(0, Math.round(balance * 100) / 100)) }));
+  }
+
   const f = (field: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setForm(prev => ({ ...prev, [field]: e.target.value }));
 
@@ -281,7 +301,17 @@ function EditModal({ loan, properties, onClose, onSave }: {
                 <input type="number" value={form.monthlyPayment} onChange={f('monthlyPayment')} className="input-base w-full text-sm" placeholder="1250" />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Current balance</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs text-gray-500">Current balance</label>
+                  <button
+                    type="button"
+                    onClick={autoCalcBalance}
+                    className="text-xs text-amber-400 hover:text-amber-300 transition-colors"
+                    title="Calculate from origination date, original amount, interest rate & monthly payment"
+                  >
+                    ⟳ Auto-calc
+                  </button>
+                </div>
                 <input type="number" value={form.currentBalance} onChange={f('currentBalance')} className="input-base w-full text-sm" placeholder="148000" />
               </div>
             </div>
