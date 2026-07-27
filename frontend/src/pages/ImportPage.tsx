@@ -712,17 +712,17 @@ function BillCard({
   onAddToProperty,
   onAssignNew,
   onRemove,
-  sameProviderUnassigned,
-  onApplyToAll,
+  sameProviderBills,
+  onApplyTo,
 }: {
-  bill:                   ParsedBill;
-  properties:             PropertyWithAccounts[];
-  onAssign:               (utilityAccountId: string) => void;
-  onAddToProperty:        (propertyId: string, acct: NewAccountPayload) => void;
-  onAssignNew:            (prop: NewPropertyPayload, acct: NewAccountPayload) => void;
-  onRemove:               () => void;
-  sameProviderUnassigned: number;
-  onApplyToAll:           () => void;
+  bill:               ParsedBill;
+  properties:         PropertyWithAccounts[];
+  onAssign:           (utilityAccountId: string) => void;
+  onAddToProperty:    (propertyId: string, acct: NewAccountPayload) => void;
+  onAssignNew:        (prop: NewPropertyPayload, acct: NewAccountPayload) => void;
+  onRemove:           () => void;
+  sameProviderBills:  ParsedBill[];
+  onApplyTo:          (filenames: string[] | 'all') => void;
 }) {
   const { extracted: ex, match, error } = bill;
   const confColor = CONFIDENCE_COLORS[match.confidence];
@@ -734,6 +734,8 @@ function BillCard({
   const [mode, setMode]                               = useState<CardMode>(defaultMode);
   const [applied, setApplied]                         = useState(false);
   const [resolvedPropertyName, setResolvedPropertyName] = useState<string | null>(null);
+  const [showApplyPanel, setShowApplyPanel]           = useState(false);
+  const [selectedForApply, setSelectedForApply]       = useState<Set<string>>(new Set());
 
   // Pre-fill forms from extracted data
   const addrParts = parseServiceAddress(ex.serviceAddress);
@@ -918,14 +920,85 @@ function BillCard({
                 Edit
               </button>
             </div>
-            {sameProviderUnassigned > 0 && (
-              <button
-                onClick={onApplyToAll}
-                className="w-full text-left rounded-lg px-3 py-2 text-xs transition-colors"
-                style={{ background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.2)', color: '#F5A623' }}
-              >
-                Apply same account to {sameProviderUnassigned} other {ex.providerName || ''} statement{sameProviderUnassigned > 1 ? 's' : ''}
-              </button>
+
+            {/* Apply to other same-provider bills */}
+            {sameProviderBills.length > 0 && (
+              <div className="rounded-lg overflow-hidden" style={{ border: '1px solid rgba(245,166,35,0.2)' }}>
+                {/* Header row */}
+                <div className="flex items-center justify-between px-3 py-2" style={{ background: 'rgba(245,166,35,0.08)' }}>
+                  <span className="text-xs font-medium" style={{ color: '#F5A623' }}>
+                    Apply to {sameProviderBills.length} other {ex.providerName || ''} statement{sameProviderBills.length > 1 ? 's' : ''}
+                  </span>
+                  <button
+                    onClick={() => {
+                      setShowApplyPanel(v => !v);
+                      setSelectedForApply(new Set(sameProviderBills.map(b => b.filename)));
+                    }}
+                    className="text-xs px-2 py-0.5 rounded transition-colors"
+                    style={{ color: '#F5A623', background: 'rgba(245,166,35,0.12)' }}
+                  >
+                    {showApplyPanel ? 'Cancel' : 'Select'}
+                  </button>
+                </div>
+
+                {!showApplyPanel ? (
+                  // Compact: single "Apply to all" button
+                  <button
+                    onClick={() => onApplyTo('all')}
+                    className="w-full text-left px-3 py-2 text-xs transition-colors hover:bg-white/5"
+                    style={{ color: '#F5A623' }}
+                  >
+                    Apply to all {sameProviderBills.length} →
+                  </button>
+                ) : (
+                  // Expanded: checklist + actions
+                  <div style={{ background: 'rgba(0,0,0,0.2)' }}>
+                    <div className="px-3 py-2 space-y-1.5 max-h-48 overflow-y-auto">
+                      {sameProviderBills.map(b => (
+                        <label key={b.filename} className="flex items-center gap-2 cursor-pointer group">
+                          <input
+                            type="checkbox"
+                            checked={selectedForApply.has(b.filename)}
+                            onChange={e => {
+                              const next = new Set(selectedForApply);
+                              if (e.target.checked) next.add(b.filename); else next.delete(b.filename);
+                              setSelectedForApply(next);
+                            }}
+                            className="accent-amber-500 w-3.5 h-3.5 flex-shrink-0"
+                          />
+                          <span className="text-xs text-gray-300 truncate group-hover:text-white">{b.filename}</span>
+                          {b.extracted.statementDate && (
+                            <span className="text-xs text-gray-600 flex-shrink-0 ml-auto">
+                              {format(new Date(b.extracted.statementDate + 'T12:00:00'), 'MMM yyyy')}
+                            </span>
+                          )}
+                        </label>
+                      ))}
+                    </div>
+                    <div className="flex gap-2 px-3 py-2 border-t" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
+                      <button
+                        onClick={() => setSelectedForApply(new Set(sameProviderBills.map(b => b.filename)))}
+                        className="text-xs text-gray-500 hover:text-gray-300"
+                      >
+                        All
+                      </button>
+                      <button
+                        onClick={() => setSelectedForApply(new Set())}
+                        className="text-xs text-gray-500 hover:text-gray-300"
+                      >
+                        None
+                      </button>
+                      <button
+                        disabled={selectedForApply.size === 0}
+                        onClick={() => { onApplyTo([...selectedForApply]); setShowApplyPanel(false); }}
+                        className="ml-auto text-xs px-3 py-1 rounded-lg font-medium text-black bg-amber-500 disabled:opacity-40"
+                      >
+                        Apply to {selectedForApply.size} selected
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
           </div>
         )}
@@ -1151,35 +1224,44 @@ export default function ImportPage() {
     setBills(prev => prev.filter(b => b.filename !== filename));
   };
 
-  const handleApplyToAll = (sourceBill: ParsedBill) => {
-    const provider = sourceBill.extracted.providerName?.toLowerCase().trim();
-    if (!provider) return;
+  // A bill is "user-confirmed" if the user explicitly assigned it.
+  // High-confidence auto-matches are already handled, not targets for apply-to.
+  function isUserConfirmed(b: ParsedBill): boolean {
+    if (b.newAccount || b.newProperty || b.addToPropertyId) return true;
+    if (b.match.confidence === 'high' && b.match.utilityAccountId) return true;
+    return false;
+  }
+
+  function applyAssignment(source: ParsedBill, target: ParsedBill): ParsedBill {
+    if (source.match.utilityAccountId) {
+      return { ...target, match: { ...target.match, utilityAccountId: source.match.utilityAccountId }, newProperty: undefined, newAccount: undefined, addToPropertyId: undefined };
+    }
+    if (source.addToPropertyId && source.newAccount) {
+      return { ...target, match: { ...target.match, utilityAccountId: null }, addToPropertyId: source.addToPropertyId, newAccount: source.newAccount, newProperty: undefined };
+    }
+    if (source.newProperty && source.newAccount) {
+      return { ...target, match: { ...target.match, utilityAccountId: null }, newProperty: source.newProperty, newAccount: source.newAccount, addToPropertyId: undefined };
+    }
+    return target;
+  }
+
+  const handleApplyTo = (sourceBill: ParsedBill, targetFilenames: string[] | 'all') => {
     setBills(prev => prev.map(b => {
       if (b.filename === sourceBill.filename) return b;
-      if (b.extracted.providerName?.toLowerCase().trim() !== provider) return b;
-      if (isBillReady(b)) return b;
-      // Copy whichever assignment method the source used
-      if (sourceBill.match.utilityAccountId) {
-        return { ...b, match: { ...b.match, utilityAccountId: sourceBill.match.utilityAccountId }, newProperty: undefined, newAccount: undefined, addToPropertyId: undefined };
-      }
-      if (sourceBill.addToPropertyId && sourceBill.newAccount) {
-        return { ...b, match: { ...b.match, utilityAccountId: null }, addToPropertyId: sourceBill.addToPropertyId, newAccount: sourceBill.newAccount, newProperty: undefined };
-      }
-      if (sourceBill.newProperty && sourceBill.newAccount) {
-        return { ...b, match: { ...b.match, utilityAccountId: null }, newProperty: sourceBill.newProperty, newAccount: sourceBill.newAccount, addToPropertyId: undefined };
-      }
-      return b;
+      if (targetFilenames !== 'all' && !targetFilenames.includes(b.filename)) return b;
+      return applyAssignment(sourceBill, b);
     }));
   };
 
-  const getSameProviderUnassigned = (bill: ParsedBill): number => {
+  const getSameProviderBills = (bill: ParsedBill): ParsedBill[] => {
     const provider = bill.extracted.providerName?.toLowerCase().trim();
-    if (!provider || !isBillReady(bill)) return 0;
+    // Source must be confirmed by user first
+    if (!provider || !isUserConfirmed(bill)) return [];
     return bills.filter(b =>
       b.filename !== bill.filename &&
       b.extracted.providerName?.toLowerCase().trim() === provider &&
-      !isBillReady(b)
-    ).length;
+      !isUserConfirmed(b)   // not yet explicitly assigned
+    );
   };
 
   const handleDriveResolved = (driveBills: ParsedBill[], props: PropertyWithAccounts[], autoImported: number) => {
@@ -1370,8 +1452,8 @@ export default function ImportPage() {
                   onAddToProperty={(propId, acct) => handleAddToProperty(bill.filename, propId, acct)}
                   onAssignNew={(prop, acct) => handleAssignNew(bill.filename, prop, acct)}
                   onRemove={() => handleRemove(bill.filename)}
-                  sameProviderUnassigned={getSameProviderUnassigned(bill)}
-                  onApplyToAll={() => handleApplyToAll(bill)}
+                  sameProviderBills={getSameProviderBills(bill)}
+                  onApplyTo={targets => handleApplyTo(bill, targets)}
                 />
               ))}
             </div>
