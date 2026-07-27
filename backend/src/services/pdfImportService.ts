@@ -122,6 +122,237 @@ Important extraction tips:
 - accountNumber: include dashes and spaces as they appear; do not normalize.
 - statementDate: if not explicit, infer from postmark, billing period end, or document date.`;
 
+// ── Regex-based extraction (free, no API calls) ───────────────────────────────
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string }>;
+
+function parseDollar(s: string): number | null {
+  const m = s.match(/\$?\s*([\d,]+\.?\d*)/);
+  if (!m) return null;
+  const n = parseFloat(m[1].replace(/,/g, ''));
+  return isNaN(n) ? null : n;
+}
+
+const MONTH_MAP: Record<string, string> = {
+  jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',
+  jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12',
+};
+
+function parseDate(s: string): string | null {
+  // MM/DD/YYYY or M/D/YY
+  let m = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+  if (m) {
+    const yr = m[3].length === 2 ? `20${m[3]}` : m[3];
+    return `${yr}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}`;
+  }
+  // Month DD, YYYY  or  DD Month YYYY
+  m = s.match(/(\w{3,9})\s+(\d{1,2}),?\s+(\d{4})/i) || s.match(/(\d{1,2})\s+(\w{3,9})\s+(\d{4})/i);
+  if (m) {
+    const [, a, b, c] = m;
+    const moName = isNaN(Number(a)) ? a : b;
+    const day    = isNaN(Number(a)) ? b : a;
+    const yr     = c;
+    const mo     = MONTH_MAP[moName.slice(0,3).toLowerCase()];
+    if (mo) return `${yr}-${mo}-${day.padStart(2,'0')}`;
+  }
+  // YYYY-MM-DD
+  m = s.match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  return null;
+}
+
+// Search the full text for a label and return the dollar amount near it
+function findDollarNear(text: string, labels: RegExp[]): number | null {
+  for (const label of labels) {
+    // Look for label followed by $amount on same line or next 2 lines
+    const m = text.match(new RegExp(label.source + r`[\s\S]{0,80}?\$?\s*([\d,]+\.\d{2})`, label.flags));
+    if (m) {
+      const n = parseFloat(m[1].replace(/,/g, ''));
+      if (!isNaN(n)) return n;
+    }
+  }
+  return null;
+}
+
+function r(strings: TemplateStringsArray): string { return strings[0]; }
+
+function findDateNear(text: string, labels: RegExp[]): string | null {
+  for (const label of labels) {
+    const m = text.match(new RegExp(label.source + r`[\s\S]{0,60}?(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\w{3,9}\s+\d{1,2},?\s+\d{4})`, label.flags));
+    if (m) {
+      const d = parseDate(m[1]);
+      if (d) return d;
+    }
+  }
+  return null;
+}
+
+function findTextNear(text: string, labels: RegExp[]): string | null {
+  for (const label of labels) {
+    const m = text.match(new RegExp(label.source + r`[:\s]+([^\n\r]{2,60})`, label.flags));
+    if (m) return m[1].trim();
+  }
+  return null;
+}
+
+function detectUtilityType(text: string, provider: string | null): ExtractedBillData['utilityType'] {
+  const t = (text + ' ' + (provider || '')).toLowerCase();
+  if (/electric|kwh|kilo.?watt|sdge|fpl|pg&e|pge|edison|sce|aps|xcel/.test(t)) return 'electric';
+  if (/natural gas|therms?|socal gas|atmos|southwest gas|piedmont gas/.test(t)) return 'gas';
+  if (/water|ccf|hcf|gallons?|irrigation|aqua|cal water/.test(t)) return 'water';
+  if (/sewer|wastewater/.test(t)) return 'sewer';
+  if (/trash|garbage|waste management|republic services|recology/.test(t)) return 'trash';
+  if (/solar|sunrun|vivint solar|sunnova/.test(t)) return 'solar';
+  if (/internet|broadband|fiber|cox|comcast|spectrum|att|at&t|charter/.test(t)) return 'internet';
+  if (/mobile|wireless|t.?mobile|verizon|sprint|phone/.test(t)) return 'phone';
+  return 'other';
+}
+
+async function extractWithRegex(pdfBuffer: Buffer, filename: string): Promise<ExtractedBillData> {
+  console.log(`[PDFImport/regex] ${filename}: ${Math.round(pdfBuffer.length / 1024)}KB`);
+  const { text } = await pdfParse(pdfBuffer);
+
+  // Provider name: first non-empty line that looks like a company name
+  const lines = text.split('\n').map((l: string) => l.trim()).filter(Boolean);
+  let providerName: string | null = null;
+  for (const line of lines.slice(0, 15)) {
+    if (line.length < 3 || line.length > 80) continue;
+    if (/^\d/.test(line)) continue;             // skip lines starting with numbers
+    if (/account|invoice|statement|bill|date|customer/i.test(line)) continue;
+    providerName = line;
+    break;
+  }
+
+  // Service address: labeled "service address" or "property address"
+  let serviceAddress: string | null = findTextNear(text, [
+    /service\s+address/i, /property\s+address/i, /service\s+location/i, /premises\s+address/i,
+  ]);
+  // Fallback: look for a line that has a street number pattern after the provider name
+  if (!serviceAddress) {
+    const addrMatch = text.match(/\b(\d{2,6}\s+[A-Z][a-z]+\s+(?:St|Ave|Blvd|Dr|Rd|Way|Ln|Ct|Pl|Cir|Ter|Trail)[^\n]{0,40})/);
+    if (addrMatch) serviceAddress = addrMatch[1].trim();
+  }
+
+  // Account number
+  const accountNumber: string | null = findTextNear(text, [
+    /account\s+(?:number|no\.?|#)/i, /customer\s+(?:number|no\.?|id)/i,
+    /reference\s+(?:number|no\.?)/i, /invoice\s+(?:number|no\.?|#)/i,
+  ]);
+
+  // Statement date
+  const statementDate: string | null = findDateNear(text, [
+    /(?:statement|bill|invoice|billing)\s+date/i, /date\s+(?:issued|generated)/i, /billing\s+date/i,
+  ]) || findDateNear(text, [/date[:\s]/i]);
+
+  // Due date
+  const dueDate: string | null = findDateNear(text, [
+    /(?:payment\s+)?due\s+(?:date|by|on)/i, /please\s+pay\s+by/i, /pay\s+by/i,
+  ]);
+
+  // Billing period
+  let billingPeriodStart: string | null = null;
+  let billingPeriodEnd:   string | null = null;
+  const periodMatch = text.match(
+    /(?:billing|service)\s+period[:\s]+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\w{3,9}\s+\d{1,2},?\s+\d{4})\s*(?:to|through|[-–])\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\w{3,9}\s+\d{1,2},?\s+\d{4})/i
+  );
+  if (periodMatch) {
+    billingPeriodStart = parseDate(periodMatch[1]);
+    billingPeriodEnd   = parseDate(periodMatch[2]);
+  }
+
+  // Financial fields
+  const amountDue: number | null = findDollarNear(text, [
+    /(?:total\s+)?amount\s+due/i, /total\s+due/i, /balance\s+due/i,
+    /please\s+pay/i, /amount\s+enclosed/i, /pay\s+this\s+amount/i, /total\s+balance/i,
+  ]);
+  const previousBalance: number | null = findDollarNear(text, [
+    /previous\s+balance/i, /prior\s+balance/i, /balance\s+forward/i, /balance\s+from\s+last/i,
+  ]);
+  const paymentsReceived: number | null = findDollarNear(text, [
+    /payments?\s+received/i, /payments?\s+&\s+credits?/i, /credits?\s+applied/i,
+  ]);
+  const currentCharges: number | null = findDollarNear(text, [
+    /current\s+charges?/i, /new\s+charges?/i, /charges?\s+this\s+period/i,
+  ]);
+
+  // Usage
+  let usageValue: number | null = null;
+  let usageUnit:  string | null = null;
+  const usagePatterns: [RegExp, string][] = [
+    [/(\d[\d,]*\.?\d*)\s*kWh/i, 'kWh'],
+    [/(\d[\d,]*\.?\d*)\s*CCF/i, 'CCF'],
+    [/(\d[\d,]*\.?\d*)\s*therms?/i, 'therms'],
+    [/(\d[\d,]*\.?\d*)\s*HCF/i, 'HCF'],
+    [/(\d[\d,]*\.?\d*)\s*(?:hundred\s+cubic\s+feet)/i, 'HCF'],
+    [/(\d[\d,]*\.?\d*)\s*gallons?/i, 'gallons'],
+  ];
+  for (const [pattern, unit] of usagePatterns) {
+    const m = text.match(pattern);
+    if (m) {
+      const n = parseFloat(m[1].replace(/,/g, ''));
+      if (!isNaN(n)) { usageValue = n; usageUnit = unit; break; }
+    }
+  }
+
+  // Rate plan
+  const ratePlan: string | null = findTextNear(text, [/rate\s+(?:plan|schedule|class)/i, /tariff/i]);
+
+  // Paid status
+  const isPaid = /paid\s+in\s+full|balance\s+is\s+\$?0\.00|\$0\.00\s+(?:due|balance)/i.test(text)
+    || (amountDue === 0);
+
+  // Utility type
+  const utilityType = detectUtilityType(text, providerName);
+
+  // Charge breakdown: look for lines matching "  Label  $amount"
+  const chargeBreakdown: Record<string, number> = {};
+  const chargeLineRe = /^(.{3,50}?)\s{2,}\$\s*([\d,]+\.\d{2})$/gm;
+  let cm: RegExpExecArray | null;
+  let breakdownCount = 0;
+  while ((cm = chargeLineRe.exec(text)) !== null && breakdownCount < 20) {
+    const label = cm[1].trim();
+    const amount = parseFloat(cm[2].replace(/,/g, ''));
+    if (!isNaN(amount) && label.length > 2) {
+      chargeBreakdown[label] = amount;
+      breakdownCount++;
+    }
+  }
+
+  // Alerts
+  const alerts: string[] = [];
+  if (/past\s+due/i.test(text)) alerts.push('Past due balance');
+  if (/late\s+(?:fee|charge|payment)/i.test(text)) alerts.push('Late fee');
+  if (/disconnect|shut.?off|termination/i.test(text)) alerts.push('Disconnect notice');
+  if (/leak\s+(?:alert|detect)/i.test(text)) alerts.push('Leak detected');
+  if (/high\s+usage/i.test(text)) alerts.push('High usage');
+  if (/nsf|returned\s+(?:check|payment)/i.test(text)) alerts.push('Returned payment');
+  if (/debt\s+collection|collections?\s+agency/i.test(text)) alerts.push('Debt collection');
+
+  return {
+    providerName,
+    serviceAddress,
+    accountNumber,
+    statementDate,
+    dueDate,
+    billingPeriodStart,
+    billingPeriodEnd,
+    amountDue,
+    previousBalance,
+    paymentsReceived,
+    currentCharges,
+    usageValue,
+    usageUnit,
+    ratePlan,
+    isPaid,
+    utilityType,
+    chargeBreakdown: breakdownCount > 0 ? chargeBreakdown : null,
+    alerts,
+  };
+}
+
+// ── Claude AI extraction ───────────────────────────────────────────────────────
+
 async function extractWithClaude(pdfBuffer: Buffer, filename: string): Promise<ExtractedBillData> {
   const anthropic = getAnthropic();
 
@@ -367,9 +598,12 @@ export async function parseBill(
   buffer: Buffer,
   filename: string,
   userId: string,
+  method: 'ai' | 'regex' = 'ai',
 ): Promise<ParsedBill> {
   try {
-    const extracted = await extractWithClaude(buffer, filename);
+    const extracted = method === 'regex'
+      ? await extractWithRegex(buffer, filename)
+      : await extractWithClaude(buffer, filename);
     const match     = await matchToAccount(extracted, userId);
     return { filename, extracted, match };
   } catch (err) {

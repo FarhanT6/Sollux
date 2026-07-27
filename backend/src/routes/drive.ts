@@ -193,8 +193,8 @@ async function downloadDriveFile(drive: drive_v3.Drive, fileId: string): Promise
 // No background job, no polling, no "Review" button — cards appear as each file finishes.
 router.post('/stream', attachDbUser, async (req, res) => {
   const userId = req.dbUserId!;
-  const { tokenId, folderId, fileIds } = req.body as {
-    tokenId: string; folderId?: string; fileIds?: string[];
+  const { tokenId, folderId, fileIds, method } = req.body as {
+    tokenId: string; folderId?: string; fileIds?: string[]; method?: 'ai' | 'regex';
   };
 
   res.setHeader('Content-Type', 'text/event-stream');
@@ -230,7 +230,7 @@ router.post('/stream', attachDbUser, async (req, res) => {
     await Promise.all(files.map(async (file) => {
       try {
         const buffer = await downloadDriveFile(drive, file.id);
-        const parsed  = await parseBill(buffer, file.name, userId);
+        const parsed  = await parseBill(buffer, file.name, userId, method === 'regex' ? 'regex' : 'ai');
         const { extracted: ex, match } = parsed;
 
         let utilityAccountId = match.utilityAccountId;
