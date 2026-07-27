@@ -1,0 +1,25 @@
+version: "1"
+
+services:
+  # ── API Web Service ────────────────────────────────────────────────────────────
+  - type: web
+    name: sollux-api
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install && npm run build && npx prisma generate
+    startCommand: npm start
+    envVars:
+      - fromGroup: sollux-env
+
+  # ── Background Worker ──────────────────────────────────────────────────────────
+  # This is the SEPARATE process that processes BullMQ scrape, insight, and
+  # Gmail jobs. Without this running, the Sync button queues jobs but nothing
+  # ever picks them up.
+  - type: worker
+    name: sollux-workers
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install && npm run build && npx prisma generate
+    startCommand: node dist/workers/index.js
+    envVars:
+      - fromGroup: sollux-env

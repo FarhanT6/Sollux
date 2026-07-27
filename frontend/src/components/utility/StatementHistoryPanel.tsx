@@ -12,13 +12,17 @@ function fmtMoney(v?: number | null) {
   return v != null ? `$${Number(v).toFixed(2)}` : '—';
 }
 
-function statusPill(s: Statement): { color: 'green' | 'amber' | 'red'; label: string } {
+function statusPill(s: Statement, newerStmt?: Statement): { color: 'green' | 'amber' | 'red'; label: string } {
   if (Number(s.amountPaid ?? 0) > 0) return { color: 'green', label: 'Paid' };
-  // isPaid flag set by scraper when no Pay button found (invoice is settled)
   if ((s.rawDataJson as any)?.isPaid === true) return { color: 'green', label: 'Paid' };
-  // isPastDue flag set by scraper when this is a prior-month unpaid balance (already overdue)
+  // The next (more recent) statement's paymentsReceived represents payment for THIS statement.
+  // If that payment covers the amount due, this statement was paid.
+  if (newerStmt) {
+    const nextPayments = Number((newerStmt.rawDataJson as any)?.paymentsReceived ?? 0);
+    const thisDue = Number(s.amountDue ?? 0);
+    if (thisDue > 0 && nextPayments >= thisDue - 0.01) return { color: 'green', label: 'Paid' };
+  }
   if ((s.rawDataJson as any)?.isPastDue === true) return { color: 'red', label: 'Overdue' };
-  // Fall back to date check — if due date has passed and still unpaid = overdue
   if (s.dueDate && isAfter(new Date(), new Date(s.dueDate))) return { color: 'red', label: 'Overdue' };
   return { color: 'amber', label: 'Due' };
 }
@@ -120,7 +124,9 @@ export default function StatementHistoryPanel({ utilityAccountId }: Props) {
             <tbody>
               {rows.map((s, idx) => {
                 const pastDue = s.rawDataJson?.pastDue as number | undefined;
-                const { color, label } = statusPill(s);
+                // rows is sorted DESC (newest first); rows[idx-1] is the more recent statement
+                // whose paymentsReceived tells us if this statement was paid.
+                const { color, label } = statusPill(s, rows[idx - 1]);
                 const isFirst = idx === 0;
                 return (
                   <tr

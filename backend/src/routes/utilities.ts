@@ -53,7 +53,10 @@ router.get('/', async (req, res, next) => {
     });
 
     // Never return encrypted credential fields
-    const sanitized = accounts.map(({ accountNumberEnc, usernameEnc, passwordEnc, ...rest }) => rest);
+    const sanitized = accounts.map(({ accountNumberEnc, usernameEnc, passwordEnc, ...rest }) => ({
+      ...rest,
+      hasCredentials: !!usernameEnc,
+    }));
     res.json(sanitized);
   } catch (err) {
     next(err);
@@ -109,7 +112,7 @@ router.get('/:id', async (req, res, next) => {
     });
     if (!account) return res.status(404).json({ error: 'Not found' });
     const { accountNumberEnc, usernameEnc, passwordEnc, ...rest } = account;
-    res.json(rest);
+    res.json({ ...rest, hasCredentials: !!usernameEnc });
   } catch (err) { next(err); }
 });
 
@@ -123,6 +126,18 @@ router.post('/:id/sync', async (req, res, next) => {
       },
     });
     if (!account) return res.status(404).json({ error: 'Utility account not found' });
+
+    if (!account.usernameEnc) {
+      // Mark as failed immediately with a clear message rather than queuing a job that will fail
+      await db.utilityAccount.update({
+        where: { id: account.id },
+        data: {
+          lastSyncStatus: 'FAILED',
+          lastSyncError: 'No credentials — open Edit to add your username and password for this provider.',
+        },
+      });
+      return res.json({ message: 'No credentials set up' });
+    }
 
     const job = await scrapeQueue.add('scrape', { utilityAccountId: account.id }, {
       attempts: 3,

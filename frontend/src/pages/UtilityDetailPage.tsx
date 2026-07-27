@@ -38,8 +38,14 @@ function isStatementPaid(s: any, payments: any[] = []): boolean {
   return sumSinceStmt >= openBalance - 0.01;
 }
 
-function statementStatus(s: any, payments: any[] = []): { color: 'green' | 'amber' | 'red'; label: string } {
+function statementStatus(s: any, payments: any[] = [], newerStmt?: any): { color: 'green' | 'amber' | 'red'; label: string } {
   if (isStatementPaid(s, payments)) return { color: 'green', label: 'Paid' };
+  // The next (more recent) statement's paymentsReceived represents payment for THIS statement.
+  if (newerStmt) {
+    const nextPayments = Number((newerStmt.rawDataJson as any)?.paymentsReceived ?? 0);
+    const thisDue = Number(s.amountDue ?? 0);
+    if (thisDue > 0 && nextPayments >= thisDue - 0.01) return { color: 'green', label: 'Paid' };
+  }
   if ((s.rawDataJson as any)?.isPastDue === true) return { color: 'red', label: 'Overdue' };
   if (s.dueDate && isAfter(new Date(), new Date(s.dueDate))) return { color: 'red', label: 'Overdue' };
   return { color: 'amber', label: 'Due' };
@@ -707,7 +713,8 @@ export default function UtilityDetailPage() {
             : (
               <div className="space-y-2 pb-8">
                 {filteredStatements.map((s, idx) => {
-                  const { color: sc, label: sl } = statementStatus(s, payments);
+                  // filteredStatements is sorted DESC; [idx-1] is the more recent statement
+                  const { color: sc, label: sl } = statementStatus(s, payments, filteredStatements[idx - 1]);
                   const raw = s.rawDataJson as Record<string, unknown> | undefined;
                   const pastDue     = raw?.pastDue      != null ? Number(raw.pastDue)      : null;
                   const totalDue    = (raw?.accountBalance ?? raw?.totalDue) != null
