@@ -105,7 +105,7 @@ router.get('/:id', async (req, res, next) => {
       where: { id: req.params.id, property: { userId: req.dbUserId! } },
       include: {
         property: { select: { id: true, address: true, nickname: true, city: true, state: true } },
-        statements: { orderBy: { statementDate: 'desc' }, take: 24 },
+        statements: { orderBy: { statementDate: 'desc' }, take: 84 },
         payments: { orderBy: { paymentDate: 'desc' }, take: 200 },
         loan: true,
       },
