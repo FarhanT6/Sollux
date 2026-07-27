@@ -146,9 +146,13 @@ async function extractWithClaude(pdfBuffer: Buffer, filename: string): Promise<E
 
   const raw = response.content[0].type === 'text' ? response.content[0].text : '';
 
-  // Strip markdown fences if present
-  const jsonStr = raw.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
-  const data = JSON.parse(jsonStr) as ExtractedBillData;
+  // Extract JSON object — Claude may include explanation text or markdown fences.
+  // Grab the first {...} block regardless of surrounding text.
+  const jsonMatch = raw.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    throw new Error(`Claude returned no JSON. Response (first 400 chars): ${raw.slice(0, 400)}`);
+  }
+  const data = JSON.parse(jsonMatch[0]) as ExtractedBillData;
 
   // Normalise alerts: ensure it's always an array
   if (!Array.isArray(data.alerts)) data.alerts = [];
