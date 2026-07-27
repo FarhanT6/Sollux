@@ -220,13 +220,25 @@ function scanAllAmounts(text: string): AmountHit[] {
 /** Pick the best amount-due candidate from a label-free scan. */
 function guessAmountDue(hits: AmountHit[]): number | null {
   if (hits.length === 0) return null;
-  // Prefer hits whose context contains due/pay/balance/total keywords
-  const duePrio = hits.filter(h =>
-    /due|pay|total|balance|owed|amount/i.test(h.context)
+  // Exclude amounts that are clearly principal/remaining balances
+  const notPrincipal = hits.filter(h =>
+    !/unpaid\s+principal|principal\s+balance|remaining\s+balance|loan\s+balance/i.test(h.context)
   );
-  const pool = duePrio.length > 0 ? duePrio : hits;
-  // Return the largest amount in the priority pool (most likely the total)
-  return pool.reduce((max, h) => h.amount > max ? h.amount : max, pool[0].amount);
+  // Prefer hits whose context contains payment-due keywords (not just "balance")
+  const paymentPrio = notPrincipal.filter(h =>
+    /amount\s+due|payment\s+due|monthly\s+payment|pay\s+this|please\s+pay|due\s+(?:date|by|on)/i.test(h.context)
+  );
+  // Secondary priority: general due/pay/total (but not principal)
+  const generalPrio = notPrincipal.filter(h =>
+    /due|pay|total|owed|amount/i.test(h.context)
+  );
+  const pool = paymentPrio.length > 0 ? paymentPrio
+    : generalPrio.length > 0 ? generalPrio
+    : notPrincipal.length > 0 ? notPrincipal
+    : hits;
+  // For loan statements the monthly payment is smaller than the balance;
+  // prefer the smallest value in the priority pool to avoid picking the principal.
+  return pool.reduce((min, h) => h.amount < min ? h.amount : min, pool[0].amount);
 }
 
 interface DateHit { date: string; position: number; context: string }
@@ -276,20 +288,35 @@ function hintsFromFilename(filename: string): { date: string | null; accountHint
   return { date, accountHint };
 }
 
-/** Scan for likely account numbers: 8–20 digit strings not surrounded by other digits. */
+/** Scan for likely account numbers: contiguous 8–20 digit strings, or space/dash-grouped digits. */
 function scanAccountNumbers(text: string): string[] {
   const candidates: string[] = [];
-  const re = /\b(\d{8,20})\b/g;
+  const seen = new Set<string>();
+  // Contiguous digits
+  const re1 = /\b(\d{8,20})\b/g;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    // Exclude obvious non-account patterns like phone numbers (10 digits starting with area code)
-    candidates.push(m[1]);
+  while ((m = re1.exec(text)) !== null) {
+    if (!seen.has(m[1])) { seen.add(m[1]); candidates.push(m[1]); }
+  }
+  // Grouped digits separated by spaces or dashes (e.g. "1220 7321 0619 02" or "1234-5678-9012")
+  const re2 = /\b(\d{3,6}[\s\-]\d{3,6}(?:[\s\-]\d{3,6})+)\b/g;
+  while ((m = re2.exec(text)) !== null) {
+    const normalized = m[1].replace(/[\s\-]/g, '');
+    if (normalized.length >= 8 && !seen.has(normalized)) {
+      seen.add(normalized);
+      candidates.push(normalized);
+    }
   }
   return candidates;
 }
 
 function detectUtilityType(text: string, provider: string | null): ExtractedBillData['utilityType'] {
   const t = (text + ' ' + (provider || '')).toLowerCase();
+  // Financial/loan statements — check first so keywords like "gas" in legal boilerplate don't misfire
+  if (/auto\s+loan|vehicle\s+loan|car\s+(?:loan|payment)|mortgage|home\s+loan|personal\s+loan|installment\s+loan|land\s+rover|bmw\s+financial|ford\s+motor\s+credit|toyota\s+financial|honda\s+financial|chase\s+auto|ally\s+financial|capital\s+one\s+auto/.test(t)) return 'other';
+  if (/insurance\s+premium|homeowner|renters\s+insurance|policy\s+number|safeco|bamboo|lemonade/.test(t)) return 'other';
+  if (/hoa|homeowner.*association|association\s+fee|keystone/.test(t)) return 'other';
+  // Utility types
   if (/electric|kwh|kilo.?watt|sdge|fpl|pg&e|pge|edison|sce|aps|xcel/.test(t)) return 'electric';
   if (/natural gas|therms?|socal gas|atmos|southwest gas|piedmont gas/.test(t)) return 'gas';
   if (/water|ccf|hcf|gallons?|irrigation|aqua|cal water/.test(t)) return 'water';
@@ -312,22 +339,44 @@ async function extractWithRegex(pdfBuffer: Buffer, filename: string): Promise<Ex
   const lines = text.split('\n').map((l: string) => l.trim()).filter(Boolean);
   let providerName: string | null = null;
   if (!garbled) {
-    for (const line of lines.slice(0, 15)) {
-      if (line.length < 3 || line.length > 80) continue;
+    for (const line of lines.slice(0, 20)) {
+      if (line.length < 3 || line.length > 100) continue;
       if (/^\d/.test(line)) continue;
-      if (/account|invoice|statement|bill|date|customer/i.test(line)) continue;
+      if (/^(account|invoice|statement|bill|date|customer|service|payment|page\s+\d)/i.test(line)) continue;
       providerName = line;
       break;
     }
   }
-  // Fallback: try well-known provider names in text
   if (!providerName) {
     const knownProviders = [
-      'Land Rover Financial','Chase','Wells Fargo','Bank of America','Citi','Capital One',
-      'SDGE','SDG&E','SoCal Gas','Southern California Gas','IID','Imperial Irrigation',
-      'Cox','AT&T','T-Mobile','Verizon','FPL','Florida Power','Republic Services',
-      'Waste Management','City of Oceanside','City of Imperial','City of El Centro',
-      'Service Finance','Carrington','Rushmore','Citadel','SPS','Select Portfolio',
+      // Auto/financial
+      'Land Rover Financial','Chase Auto','Chase Bank','Wells Fargo','Bank of America',
+      'Citi','Capital One','Ally Financial','Toyota Financial','Honda Financial',
+      'BMW Financial','Ford Motor Credit',
+      // Electric
+      'SDGE','SDG&E','San Diego Gas & Electric','FPL','Florida Power & Light',
+      'Southern California Edison','SCE','IID','Imperial Irrigation District',
+      'Pacific Gas','PG&E','Arizona Public Service','APS','Xcel Energy',
+      // Gas
+      'SoCal Gas','Southern California Gas','Atmos Energy','Southwest Gas','Piedmont Gas',
+      // Water
+      'Vista Irrigation','Cal Water','California Water','Brevard County Water',
+      // Trash / waste
+      'Waste Management','Republic Services','Recology',
+      // Internet / cable
+      'Cox','Comcast','Xfinity','Spectrum','Charter','AT&T Internet','CenturyLink','Frontier',
+      // Phone
+      'AT&T','T-Mobile','Verizon','Sprint',
+      // Solar / finance
+      'Service Finance','Sunrun','SunPower','Vivint Solar','Sunnova',
+      // Insurance
+      'Safeco','Bamboo','Lemonade','State Farm','Allstate','Farmers',
+      // HOA
+      'Keystone','First Service','HOA Management',
+      // City utilities
+      'City of Oceanside','City of Imperial','City of El Centro','City of Brawley',
+      // Mortgage servicers
+      'Carrington','Rushmore','Citadel','SPS','Select Portfolio Servicing',
     ];
     for (const p of knownProviders) {
       if (text.toLowerCase().includes(p.toLowerCase())) { providerName = p; break; }
@@ -336,114 +385,245 @@ async function extractWithRegex(pdfBuffer: Buffer, filename: string): Promise<Ex
 
   // ── Service address ───────────────────────────────────────────────────────
   let serviceAddress: string | null = garbled ? null : findTextNear(text, [
-    /service\s+address/i, /property\s+address/i, /service\s+location/i, /premises\s+address/i,
+    /service\s+address/i, /property\s+address/i, /service\s+location/i,
+    /premises\s+(?:address)?/i, /installation\s+address/i, /site\s+address/i,
+    /delivered\s+to/i, /service\s+for/i,
   ]);
   if (!serviceAddress) {
-    const addrMatch = text.match(/\b(\d{2,6}\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\s+(?:St|Ave|Blvd|Dr|Rd|Way|Ln|Ct|Pl|Cir|Ter|Trail)[^\n]{0,40})/);
+    const addrMatch = text.match(/\b(\d{2,6}\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\s+(?:St(?:reet)?|Ave(?:nue)?|Blvd|Dr(?:ive)?|Rd|Way|Ln|Ct|Pl|Cir|Ter(?:race)?|Trail|Pkwy|Hwy)[^\n]{0,50})/);
     if (addrMatch) serviceAddress = addrMatch[1].trim();
   }
 
   // ── Account number ────────────────────────────────────────────────────────
   let accountNumber: string | null = garbled ? null : findTextNear(text, [
-    /account\s+(?:number|no\.?|#)/i, /customer\s+(?:number|no\.?|id)/i,
-    /reference\s+(?:number|no\.?)/i, /invoice\s+(?:number|no\.?|#)/i,
+    /account\s+(?:number|no\.?|#)/i,
+    /customer\s+(?:number|no\.?|id)/i,
+    /reference\s+(?:number|no\.?)/i,
+    /invoice\s+(?:number|no\.?|#)/i,
+    /contract\s+(?:number|no\.?|#)/i,
+    /policy\s+(?:number|no\.?|#)/i,    // insurance
+    /policy\s+no/i,
+    /subscriber\s+(?:id|number)/i,     // phone
+    /service\s+(?:id|number)/i,
+    /meter\s+(?:number|no\.?)/i,       // utility meters
+    /loan\s+(?:number|no\.?|#)/i,      // loans
+    /unit\s+(?:number|no\.?|#)/i,      // HOA
   ]);
-  // Fallback: long digit strings in text, prefer longest
+  // Fallback: grouped or contiguous digit strings
   if (!accountNumber) {
     const candidates = scanAccountNumbers(text);
     if (candidates.length > 0) {
-      // Prefer the longest candidate; skip values that look like phone numbers
       accountNumber = candidates.sort((a, b) => b.length - a.length)[0];
     }
   }
-  // Fallback: use hint from filename (e.g. "-1902-" → partial acct)
   if (!accountNumber && fnHints.accountHint) {
     accountNumber = fnHints.accountHint;
   }
 
   // ── Statement date ────────────────────────────────────────────────────────
-  let statementDate: string | null = garbled ? null : (
-    findDateNear(text, [
+  // Filename date is the most reliable source for statement date on garbled PDFs.
+  let statementDate: string | null = fnHints.date ?? null;
+  if (!statementDate && !garbled) {
+    statementDate = findDateNear(text, [
       /(?:statement|bill|invoice|billing)\s+date/i,
-      /date\s+(?:issued|generated)/i,
+      /date\s+(?:issued|generated|prepared|mailed)/i,
       /billing\s+date/i,
-    ]) || findDateNear(text, [/date[:\s]/i])
-  );
-  // Fallback: first date found in text or filename
+      /(?:as\s+of|effective)\s+date/i,
+      /prepared\s+(?:on|date)/i,
+      /issued\s+(?:on|date)/i,
+    ]) || findDateNear(text, [/^date[:\s]/im]);
+  }
   if (!statementDate) {
     const allDates = scanAllDates(text);
-    if (allDates.length > 0) statementDate = allDates[0].date;
+    const nonDue = allDates.filter(d => !/due|pay\s+by/i.test(d.context));
+    statementDate = nonDue.length > 0 ? nonDue[0].date : (allDates[0]?.date ?? null);
   }
-  if (!statementDate && fnHints.date) statementDate = fnHints.date;
 
   // ── Due date ──────────────────────────────────────────────────────────────
   let dueDate: string | null = garbled ? null : findDateNear(text, [
-    /(?:payment\s+)?due\s+(?:date|by|on)/i, /please\s+pay\s+by/i, /pay\s+by/i,
+    /(?:payment\s+)?due\s+(?:date|by|on)/i,
+    /please\s+pay\s+by/i,
+    /pay\s+by/i,
+    /payment\s+deadline/i,
+    /(?:amount\s+)?due\s+(?:by|on)/i,
+    /remit\s+by/i,
   ]);
-  // Fallback: second distinct date in text
   if (!dueDate) {
     const allDates = scanAllDates(text);
-    const distinct = [...new Set(allDates.map(d => d.date))];
-    if (distinct.length >= 2) dueDate = distinct[1];
+    const dueDates = allDates.filter(d => /due|pay\s+by|payment\s+(?:date|deadline)/i.test(d.context));
+    if (dueDates.length > 0) {
+      dueDate = dueDates[0].date;
+    } else {
+      const distinct = [...new Set(allDates.map(d => d.date))].filter(d => d !== statementDate);
+      if (distinct.length > 0) dueDate = distinct[0];
+    }
   }
 
   // ── Billing period ────────────────────────────────────────────────────────
   let billingPeriodStart: string | null = null;
   let billingPeriodEnd:   string | null = null;
-  const periodMatch = text.match(
-    /(?:billing|service)\s+period[:\s]+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\w{3,9}\s+\d{1,2},?\s+\d{4})\s*(?:to|through|[-–])\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\w{3,9}\s+\d{1,2},?\s+\d{4})/i
-  );
-  if (periodMatch) {
-    billingPeriodStart = parseDate(periodMatch[1]);
-    billingPeriodEnd   = parseDate(periodMatch[2]);
+  const DATE_PAT = '(\\d{1,2}[\\/\\-]\\d{1,2}[\\/\\-]\\d{2,4}|\\w{3,9}\\s+\\d{1,2},?\\s+\\d{4})';
+  const SEP      = '\\s*(?:to|through|thru|–|-|—)\\s*';
+  const periodPatterns = [
+    /(?:billing|service)\s+period[:\s]+/i,
+    /for\s+service\s+(?:from|period)[:\s]+/i,
+    /service\s+dates?[:\s]+/i,
+    /period\s+of\s+service[:\s]+/i,
+    /your\s+billing\s+period[:\s]+/i,
+    /coverage\s+period[:\s]+/i,       // insurance
+    /policy\s+period[:\s]+/i,         // insurance
+    /term[:\s]+/i,
+  ];
+  for (const pfx of periodPatterns) {
+    const m = text.match(new RegExp(pfx.source + DATE_PAT + SEP + DATE_PAT, 'i'));
+    if (m) {
+      billingPeriodStart = parseDate(m[1]);
+      billingPeriodEnd   = parseDate(m[2]);
+      if (billingPeriodStart && billingPeriodEnd) break;
+    }
   }
 
-  // ── Financial fields ──────────────────────────────────────────────────────
-  let amountDue: number | null = findDollarNear(text, [
-    /(?:total\s+)?amount\s+due/i, /total\s+due/i, /balance\s+due/i,
-    /please\s+pay/i, /amount\s+enclosed/i, /pay\s+this\s+amount/i,
-    /total\s+balance/i, /current\s+balance/i,
-  ]);
-  // Fallback: label-free scan
-  if (amountDue == null) {
-    amountDue = guessAmountDue(scanAllAmounts(text));
-  }
+  // ── Amount due ────────────────────────────────────────────────────────────
+  const amountDueLabels: RegExp[] = [
+    // Generic
+    /(?:total\s+)?amount\s+due/i,
+    /total\s+due/i,
+    /balance\s+due/i,
+    /please\s+pay/i,
+    /amount\s+enclosed/i,
+    /pay\s+this\s+amount/i,
+    /amount\s+to\s+pay/i,
+    /(?:net\s+)?amount\s+payable/i,
+    /your\s+bill\s+(?:is|total)/i,
+    /total\s+(?:amount\s+)?(?:of\s+)?(?:your\s+)?(?:charges?|bill)/i,
+    /new\s+charges?\s+total/i,
+    /total\s+new\s+charges?/i,
+    // Electric
+    /total\s+electric(?:ity)?\s+charges?/i,
+    /total\s+energy\s+charges?/i,
+    /electric\s+charges?\s+total/i,
+    // Gas
+    /total\s+gas\s+charges?/i,
+    /gas\s+charges?\s+total/i,
+    // Water / sewer
+    /total\s+water(?:\s+&\s+sewer)?\s+charges?/i,
+    /water\s+(?:&\s+sewer\s+)?charges?\s+total/i,
+    /total\s+sewer\s+charges?/i,
+    // Trash
+    /total\s+(?:service|waste|trash|garbage)\s+charges?/i,
+    // Internet / phone
+    /total\s+monthly\s+charges?/i,
+    /total\s+(?:account\s+)?charges?/i,
+    // Insurance
+    /(?:total\s+)?premium\s+(?:due|amount)/i,
+    /total\s+premium/i,
+    /installment\s+(?:amount|due)/i,
+    // HOA
+    /assessment\s+(?:due|amount)/i,
+    /total\s+assessment/i,
+    /monthly\s+assessment/i,
+    // Loans / mortgage
+    /payment\s+amount\s+due/i,
+    /(?:total\s+)?amount\s+(?:of\s+)?(?:this\s+)?payment/i,
+  ];
+  let amountDue: number | null = findDollarNear(text, amountDueLabels);
+  if (amountDue == null) amountDue = guessAmountDue(scanAllAmounts(text));
 
+  // ── Previous balance ──────────────────────────────────────────────────────
   const previousBalance: number | null = findDollarNear(text, [
-    /previous\s+balance/i, /prior\s+balance/i, /balance\s+forward/i, /balance\s+from\s+last/i,
+    /previous\s+balance/i,
+    /prior\s+balance/i,
+    /balance\s+forward/i,
+    /balance\s+from\s+(?:last|previous)/i,
+    /(?:last|prior)\s+(?:month['s]?\s+)?balance/i,
+    /amount\s+from\s+previous\s+bill/i,
+    /(?:outstanding|past\s+due)\s+balance/i,
   ]);
+
+  // ── Payments received ─────────────────────────────────────────────────────
   const paymentsReceived: number | null = findDollarNear(text, [
-    /payments?\s+received/i, /payments?\s+&\s+credits?/i, /credits?\s+applied/i,
-    /payment\s+(?:amount|total)/i,
+    /payments?\s+received/i,
+    /payments?\s+&\s+(?:adjustments?|credits?)/i,
+    /credits?\s+applied/i,
+    /payment\s+(?:amount|total|received)/i,
+    /(?:last|recent)\s+payment/i,
+    /thank\s+you\s+for\s+(?:your\s+)?payment/i,
+    /payment\s+posted/i,
+    /payment\s+applied/i,
+    /auto.?pay\s+(?:amount|payment)/i,
   ]);
-  const currentCharges: number | null = findDollarNear(text, [
-    /current\s+charges?/i, /new\s+charges?/i, /charges?\s+this\s+period/i,
+
+  // ── Current charges ───────────────────────────────────────────────────────
+  let currentCharges: number | null = findDollarNear(text, [
+    /current\s+charges?/i,
+    /new\s+charges?/i,
+    /charges?\s+this\s+(?:period|month|statement)/i,
+    /this\s+(?:month['s]?\s+)?charges?/i,
+    /monthly\s+(?:charge|payment|service\s+fee)/i,
+    /payment\s+amount/i,
+    /regular\s+(?:monthly\s+)?payment/i,
+    /service\s+charge\s+total/i,
+    /total\s+(?:service|monthly)\s+charges?/i,
+    // Electric-specific
+    /electric(?:ity)?\s+charges?\s+(?:this\s+period)?/i,
+    /energy\s+charges?\s+(?:this\s+period)?/i,
+    // Gas-specific
+    /gas\s+charges?\s+(?:this\s+period)?/i,
+    // Water-specific
+    /water\s+charges?\s+(?:this\s+period)?/i,
   ]);
+  // Loan: monthly payment IS the current charge
+  if (currentCharges == null && amountDue != null && /loan|mortgage|installment|auto|vehicle/i.test(text)) {
+    currentCharges = amountDue;
+  }
 
   // ── Usage ─────────────────────────────────────────────────────────────────
   let usageValue: number | null = null;
   let usageUnit:  string | null = null;
   const usagePatterns: [RegExp, string][] = [
-    [/(\d[\d,]*\.?\d*)\s*kWh/i, 'kWh'],
-    [/(\d[\d,]*\.?\d*)\s*CCF/i, 'CCF'],
-    [/(\d[\d,]*\.?\d*)\s*therms?/i, 'therms'],
-    [/(\d[\d,]*\.?\d*)\s*HCF/i, 'HCF'],
-    [/(\d[\d,]*\.?\d*)\s*(?:hundred\s+cubic\s+feet)/i, 'HCF'],
-    [/(\d[\d,]*\.?\d*)\s*gallons?/i, 'gallons'],
+    // Electric
+    [/total\s+usage[:\s]+([\d,]+\.?\d*)\s*kWh/i, 'kWh'],
+    [/([\d,]+\.?\d*)\s*kWh\s*(?:used|consumed|total|billed)/i, 'kWh'],
+    [/([\d,]+\.?\d*)\s*kWh/i, 'kWh'],
+    [/([\d,]+\.?\d*)\s*MWh/i, 'MWh'],
+    // Gas
+    [/([\d,]+\.?\d*)\s*therms?\b/i, 'therms'],
+    [/([\d,]+\.?\d*)\s*CCF\b/i, 'CCF'],
+    [/([\d,]+\.?\d*)\s*MCF\b/i, 'MCF'],
+    [/([\d,]+\.?\d*)\s*HCF\b/i, 'HCF'],
+    [/([\d,]+\.?\d*)\s*dekatherms?\b/i, 'dekatherms'],
+    [/([\d,]+\.?\d*)\s*(?:hundred\s+cubic\s+feet)\b/i, 'HCF'],
+    // Water
+    [/([\d,]+\.?\d*)\s*(?:hundred\s+cubic\s+feet|HCF)\b/i, 'HCF'],
+    [/([\d,]+\.?\d*)\s*gallons?\b/i, 'gallons'],
+    [/([\d,]+\.?\d*)\s*(?:kilo.?gallons?|kgal)\b/i, 'kgal'],
+    [/([\d,]+\.?\d*)\s*(?:cubic\s+feet|cu\.?\s*ft\.?)\b/i, 'cu ft'],
+    // Trash (pickups)
+    [/([\d,]+)\s*pickups?\s*(?:per\s*(?:week|month))?/i, 'pickups'],
+    // Internet (data)
+    [/([\d,]+\.?\d*)\s*GB\s*(?:used|data|of\s+data)/i, 'GB'],
   ];
   for (const [pattern, unit] of usagePatterns) {
     const m = text.match(pattern);
     if (m) {
-      const n = parseFloat(m[1].replace(/,/g, ''));
-      if (!isNaN(n)) { usageValue = n; usageUnit = unit; break; }
+      const val = m[1] || m[2];
+      if (!val) continue;
+      const n = parseFloat(val.replace(/,/g, ''));
+      if (!isNaN(n) && n > 0) { usageValue = n; usageUnit = unit; break; }
     }
   }
 
   // ── Rate plan ─────────────────────────────────────────────────────────────
-  const ratePlan: string | null = garbled ? null : findTextNear(text, [/rate\s+(?:plan|schedule|class)/i, /tariff/i]);
+  const ratePlan: string | null = garbled ? null : findTextNear(text, [
+    /rate\s+(?:plan|schedule|class|code)/i,
+    /tariff\s*(?:code|schedule)?/i,
+    /service\s+(?:class|code|type)/i,
+    /plan\s+(?:name|type|code)/i,
+    /pricing\s+plan/i,
+  ]);
 
   // ── Paid status ───────────────────────────────────────────────────────────
-  const isPaid = /paid\s+in\s+full|balance\s+is\s+\$?0\.00|\$0\.00\s+(?:due|balance)/i.test(text)
+  const isPaid = /paid\s+in\s+full|balance\s+is\s+\$?0\.00|\$0\.00\s+(?:due|balance)|zero\s+balance|no\s+payment\s+due/i.test(text)
     || (amountDue === 0);
 
   // ── Utility type ──────────────────────────────────────────────────────────
@@ -451,38 +631,84 @@ async function extractWithRegex(pdfBuffer: Buffer, filename: string): Promise<Ex
 
   // ── Charge breakdown ──────────────────────────────────────────────────────
   const chargeBreakdown: Record<string, number> = {};
-  // Try multi-space alignment pattern
-  const chargeLineRe = /^(.{3,50}?)\s{2,}\$\s*([\d,]+\.\d{2})$/gm;
   let cm: RegExpExecArray | null;
   let breakdownCount = 0;
-  while ((cm = chargeLineRe.exec(text)) !== null && breakdownCount < 20) {
-    const label  = cm[1].trim();
+
+  // Pattern 1: "Label ...... $X.XX"  (dot or space leaders, right-aligned)
+  const leaderRe = /^(.{3,55}?)[\s\.]{2,}\$?\s*([\d,]+\.\d{2})\s*$/gm;
+  while ((cm = leaderRe.exec(text)) !== null && breakdownCount < 25) {
+    const label  = cm[1].trim().replace(/\.+$/, '').trim();
     const amount = parseFloat(cm[2].replace(/,/g, ''));
-    if (!isNaN(amount) && label.length > 2) { chargeBreakdown[label] = amount; breakdownCount++; }
+    if (!isNaN(amount) && label.length > 2 && !/^(page|account|date|total\s+amount\s+due)/i.test(label)) {
+      chargeBreakdown[label] = amount;
+      breakdownCount++;
+    }
   }
-  // Secondary pattern: "Label: $X.XX"
-  if (breakdownCount === 0) {
-    const altRe = /^([A-Za-z][^:\n]{2,50}):\s*\$\s*([\d,]+\.\d{2})/gm;
-    while ((cm = altRe.exec(text)) !== null && breakdownCount < 20) {
+  // Pattern 2: "Label\t$X.XX" or "Label   $X.XX"
+  if (breakdownCount < 3) {
+    const tabRe = /^(.{3,55}?)\s{2,}\$\s*([\d,]+\.\d{2})$/gm;
+    while ((cm = tabRe.exec(text)) !== null && breakdownCount < 25) {
       const label  = cm[1].trim();
       const amount = parseFloat(cm[2].replace(/,/g, ''));
-      if (!isNaN(amount)) { chargeBreakdown[label] = amount; breakdownCount++; }
+      if (!isNaN(amount) && label.length > 2 && !chargeBreakdown[label]) {
+        chargeBreakdown[label] = amount;
+        breakdownCount++;
+      }
+    }
+  }
+  // Pattern 3: "Label: $X.XX" inline
+  if (breakdownCount < 3) {
+    const colonRe = /^([A-Za-z][^:\n]{2,50}):\s*\$?\s*([\d,]+\.\d{2})/gm;
+    while ((cm = colonRe.exec(text)) !== null && breakdownCount < 25) {
+      const label  = cm[1].trim();
+      const amount = parseFloat(cm[2].replace(/,/g, ''));
+      if (!isNaN(amount) && !chargeBreakdown[label]) {
+        chargeBreakdown[label] = amount;
+        breakdownCount++;
+      }
     }
   }
 
   // ── Alerts ────────────────────────────────────────────────────────────────
   const alerts: string[] = [];
-  if (/past\s+due/i.test(text))                          alerts.push('Past due balance');
-  if (/late\s+(?:fee|charge|payment)/i.test(text))       alerts.push('Late fee');
-  if (/disconnect|shut.?off|termination/i.test(text))    alerts.push('Disconnect notice');
-  if (/leak\s+(?:alert|detect)/i.test(text))             alerts.push('Leak detected');
-  if (/high\s+usage/i.test(text))                        alerts.push('High usage');
-  if (/nsf|returned\s+(?:check|payment)/i.test(text))    alerts.push('Returned payment');
-  if (/debt\s+collection|collections?\s+agency/i.test(text)) alerts.push('Debt collection');
-  if (/auto\s+loan|vehicle\s+loan|car\s+loan/i.test(text))   alerts.push('Auto loan statement');
-  if (/final\s+notice|final\s+demand/i.test(text))       alerts.push('Final notice');
-  if (/account\s+is\s+current/i.test(text))              alerts.push('Account is current');
-  if (/nearing\s+(?:end|payoff)/i.test(text))            alerts.push('Nearing end of loan');
+  // Universal
+  if (/past\s+due/i.test(text))                           alerts.push('Past due balance');
+  if (/final\s+(?:notice|demand|warning)/i.test(text))    alerts.push('Final notice');
+  if (/late\s+(?:fee|charge|penalty)/i.test(text))        alerts.push('Late fee');
+  if (/disconnect|shut.?off|service\s+termination/i.test(text)) alerts.push('Disconnect notice');
+  // NSF — require fee/charge context to avoid boilerplate false positives
+  if (/nsf|returned\s+(?:check|payment).*(?:fee|charge|\$)|(?:fee|charge).*returned\s+(?:check|payment)/i.test(text)) alerts.push('Returned payment');
+  if (/debt\s+collection|collections?\s+agency|third.party\s+collect/i.test(text)) alerts.push('Debt collection');
+  if (/account\s+is\s+current/i.test(text))               alerts.push('Account is current');
+  // Electric
+  if (/tier\s*2|above\s+baseline|baseline\s+exceeded/i.test(text)) alerts.push('Above baseline usage');
+  if (/(?:critical\s+peak|flex\s+alert|demand\s+response)/i.test(text)) alerts.push('Peak demand event');
+  if (/high\s+(?:usage|consumption)|usage\s+alert/i.test(text)) alerts.push('High usage');
+  if (/outage\s+credit|service\s+interruption\s+credit/i.test(text)) alerts.push('Outage credit applied');
+  if (/net\s+(?:metering|energy\s+metering)|solar\s+credit|excess\s+generation/i.test(text)) alerts.push('Solar net metering credit');
+  // Gas
+  if (/gas\s+(?:safety|leak|smell)|smell\s+gas/i.test(text)) alerts.push('Gas safety notice');
+  // Water
+  if (/leak\s+(?:alert|detect|warning)|possible\s+leak/i.test(text)) alerts.push('Possible leak detected');
+  if (/water\s+(?:restriction|shortage|conservation)/i.test(text)) alerts.push('Water restriction notice');
+  if (/drought/i.test(text))                              alerts.push('Drought surcharge applied');
+  // Internet / phone
+  if (/data\s+(?:overage|over\s+limit|cap\s+exceeded)/i.test(text)) alerts.push('Data overage');
+  if (/service\s+(?:outage|disruption|interruption)\s+credit/i.test(text)) alerts.push('Service outage credit');
+  // Insurance
+  if (/cancell?ation\s+notice|policy\s+cancell?ed/i.test(text)) alerts.push('Cancellation notice');
+  if (/renewal\s+notice|policy\s+renew/i.test(text))      alerts.push('Policy renewal');
+  if (/premium\s+(?:increase|change)/i.test(text))        alerts.push('Premium changed');
+  // Loans / mortgage
+  if (/auto\s+loan|vehicle\s+loan|car\s+loan/i.test(text))  alerts.push('Auto loan statement');
+  if (/nearing\s+(?:end|payoff)|final\s+payment/i.test(text)) alerts.push('Nearing end of loan');
+  if (/escrow\s+(?:shortage|deficiency)/i.test(text))     alerts.push('Escrow shortage');
+  if (/prepayment\s+penalty/i.test(text))                  alerts.push('Prepayment penalty applies');
+  // HOA
+  if (/special\s+assessment/i.test(text))                  alerts.push('Special assessment');
+  if (/violation\s+(?:fine|fee|notice)/i.test(text))       alerts.push('HOA violation');
+  // Solar loan
+  if (/solar\s+(?:loan|lease|ppa|power\s+purchase)/i.test(text)) alerts.push('Solar financing statement');
 
   return {
     providerName,
