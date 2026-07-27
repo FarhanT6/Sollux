@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   getUtility, syncUtility, deleteUtility, getStatementDownloadUrl,
   getPaymentPlan, createPaymentPlan, updatePaymentPlan, deletePaymentPlan,
-  upsertUtilityLoan, deleteUtilityLoan,
+  upsertUtilityLoan, deleteUtilityLoan, patchStatement,
 } from '../api/client';
 import { CATEGORY_LABELS, CATEGORY_COLORS } from '../types';
 import { Pill, Skeleton, EmptyState } from '../components/ui';
@@ -38,16 +38,19 @@ function isStatementPaid(s: any, payments: any[] = []): boolean {
   return sumSinceStmt >= openBalance - 0.01;
 }
 
-function statementStatus(s: any, payments: any[] = [], newerStmt?: any): { color: 'green' | 'amber' | 'red'; label: string } {
+function statementStatus(s: any, payments: any[] = [], newerStmt?: any, isLatest = false): { color: 'green' | 'amber' | 'red'; label: string } {
   if (isStatementPaid(s, payments)) return { color: 'green', label: 'Paid' };
-  // The next (more recent) statement's paymentsReceived represents payment for THIS statement.
+  // Next statement's paymentsReceived covers this amount → was paid
   if (newerStmt) {
     const nextPayments = Number((newerStmt.rawDataJson as any)?.paymentsReceived ?? 0);
     const thisDue = Number(s.amountDue ?? 0);
     if (thisDue > 0 && nextPayments >= thisDue - 0.01) return { color: 'green', label: 'Paid' };
   }
+  // AI explicitly flagged past due — reliable, came from the bill itself
   if ((s.rawDataJson as any)?.isPastDue === true) return { color: 'red', label: 'Overdue' };
-  if (s.dueDate && isAfter(new Date(), new Date(s.dueDate))) return { color: 'red', label: 'Overdue' };
+  // Date-based overdue only for the latest statement — historical bills get neutral
+  // "Due" because we have no payment evidence either way (avoids false red on paid history).
+  if (isLatest && s.dueDate && isAfter(new Date(), new Date(s.dueDate))) return { color: 'red', label: 'Overdue' };
   return { color: 'amber', label: 'Due' };
 }
 
@@ -431,6 +434,7 @@ export default function UtilityDetailPage() {
   const [showPlanModal, setShowPlanModal] = useState(false);
   const [loan, setLoan]           = useState<any>(null);
   const [showLoanModal, setShowLoanModal] = useState(false);
+  const [markingPaid, setMarkingPaid] = useState<string | null>(null);
 
   useEffect(() => {
     if (!accountId) return;
@@ -439,6 +443,18 @@ export default function UtilityDetailPage() {
       getPaymentPlan(accountId).then(setPlan),
     ]).finally(() => setLoading(false));
   }, [accountId]);
+
+  async function handleMarkPaid(s: any) {
+    const isPaid = Number(s.amountPaid ?? 0) > 0;
+    setMarkingPaid(s.id);
+    try {
+      const updated = await patchStatement(s.id, { amountPaid: isPaid ? null : Number(s.amountDue ?? 0) });
+      setAccount((prev: any) => prev ? {
+        ...prev,
+        statements: (prev.statements ?? []).map((r: any) => r.id === s.id ? { ...r, amountPaid: updated.amountPaid } : r),
+      } : prev);
+    } catch { } finally { setMarkingPaid(null); }
+  }
 
   async function handleSync() {
     if (!accountId) return;
@@ -713,15 +729,16 @@ export default function UtilityDetailPage() {
             : (
               <div className="space-y-2 pb-8">
                 {filteredStatements.map((s, idx) => {
-                  // filteredStatements is sorted DESC; [idx-1] is the more recent statement
-                  const { color: sc, label: sl } = statementStatus(s, payments, filteredStatements[idx - 1]);
+                  // filteredStatements sorted DESC; [idx-1] is more recent; idx===0 is latest
+                  const isLatest = idx === 0 && yearFilter === 'all' && !search;
+                  const { color: sc, label: sl } = statementStatus(s, payments, filteredStatements[idx - 1], isLatest);
                   const raw = s.rawDataJson as Record<string, unknown> | undefined;
                   const pastDue     = raw?.pastDue      != null ? Number(raw.pastDue)      : null;
                   const totalDue    = (raw?.accountBalance ?? raw?.totalDue) != null
                                       ? Number(raw?.accountBalance ?? raw?.totalDue) : null;
                   const prevBal     = raw?.previousBalance != null ? Number(raw.previousBalance) : null;
                   const currentBill = raw?.currentBill   != null ? Number(raw.currentBill)   : null;
-                  const isLatest = idx === 0 && yearFilter === 'all' && !search;
+                  const isPaid = Number(s.amountPaid ?? 0) > 0 || (s.rawDataJson as any)?.isPaid === true;
                   return (
                     <div key={s.id} className="rounded-xl px-5 py-4 flex items-center gap-4"
                       style={{
@@ -787,8 +804,17 @@ export default function UtilityDetailPage() {
                         <Pill color={sc}>{sl}</Pill>
                       </div>
 
-                      {s.pdfS3Key && (
-                        <div className="flex-shrink-0">
+                      <div className="flex-shrink-0 flex items-center gap-1.5">
+                        <button
+                          onClick={() => handleMarkPaid(s)}
+                          disabled={markingPaid === s.id}
+                          title={isPaid ? 'Mark as unpaid' : 'Mark as paid'}
+                          className={`text-xs px-2 py-1 rounded transition-colors disabled:opacity-30 ${isPaid ? 'text-green-500 hover:text-gray-400' : 'text-gray-500 hover:text-green-400'}`}
+                          style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
+                        >
+                          {markingPaid === s.id ? '…' : isPaid ? '✓ Paid' : '✓ Mark paid'}
+                        </button>
+                        {s.pdfS3Key && (
                           <button
                             onClick={async () => {
                               try {
@@ -801,8 +827,8 @@ export default function UtilityDetailPage() {
                           >
                             📄 PDF
                           </button>
-                        </div>
-                      )}
+                        )}
+                      </div>
                     </div>
                   );
                 })}

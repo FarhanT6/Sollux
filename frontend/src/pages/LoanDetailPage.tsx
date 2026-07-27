@@ -1,20 +1,27 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { getLoan, getLoanAmortization } from '../api/client';
-import type { Loan } from '../types';
-import { format } from 'date-fns';
+import { getLoan, getLoanAmortization, updateLoan, getProperties } from '../api/client';
+import type { Loan, Property, LoanType, PrepaymentPenalty, PrepaymentPenaltyTier } from '../types';
+import { format, addMonths } from 'date-fns';
 
 const money = (n: number | null | undefined) =>
   n == null ? '—' : n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const moneyPrecise = (n: number | null | undefined) =>
   n == null ? '—' : n.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 });
+const pct = (n: number) => `${n.toFixed(2)}%`;
 
 const BALANCE_METHOD_LABELS: Record<string, string> = {
   balance_after: 'From most recent payment record',
   payment_sum: 'Calculated from recorded principal payments',
   theoretical: 'Projected from origination date (no payment history on file)',
   manual: 'Manually entered — no calculation basis available',
+};
+
+const LOAN_TYPES: LoanType[] = ['MORTGAGE','HELOC','AUTO','PERSONAL','STUDENT','INSTALLMENT_PLAN','CREDIT_LINE','OTHER'];
+const LOAN_TYPE_LABELS: Record<string, string> = {
+  MORTGAGE: 'Mortgage', HELOC: 'HELOC', AUTO: 'Auto', PERSONAL: 'Personal',
+  STUDENT: 'Student', INSTALLMENT_PLAN: 'Installment Plan', CREDIT_LINE: 'Credit Line', OTHER: 'Other',
 };
 
 interface AmortizationResponse {
@@ -33,26 +40,494 @@ interface AmortizationResponse {
   };
 }
 
+// ── Prepayment Penalty Calculator ─────────────────────────────────────────────
+
+function calcPrepaymentPenalty(
+  penalty: PrepaymentPenalty,
+  originationDate: string,
+  currentBalance: number
+): { inPenaltyPeriod: boolean; currentRate: number | null; penaltyAmount: number | null; penaltyEnds: Date; currentTierEnds: Date | null; monthsElapsed: number } {
+  const origin = new Date(originationDate);
+  const today = new Date();
+  const monthsElapsed = Math.floor(
+    (today.getFullYear() - origin.getFullYear()) * 12 + (today.getMonth() - origin.getMonth())
+  );
+  const penaltyEnds = addMonths(origin, penalty.periodMonths);
+  const inPenaltyPeriod = monthsElapsed < penalty.periodMonths;
+
+  if (!inPenaltyPeriod) {
+    return { inPenaltyPeriod: false, currentRate: null, penaltyAmount: null, penaltyEnds, currentTierEnds: null, monthsElapsed };
+  }
+
+  const activeTier = penalty.tiers.find(t => monthsElapsed >= t.startMonth && monthsElapsed < t.endMonth);
+  if (!activeTier) {
+    return { inPenaltyPeriod: true, currentRate: null, penaltyAmount: null, penaltyEnds, currentTierEnds: null, monthsElapsed };
+  }
+
+  return {
+    inPenaltyPeriod: true,
+    currentRate: activeTier.rate,
+    penaltyAmount: currentBalance * (activeTier.rate / 100),
+    penaltyEnds,
+    currentTierEnds: addMonths(origin, activeTier.endMonth),
+    monthsElapsed,
+  };
+}
+
+// ── Prepayment Penalty Editor ─────────────────────────────────────────────────
+
+function PenaltyEditor({ value, onChange }: {
+  value: PrepaymentPenalty | null;
+  onChange: (v: PrepaymentPenalty | null) => void;
+}) {
+  const enabled = value?.enabled ?? false;
+
+  const toggle = () => {
+    if (!enabled) {
+      onChange({ enabled: true, periodMonths: 36, tiers: [{ startMonth: 0, endMonth: 24, rate: 3 }, { startMonth: 24, endMonth: 36, rate: 2 }] });
+    } else {
+      onChange(null);
+    }
+  };
+
+  const updateField = (field: keyof PrepaymentPenalty, val: any) => {
+    if (!value) return;
+    onChange({ ...value, [field]: val });
+  };
+
+  const updateTier = (i: number, field: keyof PrepaymentPenaltyTier, val: number) => {
+    if (!value) return;
+    const tiers = [...value.tiers];
+    tiers[i] = { ...tiers[i], [field]: val };
+    onChange({ ...value, tiers });
+  };
+
+  const addTier = () => {
+    if (!value) return;
+    const last = value.tiers[value.tiers.length - 1];
+    const start = last?.endMonth ?? 0;
+    onChange({ ...value, tiers: [...value.tiers, { startMonth: start, endMonth: start + 12, rate: 1 }] });
+  };
+
+  const removeTier = (i: number) => {
+    if (!value) return;
+    onChange({ ...value, tiers: value.tiers.filter((_, idx) => idx !== i) });
+  };
+
+  return (
+    <div className="space-y-3">
+      <label className="flex items-center gap-2 cursor-pointer">
+        <div
+          onClick={toggle}
+          className={`w-9 h-5 rounded-full transition-colors relative cursor-pointer flex-shrink-0 ${enabled ? 'bg-amber-500' : 'bg-white/10'}`}
+        >
+          <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${enabled ? 'left-4' : 'left-0.5'}`} />
+        </div>
+        <span className="text-sm text-gray-300">Prepayment penalty applies</span>
+      </label>
+
+      {enabled && value && (
+        <div className="space-y-3 pl-3 border-l border-white/10">
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Total penalty period (months)</label>
+            <input
+              type="number" min={1} max={120}
+              value={value.periodMonths}
+              onChange={e => updateField('periodMonths', parseInt(e.target.value) || 1)}
+              className="input-base w-32 text-sm"
+            />
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <p className="text-xs text-gray-500">Penalty tiers</p>
+              <button type="button" onClick={addTier} className="text-xs text-amber-400 hover:text-amber-300">+ Add tier</button>
+            </div>
+            <div className="space-y-2">
+              {value.tiers.map((tier, i) => (
+                <div key={i} className="flex items-center gap-2 text-xs">
+                  <span className="text-gray-500 w-16 flex-shrink-0">Month</span>
+                  <input type="number" min={0} value={tier.startMonth}
+                    onChange={e => updateTier(i, 'startMonth', parseInt(e.target.value) || 0)}
+                    className="input-base w-16 text-sm text-center" placeholder="0" />
+                  <span className="text-gray-600">–</span>
+                  <input type="number" min={1} value={tier.endMonth}
+                    onChange={e => updateTier(i, 'endMonth', parseInt(e.target.value) || 1)}
+                    className="input-base w-16 text-sm text-center" placeholder="24" />
+                  <span className="text-gray-500">→</span>
+                  <input type="number" min={0} max={100} step={0.1} value={tier.rate}
+                    onChange={e => updateTier(i, 'rate', parseFloat(e.target.value) || 0)}
+                    className="input-base w-16 text-sm text-center" placeholder="3" />
+                  <span className="text-gray-500">%</span>
+                  {value.tiers.length > 1 && (
+                    <button type="button" onClick={() => removeTier(i)} className="text-gray-600 hover:text-red-400 ml-1">✕</button>
+                  )}
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-gray-600 mt-1.5">Month ranges are months elapsed since origination date.</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Edit Modal ────────────────────────────────────────────────────────────────
+
+function EditModal({ loan, properties, onClose, onSave }: {
+  loan: Loan;
+  properties: Property[];
+  onClose: () => void;
+  onSave: (updated: Loan) => void;
+}) {
+  const [form, setForm] = useState({
+    lender: loan.lender,
+    loanType: loan.loanType,
+    paymentType: loan.paymentType ?? 'PRINCIPAL_AND_INTEREST',
+    accountLast4: loan.accountLast4 ?? '',
+    originalAmount: loan.originalAmount != null ? String(loan.originalAmount) : '',
+    interestRate: loan.interestRate != null ? String(loan.interestRate) : '',
+    monthlyPayment: loan.monthlyPayment != null ? String(loan.monthlyPayment) : '',
+    currentBalance: loan.currentBalance != null ? String(loan.currentBalance) : '',
+    originationDate: loan.originationDate ? loan.originationDate.slice(0, 10) : '',
+    maturityDate: loan.maturityDate ? loan.maturityDate.slice(0, 10) : '',
+    propertyId: loan.propertyId ?? '',
+    notes: loan.notes ?? '',
+    isPersonal: loan.isPersonal,
+    isActive: loan.isActive,
+  });
+  const [penalty, setPenalty] = useState<PrepaymentPenalty | null>(loan.prepaymentPenaltyJson ?? null);
+  const [saving, setSaving] = useState(false);
+
+  const f = (field: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
+    setForm(prev => ({ ...prev, [field]: e.target.value }));
+
+  async function handleSave() {
+    if (!form.lender) return;
+    setSaving(true);
+    try {
+      const payload: any = {
+        lender: form.lender,
+        loanType: form.loanType,
+        paymentType: form.paymentType,
+        accountLast4: form.accountLast4 || null,
+        originalAmount: form.originalAmount ? parseFloat(form.originalAmount) : null,
+        interestRate: form.interestRate ? parseFloat(form.interestRate) : null,
+        monthlyPayment: form.monthlyPayment ? parseFloat(form.monthlyPayment) : null,
+        currentBalance: form.currentBalance ? parseFloat(form.currentBalance) : null,
+        originationDate: form.originationDate || null,
+        maturityDate: form.maturityDate || null,
+        propertyId: form.propertyId || null,
+        notes: form.notes || null,
+        isPersonal: form.isPersonal,
+        isActive: form.isActive,
+        prepaymentPenaltyJson: penalty?.enabled ? penalty : null,
+      };
+      const updated = await updateLoan(loan.id, payload);
+      onSave(updated);
+      onClose();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="rounded-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto"
+        style={{ background: '#1a1a1a', border: '1px solid rgba(255,255,255,0.1)' }}>
+        <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 border-b border-white/8"
+          style={{ background: '#1a1a1a' }}>
+          <h2 className="text-base font-semibold text-white">Edit loan</h2>
+          <button onClick={onClose} className="text-gray-500 hover:text-white text-lg leading-none">×</button>
+        </div>
+
+        <div className="px-6 py-5 space-y-5">
+          {/* Lender + type */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="col-span-2">
+              <label className="block text-xs text-gray-500 mb-1">Lender / name</label>
+              <input value={form.lender} onChange={f('lender')} className="input-base w-full text-sm" placeholder="e.g. Monty James" />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Loan type</label>
+              <select value={form.loanType} onChange={f('loanType')} className="input-base w-full text-sm">
+                {LOAN_TYPES.map(t => <option key={t} value={t}>{LOAN_TYPE_LABELS[t]}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Payment structure</label>
+              <select value={form.paymentType} onChange={f('paymentType')} className="input-base w-full text-sm">
+                <option value="PRINCIPAL_AND_INTEREST">P+I (Principal & Interest)</option>
+                <option value="INTEREST_ONLY">Interest only</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Financials */}
+          <div>
+            <p className="text-xs text-gray-500 mb-2 font-medium uppercase tracking-wide">Financials</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Original loan amount</label>
+                <input type="number" value={form.originalAmount} onChange={f('originalAmount')} className="input-base w-full text-sm" placeholder="150000" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Interest rate (%)</label>
+                <input type="number" step="0.001" value={form.interestRate} onChange={f('interestRate')} className="input-base w-full text-sm" placeholder="10.0" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Monthly payment</label>
+                <input type="number" value={form.monthlyPayment} onChange={f('monthlyPayment')} className="input-base w-full text-sm" placeholder="1250" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Current balance</label>
+                <input type="number" value={form.currentBalance} onChange={f('currentBalance')} className="input-base w-full text-sm" placeholder="148000" />
+              </div>
+            </div>
+          </div>
+
+          {/* Dates */}
+          <div>
+            <p className="text-xs text-gray-500 mb-2 font-medium uppercase tracking-wide">Dates</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Origination date</label>
+                <input type="date" value={form.originationDate} onChange={f('originationDate')} className="input-base w-full text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Maturity date</label>
+                <input type="date" value={form.maturityDate} onChange={f('maturityDate')} className="input-base w-full text-sm" />
+              </div>
+            </div>
+          </div>
+
+          {/* Property + account */}
+          <div>
+            <p className="text-xs text-gray-500 mb-2 font-medium uppercase tracking-wide">Details</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2">
+                <label className="block text-xs text-gray-500 mb-1">Attached property</label>
+                <select value={form.propertyId} onChange={f('propertyId')} className="input-base w-full text-sm">
+                  <option value="">— No property —</option>
+                  {properties.map(p => (
+                    <option key={p.id} value={p.id}>{p.nickname || p.address}{p.city ? `, ${p.city}` : ''}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Account # (last 4)</label>
+                <input maxLength={4} value={form.accountLast4} onChange={f('accountLast4')} className="input-base w-full text-sm" placeholder="1234" />
+              </div>
+              <div className="flex flex-col justify-end gap-2 pb-0.5">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={form.isPersonal}
+                    onChange={e => setForm(p => ({ ...p, isPersonal: e.target.checked }))}
+                    className="rounded border-white/20" />
+                  <span className="text-sm text-gray-300">Personal loan</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={form.isActive}
+                    onChange={e => setForm(p => ({ ...p, isActive: e.target.checked }))}
+                    className="rounded border-white/20" />
+                  <span className="text-sm text-gray-300">Active</span>
+                </label>
+              </div>
+            </div>
+            <div className="mt-3">
+              <label className="block text-xs text-gray-500 mb-1">Notes</label>
+              <textarea value={form.notes} onChange={f('notes')} rows={2} className="input-base w-full text-sm resize-none" placeholder="VVW loan, ~$150k…" />
+            </div>
+          </div>
+
+          {/* Prepayment penalty */}
+          <div>
+            <p className="text-xs text-gray-500 mb-2 font-medium uppercase tracking-wide">Prepayment penalty</p>
+            <PenaltyEditor value={penalty} onChange={setPenalty} />
+          </div>
+        </div>
+
+        <div className="sticky bottom-0 flex justify-end gap-2 px-6 py-4 border-t border-white/8"
+          style={{ background: '#1a1a1a' }}>
+          <button onClick={onClose} className="btn text-sm">Cancel</button>
+          <button onClick={handleSave} disabled={saving || !form.lender} className="btn btn-primary text-sm">
+            {saving ? 'Saving…' : 'Save changes'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Prepayment Penalty Card ───────────────────────────────────────────────────
+
+function PrepaymentCard({ loan, currentBalance }: { loan: Loan; currentBalance: number }) {
+  const penalty = loan.prepaymentPenaltyJson;
+  if (!penalty?.enabled || !loan.originationDate) return null;
+
+  const calc = calcPrepaymentPenalty(penalty, loan.originationDate, currentBalance);
+
+  return (
+    <div className="card p-4 mb-6">
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-sm font-medium text-white">Prepayment penalty</p>
+        {calc.inPenaltyPeriod
+          ? <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ background: 'rgba(239,68,68,0.12)', color: '#f87171', border: '1px solid rgba(239,68,68,0.25)' }}>Active</span>
+          : <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ background: 'rgba(16,185,129,0.12)', color: '#34d399', border: '1px solid rgba(16,185,129,0.25)' }}>Expired</span>
+        }
+      </div>
+
+      {calc.inPenaltyPeriod ? (
+        <div className="space-y-4">
+          {/* Current penalty amount */}
+          <div className="grid grid-cols-3 gap-3">
+            <div className="rounded-lg px-3 py-2.5" style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)' }}>
+              <p className="text-xs text-gray-500 mb-1">Current penalty rate</p>
+              <p className="text-lg font-semibold text-red-400">{calc.currentRate != null ? pct(calc.currentRate) : '—'}</p>
+              <p className="text-xs text-gray-600">of outstanding balance</p>
+            </div>
+            <div className="rounded-lg px-3 py-2.5" style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)' }}>
+              <p className="text-xs text-gray-500 mb-1">Penalty if paid today</p>
+              <p className="text-lg font-semibold text-red-400">{moneyPrecise(calc.penaltyAmount)}</p>
+              <p className="text-xs text-gray-600">on {money(currentBalance)} balance</p>
+            </div>
+            <div className="rounded-lg px-3 py-2.5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+              <p className="text-xs text-gray-500 mb-1">Month {calc.monthsElapsed} of {penalty.periodMonths}</p>
+              <p className="text-lg font-semibold text-white">{penalty.periodMonths - calc.monthsElapsed}mo left</p>
+              <p className="text-xs text-gray-600">penalty ends {format(calc.penaltyEnds, 'MMM yyyy')}</p>
+            </div>
+          </div>
+
+          {/* Tier timeline */}
+          {penalty.tiers.length > 1 && (
+            <div>
+              <p className="text-xs text-gray-500 mb-2">Penalty schedule</p>
+              <div className="space-y-1.5">
+                {penalty.tiers.map((tier, i) => {
+                  const tierStart = addMonths(new Date(loan.originationDate!), tier.startMonth);
+                  const tierEnd = addMonths(new Date(loan.originationDate!), tier.endMonth);
+                  const isActive = calc.monthsElapsed >= tier.startMonth && calc.monthsElapsed < tier.endMonth;
+                  const isPast = calc.monthsElapsed >= tier.endMonth;
+                  return (
+                    <div key={i} className={`flex items-center gap-3 text-xs rounded-lg px-3 py-2 ${isActive ? 'bg-red-500/10 border border-red-500/20' : ''}`}>
+                      <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isActive ? 'bg-red-400' : isPast ? 'bg-gray-600' : 'bg-gray-500'}`} />
+                      <span className={isPast ? 'text-gray-600 line-through' : isActive ? 'text-white font-medium' : 'text-gray-400'}>
+                        {format(tierStart, 'MMM yyyy')} – {format(tierEnd, 'MMM yyyy')}
+                      </span>
+                      <span className={`ml-auto font-mono ${isActive ? 'text-red-400 font-semibold' : isPast ? 'text-gray-600' : 'text-gray-400'}`}>
+                        {pct(tier.rate)}
+                      </span>
+                      {isActive && <span className="text-red-400 text-xs">← now</span>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Payoff calculator */}
+          <PrepayoffCalc loan={loan} currentBalance={currentBalance} penalty={penalty} calc={calc} />
+        </div>
+      ) : (
+        <p className="text-sm text-gray-400">
+          The {penalty.periodMonths}-month prepayment penalty period ended{' '}
+          <span className="text-white">{format(calc.penaltyEnds, 'MMMM yyyy')}</span>.
+          This loan can now be paid off without penalty.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function PrepayoffCalc({ loan, currentBalance, penalty, calc }: {
+  loan: Loan;
+  currentBalance: number;
+  penalty: PrepaymentPenalty;
+  calc: ReturnType<typeof calcPrepaymentPenalty>;
+}) {
+  const [payoffAmount, setPayoffAmount] = useState(String(Math.round(currentBalance)));
+  const balNum = parseFloat(payoffAmount) || currentBalance;
+
+  const activeTier = calc.currentRate != null ? penalty.tiers.find(t =>
+    calc.monthsElapsed >= t.startMonth && calc.monthsElapsed < t.endMonth
+  ) : null;
+
+  const penaltyOnAmount = activeTier ? balNum * (activeTier.rate / 100) : 0;
+  const totalCost = balNum + penaltyOnAmount;
+
+  // When does the next cheaper tier start?
+  const nextTier = penalty.tiers.find(t => t.startMonth > calc.monthsElapsed);
+  const nextTierDate = nextTier && loan.originationDate
+    ? addMonths(new Date(loan.originationDate), nextTier.startMonth)
+    : null;
+
+  return (
+    <div className="rounded-lg p-4 space-y-3" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
+      <p className="text-xs font-medium text-gray-300">Payoff calculator</p>
+      <div className="flex items-center gap-3">
+        <div className="flex-1">
+          <label className="block text-xs text-gray-500 mb-1">Payoff amount</label>
+          <input
+            type="number"
+            value={payoffAmount}
+            onChange={e => setPayoffAmount(e.target.value)}
+            className="input-base w-full text-sm"
+            placeholder={String(Math.round(currentBalance))}
+          />
+        </div>
+        <div className="flex-1">
+          <p className="text-xs text-gray-500 mb-1">Penalty ({activeTier ? pct(activeTier.rate) : '—'})</p>
+          <p className="text-base font-semibold text-red-400">{moneyPrecise(penaltyOnAmount)}</p>
+        </div>
+        <div className="flex-1">
+          <p className="text-xs text-gray-500 mb-1">Total out of pocket</p>
+          <p className="text-base font-semibold text-white">{moneyPrecise(totalCost)}</p>
+        </div>
+      </div>
+      {nextTierDate && (
+        <p className="text-xs text-gray-500">
+          Wait until <span className="text-amber-400">{format(nextTierDate, 'MMMM yyyy')}</span> and the rate drops to{' '}
+          <span className="text-amber-400">{pct(nextTier!.rate)}</span>{' '}
+          — saving <span className="text-green-400">{moneyPrecise(balNum * ((activeTier!.rate - nextTier!.rate) / 100))}</span> in penalty fees.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ── Main Page ─────────────────────────────────────────────────────────────────
+
 export default function LoanDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [loan, setLoan] = useState<Loan | null>(null);
   const [amort, setAmort] = useState<AmortizationResponse | null>(null);
+  const [properties, setProperties] = useState<Property[]>([]);
   const [loading, setLoading] = useState(true);
   const [showFullSchedule, setShowFullSchedule] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
+
+  const reload = () => {
+    if (!id) return Promise.resolve();
+    return Promise.all([getLoan(id), getLoanAmortization(id)])
+      .then(([l, a]) => { setLoan(l); setAmort(a as AmortizationResponse); });
+  };
 
   useEffect(() => {
     if (!id) return;
-    Promise.all([getLoan(id), getLoanAmortization(id)])
-      .then(([l, a]) => { setLoan(l); setAmort(a as AmortizationResponse); })
+    Promise.all([getLoan(id), getLoanAmortization(id), getProperties()])
+      .then(([l, a, props]) => { setLoan(l); setAmort(a as AmortizationResponse); setProperties(props); })
       .finally(() => setLoading(false));
   }, [id]);
+
+  const currentBalance = useMemo(() => amort?.balance.balance ?? Number(loan?.currentBalance ?? 0), [amort, loan]);
+  const originalAmount = useMemo(() => Number(loan?.originalAmount ?? 0), [loan]);
+  const paidOff = useMemo(() => originalAmount > 0 ? Math.max(0, Math.min(100, ((originalAmount - currentBalance) / originalAmount) * 100)) : 0, [originalAmount, currentBalance]);
 
   if (loading) return <div className="p-6 text-gray-500 text-sm">Loading…</div>;
   if (!loan || !amort) return <div className="p-6 text-gray-500 text-sm">Loan not found</div>;
 
   const { balance, amortization } = amort;
 
-  // Build chart data: past payments (actual) + forward projection (schedule).
   const history = (loan.loanPayments || [])
     .filter(p => p.balanceAfter != null)
     .slice()
@@ -65,32 +540,35 @@ export default function LoanDetailPage() {
 
   return (
     <div className="p-6 max-w-6xl">
-      <div className="flex items-center justify-between mb-1">
+      {/* Header */}
+      <div className="flex items-start justify-between mb-1">
         <div>
           <Link to="/loans" className="text-xs text-gray-500 hover:text-gray-300">&larr; Loans</Link>
           <h1 className="text-xl font-semibold text-white mt-1">{loan.lender}</h1>
           <p className="text-sm text-gray-400 mt-0.5">
-            {loan.loanType.replace('_', ' ')}
+            {LOAN_TYPE_LABELS[loan.loanType] ?? loan.loanType}
+            {loan.paymentType === 'INTEREST_ONLY' && <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded" style={{ background: 'rgba(245,166,35,0.12)', color: '#F5A623' }}>Interest only</span>}
             {loan.accountLast4 && <span> &middot; &middot;&middot;&middot;{loan.accountLast4}</span>}
             {loan.property && (
               <> &middot; <Link to={`/properties/${loan.property.id}`} className="text-amber-400 hover:text-amber-300">{loan.property.nickname || loan.property.address}</Link></>
             )}
           </p>
         </div>
-        <div className="flex gap-1.5">
+        <div className="flex items-center gap-2">
           {loan.isPersonal && <span className="pill pill-purple">Personal</span>}
           {!loan.isActive && <span className="pill pill-gray">Closed</span>}
+          <button onClick={() => setShowEdit(true)} className="btn text-sm">Edit</button>
         </div>
       </div>
 
       {amortization.negativeAmortization && (
         <div className="mt-4 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-4 py-2.5">
-          The payment on file doesn't cover the monthly interest — this loan's balance will grow, not shrink, at the current payment amount. No payoff date can be projected until the payment increases.
+          The payment on file doesn't cover the monthly interest — this loan's balance will grow at the current payment amount.
         </div>
       )}
 
       {/* Stats */}
-      <div className="grid grid-cols-4 gap-3 mt-5 mb-6">
+      <div className="grid grid-cols-4 gap-3 mt-5">
         <div className="stat-card">
           <p className="text-xs text-gray-500 mb-1">Current balance</p>
           <p className="text-xl font-semibold text-red-400">{money(balance.balance)}</p>
@@ -99,7 +577,7 @@ export default function LoanDetailPage() {
         <div className="stat-card">
           <p className="text-xs text-gray-500 mb-1">Monthly payment</p>
           <p className="text-xl font-semibold text-white">{money(loan.monthlyPayment ?? amortization.computedMonthlyPayment)}</p>
-          {!loan.monthlyPayment && <p className="text-xs text-gray-600 mt-1">Estimated (none on file)</p>}
+          {!loan.monthlyPayment && <p className="text-xs text-gray-600 mt-1">Estimated</p>}
         </div>
         <div className="stat-card">
           <p className="text-xs text-gray-500 mb-1">Payoff date</p>
@@ -115,10 +593,39 @@ export default function LoanDetailPage() {
         </div>
       </div>
 
+      {/* Payoff progress bar */}
+      {originalAmount > 0 && (
+        <div className="mt-4 mb-6 card p-4">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs text-gray-500">Payoff progress</p>
+            <p className="text-xs font-semibold text-white">{paidOff.toFixed(1)}% paid off</p>
+          </div>
+          <div className="w-full h-2.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.08)' }}>
+            <div
+              className="h-full rounded-full transition-all"
+              style={{ width: `${paidOff}%`, background: 'linear-gradient(90deg, #6366f1, #8b5cf6)' }}
+            />
+          </div>
+          <div className="flex justify-between mt-1.5 text-xs text-gray-600">
+            <span>{money(originalAmount - currentBalance)} paid</span>
+            <span>{money(currentBalance)} remaining of {money(originalAmount)}</span>
+          </div>
+          {amortization.totalInterestRemaining > 0 && (
+            <div className="mt-2 pt-2 border-t border-white/6 flex gap-6 text-xs text-gray-500">
+              <span>Total interest remaining: <span className="text-gray-300">{money(amortization.totalInterestRemaining)}</span></span>
+              {amortization.totalInterestToDate > 0 && <span>Interest paid to date: <span className="text-gray-300">{money(amortization.totalInterestToDate)}</span></span>}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Prepayment penalty */}
+      <PrepaymentCard loan={loan} currentBalance={currentBalance} />
+
       {/* Balance over time chart */}
       {chartData.length > 1 && (
         <div className="card p-4 mb-6">
-          <p className="text-xs text-gray-500 mb-3">Balance over time, including the projected payoff path at current terms</p>
+          <p className="text-xs text-gray-500 mb-3">Balance over time — actual payments + projected payoff path</p>
           <ResponsiveContainer width="100%" height={220}>
             <AreaChart data={chartData}>
               <defs>
@@ -128,23 +635,8 @@ export default function LoanDetailPage() {
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false} />
-              <XAxis
-                dataKey="date"
-                tickFormatter={d => format(new Date(d), 'MMM yy')}
-                stroke="#6b7280"
-                fontSize={11}
-                tickLine={false}
-                axisLine={false}
-                minTickGap={40}
-              />
-              <YAxis
-                tickFormatter={v => `$${(v / 1000).toFixed(0)}k`}
-                stroke="#6b7280"
-                fontSize={11}
-                tickLine={false}
-                axisLine={false}
-                width={48}
-              />
+              <XAxis dataKey="date" tickFormatter={d => format(new Date(d), 'MMM yy')} stroke="#6b7280" fontSize={11} tickLine={false} axisLine={false} minTickGap={40} />
+              <YAxis tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} stroke="#6b7280" fontSize={11} tickLine={false} axisLine={false} width={48} />
               <Tooltip
                 contentStyle={{ background: '#242424', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 12 }}
                 labelFormatter={d => format(new Date(d), 'MMM d, yyyy')}
@@ -171,6 +663,7 @@ export default function LoanDetailPage() {
             <table className="table-base">
               <thead>
                 <tr>
+                  <th>#</th>
                   <th>Date</th>
                   <th className="text-right">Payment</th>
                   <th className="text-right">Principal</th>
@@ -181,6 +674,7 @@ export default function LoanDetailPage() {
               <tbody>
                 {(showFullSchedule ? amortization.schedule : amortization.schedule.slice(0, 12)).map(row => (
                   <tr key={row.paymentNumber}>
+                    <td className="text-gray-600">{row.paymentNumber}</td>
                     <td>{format(new Date(row.date), 'MMM yyyy')}</td>
                     <td className="text-right font-mono">{moneyPrecise(row.paymentAmount)}</td>
                     <td className="text-right font-mono text-green-400">{moneyPrecise(row.principal)}</td>
@@ -230,6 +724,16 @@ export default function LoanDetailPage() {
           </div>
         )}
       </div>
+
+      {/* Edit modal */}
+      {showEdit && (
+        <EditModal
+          loan={loan}
+          properties={properties}
+          onClose={() => setShowEdit(false)}
+          onSave={updated => { setLoan(updated); reload(); }}
+        />
+      )}
     </div>
   );
 }

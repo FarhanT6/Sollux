@@ -1,11 +1,24 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { calculateCurrentBalance, buildAmortizationSchedule } from '../lib/amortization';
 
 const router = Router();
 router.use(attachDbUser);
+
+const PrepaymentTierSchema = z.object({
+  startMonth: z.number().int().min(0),
+  endMonth: z.number().int().min(1),
+  rate: z.number().min(0).max(100),
+});
+
+const PrepaymentPenaltySchema = z.object({
+  enabled: z.boolean(),
+  periodMonths: z.number().int().min(1),
+  tiers: z.array(PrepaymentTierSchema),
+}).nullable();
 
 const LoanSchema = z.object({
   propertyId: z.string().optional().nullable(),
@@ -18,6 +31,8 @@ const LoanSchema = z.object({
   maturityDate: z.string().transform(s => new Date(s)).optional().nullable(),
   monthlyPayment: z.number().optional().nullable(),
   currentBalance: z.number().optional().nullable(),
+  paymentType: z.enum(['PRINCIPAL_AND_INTEREST', 'INTEREST_ONLY']).default('PRINCIPAL_AND_INTEREST'),
+  prepaymentPenaltyJson: PrepaymentPenaltySchema.optional(),
   notes: z.string().optional().nullable(),
   isPersonal: z.boolean().default(false),
   isActive: z.boolean().default(true),
@@ -111,17 +126,38 @@ router.post('/', async (req, res, next) => {
       const prop = await db.property.findFirst({ where: { id: data.propertyId, userId: req.dbUserId! } });
       if (!prop) return res.status(404).json({ error: 'Property not found' });
     }
-    const loan = await db.loan.create({ data: { ...data, userId: req.dbUserId! } });
+    const { propertyId, prepaymentPenaltyJson, ...rest } = data;
+    const loan = await db.loan.create({
+      data: {
+        ...rest,
+        userId: req.dbUserId!,
+        prepaymentPenaltyJson: prepaymentPenaltyJson ?? Prisma.DbNull,
+        ...(propertyId != null ? { property: { connect: { id: propertyId } } } : {}),
+      },
+    });
     res.status(201).json(loan);
   } catch (err) { next(err); }
 });
 
 router.patch('/:id', async (req, res, next) => {
   try {
-    const data = LoanSchema.partial().parse(req.body);
+    const { propertyId, prepaymentPenaltyJson, ...rest } = LoanSchema.partial().parse(req.body);
     const existing = await db.loan.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
     if (!existing) return res.status(404).json({ error: 'Loan not found' });
-    const loan = await db.loan.update({ where: { id: req.params.id }, data });
+    const loan = await db.loan.update({
+      where: { id: req.params.id },
+      data: {
+        ...rest,
+        ...(prepaymentPenaltyJson !== undefined
+          ? { prepaymentPenaltyJson: prepaymentPenaltyJson ?? Prisma.DbNull }
+          : {}),
+        ...(propertyId !== undefined
+          ? propertyId != null
+            ? { property: { connect: { id: propertyId } } }
+            : { property: { disconnect: true } }
+          : {}),
+      },
+    });
     res.json(loan);
   } catch (err) { next(err); }
 });

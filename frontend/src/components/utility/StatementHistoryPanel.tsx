@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { format, isAfter } from 'date-fns';
-import { getStatements, deleteStatement } from '../../api/client';
+import { getStatements, deleteStatement, patchStatement } from '../../api/client';
 import type { Statement } from '../../types';
 import { Skeleton, Pill } from '../ui';
 
@@ -12,18 +12,20 @@ function fmtMoney(v?: number | null) {
   return v != null ? `$${Number(v).toFixed(2)}` : '—';
 }
 
-function statusPill(s: Statement, newerStmt?: Statement): { color: 'green' | 'amber' | 'red'; label: string } {
+function statusPill(s: Statement, newerStmt?: Statement, isLatest = false): { color: 'green' | 'amber' | 'red'; label: string } {
   if (Number(s.amountPaid ?? 0) > 0) return { color: 'green', label: 'Paid' };
   if ((s.rawDataJson as any)?.isPaid === true) return { color: 'green', label: 'Paid' };
-  // The next (more recent) statement's paymentsReceived represents payment for THIS statement.
-  // If that payment covers the amount due, this statement was paid.
+  // Next statement's paymentsReceived covers this amount → was paid
   if (newerStmt) {
     const nextPayments = Number((newerStmt.rawDataJson as any)?.paymentsReceived ?? 0);
     const thisDue = Number(s.amountDue ?? 0);
     if (thisDue > 0 && nextPayments >= thisDue - 0.01) return { color: 'green', label: 'Paid' };
   }
+  // AI explicitly flagged this as past due (reliable — it came from the bill itself)
   if ((s.rawDataJson as any)?.isPastDue === true) return { color: 'red', label: 'Overdue' };
-  if (s.dueDate && isAfter(new Date(), new Date(s.dueDate))) return { color: 'red', label: 'Overdue' };
+  // Date-based overdue only for the current/latest statement — historical bills
+  // default to amber "Due" since we have no payment evidence either way.
+  if (isLatest && s.dueDate && isAfter(new Date(), new Date(s.dueDate))) return { color: 'red', label: 'Overdue' };
   return { color: 'amber', label: 'Due' };
 }
 
@@ -31,6 +33,7 @@ export default function StatementHistoryPanel({ utilityAccountId }: Props) {
   const [rows, setRows] = useState<Statement[]>([]);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [markingPaid, setMarkingPaid] = useState<string | null>(null);
 
   useEffect(() => {
     getStatements({ utilityAccountId })
@@ -48,6 +51,19 @@ export default function StatementHistoryPanel({ utilityAccountId }: Props) {
       alert('Failed to delete statement. Please try again.');
     } finally {
       setDeleting(null);
+    }
+  }
+
+  async function handleMarkPaid(s: Statement) {
+    const isPaid = Number(s.amountPaid ?? 0) > 0;
+    setMarkingPaid(s.id);
+    try {
+      const updated = await patchStatement(s.id, { amountPaid: isPaid ? null : Number(s.amountDue ?? 0) });
+      setRows(prev => prev.map(r => r.id === s.id ? { ...r, amountPaid: updated.amountPaid } : r));
+    } catch {
+      // silently fail — status will just not update
+    } finally {
+      setMarkingPaid(null);
     }
   }
 
@@ -124,10 +140,10 @@ export default function StatementHistoryPanel({ utilityAccountId }: Props) {
             <tbody>
               {rows.map((s, idx) => {
                 const pastDue = s.rawDataJson?.pastDue as number | undefined;
-                // rows is sorted DESC (newest first); rows[idx-1] is the more recent statement
-                // whose paymentsReceived tells us if this statement was paid.
-                const { color, label } = statusPill(s, rows[idx - 1]);
                 const isFirst = idx === 0;
+                // rows sorted DESC: rows[idx-1] is the more recent statement
+                const { color, label } = statusPill(s, rows[idx - 1], isFirst);
+                const isPaid = Number(s.amountPaid ?? 0) > 0 || (s.rawDataJson as any)?.isPaid === true;
                 return (
                   <tr
                     key={s.id}
@@ -165,15 +181,26 @@ export default function StatementHistoryPanel({ utilityAccountId }: Props) {
                       <Pill color={color}>{label}</Pill>
                     </td>
                     <td className="py-2 pl-2">
-                      <button
-                        onClick={() => handleDelete(s.id)}
-                        disabled={deleting === s.id}
-                        title="Delete statement (will be re-fetched on next sync)"
-                        className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-600 hover:text-red-400 disabled:opacity-30"
-                        style={{ fontSize: '14px', lineHeight: 1, padding: '2px 4px', background: 'none', border: 'none', cursor: 'pointer' }}
-                      >
-                        {deleting === s.id ? '…' : '✕'}
-                      </button>
+                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          onClick={() => handleMarkPaid(s)}
+                          disabled={markingPaid === s.id}
+                          title={isPaid ? 'Mark as unpaid' : 'Mark as paid'}
+                          className={`text-xs px-1.5 py-0.5 rounded transition-colors disabled:opacity-30 ${isPaid ? 'text-green-500 hover:text-gray-400' : 'text-gray-500 hover:text-green-400'}`}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', fontWeight: 500 }}
+                        >
+                          {markingPaid === s.id ? '…' : isPaid ? '✓' : '✓ Paid'}
+                        </button>
+                        <button
+                          onClick={() => handleDelete(s.id)}
+                          disabled={deleting === s.id}
+                          title="Delete statement"
+                          className="text-gray-600 hover:text-red-400 disabled:opacity-30"
+                          style={{ fontSize: '14px', lineHeight: 1, padding: '2px 4px', background: 'none', border: 'none', cursor: 'pointer' }}
+                        >
+                          {deleting === s.id ? '…' : '✕'}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );

@@ -200,6 +200,8 @@ export const getStatementDownloadUrl = (id: string) =>
   api.get<{ url: string }>(`/statements/${id}/download`).then(r => r.data);
 export const deleteStatement = (id: string) =>
   api.delete<{ success: boolean }>(`/statements/${id}`).then(r => r.data);
+export const patchStatement = (id: string, data: { amountPaid?: number | null }) =>
+  api.patch(`/statements/${id}`, data).then(r => r.data);
 
 // Utility payments
 export const getPayments = (params: { utilityAccountId?: string; propertyId?: string }) =>

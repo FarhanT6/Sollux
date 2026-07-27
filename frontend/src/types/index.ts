@@ -158,6 +158,18 @@ export interface Expense {
   property?: Pick<Property, 'id' | 'address' | 'nickname'>;
 }
 
+export interface PrepaymentPenaltyTier {
+  startMonth: number;
+  endMonth: number;
+  rate: number;
+}
+
+export interface PrepaymentPenalty {
+  enabled: boolean;
+  periodMonths: number;
+  tiers: PrepaymentPenaltyTier[];
+}
+
 export interface Loan {
   id: string;
   propertyId?: string;
@@ -171,6 +183,8 @@ export interface Loan {
   maturityDate?: string;
   monthlyPayment?: number;
   currentBalance?: number;
+  paymentType?: string;
+  prepaymentPenaltyJson?: PrepaymentPenalty | null;
   notes?: string;
   isPersonal: boolean;
   isActive: boolean;
