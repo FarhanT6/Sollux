@@ -13,18 +13,22 @@ function fmtMoney(v?: number | null) {
 }
 
 function statusPill(s: Statement, newerStmt?: Statement, isLatest = false): { color: 'green' | 'amber' | 'red'; label: string } {
+  // Manual overrides always win
   if (Number(s.amountPaid ?? 0) > 0) return { color: 'green', label: 'Paid' };
   if ((s.rawDataJson as any)?.isPaid === true) return { color: 'green', label: 'Paid' };
-  // Next statement's paymentsReceived covers this amount → was paid
-  if (newerStmt) {
-    const nextPayments = Number((newerStmt.rawDataJson as any)?.paymentsReceived ?? 0);
+
+  if (!isLatest && newerStmt) {
+    // If the next bill's "previous balance" is $0 → this bill was paid in full before the next cycle.
+    // If it's > 0 and roughly equals this amount → this bill rolled over unpaid.
+    const newerPrevBal = Number((newerStmt.rawDataJson as any)?.previousBalance ?? 0);
     const thisDue = Number(s.amountDue ?? 0);
-    if (thisDue > 0 && nextPayments >= thisDue - 0.01) return { color: 'green', label: 'Paid' };
+    if (newerPrevBal === 0) return { color: 'green', label: 'Paid' };
+    if (thisDue > 0 && newerPrevBal >= thisDue - 0.01) return { color: 'amber', label: 'Due' };
+    // Newer bill has a prev balance but it's much less than this amount → this was largely paid
+    return { color: 'green', label: 'Paid' };
   }
-  // AI explicitly flagged this as past due (reliable — it came from the bill itself)
+
   if ((s.rawDataJson as any)?.isPastDue === true) return { color: 'red', label: 'Overdue' };
-  // Date-based overdue only for the current/latest statement — historical bills
-  // default to amber "Due" since we have no payment evidence either way.
   if (isLatest && s.dueDate && isAfter(new Date(), new Date(s.dueDate))) return { color: 'red', label: 'Overdue' };
   return { color: 'amber', label: 'Due' };
 }
