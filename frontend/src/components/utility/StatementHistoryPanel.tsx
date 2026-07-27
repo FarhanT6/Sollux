@@ -18,18 +18,22 @@ function statusPill(s: Statement, newerStmt?: Statement, isLatest = false): { co
   if ((s.rawDataJson as any)?.isPaid === true) return { color: 'green', label: 'Paid' };
 
   if (!isLatest && newerStmt) {
-    // If the next bill's "previous balance" is $0 → this bill was paid in full before the next cycle.
-    // If it's > 0 and roughly equals this amount → this bill rolled over unpaid.
+    // Use next bill's previousBalance to determine if this bill was paid.
+    // $0 prev balance on the next bill = this one was paid in full.
+    // prev balance ≈ this amount = rolled over unpaid.
     const newerPrevBal = Number((newerStmt.rawDataJson as any)?.previousBalance ?? 0);
     const thisDue = Number(s.amountDue ?? 0);
     if (newerPrevBal === 0) return { color: 'green', label: 'Paid' };
-    if (thisDue > 0 && newerPrevBal >= thisDue - 0.01) return { color: 'amber', label: 'Due' };
-    // Newer bill has a prev balance but it's much less than this amount → this was largely paid
+    if (thisDue > 0 && newerPrevBal >= thisDue - 0.01) {
+      // Unpaid and rolled over — past due date = Overdue, otherwise Due
+      const pastDueDate = s.dueDate && isAfter(new Date(), new Date(s.dueDate));
+      return pastDueDate ? { color: 'red', label: 'Overdue' } : { color: 'amber', label: 'Due' };
+    }
     return { color: 'green', label: 'Paid' };
   }
 
   if ((s.rawDataJson as any)?.isPastDue === true) return { color: 'red', label: 'Overdue' };
-  if (isLatest && s.dueDate && isAfter(new Date(), new Date(s.dueDate))) return { color: 'red', label: 'Overdue' };
+  if (s.dueDate && isAfter(new Date(), new Date(s.dueDate))) return { color: 'red', label: 'Overdue' };
   return { color: 'amber', label: 'Due' };
 }
 
@@ -186,15 +190,17 @@ export default function StatementHistoryPanel({ utilityAccountId }: Props) {
                     </td>
                     <td className="py-2 pl-2">
                       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button
-                          onClick={() => handleMarkPaid(s)}
-                          disabled={markingPaid === s.id}
-                          title={isPaid ? 'Mark as unpaid' : 'Mark as paid'}
-                          className={`text-xs px-1.5 py-0.5 rounded transition-colors disabled:opacity-30 ${isPaid ? 'text-green-500 hover:text-gray-400' : 'text-gray-500 hover:text-green-400'}`}
-                          style={{ background: 'none', border: 'none', cursor: 'pointer', fontWeight: 500 }}
-                        >
-                          {markingPaid === s.id ? '…' : isPaid ? '✓' : '✓ Paid'}
-                        </button>
+                        {!isPaid && (
+                          <button
+                            onClick={() => handleMarkPaid(s)}
+                            disabled={markingPaid === s.id}
+                            title="Mark as paid"
+                            className="text-xs px-1.5 py-0.5 rounded transition-colors disabled:opacity-30 text-gray-500 hover:text-green-400"
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', fontWeight: 500 }}
+                          >
+                            {markingPaid === s.id ? '…' : '✓ Paid'}
+                          </button>
+                        )}
                         <button
                           onClick={() => handleDelete(s.id)}
                           disabled={deleting === s.id}

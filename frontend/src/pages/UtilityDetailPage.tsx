@@ -42,17 +42,18 @@ function statementStatus(s: any, payments: any[] = [], newerStmt?: any, isLatest
   if (isStatementPaid(s, payments)) return { color: 'green', label: 'Paid' };
 
   if (!isLatest && newerStmt) {
-    // If the next bill's "previous balance" is $0 → this bill was paid before the next cycle.
-    // If it's ≥ this amount → this bill rolled over unpaid.
     const newerPrevBal = Number((newerStmt.rawDataJson as any)?.previousBalance ?? 0);
     const thisDue = Number(s.amountDue ?? 0);
     if (newerPrevBal === 0) return { color: 'green', label: 'Paid' };
-    if (thisDue > 0 && newerPrevBal >= thisDue - 0.01) return { color: 'amber', label: 'Due' };
+    if (thisDue > 0 && newerPrevBal >= thisDue - 0.01) {
+      const pastDueDate = s.dueDate && isAfter(new Date(), new Date(s.dueDate));
+      return pastDueDate ? { color: 'red', label: 'Overdue' } : { color: 'amber', label: 'Due' };
+    }
     return { color: 'green', label: 'Paid' };
   }
 
   if ((s.rawDataJson as any)?.isPastDue === true) return { color: 'red', label: 'Overdue' };
-  if (isLatest && s.dueDate && isAfter(new Date(), new Date(s.dueDate))) return { color: 'red', label: 'Overdue' };
+  if (s.dueDate && isAfter(new Date(), new Date(s.dueDate))) return { color: 'red', label: 'Overdue' };
   return { color: 'amber', label: 'Due' };
 }
 
@@ -807,15 +808,17 @@ export default function UtilityDetailPage() {
                       </div>
 
                       <div className="flex-shrink-0 flex items-center gap-1.5">
-                        <button
-                          onClick={() => handleMarkPaid(s)}
-                          disabled={markingPaid === s.id}
-                          title={isPaid ? 'Mark as unpaid' : 'Mark as paid'}
-                          className={`text-xs px-2 py-1 rounded transition-colors disabled:opacity-30 ${isPaid ? 'text-green-500 hover:text-gray-400' : 'text-gray-500 hover:text-green-400'}`}
-                          style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
-                        >
-                          {markingPaid === s.id ? '…' : isPaid ? '✓ Paid' : '✓ Mark paid'}
-                        </button>
+                        {!isPaid && (
+                          <button
+                            onClick={() => handleMarkPaid(s)}
+                            disabled={markingPaid === s.id}
+                            title="Mark as paid"
+                            className="text-xs px-2 py-1 rounded transition-colors disabled:opacity-30 text-gray-500 hover:text-green-400"
+                            style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
+                          >
+                            {markingPaid === s.id ? '…' : '✓ Mark paid'}
+                          </button>
+                        )}
                         {s.pdfS3Key && (
                           <button
                             onClick={async () => {
