@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useUser } from '@clerk/clerk-react';
-import { getDashboardSummary, getRecentActivity, getInsights, queryPortfolio, getPlaidItems } from '../api/client';
-import type { DashboardSummary, AIInsight } from '../types';
+import { getDashboardSummary, getRecentActivity, getInsights, queryPortfolio, getPlaidItems, getBankAccounts } from '../api/client';
+import type { DashboardSummary, AIInsight, BankAccount } from '../types';
 import type { PlaidItem } from '../api/client';
 import { StatCard, InsightCard, Skeleton, EmptyState } from '../components/ui';
 import { format } from 'date-fns';
@@ -21,6 +21,7 @@ export default function DashboardPage() {
   const [activity, setActivity] = useState<any>(null);
   const [insights, setInsights] = useState<AIInsight[]>([]);
   const [plaidItems, setPlaidItems] = useState<PlaidItem[]>([]);
+  const [manualAccounts, setManualAccounts] = useState<BankAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddProperty, setShowAddProperty] = useState(false);
 
@@ -40,11 +41,14 @@ export default function DashboardPage() {
       getRecentActivity(),
       getInsights({ unread: true }),
       getPlaidItems().catch(() => []),
-    ]).then(([s, a, i, p]) => {
+      getBankAccounts().catch(() => []),
+    ]).then(([s, a, i, p, ba]) => {
       setSummary(s);
       setActivity(a);
       setInsights(i.slice(0, 4));
       setPlaidItems(p as PlaidItem[]);
+      const plaidIds = new Set((p as PlaidItem[]).flatMap((pi: PlaidItem) => pi.accounts.map((ac: any) => ac.id)));
+      setManualAccounts((ba as any[]).filter((ac: any) => !ac.plaidAccountId && !plaidIds.has(ac.id)));
     }).finally(() => setLoading(false));
   }, []);
 
@@ -125,7 +129,7 @@ export default function DashboardPage() {
         </div>
 
         {/* Cash Position */}
-        {plaidItems.length > 0 && <CashPositionCard items={plaidItems} />}
+        {(plaidItems.length > 0 || manualAccounts.length > 0) && <CashPositionCard items={plaidItems} manualAccounts={manualAccounts} />}
 
         {/* AI Search Bar */}
         <div className="mb-6">
@@ -272,22 +276,36 @@ function EyeIcon({ hidden }: { hidden: boolean }) {
   );
 }
 
-function CashPositionCard({ items }: { items: PlaidItem[] }) {
+const THIRD_PARTY_KEYWORDS = ['venmo', 'apple', 'cash app', 'paypal'];
+function isThirdParty(a: any) {
+  const text = ((a.name || '') + ' ' + (a.bank || '')).toLowerCase();
+  return THIRD_PARTY_KEYWORDS.some(k => text.includes(k));
+}
+
+function CashPositionCard({ items, manualAccounts }: { items: PlaidItem[]; manualAccounts: any[] }) {
   const [hidden, setHidden] = useState(() => sessionStorage.getItem('sollux_bal_vis') !== '1');
-  const accounts = items.flatMap(i => i.accounts).filter(a => a.isActive);
-  const depositAccounts = accounts.filter(a => a.accountType !== 'CREDIT_CARD');
-  const creditAccounts  = accounts.filter(a => a.accountType === 'CREDIT_CARD');
+  const plaidAccounts = items.flatMap(i => i.accounts).filter(a => a.isActive);
+  const bankAccounts  = plaidAccounts.filter(a => a.accountType !== 'CREDIT_CARD');
+  const creditAccounts = plaidAccounts.filter(a => a.accountType === 'CREDIT_CARD');
+  const thirdPartyAccounts = manualAccounts.filter(a => a.isActive && isThirdParty(a));
+  const cashAccounts = manualAccounts.filter(a => a.isActive && !isThirdParty(a) && a.accountType !== 'CREDIT_CARD');
 
-  const totalCash   = depositAccounts.reduce((s, a) => s + Number(a.balances[0]?.available ?? a.balances[0]?.balance ?? 0), 0);
-  const totalCredit = creditAccounts.reduce((s, a) => s + Number(a.balances[0]?.balance ?? 0), 0);
+  const bankTotal       = bankAccounts.reduce((s, a) => s + Number(a.balances[0]?.available ?? a.balances[0]?.balance ?? 0), 0);
+  const thirdPartyTotal = thirdPartyAccounts.reduce((s, a) => s + Number((a as any).balances?.[0]?.balance ?? 0), 0);
+  const cashTotal       = cashAccounts.reduce((s, a) => s + Number((a as any).balances?.[0]?.balance ?? 0), 0);
+  const grandTotal      = bankTotal + thirdPartyTotal + cashTotal;
+  const creditTotal     = creditAccounts.reduce((s, a) => s + Number(a.balances[0]?.balance ?? 0), 0);
 
-  const lastSync = items
-    .map(i => i.lastSyncedAt)
-    .filter(Boolean)
-    .sort()
-    .at(-1);
+  const lastSync = items.map(i => i.lastSyncedAt).filter(Boolean).sort().at(-1);
+  const mask = '••••';
 
-  const mask = '••••••';
+  const buckets = [
+    { label: 'Banks', total: bankTotal, count: bankAccounts.length, unit: 'accounts' },
+    { label: '3rd party', total: thirdPartyTotal, count: thirdPartyAccounts.length, unit: 'services' },
+    { label: 'Cash', total: cashTotal, count: cashAccounts.length, unit: 'accounts' },
+  ].filter(b => b.count > 0);
+
+  const allDisplayAccounts = [...bankAccounts, ...thirdPartyAccounts, ...cashAccounts, ...creditAccounts];
 
   return (
     <div className="mb-6">
@@ -296,10 +314,11 @@ function CashPositionCard({ items }: { items: PlaidItem[] }) {
         <Link to="/settings?tab=banking" className="text-xs text-gold-500 hover:underline">Manage accounts →</Link>
       </div>
       <div className="card p-4">
+        {/* Grand total + toggle */}
         <div className="flex items-start justify-between mb-4">
           <div>
             <div className="flex items-center gap-1.5 mb-0.5">
-              <p className="text-xs text-gray-400">Available cash</p>
+              <p className="text-xs text-gray-400">Total available</p>
               <button
                 onClick={() => setHidden(h => { const next = !h; sessionStorage.setItem('sollux_bal_vis', next ? '0' : '1'); return next; })}
                 className="text-gray-600 hover:text-gray-400 transition-colors"
@@ -308,31 +327,42 @@ function CashPositionCard({ items }: { items: PlaidItem[] }) {
                 <EyeIcon hidden={hidden} />
               </button>
             </div>
-            <p className="text-2xl font-semibold text-white">{hidden ? mask : money(totalCash)}</p>
+            <p className="text-2xl font-semibold text-white">{hidden ? '••••••' : money(grandTotal)}</p>
             {creditAccounts.length > 0 && (
               <p className="text-xs text-gray-500 mt-0.5">
-                {hidden ? mask : money(totalCredit)} credit balance outstanding
+                {hidden ? mask : money(creditTotal)} credit outstanding
               </p>
             )}
           </div>
           {lastSync && (
-            <span className="text-xs text-gray-600">
-              Synced {new Date(lastSync).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-            </span>
+            <span className="text-xs text-gray-600">Synced {new Date(lastSync).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
           )}
         </div>
-        <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(accounts.length, 4)}, 1fr)` }}>
-          {accounts.slice(0, 8).map(acct => {
-            const bal = acct.balances[0];
+
+        {/* 3-bucket breakdown */}
+        {buckets.length > 1 && (
+          <div className="grid gap-2 mb-4" style={{ gridTemplateColumns: `repeat(${buckets.length}, 1fr)` }}>
+            {buckets.map(b => (
+              <div key={b.label} className="rounded-lg p-2.5" style={{ background: 'rgba(255,255,255,0.04)' }}>
+                <p className="text-xs text-gray-500 mb-1">{b.label}</p>
+                <p className="text-sm font-semibold text-white">{hidden ? mask : money(b.total)}</p>
+                <p className="text-xs text-gray-600 mt-0.5">{b.count} {b.unit}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Individual account chips */}
+        <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(allDisplayAccounts.length, 4)}, 1fr)` }}>
+          {allDisplayAccounts.slice(0, 8).map((acct: any) => {
+            const bal = acct.balances?.[0];
             const displayBal = acct.accountType === 'CREDIT_CARD'
               ? Number(bal?.balance ?? 0)
               : Number(bal?.available ?? bal?.balance ?? 0);
             return (
-              <div key={acct.id} className="rounded-lg p-2.5" style={{ background: 'rgba(255,255,255,0.04)' }}>
+              <div key={acct.id} className="rounded-lg p-2.5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}>
                 <p className="text-xs text-gray-400 truncate mb-0.5">{acct.name}</p>
-                {acct.ownerLabel && (
-                  <p className="text-xs text-amber-500/70 mb-0.5">{acct.ownerLabel}</p>
-                )}
+                {acct.ownerLabel && <p className="text-xs text-amber-500/70 mb-0.5">{acct.ownerLabel}</p>}
                 <p className={`text-sm font-semibold ${acct.accountType === 'CREDIT_CARD' ? 'text-red-400' : 'text-white'}`}>
                   {hidden ? mask : acct.accountType === 'CREDIT_CARD' ? `(${money(displayBal)})` : money(displayBal)}
                 </p>

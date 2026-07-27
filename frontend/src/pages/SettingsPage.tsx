@@ -549,45 +549,82 @@ function BankingTab() {
     } catch { } finally { setSavingBal(false); }
   }
 
-  const allPlaidAccounts = items.flatMap(i => i.accounts);
-  const totalCash = [
-    ...allPlaidAccounts.filter(a => a.accountType !== 'CREDIT_CARD' && a.isActive)
-      .map(a => Number(a.balances[0]?.available ?? a.balances[0]?.balance ?? 0)),
-    ...manualAccounts.filter(a => a.accountType !== 'CREDIT_CARD' && a.isActive)
-      .map(a => Number((a as any).balances?.[0]?.balance ?? 0)),
-  ].reduce((s, v) => s + v, 0);
+  const THIRD_PARTY_KW = ['venmo', 'apple', 'cash app', 'paypal'];
+  const isTP = (a: any) => {
+    const t = ((a.name || '') + ' ' + (a.bank || '')).toLowerCase();
+    return THIRD_PARTY_KW.some(k => t.includes(k));
+  };
+
+  const allPlaidAccounts  = items.flatMap(i => i.accounts);
+  const plaidDeposit      = allPlaidAccounts.filter(a => a.accountType !== 'CREDIT_CARD' && a.isActive);
+  const plaidCredit       = allPlaidAccounts.filter(a => a.accountType === 'CREDIT_CARD' && a.isActive);
+  const thirdPartyAccts   = manualAccounts.filter(a => a.isActive && isTP(a));
+  const cashAccts         = manualAccounts.filter(a => a.isActive && !isTP(a) && a.accountType !== 'CREDIT_CARD');
+
+  const bankTotal       = plaidDeposit.reduce((s, a) => s + Number(a.balances[0]?.available ?? a.balances[0]?.balance ?? 0), 0);
+  const thirdPartyTotal = thirdPartyAccts.reduce((s, a) => s + Number((a as any).balances?.[0]?.balance ?? 0), 0);
+  const cashOnHandTotal = cashAccts.reduce((s, a) => s + Number((a as any).balances?.[0]?.balance ?? 0), 0);
+  const grandTotal      = bankTotal + thirdPartyTotal + cashOnHandTotal;
+
+  const buckets = [
+    { label: 'Banks', total: bankTotal, count: plaidDeposit.length, sub: 'connected accounts' },
+    { label: '3rd party', total: thirdPartyTotal, count: thirdPartyAccts.length, sub: 'payment services' },
+    { label: 'Cash', total: cashOnHandTotal, count: cashAccts.length, sub: 'on hand' },
+  ].filter(b => b.count > 0);
+
+  const EyeBtn = () => (
+    <button onClick={toggleBal} title={balVisible ? 'Hide balances' : 'Show balances'}
+      className="text-xs px-2.5 py-1.5 rounded-lg transition-colors text-gray-400 hover:text-white"
+      style={{ background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)' }}>
+      {balVisible ? (
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/>
+        </svg>
+      ) : (
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+        </svg>
+      )}
+    </button>
+  );
 
   return (
     <div className="px-6 py-5 max-w-2xl">
       {/* Summary */}
       {(allPlaidAccounts.length > 0 || manualAccounts.length > 0) && (
-        <div className="card p-4 mb-4 flex items-center justify-between">
-          <div>
-            <p className="text-xs text-gray-400 mb-0.5">Total available cash</p>
-            <p className="text-2xl font-semibold text-white">{balVisible ? money(totalCash) : '••••••'}</p>
-            <p className="text-xs text-gray-500">
-              Across {allPlaidAccounts.filter(a => a.accountType !== 'CREDIT_CARD').length + manualAccounts.filter(a => a.accountType !== 'CREDIT_CARD').length} deposit accounts
-            </p>
-          </div>
-          <div className="flex flex-col items-end gap-2">
-            <div className="flex gap-2">
-              <button onClick={toggleBal} title={balVisible ? 'Hide balances' : 'Show balances'}
-                className="text-xs px-2.5 py-1.5 rounded-lg transition-colors text-gray-400 hover:text-white"
-                style={{ background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)' }}>
-                {balVisible ? (
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/>
-                  </svg>
-                ) : (
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
-                  </svg>
-                )}
-              </button>
-              <button onClick={handleSync} disabled={syncing} className="btn text-xs">{syncing ? 'Syncing…' : '↻ Sync now'}</button>
+        <div className="mb-4">
+          {/* Grand total */}
+          <div className="card p-4 mb-3 flex items-center justify-between">
+            <div>
+              <p className="text-xs text-gray-400 mb-0.5">Total available</p>
+              <p className="text-2xl font-semibold text-white">{balVisible ? money(grandTotal) : '••••••'}</p>
+              {plaidCredit.length > 0 && (
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {balVisible ? money(plaidCredit.reduce((s, a) => s + Number(a.balances[0]?.balance ?? 0), 0)) : '••••'} credit outstanding
+                </p>
+              )}
             </div>
-            {syncMsg && <p className="text-xs text-emerald-400">{syncMsg}</p>}
+            <div className="flex flex-col items-end gap-2">
+              <div className="flex gap-2">
+                <EyeBtn />
+                <button onClick={handleSync} disabled={syncing} className="btn text-xs">{syncing ? 'Syncing…' : '↻ Sync now'}</button>
+              </div>
+              {syncMsg && <p className="text-xs text-emerald-400">{syncMsg}</p>}
+            </div>
           </div>
+
+          {/* 3 buckets */}
+          {buckets.length > 0 && (
+            <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${buckets.length}, 1fr)` }}>
+              {buckets.map(b => (
+                <div key={b.label} className="card p-3">
+                  <p className="text-xs text-gray-500 mb-1">{b.label}</p>
+                  <p className="text-base font-semibold text-white">{balVisible ? money(b.total) : '••••'}</p>
+                  <p className="text-xs text-gray-600 mt-0.5">{b.count} {b.sub}</p>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
