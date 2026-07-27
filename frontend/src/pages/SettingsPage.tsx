@@ -414,7 +414,11 @@ function BankingTab() {
                 </button>
               </div>
               <div className="space-y-2">
-                {item.accounts.map(acct => {
+                {item.accounts
+                  .filter((acct, idx, arr) =>
+                    arr.findIndex(a => a.name === acct.name && a.last4 === acct.last4) === idx
+                  )
+                  .map(acct => {
                   const bal = acct.balances[0];
                   const displayBal = acct.accountType === 'CREDIT_CARD'
                     ? Number(bal?.balance ?? 0)
