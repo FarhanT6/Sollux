@@ -135,6 +135,7 @@ model UtilityAccount {
   payments     Payment[]
   insights     AIInsight[]
   paymentPlan  PaymentPlan?
+  loan         Loan?
 
   @@map("utility_accounts")
 }
@@ -559,24 +560,26 @@ enum ExpenseCategory {
 
 // ─── LOANS ───────────────────────────────────────────────
 model Loan {
-  id              String    @id @default(cuid())
-  propertyId      String?
-  property        Property? @relation(fields: [propertyId], references: [id])
-  userId          String
-  loanType        LoanType
-  lender          String
-  accountLast4    String?
-  originalAmount  Decimal?  @db.Decimal(14, 2)
-  interestRate    Decimal?  @db.Decimal(6, 3)
-  originationDate DateTime?
-  maturityDate    DateTime?
-  monthlyPayment  Decimal?  @db.Decimal(10, 2)
-  currentBalance  Decimal?  @db.Decimal(14, 2)
-  notes           String?
-  isPersonal      Boolean   @default(false)
-  isActive        Boolean   @default(true)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id                 String          @id @default(cuid())
+  propertyId         String?
+  property           Property?       @relation(fields: [propertyId], references: [id])
+  utilityAccountId   String?         @unique
+  utilityAccount     UtilityAccount? @relation(fields: [utilityAccountId], references: [id], onDelete: SetNull)
+  userId             String
+  loanType           LoanType
+  lender             String
+  accountLast4       String?
+  originalAmount     Decimal?        @db.Decimal(14, 2)
+  interestRate       Decimal?        @db.Decimal(6, 3)
+  originationDate    DateTime?
+  maturityDate       DateTime?
+  monthlyPayment     Decimal?        @db.Decimal(10, 2)
+  currentBalance     Decimal?        @db.Decimal(14, 2)
+  notes              String?
+  isPersonal         Boolean         @default(false)
+  isActive           Boolean         @default(true)
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
 
   loanPayments LoanPayment[]
 

@@ -244,10 +244,11 @@ function loadGooglePicker(): Promise<void> {
   return gapiLoadPromise;
 }
 
-function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed }: {
+function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed, onProgress }: {
   onResolved:     (bills: ParsedBill[], properties: PropertyWithAccounts[], autoImported: number) => void;
   onStreamStart?: (properties: PropertyWithAccounts[], autoImported: number) => void;
   onBillStreamed?:(bill: ParsedBill) => void;
+  onProgress?:    (done: number, total: number) => void;
 }) {
   const [status, setStatus] = useState<{ connected: boolean; accounts: { id: string; email: string }[] } | null>(null);
   const [tokenId, setTokenId] = useState('');
@@ -353,6 +354,7 @@ function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed }: {
       let done    = false;
       let started = false;
       let counted = 0;
+      let total   = 0;  // local var so it's always current inside the loop
 
       while (!done) {
         const { value, done: streamDone } = await reader.read();
@@ -368,21 +370,25 @@ function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed }: {
           const event = JSON.parse(line.slice(6));
 
           if (event.type === 'total') {
-            setStreamTotal(event.count);
+            total = event.count;
+            setStreamTotal(total);
+            onProgress?.(0, total);
           } else if (event.type === 'bill') {
             counted++;
             setStreamDone(counted);
+            onProgress?.(counted, total);
             if (!started) {
-              onStreamStart?.({} as any, 0); // switch to review stage immediately
+              onStreamStart?.({} as any, 0);
               started = true;
             }
             onBillStreamed?.({ filename: event.filename, extracted: event.extracted, match: event.match, fileData: event.fileData });
           } else if (event.type === 'auto_imported') {
             counted++;
             setStreamDone(counted);
+            onProgress?.(counted, total);
           } else if (event.type === 'done') {
+            onProgress?.(total, total);  // mark complete
             if (!started) {
-              // All auto-imported, nothing to review
               onResolved([], event.properties || [], event.autoImported ?? 0);
             } else {
               onStreamStart?.(event.properties || [], event.autoImported ?? 0);
@@ -1022,13 +1028,14 @@ async function refreshAccounts(): Promise<PropertyWithAccounts[]> {
 }
 
 export default function ImportPage() {
-  const [stage, setStage]           = useState<Stage>('drop');
-  const [bills, setBills]           = useState<ParsedBill[]>([]);
-  const [properties, setProperties] = useState<PropertyWithAccounts[]>([]);
-  const [result, setResult]         = useState<{ imported: number; skipped: number; errors: string[] } | null>(null);
-  const [driveNote, setDriveNote]   = useState<string | null>(null);
-  const [progress, setProgress]     = useState('');
-  const [refreshing, setRefreshing] = useState(false);
+  const [stage, setStage]                   = useState<Stage>('drop');
+  const [bills, setBills]                   = useState<ParsedBill[]>([]);
+  const [properties, setProperties]         = useState<PropertyWithAccounts[]>([]);
+  const [result, setResult]                 = useState<{ imported: number; skipped: number; errors: string[] } | null>(null);
+  const [driveNote, setDriveNote]           = useState<string | null>(null);
+  const [progress, setProgress]             = useState('');
+  const [refreshing, setRefreshing]         = useState(false);
+  const [driveProgress, setDriveProgress]   = useState<{ done: number; total: number } | null>(null);
 
   const handleRefreshAccounts = async () => {
     setRefreshing(true);
@@ -1209,6 +1216,14 @@ export default function ImportPage() {
     setBills(prev => [...prev, bill]);
   };
 
+  const handleDriveProgress = (done: number, total: number) => {
+    if (total > 0 && done < total) {
+      setDriveProgress({ done, total });
+    } else {
+      setDriveProgress(null);
+    }
+  };
+
   const handleImport = async () => {
     const ready = bills.filter(isBillReady);
     if (ready.length === 0) return;
@@ -1243,6 +1258,7 @@ export default function ImportPage() {
     setResult(null);
     setProgress('');
     setDriveNote(null);
+    setDriveProgress(null);
   };
 
   const readyCount      = bills.filter(isBillReady).length;
@@ -1265,6 +1281,7 @@ export default function ImportPage() {
               onResolved={handleDriveResolved}
               onStreamStart={handleDriveStreamStart}
               onBillStreamed={handleDriveBillStreamed}
+              onProgress={handleDriveProgress}
             />
             <Dropzone onFiles={handleFiles} />
           </>
@@ -1285,7 +1302,21 @@ export default function ImportPage() {
             {driveNote && (
               <div className="text-xs text-blue-400 bg-blue-500/10 rounded-lg px-4 py-2.5">{driveNote}</div>
             )}
-            {/* Live progress bar while streaming */}
+            {/* Drive streaming progress */}
+            {driveProgress && (
+              <div className="rounded-xl p-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="w-4 h-4 border-2 border-amber-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                  <p className="text-sm font-medium text-gray-200">
+                    Processing {driveProgress.done} / {driveProgress.total} files from Drive...
+                  </p>
+                </div>
+                <div className="w-full h-1.5 rounded-full bg-white/10 overflow-hidden">
+                  <div className="h-full bg-amber-500 transition-all" style={{ width: `${Math.round((driveProgress.done / driveProgress.total) * 100)}%` }} />
+                </div>
+              </div>
+            )}
+            {/* Direct upload live progress bar */}
             {progress && (
               <div className="flex items-center gap-3 rounded-lg px-4 py-2.5" style={{ background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.2)' }}>
                 <div className="w-4 h-4 border-2 border-amber-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />

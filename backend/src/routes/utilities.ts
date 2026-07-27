@@ -104,6 +104,7 @@ router.get('/:id', async (req, res, next) => {
         property: { select: { id: true, address: true, nickname: true, city: true, state: true } },
         statements: { orderBy: { statementDate: 'desc' }, take: 24 },
         payments: { orderBy: { paymentDate: 'desc' }, take: 200 },
+        loan: true,
       },
     });
     if (!account) return res.status(404).json({ error: 'Not found' });
@@ -280,6 +281,76 @@ router.delete('/:id/payment-plan', async (req, res, next) => {
     if (!account) return res.status(404).json({ error: 'Not found' });
 
     await db.paymentPlan.deleteMany({ where: { utilityAccountId: req.params.id } });
+    res.status(204).send();
+  } catch (err) { next(err); }
+});
+
+// ── Loan linked to this utility account ──────────────────────────────────────
+
+// PUT /api/utilities/:id/loan  — create or update the linked loan
+router.put('/:id/loan', async (req, res, next) => {
+  try {
+    const account = await requireOwnedAccount(req.params.id, req.dbUserId!);
+    if (!account) return res.status(404).json({ error: 'Not found' });
+
+    const {
+      loanType, lender, accountLast4, originalAmount, interestRate,
+      originationDate, maturityDate, monthlyPayment, currentBalance, notes,
+    } = req.body;
+
+    const existing = await db.loan.findUnique({ where: { utilityAccountId: req.params.id } });
+
+    if (existing) {
+      const updated = await db.loan.update({
+        where: { id: existing.id },
+        data: {
+          loanType:       loanType       ?? existing.loanType,
+          lender:         lender         ?? existing.lender,
+          accountLast4:   accountLast4   ?? existing.accountLast4,
+          originalAmount: originalAmount != null ? originalAmount : existing.originalAmount,
+          interestRate:   interestRate   != null ? interestRate   : existing.interestRate,
+          originationDate: originationDate ? new Date(originationDate) : existing.originationDate,
+          maturityDate:   maturityDate   ? new Date(maturityDate)   : existing.maturityDate,
+          monthlyPayment: monthlyPayment != null ? monthlyPayment : existing.monthlyPayment,
+          currentBalance: currentBalance != null ? currentBalance : existing.currentBalance,
+          notes:          notes          ?? existing.notes,
+        },
+      });
+      return res.json(updated);
+    }
+
+    const created = await db.loan.create({
+      data: {
+        userId:          req.dbUserId!,
+        propertyId:      account.propertyId,
+        utilityAccountId: req.params.id,
+        loanType:        loanType || 'OTHER',
+        lender:          lender   || account.providerName,
+        accountLast4,
+        originalAmount,
+        interestRate,
+        originationDate: originationDate ? new Date(originationDate) : null,
+        maturityDate:    maturityDate    ? new Date(maturityDate)    : null,
+        monthlyPayment,
+        currentBalance,
+        notes,
+        isPersonal: false,
+      },
+    });
+    return res.json(created);
+  } catch (err) { next(err); }
+});
+
+// DELETE /api/utilities/:id/loan
+router.delete('/:id/loan', async (req, res, next) => {
+  try {
+    const account = await requireOwnedAccount(req.params.id, req.dbUserId!);
+    if (!account) return res.status(404).json({ error: 'Not found' });
+
+    await db.loan.updateMany({
+      where: { utilityAccountId: req.params.id },
+      data: { utilityAccountId: null },
+    });
     res.status(204).send();
   } catch (err) { next(err); }
 });

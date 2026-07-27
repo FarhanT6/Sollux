@@ -259,6 +259,12 @@ export const updatePaymentPlan = (utilityAccountId: string, data: {
 export const deletePaymentPlan = (utilityAccountId: string) =>
   api.delete(`/utilities/${utilityAccountId}/payment-plan`);
 
+// Loan linked to utility account
+export const upsertUtilityLoan = (utilityAccountId: string, data: Record<string, unknown>) =>
+  api.put(`/utilities/${utilityAccountId}/loan`, data).then(r => r.data);
+export const deleteUtilityLoan = (utilityAccountId: string) =>
+  api.delete(`/utilities/${utilityAccountId}/loan`);
+
 // Bank Accounts
 export const getBankAccounts = () =>
   api.get<BankAccount[]>('/bank-accounts').then(r => r.data);
