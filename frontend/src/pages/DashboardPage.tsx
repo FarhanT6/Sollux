@@ -273,7 +273,7 @@ function EyeIcon({ hidden }: { hidden: boolean }) {
 }
 
 function CashPositionCard({ items }: { items: PlaidItem[] }) {
-  const [hidden, setHidden] = useState(false);
+  const [hidden, setHidden] = useState(() => sessionStorage.getItem('sollux_bal_vis') !== '1');
   const accounts = items.flatMap(i => i.accounts).filter(a => a.isActive);
   const depositAccounts = accounts.filter(a => a.accountType !== 'CREDIT_CARD');
   const creditAccounts  = accounts.filter(a => a.accountType === 'CREDIT_CARD');
@@ -301,7 +301,7 @@ function CashPositionCard({ items }: { items: PlaidItem[] }) {
             <div className="flex items-center gap-1.5 mb-0.5">
               <p className="text-xs text-gray-400">Available cash</p>
               <button
-                onClick={() => setHidden(h => !h)}
+                onClick={() => setHidden(h => { const next = !h; sessionStorage.setItem('sollux_bal_vis', next ? '0' : '1'); return next; })}
                 className="text-gray-600 hover:text-gray-400 transition-colors"
                 title={hidden ? 'Show balances' : 'Hide balances'}
               >
