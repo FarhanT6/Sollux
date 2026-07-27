@@ -164,9 +164,9 @@ function parseDate(s: string): string | null {
 
 // Search the full text for a label and return the dollar amount near it
 function findDollarNear(text: string, labels: RegExp[]): number | null {
+  const suffix = '[\\s\\S]{0,80}?\\$?\\s*([\\d,]+\\.\\d{2})';
   for (const label of labels) {
-    // Look for label followed by $amount on same line or next 2 lines
-    const m = text.match(new RegExp(label.source + r`[\s\S]{0,80}?\$?\s*([\d,]+\.\d{2})`, label.flags));
+    const m = text.match(new RegExp(label.source + suffix, label.flags));
     if (m) {
       const n = parseFloat(m[1].replace(/,/g, ''));
       if (!isNaN(n)) return n;
@@ -175,11 +175,10 @@ function findDollarNear(text: string, labels: RegExp[]): number | null {
   return null;
 }
 
-function r(strings: TemplateStringsArray): string { return strings[0]; }
-
 function findDateNear(text: string, labels: RegExp[]): string | null {
+  const suffix = '[\\s\\S]{0,60}?(\\d{1,2}[\\/\\-]\\d{1,2}[\\/\\-]\\d{2,4}|\\w{3,9}\\s+\\d{1,2},?\\s+\\d{4})';
   for (const label of labels) {
-    const m = text.match(new RegExp(label.source + r`[\s\S]{0,60}?(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\w{3,9}\s+\d{1,2},?\s+\d{4})`, label.flags));
+    const m = text.match(new RegExp(label.source + suffix, label.flags));
     if (m) {
       const d = parseDate(m[1]);
       if (d) return d;
@@ -189,8 +188,9 @@ function findDateNear(text: string, labels: RegExp[]): string | null {
 }
 
 function findTextNear(text: string, labels: RegExp[]): string | null {
+  const suffix = '[:\\s]+([^\\n\\r]{2,60})';
   for (const label of labels) {
-    const m = text.match(new RegExp(label.source + r`[:\s]+([^\n\r]{2,60})`, label.flags));
+    const m = text.match(new RegExp(label.source + suffix, label.flags));
     if (m) return m[1].trim();
   }
   return null;

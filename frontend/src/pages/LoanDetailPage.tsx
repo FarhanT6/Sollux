@@ -582,6 +582,11 @@ export default function LoanDetailPage() {
             {loan.property && (
               <> &middot; <Link to={`/properties/${loan.property.id}`} className="text-amber-400 hover:text-amber-300">{loan.property.nickname || loan.property.address}</Link></>
             )}
+            {(loan as any).utilityAccount && (
+              <> &middot; <Link to={`/utilities/${(loan as any).utilityAccount.id}`} className="text-indigo-400 hover:text-indigo-300">
+                Linked: {(loan as any).utilityAccount.providerName}
+              </Link></>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2">
