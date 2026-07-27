@@ -277,6 +277,13 @@ function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed, onProgres
   const [streaming, setStreaming] = useState(false);
   const [streamTotal, setStreamTotal] = useState(0);
   const [streamDone, setStreamDone]   = useState(0);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const cancelStream = () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setStreaming(false);
+  };
 
   const openPicker = async () => {
     const apiKey = import.meta.env.VITE_GOOGLE_PICKER_API_KEY;
@@ -332,6 +339,9 @@ function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed, onProgres
     setStreamDone(0);
     setDriveError(null);
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
       // @ts-ignore
       const token = await window.Clerk?.session?.getToken();
@@ -344,6 +354,7 @@ function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed, onProgres
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({ tokenId: tId, folderId, fileIds }),
+        signal: controller.signal,
       });
 
       if (!response.ok || !response.body) throw new Error('Stream failed');
@@ -381,7 +392,7 @@ function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed, onProgres
               onStreamStart?.({} as any, 0);
               started = true;
             }
-            onBillStreamed?.({ filename: event.filename, extracted: event.extracted, match: event.match, fileData: event.fileData });
+            onBillStreamed?.({ filename: event.filename, extracted: event.extracted, match: event.match, fileData: event.fileData, error: event.error });
           } else if (event.type === 'auto_imported') {
             counted++;
             setStreamDone(counted);
@@ -397,8 +408,11 @@ function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed, onProgres
         }
       }
     } catch (err) {
-      setDriveError(`Import failed: ${(err as Error).message}`);
+      if ((err as Error).name !== 'AbortError') {
+        setDriveError(`Import failed: ${(err as Error).message}`);
+      }
     } finally {
+      abortRef.current = null;
       setStreaming(false);
     }
   };
@@ -423,13 +437,22 @@ function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed, onProgres
     const pct = streamTotal > 0 ? Math.round((streamDone / streamTotal) * 100) : 0;
     return (
       <div className="rounded-xl p-5 mb-5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
-        <div className="flex items-center gap-3 mb-3">
-          <div className="w-4 h-4 border-2 border-amber-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
-          <p className="text-sm font-medium text-gray-200">
-            {streamTotal > 0
-              ? `Processing ${folderName}  -  ${streamDone} / ${streamTotal} files`
-              : 'Connecting to Drive...'}
-          </p>
+        <div className="flex items-center justify-between gap-3 mb-3">
+          <div className="flex items-center gap-3">
+            <div className="w-4 h-4 border-2 border-amber-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+            <p className="text-sm font-medium text-gray-200">
+              {streamTotal > 0
+                ? `Processing ${folderName}  -  ${streamDone} / ${streamTotal} files`
+                : 'Connecting to Drive...'}
+            </p>
+          </div>
+          <button
+            onClick={cancelStream}
+            className="text-xs px-3 py-1 rounded-lg transition-colors text-gray-400 hover:text-red-400"
+            style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)' }}
+          >
+            Cancel
+          </button>
         </div>
         {streamTotal > 0 && (
           <div className="w-full h-1.5 rounded-full bg-white/10 overflow-hidden">
