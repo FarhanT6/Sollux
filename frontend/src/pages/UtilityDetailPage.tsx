@@ -26,7 +26,7 @@ function fmtMoney(v?: number | string | null) {
 // the statement date; if the sum covers the open balance, treat as paid.
 function isStatementPaid(s: any, payments: any[] = []): boolean {
   const raw = s.rawDataJson as any;
-  if (Number(s.amountPaid ?? 0) > 0 || raw?.isPaid === true) return true;
+  if (s.amountPaid != null || raw?.isPaid === true) return true;
   const openBalance = (raw?.accountBalance ?? raw?.totalDue ?? s.balance ?? s.amountDue) as number | undefined;
   if (openBalance == null) return false;
   if (openBalance <= 0.01) return true;
@@ -476,7 +476,7 @@ export default function UtilityDetailPage() {
   }, [accountId]);
 
   async function handleMarkPaid(s: any) {
-    const isPaid = Number(s.amountPaid ?? 0) > 0;
+    const isPaid = s.amountPaid != null;
     setMarkingPaid(s.id);
     try {
       const updated = await patchStatement(s.id, { amountPaid: isPaid ? null : Number(s.amountDue ?? 0) });
@@ -769,7 +769,7 @@ export default function UtilityDetailPage() {
                                       ? Number(raw?.accountBalance ?? raw?.totalDue) : null;
                   const prevBal     = raw?.previousBalance != null ? Number(raw.previousBalance) : null;
                   const currentBill = raw?.currentBill   != null ? Number(raw.currentBill)   : null;
-                  const isPaid = Number(s.amountPaid ?? 0) > 0 || (s.rawDataJson as any)?.isPaid === true;
+                  const isPaid = s.amountPaid != null || (s.rawDataJson as any)?.isPaid === true;
                   return (
                     <div key={s.id} className="rounded-xl px-5 py-4 flex items-center gap-4"
                       style={{

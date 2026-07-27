@@ -1,7 +1,15 @@
 import { useUser, useClerk } from '@clerk/clerk-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { usePlaidLink } from 'react-plaid-link';
+import {
+  DndContext, closestCenter, PointerSensor, useSensor, useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  arrayMove, SortableContext, verticalListSortingStrategy, useSortable,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { PageHeader } from '../components/ui';
 import api, {
   getGmailConnectUrl,
@@ -11,8 +19,14 @@ import api, {
   getPlaidItems,
   deletePlaidItem,
   syncPlaidBalances,
+  getBankAccounts,
+  createBankAccount,
+  updateBankAccount,
+  deleteBankAccount,
+  recordBankBalance,
 } from '../api/client';
 import type { PlaidItem } from '../api/client';
+import type { BankAccount } from '../types';
 
 type SettingsTab = 'account' | 'notifications' | 'banking';
 
@@ -280,8 +294,390 @@ const fmtDate = (d: string | null | undefined) =>
   d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
 
 const ACCOUNT_TYPE_LABELS: Record<string, string> = {
-  CHECKING: 'Checking', SAVINGS: 'Savings', CREDIT_CARD: 'Credit card', CASH_POOL: 'Cash',
+  CHECKING: 'Checking', SAVINGS: 'Savings', CREDIT_CARD: 'Credit card', CASH_POOL: 'Cash / Wallet',
 };
+
+const MANUAL_PRESETS = [
+  { name: 'Venmo',        bank: 'Venmo',    accountType: 'CASH_POOL' as const },
+  { name: 'Apple Cash',   bank: 'Apple',    accountType: 'CASH_POOL' as const },
+  { name: 'Cash App',     bank: 'Cash App', accountType: 'CASH_POOL' as const },
+  { name: 'PayPal',       bank: 'PayPal',   accountType: 'CASH_POOL' as const },
+  { name: 'Cash on Hand', bank: '',         accountType: 'CASH_POOL' as const },
+];
+
+// ── Sortable Plaid institution card ──────────────────────────────────────────
+function SortablePlaidCard({
+  item, balVisible, disp, onDisconnect,
+}: {
+  item: PlaidItem;
+  balVisible: boolean;
+  disp: (n: number | null | undefined) => string;
+  onDisconnect: (id: string, name: string) => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.id });
+  const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 };
+
+  const accounts = item.accounts.filter((acct, idx, arr) =>
+    arr.findIndex(a => a.name === acct.name && a.last4 === acct.last4) === idx
+  );
+
+  return (
+    <div ref={setNodeRef} style={style} className="card p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <button
+            className="text-gray-600 hover:text-gray-400 cursor-grab active:cursor-grabbing touch-none select-none px-1"
+            title="Drag to reorder"
+            {...attributes} {...listeners}
+          >
+            <svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor">
+              <circle cx="2" cy="2" r="1.5"/><circle cx="8" cy="2" r="1.5"/>
+              <circle cx="2" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/>
+              <circle cx="2" cy="14" r="1.5"/><circle cx="8" cy="14" r="1.5"/>
+            </svg>
+          </button>
+          <div>
+            <p className="text-sm font-semibold text-white">{item.institutionName}</p>
+            <p className="text-xs text-gray-500">Last synced: {item.lastSyncedAt ? fmtDate(item.lastSyncedAt) : 'Never'}</p>
+          </div>
+        </div>
+        <button
+          onClick={() => onDisconnect(item.id, item.institutionName)}
+          className="text-xs text-red-400 hover:text-red-300 border border-red-500/20 hover:border-red-500/40 rounded-lg px-2.5 py-1.5 transition-colors"
+        >Disconnect</button>
+      </div>
+      <div className="space-y-2">
+        {accounts.map(acct => {
+          const bal = acct.balances[0];
+          const displayBal = acct.accountType === 'CREDIT_CARD'
+            ? Number(bal?.balance ?? 0)
+            : Number(bal?.available ?? bal?.balance ?? 0);
+          return (
+            <div key={acct.id} className="flex items-center justify-between py-2 border-t border-white/5">
+              <div>
+                <p className="text-sm text-gray-100">
+                  {acct.name}
+                  {acct.last4 && <span className="text-gray-500 ml-1">···{acct.last4}</span>}
+                </p>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <span className="text-xs text-gray-500">{ACCOUNT_TYPE_LABELS[acct.accountType] ?? acct.accountType}</span>
+                  {acct.ownerLabel && (
+                    <span className="text-xs bg-amber-500/10 text-amber-400 px-1.5 py-0.5 rounded">{acct.ownerLabel}</span>
+                  )}
+                  {bal?.source === 'plaid' && (
+                    <span className="text-xs text-gray-600">· Auto-synced {fmtDate(bal.asOfDate)}</span>
+                  )}
+                </div>
+              </div>
+              <div className="text-right">
+                <p className={`text-sm font-semibold ${acct.accountType === 'CREDIT_CARD' ? 'text-red-400' : 'text-white'}`}>
+                  {balVisible
+                    ? (acct.accountType === 'CREDIT_CARD' ? `(${disp(displayBal)})` : disp(displayBal))
+                    : '••••'}
+                </p>
+                {bal?.available != null && acct.accountType !== 'CREDIT_CARD' && balVisible && (
+                  <p className="text-xs text-gray-500">{money(Number(bal.balance))} ledger</p>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Add manual account modal ──────────────────────────────────────────────────
+function AddManualAccountModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const [name, setName] = useState('');
+  const [bank, setBank] = useState('');
+  const [accountType, setAccountType] = useState<'CHECKING' | 'SAVINGS' | 'CREDIT_CARD' | 'CASH_POOL'>('CASH_POOL');
+  const [balance, setBalance] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  function applyPreset(p: typeof MANUAL_PRESETS[number]) {
+    setName(p.name); setBank(p.bank); setAccountType(p.accountType);
+  }
+
+  async function handleSave() {
+    if (!name.trim()) return;
+    setSaving(true);
+    try {
+      const acct = await createBankAccount({ name: name.trim(), bank: bank.trim() || undefined, accountType });
+      if (balance && !isNaN(parseFloat(balance))) {
+        await recordBankBalance(acct.id, { balance: parseFloat(balance) });
+      }
+      onSaved();
+    } catch { } finally { setSaving(false); }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.7)' }} onClick={onClose}>
+      <div className="w-full max-w-md rounded-2xl p-6" style={{ background: '#1a1a1a', border: '1px solid rgba(255,255,255,0.1)' }} onClick={e => e.stopPropagation()}>
+        <h2 className="text-base font-semibold text-white mb-4">Add account</h2>
+
+        {/* Quick presets */}
+        <p className="text-xs text-gray-500 mb-2">Quick add</p>
+        <div className="flex flex-wrap gap-1.5 mb-4">
+          {MANUAL_PRESETS.map(p => (
+            <button key={p.name} onClick={() => applyPreset(p)}
+              className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${name === p.name ? 'bg-amber-500/15 border-amber-500/40 text-amber-400' : 'border-white/10 text-gray-400 hover:border-white/20'}`}>
+              {p.name}
+            </button>
+          ))}
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Account name</label>
+            <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. My Venmo"
+              className="w-full px-3 py-2 text-sm rounded-lg bg-white/5 border border-white/10 text-white placeholder-gray-600 focus:border-amber-500/40 outline-none" />
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Institution (optional)</label>
+            <input value={bank} onChange={e => setBank(e.target.value)} placeholder="e.g. Chase"
+              className="w-full px-3 py-2 text-sm rounded-lg bg-white/5 border border-white/10 text-white placeholder-gray-600 focus:border-amber-500/40 outline-none" />
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Type</label>
+            <select value={accountType} onChange={e => setAccountType(e.target.value as any)}
+              className="w-full px-3 py-2 text-sm rounded-lg bg-white/5 border border-white/10 text-white focus:border-amber-500/40 outline-none">
+              <option value="CHECKING">Checking</option>
+              <option value="SAVINGS">Savings</option>
+              <option value="CREDIT_CARD">Credit card</option>
+              <option value="CASH_POOL">Cash / Digital wallet</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Current balance ($)</label>
+            <input value={balance} onChange={e => setBalance(e.target.value)} placeholder="0.00" type="number" step="0.01"
+              className="w-full px-3 py-2 text-sm rounded-lg bg-white/5 border border-white/10 text-white placeholder-gray-600 focus:border-amber-500/40 outline-none" />
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 mt-5">
+          <button onClick={onClose} className="btn text-xs">Cancel</button>
+          <button onClick={handleSave} disabled={!name.trim() || saving} className="btn btn-primary text-xs">
+            {saving ? 'Saving…' : 'Add account'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Main BankingTab ───────────────────────────────────────────────────────────
+function BankingTab() {
+  // balance visibility — hidden by default each session
+  const [balVisible, setBalVisible] = useState(() => sessionStorage.getItem('sollux_bal_vis') === '1');
+  const toggleBal = () => setBalVisible(v => {
+    const next = !v;
+    sessionStorage.setItem('sollux_bal_vis', next ? '1' : '0');
+    return next;
+  });
+  const disp = (n: number | null | undefined) => balVisible ? money(n) : '——';
+
+  const [items, setItems] = useState<PlaidItem[]>([]);
+  const [itemIds, setItemIds] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('sollux_plaid_order') || '[]'); } catch { return []; }
+  });
+  const [manualAccounts, setManualAccounts] = useState<BankAccount[]>([]);
+  const [loading, setLoading]     = useState(true);
+  const [syncing, setSyncing]     = useState(false);
+  const [syncMsg, setSyncMsg]     = useState('');
+  const [showAddManual, setShowAddManual] = useState(false);
+  const [editingBal, setEditingBal] = useState<string | null>(null);
+  const [editingBalVal, setEditingBalVal] = useState('');
+  const [savingBal, setSavingBal] = useState(false);
+
+  const plaidAccountIds = useMemo(() => new Set(items.flatMap(i => i.accounts.map(a => a.id))), [items]);
+
+  const sortedItems = useMemo(() => {
+    if (!itemIds.length) return items;
+    const idx = Object.fromEntries(itemIds.map((id, i) => [id, i]));
+    return [...items].sort((a, b) => (idx[a.id] ?? 999) - (idx[b.id] ?? 999));
+  }, [items, itemIds]);
+
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+
+  const loadAll = useCallback(async () => {
+    const [plaidItems, allAccounts] = await Promise.all([getPlaidItems(), getBankAccounts()]);
+    setItems(plaidItems);
+    const plaidIds = new Set(plaidItems.flatMap(i => i.accounts.map((a: any) => a.id)));
+    setManualAccounts((allAccounts as any[]).filter((a: any) => !plaidIds.has(a.id)));
+  }, []);
+
+  useEffect(() => { loadAll().finally(() => setLoading(false)); }, [loadAll]);
+
+  async function handleSync() {
+    setSyncing(true); setSyncMsg('');
+    try {
+      const { synced, failed } = await syncPlaidBalances();
+      setSyncMsg(`Synced ${synced} connection${synced !== 1 ? 's' : ''}${failed ? ` · ${failed} failed` : ''}`);
+      await loadAll();
+    } finally { setSyncing(false); }
+  }
+
+  async function handleDisconnect(id: string, name: string) {
+    if (!confirm(`Disconnect ${name}? Balance history will be kept.`)) return;
+    await deletePlaidItem(id);
+    setItems(prev => prev.filter(i => i.id !== id));
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIdx = sortedItems.findIndex(i => i.id === active.id);
+    const newIdx = sortedItems.findIndex(i => i.id === over.id);
+    const newOrder = arrayMove(sortedItems, oldIdx, newIdx).map(i => i.id);
+    setItemIds(newOrder);
+    localStorage.setItem('sollux_plaid_order', JSON.stringify(newOrder));
+  }
+
+  async function handleDeleteManual(id: string) {
+    if (!confirm('Remove this account?')) return;
+    await deleteBankAccount(id);
+    setManualAccounts(prev => prev.filter(a => a.id !== id));
+  }
+
+  async function handleSaveBalance(accountId: string) {
+    const val = parseFloat(editingBalVal);
+    if (isNaN(val)) return;
+    setSavingBal(true);
+    try {
+      await recordBankBalance(accountId, { balance: val });
+      await loadAll();
+      setEditingBal(null);
+    } catch { } finally { setSavingBal(false); }
+  }
+
+  const allPlaidAccounts = items.flatMap(i => i.accounts);
+  const totalCash = [
+    ...allPlaidAccounts.filter(a => a.accountType !== 'CREDIT_CARD' && a.isActive)
+      .map(a => Number(a.balances[0]?.available ?? a.balances[0]?.balance ?? 0)),
+    ...manualAccounts.filter(a => a.accountType !== 'CREDIT_CARD' && a.isActive)
+      .map(a => Number(a.balance ?? 0)),
+  ].reduce((s, v) => s + v, 0);
+
+  return (
+    <div className="px-6 py-5 max-w-2xl">
+      {/* Summary */}
+      {(allPlaidAccounts.length > 0 || manualAccounts.length > 0) && (
+        <div className="card p-4 mb-4 flex items-center justify-between">
+          <div>
+            <p className="text-xs text-gray-400 mb-0.5">Total available cash</p>
+            <p className="text-2xl font-semibold text-white">{balVisible ? money(totalCash) : '••••••'}</p>
+            <p className="text-xs text-gray-500">
+              Across {allPlaidAccounts.filter(a => a.accountType !== 'CREDIT_CARD').length + manualAccounts.filter(a => a.accountType !== 'CREDIT_CARD').length} deposit accounts
+            </p>
+          </div>
+          <div className="flex flex-col items-end gap-2">
+            <div className="flex gap-2">
+              <button onClick={toggleBal} title={balVisible ? 'Hide balances' : 'Show balances'}
+                className="text-xs px-2.5 py-1.5 rounded-lg transition-colors text-gray-400 hover:text-white"
+                style={{ background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)' }}>
+                {balVisible ? (
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/>
+                  </svg>
+                ) : (
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+                  </svg>
+                )}
+              </button>
+              <button onClick={handleSync} disabled={syncing} className="btn text-xs">{syncing ? 'Syncing…' : '↻ Sync now'}</button>
+            </div>
+            {syncMsg && <p className="text-xs text-emerald-400">{syncMsg}</p>}
+          </div>
+        </div>
+      )}
+
+      {/* Plaid institution cards (draggable) */}
+      {loading ? (
+        <div className="text-gray-500 text-sm py-8 text-center">Loading…</div>
+      ) : sortedItems.length === 0 && manualAccounts.length === 0 ? (
+        <div className="card p-8 text-center mb-4">
+          <p className="text-sm font-medium text-gray-300 mb-1">No bank accounts connected</p>
+          <p className="text-xs text-gray-500 mb-4">Connect your accounts to get automatic end-of-day balance snapshots.</p>
+        </div>
+      ) : (
+        <>
+          {sortedItems.length > 0 && (
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+              <SortableContext items={sortedItems.map(i => i.id)} strategy={verticalListSortingStrategy}>
+                <div className="space-y-3 mb-4">
+                  {sortedItems.map(item => (
+                    <SortablePlaidCard key={item.id} item={item} balVisible={balVisible} disp={disp} onDisconnect={handleDisconnect} />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
+          )}
+
+          {/* Manual / cash accounts */}
+          {manualAccounts.length > 0 && (
+            <div className="card p-4 mb-4">
+              <p className="text-xs font-medium text-gray-400 mb-3">Cash &amp; digital wallets</p>
+              <div className="space-y-2">
+                {manualAccounts.map(acct => (
+                  <div key={acct.id} className="flex items-center justify-between py-2 border-t border-white/5">
+                    <div>
+                      <p className="text-sm text-gray-100">{acct.name}</p>
+                      <span className="text-xs text-gray-500">{ACCOUNT_TYPE_LABELS[acct.accountType] ?? acct.accountType}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {editingBal === acct.id ? (
+                        <>
+                          <input
+                            autoFocus
+                            type="number" step="0.01"
+                            value={editingBalVal}
+                            onChange={e => setEditingBalVal(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') handleSaveBalance(acct.id); if (e.key === 'Escape') setEditingBal(null); }}
+                            className="w-24 px-2 py-1 text-sm rounded-lg bg-white/5 border border-white/15 text-white outline-none focus:border-amber-500/40"
+                          />
+                          <button onClick={() => handleSaveBalance(acct.id)} disabled={savingBal} className="text-xs text-emerald-400 hover:text-emerald-300">✓</button>
+                          <button onClick={() => setEditingBal(null)} className="text-xs text-gray-500 hover:text-gray-300">✕</button>
+                        </>
+                      ) : (
+                        <>
+                          <button onClick={() => { setEditingBal(acct.id); setEditingBalVal(String(acct.balance ?? '')); }}
+                            className="text-sm font-semibold text-white hover:text-amber-400 transition-colors">
+                            {balVisible ? money(acct.balance) : '••••'}
+                          </button>
+                          <button onClick={() => handleDeleteManual(acct.id)} className="text-xs text-gray-600 hover:text-red-400 transition-colors ml-1">✕</button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      <div className="flex gap-2 mb-4">
+        <PlaidConnectButton onSuccess={() => loadAll()} />
+        <button onClick={() => setShowAddManual(true)} className="btn text-xs">+ Add cash / wallet</button>
+      </div>
+
+      <div className="mt-2 rounded-xl px-4 py-3" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
+        <p className="text-xs text-gray-500">
+          Bank connections are read-only. Sollux uses Plaid to securely fetch balances — your credentials are never stored. Balances snapshot automatically at 11:55 PM every night.
+        </p>
+      </div>
+
+      {showAddManual && (
+        <AddManualAccountModal
+          onClose={() => setShowAddManual(false)}
+          onSaved={() => { setShowAddManual(false); loadAll(); }}
+        />
+      )}
+    </div>
+  );
+}
 
 function PlaidConnectButton({ onSuccess }: { onSuccess: () => void }) {
   const [linkToken, setLinkToken] = useState<string | null>(null);
@@ -328,142 +724,5 @@ function PlaidConnectButton({ onSuccess }: { onSuccess: () => void }) {
     >
       {loading ? 'Connecting…' : '+ Connect bank'}
     </button>
-  );
-}
-
-function BankingTab() {
-  const [items, setItems] = useState<PlaidItem[]>([]);
-  const [loading, setLoading]   = useState(true);
-  const [syncing, setSyncing]   = useState(false);
-  const [syncMsg, setSyncMsg]   = useState('');
-
-  const loadItems = useCallback(() =>
-    getPlaidItems().then(setItems).catch(() => {}), []);
-
-  useEffect(() => {
-    loadItems().finally(() => setLoading(false));
-  }, [loadItems]);
-
-  async function handleSync() {
-    setSyncing(true); setSyncMsg('');
-    try {
-      const { synced, failed } = await syncPlaidBalances();
-      setSyncMsg(`Synced ${synced} connection${synced !== 1 ? 's' : ''}${failed ? ` · ${failed} failed` : ''}`);
-      await loadItems();
-    } finally { setSyncing(false); }
-  }
-
-  async function handleDisconnect(id: string, name: string) {
-    if (!confirm(`Disconnect ${name}? Balance history will be kept.`)) return;
-    await deletePlaidItem(id);
-    setItems(prev => prev.filter(i => i.id !== id));
-  }
-
-  const allAccounts = items.flatMap(i => i.accounts);
-  const totalCash = allAccounts
-    .filter(a => a.accountType !== 'CREDIT_CARD' && a.isActive)
-    .reduce((s, a) => s + Number(a.balances[0]?.available ?? a.balances[0]?.balance ?? 0), 0);
-
-  return (
-    <div className="px-6 py-5 max-w-2xl">
-      {/* Summary */}
-      {allAccounts.length > 0 && (
-        <div className="card p-4 mb-4 flex items-center justify-between">
-          <div>
-            <p className="text-xs text-gray-400 mb-0.5">Total available cash</p>
-            <p className="text-2xl font-semibold text-white">{money(totalCash)}</p>
-            <p className="text-xs text-gray-500">Across {allAccounts.filter(a => a.accountType !== 'CREDIT_CARD').length} deposit accounts</p>
-          </div>
-          <div className="text-right">
-            <button
-              onClick={handleSync}
-              disabled={syncing}
-              className="btn text-xs mb-1"
-            >
-              {syncing ? 'Syncing…' : '↻ Sync now'}
-            </button>
-            {syncMsg && <p className="text-xs text-emerald-400">{syncMsg}</p>}
-          </div>
-        </div>
-      )}
-
-      {/* Connected items */}
-      {loading ? (
-        <div className="text-gray-500 text-sm py-8 text-center">Loading…</div>
-      ) : items.length === 0 ? (
-        <div className="card p-8 text-center mb-4">
-          <p className="text-sm font-medium text-gray-300 mb-1">No bank accounts connected</p>
-          <p className="text-xs text-gray-500 mb-4">Connect your accounts to get automatic end-of-day balance snapshots. Works with Chase, Bank of America, Wells Fargo, and 12,000+ other institutions.</p>
-        </div>
-      ) : (
-        <div className="space-y-3 mb-4">
-          {items.map(item => (
-            <div key={item.id} className="card p-4">
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <p className="text-sm font-semibold text-white">{item.institutionName}</p>
-                  <p className="text-xs text-gray-500">
-                    Last synced: {item.lastSyncedAt ? fmtDate(item.lastSyncedAt) : 'Never'}
-                  </p>
-                </div>
-                <button
-                  onClick={() => handleDisconnect(item.id, item.institutionName)}
-                  className="text-xs text-red-400 hover:text-red-300 border border-red-500/20 hover:border-red-500/40 rounded-lg px-2.5 py-1.5 transition-colors"
-                >
-                  Disconnect
-                </button>
-              </div>
-              <div className="space-y-2">
-                {item.accounts
-                  .filter((acct, idx, arr) =>
-                    arr.findIndex(a => a.name === acct.name && a.last4 === acct.last4) === idx
-                  )
-                  .map(acct => {
-                  const bal = acct.balances[0];
-                  const displayBal = acct.accountType === 'CREDIT_CARD'
-                    ? Number(bal?.balance ?? 0)
-                    : Number(bal?.available ?? bal?.balance ?? 0);
-                  return (
-                    <div key={acct.id} className="flex items-center justify-between py-2 border-t border-white/5">
-                      <div>
-                        <p className="text-sm text-gray-100">
-                          {acct.name}
-                          {acct.last4 && <span className="text-gray-500 ml-1">···{acct.last4}</span>}
-                        </p>
-                        <div className="flex items-center gap-1.5 mt-0.5">
-                          <span className="text-xs text-gray-500">{ACCOUNT_TYPE_LABELS[acct.accountType] ?? acct.accountType}</span>
-                          {acct.ownerLabel && (
-                            <span className="text-xs bg-amber-500/10 text-amber-400 px-1.5 py-0.5 rounded">{acct.ownerLabel}</span>
-                          )}
-                          {bal?.source === 'plaid' && (
-                            <span className="text-xs text-gray-600">· Auto-synced {fmtDate(bal.asOfDate)}</span>
-                          )}
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <p className={`text-sm font-semibold ${acct.accountType === 'CREDIT_CARD' ? 'text-red-400' : 'text-white'}`}>
-                          {acct.accountType === 'CREDIT_CARD' ? `(${money(displayBal)})` : money(displayBal)}
-                        </p>
-                        {bal?.available != null && acct.accountType !== 'CREDIT_CARD' && (
-                          <p className="text-xs text-gray-500">{money(Number(bal.balance))} ledger</p>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <PlaidConnectButton onSuccess={() => loadItems()} />
-
-      <div className="mt-4 rounded-xl px-4 py-3" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
-        <p className="text-xs text-gray-500">
-          Bank connections are read-only. Sollux uses Plaid to securely fetch balances — your credentials are never stored. Balances snapshot automatically at 11:55 PM every night.
-        </p>
-      </div>
-    </div>
   );
 }

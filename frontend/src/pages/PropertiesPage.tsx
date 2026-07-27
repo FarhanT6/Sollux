@@ -1,5 +1,13 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
+import {
+  DndContext, closestCenter, PointerSensor, useSensor, useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  arrayMove, SortableContext, rectSortingStrategy, useSortable,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { getProperties, updateProperty, deleteProperty } from '../api/client';
 import type { Property } from '../types';
 import { PageHeader, StatCard, Skeleton, EmptyState } from '../components/ui';
@@ -21,12 +29,19 @@ const FILTER_CHIPS = [
 
 export default function PropertiesPage() {
   const [properties, setProperties] = useState<Property[]>([]);
+  const [propOrder, setPropOrder] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('sollux_prop_order') || '[]'); } catch { return []; }
+  });
   const [filter, setFilter] = useState('all');
+  const [cityFilter, setCityFilter] = useState('all');
+  const [stateFilter, setStateFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [showAddProperty, setShowAddProperty] = useState(false);
   const [editingProperty, setEditingProperty]   = useState<Property | null>(null);
   const [deletingProperty, setDeletingProperty] = useState<Property | null>(null);
+
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
   function loadProperties() {
     return getProperties().then(setProperties);
@@ -36,13 +51,37 @@ export default function PropertiesPage() {
     loadProperties().finally(() => setLoading(false));
   }, []);
 
-  const typeFiltered = filter === 'all' ? properties : properties.filter(p => p.type === filter);
+  // Sorted by user-defined drag order
+  const orderedProperties = useMemo(() => {
+    if (!propOrder.length) return properties;
+    const idx = Object.fromEntries(propOrder.map((id, i) => [id, i]));
+    return [...properties].sort((a, b) => (idx[a.id] ?? 999) - (idx[b.id] ?? 999));
+  }, [properties, propOrder]);
+
+  const cities  = useMemo(() => ['all', ...Array.from(new Set(properties.map(p => p.city).filter(Boolean))).sort()], [properties]);
+  const states  = useMemo(() => ['all', ...Array.from(new Set(properties.map(p => p.state).filter(Boolean))).sort()], [properties]);
+
+  const typeFiltered = filter === 'all' ? orderedProperties : orderedProperties.filter(p => p.type === filter);
+  const cityFiltered = cityFilter === 'all' ? typeFiltered : typeFiltered.filter(p => p.city === cityFilter);
+  const stateFiltered = stateFilter === 'all' ? cityFiltered : cityFiltered.filter(p => p.state === stateFilter);
   const searchLower = search.toLowerCase();
-  const filtered = !searchLower ? typeFiltered : typeFiltered.filter(p =>
+  const filtered = !searchLower ? stateFiltered : stateFiltered.filter(p =>
     (p.nickname || '').toLowerCase().includes(searchLower) ||
     (p.address || '').toLowerCase().includes(searchLower) ||
     (p.city || '').toLowerCase().includes(searchLower)
   );
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    // Operate on the full ordered list, not filtered
+    const oldIdx = orderedProperties.findIndex(p => p.id === active.id);
+    const newIdx = orderedProperties.findIndex(p => p.id === over.id);
+    if (oldIdx < 0 || newIdx < 0) return;
+    const newOrder = arrayMove(orderedProperties, oldIdx, newIdx).map(p => p.id);
+    setPropOrder(newOrder);
+    localStorage.setItem('sollux_prop_order', JSON.stringify(newOrder));
+  }
 
   const monthlyTotal = properties.reduce((sum, p) =>
     sum + (p.utilityAccounts || []).reduce((s, a) => {
@@ -92,8 +131,8 @@ export default function PropertiesPage() {
           )}
         </div>
 
-        {/* Filter chips */}
-        <div className="flex gap-2 mb-5 flex-wrap">
+        {/* Filter row */}
+        <div className="flex flex-wrap items-center gap-2 mb-3">
           {FILTER_CHIPS.map(chip => (
             <button
               key={chip.value}
@@ -106,15 +145,37 @@ export default function PropertiesPage() {
             >
               {chip.label}
               {chip.value !== 'all' && (
-                <span className="ml-1 text-gray-500">
-                  ({properties.filter(p => p.type === chip.value).length})
-                </span>
+                <span className="ml-1 text-gray-500">({properties.filter(p => p.type === chip.value).length})</span>
               )}
             </button>
           ))}
         </div>
 
-        {/* Property grid */}
+        {/* City + State dropdowns */}
+        <div className="flex gap-2 mb-5 flex-wrap">
+          {cities.length > 2 && (
+            <select value={cityFilter} onChange={e => setCityFilter(e.target.value)}
+              className="text-xs px-3 py-1.5 rounded-full border border-white/10 bg-transparent text-gray-400 focus:border-amber-500/30 focus:text-amber-400 outline-none transition-colors appearance-none pr-6"
+              style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236b7280'/%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 8px center' }}>
+              {cities.map(c => <option key={c} value={c} style={{ background: '#1a1a1a' }}>{c === 'all' ? 'All cities' : c}</option>)}
+            </select>
+          )}
+          {states.length > 2 && (
+            <select value={stateFilter} onChange={e => setStateFilter(e.target.value)}
+              className="text-xs px-3 py-1.5 rounded-full border border-white/10 bg-transparent text-gray-400 focus:border-amber-500/30 focus:text-amber-400 outline-none transition-colors appearance-none pr-6"
+              style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236b7280'/%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 8px center' }}>
+              {states.map(s => <option key={s} value={s} style={{ background: '#1a1a1a' }}>{s === 'all' ? 'All states' : s}</option>)}
+            </select>
+          )}
+          {(cityFilter !== 'all' || stateFilter !== 'all') && (
+            <button onClick={() => { setCityFilter('all'); setStateFilter('all'); }}
+              className="text-xs px-2.5 py-1.5 rounded-full border border-white/10 text-gray-500 hover:text-gray-300 transition-colors">
+              Clear ×
+            </button>
+          )}
+        </div>
+
+        {/* Property grid (draggable) */}
         {loading ? (
           <div className="grid grid-cols-2 gap-4">
             {Array(6).fill(0).map((_, i) => <Skeleton key={i} className="h-56" />)}
@@ -122,16 +183,20 @@ export default function PropertiesPage() {
         ) : filtered.length === 0 ? (
           <EmptyState icon="🏠" title="No properties found" body="Add your first property to start tracking utility bills." />
         ) : (
-          <div className="grid grid-cols-2 gap-4">
-            {filtered.map(property => (
-              <PropertyCard
-                key={property.id}
-                property={property}
-                onEdit={() => setEditingProperty(property)}
-                onDelete={() => setDeletingProperty(property)}
-              />
-            ))}
-          </div>
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+            <SortableContext items={filtered.map(p => p.id)} strategy={rectSortingStrategy}>
+              <div className="grid grid-cols-2 gap-4">
+                {filtered.map(property => (
+                  <SortablePropertyCard
+                    key={property.id}
+                    property={property}
+                    onEdit={() => setEditingProperty(property)}
+                    onDelete={() => setDeletingProperty(property)}
+                  />
+                ))}
+              </div>
+            </SortableContext>
+          </DndContext>
         )}
       </div>
       {showAddProperty   && <AddPropertyModal onClose={() => { setShowAddProperty(false); loadProperties(); }} />}
@@ -149,6 +214,27 @@ export default function PropertiesPage() {
           onDeleted={() => { setDeletingProperty(null); loadProperties(); }}
         />
       )}
+    </div>
+  );
+}
+
+function SortablePropertyCard({ property, onEdit, onDelete }: { property: Property; onEdit: () => void; onDelete: () => void }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: property.id });
+  const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1, zIndex: isDragging ? 10 : undefined };
+  return (
+    <div ref={setNodeRef} style={style} className="relative group">
+      <button
+        className="absolute top-3 right-10 z-10 text-gray-700 hover:text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity cursor-grab active:cursor-grabbing touch-none"
+        title="Drag to reorder"
+        {...attributes} {...listeners}
+      >
+        <svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor">
+          <circle cx="2" cy="2" r="1.5"/><circle cx="8" cy="2" r="1.5"/>
+          <circle cx="2" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/>
+          <circle cx="2" cy="14" r="1.5"/><circle cx="8" cy="14" r="1.5"/>
+        </svg>
+      </button>
+      <PropertyCard property={property} onEdit={onEdit} onDelete={onDelete} />
     </div>
   );
 }
