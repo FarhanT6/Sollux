@@ -48,10 +48,10 @@ export const updateProperty = (id: string, data: Partial<Property>) =>
   api.patch<Property>(`/properties/${id}`, data).then(r => r.data);
 export const deleteProperty = (id: string) =>
   api.delete(`/properties/${id}`);
-export const lookupPropertyByAddress = (params: { address: string; city: string; state: string; zip: string }) =>
+export const lookupPropertyByAddress = (params: { address: string; city: string; state: string; zip?: string }) =>
   api.get<{
     record: {
-      county?: string; propertyType?: string; bedrooms?: number; bathrooms?: number;
+      zipCode?: string; county?: string; propertyType?: string; bedrooms?: number; bathrooms?: number;
       squareFootage?: number; lotSize?: number; yearBuilt?: number;
       lastSaleDate?: string; lastSalePrice?: number;
     } | null;

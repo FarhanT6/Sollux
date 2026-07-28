@@ -41,11 +41,11 @@ interface AddressQuery {
   address: string;
   city: string;
   state: string;
-  zip: string;
+  zip?: string;
 }
 
 function fullAddress(q: AddressQuery): string {
-  return `${q.address}, ${q.city}, ${q.state} ${q.zip}`;
+  return `${q.address}, ${q.city}, ${q.state}${q.zip ? ` ${q.zip}` : ''}`;
 }
 
 /** Property records lookup: beds/baths/sqft/lot size/year built/last sale. */

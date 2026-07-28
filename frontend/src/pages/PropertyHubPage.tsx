@@ -222,18 +222,19 @@ function PropertyEditModal({ property, onClose, onSave }: {
     setLookupError(null);
     setLookingUpDetails(true);
     try {
-      const { record } = await lookupPropertyByAddress({ address: form.address, city: form.city, state: form.state, zip: form.zip });
+      const { record } = await lookupPropertyByAddress({ address: form.address, city: form.city, state: form.state, zip: form.zip || undefined });
       if (!record) { setLookupError('No RentCast data found for this address.'); return; }
       setForm(prev => ({
         ...prev,
+        zip: prev.zip || record.zipCode || prev.zip,
         county: prev.county || record.county || prev.county,
         lotSqft: prev.lotSqft || (record.lotSize != null ? String(record.lotSize) : prev.lotSqft),
         notes: prev.notes || (record.bedrooms || record.squareFootage
           ? `${record.bedrooms ?? '?'}bd/${record.bathrooms ?? '?'}ba, ${record.squareFootage ?? '?'} sqft, built ${record.yearBuilt ?? '?'} (via RentCast)`
           : prev.notes),
       }));
-    } catch {
-      setLookupError('RentCast lookup failed. Check RENTCAST_API_KEY is configured on the server.');
+    } catch (e: any) {
+      setLookupError(e?.response?.data?.error || 'RentCast lookup failed.');
     } finally { setLookingUpDetails(false); }
   }
 
@@ -241,7 +242,7 @@ function PropertyEditModal({ property, onClose, onSave }: {
     setLookupError(null);
     setLookingUpValue(true);
     try {
-      const { valuation } = await lookupPropertyByAddress({ address: form.address, city: form.city, state: form.state, zip: form.zip });
+      const { valuation } = await lookupPropertyByAddress({ address: form.address, city: form.city, state: form.state, zip: form.zip || undefined });
       if (!valuation?.price) { setLookupError('No RentCast valuation found for this address.'); return; }
       setForm(prev => ({
         ...prev,
@@ -249,8 +250,8 @@ function PropertyEditModal({ property, onClose, onSave }: {
         valuationDate: new Date().toISOString().slice(0, 10),
         valuationNotes: `RentCast AVM estimate${valuation.priceRangeLow && valuation.priceRangeHigh ? ` ($${valuation.priceRangeLow.toLocaleString()}–$${valuation.priceRangeHigh.toLocaleString()} range)` : ''}, ${new Date().toLocaleDateString()}`,
       }));
-    } catch {
-      setLookupError('RentCast lookup failed. Check RENTCAST_API_KEY is configured on the server.');
+    } catch (e: any) {
+      setLookupError(e?.response?.data?.error || 'RentCast lookup failed.');
     } finally { setLookingUpValue(false); }
   }
 
