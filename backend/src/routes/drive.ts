@@ -262,11 +262,35 @@ router.post('/stream', attachDbUser, async (req, res) => {
             const s3Key = buildStatementKey(userId, acct.propertyId, acct.id, statementDate, sanitizeFilename(file.name));
             const pdfS3Key = await uploadDocument(s3Key, buffer);
 
+            // Compute the breakdown: amountDue = current period charges only;
+            // balance/totalDue = full amount owed including any past-due carry-forward.
+            const totalDue = (ex.currentCharges != null || ex.previousBalance != null)
+              ? (ex.currentCharges ?? 0) + (ex.previousBalance ?? 0)
+              : ex.amountDue;
+            const amountDueCurrent = ex.currentCharges ?? ex.amountDue;
+            const rawData: Record<string, unknown> = {
+              source: 'drive_import',
+              providerName: ex.providerName,
+              serviceAddress: ex.serviceAddress,
+              accountNumber: ex.accountNumber,
+              previousBalance: ex.previousBalance,
+              paymentsReceived: ex.paymentsReceived,
+              currentCharges: ex.currentCharges,
+              totalDue,
+              pastDue: ex.previousBalance != null && ex.previousBalance > 0 ? ex.previousBalance : undefined,
+              isPaid: ex.isPaid,
+              utilityType: ex.utilityType,
+              chargeBreakdown: ex.chargeBreakdown,
+              alerts: ex.alerts,
+            };
+
             if (existing) {
               await db.statement.update({ where: { id: existing.id }, data: {
-                statementDate, amountDue: ex.amountDue ?? existing.amountDue, balance: ex.amountDue ?? existing.balance,
+                statementDate,
+                amountDue: amountDueCurrent ?? existing.amountDue,
+                balance: totalDue ?? amountDueCurrent ?? existing.balance,
                 dueDate: ex.dueDate ? new Date(ex.dueDate) : existing.dueDate,
-                rawDataJson: { source: 'drive_import', providerName: ex.providerName } as Prisma.InputJsonValue,
+                rawDataJson: rawData as Prisma.InputJsonValue,
                 ...(pdfS3Key ? { pdfS3Key } : {}),
               }});
             } else {
@@ -275,11 +299,12 @@ router.post('/stream', attachDbUser, async (req, res) => {
                 dueDate: ex.dueDate ? new Date(ex.dueDate) : null,
                 billingPeriodStart: ex.billingPeriodStart ? new Date(ex.billingPeriodStart) : null,
                 billingPeriodEnd:   ex.billingPeriodEnd   ? new Date(ex.billingPeriodEnd)   : null,
-                amountDue: ex.amountDue ?? null, balance: ex.amountDue ?? null,
-                amountPaid: ex.isPaid ? (ex.amountDue ?? null) : null,
+                amountDue: amountDueCurrent ?? null,
+                balance: totalDue ?? amountDueCurrent ?? null,
+                amountPaid: ex.isPaid ? (totalDue ?? amountDueCurrent ?? null) : null,
                 usageValue: ex.usageValue ?? null, usageUnit: ex.usageUnit ?? null,
                 ratePlan: ex.ratePlan ?? null, pdfS3Key, sourceType: 'MANUAL',
-                rawDataJson: { source: 'drive_import', providerName: ex.providerName } as Prisma.InputJsonValue,
+                rawDataJson: rawData as Prisma.InputJsonValue,
               }});
             }
             autoImported++;

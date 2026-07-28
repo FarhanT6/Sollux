@@ -10,6 +10,7 @@ const TenantSchema = z.object({
   fullName: z.string().min(1),
   email: z.string().email().optional().nullable(),
   phone: z.string().optional().nullable(),
+  address: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
 });
 
@@ -25,6 +26,29 @@ router.get('/', async (req, res, next) => {
       orderBy: { fullName: 'asc' },
     });
     res.json(tenants);
+  } catch (err) { next(err); }
+});
+
+router.get('/:id', async (req, res, next) => {
+  try {
+    const tenant = await db.tenant.findFirst({
+      where: { id: req.params.id, userId: req.dbUserId! },
+      include: {
+        leaseTenants: {
+          include: {
+            lease: {
+              include: {
+                unit: { include: { property: { select: { id: true, address: true, nickname: true } } } },
+                rentPayments: { orderBy: { paidDate: 'desc' } },
+                rentNotices: { orderBy: { noticeDate: 'desc' } },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
+    res.json(tenant);
   } catch (err) { next(err); }
 });
 

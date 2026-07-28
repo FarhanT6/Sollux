@@ -38,6 +38,15 @@ function isStatementPaid(s: any, payments: any[] = []): boolean {
   return sumSinceStmt >= openBalance - 0.01;
 }
 
+// "Past due" / "Prev balance" on a statement is a frozen snapshot of what the
+// provider printed on that bill. Once the prior statement is marked paid in
+// Sollux, that snapshot is stale — suppress the past-due display for it.
+function isPriorStatementPaid(current: any, all: any[], payments: any[] = []): boolean {
+  const idx = all.findIndex(x => x.id === current.id);
+  if (idx === -1 || idx + 1 >= all.length) return false;
+  return isStatementPaid(all[idx + 1], payments);
+}
+
 function statementStatus(s: any, payments: any[] = [], newerStmt?: any, isLatest = false): { color: 'green' | 'amber' | 'red'; label: string } {
   if (isStatementPaid(s, payments)) return { color: 'green', label: 'Paid' };
 
@@ -588,12 +597,19 @@ export default function UtilityDetailPage() {
 
   // Past due from latest statement
   const latestRaw = statements[0]?.rawDataJson as Record<string, unknown> | undefined;
-  const latestPastDue = latestRaw?.pastDue != null ? Number(latestRaw.pastDue) : null;
+  // The prior statement's payment status can make this snapshot stale — see
+  // isPriorStatementPaid for why we don't trust rawDataJson.pastDue blindly.
+  const priorToLatestPaid = statements[0] ? isPriorStatementPaid(statements[0], statements, payments) : false;
+  const latestPastDue = (latestRaw?.pastDue != null && !priorToLatestPaid) ? Number(latestRaw.pastDue) : null;
   const rawTotalDue = (latestRaw?.accountBalance ?? latestRaw?.totalDue) as number | undefined;
   // Reconcile the displayed current balance against recent payments. If the user paid
   // a bill but the provider's API hasn't reflected it yet, we still want $0 here.
   const isLatestPaid = statements[0] ? isStatementPaid(statements[0], payments) : false;
-  const latestTotalDue = isLatestPaid ? 0 : rawTotalDue;
+  const latestTotalDue = isLatestPaid
+    ? 0
+    : (priorToLatestPaid && rawTotalDue != null && latestRaw?.currentCharges != null)
+      ? Number(latestRaw.currentCharges)
+      : rawTotalDue;
 
   if (loading) return <div className="p-6 space-y-4"><Skeleton className="h-24" /><Skeleton className="h-64" /></div>;
   if (!account) return <div className="p-6 text-gray-400">Account not found</div>;
@@ -770,6 +786,7 @@ export default function UtilityDetailPage() {
                   const prevBal     = raw?.previousBalance != null ? Number(raw.previousBalance) : null;
                   const currentBill = raw?.currentBill   != null ? Number(raw.currentBill)   : null;
                   const isPaid = s.amountPaid != null || (s.rawDataJson as any)?.isPaid === true;
+                  const priorPaid = isPriorStatementPaid(s, statements, payments);
                   return (
                     <div key={s.id} className="rounded-xl px-5 py-4 flex items-center gap-4"
                       style={{
@@ -789,11 +806,14 @@ export default function UtilityDetailPage() {
                             ? `${format(new Date(s.billingPeriodStart), 'MMM d')} – ${format(new Date(s.billingPeriodEnd), 'MMM d, yyyy')}`
                             : 'Billing period —'}
                         </p>
-                        {pastDue != null && pastDue > 0 && (
+                        {pastDue != null && pastDue > 0 && !priorPaid && (
                           <p className="text-xs text-red-400 mt-0.5">⚠ Past due: {fmtMoney(pastDue)}</p>
                         )}
-                        {prevBal != null && prevBal > 0 && (
+                        {prevBal != null && prevBal > 0 && !priorPaid && (
                           <p className="text-xs text-gray-500 mt-0.5">Prev balance: {fmtMoney(prevBal)}</p>
+                        )}
+                        {((pastDue ?? 0) > 0 || (prevBal ?? 0) > 0) && priorPaid && (
+                          <p className="text-xs text-green-500 mt-0.5">✓ Prior balance paid</p>
                         )}
                         {s.usageValue && (
                           <p className="text-xs text-gray-600 mt-0.5">{s.usageValue} {s.usageUnit}</p>

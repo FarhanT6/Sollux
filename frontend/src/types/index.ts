@@ -81,6 +81,7 @@ export interface Tenant {
   fullName: string;
   email?: string;
   phone?: string;
+  address?: string;
   notes?: string;
   createdAt: string;
   leaseTenants?: LeaseTenant[];

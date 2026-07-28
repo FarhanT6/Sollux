@@ -6,6 +6,9 @@ import {
   getTaxAssessments, getImprovements, getPropertyPnL, getRentPayments,
   createRentPayment, createExpense, createImprovement, createInsurancePolicy,
   createTaxAssessment, createLoan,
+  updateExpense, deleteExpense, updateInsurancePolicy, deleteInsurancePolicy,
+  updateTaxAssessment, deleteTaxAssessment, updateImprovement, deleteImprovement,
+  updateLease,
 } from '../api/client';
 import type {
   Property, Lease, Loan, Expense, InsurancePolicy, TaxAssessment,
@@ -301,6 +304,40 @@ function TenantsTab({ propertyId, leases, setLeases }: {
   const [saving, setSaving]       = useState(false);
   const [expandLease, setExpandLease] = useState<string | null>(null);
   const [payments, setPayments] = useState<Record<string, any[]>>({});
+  const [editLease, setEditLease] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({ rentAmount: '', securityDeposit: '', startDate: '', endDate: '', leaseType: 'MONTH_TO_MONTH', status: 'ACTIVE', notes: '' });
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  function openEditLease(lease: Lease) {
+    setEditForm({
+      rentAmount: String(lease.rentAmount ?? ''),
+      securityDeposit: String(lease.securityDeposit ?? ''),
+      startDate: lease.startDate?.slice(0, 10) ?? '',
+      endDate: lease.endDate?.slice(0, 10) ?? '',
+      leaseType: lease.leaseType,
+      status: lease.status,
+      notes: lease.notes ?? '',
+    });
+    setEditLease(lease.id);
+  }
+
+  async function saveEditLease(leaseId: string) {
+    setSavingEdit(true);
+    try {
+      await updateLease(leaseId, {
+        rentAmount: parseFloat(editForm.rentAmount) || undefined,
+        securityDeposit: editForm.securityDeposit ? parseFloat(editForm.securityDeposit) : null,
+        startDate: editForm.startDate || undefined,
+        endDate: editForm.endDate || null,
+        leaseType: editForm.leaseType,
+        status: editForm.status,
+        notes: editForm.notes || undefined,
+      });
+      const updated = await getLeases({ propertyId });
+      setLeases(updated);
+      setEditLease(null);
+    } finally { setSavingEdit(false); }
+  }
 
   const filtered = leases
     .filter(l => !filterStatus || l.status === filterStatus)
@@ -368,7 +405,7 @@ function TenantsTab({ propertyId, leases, setLeases }: {
       ) : (
         <div className="space-y-2">
           {filtered.map(lease => {
-            const tenants = lease.leaseTenants?.map(lt => lt.tenant.fullName).join(', ') || '—';
+            const leaseTenants = lease.leaseTenants ?? [];
             const arrears = Number(lease.arrearsBalance);
             const isExpanded = expandLease === lease.id;
             return (
@@ -377,7 +414,16 @@ function TenantsTab({ propertyId, leases, setLeases }: {
                   <div className="flex items-start gap-3">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-0.5">
-                        <p className="text-sm font-semibold text-white">{tenants}</p>
+                        <p className="text-sm font-semibold text-white">
+                          {leaseTenants.length === 0 ? '—' : leaseTenants.map((lt, i) => (
+                            <span key={lt.tenant.id}>
+                              {i > 0 && ', '}
+                              <Link to={`/tenants/${lt.tenant.id}`} className="hover:text-amber-400 transition-colors" onClick={e => e.stopPropagation()}>
+                                {lt.tenant.fullName}
+                              </Link>
+                            </span>
+                          ))}
+                        </p>
                         <span className={`pill text-xs ${lease.status === 'ACTIVE' ? 'pill-green' : lease.status === 'PENDING' ? 'pill-amber' : 'pill-gray'}`}>
                           {lease.status}
                         </span>
@@ -403,8 +449,32 @@ function TenantsTab({ propertyId, leases, setLeases }: {
                       className="text-xs text-gray-500 hover:text-gray-300">
                       {isExpanded ? 'Hide history' : 'View history'}
                     </button>
+                    <button onClick={() => editLease === lease.id ? setEditLease(null) : openEditLease(lease)}
+                      className="text-xs text-gray-500 hover:text-gray-300">
+                      {editLease === lease.id ? 'Cancel edit' : 'Edit'}
+                    </button>
                   </div>
                 </div>
+
+                {editLease === lease.id && (
+                  <div className="px-4 py-3 grid grid-cols-3 gap-2" style={{ background: 'rgba(255,255,255,0.03)', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                    <input type="number" placeholder="Rent/mo" value={editForm.rentAmount} onChange={e => setEditForm(f => ({ ...f, rentAmount: e.target.value }))} className="input-dark text-xs" />
+                    <input type="number" placeholder="Security deposit" value={editForm.securityDeposit} onChange={e => setEditForm(f => ({ ...f, securityDeposit: e.target.value }))} className="input-dark text-xs" />
+                    <select value={editForm.status} onChange={e => setEditForm(f => ({ ...f, status: e.target.value }))} className="input-dark text-xs">
+                      {['ACTIVE', 'ENDED', 'PENDING', 'TERMINATED'].map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                    <input type="date" value={editForm.startDate} onChange={e => setEditForm(f => ({ ...f, startDate: e.target.value }))} className="input-dark text-xs" />
+                    <input type="date" value={editForm.endDate} onChange={e => setEditForm(f => ({ ...f, endDate: e.target.value }))} className="input-dark text-xs" placeholder="End date" />
+                    <select value={editForm.leaseType} onChange={e => setEditForm(f => ({ ...f, leaseType: e.target.value }))} className="input-dark text-xs">
+                      <option value="MONTH_TO_MONTH">Month-to-month</option>
+                      <option value="FIXED_TERM">Fixed term</option>
+                    </select>
+                    <input placeholder="Notes" value={editForm.notes} onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))} className="input-dark text-xs col-span-3" />
+                    <div className="col-span-3 flex justify-end">
+                      <button onClick={() => saveEditLease(lease.id)} disabled={savingEdit} className="btn btn-primary text-xs">{savingEdit ? '…' : 'Save changes'}</button>
+                    </div>
+                  </div>
+                )}
 
                 {showPayForm === lease.id && (
                   <div className="px-4 py-3 flex gap-2 flex-wrap" style={{ background: 'rgba(255,255,255,0.03)', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
@@ -566,11 +636,13 @@ function LoansTab({ propertyId, loans, setLoans }: {
 
 // ─── Expenses ──────────────────────────────────────────────────────────────────
 
+const EMPTY_EXPENSE_FORM = { category: 'REPAIRS_MAINTENANCE', amount: '', date: new Date().toISOString().slice(0, 10), vendor: '', description: '', isCapEx: false, isPersonal: false };
+
 function ExpensesTab({ propertyId, expenses, setExpenses }: {
   propertyId: string; expenses: Expense[]; setExpenses: (e: Expense[]) => void;
 }) {
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ category: 'REPAIRS_MAINTENANCE', amount: '', date: new Date().toISOString().slice(0, 10), vendor: '', description: '', isCapEx: false, isPersonal: false });
+  const [formMode, setFormMode] = useState<'closed' | 'new' | Expense>('closed');
+  const [form, setForm] = useState(EMPTY_EXPENSE_FORM);
   const [saving, setSaving] = useState(false);
   const [filterCat, setFilterCat] = useState('');
 
@@ -578,16 +650,24 @@ function ExpensesTab({ propertyId, expenses, setExpenses }: {
     .filter(e => !filterCat || e.category === filterCat)
     .sort((a, b) => b.date.localeCompare(a.date));
 
-  const totalByCategory = expenses.reduce<Record<string, number>>((acc, e) => {
-    acc[e.category] = (acc[e.category] ?? 0) + Number(e.amount);
-    return acc;
-  }, {});
+  function openNew() {
+    setForm(EMPTY_EXPENSE_FORM);
+    setFormMode('new');
+  }
+
+  function openEdit(e: Expense) {
+    setForm({
+      category: e.category, amount: String(e.amount), date: e.date.slice(0, 10),
+      vendor: e.vendor ?? '', description: e.description ?? '', isCapEx: e.isCapEx, isPersonal: e.isPersonal,
+    });
+    setFormMode(e);
+  }
 
   async function save() {
     if (!form.amount) return;
     setSaving(true);
     try {
-      await createExpense({
+      const payload = {
         propertyId,
         category: form.category as any,
         amount: parseFloat(form.amount),
@@ -596,15 +676,28 @@ function ExpensesTab({ propertyId, expenses, setExpenses }: {
         description: form.description || undefined,
         isCapEx: form.isCapEx,
         isPersonal: form.isPersonal,
-      });
+      };
+      if (formMode !== 'new' && formMode !== 'closed') {
+        await updateExpense(formMode.id, payload);
+      } else {
+        await createExpense(payload);
+      }
       const updated = await getExpenses({ propertyId });
       setExpenses(updated);
-      setShowForm(false);
-      setForm({ category: 'REPAIRS_MAINTENANCE', amount: '', date: new Date().toISOString().slice(0, 10), vendor: '', description: '', isCapEx: false, isPersonal: false });
+      setFormMode('closed');
     } finally { setSaving(false); }
   }
 
+  async function remove() {
+    if (formMode === 'new' || formMode === 'closed') return;
+    if (!confirm('Delete this expense?')) return;
+    await deleteExpense(formMode.id);
+    setExpenses(expenses.filter(e => e.id !== formMode.id));
+    setFormMode('closed');
+  }
+
   const total = filtered.reduce((s, e) => s + Number(e.amount), 0);
+  const isEditing = formMode !== 'new' && formMode !== 'closed';
 
   return (
     <div>
@@ -616,12 +709,12 @@ function ExpensesTab({ propertyId, expenses, setExpenses }: {
           </select>
           <span className="text-xs text-gray-500">Total: <span className="text-white font-medium">{money(total)}</span></span>
         </div>
-        <button onClick={() => setShowForm(!showForm)} className="btn text-xs">+ Add expense</button>
+        <button onClick={() => formMode === 'closed' ? openNew() : setFormMode('closed')} className="btn text-xs">+ Add expense</button>
       </div>
 
-      {showForm && (
+      {formMode !== 'closed' && (
         <div className="card p-4 mb-4 grid grid-cols-4 gap-3">
-          <div className="col-span-4 text-xs font-medium text-gray-400 mb-1">New expense</div>
+          <div className="col-span-4 text-xs font-medium text-gray-400 mb-1">{isEditing ? 'Edit expense' : 'New expense'}</div>
           <select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} className="input-dark text-sm col-span-2">
             {Object.entries(EXPENSE_CATEGORY_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
@@ -640,7 +733,8 @@ function ExpensesTab({ propertyId, expenses, setExpenses }: {
           <div className="col-span-4 flex gap-2 items-center justify-between">
             {form.isPersonal && <span className="text-xs text-amber-400">This expense will be excluded from P&L and budget</span>}
             <div className="flex gap-2 ml-auto">
-              <button onClick={() => setShowForm(false)} className="btn text-xs">Cancel</button>
+              {isEditing && <button onClick={remove} className="text-xs text-red-400 hover:text-red-300 mr-auto">Delete</button>}
+              <button onClick={() => setFormMode('closed')} className="btn text-xs">Cancel</button>
               <button onClick={save} disabled={saving || !form.amount} className="btn btn-primary text-xs">{saving ? '…' : 'Save'}</button>
             </div>
           </div>
@@ -664,7 +758,7 @@ function ExpensesTab({ propertyId, expenses, setExpenses }: {
             </thead>
             <tbody className="divide-y divide-white/5">
               {filtered.map(e => (
-                <tr key={e.id} className="hover:bg-white/[0.02]">
+                <tr key={e.id} onClick={() => openEdit(e)} className="hover:bg-white/[0.02] cursor-pointer">
                   <td className="px-4 py-3 text-gray-400 text-xs">{fmtDate(e.date)}</td>
                   <td className="px-4 py-3 text-gray-300">{EXPENSE_CATEGORY_LABELS[e.category] ?? e.category}</td>
                   <td className="px-4 py-3 text-gray-400">{e.vendor || '—'}</td>
@@ -688,11 +782,13 @@ function ExpensesTab({ propertyId, expenses, setExpenses }: {
 
 // ─── Insurance ─────────────────────────────────────────────────────────────────
 
+const EMPTY_INSURANCE_FORM = { carrier: '', policyNumber: '', policyType: 'PROPERTY', premiumAmount: '', premiumFrequency: 'ANNUAL', effectiveDate: '', expirationDate: '', notes: '', isActive: true };
+
 function InsuranceTab({ propertyId, policies, setPolicies }: {
   propertyId: string; policies: InsurancePolicy[]; setPolicies: (p: InsurancePolicy[]) => void;
 }) {
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ carrier: '', policyNumber: '', policyType: 'PROPERTY', premiumAmount: '', premiumFrequency: 'ANNUAL', effectiveDate: '', expirationDate: '', notes: '' });
+  const [formMode, setFormMode] = useState<'closed' | 'new' | InsurancePolicy>('closed');
+  const [form, setForm] = useState(EMPTY_INSURANCE_FORM);
   const [saving, setSaving] = useState(false);
 
   const active = policies.filter(p => p.isActive);
@@ -701,11 +797,26 @@ function InsuranceTab({ propertyId, policies, setPolicies }: {
     return s + Number(p.premiumAmount) * m;
   }, 0);
 
+  function openNew() {
+    setForm(EMPTY_INSURANCE_FORM);
+    setFormMode('new');
+  }
+
+  function openEdit(p: InsurancePolicy) {
+    setForm({
+      carrier: p.carrier, policyNumber: p.policyNumber ?? '', policyType: p.policyType,
+      premiumAmount: String(p.premiumAmount), premiumFrequency: p.premiumFrequency,
+      effectiveDate: p.effectiveDate?.slice(0, 10) ?? '', expirationDate: p.expirationDate?.slice(0, 10) ?? '',
+      notes: p.notes ?? '', isActive: p.isActive,
+    });
+    setFormMode(p);
+  }
+
   async function save() {
     if (!form.carrier || !form.premiumAmount) return;
     setSaving(true);
     try {
-      await createInsurancePolicy({
+      const payload = {
         propertyId,
         carrier: form.carrier,
         policyNumber: form.policyNumber || undefined,
@@ -716,13 +827,25 @@ function InsuranceTab({ propertyId, policies, setPolicies }: {
         expirationDate: form.expirationDate || undefined,
         notes: form.notes || undefined,
         isPersonal: false,
-        isActive: true,
-      });
+        isActive: form.isActive,
+      };
+      if (formMode !== 'new' && formMode !== 'closed') {
+        await updateInsurancePolicy(formMode.id, payload);
+      } else {
+        await createInsurancePolicy(payload);
+      }
       const updated = await getInsurancePolicies({ propertyId });
       setPolicies(updated);
-      setShowForm(false);
-      setForm({ carrier: '', policyNumber: '', policyType: 'PROPERTY', premiumAmount: '', premiumFrequency: 'ANNUAL', effectiveDate: '', expirationDate: '', notes: '' });
+      setFormMode('closed');
     } finally { setSaving(false); }
+  }
+
+  async function remove() {
+    if (formMode === 'new' || formMode === 'closed') return;
+    if (!confirm('Delete this policy?')) return;
+    await deleteInsurancePolicy(formMode.id);
+    setPolicies(policies.filter(p => p.id !== formMode.id));
+    setFormMode('closed');
   }
 
   const daysUntilExpiry = (d?: string) => {
@@ -730,16 +853,18 @@ function InsuranceTab({ propertyId, policies, setPolicies }: {
     return Math.ceil((new Date(d).getTime() - Date.now()) / 86400000);
   };
 
+  const isEditing = formMode !== 'new' && formMode !== 'closed';
+
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
         <p className="text-xs text-gray-500">Total annual premium: <span className="text-white font-medium">{money(totalAnnual)}</span></p>
-        <button onClick={() => setShowForm(!showForm)} className="btn text-xs">+ Add policy</button>
+        <button onClick={() => formMode === 'closed' ? openNew() : setFormMode('closed')} className="btn text-xs">+ Add policy</button>
       </div>
 
-      {showForm && (
+      {formMode !== 'closed' && (
         <div className="card p-4 mb-4 grid grid-cols-4 gap-3">
-          <div className="col-span-4 text-xs font-medium text-gray-400 mb-1">New policy</div>
+          <div className="col-span-4 text-xs font-medium text-gray-400 mb-1">{isEditing ? 'Edit policy' : 'New policy'}</div>
           <input placeholder="Carrier *" value={form.carrier} onChange={e => setForm(f => ({ ...f, carrier: e.target.value }))} className="input-dark text-sm col-span-2" />
           <input placeholder="Policy number" value={form.policyNumber} onChange={e => setForm(f => ({ ...f, policyNumber: e.target.value }))} className="input-dark text-sm" />
           <select value={form.policyType} onChange={e => setForm(f => ({ ...f, policyType: e.target.value }))} className="input-dark text-sm">
@@ -754,8 +879,13 @@ function InsuranceTab({ propertyId, policies, setPolicies }: {
           <input type="date" placeholder="Effective" value={form.effectiveDate} onChange={e => setForm(f => ({ ...f, effectiveDate: e.target.value }))} className="input-dark text-sm" />
           <input type="date" placeholder="Expiration" value={form.expirationDate} onChange={e => setForm(f => ({ ...f, expirationDate: e.target.value }))} className="input-dark text-sm" />
           <input placeholder="Notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="input-dark text-sm col-span-2" />
-          <div className="col-span-2 flex gap-2 justify-end">
-            <button onClick={() => setShowForm(false)} className="btn text-xs">Cancel</button>
+          <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
+            <input type="checkbox" checked={form.isActive} onChange={e => setForm(f => ({ ...f, isActive: e.target.checked }))} />
+            Active
+          </label>
+          <div className="col-span-4 flex gap-2 justify-end">
+            {isEditing && <button onClick={remove} className="text-xs text-red-400 hover:text-red-300 mr-auto">Delete</button>}
+            <button onClick={() => setFormMode('closed')} className="btn text-xs">Cancel</button>
             <button onClick={save} disabled={saving || !form.carrier || !form.premiumAmount} className="btn btn-primary text-xs">{saving ? '…' : 'Save'}</button>
           </div>
         </div>
@@ -769,7 +899,7 @@ function InsuranceTab({ propertyId, policies, setPolicies }: {
             const days = daysUntilExpiry(p.expirationDate);
             const urgent = days !== null && days <= 30 && days >= 0;
             return (
-              <div key={p.id} className="card p-4">
+              <div key={p.id} onClick={() => openEdit(p)} className="card p-4 cursor-pointer hover:bg-white/[0.02]">
                 <div className="flex items-start justify-between">
                   <div>
                     <p className="text-sm font-semibold text-white">{p.carrier}</p>
@@ -800,11 +930,13 @@ function InsuranceTab({ propertyId, policies, setPolicies }: {
 
 // ─── Maintenance ───────────────────────────────────────────────────────────────
 
+const EMPTY_IMPROVEMENT_FORM = { description: '', category: '', cost: '', contractor: '', startDate: '', completionDate: '', notes: '' };
+
 function MaintenanceTab({ propertyId, items, setItems }: {
   propertyId: string; items: Improvement[]; setItems: (i: Improvement[]) => void;
 }) {
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ description: '', category: '', cost: '', contractor: '', startDate: '', completionDate: '', notes: '' });
+  const [formMode, setFormMode] = useState<'closed' | 'new' | Improvement>('closed');
+  const [form, setForm] = useState(EMPTY_IMPROVEMENT_FORM);
   const [saving, setSaving] = useState(false);
   const [filterCat, setFilterCat] = useState('');
 
@@ -814,11 +946,25 @@ function MaintenanceTab({ propertyId, items, setItems }: {
     .sort((a, b) => (b.startDate ?? '').localeCompare(a.startDate ?? ''));
   const total = filtered.reduce((s, i) => s + Number(i.cost), 0);
 
+  function openNew() {
+    setForm(EMPTY_IMPROVEMENT_FORM);
+    setFormMode('new');
+  }
+
+  function openEdit(i: Improvement) {
+    setForm({
+      description: i.description, category: i.category ?? '', cost: String(i.cost),
+      contractor: i.contractor ?? '', startDate: i.startDate?.slice(0, 10) ?? '',
+      completionDate: i.completionDate?.slice(0, 10) ?? '', notes: i.notes ?? '',
+    });
+    setFormMode(i);
+  }
+
   async function save() {
     if (!form.description || !form.cost) return;
     setSaving(true);
     try {
-      await createImprovement({
+      const payload = {
         propertyId,
         description: form.description,
         category: form.category || undefined,
@@ -827,15 +973,28 @@ function MaintenanceTab({ propertyId, items, setItems }: {
         startDate: form.startDate || undefined,
         completionDate: form.completionDate || undefined,
         notes: form.notes || undefined,
-      });
+      };
+      if (formMode !== 'new' && formMode !== 'closed') {
+        await updateImprovement(formMode.id, payload);
+      } else {
+        await createImprovement(payload);
+      }
       const updated = await getImprovements({ propertyId });
       setItems(updated);
-      setShowForm(false);
-      setForm({ description: '', category: '', cost: '', contractor: '', startDate: '', completionDate: '', notes: '' });
+      setFormMode('closed');
     } finally { setSaving(false); }
   }
 
+  async function remove() {
+    if (formMode === 'new' || formMode === 'closed') return;
+    if (!confirm('Delete this maintenance record?')) return;
+    await deleteImprovement(formMode.id);
+    setItems(items.filter(i => i.id !== formMode.id));
+    setFormMode('closed');
+  }
+
   const COMMON_CATS = ['Plumbing', 'Electrical', 'HVAC', 'Roofing', 'Flooring', 'Paint', 'Appliances', 'Landscaping', 'General', 'Capital'];
+  const isEditing = formMode !== 'new' && formMode !== 'closed';
 
   return (
     <div>
@@ -847,12 +1006,12 @@ function MaintenanceTab({ propertyId, items, setItems }: {
           </select>
           <span className="text-xs text-gray-500">Total: <span className="text-white font-medium">{money(total)}</span></span>
         </div>
-        <button onClick={() => setShowForm(!showForm)} className="btn text-xs">+ Add work</button>
+        <button onClick={() => formMode === 'closed' ? openNew() : setFormMode('closed')} className="btn text-xs">+ Add work</button>
       </div>
 
-      {showForm && (
+      {formMode !== 'closed' && (
         <div className="card p-4 mb-4 grid grid-cols-4 gap-3">
-          <div className="col-span-4 text-xs font-medium text-gray-400 mb-1">New maintenance / improvement</div>
+          <div className="col-span-4 text-xs font-medium text-gray-400 mb-1">{isEditing ? 'Edit maintenance / improvement' : 'New maintenance / improvement'}</div>
           <input placeholder="Description *" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} className="input-dark text-sm col-span-2" />
           <select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} className="input-dark text-sm">
             <option value="">Category</option>
@@ -864,7 +1023,8 @@ function MaintenanceTab({ propertyId, items, setItems }: {
           <input type="date" placeholder="Completion" value={form.completionDate} onChange={e => setForm(f => ({ ...f, completionDate: e.target.value }))} className="input-dark text-sm" />
           <input placeholder="Notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="input-dark text-sm col-span-2" />
           <div className="col-span-2 flex gap-2 justify-end">
-            <button onClick={() => setShowForm(false)} className="btn text-xs">Cancel</button>
+            {isEditing && <button onClick={remove} className="text-xs text-red-400 hover:text-red-300 mr-auto">Delete</button>}
+            <button onClick={() => setFormMode('closed')} className="btn text-xs">Cancel</button>
             <button onClick={save} disabled={saving || !form.description || !form.cost} className="btn btn-primary text-xs">{saving ? '…' : 'Save'}</button>
           </div>
         </div>
@@ -875,7 +1035,7 @@ function MaintenanceTab({ propertyId, items, setItems }: {
       ) : (
         <div className="space-y-2">
           {filtered.map(item => (
-            <div key={item.id} className="card p-4">
+            <div key={item.id} onClick={() => openEdit(item)} className="card p-4 cursor-pointer hover:bg-white/[0.02]">
               <div className="flex items-start justify-between">
                 <div>
                   <p className="text-sm font-medium text-white">{item.description}</p>
@@ -901,58 +1061,97 @@ function MaintenanceTab({ propertyId, items, setItems }: {
 
 // ─── Tax ───────────────────────────────────────────────────────────────────────
 
+const EMPTY_TAX_FORM = { taxYear: new Date().getFullYear().toString(), assessedValue: '', annualTaxAmount: '', installment1Due: '', installment2Due: '', installment1Paid: '', installment2Paid: '', status: 'UNPAID', notes: '' };
+
 function TaxTab({ propertyId, taxes, setTaxes }: {
   propertyId: string; taxes: TaxAssessment[]; setTaxes: (t: TaxAssessment[]) => void;
 }) {
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ taxYear: new Date().getFullYear().toString(), assessedValue: '', annualTaxAmount: '', installment1Due: '', installment2Due: '', notes: '' });
+  const [formMode, setFormMode] = useState<'closed' | 'new' | TaxAssessment>('closed');
+  const [form, setForm] = useState(EMPTY_TAX_FORM);
   const [saving, setSaving] = useState(false);
 
   const sorted = [...taxes].sort((a, b) => b.taxYear.localeCompare(a.taxYear));
+
+  function openNew() {
+    setForm(EMPTY_TAX_FORM);
+    setFormMode('new');
+  }
+
+  function openEdit(t: TaxAssessment) {
+    setForm({
+      taxYear: t.taxYear, assessedValue: t.assessedValue != null ? String(t.assessedValue) : '',
+      annualTaxAmount: String(t.annualTaxAmount),
+      installment1Due: t.installment1Due?.slice(0, 10) ?? '', installment2Due: t.installment2Due?.slice(0, 10) ?? '',
+      installment1Paid: t.installment1Paid?.slice(0, 10) ?? '', installment2Paid: t.installment2Paid?.slice(0, 10) ?? '',
+      status: t.status, notes: t.notes ?? '',
+    });
+    setFormMode(t);
+  }
 
   async function save() {
     if (!form.annualTaxAmount) return;
     setSaving(true);
     try {
-      await createTaxAssessment({
+      const payload = {
         propertyId,
         taxYear: form.taxYear,
         assessedValue: form.assessedValue ? parseFloat(form.assessedValue) : undefined,
         annualTaxAmount: parseFloat(form.annualTaxAmount),
         installment1Due: form.installment1Due || undefined,
         installment2Due: form.installment2Due || undefined,
+        installment1Paid: form.installment1Paid || undefined,
+        installment2Paid: form.installment2Paid || undefined,
         notes: form.notes || undefined,
-        status: 'UNPAID',
-      });
+        status: form.status as any,
+      };
+      if (formMode !== 'new' && formMode !== 'closed') {
+        await updateTaxAssessment(formMode.id, payload);
+      } else {
+        await createTaxAssessment(payload);
+      }
       const updated = await getTaxAssessments({ propertyId });
       setTaxes(updated);
-      setShowForm(false);
-      setForm({ taxYear: new Date().getFullYear().toString(), assessedValue: '', annualTaxAmount: '', installment1Due: '', installment2Due: '', notes: '' });
+      setFormMode('closed');
     } finally { setSaving(false); }
+  }
+
+  async function remove() {
+    if (formMode === 'new' || formMode === 'closed') return;
+    if (!confirm('Delete this tax assessment?')) return;
+    await deleteTaxAssessment(formMode.id);
+    setTaxes(taxes.filter(t => t.id !== formMode.id));
+    setFormMode('closed');
   }
 
   const statusColor: Record<string, string> = {
     PAID: 'pill-green', UNPAID: 'pill-red', PARTIALLY_PAID: 'pill-amber', DELINQUENT: 'pill-red',
   };
+  const isEditing = formMode !== 'new' && formMode !== 'closed';
 
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
         <p className="text-xs text-gray-500">{taxes.length} assessment{taxes.length !== 1 ? 's' : ''}</p>
-        <button onClick={() => setShowForm(!showForm)} className="btn text-xs">+ Add assessment</button>
+        <button onClick={() => formMode === 'closed' ? openNew() : setFormMode('closed')} className="btn text-xs">+ Add assessment</button>
       </div>
 
-      {showForm && (
+      {formMode !== 'closed' && (
         <div className="card p-4 mb-4 grid grid-cols-4 gap-3">
-          <div className="col-span-4 text-xs font-medium text-gray-400 mb-1">New tax assessment</div>
+          <div className="col-span-4 text-xs font-medium text-gray-400 mb-1">{isEditing ? 'Edit tax assessment' : 'New tax assessment'}</div>
           <input placeholder="Tax year *" value={form.taxYear} onChange={e => setForm(f => ({ ...f, taxYear: e.target.value }))} className="input-dark text-sm" />
           <input type="number" placeholder="Annual tax *" value={form.annualTaxAmount} onChange={e => setForm(f => ({ ...f, annualTaxAmount: e.target.value }))} className="input-dark text-sm" />
           <input type="number" placeholder="Assessed value" value={form.assessedValue} onChange={e => setForm(f => ({ ...f, assessedValue: e.target.value }))} className="input-dark text-sm" />
+          <select value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))} className="input-dark text-sm">
+            {['UNPAID', 'PARTIALLY_PAID', 'PAID', 'DELINQUENT'].map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
           <input type="date" placeholder="Install. 1 due" value={form.installment1Due} onChange={e => setForm(f => ({ ...f, installment1Due: e.target.value }))} className="input-dark text-sm" />
+          <input type="date" placeholder="Install. 1 paid" value={form.installment1Paid} onChange={e => setForm(f => ({ ...f, installment1Paid: e.target.value }))} className="input-dark text-sm" />
           <input type="date" placeholder="Install. 2 due" value={form.installment2Due} onChange={e => setForm(f => ({ ...f, installment2Due: e.target.value }))} className="input-dark text-sm" />
-          <input placeholder="Notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="input-dark text-sm col-span-2" />
+          <input type="date" placeholder="Install. 2 paid" value={form.installment2Paid} onChange={e => setForm(f => ({ ...f, installment2Paid: e.target.value }))} className="input-dark text-sm" />
+          <input placeholder="Notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="input-dark text-sm col-span-4" />
           <div className="col-span-4 flex gap-2 justify-end">
-            <button onClick={() => setShowForm(false)} className="btn text-xs">Cancel</button>
+            {isEditing && <button onClick={remove} className="text-xs text-red-400 hover:text-red-300 mr-auto">Delete</button>}
+            <button onClick={() => setFormMode('closed')} className="btn text-xs">Cancel</button>
             <button onClick={save} disabled={saving || !form.annualTaxAmount} className="btn btn-primary text-xs">{saving ? '…' : 'Save'}</button>
           </div>
         </div>
@@ -963,7 +1162,7 @@ function TaxTab({ propertyId, taxes, setTaxes }: {
       ) : (
         <div className="space-y-3">
           {sorted.map(t => (
-            <div key={t.id} className="card p-4">
+            <div key={t.id} onClick={() => openEdit(t)} className="card p-4 cursor-pointer hover:bg-white/[0.02]">
               <div className="flex items-start justify-between">
                 <div>
                   <div className="flex items-center gap-2 mb-1">

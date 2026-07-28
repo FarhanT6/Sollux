@@ -26,7 +26,7 @@ export default api;
 
 import type {
   Property, UtilityAccount, Statement, Payment, AIInsight, DashboardSummary,
-  Unit, Tenant, Lease, RentPayment, RentNotice, Expense, Loan, LoanPayment,
+  Unit, Tenant, LeaseTenant, Lease, RentPayment, RentNotice, Expense, Loan, LoanPayment,
   InsurancePolicy, TaxAssessment, Improvement, LegalMatter, PropertyPnL, MonthlyPnL,
   BankAccount, OtherIncome, BudgetSummary, DelinquencyTenant,
 } from '../types';
@@ -62,6 +62,8 @@ export const deleteUnit = (id: string) =>
 // Tenants
 export const getTenants = () =>
   api.get<Tenant[]>('/tenants').then(r => r.data);
+export const getTenant = (id: string) =>
+  api.get<Tenant & { leaseTenants: (LeaseTenant & { lease: Lease })[] }>(`/tenants/${id}`).then(r => r.data);
 export const createTenant = (data: Partial<Tenant>) =>
   api.post<Tenant>('/tenants', data).then(r => r.data);
 export const updateTenant = (id: string, data: Partial<Tenant>) =>
@@ -80,6 +82,10 @@ export const updateLease = (id: string, data: any) =>
   api.patch<Lease>(`/leases/${id}`, data).then(r => r.data);
 export const deleteLease = (id: string) =>
   api.delete(`/leases/${id}`);
+export const uploadLeaseDocument = (id: string, fileData: string, filename: string) =>
+  api.post<Lease>(`/leases/${id}/document`, { fileData, filename }).then(r => r.data);
+export const getLeaseDocumentUrl = (id: string) =>
+  api.get<{ url: string; expiresIn: number }>(`/leases/${id}/document`).then(r => r.data);
 
 // Rent payments
 export const getRentPayments = (params?: { leaseId?: string; propertyId?: string }) =>
