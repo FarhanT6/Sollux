@@ -48,6 +48,15 @@ export const updateProperty = (id: string, data: Partial<Property>) =>
   api.patch<Property>(`/properties/${id}`, data).then(r => r.data);
 export const deleteProperty = (id: string) =>
   api.delete(`/properties/${id}`);
+export const lookupPropertyByAddress = (params: { address: string; city: string; state: string; zip: string }) =>
+  api.get<{
+    record: {
+      county?: string; propertyType?: string; bedrooms?: number; bathrooms?: number;
+      squareFootage?: number; lotSize?: number; yearBuilt?: number;
+      lastSaleDate?: string; lastSalePrice?: number;
+    } | null;
+    valuation: { price?: number; priceRangeLow?: number; priceRangeHigh?: number } | null;
+  }>('/properties/lookup', { params }).then(r => r.data);
 
 // Units
 export const getUnits = (params?: { propertyId?: string }) =>
