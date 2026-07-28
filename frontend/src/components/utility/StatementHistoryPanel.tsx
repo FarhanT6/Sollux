@@ -12,6 +12,18 @@ function fmtMoney(v?: number | null) {
   return v != null ? `$${Number(v).toFixed(2)}` : '—';
 }
 
+function rowIsPaid(s: Statement): boolean {
+  return Number(s.amountPaid ?? 0) > 0 || (s.rawDataJson as any)?.isPaid === true;
+}
+
+// "Past due" on a statement is a frozen snapshot of what the provider printed
+// on that bill. Once the prior (chronologically older) statement is marked
+// paid in Sollux, that snapshot is stale — suppress the past-due display.
+function isPriorRowPaid(idx: number, rows: Statement[]): boolean {
+  const prior = rows[idx + 1];
+  return prior ? rowIsPaid(prior) : false;
+}
+
 function statusPill(s: Statement, newerStmt?: Statement, isLatest = false): { color: 'green' | 'amber' | 'red'; label: string } {
   // Manual overrides always win
   if (Number(s.amountPaid ?? 0) > 0) return { color: 'green', label: 'Paid' };
@@ -102,7 +114,8 @@ export default function StatementHistoryPanel({ utilityAccountId }: Props) {
       {/* Show past due warning if latest statement has a past due balance */}
       {(() => {
         const latestPastDue = latest?.rawDataJson?.pastDue as number | undefined;
-        return latestPastDue && latestPastDue > 0 ? (
+        const priorPaid = isPriorRowPaid(0, rows);
+        return latestPastDue && latestPastDue > 0 && !priorPaid ? (
           <div className="mb-3 px-3 py-2 rounded-lg flex items-center gap-2 text-xs"
             style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)' }}>
             <span className="text-red-400 font-medium">⚠ Past due balance:</span>
@@ -147,11 +160,13 @@ export default function StatementHistoryPanel({ utilityAccountId }: Props) {
             </thead>
             <tbody>
               {rows.map((s, idx) => {
-                const pastDue = s.rawDataJson?.pastDue as number | undefined;
+                const rawPastDue = s.rawDataJson?.pastDue as number | undefined;
+                const priorPaid = isPriorRowPaid(idx, rows);
+                const pastDue = priorPaid ? undefined : rawPastDue;
                 const isFirst = idx === 0;
                 // rows sorted DESC: rows[idx-1] is the more recent statement
                 const { color, label } = statusPill(s, rows[idx - 1], isFirst);
-                const isPaid = Number(s.amountPaid ?? 0) > 0 || (s.rawDataJson as any)?.isPaid === true;
+                const isPaid = rowIsPaid(s);
                 return (
                   <tr
                     key={s.id}

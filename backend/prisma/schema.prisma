@@ -416,6 +416,7 @@ model Tenant {
   fullName String
   email    String?
   phone    String?
+  address  String?
   notes    String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

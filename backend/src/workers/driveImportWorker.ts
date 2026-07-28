@@ -106,6 +106,9 @@ async function downloadFile(drive: drive_v3.Drive, fileId: string): Promise<Buff
 }
 
 function buildRawData(ex: Awaited<ReturnType<typeof parseBill>>['extracted']) {
+  const totalDue = (ex.currentCharges != null || ex.previousBalance != null)
+    ? (ex.currentCharges ?? 0) + (ex.previousBalance ?? 0)
+    : ex.amountDue;
   return {
     source: 'drive_import',
     providerName: ex.providerName,
@@ -114,6 +117,8 @@ function buildRawData(ex: Awaited<ReturnType<typeof parseBill>>['extracted']) {
     previousBalance: ex.previousBalance,
     paymentsReceived: ex.paymentsReceived,
     currentCharges: ex.currentCharges,
+    totalDue,
+    pastDue: ex.previousBalance != null && ex.previousBalance > 0 ? ex.previousBalance : undefined,
     isPaid: ex.isPaid,
     utilityType: ex.utilityType,
     chargeBreakdown: ex.chargeBreakdown,
@@ -204,6 +209,9 @@ const worker = new Worker<DriveImportJobData>(
             const key = buildStatementKey(userId, acct.propertyId, acct.id, statementDate, sanitizeFilename(file.name));
             const pdfS3Key = await uploadDocument(key, buffer);
             const rawData = buildRawData(ex);
+            // amountDue = current period charges only; balance = full amount owed.
+            const amountDueCurrent = ex.currentCharges ?? ex.amountDue;
+            const totalBalance = rawData.totalDue ?? amountDueCurrent;
 
             if (existing) {
               await db.statement.update({
@@ -212,7 +220,8 @@ const worker = new Worker<DriveImportJobData>(
                   dueDate: ex.dueDate ? new Date(ex.dueDate) : existing.dueDate,
                   billingPeriodStart: ex.billingPeriodStart ? new Date(ex.billingPeriodStart) : existing.billingPeriodStart,
                   billingPeriodEnd: ex.billingPeriodEnd ? new Date(ex.billingPeriodEnd) : existing.billingPeriodEnd,
-                  amountDue: ex.amountDue ?? existing.amountDue,
+                  amountDue: amountDueCurrent ?? existing.amountDue,
+                  balance: totalBalance ?? existing.balance,
                   usageValue: ex.usageValue ?? existing.usageValue,
                   usageUnit: ex.usageUnit ?? existing.usageUnit,
                   ratePlan: ex.ratePlan ?? existing.ratePlan,
@@ -228,9 +237,9 @@ const worker = new Worker<DriveImportJobData>(
                   dueDate: ex.dueDate ? new Date(ex.dueDate) : null,
                   billingPeriodStart: ex.billingPeriodStart ? new Date(ex.billingPeriodStart) : null,
                   billingPeriodEnd: ex.billingPeriodEnd ? new Date(ex.billingPeriodEnd) : null,
-                  amountDue: ex.amountDue ?? null,
-                  balance: ex.amountDue ?? null,
-                  amountPaid: ex.isPaid ? (ex.amountDue ?? null) : null,
+                  amountDue: amountDueCurrent ?? null,
+                  balance: totalBalance ?? null,
+                  amountPaid: ex.isPaid ? (totalBalance ?? amountDueCurrent ?? null) : null,
                   usageValue: ex.usageValue ?? null,
                   usageUnit: ex.usageUnit ?? null,
                   ratePlan: ex.ratePlan ?? null,

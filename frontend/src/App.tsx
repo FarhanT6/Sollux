@@ -16,6 +16,7 @@ import ImportPage from './pages/ImportPage';
 // Still used for deep-link detail pages
 import LoanDetailPage from './pages/LoanDetailPage';
 import NoticeDetailPage from './pages/NoticeDetailPage';
+import TenantDetailPage from './pages/TenantDetailPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isSignedIn, isLoaded } = useAuth();
@@ -58,6 +59,7 @@ export default function App() {
 
           {/* Tenants hub */}
           <Route path="tenants" element={<TenantsHubPage />} />
+          <Route path="tenants/:id" element={<TenantDetailPage />} />
           <Route path="notices/:id" element={<NoticeDetailPage />} />
 
           {/* Standalone pages */}
