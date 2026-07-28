@@ -9,10 +9,11 @@ import {
   updateExpense, deleteExpense, updateInsurancePolicy, deleteInsurancePolicy,
   updateTaxAssessment, deleteTaxAssessment, updateImprovement, deleteImprovement,
   updateLease, updateProperty, lookupPropertyByAddress,
+  createLease, getTenants, createTenant, getUnits, createUnit,
 } from '../api/client';
 import type {
   Property, Lease, Loan, Expense, InsurancePolicy, TaxAssessment,
-  Improvement, PropertyPnL,
+  Improvement, PropertyPnL, Tenant, Unit,
 } from '../types';
 import { PROPERTY_TYPE_LABELS, EXPENSE_CATEGORY_LABELS } from '../types';
 
@@ -542,6 +543,7 @@ function TenantsTab({ propertyId, leases, setLeases }: {
   const [editLease, setEditLease] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ rentAmount: '', securityDeposit: '', startDate: '', endDate: '', leaseType: 'MONTH_TO_MONTH', status: 'ACTIVE', notes: '' });
   const [savingEdit, setSavingEdit] = useState(false);
+  const [showNewLease, setShowNewLease] = useState(false);
 
   function openEditLease(lease: Lease) {
     setEditForm({
@@ -632,8 +634,16 @@ function TenantsTab({ propertyId, leases, setLeases }: {
             {totalDeposits > 0 && ` · ${money(totalDeposits)} in deposits`}
           </span>
         </div>
-        <Link to="/leases/new" className="btn text-xs">+ New lease</Link>
+        <button onClick={() => setShowNewLease(true)} className="btn text-xs">+ New lease</button>
       </div>
+
+      {showNewLease && (
+        <NewLeaseModal
+          propertyId={propertyId}
+          onClose={() => setShowNewLease(false)}
+          onCreated={async () => { setLeases(await getLeases({ propertyId })); setShowNewLease(false); }}
+        />
+      )}
 
       {filtered.length === 0 ? (
         <div className="text-center py-12 text-gray-500 text-sm">No leases for this property</div>
@@ -759,6 +769,172 @@ function TenantsTab({ propertyId, leases, setLeases }: {
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── New lease modal ─────────────────────────────────────────────────────────
+
+interface TenantRow { mode: 'existing' | 'new'; tenantId: string; fullName: string; email: string; phone: string; }
+const EMPTY_TENANT_ROW: TenantRow = { mode: 'new', tenantId: '', fullName: '', email: '', phone: '' };
+
+function NewLeaseModal({ propertyId, onClose, onCreated }: {
+  propertyId: string; onClose: () => void; onCreated: () => void;
+}) {
+  const [units, setUnits] = useState<Unit[]>([]);
+  const [allTenants, setAllTenants] = useState<Tenant[]>([]);
+  const [unitId, setUnitId] = useState('');
+  const [newUnitLabel, setNewUnitLabel] = useState('');
+  const [creatingUnit, setCreatingUnit] = useState(false);
+  const [tenantRows, setTenantRows] = useState<TenantRow[]>([{ ...EMPTY_TENANT_ROW }]);
+  const [form, setForm] = useState({
+    rentAmount: '', securityDeposit: '', startDate: new Date().toISOString().slice(0, 10),
+    endDate: '', leaseType: 'MONTH_TO_MONTH', status: 'ACTIVE', notes: '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    getUnits({ propertyId }).then(u => { setUnits(u); if (u.length === 1) setUnitId(u[0].id); });
+    getTenants().then(setAllTenants);
+  }, [propertyId]);
+
+  function updateRow(i: number, patch: Partial<TenantRow>) {
+    setTenantRows(rows => rows.map((r, idx) => idx === i ? { ...r, ...patch } : r));
+  }
+  function addRow() {
+    setTenantRows(rows => [...rows, { ...EMPTY_TENANT_ROW }]);
+  }
+  function removeRow(i: number) {
+    setTenantRows(rows => rows.filter((_, idx) => idx !== i));
+  }
+
+  async function handleSave() {
+    setError(null);
+    let finalUnitId = unitId;
+    if (!finalUnitId) {
+      if (!newUnitLabel.trim()) { setError('Select a unit or enter a new unit label.'); return; }
+      setCreatingUnit(true);
+      try {
+        const unit = await createUnit({ propertyId, unitLabel: newUnitLabel.trim() });
+        finalUnitId = unit.id;
+      } finally { setCreatingUnit(false); }
+    }
+
+    const validRows = tenantRows.filter(r => r.mode === 'existing' ? r.tenantId : r.fullName.trim());
+    if (validRows.length === 0) { setError('Add at least one tenant.'); return; }
+    if (!form.rentAmount) { setError('Rent amount is required.'); return; }
+
+    setSaving(true);
+    try {
+      const tenantIds: string[] = [];
+      for (const row of validRows) {
+        if (row.mode === 'existing') {
+          tenantIds.push(row.tenantId);
+        } else {
+          const created = await createTenant({ fullName: row.fullName.trim(), email: row.email || undefined, phone: row.phone || undefined });
+          tenantIds.push(created.id);
+        }
+      }
+      await createLease({
+        unitId: finalUnitId,
+        startDate: form.startDate,
+        endDate: form.endDate || undefined,
+        rentAmount: parseFloat(form.rentAmount),
+        securityDeposit: form.securityDeposit ? parseFloat(form.securityDeposit) : undefined,
+        leaseType: form.leaseType,
+        status: form.status,
+        notes: form.notes || undefined,
+        tenantIds,
+      });
+      onCreated();
+    } catch {
+      setError('Failed to create lease. Please check the fields and try again.');
+    } finally { setSaving(false); }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="rounded-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto" style={{ background: '#1a1a1a', border: '1px solid rgba(255,255,255,0.1)' }}>
+        <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 border-b border-white/8" style={{ background: '#1a1a1a' }}>
+          <h2 className="text-base font-semibold text-white">New lease</h2>
+          <button onClick={onClose} className="text-gray-500 hover:text-white text-lg leading-none">×</button>
+        </div>
+
+        <div className="px-6 py-5 space-y-5">
+          {error && <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">{error}</div>}
+
+          <div>
+            <p className="text-xs text-gray-500 mb-2 font-medium uppercase tracking-wide">Unit</p>
+            {units.length > 0 && (
+              <select value={unitId} onChange={e => setUnitId(e.target.value)} className="input-dark w-full text-sm mb-2">
+                <option value="">— Select existing unit —</option>
+                {units.map(u => <option key={u.id} value={u.id}>{u.unitLabel}</option>)}
+              </select>
+            )}
+            {!unitId && (
+              <input placeholder={units.length > 0 ? 'Or enter a new unit label' : 'Unit label (e.g. Main House, Unit A)'}
+                value={newUnitLabel} onChange={e => setNewUnitLabel(e.target.value)} className="input-dark w-full text-sm" />
+            )}
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">Tenant(s)</p>
+              <button onClick={addRow} className="text-xs text-amber-400 hover:text-amber-300">+ Add another tenant</button>
+            </div>
+            <div className="space-y-2">
+              {tenantRows.map((row, i) => (
+                <div key={i} className="rounded-lg p-3" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex gap-2 text-xs">
+                      <button onClick={() => updateRow(i, { mode: 'existing' })} className={row.mode === 'existing' ? 'text-amber-400 font-medium' : 'text-gray-500 hover:text-gray-300'}>Existing tenant</button>
+                      <span className="text-gray-700">·</span>
+                      <button onClick={() => updateRow(i, { mode: 'new' })} className={row.mode === 'new' ? 'text-amber-400 font-medium' : 'text-gray-500 hover:text-gray-300'}>New tenant</button>
+                    </div>
+                    {tenantRows.length > 1 && <button onClick={() => removeRow(i)} className="text-xs text-gray-600 hover:text-red-400">✕</button>}
+                  </div>
+                  {row.mode === 'existing' ? (
+                    <select value={row.tenantId} onChange={e => updateRow(i, { tenantId: e.target.value })} className="input-dark w-full text-sm">
+                      <option value="">— Select tenant —</option>
+                      {allTenants.map(t => <option key={t.id} value={t.id}>{t.fullName}</option>)}
+                    </select>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2">
+                      <input placeholder="Full name *" value={row.fullName} onChange={e => updateRow(i, { fullName: e.target.value })} className="input-dark text-sm col-span-2" />
+                      <input placeholder="Email" value={row.email} onChange={e => updateRow(i, { email: e.target.value })} className="input-dark text-sm" />
+                      <input placeholder="Phone" value={row.phone} onChange={e => updateRow(i, { phone: e.target.value })} className="input-dark text-sm" />
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <p className="text-xs text-gray-500 mb-2 font-medium uppercase tracking-wide">Lease terms</p>
+            <div className="grid grid-cols-2 gap-3">
+              <input type="number" placeholder="Rent/mo *" value={form.rentAmount} onChange={e => setForm(f => ({ ...f, rentAmount: e.target.value }))} className="input-dark text-sm" />
+              <input type="number" placeholder="Security deposit" value={form.securityDeposit} onChange={e => setForm(f => ({ ...f, securityDeposit: e.target.value }))} className="input-dark text-sm" />
+              <select value={form.leaseType} onChange={e => setForm(f => ({ ...f, leaseType: e.target.value }))} className="input-dark text-sm">
+                <option value="MONTH_TO_MONTH">Month-to-month</option>
+                <option value="FIXED_TERM">Fixed term</option>
+              </select>
+              <select value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))} className="input-dark text-sm">
+                {['ACTIVE', 'PENDING', 'ENDED', 'TERMINATED'].map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+              <input type="date" value={form.startDate} onChange={e => setForm(f => ({ ...f, startDate: e.target.value }))} className="input-dark text-sm" />
+              <input type="date" placeholder="End date" value={form.endDate} onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))} className="input-dark text-sm" />
+              <input placeholder="Notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="input-dark text-sm col-span-2" />
+            </div>
+          </div>
+        </div>
+
+        <div className="sticky bottom-0 flex justify-end gap-2 px-6 py-4 border-t border-white/8" style={{ background: '#1a1a1a' }}>
+          <button onClick={onClose} className="btn text-sm">Cancel</button>
+          <button onClick={handleSave} disabled={saving || creatingUnit} className="btn btn-primary text-sm">{saving || creatingUnit ? '…' : 'Create lease'}</button>
+        </div>
+      </div>
     </div>
   );
 }

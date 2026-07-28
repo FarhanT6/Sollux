@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import {
   getBudgetMonthly, getBudgetDelinquency,
   getBankAccounts, createBankAccount, updateBankAccount, deleteBankAccount, recordBankBalance,
@@ -231,7 +232,11 @@ function OverviewTab({ budget }: { budget: BudgetSummary }) {
             <tbody>
               {rent.rows.map(row => (
                 <tr key={row.leaseId} className="border-b border-white/5 hover:bg-white/2">
-                  <td className="py-2 text-white font-medium">{row.tenant}</td>
+                  <td className="py-2 text-white font-medium">
+                    {row.tenantId
+                      ? <Link to={`/tenants/${row.tenantId}`} className="hover:text-amber-400">{row.tenant}</Link>
+                      : row.tenant}
+                  </td>
                   <td className="py-2 text-gray-400">{row.unit} · {row.property}</td>
                   <td className="py-2 text-right text-gray-300">{fmt(row.expected)}</td>
                   <td className="py-2 text-right text-emerald-500">{fmt(row.collected)}</td>
@@ -367,7 +372,11 @@ function DelinquencyTab({ data }: { data: { tenants: DelinquencyTenant[]; totalA
           <tbody>
             {data.tenants.map(t => (
               <tr key={t.leaseId} className="border-b border-white/5 hover:bg-white/2">
-                <td className="py-2 text-white font-medium">{t.tenant}</td>
+                <td className="py-2 text-white font-medium">
+                  {t.tenantId
+                    ? <Link to={`/tenants/${t.tenantId}`} className="hover:text-amber-400">{t.tenant}</Link>
+                    : t.tenant}
+                </td>
                 <td className="py-2 text-gray-400">{t.unit} · {t.property}</td>
                 <td className="py-2 text-right text-gray-300">{fmt(t.monthlyRent)}</td>
                 <td className="py-2 text-right text-red-500 font-semibold">{fmt(t.arrears)}</td>
