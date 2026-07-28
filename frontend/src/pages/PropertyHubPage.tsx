@@ -8,7 +8,7 @@ import {
   createTaxAssessment, createLoan,
   updateExpense, deleteExpense, updateInsurancePolicy, deleteInsurancePolicy,
   updateTaxAssessment, deleteTaxAssessment, updateImprovement, deleteImprovement,
-  updateLease,
+  updateLease, updateProperty, lookupPropertyByAddress,
 } from '../api/client';
 import type {
   Property, Lease, Loan, Expense, InsurancePolicy, TaxAssessment,
@@ -39,6 +39,7 @@ export default function PropertyHubPage() {
   const [taxes, setTaxes]       = useState<TaxAssessment[]>([]);
   const [improvements, setImprovements] = useState<Improvement[]>([]);
   const [pnl, setPnl] = useState<PropertyPnL | null>(null);
+  const [showEditProperty, setShowEditProperty] = useState(false);
 
   const loaded = useRef<Set<Tab>>(new Set());
 
@@ -116,7 +117,7 @@ export default function PropertyHubPage() {
                 </p>
               </div>
             </div>
-            <div className="flex gap-1.5 flex-wrap justify-end">
+            <div className="flex gap-1.5 flex-wrap justify-end items-center">
               <span className="pill pill-gray">{PROPERTY_TYPE_LABELS[property.type] ?? property.type}</span>
               <span className={`pill ${property.status === 'ACTIVE' ? 'pill-green' : 'pill-gray'}`}>
                 {property.status}
@@ -126,6 +127,7 @@ export default function PropertyHubPage() {
                   {occ}% occupied
                 </span>
               )}
+              <button onClick={() => setShowEditProperty(true)} className="btn text-xs ml-1">Edit</button>
             </div>
           </div>
 
@@ -171,6 +173,239 @@ export default function PropertyHubPage() {
         {activeTab === 'Insurance' && <InsuranceTab propertyId={id!} policies={policies} setPolicies={setPolicies} />}
         {activeTab === 'Maintenance' && <MaintenanceTab propertyId={id!} items={improvements} setItems={setImprovements} />}
         {activeTab === 'Tax' && <TaxTab propertyId={id!} taxes={taxes} setTaxes={setTaxes} />}
+      </div>
+
+      {showEditProperty && (
+        <PropertyEditModal property={property} onClose={() => setShowEditProperty(false)} onSave={setProperty} />
+      )}
+    </div>
+  );
+}
+
+// ─── Property edit modal ─────────────────────────────────────────────────────
+
+function PropertyEditModal({ property, onClose, onSave }: {
+  property: Property; onClose: () => void; onSave: (p: Property) => void;
+}) {
+  const [form, setForm] = useState({
+    nickname: property.nickname ?? '',
+    address: property.address,
+    addressLine2: property.addressLine2 ?? '',
+    city: property.city,
+    county: property.county ?? '',
+    state: property.state,
+    zip: property.zip,
+    region: property.region ?? '',
+    type: property.type,
+    status: property.status,
+    ownerEntity: property.ownerEntity ?? '',
+    lotSqft: property.lotSqft != null ? String(property.lotSqft) : '',
+    parcelGroupName: property.parcelGroupName ?? '',
+    notes: property.notes ?? '',
+    acquisitionDate: property.acquisitionDate?.slice(0, 10) ?? '',
+    acquisitionPrice: property.acquisitionPrice != null ? String(property.acquisitionPrice) : '',
+    estimatedValue: property.estimatedValue != null ? String(property.estimatedValue) : '',
+    landValue: property.landValue != null ? String(property.landValue) : '',
+    valuationDate: property.valuationDate?.slice(0, 10) ?? '',
+    valuationNotes: property.valuationNotes ?? '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [lookingUpDetails, setLookingUpDetails] = useState(false);
+  const [lookingUpValue, setLookingUpValue] = useState(false);
+  const [lookupError, setLookupError] = useState<string | null>(null);
+
+  const f = (field: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
+    setForm(prev => ({ ...prev, [field]: e.target.value }));
+
+  async function fillDetailsFromRentCast() {
+    setLookupError(null);
+    setLookingUpDetails(true);
+    try {
+      const { record } = await lookupPropertyByAddress({ address: form.address, city: form.city, state: form.state, zip: form.zip });
+      if (!record) { setLookupError('No RentCast data found for this address.'); return; }
+      setForm(prev => ({
+        ...prev,
+        county: prev.county || record.county || prev.county,
+        lotSqft: prev.lotSqft || (record.lotSize != null ? String(record.lotSize) : prev.lotSqft),
+        notes: prev.notes || (record.bedrooms || record.squareFootage
+          ? `${record.bedrooms ?? '?'}bd/${record.bathrooms ?? '?'}ba, ${record.squareFootage ?? '?'} sqft, built ${record.yearBuilt ?? '?'} (via RentCast)`
+          : prev.notes),
+      }));
+    } catch {
+      setLookupError('RentCast lookup failed. Check RENTCAST_API_KEY is configured on the server.');
+    } finally { setLookingUpDetails(false); }
+  }
+
+  async function fillValueFromRentCast() {
+    setLookupError(null);
+    setLookingUpValue(true);
+    try {
+      const { valuation } = await lookupPropertyByAddress({ address: form.address, city: form.city, state: form.state, zip: form.zip });
+      if (!valuation?.price) { setLookupError('No RentCast valuation found for this address.'); return; }
+      setForm(prev => ({
+        ...prev,
+        estimatedValue: String(valuation.price),
+        valuationDate: new Date().toISOString().slice(0, 10),
+        valuationNotes: `RentCast AVM estimate${valuation.priceRangeLow && valuation.priceRangeHigh ? ` ($${valuation.priceRangeLow.toLocaleString()}–$${valuation.priceRangeHigh.toLocaleString()} range)` : ''}, ${new Date().toLocaleDateString()}`,
+      }));
+    } catch {
+      setLookupError('RentCast lookup failed. Check RENTCAST_API_KEY is configured on the server.');
+    } finally { setLookingUpValue(false); }
+  }
+
+  async function handleSave() {
+    if (!form.address || !form.city || !form.state || !form.zip) return;
+    setSaving(true);
+    try {
+      const updated = await updateProperty(property.id, {
+        nickname: form.nickname || undefined,
+        address: form.address,
+        addressLine2: form.addressLine2 || undefined,
+        city: form.city,
+        county: form.county || undefined,
+        state: form.state.toUpperCase(),
+        zip: form.zip,
+        region: form.region || undefined,
+        type: form.type,
+        status: form.status,
+        ownerEntity: form.ownerEntity || undefined,
+        lotSqft: form.lotSqft ? parseInt(form.lotSqft, 10) : undefined,
+        parcelGroupName: form.parcelGroupName || undefined,
+        notes: form.notes || undefined,
+        acquisitionDate: form.acquisitionDate || undefined,
+        acquisitionPrice: form.acquisitionPrice ? parseFloat(form.acquisitionPrice) : undefined,
+        estimatedValue: form.estimatedValue ? parseFloat(form.estimatedValue) : undefined,
+        landValue: form.landValue ? parseFloat(form.landValue) : undefined,
+        valuationDate: form.valuationDate || undefined,
+        valuationNotes: form.valuationNotes || undefined,
+      } as any);
+      onSave(updated);
+      onClose();
+    } finally { setSaving(false); }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="rounded-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto"
+        style={{ background: '#1a1a1a', border: '1px solid rgba(255,255,255,0.1)' }}>
+        <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 border-b border-white/8" style={{ background: '#1a1a1a' }}>
+          <h2 className="text-base font-semibold text-white">Edit property</h2>
+          <button onClick={onClose} className="text-gray-500 hover:text-white text-lg leading-none">×</button>
+        </div>
+
+        <div className="px-6 py-5 space-y-5">
+          {lookupError && (
+            <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">{lookupError}</div>
+          )}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">Property details</p>
+              <button onClick={fillDetailsFromRentCast} disabled={lookingUpDetails || !form.address}
+                className="text-xs text-amber-400 hover:text-amber-300 disabled:opacity-40">
+                {lookingUpDetails ? 'Looking up…' : '⚡ Auto-fill from RentCast'}
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2">
+                <label className="block text-xs text-gray-500 mb-1">Nickname</label>
+                <input value={form.nickname} onChange={f('nickname')} className="input-dark w-full text-sm" placeholder="e.g. Vista Verde" />
+              </div>
+              <div className="col-span-2">
+                <label className="block text-xs text-gray-500 mb-1">Address *</label>
+                <input value={form.address} onChange={f('address')} className="input-dark w-full text-sm" />
+              </div>
+              <div className="col-span-2">
+                <label className="block text-xs text-gray-500 mb-1">Address line 2</label>
+                <input value={form.addressLine2} onChange={f('addressLine2')} className="input-dark w-full text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">City *</label>
+                <input value={form.city} onChange={f('city')} className="input-dark w-full text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">County</label>
+                <input value={form.county} onChange={f('county')} className="input-dark w-full text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">State *</label>
+                <input value={form.state} onChange={f('state')} maxLength={2} className="input-dark w-full text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Zip *</label>
+                <input value={form.zip} onChange={f('zip')} className="input-dark w-full text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Type</label>
+                <select value={form.type} onChange={f('type')} className="input-dark w-full text-sm">
+                  {Object.entries(PROPERTY_TYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Status</label>
+                <select value={form.status} onChange={f('status')} className="input-dark w-full text-sm">
+                  {['ACTIVE', 'SOLD', 'UNDER_CONTRACT', 'INACTIVE'].map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Owner entity</label>
+                <input value={form.ownerEntity} onChange={f('ownerEntity')} className="input-dark w-full text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Lot size (sqft)</label>
+                <input type="number" value={form.lotSqft} onChange={f('lotSqft')} className="input-dark w-full text-sm" />
+              </div>
+              <div className="col-span-2">
+                <label className="block text-xs text-gray-500 mb-1">Parcel group</label>
+                <input value={form.parcelGroupName} onChange={f('parcelGroupName')} className="input-dark w-full text-sm" />
+              </div>
+              <div className="col-span-2">
+                <label className="block text-xs text-gray-500 mb-1">Notes</label>
+                <textarea value={form.notes} onChange={f('notes')} rows={2} className="input-dark w-full text-sm" />
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">Purchase & valuation</p>
+              <button onClick={fillValueFromRentCast} disabled={lookingUpValue || !form.address}
+                className="text-xs text-amber-400 hover:text-amber-300 disabled:opacity-40">
+                {lookingUpValue ? 'Estimating…' : '⚡ Get automated valuation'}
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Acquisition date</label>
+                <input type="date" value={form.acquisitionDate} onChange={f('acquisitionDate')} className="input-dark w-full text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Purchase price</label>
+                <input type="number" value={form.acquisitionPrice} onChange={f('acquisitionPrice')} className="input-dark w-full text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Estimated value</label>
+                <input type="number" value={form.estimatedValue} onChange={f('estimatedValue')} className="input-dark w-full text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Land value</label>
+                <input type="number" value={form.landValue} onChange={f('landValue')} className="input-dark w-full text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Valuation date</label>
+                <input type="date" value={form.valuationDate} onChange={f('valuationDate')} className="input-dark w-full text-sm" />
+              </div>
+              <div className="col-span-2">
+                <label className="block text-xs text-gray-500 mb-1">Valuation notes</label>
+                <input value={form.valuationNotes} onChange={f('valuationNotes')} className="input-dark w-full text-sm" placeholder="e.g. source of estimate" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="sticky bottom-0 flex justify-end gap-2 px-6 py-4 border-t border-white/8" style={{ background: '#1a1a1a' }}>
+          <button onClick={onClose} className="btn text-sm">Cancel</button>
+          <button onClick={handleSave} disabled={saving || !form.address || !form.city} className="btn btn-primary text-sm">{saving ? '…' : 'Save changes'}</button>
+        </div>
       </div>
     </div>
   );

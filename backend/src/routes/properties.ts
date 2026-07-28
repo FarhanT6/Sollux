@@ -2,17 +2,33 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
+import { lookupPropertyRecord, lookupValueEstimate } from '../services/rentcastService';
 
 const router = Router();
 router.use(attachDbUser);
 
 const PropertySchema = z.object({
-  nickname: z.string().optional(),
+  nickname: z.string().optional().nullable(),
   address: z.string().min(1),
+  addressLine2: z.string().optional().nullable(),
   city: z.string().min(1),
+  county: z.string().optional().nullable(),
   state: z.string().min(2).max(2),
   zip: z.string().min(5),
-  type: z.enum(['PRIMARY', 'RENTAL', 'INVESTMENT', 'COMMERCIAL']),
+  country: z.string().optional(),
+  region: z.string().optional().nullable(),
+  type: z.enum(['PRIMARY', 'RENTAL', 'INVESTMENT', 'COMMERCIAL', 'RESIDENTIAL_SINGLE', 'RESIDENTIAL_MULTI', 'LAND', 'GOLF_COURSE', 'OTHER']),
+  status: z.enum(['ACTIVE', 'SOLD', 'UNDER_CONTRACT', 'INACTIVE']).optional(),
+  acquisitionDate: z.string().transform(s => new Date(s)).optional().nullable(),
+  acquisitionPrice: z.number().optional().nullable(),
+  ownerEntity: z.string().optional().nullable(),
+  notes: z.string().optional().nullable(),
+  estimatedValue: z.number().optional().nullable(),
+  landValue: z.number().optional().nullable(),
+  valuationDate: z.string().transform(s => new Date(s)).optional().nullable(),
+  valuationNotes: z.string().optional().nullable(),
+  lotSqft: z.number().optional().nullable(),
+  parcelGroupName: z.string().optional().nullable(),
 });
 
 // GET /api/properties — list all for user
@@ -51,6 +67,29 @@ router.get('/', async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+});
+
+// GET /api/properties/lookup?address=&city=&state=&zip= — RentCast property
+// details + automated valuation for an address. Returns suggested values for
+// the UI to prefill; nothing is saved until the user confirms via PATCH.
+router.get('/lookup', async (req, res, next) => {
+  try {
+    const { address, city, state, zip } = req.query as Record<string, string>;
+    if (!address || !city || !state || !zip) {
+      return res.status(400).json({ error: 'address, city, state, and zip are required' });
+    }
+
+    const [record, valuation] = await Promise.all([
+      lookupPropertyRecord({ address, city, state, zip }).catch(() => null),
+      lookupValueEstimate({ address, city, state, zip }).catch(() => null),
+    ]);
+
+    if (!record && !valuation) {
+      return res.status(404).json({ error: 'No RentCast data found for this address' });
+    }
+
+    res.json({ record, valuation });
+  } catch (err) { next(err); }
 });
 
 // GET /api/properties/:id
