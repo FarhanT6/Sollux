@@ -35,6 +35,8 @@ interface AmortizationResponse {
     payoffDate: string | null;
     monthsRemaining: number | null;
     totalInterestRemaining: number;
+    totalDeferredInterest: number;
+    scheduleEndsAt: string | null;
     totalPaidToDate: number;
     totalInterestToDate: number;
   };
@@ -635,7 +637,11 @@ export default function LoanDetailPage() {
 
       {amortization.negativeAmortization && (
         <div className="mt-4 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-4 py-2.5">
-          The payment on file doesn't cover the monthly interest — this loan's balance will grow at the current payment amount.
+          The payment on file doesn't cover the monthly interest — unpaid interest is capitalizing into the balance instead of paying it down.
+          {amortization.scheduleEndsAt && (
+            <> Projected through <span className="font-medium">{format(new Date(amortization.scheduleEndsAt), 'MMM yyyy')}</span>, that adds up to{' '}
+            <span className="font-medium">{moneyPrecise(amortization.totalDeferredInterest)}</span> of deferred interest added to the balance.</>
+          )}
         </div>
       )}
 
@@ -665,11 +671,24 @@ export default function LoanDetailPage() {
           )}
         </div>
         <div className="stat-card">
-          <p className="text-xs text-gray-500 mb-1">Payoff date</p>
-          <p className={`text-xl font-semibold ${amortization.payoffDate ? 'text-green-400' : 'text-gray-500'}`}>
-            {amortization.payoffDate ? format(new Date(amortization.payoffDate), 'MMM yyyy') : '—'}
-          </p>
-          {amortization.monthsRemaining && <p className="text-xs text-gray-600 mt-1">{amortization.monthsRemaining} payments left</p>}
+          <p className="text-xs text-gray-500 mb-1">{amortization.negativeAmortization ? 'Balance trend' : 'Payoff date'}</p>
+          {amortization.negativeAmortization ? (
+            <>
+              <p className="text-xl font-semibold text-red-400">Growing</p>
+              {amortization.scheduleEndsAt && (
+                <p className="text-xs text-gray-600 mt-1">
+                  {money(amortization.schedule[amortization.schedule.length - 1]?.balance)} by {format(new Date(amortization.scheduleEndsAt), 'MMM yyyy')}
+                </p>
+              )}
+            </>
+          ) : (
+            <>
+              <p className={`text-xl font-semibold ${amortization.payoffDate ? 'text-green-400' : 'text-gray-500'}`}>
+                {amortization.payoffDate ? format(new Date(amortization.payoffDate), 'MMM yyyy') : '—'}
+              </p>
+              {amortization.monthsRemaining && <p className="text-xs text-gray-600 mt-1">{amortization.monthsRemaining} payments left</p>}
+            </>
+          )}
         </div>
         <div className="stat-card">
           <p className="text-xs text-gray-500 mb-1">Interest rate</p>
@@ -687,13 +706,18 @@ export default function LoanDetailPage() {
       {originalAmount > 0 && hasBalanceData && (
         <div className="mt-4 mb-6 card p-4">
           <div className="flex items-center justify-between mb-2">
-            <p className="text-xs text-gray-500">Payoff progress</p>
-            <p className="text-xs font-semibold text-white">{paidOff.toFixed(1)}% paid off</p>
+            <p className="text-xs text-gray-500">{currentBalance > originalAmount ? 'Balance vs. original' : 'Payoff progress'}</p>
+            <p className="text-xs font-semibold text-white">
+              {currentBalance > originalAmount ? `${money(currentBalance - originalAmount)} above original` : `${paidOff.toFixed(1)}% paid off`}
+            </p>
           </div>
           <div className="w-full h-2.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.08)' }}>
             <div
               className="h-full rounded-full transition-all"
-              style={{ width: `${paidOff}%`, background: 'linear-gradient(90deg, #6366f1, #8b5cf6)' }}
+              style={{
+                width: currentBalance > originalAmount ? '100%' : `${paidOff}%`,
+                background: currentBalance > originalAmount ? '#ef4444' : 'linear-gradient(90deg, #6366f1, #8b5cf6)',
+              }}
             />
           </div>
           <div className="flex justify-between mt-1.5 text-xs text-gray-600">
@@ -749,7 +773,7 @@ export default function LoanDetailPage() {
       {amortization.isAmortizing && amortization.schedule.length > 0 && (
         <div className="card p-4 mb-6">
           <div className="flex items-center justify-between mb-3">
-            <p className="text-sm font-medium text-white">Remaining amortization schedule</p>
+            <p className="text-sm font-medium text-white">{amortization.negativeAmortization ? 'Projected balance schedule (negative amortization)' : 'Remaining amortization schedule'}</p>
             {amortization.schedule.length > 12 && (
               <button onClick={() => setShowFullSchedule(v => !v)} className="text-xs text-amber-400 hover:text-amber-300">
                 {showFullSchedule ? 'Show less' : `Show all ${amortization.schedule.length}`}
@@ -774,7 +798,9 @@ export default function LoanDetailPage() {
                     <td className="text-gray-600">{row.paymentNumber}</td>
                     <td>{format(new Date(row.date), 'MMM yyyy')}</td>
                     <td className="text-right font-mono">{moneyPrecise(row.paymentAmount)}</td>
-                    <td className="text-right font-mono text-green-400">{moneyPrecise(row.principal)}</td>
+                    <td className={`text-right font-mono ${row.principal < 0 ? 'text-red-400' : 'text-green-400'}`}>
+                      {row.principal < 0 ? `+${moneyPrecise(-row.principal)}` : moneyPrecise(row.principal)}
+                    </td>
                     <td className="text-right font-mono text-gray-400">{moneyPrecise(row.interest)}</td>
                     <td className="text-right font-mono">{moneyPrecise(row.balance)}</td>
                   </tr>
