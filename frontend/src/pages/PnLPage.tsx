@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { getPortfolioPnL, getMonthlyPnL, getProperties } from '../api/client';
 import type { PropertyPnL, MonthlyPnL, Property } from '../types';
 
@@ -234,7 +235,9 @@ export default function PnLPage({ embedded }: { embedded?: boolean } = {}) {
               <tbody className="divide-y divide-white/5">
                 {byProp.map(p => (
                   <tr key={p.propertyId} className="hover:bg-white/[0.02]">
-                    <td className="px-4 py-3 text-white font-medium text-xs">{p.propertyName}</td>
+                    <td className="px-4 py-3 text-white font-medium text-xs">
+                      <Link to={`/portfolio/${p.propertyId}`} className="hover:text-amber-400">{p.propertyName}</Link>
+                    </td>
                     <td className="px-4 py-3 text-right text-gray-300 text-xs">{money(p.rentalIncome)}</td>
                     <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(p.operatingExpenses)}</td>
                     <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(p.insuranceExpense)}</td>

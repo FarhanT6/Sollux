@@ -455,6 +455,8 @@ model Lease {
   notes                String?
   arrearsBalance       Decimal     @default(0) @db.Decimal(10, 2)
   arrearsCaughtUpThrough DateTime?
+  manualLikelihood     String?     // 'high' | 'medium' | 'low' | 'none' — overrides the automated delinquency score
+  manualLikelihoodNote String?
   createdAt            DateTime    @default(now())
   updatedAt            DateTime    @updatedAt
 
@@ -575,7 +577,10 @@ model Loan {
   originationDate    DateTime?
   maturityDate       DateTime?
   monthlyPayment     Decimal?        @db.Decimal(10, 2)
+  escrowAmount       Decimal?        @db.Decimal(10, 2) // taxes/insurance portion, on top of P&I
   currentBalance     Decimal?        @db.Decimal(14, 2)
+  dueDay             Int?            // day of month payment is due, e.g. 1
+  gracePeriodDays    Int?            // days after dueDay before a late fee applies
   notes                  String?
   paymentType            String          @default("PRINCIPAL_AND_INTEREST")
   prepaymentPenaltyJson  Json?

@@ -183,7 +183,10 @@ export interface Loan {
   originationDate?: string;
   maturityDate?: string;
   monthlyPayment?: number;
+  escrowAmount?: number;
   currentBalance?: number;
+  dueDay?: number;
+  gracePeriodDays?: number;
   paymentType?: string;
   prepaymentPenaltyJson?: PrepaymentPenalty | null;
   notes?: string;
@@ -192,6 +195,8 @@ export interface Loan {
   createdAt: string;
   property?: Pick<Property, 'id' | 'address' | 'nickname'>;
   loanPayments?: LoanPayment[];
+  interestPaidToDate?: number;
+  totalInterestLifetime?: number | null;
 }
 
 export interface LoanPayment {
@@ -488,7 +493,10 @@ export interface DelinquencyTenant {
   daysSincePay: number;
   recentMonthlyAvg: number;
   score: number;
+  computedLikelihood: 'high' | 'medium' | 'low' | 'none';
   likelihood: 'high' | 'medium' | 'low' | 'none';
+  isManualOverride: boolean;
+  manualLikelihoodNote: string | null;
   expectedCollection: number;
 }
 

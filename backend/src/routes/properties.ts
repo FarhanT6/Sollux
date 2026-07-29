@@ -14,7 +14,7 @@ const PropertySchema = z.object({
   city: z.string().min(1),
   county: z.string().optional().nullable(),
   state: z.string().min(2).max(2),
-  zip: z.string().min(5),
+  zip: z.string(), // many legacy/vacant-land properties have no zip on file; '' is valid
   country: z.string().optional(),
   region: z.string().optional().nullable(),
   type: z.enum(['PRIMARY', 'RENTAL', 'INVESTMENT', 'COMMERCIAL', 'RESIDENTIAL_SINGLE', 'RESIDENTIAL_MULTI', 'LAND', 'GOLF_COURSE', 'OTHER']),

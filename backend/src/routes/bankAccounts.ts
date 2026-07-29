@@ -1,9 +1,31 @@
 import { Router } from 'express';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
+import { Decimal } from '@prisma/client/runtime/library';
 
 const router = Router();
 router.use(attachDbUser);
+
+function toNum(d: Decimal | null | undefined): number {
+  return d ? parseFloat(d.toString()) : 0;
+}
+
+function serialize(a: any) {
+  const latest = a.balances?.[0];
+  return {
+    id: a.id,
+    name: a.name,
+    last4: a.last4,
+    bank: a.bank,
+    accountType: a.accountType,
+    isActive: a.isActive,
+    sortOrder: a.sortOrder,
+    notes: a.notes,
+    balance: toNum(latest?.balance),
+    creditLimit: latest?.creditLimit != null ? toNum(latest.creditLimit) : undefined,
+    asOfDate: latest?.asOfDate ?? undefined,
+  };
+}
 
 // GET /api/bank-accounts
 router.get('/', async (req, res, next) => {
@@ -18,7 +40,7 @@ router.get('/', async (req, res, next) => {
       },
       orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
     });
-    res.json(accounts);
+    res.json(accounts.map(serialize));
   } catch (err) { next(err); }
 });
 
@@ -28,8 +50,9 @@ router.post('/', async (req, res, next) => {
     const { name, last4, bank, accountType, sortOrder, notes } = req.body;
     const account = await db.bankAccount.create({
       data: { userId: req.dbUserId!, name, last4, bank, accountType, sortOrder: sortOrder ?? 0, notes },
+      include: { balances: { orderBy: { asOfDate: 'desc' }, take: 1 } },
     });
-    res.status(201).json(account);
+    res.status(201).json(serialize(account));
   } catch (err) { next(err); }
 });
 
@@ -42,8 +65,9 @@ router.patch('/:id', async (req, res, next) => {
     const updated = await db.bankAccount.update({
       where: { id: acct.id },
       data: { name, last4, bank, accountType, isActive, sortOrder, notes },
+      include: { balances: { orderBy: { asOfDate: 'desc' }, take: 1 } },
     });
-    res.json(updated);
+    res.json(serialize(updated));
   } catch (err) { next(err); }
 });
 

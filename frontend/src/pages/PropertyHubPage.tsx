@@ -256,7 +256,7 @@ function PropertyEditModal({ property, onClose, onSave }: {
   }
 
   async function handleSave() {
-    if (!form.address || !form.city || !form.state || !form.zip) return;
+    if (!form.address || !form.city || !form.state) return;
     setSaving(true);
     try {
       const updated = await updateProperty(property.id, {
@@ -266,7 +266,7 @@ function PropertyEditModal({ property, onClose, onSave }: {
         city: form.city,
         county: form.county || undefined,
         state: form.state.toUpperCase(),
-        zip: form.zip,
+        zip: form.zip || undefined,
         region: form.region || undefined,
         type: form.type,
         status: form.status,
@@ -415,6 +415,17 @@ function PropertyEditModal({ property, onClose, onSave }: {
 
 // ─── Overview ──────────────────────────────────────────────────────────────────
 
+// Next occurrence of dueDay (1-31) on or after today, clamped to short months.
+function nextDueDate(dueDay: number): Date {
+  const today = new Date();
+  const thisMonth = new Date(today.getFullYear(), today.getMonth(), Math.min(dueDay, 28));
+  const daysInThisMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+  const clampedThisMonth = new Date(today.getFullYear(), today.getMonth(), Math.min(dueDay, daysInThisMonth));
+  if (clampedThisMonth >= new Date(today.getFullYear(), today.getMonth(), today.getDate())) return clampedThisMonth;
+  const daysNextMonth = new Date(today.getFullYear(), today.getMonth() + 2, 0).getDate();
+  return new Date(today.getFullYear(), today.getMonth() + 1, Math.min(dueDay, daysNextMonth));
+}
+
 function OverviewTab({ property, pnl, leases, loans }: {
   property: Property; pnl: PropertyPnL | null; leases: Lease[]; loans: Loan[];
 }) {
@@ -428,6 +439,7 @@ function OverviewTab({ property, pnl, leases, loans }: {
   const appreciation = property.acquisitionPrice && property.estimatedValue
     ? ((Number(property.estimatedValue) - Number(property.acquisitionPrice)) / Number(property.acquisitionPrice) * 100)
     : null;
+  const mortgages = loans.filter(l => l.loanType === 'MORTGAGE' || l.loanType === 'HELOC');
 
   return (
     <div className="space-y-5">
@@ -448,6 +460,38 @@ function OverviewTab({ property, pnl, leases, loans }: {
                 <p className={`text-lg font-semibold ${c.color}`}>{c.value}</p>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Mortgage / upcoming payments */}
+      {mortgages.length > 0 && (
+        <div>
+          <p className="section-label">Mortgage &amp; upcoming payments</p>
+          <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${Math.min(mortgages.length, 3)}, 1fr)` }}>
+            {mortgages.map(loan => {
+              const total = Number(loan.monthlyPayment ?? 0) + Number(loan.escrowAmount ?? 0);
+              const due = loan.dueDay ? nextDueDate(loan.dueDay) : null;
+              const daysUntil = due ? Math.round((due.getTime() - Date.now()) / 86400000) : null;
+              const urgent = daysUntil !== null && daysUntil <= (loan.gracePeriodDays ?? 5);
+              return (
+                <Link key={loan.id} to={`/loans/${loan.id}`} className="card p-3.5 block hover:border-amber-500/30 transition-colors">
+                  <div className="flex items-start justify-between mb-2">
+                    <p className="text-sm font-medium text-white truncate">{loan.lender}</p>
+                    {loan.currentBalance != null && <p className="text-xs text-gray-500 flex-shrink-0 ml-2">{money(Number(loan.currentBalance))} bal.</p>}
+                  </div>
+                  <p className="text-lg font-semibold text-white">{total > 0 ? money(total) : '—'}<span className="text-xs text-gray-500 font-normal">/mo</span></p>
+                  {due ? (
+                    <p className={`text-xs mt-1 ${urgent ? 'text-amber-400' : 'text-gray-500'}`}>
+                      Due {format(due, 'MMM d')}{daysUntil !== null && ` · ${daysUntil <= 0 ? 'today' : `${daysUntil}d`}`}
+                      {loan.gracePeriodDays ? ` (${loan.gracePeriodDays}d grace)` : ''}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-gray-600 mt-1">No due date on file</p>
+                  )}
+                </Link>
+              );
+            })}
           </div>
         </div>
       )}

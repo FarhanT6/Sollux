@@ -1,0 +1,3 @@
+ALTER TABLE "loans" ADD COLUMN "escrowAmount" DECIMAL(10,2);
+ALTER TABLE "loans" ADD COLUMN "dueDay" INTEGER;
+ALTER TABLE "loans" ADD COLUMN "gracePeriodDays" INTEGER;

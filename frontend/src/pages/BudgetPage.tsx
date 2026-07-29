@@ -1,9 +1,9 @@
-import { useEffect, useState, useCallback } from 'react';
+import { Fragment, useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import {
   getBudgetMonthly, getBudgetDelinquency,
   getBankAccounts, createBankAccount, updateBankAccount, deleteBankAccount, recordBankBalance,
-  createOtherIncome, deleteOtherIncome,
+  createOtherIncome, deleteOtherIncome, updateLease,
 } from '../api/client';
 import type {
   BudgetSummary, BankAccount, DelinquencyTenant, OtherIncome,
@@ -161,7 +161,7 @@ export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
             <OverviewTab budget={budget} />
           )}
           {activeTab === 'delinquency' && delinquency && (
-            <DelinquencyTab data={delinquency} />
+            <DelinquencyTab data={delinquency} onChanged={load} />
           )}
           {activeTab === 'banks' && (
             <BanksTab
@@ -332,7 +332,39 @@ function OverviewTab({ budget }: { budget: BudgetSummary }) {
 
 // ─── Delinquency Tab ──────────────────────────────────────
 
-function DelinquencyTab({ data }: { data: { tenants: DelinquencyTenant[]; totalArrears: number; totalExpectedCollection: number } }) {
+function DelinquencyTab({ data, onChanged }: {
+  data: { tenants: DelinquencyTenant[]; totalArrears: number; totalExpectedCollection: number };
+  onChanged: () => void;
+}) {
+  const [editingLease, setEditingLease] = useState<string | null>(null);
+  const [overrideValue, setOverrideValue] = useState<'high' | 'medium' | 'low' | 'none'>('medium');
+  const [overrideNote, setOverrideNote] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  function openEdit(t: DelinquencyTenant) {
+    setOverrideValue(t.likelihood);
+    setOverrideNote(t.manualLikelihoodNote ?? '');
+    setEditingLease(t.leaseId);
+  }
+
+  async function saveOverride(leaseId: string) {
+    setSaving(true);
+    try {
+      await updateLease(leaseId, { manualLikelihood: overrideValue, manualLikelihoodNote: overrideNote || null } as any);
+      setEditingLease(null);
+      onChanged();
+    } finally { setSaving(false); }
+  }
+
+  async function clearOverride(leaseId: string) {
+    setSaving(true);
+    try {
+      await updateLease(leaseId, { manualLikelihood: null, manualLikelihoodNote: null } as any);
+      setEditingLease(null);
+      onChanged();
+    } finally { setSaving(false); }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-6 p-4 rounded-xl border border-white/10 bg-white/3 mb-2">
@@ -351,7 +383,7 @@ function DelinquencyTab({ data }: { data: { tenants: DelinquencyTenant[]; totalA
       </div>
 
       <p className="text-xs text-gray-500">
-        Scores are calculated from payment recency, frequency, and average payment ratio over the last 6 months.
+        Scores are calculated from payment recency, frequency, and average payment ratio over the last 6 months. Click a likelihood badge to flag your own read on a tenant instead — it overrides the automated score until cleared.
       </p>
 
       <div className="overflow-x-auto">
@@ -371,34 +403,61 @@ function DelinquencyTab({ data }: { data: { tenants: DelinquencyTenant[]; totalA
           </thead>
           <tbody>
             {data.tenants.map(t => (
-              <tr key={t.leaseId} className="border-b border-white/5 hover:bg-white/2">
-                <td className="py-2 text-white font-medium">
-                  {t.tenantId
-                    ? <Link to={`/tenants/${t.tenantId}`} className="hover:text-amber-400">{t.tenant}</Link>
-                    : t.tenant}
-                </td>
-                <td className="py-2 text-gray-400">{t.unit} · {t.property}</td>
-                <td className="py-2 text-right text-gray-300">{fmt(t.monthlyRent)}</td>
-                <td className="py-2 text-right text-red-500 font-semibold">{fmt(t.arrears)}</td>
-                <td className="py-2 text-right">
-                  <span className={t.daysSincePay > 30 ? 'text-red-500' : 'text-gray-300'}>
-                    {daysAgoLabel(t.daysSincePay)}
-                  </span>
-                  {t.lastPaymentAmount > 0 && (
-                    <span className="ml-1 text-gray-500 text-xs">({fmt(t.lastPaymentAmount)})</span>
-                  )}
-                </td>
-                <td className="py-2 text-right text-gray-400">{fmt(t.recentMonthlyAvg)}</td>
-                <td className="py-2 text-center">
-                  <ScoreBar score={t.score} />
-                </td>
-                <td className="py-2 text-center"><LikelihoodBadge likelihood={t.likelihood} /></td>
-                <td className="py-2 text-right font-semibold">
-                  <span className={t.likelihood === 'none' ? 'text-gray-500 line-through' : 'text-amber-500'}>
-                    {fmt(t.expectedCollection)}
-                  </span>
-                </td>
-              </tr>
+              <Fragment key={t.leaseId}>
+                <tr className="border-b border-white/5 hover:bg-white/2">
+                  <td className="py-2 text-white font-medium">
+                    {t.tenantId
+                      ? <Link to={`/tenants/${t.tenantId}`} className="hover:text-amber-400">{t.tenant}</Link>
+                      : t.tenant}
+                  </td>
+                  <td className="py-2 text-gray-400">{t.unit} · {t.property}</td>
+                  <td className="py-2 text-right text-gray-300">{fmt(t.monthlyRent)}</td>
+                  <td className="py-2 text-right text-red-500 font-semibold">{fmt(t.arrears)}</td>
+                  <td className="py-2 text-right">
+                    <span className={t.daysSincePay > 30 ? 'text-red-500' : 'text-gray-300'}>
+                      {daysAgoLabel(t.daysSincePay)}
+                    </span>
+                    {t.lastPaymentAmount > 0 && (
+                      <span className="ml-1 text-gray-500 text-xs">({fmt(t.lastPaymentAmount)})</span>
+                    )}
+                  </td>
+                  <td className="py-2 text-right text-gray-400">{fmt(t.recentMonthlyAvg)}</td>
+                  <td className="py-2 text-center">
+                    <ScoreBar score={t.score} />
+                  </td>
+                  <td className="py-2 text-center">
+                    <button onClick={() => editingLease === t.leaseId ? setEditingLease(null) : openEdit(t)} className="inline-flex items-center gap-1">
+                      <LikelihoodBadge likelihood={t.likelihood} />
+                      {t.isManualOverride && <span title={`Flagged manually${t.manualLikelihoodNote ? ': ' + t.manualLikelihoodNote : ''} (auto score says ${t.computedLikelihood})`} className="text-xs text-amber-400">✎</span>}
+                    </button>
+                  </td>
+                  <td className="py-2 text-right font-semibold">
+                    <span className={t.likelihood === 'none' ? 'text-gray-500 line-through' : 'text-amber-500'}>
+                      {fmt(t.expectedCollection)}
+                    </span>
+                  </td>
+                </tr>
+                {editingLease === t.leaseId && (
+                  <tr className="border-b border-white/5">
+                    <td colSpan={9} className="py-3 px-2" style={{ background: 'rgba(255,255,255,0.02)' }}>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs text-gray-500">Flag {t.tenant} as:</span>
+                        {(['high', 'medium', 'low', 'none'] as const).map(l => (
+                          <button key={l} onClick={() => setOverrideValue(l)}
+                            className={`text-xs px-2 py-1 rounded-full border ${overrideValue === l ? 'border-amber-500 text-amber-400' : 'border-white/10 text-gray-400 hover:text-gray-200'}`}>
+                            {l === 'high' ? 'Likely to pay' : l === 'medium' ? 'Uncertain' : l === 'low' ? 'Unlikely' : 'Write-off'}
+                          </button>
+                        ))}
+                        <input value={overrideNote} onChange={e => setOverrideNote(e.target.value)} placeholder="Optional note (why?)"
+                          className="field-input text-xs flex-1 min-w-40" />
+                        <button onClick={() => saveOverride(t.leaseId)} disabled={saving} className="btn-primary text-xs px-3 py-1.5">{saving ? '…' : 'Save flag'}</button>
+                        {t.isManualOverride && <button onClick={() => clearOverride(t.leaseId)} disabled={saving} className="text-xs text-gray-500 hover:text-gray-300">Reset to automated</button>}
+                        <button onClick={() => setEditingLease(null)} className="text-xs text-gray-500 hover:text-gray-300">Cancel</button>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             ))}
           </tbody>
         </table>
