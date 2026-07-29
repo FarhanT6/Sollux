@@ -106,9 +106,13 @@
     @apply w-full border-collapse text-sm;
   }
   .table-base th {
-    @apply text-left text-xs font-medium uppercase tracking-wide pb-2 px-3;
+    @apply text-xs font-medium uppercase tracking-wide pb-2 px-3;
+    text-align: left;
     color: #6b7280;
     border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+  .table-base th.text-right {
+    text-align: right;
   }
   .table-base th:first-child { padding-left: 0; }
   .table-base th:last-child { padding-right: 0; }
