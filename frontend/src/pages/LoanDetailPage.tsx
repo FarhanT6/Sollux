@@ -538,11 +538,11 @@ function PrepayoffCalc({ loan, currentBalance, penalty, calc }: {
           <p className="text-base font-semibold text-white">{moneyPrecise(totalCost)}</p>
         </div>
       </div>
-      {nextTierDate && (
+      {nextTierDate && activeTier && (
         <p className="text-xs text-gray-500">
           Wait until <span className="text-amber-400">{format(nextTierDate, 'MMMM yyyy')}</span> and the rate drops to{' '}
           <span className="text-amber-400">{pct(nextTier!.rate)}</span>{' '}
-          — saving <span className="text-green-400">{moneyPrecise(balNum * ((activeTier!.rate - nextTier!.rate) / 100))}</span> in penalty fees.
+          — saving <span className="text-green-400">{moneyPrecise(balNum * ((activeTier.rate - nextTier!.rate) / 100))}</span> in penalty fees.
         </p>
       )}
     </div>
