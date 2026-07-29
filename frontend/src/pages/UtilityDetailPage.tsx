@@ -142,7 +142,8 @@ function PaymentPlanModal({
 const LOAN_TYPE_LABELS: Record<string, string> = {
   MORTGAGE: 'Mortgage', HELOC: 'HELOC', AUTO: 'Auto', PERSONAL: 'Personal',
   STUDENT: 'Student', INSTALLMENT_PLAN: 'Installment Plan',
-  CREDIT_LINE: 'Credit Line', OTHER: 'Other',
+  CREDIT_LINE: 'Credit Line', SELLER_FINANCING: 'Seller Financing',
+  DSCR: 'DSCR', COMMERCIAL: 'Commercial', HARD_MONEY: 'Hard Money', OTHER: 'Other',
 };
 
 function LoanModal({ accountId, existing, onClose, onSave }: {

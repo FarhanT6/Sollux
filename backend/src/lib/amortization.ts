@@ -17,6 +17,7 @@ export interface LoanInput {
   monthlyPayment: number | null;
   currentBalance: number | null; // manually-entered fallback/seed value
   loanType: string;
+  paymentType?: string | null;   // 'INTEREST_ONLY' forces principal to 0 in the forward projection
 }
 
 export interface PaymentInput {
@@ -47,6 +48,7 @@ export interface AmortizationResult {
   monthlyRate: number;
   computedMonthlyPayment: number; // theoretical P&I payment, whether or not one is on file
   negativeAmortization: boolean;  // true if the payment on file doesn't cover interest
+  isInterestOnly: boolean;        // true when projecting a flat balance under an interest-only payment structure
   schedule: AmortizationRow[];    // forward-looking, from current balance to payoff
   payoffDate: string | null;
   monthsRemaining: number | null;
@@ -145,6 +147,7 @@ export function buildAmortizationSchedule(
       monthlyRate,
       computedMonthlyPayment: loan.monthlyPayment ?? 0,
       negativeAmortization: false,
+      isInterestOnly: false,
       schedule: [],
       payoffDate: null,
       monthsRemaining: null,
@@ -175,13 +178,20 @@ export function buildAmortizationSchedule(
   // doesn't get misclassified as negative amortization by floating-point noise.
   const negativeAmortization = payment < firstMonthInterest - 0.005;
 
-  // Negative-amortization balances grow indefinitely, so there's no natural
-  // stopping point. Project to the stated maturity date if there is one
-  // (most ARMs/HELOCs recast or mature on a known date); otherwise fall back
-  // to a 10-year horizon — long enough to show the trend, short enough not
-  // to imply decades of unchecked compounding as if it were a real forecast.
+  // An explicit interest-only payment structure forces principal to 0 each
+  // period (flat balance) regardless of what number happens to be on file —
+  // unless the loan is genuinely underwater (negative amortization above
+  // takes priority, since that's a real shortfall, not an intentional structure).
+  const isInterestOnly = !negativeAmortization && loan.paymentType === 'INTEREST_ONLY';
+
+  // Negative-amortization and interest-only balances don't naturally reach
+  // zero, so there's no organic stopping point. Project to the stated
+  // maturity date if there is one (most ARMs/HELOCs/IO periods recast or
+  // mature on a known date); otherwise fall back to a 10-year horizon —
+  // long enough to show the trend, short enough not to imply decades of
+  // unchecked projection as if it were a real forecast.
   const startDate = new Date(balanceResult.asOfDate);
-  const negAmHorizonMonths = negativeAmortization
+  const flatHorizonMonths = (negativeAmortization || isInterestOnly)
     ? Math.min(600, Math.max(1, loan.maturityDate ? monthsBetween(startDate, loan.maturityDate) : 120))
     : null;
 
@@ -191,12 +201,12 @@ export function buildAmortizationSchedule(
   let totalDeferredInterest = 0;
 
   // Cap at 600 rows (50 years) as a hard safety limit against runaway loops.
-  for (let i = 1; i <= 600 && (negativeAmortization ? i <= negAmHorizonMonths! : balance > 0.01); i++) {
+  for (let i = 1; i <= 600 && (flatHorizonMonths != null ? i <= flatHorizonMonths : balance > 0.01); i++) {
     const interest = balance * monthlyRate;
-    let principal = payment - interest;
-    let paymentAmount = payment;
+    let principal = isInterestOnly ? 0 : payment - interest;
+    let paymentAmount = isInterestOnly ? interest : payment;
 
-    if (!negativeAmortization && principal >= balance) {
+    if (!negativeAmortization && !isInterestOnly && principal >= balance) {
       principal = balance;
       paymentAmount = balance + interest;
     }
@@ -223,9 +233,10 @@ export function buildAmortizationSchedule(
     monthlyRate,
     computedMonthlyPayment: Math.round(payment * 100) / 100,
     negativeAmortization,
+    isInterestOnly,
     schedule,
-    payoffDate: negativeAmortization ? null : (last?.date ?? null),
-    monthsRemaining: negativeAmortization ? null : schedule.length,
+    payoffDate: (negativeAmortization || isInterestOnly) ? null : (last?.date ?? null),
+    monthsRemaining: (negativeAmortization || isInterestOnly) ? null : schedule.length,
     totalInterestRemaining: Math.round(totalInterestRemaining * 100) / 100,
     totalDeferredInterest: Math.round(totalDeferredInterest * 100) / 100,
     scheduleEndsAt: last?.date ?? null,

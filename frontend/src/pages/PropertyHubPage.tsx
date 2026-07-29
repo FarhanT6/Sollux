@@ -439,7 +439,7 @@ function OverviewTab({ property, pnl, leases, loans }: {
   const appreciation = property.acquisitionPrice && property.estimatedValue
     ? ((Number(property.estimatedValue) - Number(property.acquisitionPrice)) / Number(property.acquisitionPrice) * 100)
     : null;
-  const mortgages = loans.filter(l => l.loanType === 'MORTGAGE' || l.loanType === 'HELOC');
+  const mortgages = loans.filter(l => ['MORTGAGE', 'HELOC', 'SELLER_FINANCING', 'DSCR', 'COMMERCIAL', 'HARD_MONEY'].includes(l.loanType));
 
   return (
     <div className="space-y-5">
@@ -1032,7 +1032,7 @@ function LoansTab({ propertyId, loans, setLoans }: {
         <div className="card p-4 mb-4 grid grid-cols-4 gap-3">
           <div className="col-span-4 text-xs font-medium text-gray-400 mb-1">New loan</div>
           <select value={form.loanType} onChange={e => setForm(f => ({ ...f, loanType: e.target.value }))} className="input-dark text-sm">
-            {['MORTGAGE','HELOC','INSTALLMENT_PLAN','CREDIT_LINE','OTHER'].map(t => <option key={t} value={t}>{t}</option>)}
+            {['MORTGAGE','HELOC','INSTALLMENT_PLAN','CREDIT_LINE','SELLER_FINANCING','DSCR','COMMERCIAL','HARD_MONEY','OTHER'].map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
           </select>
           <input placeholder="Lender *" value={form.lender} onChange={e => setForm(f => ({ ...f, lender: e.target.value }))} className="input-dark text-sm" />
           <input placeholder="Current balance" type="number" value={form.currentBalance} onChange={e => setForm(f => ({ ...f, currentBalance: e.target.value }))} className="input-dark text-sm" />

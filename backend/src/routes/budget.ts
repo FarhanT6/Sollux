@@ -73,7 +73,7 @@ router.get('/monthly', async (req, res, next) => {
       where: {
         userId,
         isActive: true,
-        loanType: 'MORTGAGE',
+        loanType: { in: ['MORTGAGE', 'HELOC', 'SELLER_FINANCING', 'DSCR', 'COMMERCIAL', 'HARD_MONEY'] },
       },
       include: {
         property: { select: { nickname: true, address: true } },

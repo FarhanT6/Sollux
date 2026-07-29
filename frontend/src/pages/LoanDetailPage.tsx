@@ -18,10 +18,11 @@ const BALANCE_METHOD_LABELS: Record<string, string> = {
   manual: 'Manually entered',
 };
 
-const LOAN_TYPES: LoanType[] = ['MORTGAGE','HELOC','AUTO','PERSONAL','STUDENT','INSTALLMENT_PLAN','CREDIT_LINE','OTHER'];
+const LOAN_TYPES: LoanType[] = ['MORTGAGE','HELOC','AUTO','PERSONAL','STUDENT','INSTALLMENT_PLAN','CREDIT_LINE','SELLER_FINANCING','DSCR','COMMERCIAL','HARD_MONEY','OTHER'];
 const LOAN_TYPE_LABELS: Record<string, string> = {
   MORTGAGE: 'Mortgage', HELOC: 'HELOC', AUTO: 'Auto', PERSONAL: 'Personal',
-  STUDENT: 'Student', INSTALLMENT_PLAN: 'Installment Plan', CREDIT_LINE: 'Credit Line', OTHER: 'Other',
+  STUDENT: 'Student', INSTALLMENT_PLAN: 'Installment Plan', CREDIT_LINE: 'Credit Line',
+  SELLER_FINANCING: 'Seller Financing', DSCR: 'DSCR', COMMERCIAL: 'Commercial', HARD_MONEY: 'Hard Money', OTHER: 'Other',
 };
 
 interface AmortizationResponse {
@@ -31,6 +32,7 @@ interface AmortizationResponse {
     monthlyRate: number;
     computedMonthlyPayment: number;
     negativeAmortization: boolean;
+    isInterestOnly: boolean;
     schedule: { paymentNumber: number; date: string; paymentAmount: number; principal: number; interest: number; balance: number }[];
     payoffDate: string | null;
     monthsRemaining: number | null;
@@ -187,6 +189,7 @@ function EditModal({ loan, properties, onClose, onSave }: {
     lender: loan.lender,
     loanType: loan.loanType,
     paymentType: loan.paymentType ?? 'PRINCIPAL_AND_INTEREST',
+    paymentStructureChangedAt: loan.paymentStructureChangedAt ? loan.paymentStructureChangedAt.slice(0, 10) : '',
     accountNumber: loan.accountNumber ?? '',
     originalAmount: loan.originalAmount != null ? String(loan.originalAmount) : '',
     interestRate: loan.interestRate != null ? String(loan.interestRate) : '',
@@ -225,6 +228,34 @@ function EditModal({ loan, properties, onClose, onSave }: {
     setForm(prev => ({ ...prev, currentBalance: String(Math.max(0, Math.round(balance * 100) / 100)) }));
   }
 
+  function autoCalcPayment() {
+    const r = parseFloat(form.interestRate) / 12 / 100;
+    if (isNaN(r)) return;
+
+    if (form.paymentType === 'INTEREST_ONLY') {
+      // Interest-only payment is just this period's interest on whatever
+      // balance is currently on file (fall back to the original amount for
+      // a brand-new loan with no balance entered yet).
+      const balance = parseFloat(form.currentBalance) || parseFloat(form.originalAmount);
+      if (isNaN(balance) || balance <= 0) return;
+      setForm(prev => ({ ...prev, monthlyPayment: String(Math.round(balance * r * 100) / 100) }));
+      return;
+    }
+
+    // Standard amortizing payment over the full origination-to-maturity term.
+    const P = parseFloat(form.originalAmount);
+    const origin = form.originationDate ? new Date(form.originationDate) : null;
+    const maturity = form.maturityDate ? new Date(form.maturityDate) : null;
+    if (!origin || !maturity || isNaN(P) || P <= 0) return;
+    const n = Math.max(1, Math.round(
+      (maturity.getFullYear() - origin.getFullYear()) * 12 + (maturity.getMonth() - origin.getMonth())
+    ));
+    const payment = r > 0
+      ? (P * r * Math.pow(1 + r, n)) / (Math.pow(1 + r, n) - 1)
+      : P / n;
+    setForm(prev => ({ ...prev, monthlyPayment: String(Math.round(payment * 100) / 100) }));
+  }
+
   const f = (field: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setForm(prev => ({ ...prev, [field]: e.target.value }));
 
@@ -236,6 +267,7 @@ function EditModal({ loan, properties, onClose, onSave }: {
         lender: form.lender,
         loanType: form.loanType,
         paymentType: form.paymentType,
+        paymentStructureChangedAt: form.paymentStructureChangedAt || null,
         accountNumber: form.accountNumber || null,
         originalAmount: form.originalAmount ? parseFloat(form.originalAmount) : null,
         interestRate: form.interestRate ? parseFloat(form.interestRate) : null,
@@ -290,6 +322,11 @@ function EditModal({ loan, properties, onClose, onSave }: {
                 <option value="INTEREST_ONLY">Interest only</option>
               </select>
             </div>
+            <div className="col-span-2">
+              <label className="block text-xs text-gray-500 mb-1">Structure changed on</label>
+              <input type="date" value={form.paymentStructureChangedAt} onChange={f('paymentStructureChangedAt')} className="input-dark w-full text-sm" />
+              <p className="text-xs text-gray-600 mt-1">If this loan converted from P&amp;I to interest-only (or back) at some point, record when — e.g. a loan modification or forbearance.</p>
+            </div>
           </div>
 
           {/* Financials */}
@@ -305,7 +342,19 @@ function EditModal({ loan, properties, onClose, onSave }: {
                 <input type="number" step="0.001" value={form.interestRate} onChange={f('interestRate')} className="input-dark w-full text-sm" placeholder="10.0" />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Monthly payment (P&amp;I)</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs text-gray-500">Monthly payment (P&amp;I)</label>
+                  <button
+                    type="button"
+                    onClick={autoCalcPayment}
+                    className="text-xs text-amber-400 hover:text-amber-300 transition-colors"
+                    title={form.paymentType === 'INTEREST_ONLY'
+                      ? 'Calculate from current balance & interest rate'
+                      : 'Calculate from original amount, interest rate, origination & maturity dates'}
+                  >
+                    ⟳ Auto-calc
+                  </button>
+                </div>
                 <input type="number" value={form.monthlyPayment} onChange={f('monthlyPayment')} className="input-dark w-full text-sm" placeholder="1250" />
               </div>
               <div>
@@ -612,7 +661,11 @@ export default function LoanDetailPage() {
           <h1 className="text-xl font-semibold text-white mt-1">{loan.lender}</h1>
           <p className="text-sm text-gray-400 mt-0.5">
             {LOAN_TYPE_LABELS[loan.loanType] ?? loan.loanType}
-            {loan.paymentType === 'INTEREST_ONLY' && <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded" style={{ background: 'rgba(245,166,35,0.12)', color: '#F5A623' }}>Interest only</span>}
+            {loan.paymentType === 'INTEREST_ONLY' && (
+              <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded" style={{ background: 'rgba(245,166,35,0.12)', color: '#F5A623' }}>
+                Interest only{loan.paymentStructureChangedAt ? ` since ${format(new Date(loan.paymentStructureChangedAt), 'MMM yyyy')}` : ''}
+              </span>
+            )}
             {loan.accountNumber ? (
               <span> &middot; Acct #{loan.accountNumber}</span>
             ) : loan.accountLast4 ? (
@@ -645,6 +698,16 @@ export default function LoanDetailPage() {
         </div>
       )}
 
+      {amortization.isInterestOnly && (
+        <div className="mt-4 text-xs text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-lg px-4 py-2.5">
+          Payments aren't reducing principal — this loan is interest-only{loan.paymentStructureChangedAt ? ` as of ${format(new Date(loan.paymentStructureChangedAt), 'MMMM yyyy')}` : ''}.
+          {amortization.scheduleEndsAt && (
+            <> Balance projected to stay flat at <span className="font-medium">{money(balance.balance)}</span> through{' '}
+            <span className="font-medium">{format(new Date(amortization.scheduleEndsAt), 'MMM yyyy')}</span>.</>
+          )}
+        </div>
+      )}
+
       {/* Stats */}
       <div className="grid grid-cols-4 gap-3 mt-5">
         <div className="stat-card">
@@ -671,13 +734,22 @@ export default function LoanDetailPage() {
           )}
         </div>
         <div className="stat-card">
-          <p className="text-xs text-gray-500 mb-1">{amortization.negativeAmortization ? 'Balance trend' : 'Payoff date'}</p>
+          <p className="text-xs text-gray-500 mb-1">{amortization.negativeAmortization || amortization.isInterestOnly ? 'Balance trend' : 'Payoff date'}</p>
           {amortization.negativeAmortization ? (
             <>
               <p className="text-xl font-semibold text-red-400">Growing</p>
               {amortization.scheduleEndsAt && (
                 <p className="text-xs text-gray-600 mt-1">
                   {money(amortization.schedule[amortization.schedule.length - 1]?.balance)} by {format(new Date(amortization.scheduleEndsAt), 'MMM yyyy')}
+                </p>
+              )}
+            </>
+          ) : amortization.isInterestOnly ? (
+            <>
+              <p className="text-xl font-semibold text-amber-400">Flat</p>
+              {amortization.scheduleEndsAt && (
+                <p className="text-xs text-gray-600 mt-1">
+                  Interest-only through {format(new Date(amortization.scheduleEndsAt), 'MMM yyyy')}
                 </p>
               )}
             </>
@@ -773,7 +845,11 @@ export default function LoanDetailPage() {
       {amortization.isAmortizing && amortization.schedule.length > 0 && (
         <div className="card p-4 mb-6">
           <div className="flex items-center justify-between mb-3">
-            <p className="text-sm font-medium text-white">{amortization.negativeAmortization ? 'Projected balance schedule (negative amortization)' : 'Remaining amortization schedule'}</p>
+            <p className="text-sm font-medium text-white">
+              {amortization.negativeAmortization ? 'Projected balance schedule (negative amortization)'
+                : amortization.isInterestOnly ? 'Projected interest-only schedule'
+                : 'Remaining amortization schedule'}
+            </p>
             {amortization.schedule.length > 12 && (
               <button onClick={() => setShowFullSchedule(v => !v)} className="text-xs text-amber-400 hover:text-amber-300">
                 {showFullSchedule ? 'Show less' : `Show all ${amortization.schedule.length}`}

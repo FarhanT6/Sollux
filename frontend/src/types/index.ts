@@ -14,7 +14,7 @@ export type SyncStatus = 'SUCCESS' | 'FAILED' | 'PENDING' | 'PARTIAL';
 export type LeaseType = 'FIXED_TERM' | 'MONTH_TO_MONTH';
 export type LeaseStatus = 'ACTIVE' | 'ENDED' | 'PENDING' | 'TERMINATED';
 export type RentPaymentMethod = 'CASH' | 'CHECK' | 'ZELLE' | 'ACH' | 'MONEY_ORDER' | 'CARD' | 'OTHER';
-export type LoanType = 'MORTGAGE' | 'HELOC' | 'AUTO' | 'PERSONAL' | 'STUDENT' | 'INSTALLMENT_PLAN' | 'CREDIT_LINE' | 'OTHER';
+export type LoanType = 'MORTGAGE' | 'HELOC' | 'AUTO' | 'PERSONAL' | 'STUDENT' | 'INSTALLMENT_PLAN' | 'CREDIT_LINE' | 'SELLER_FINANCING' | 'DSCR' | 'COMMERCIAL' | 'HARD_MONEY' | 'OTHER';
 export type InsuranceType = 'PROPERTY' | 'LIABILITY' | 'FLOOD' | 'UMBRELLA' | 'OTHER';
 export type PremiumFrequency = 'MONTHLY' | 'ANNUAL' | 'SEMI_ANNUAL';
 export type TaxStatus = 'UNPAID' | 'PAID' | 'PARTIALLY_PAID' | 'DELINQUENT';
@@ -189,6 +189,7 @@ export interface Loan {
   dueDay?: number;
   gracePeriodDays?: number;
   paymentType?: string;
+  paymentStructureChangedAt?: string | null;
   prepaymentPenaltyJson?: PrepaymentPenalty | null;
   notes?: string;
   isPersonal: boolean;
