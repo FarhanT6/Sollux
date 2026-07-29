@@ -189,7 +189,10 @@ function EditModal({ loan, properties, onClose, onSave }: {
     originalAmount: loan.originalAmount != null ? String(loan.originalAmount) : '',
     interestRate: loan.interestRate != null ? String(loan.interestRate) : '',
     monthlyPayment: loan.monthlyPayment != null ? String(loan.monthlyPayment) : '',
+    escrowAmount: loan.escrowAmount != null ? String(loan.escrowAmount) : '',
     currentBalance: loan.currentBalance != null ? String(loan.currentBalance) : '',
+    dueDay: loan.dueDay != null ? String(loan.dueDay) : '',
+    gracePeriodDays: loan.gracePeriodDays != null ? String(loan.gracePeriodDays) : '',
     originationDate: loan.originationDate ? loan.originationDate.slice(0, 10) : '',
     maturityDate: loan.maturityDate ? loan.maturityDate.slice(0, 10) : '',
     propertyId: loan.propertyId ?? '',
@@ -235,7 +238,10 @@ function EditModal({ loan, properties, onClose, onSave }: {
         originalAmount: form.originalAmount ? parseFloat(form.originalAmount) : null,
         interestRate: form.interestRate ? parseFloat(form.interestRate) : null,
         monthlyPayment: form.monthlyPayment ? parseFloat(form.monthlyPayment) : null,
+        escrowAmount: form.escrowAmount ? parseFloat(form.escrowAmount) : null,
         currentBalance: form.currentBalance ? parseFloat(form.currentBalance) : null,
+        dueDay: form.dueDay ? parseInt(form.dueDay, 10) : null,
+        gracePeriodDays: form.gracePeriodDays ? parseInt(form.gracePeriodDays, 10) : null,
         originationDate: form.originationDate || null,
         maturityDate: form.maturityDate || null,
         propertyId: form.propertyId || null,
@@ -297,8 +303,12 @@ function EditModal({ loan, properties, onClose, onSave }: {
                 <input type="number" step="0.001" value={form.interestRate} onChange={f('interestRate')} className="input-dark w-full text-sm" placeholder="10.0" />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Monthly payment</label>
+                <label className="block text-xs text-gray-500 mb-1">Monthly payment (P&amp;I)</label>
                 <input type="number" value={form.monthlyPayment} onChange={f('monthlyPayment')} className="input-dark w-full text-sm" placeholder="1250" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Escrow (taxes/insurance)</label>
+                <input type="number" value={form.escrowAmount} onChange={f('escrowAmount')} className="input-dark w-full text-sm" placeholder="On top of P&I" />
               </div>
               <div>
                 <div className="flex items-center justify-between mb-1">
@@ -314,12 +324,18 @@ function EditModal({ loan, properties, onClose, onSave }: {
                 </div>
                 <input type="number" value={form.currentBalance} onChange={f('currentBalance')} className="input-dark w-full text-sm" placeholder="148000" />
               </div>
+              {form.monthlyPayment && (
+                <div>
+                  <p className="text-xs text-gray-500 mb-1">Total monthly (P&amp;I + escrow)</p>
+                  <p className="text-sm text-white pt-1.5">{money((parseFloat(form.monthlyPayment) || 0) + (parseFloat(form.escrowAmount) || 0))}</p>
+                </div>
+              )}
             </div>
           </div>
 
           {/* Dates */}
           <div>
-            <p className="text-xs text-gray-500 mb-2 font-medium uppercase tracking-wide">Dates</p>
+            <p className="text-xs text-gray-500 mb-2 font-medium uppercase tracking-wide">Dates &amp; due date</p>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Origination date</label>
@@ -328,6 +344,14 @@ function EditModal({ loan, properties, onClose, onSave }: {
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Maturity date</label>
                 <input type="date" value={form.maturityDate} onChange={f('maturityDate')} className="input-dark w-full text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Due day of month</label>
+                <input type="number" min={1} max={31} value={form.dueDay} onChange={f('dueDay')} className="input-dark w-full text-sm" placeholder="1" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Grace period (days)</label>
+                <input type="number" min={0} value={form.gracePeriodDays} onChange={f('gracePeriodDays')} className="input-dark w-full text-sm" placeholder="15" />
               </div>
             </div>
           </div>
@@ -615,9 +639,20 @@ export default function LoanDetailPage() {
           <p className="text-xs text-gray-600 mt-1">{hasBalanceData ? BALANCE_METHOD_LABELS[balance.method] : 'No balance on file'}</p>
         </div>
         <div className="stat-card">
-          <p className="text-xs text-gray-500 mb-1">Monthly payment</p>
-          <p className="text-xl font-semibold text-white">{money(loan.monthlyPayment ?? amortization.computedMonthlyPayment)}</p>
-          {!loan.monthlyPayment && <p className="text-xs text-gray-600 mt-1">Estimated</p>}
+          <p className="text-xs text-gray-500 mb-1">{loan.escrowAmount ? 'Total monthly (P&I + escrow)' : 'Monthly payment'}</p>
+          <p className="text-xl font-semibold text-white">
+            {money((loan.monthlyPayment ?? amortization.computedMonthlyPayment) + (loan.escrowAmount ?? 0))}
+          </p>
+          {loan.escrowAmount ? (
+            <p className="text-xs text-gray-600 mt-1">{money(loan.monthlyPayment ?? amortization.computedMonthlyPayment)} P&I + {money(loan.escrowAmount)} escrow</p>
+          ) : !loan.monthlyPayment ? (
+            <p className="text-xs text-gray-600 mt-1">Estimated</p>
+          ) : null}
+          {loan.dueDay && (
+            <p className="text-xs text-gray-600 mt-1">
+              Due day {loan.dueDay}{loan.gracePeriodDays ? ` · ${loan.gracePeriodDays}d grace` : ''}
+            </p>
+          )}
         </div>
         <div className="stat-card">
           <p className="text-xs text-gray-500 mb-1">Payoff date</p>

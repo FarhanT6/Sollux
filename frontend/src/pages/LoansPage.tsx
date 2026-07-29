@@ -27,7 +27,8 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
   const [form, setForm] = useState({
     propertyId: '', loanType: 'MORTGAGE' as LoanType,
     lender: '', accountLast4: '', originalAmount: '', interestRate: '',
-    originationDate: '', maturityDate: '', monthlyPayment: '', currentBalance: '',
+    originationDate: '', maturityDate: '', monthlyPayment: '', escrowAmount: '', currentBalance: '',
+    dueDay: '', gracePeriodDays: '',
     notes: '', isPersonal: false, isActive: true,
   });
   const [saving, setSaving] = useState(false);
@@ -53,7 +54,10 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
         originationDate: form.originationDate || undefined,
         maturityDate: form.maturityDate || undefined,
         monthlyPayment: form.monthlyPayment ? parseFloat(form.monthlyPayment) : undefined,
+        escrowAmount: form.escrowAmount ? parseFloat(form.escrowAmount) : undefined,
         currentBalance: form.currentBalance ? parseFloat(form.currentBalance) : undefined,
+        dueDay: form.dueDay ? parseInt(form.dueDay, 10) : undefined,
+        gracePeriodDays: form.gracePeriodDays ? parseInt(form.gracePeriodDays, 10) : undefined,
         notes: form.notes || undefined,
         isPersonal: form.isPersonal,
         isActive: form.isActive,
@@ -175,6 +179,18 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
               <label className="text-xs text-gray-400 block mb-1">Origination date</label>
               <input type="date" value={form.originationDate} onChange={e => setForm(f => ({ ...f, originationDate: e.target.value }))} className="input-dark w-full" />
             </div>
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Escrow (taxes/insurance)</label>
+              <input type="number" step="0.01" value={form.escrowAmount} onChange={e => setForm(f => ({ ...f, escrowAmount: e.target.value }))} className="input-dark w-full" placeholder="On top of P&I" />
+            </div>
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Due day of month</label>
+              <input type="number" min={1} max={31} value={form.dueDay} onChange={e => setForm(f => ({ ...f, dueDay: e.target.value }))} className="input-dark w-full" placeholder="1" />
+            </div>
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Grace period (days)</label>
+              <input type="number" min={0} value={form.gracePeriodDays} onChange={e => setForm(f => ({ ...f, gracePeriodDays: e.target.value }))} className="input-dark w-full" placeholder="15" />
+            </div>
           </div>
           <div className="flex gap-4 mb-4">
             <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
@@ -193,16 +209,19 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
       {loading ? (
         <div className="text-gray-500 text-sm">Loading…</div>
       ) : (
-        <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
+        <div className="rounded-xl overflow-x-auto" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
           <table className="w-full text-sm">
             <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
               <tr className="text-left text-gray-400 text-xs">
                 <th className="px-4 py-3">Lender</th>
                 <th className="px-4 py-3">Property</th>
                 <th className="px-4 py-3">Type</th>
+                <th className="px-4 py-3 text-right">Original</th>
                 <th className="px-4 py-3 text-right">Balance</th>
                 <th className="px-4 py-3 text-right">Monthly</th>
                 <th className="px-4 py-3 text-right">Rate</th>
+                <th className="px-4 py-3 text-right">Total interest</th>
+                <th className="px-4 py-3 text-right">Interest paid</th>
                 <th className="px-4 py-3">Maturity</th>
                 <th className="px-4 py-3">Flags</th>
                 <th className="px-4 py-3"></th>
@@ -211,18 +230,21 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
             <tbody className="divide-y divide-white/5">
               {displayedLoans.map(loan => (
                 <tr key={loan.id} className={`hover:bg-white/[0.02] ${!loan.isActive ? 'opacity-40' : ''}`}>
-                  <td className="px-4 py-3 font-medium text-xs">
+                  <td className="px-4 py-3 font-medium text-xs whitespace-nowrap">
                     <Link to={`/loans/${loan.id}`} className="text-white hover:text-amber-400">
                       {loan.lender}
                     </Link>
                     {loan.accountLast4 && <span className="text-gray-500 ml-1">···{loan.accountLast4}</span>}
                   </td>
-                  <td className="px-4 py-3 text-gray-400 text-xs">{loan.property?.nickname || loan.property?.address || <span className="text-gray-600">Unattached</span>}</td>
-                  <td className="px-4 py-3 text-gray-400 text-xs">{loan.loanType.replace('_', ' ')}</td>
+                  <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">{loan.property?.nickname || loan.property?.address || <span className="text-gray-600">Unattached</span>}</td>
+                  <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">{loan.loanType.replace('_', ' ')}</td>
+                  <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(loan.originalAmount ?? undefined)}</td>
                   <td className="px-4 py-3 text-right text-red-400 text-xs font-medium">{money(loan.currentBalance ?? undefined)}</td>
                   <td className="px-4 py-3 text-right text-gray-300 text-xs">{money(loan.monthlyPayment ?? undefined)}</td>
                   <td className="px-4 py-3 text-right text-gray-400 text-xs">{loan.interestRate != null ? `${loan.interestRate}%` : '—'}</td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(loan.totalInterestLifetime ?? undefined)}</td>
+                  <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(loan.interestPaidToDate ?? undefined)}</td>
+                  <td className="px-4 py-3 whitespace-nowrap">
                     <MaturityBadge maturityDate={loan.maturityDate} />
                   </td>
                   <td className="px-4 py-3">
@@ -231,7 +253,7 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
                       {!loan.isActive && <span className="text-xs bg-gray-800 text-gray-500 px-1.5 py-0.5 rounded">Closed</span>}
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-right">
+                  <td className="px-4 py-3 text-right whitespace-nowrap">
                     <button
                       onClick={async () => { const u = await updateLoan(loan.id, { isActive: !loan.isActive }); setLoans(prev => prev.map(l => l.id === loan.id ? { ...l, isActive: u.isActive } : l)); }}
                       className="text-xs text-gray-500 hover:text-gray-300 mr-2"

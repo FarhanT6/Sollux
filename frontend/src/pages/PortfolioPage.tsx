@@ -89,6 +89,18 @@ export default function PortfolioPage() {
     }, 0),
   }), [filtered, stats]);
 
+  // Cluster properties that share a parcel group so adjacent/combined
+  // parcels (e.g. 1536/1538/1518 Hunsaker St) show together, not scattered.
+  const { groups, ungrouped } = useMemo(() => {
+    const g: Record<string, Property[]> = {};
+    const u: Property[] = [];
+    for (const p of filtered) {
+      if (p.parcelGroupName) (g[p.parcelGroupName] ??= []).push(p);
+      else u.push(p);
+    }
+    return { groups: g, ungrouped: u };
+  }, [filtered]);
+
   return (
     <div>
       <div className="px-6 py-4 flex items-center justify-between sticky top-0 z-10"
@@ -157,54 +169,77 @@ export default function PortfolioPage() {
         ) : filtered.length === 0 ? (
           <div className="text-center py-16 text-gray-500 text-sm">No properties match your filters</div>
         ) : (
-          <div className="grid grid-cols-2 gap-3">
-            {filtered.map(p => {
-              const s = stats[p.id] ?? {};
-              const totalUnits = p.units?.length ?? 0;
-              const occ = totalUnits > 0 ? Math.round((s.occupied ?? 0) / totalUnits * 100) : null;
-              const equity = Number(p.estimatedValue ?? 0) - (s.debt ?? 0);
+          <div className="space-y-4">
+            {Object.entries(groups).map(([groupName, groupProps]) => {
+              const groupRent = groupProps.reduce((s, p) => s + (stats[p.id]?.rent ?? 0), 0);
+              const groupArrears = groupProps.reduce((s, p) => s + (stats[p.id]?.arrears ?? 0), 0);
+              const groupEquity = groupProps.reduce((s, p) => s + Math.max(0, Number(p.estimatedValue ?? 0) - (stats[p.id]?.debt ?? 0)), 0);
               return (
-                <Link key={p.id} to={`/portfolio/${p.id}`}
-                  className="card p-4 hover:border-amber-500/30 transition-colors block group">
-                  <div className="flex items-start justify-between mb-3">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-semibold text-white truncate group-hover:text-amber-400 transition-colors">
-                        {p.nickname || p.address}
-                      </p>
-                      {p.nickname && <p className="text-xs text-gray-500 truncate">{p.address}</p>}
-                      <p className="text-xs text-gray-500">{p.city}, {p.state}</p>
-                    </div>
-                    <div className="flex gap-1.5 flex-shrink-0 ml-2 flex-wrap justify-end">
-                      <span className="pill pill-gray">{TYPE_LABELS[p.type] ?? p.type}</span>
-                      {occ !== null && (
-                        <span className={`pill ${occ === 100 ? 'pill-green' : occ >= 75 ? 'pill-amber' : 'pill-red'}`}>
-                          {occ}% occ
-                        </span>
-                      )}
-                    </div>
+                <div key={groupName} className="rounded-xl p-3" style={{ border: '1px solid rgba(245,166,35,0.2)', background: 'rgba(245,166,35,0.03)' }}>
+                  <div className="flex items-center justify-between px-1 pb-2 mb-1">
+                    <p className="text-xs font-semibold text-amber-400 uppercase tracking-wide">{groupName} · {groupProps.length} parcels</p>
+                    <p className="text-xs text-gray-400">
+                      {money(groupRent)}/mo · {groupArrears > 0 ? <span className="text-red-400">{money(groupArrears)} arrears</span> : 'no arrears'} · {money(groupEquity)} equity
+                    </p>
                   </div>
-                  <div className="grid grid-cols-3 gap-3 pt-3" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                    <div>
-                      <p className="text-xs text-gray-500 mb-0.5">Rent/mo</p>
-                      <p className="text-sm font-semibold text-white">{s.rent ? money(s.rent) : '—'}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500 mb-0.5">Arrears</p>
-                      <p className={`text-sm font-semibold ${(s.arrears ?? 0) > 0 ? 'text-red-400' : 'text-gray-600'}`}>
-                        {(s.arrears ?? 0) > 0 ? money(s.arrears!) : '—'}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500 mb-0.5">Equity</p>
-                      <p className="text-sm font-semibold text-emerald-400">{equity > 0 ? money(equity) : '—'}</p>
-                    </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    {groupProps.map(p => <PropertyCard key={p.id} p={p} stat={stats[p.id]} />)}
                   </div>
-                </Link>
+                </div>
               );
             })}
+            {ungrouped.length > 0 && (
+              <div className="grid grid-cols-2 gap-3">
+                {ungrouped.map(p => <PropertyCard key={p.id} p={p} stat={stats[p.id]} />)}
+              </div>
+            )}
           </div>
         )}
       </div>
     </div>
+  );
+}
+
+function PropertyCard({ p, stat }: { p: Property; stat?: { rent: number; arrears: number; occupied: number; debt: number } }) {
+  const s = stat ?? { rent: 0, arrears: 0, occupied: 0, debt: 0 };
+  const totalUnits = p.units?.length ?? 0;
+  const occ = totalUnits > 0 ? Math.round(s.occupied / totalUnits * 100) : null;
+  const equity = Number(p.estimatedValue ?? 0) - s.debt;
+  return (
+    <Link to={`/portfolio/${p.id}`} className="card p-4 hover:border-amber-500/30 transition-colors block group">
+      <div className="flex items-start justify-between mb-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-white truncate group-hover:text-amber-400 transition-colors">
+            {p.nickname || p.address}
+          </p>
+          {p.nickname && <p className="text-xs text-gray-500 truncate">{p.address}</p>}
+          <p className="text-xs text-gray-500">{p.city}, {p.state}</p>
+        </div>
+        <div className="flex gap-1.5 flex-shrink-0 ml-2 flex-wrap justify-end">
+          <span className="pill pill-gray">{TYPE_LABELS[p.type] ?? p.type}</span>
+          {occ !== null && (
+            <span className={`pill ${occ === 100 ? 'pill-green' : occ >= 75 ? 'pill-amber' : 'pill-red'}`}>
+              {occ}% occ
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="grid grid-cols-3 gap-3 pt-3" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+        <div>
+          <p className="text-xs text-gray-500 mb-0.5">Rent/mo</p>
+          <p className="text-sm font-semibold text-white">{s.rent ? money(s.rent) : '—'}</p>
+        </div>
+        <div>
+          <p className="text-xs text-gray-500 mb-0.5">Arrears</p>
+          <p className={`text-sm font-semibold ${s.arrears > 0 ? 'text-red-400' : 'text-gray-600'}`}>
+            {s.arrears > 0 ? money(s.arrears) : '—'}
+          </p>
+        </div>
+        <div>
+          <p className="text-xs text-gray-500 mb-0.5">Equity</p>
+          <p className="text-sm font-semibold text-emerald-400">{equity > 0 ? money(equity) : '—'}</p>
+        </div>
+      </div>
+    </Link>
   );
 }

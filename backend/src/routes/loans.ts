@@ -30,7 +30,10 @@ const LoanSchema = z.object({
   originationDate: z.string().transform(s => new Date(s)).optional().nullable(),
   maturityDate: z.string().transform(s => new Date(s)).optional().nullable(),
   monthlyPayment: z.number().optional().nullable(),
+  escrowAmount: z.number().optional().nullable(),
   currentBalance: z.number().optional().nullable(),
+  dueDay: z.number().int().min(1).max(31).optional().nullable(),
+  gracePeriodDays: z.number().int().min(0).optional().nullable(),
   paymentType: z.enum(['PRINCIPAL_AND_INTEREST', 'INTEREST_ONLY']).default('PRINCIPAL_AND_INTEREST'),
   prepaymentPenaltyJson: PrepaymentPenaltySchema.optional(),
   notes: z.string().optional().nullable(),
@@ -68,9 +71,36 @@ router.get('/', async (req, res, next) => {
       },
       orderBy: { createdAt: 'asc' },
     });
-    res.json(loans);
+
+    const interestAgg = await db.loanPayment.groupBy({
+      by: ['loanId'],
+      where: { loanId: { in: loans.map(l => l.id) } },
+      _sum: { interest: true },
+    });
+    const interestPaidByLoan = new Map(interestAgg.map(a => [a.loanId, a._sum.interest != null ? Number(a._sum.interest) : 0]));
+
+    const result = loans.map(l => ({
+      ...l,
+      interestPaidToDate: interestPaidByLoan.get(l.id) ?? 0,
+      totalInterestLifetime: computeLifetimeInterest(l),
+    }));
+
+    res.json(result);
   } catch (err) { next(err); }
 });
+
+// Closed-form total interest over the life of the loan, from the standard
+// amortization term formula — n = ln(PMT / (PMT - P*r)) / ln(1 + r).
+// Returns null when there isn't enough on file to compute it.
+function computeLifetimeInterest(l: { originalAmount: Prisma.Decimal | null; interestRate: Prisma.Decimal | null; monthlyPayment: Prisma.Decimal | null }): number | null {
+  if (l.originalAmount == null || l.interestRate == null || l.monthlyPayment == null) return null;
+  const principal = Number(l.originalAmount);
+  const payment = Number(l.monthlyPayment);
+  const rate = Number(l.interestRate) / 100 / 12;
+  if (rate <= 0 || payment <= principal * rate) return null; // doesn't amortize with this payment
+  const termMonths = Math.log(payment / (payment - principal * rate)) / Math.log(1 + rate);
+  return Math.round((payment * termMonths - principal) * 100) / 100;
+}
 
 router.get('/:id', async (req, res, next) => {
   try {
