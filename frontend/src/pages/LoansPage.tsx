@@ -6,7 +6,7 @@ import { format } from 'date-fns';
 
 const money = (n: number | string | undefined) => n == null ? '—' : Number(n).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 
-const LOAN_TYPES: LoanType[] = ['MORTGAGE','HELOC','AUTO','PERSONAL','STUDENT','INSTALLMENT_PLAN','CREDIT_LINE','OTHER'];
+const LOAN_TYPES: LoanType[] = ['MORTGAGE','HELOC','AUTO','PERSONAL','STUDENT','INSTALLMENT_PLAN','CREDIT_LINE','SELLER_FINANCING','DSCR','COMMERCIAL','HARD_MONEY','OTHER'];
 
 function MaturityBadge({ maturityDate }: { maturityDate?: string }) {
   if (!maturityDate) return null;

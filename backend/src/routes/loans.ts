@@ -43,7 +43,7 @@ const PrepaymentPenaltySchema = z.object({
 
 const LoanSchema = z.object({
   propertyId: z.string().optional().nullable(),
-  loanType: z.enum(['MORTGAGE','HELOC','AUTO','PERSONAL','STUDENT','INSTALLMENT_PLAN','CREDIT_LINE','OTHER']),
+  loanType: z.enum(['MORTGAGE','HELOC','AUTO','PERSONAL','STUDENT','INSTALLMENT_PLAN','CREDIT_LINE','SELLER_FINANCING','DSCR','COMMERCIAL','HARD_MONEY','OTHER']),
   lender: z.string().min(1),
   accountLast4: z.string().max(4).optional().nullable(),
   accountNumber: z.string().optional().nullable(),
@@ -57,6 +57,7 @@ const LoanSchema = z.object({
   dueDay: z.number().int().min(1).max(31).optional().nullable(),
   gracePeriodDays: z.number().int().min(0).optional().nullable(),
   paymentType: z.enum(['PRINCIPAL_AND_INTEREST', 'INTEREST_ONLY']).default('PRINCIPAL_AND_INTEREST'),
+  paymentStructureChangedAt: z.string().transform(s => new Date(s)).optional().nullable(),
   prepaymentPenaltyJson: PrepaymentPenaltySchema.optional(),
   notes: z.string().optional().nullable(),
   isPersonal: z.boolean().default(false),
@@ -156,6 +157,7 @@ router.get('/:id/amortization', async (req, res, next) => {
       monthlyPayment: loan.monthlyPayment != null ? Number(loan.monthlyPayment) : null,
       currentBalance: loan.currentBalance != null ? Number(loan.currentBalance) : null,
       loanType: loan.loanType,
+      paymentType: loan.paymentType,
     };
     const paymentsInput = loan.loanPayments.map(p => ({
       date: p.date,

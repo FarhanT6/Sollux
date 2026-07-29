@@ -584,6 +584,7 @@ model Loan {
   gracePeriodDays    Int?            // days after dueDay before a late fee applies
   notes                  String?
   paymentType            String          @default("PRINCIPAL_AND_INTEREST")
+  paymentStructureChangedAt DateTime?     // when paymentType last changed, e.g. converted from P&I to interest-only
   prepaymentPenaltyJson  Json?
   isPersonal             Boolean         @default(false)
   isActive               Boolean         @default(true)
@@ -605,6 +606,10 @@ enum LoanType {
   STUDENT
   INSTALLMENT_PLAN
   CREDIT_LINE
+  SELLER_FINANCING
+  DSCR
+  COMMERCIAL
+  HARD_MONEY
   OTHER
 }
 

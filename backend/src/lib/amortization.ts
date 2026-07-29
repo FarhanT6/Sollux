@@ -17,6 +17,7 @@ export interface LoanInput {
   monthlyPayment: number | null;
   currentBalance: number | null; // manually-entered fallback/seed value
   loanType: string;
+  paymentType?: string | null;   // 'INTEREST_ONLY' forces principal to 0 in the forward projection
 }
 
 export interface PaymentInput {
@@ -47,10 +48,13 @@ export interface AmortizationResult {
   monthlyRate: number;
   computedMonthlyPayment: number; // theoretical P&I payment, whether or not one is on file
   negativeAmortization: boolean;  // true if the payment on file doesn't cover interest
+  isInterestOnly: boolean;        // true when projecting a flat balance under an interest-only payment structure
   schedule: AmortizationRow[];    // forward-looking, from current balance to payoff
   payoffDate: string | null;
   monthsRemaining: number | null;
   totalInterestRemaining: number;
+  totalDeferredInterest: number;  // unpaid interest capitalized into the balance (negative amortization only)
+  scheduleEndsAt: string | null;  // last projected date — payoff date, or projection horizon if negatively amortizing
   totalPaidToDate: number;
   totalInterestToDate: number;
 }
@@ -143,10 +147,13 @@ export function buildAmortizationSchedule(
       monthlyRate,
       computedMonthlyPayment: loan.monthlyPayment ?? 0,
       negativeAmortization: false,
+      isInterestOnly: false,
       schedule: [],
       payoffDate: null,
       monthsRemaining: null,
       totalInterestRemaining: 0,
+      totalDeferredInterest: 0,
+      scheduleEndsAt: null,
       totalPaidToDate,
       totalInterestToDate,
     };
@@ -166,30 +173,45 @@ export function buildAmortizationSchedule(
   }
 
   const firstMonthInterest = balanceResult.balance * monthlyRate;
-  const negativeAmortization = payment <= firstMonthInterest;
+  // Half-cent epsilon so a payment that exactly covers interest (common for
+  // interest-only loans, or a payment back-solved from the same balance/rate)
+  // doesn't get misclassified as negative amortization by floating-point noise.
+  const negativeAmortization = payment < firstMonthInterest - 0.005;
+
+  // An explicit interest-only payment structure forces principal to 0 each
+  // period (flat balance) regardless of what number happens to be on file —
+  // unless the loan is genuinely underwater (negative amortization above
+  // takes priority, since that's a real shortfall, not an intentional structure).
+  const isInterestOnly = !negativeAmortization && loan.paymentType === 'INTEREST_ONLY';
+
+  // Negative-amortization and interest-only balances don't naturally reach
+  // zero, so there's no organic stopping point. Project to the stated
+  // maturity date if there is one (most ARMs/HELOCs/IO periods recast or
+  // mature on a known date); otherwise fall back to a 10-year horizon —
+  // long enough to show the trend, short enough not to imply decades of
+  // unchecked projection as if it were a real forecast.
+  const startDate = new Date(balanceResult.asOfDate);
+  const flatHorizonMonths = (negativeAmortization || isInterestOnly)
+    ? Math.min(600, Math.max(1, loan.maturityDate ? monthsBetween(startDate, loan.maturityDate) : 120))
+    : null;
 
   const schedule: AmortizationRow[] = [];
   let balance = balanceResult.balance;
-  const startDate = new Date(balanceResult.asOfDate);
   let totalInterestRemaining = 0;
+  let totalDeferredInterest = 0;
 
-  // Cap at 600 rows (50 years) as a hard safety limit against runaway loops
-  // when a payment doesn't cover interest.
-  for (let i = 1; i <= 600 && balance > 0.01; i++) {
+  // Cap at 600 rows (50 years) as a hard safety limit against runaway loops.
+  for (let i = 1; i <= 600 && (flatHorizonMonths != null ? i <= flatHorizonMonths : balance > 0.01); i++) {
     const interest = balance * monthlyRate;
-    let principal = payment - interest;
-    let paymentAmount = payment;
+    let principal = isInterestOnly ? 0 : payment - interest;
+    let paymentAmount = isInterestOnly ? interest : payment;
 
-    if (negativeAmortization) {
-      // Balance would never reach zero — stop projecting and let the
-      // caller flag it instead of looping forever.
-      break;
-    }
-
-    if (principal >= balance) {
+    if (!negativeAmortization && !isInterestOnly && principal >= balance) {
       principal = balance;
       paymentAmount = balance + interest;
     }
+
+    if (principal < 0) totalDeferredInterest += -principal;
 
     balance = Math.max(0, balance - principal);
     totalInterestRemaining += interest;
@@ -211,10 +233,13 @@ export function buildAmortizationSchedule(
     monthlyRate,
     computedMonthlyPayment: Math.round(payment * 100) / 100,
     negativeAmortization,
+    isInterestOnly,
     schedule,
-    payoffDate: negativeAmortization ? null : (last?.date ?? null),
-    monthsRemaining: negativeAmortization ? null : schedule.length,
+    payoffDate: (negativeAmortization || isInterestOnly) ? null : (last?.date ?? null),
+    monthsRemaining: (negativeAmortization || isInterestOnly) ? null : schedule.length,
     totalInterestRemaining: Math.round(totalInterestRemaining * 100) / 100,
+    totalDeferredInterest: Math.round(totalDeferredInterest * 100) / 100,
+    scheduleEndsAt: last?.date ?? null,
     totalPaidToDate,
     totalInterestToDate,
   };
