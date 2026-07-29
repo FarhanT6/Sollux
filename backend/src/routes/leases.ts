@@ -23,6 +23,8 @@ const LeaseSchema = z.object({
   documentUrl: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
   tenantIds: z.array(z.string()).optional(),
+  manualLikelihood: z.enum(['high', 'medium', 'low', 'none']).optional().nullable(),
+  manualLikelihoodNote: z.string().optional().nullable(),
 });
 
 router.get('/', async (req, res, next) => {

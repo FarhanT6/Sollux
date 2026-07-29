@@ -455,6 +455,8 @@ model Lease {
   notes                String?
   arrearsBalance       Decimal     @default(0) @db.Decimal(10, 2)
   arrearsCaughtUpThrough DateTime?
+  manualLikelihood     String?     // 'high' | 'medium' | 'low' | 'none' — overrides the automated delinquency score
+  manualLikelihoodNote String?
   createdAt            DateTime    @default(now())
   updatedAt            DateTime    @updatedAt
 

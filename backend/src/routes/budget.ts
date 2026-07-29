@@ -239,10 +239,15 @@ router.get('/delinquency', async (req, res, next) => {
 
       score = Math.max(0, Math.min(100, score));
 
-      const likelihood: 'high' | 'medium' | 'low' | 'none' =
+      const computedLikelihood: 'high' | 'medium' | 'low' | 'none' =
         score >= 65 ? 'high' :
         score >= 40 ? 'medium' :
         score >= 20 ? 'low' : 'none';
+
+      // A manual flag on the lease always wins over the automated score —
+      // the landlord knows things the payment history can't capture.
+      const isManualOverride = lease.manualLikelihood != null;
+      const likelihood = (lease.manualLikelihood as typeof computedLikelihood) ?? computedLikelihood;
 
       const collectionRate = likelihood === 'high' ? 0.75 : likelihood === 'medium' ? 0.45 : likelihood === 'low' ? 0.15 : 0;
       const expectedCollection = arrears * collectionRate;
@@ -261,7 +266,10 @@ router.get('/delinquency', async (req, res, next) => {
         daysSincePay,
         recentMonthlyAvg: avgMonthlyPaid,
         score,
+        computedLikelihood,
         likelihood,
+        isManualOverride,
+        manualLikelihoodNote: lease.manualLikelihoodNote ?? null,
         expectedCollection,
       };
     });

@@ -493,7 +493,10 @@ export interface DelinquencyTenant {
   daysSincePay: number;
   recentMonthlyAvg: number;
   score: number;
+  computedLikelihood: 'high' | 'medium' | 'low' | 'none';
   likelihood: 'high' | 'medium' | 'low' | 'none';
+  isManualOverride: boolean;
+  manualLikelihoodNote: string | null;
   expectedCollection: number;
 }
 
