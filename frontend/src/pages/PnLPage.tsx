@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getPortfolioPnL, getMonthlyPnL, getProperties } from '../api/client';
 import type { PropertyPnL, MonthlyPnL, Property } from '../types';
@@ -165,6 +165,21 @@ export default function PnLPage({ embedded }: { embedded?: boolean } = {}) {
     }).finally(() => setLoading(false));
   }, [year]);
 
+  // Cluster properties that share a parcel group (e.g. 1536/1538/1518 Hunsaker
+  // St), mirroring the grouping on the Portfolio page.
+  const { groupedByProp, ungroupedByProp } = useMemo(() => {
+    const groupNameById: Record<string, string | undefined> = {};
+    for (const p of properties) groupNameById[p.id] = p.parcelGroupName;
+    const groups: Record<string, PropertyPnL[]> = {};
+    const ungrouped: PropertyPnL[] = [];
+    for (const p of byProp) {
+      const g = groupNameById[p.propertyId];
+      if (g) (groups[g] ??= []).push(p);
+      else ungrouped.push(p);
+    }
+    return { groupedByProp: groups, ungroupedByProp: ungrouped };
+  }, [byProp, properties]);
+
   return (
     <div className={embedded ? '' : 'p-6'}>
       {!embedded && (
@@ -233,7 +248,51 @@ export default function PnLPage({ embedded }: { embedded?: boolean } = {}) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {byProp.map(p => (
+                {Object.entries(groupedByProp).map(([groupName, rows]) => {
+                  const agg = rows.reduce((acc, r) => ({
+                    rentalIncome: acc.rentalIncome + r.rentalIncome,
+                    operatingExpenses: acc.operatingExpenses + r.operatingExpenses,
+                    insuranceExpense: acc.insuranceExpense + r.insuranceExpense,
+                    propertyTaxExpense: acc.propertyTaxExpense + r.propertyTaxExpense,
+                    noi: acc.noi + r.noi,
+                    debtService: acc.debtService + r.debtService,
+                    cashFlow: acc.cashFlow + r.cashFlow,
+                  }), { rentalIncome: 0, operatingExpenses: 0, insuranceExpense: 0, propertyTaxExpense: 0, noi: 0, debtService: 0, cashFlow: 0 });
+                  return (
+                    <Fragment key={groupName}>
+                      <tr style={{ background: 'rgba(245,166,35,0.06)' }}>
+                        <td colSpan={8} className="px-4 py-2">
+                          <span className="text-xs font-semibold text-amber-400 uppercase tracking-wide">{groupName} · {rows.length} parcels</span>
+                        </td>
+                      </tr>
+                      {rows.map(p => (
+                        <tr key={p.propertyId} className="hover:bg-white/[0.02]">
+                          <td className="px-4 py-3 pl-7 text-white font-medium text-xs">
+                            <Link to={`/portfolio/${p.propertyId}`} className="hover:text-amber-400">{p.propertyName}</Link>
+                          </td>
+                          <td className="px-4 py-3 text-right text-gray-300 text-xs">{money(p.rentalIncome)}</td>
+                          <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(p.operatingExpenses)}</td>
+                          <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(p.insuranceExpense)}</td>
+                          <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(p.propertyTaxExpense)}</td>
+                          <td className="px-4 py-3 text-right font-medium text-xs" style={{ color: p.noi >= 0 ? '#F5A623' : '#ef4444' }}>{money(p.noi)}</td>
+                          <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(p.debtService)}</td>
+                          <td className="px-4 py-3 text-right font-semibold text-xs" style={{ color: p.cashFlow >= 0 ? '#10b981' : '#ef4444' }}>{money(p.cashFlow)}</td>
+                        </tr>
+                      ))}
+                      <tr style={{ background: 'rgba(255,255,255,0.02)' }}>
+                        <td className="px-4 py-2 pl-7 text-xs text-gray-500 italic">Subtotal</td>
+                        <td className="px-4 py-2 text-right text-gray-400 text-xs">{money(agg.rentalIncome)}</td>
+                        <td className="px-4 py-2 text-right text-gray-400 text-xs">{money(agg.operatingExpenses)}</td>
+                        <td className="px-4 py-2 text-right text-gray-400 text-xs">{money(agg.insuranceExpense)}</td>
+                        <td className="px-4 py-2 text-right text-gray-400 text-xs">{money(agg.propertyTaxExpense)}</td>
+                        <td className="px-4 py-2 text-right text-xs" style={{ color: agg.noi >= 0 ? '#F5A623' : '#ef4444' }}>{money(agg.noi)}</td>
+                        <td className="px-4 py-2 text-right text-gray-400 text-xs">{money(agg.debtService)}</td>
+                        <td className="px-4 py-2 text-right font-medium text-xs" style={{ color: agg.cashFlow >= 0 ? '#10b981' : '#ef4444' }}>{money(agg.cashFlow)}</td>
+                      </tr>
+                    </Fragment>
+                  );
+                })}
+                {ungroupedByProp.map(p => (
                   <tr key={p.propertyId} className="hover:bg-white/[0.02]">
                     <td className="px-4 py-3 text-white font-medium text-xs">
                       <Link to={`/portfolio/${p.propertyId}`} className="hover:text-amber-400">{p.propertyName}</Link>
