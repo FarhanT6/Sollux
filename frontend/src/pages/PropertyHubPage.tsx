@@ -256,7 +256,7 @@ function PropertyEditModal({ property, onClose, onSave }: {
   }
 
   async function handleSave() {
-    if (!form.address || !form.city || !form.state || !form.zip) return;
+    if (!form.address || !form.city || !form.state) return;
     setSaving(true);
     try {
       const updated = await updateProperty(property.id, {
@@ -266,7 +266,7 @@ function PropertyEditModal({ property, onClose, onSave }: {
         city: form.city,
         county: form.county || undefined,
         state: form.state.toUpperCase(),
-        zip: form.zip,
+        zip: form.zip || undefined,
         region: form.region || undefined,
         type: form.type,
         status: form.status,
