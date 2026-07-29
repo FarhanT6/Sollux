@@ -15,7 +15,7 @@ const BALANCE_METHOD_LABELS: Record<string, string> = {
   balance_after: 'From most recent payment record',
   payment_sum: 'Calculated from recorded principal payments',
   theoretical: 'Projected from origination date (no payment history on file)',
-  manual: 'Manually entered — no calculation basis available',
+  manual: 'Manually entered',
 };
 
 const LOAN_TYPES: LoanType[] = ['MORTGAGE','HELOC','AUTO','PERSONAL','STUDENT','INSTALLMENT_PLAN','CREDIT_LINE','OTHER'];
@@ -558,6 +558,7 @@ export default function LoanDetailPage() {
   const [properties, setProperties] = useState<Property[]>([]);
   const [loading, setLoading] = useState(true);
   const [showFullSchedule, setShowFullSchedule] = useState(false);
+  const [chartFullRange, setChartFullRange] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
 
   const reload = () => {
@@ -590,8 +591,13 @@ export default function LoanDetailPage() {
     .slice()
     .reverse()
     .map(p => ({ date: p.date, balance: Number(p.balanceAfter), kind: 'actual' as const }));
-  const projected = amortization.schedule
-    .filter((_, i) => i % Math.max(1, Math.floor(amortization.schedule.length / 60)) === 0 || i === amortization.schedule.length - 1)
+  // Plotting the full term of a fresh 30-year loan makes the chart look like
+  // a long flat stretch, since early-life balance movement is tiny next to
+  // the total. Default to a 10-year window; let the user expand it.
+  const CHART_DEFAULT_MONTHS = 120;
+  const chartSchedule = chartFullRange ? amortization.schedule : amortization.schedule.slice(0, CHART_DEFAULT_MONTHS);
+  const projected = chartSchedule
+    .filter((_, i) => i % Math.max(1, Math.floor(chartSchedule.length / 60)) === 0 || i === chartSchedule.length - 1)
     .map(r => ({ date: r.date, balance: r.balance, kind: 'projected' as const }));
   const chartData = [...history, { date: balance.asOfDate, balance: balance.balance, kind: 'actual' as const }, ...projected];
 
@@ -641,10 +647,10 @@ export default function LoanDetailPage() {
         <div className="stat-card">
           <p className="text-xs text-gray-500 mb-1">{loan.escrowAmount ? 'Total monthly (P&I + escrow)' : 'Monthly payment'}</p>
           <p className="text-xl font-semibold text-white">
-            {money((loan.monthlyPayment ?? amortization.computedMonthlyPayment) + (loan.escrowAmount ?? 0))}
+            {money(Number(loan.monthlyPayment ?? amortization.computedMonthlyPayment) + Number(loan.escrowAmount ?? 0))}
           </p>
           {loan.escrowAmount ? (
-            <p className="text-xs text-gray-600 mt-1">{money(loan.monthlyPayment ?? amortization.computedMonthlyPayment)} P&I + {money(loan.escrowAmount)} escrow</p>
+            <p className="text-xs text-gray-600 mt-1">{money(Number(loan.monthlyPayment ?? amortization.computedMonthlyPayment))} P&I + {money(Number(loan.escrowAmount))} escrow</p>
           ) : !loan.monthlyPayment ? (
             <p className="text-xs text-gray-600 mt-1">Estimated</p>
           ) : null}
@@ -705,7 +711,14 @@ export default function LoanDetailPage() {
       {/* Balance over time chart */}
       {chartData.length > 1 && (
         <div className="card p-4 mb-6">
-          <p className="text-xs text-gray-500 mb-3">Balance over time — actual payments + projected payoff path</p>
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs text-gray-500">Balance over time — actual payments + projected payoff path</p>
+            {amortization.schedule.length > CHART_DEFAULT_MONTHS && (
+              <button onClick={() => setChartFullRange(v => !v)} className="text-xs text-amber-400 hover:text-amber-300">
+                {chartFullRange ? 'Show 10yr window' : `Show full ${Math.ceil(amortization.schedule.length / 12)}yr term`}
+              </button>
+            )}
+          </div>
           <ResponsiveContainer width="100%" height={220}>
             <AreaChart data={chartData}>
               <defs>

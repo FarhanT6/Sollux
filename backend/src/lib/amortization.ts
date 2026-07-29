@@ -87,7 +87,16 @@ export function calculateCurrentBalance(loan: LoanInput, payments: PaymentInput[
     return { balance, asOfDate: iso(sorted[0].date), method: 'payment_sum' };
   }
 
-  // 3. Theoretical schedule from origination to today.
+  // 3. An explicitly entered current balance — trust it over a generic
+  // projection. The user (or the Auto-calc button, seeded from the same
+  // inputs) may know about extra payments, refinances, or other real-world
+  // events a theoretical schedule can't see.
+  if (loan.currentBalance != null) {
+    return { balance: loan.currentBalance, asOfDate: iso(new Date()), method: 'manual' };
+  }
+
+  // 4. Last resort: theoretical schedule from origination to today, only
+  // when there's nothing else — not even a manually entered balance.
   if (loan.originalAmount != null && loan.interestRate != null && loan.originationDate) {
     const monthlyRate = loan.interestRate / 100 / 12;
     const today = new Date();
@@ -107,8 +116,8 @@ export function calculateCurrentBalance(loan: LoanInput, payments: PaymentInput[
     }
   }
 
-  // 4. Nothing to compute from — fall back to whatever was manually entered.
-  return { balance: loan.currentBalance ?? 0, asOfDate: iso(new Date()), method: 'manual' };
+  // 5. Nothing on file at all.
+  return { balance: 0, asOfDate: iso(new Date()), method: 'manual' };
 }
 
 function computeMonthlyPayment(principal: number, monthlyRate: number, termMonths: number): number {

@@ -8,6 +8,26 @@ import { calculateCurrentBalance, buildAmortizationSchedule } from '../lib/amort
 const router = Router();
 router.use(attachDbUser);
 
+// Prisma Decimal fields serialize to JSON as strings (to preserve precision),
+// which silently breaks any frontend arithmetic or currency formatting on
+// them (e.g. "4256.4" + "1360.64" === "4256.41360.64" via string
+// concatenation). Convert to plain numbers before they leave the API.
+const DECIMAL_LOAN_FIELDS = ['originalAmount', 'interestRate', 'monthlyPayment', 'escrowAmount', 'currentBalance'] as const;
+const DECIMAL_PAYMENT_FIELDS = ['billAmount', 'amount', 'lateFee', 'principal', 'interest', 'escrow', 'balanceAfter'] as const;
+
+function serializeLoanPayment(p: any) {
+  const out = { ...p };
+  for (const f of DECIMAL_PAYMENT_FIELDS) if (out[f] != null) out[f] = Number(out[f]);
+  return out;
+}
+
+function serializeLoan(l: any) {
+  const out = { ...l };
+  for (const f of DECIMAL_LOAN_FIELDS) if (out[f] != null) out[f] = Number(out[f]);
+  if (Array.isArray(out.loanPayments)) out.loanPayments = out.loanPayments.map(serializeLoanPayment);
+  return out;
+}
+
 const PrepaymentTierSchema = z.object({
   startMonth: z.number().int().min(0),
   endMonth: z.number().int().min(1),
@@ -79,7 +99,7 @@ router.get('/', async (req, res, next) => {
     });
     const interestPaidByLoan = new Map(interestAgg.map(a => [a.loanId, a._sum.interest != null ? Number(a._sum.interest) : 0]));
 
-    const result = loans.map(l => ({
+    const result = loans.map(l => serializeLoan({
       ...l,
       interestPaidToDate: interestPaidByLoan.get(l.id) ?? 0,
       totalInterestLifetime: computeLifetimeInterest(l),
@@ -113,7 +133,7 @@ router.get('/:id', async (req, res, next) => {
       },
     });
     if (!loan) return res.status(404).json({ error: 'Loan not found' });
-    res.json(loan);
+    res.json(serializeLoan(loan));
   } catch (err) { next(err); }
 });
 
@@ -166,7 +186,7 @@ router.post('/', async (req, res, next) => {
         ...(propertyId != null ? { property: { connect: { id: propertyId } } } : {}),
       },
     });
-    res.status(201).json(loan);
+    res.status(201).json(serializeLoan(loan));
   } catch (err) { next(err); }
 });
 
@@ -189,7 +209,7 @@ router.patch('/:id', async (req, res, next) => {
           : {}),
       },
     });
-    res.json(loan);
+    res.json(serializeLoan(loan));
   } catch (err) { next(err); }
 });
 
@@ -208,7 +228,7 @@ router.get('/:id/payments', async (req, res, next) => {
     const loan = await db.loan.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
     if (!loan) return res.status(404).json({ error: 'Loan not found' });
     const payments = await db.loanPayment.findMany({ where: { loanId: req.params.id }, orderBy: { date: 'desc' } });
-    res.json(payments);
+    res.json(payments.map(serializeLoanPayment));
   } catch (err) { next(err); }
 });
 
@@ -218,7 +238,7 @@ router.post('/:id/payments', async (req, res, next) => {
     if (!loan) return res.status(404).json({ error: 'Loan not found' });
     const data = LoanPaymentSchema.parse(req.body);
     const payment = await db.loanPayment.create({ data: { ...data, loanId: req.params.id } });
-    res.status(201).json(payment);
+    res.status(201).json(serializeLoanPayment(payment));
   } catch (err) { next(err); }
 });
 

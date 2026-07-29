@@ -76,7 +76,7 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
 
   const activeLoans = loans.filter(l => l.isActive && !l.isPersonal);
   const totalDebt = activeLoans.reduce((s, l) => s + Number(l.currentBalance ?? 0), 0);
-  const monthlyDebt = activeLoans.reduce((s, l) => s + Number(l.monthlyPayment ?? 0), 0);
+  const monthlyDebt = activeLoans.reduce((s, l) => s + Number(l.monthlyPayment ?? 0) + Number(l.escrowAmount ?? 0), 0);
   const ratesWithValue = activeLoans.filter(l => l.interestRate != null);
   const avgRate = ratesWithValue.length ? ratesWithValue.reduce((s, l) => s + Number(l.interestRate), 0) / ratesWithValue.length : null;
 
@@ -240,7 +240,9 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
                   <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">{loan.loanType.replace('_', ' ')}</td>
                   <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(loan.originalAmount ?? undefined)}</td>
                   <td className="px-4 py-3 text-right text-red-400 text-xs font-medium">{money(loan.currentBalance ?? undefined)}</td>
-                  <td className="px-4 py-3 text-right text-gray-300 text-xs">{money(loan.monthlyPayment ?? undefined)}</td>
+                  <td className="px-4 py-3 text-right text-gray-300 text-xs" title={loan.escrowAmount ? `${money(loan.monthlyPayment)} P&I + ${money(loan.escrowAmount)} escrow` : undefined}>
+                    {money(loan.monthlyPayment != null || loan.escrowAmount != null ? Number(loan.monthlyPayment ?? 0) + Number(loan.escrowAmount ?? 0) : undefined)}
+                  </td>
                   <td className="px-4 py-3 text-right text-gray-400 text-xs">{loan.interestRate != null ? `${loan.interestRate}%` : '—'}</td>
                   <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(loan.totalInterestLifetime ?? undefined)}</td>
                   <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(loan.interestPaidToDate ?? undefined)}</td>
