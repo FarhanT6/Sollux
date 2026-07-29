@@ -453,6 +453,7 @@ export interface OtherIncome {
 export interface BudgetRentRow {
   leaseId: string;
   tenant: string;
+  tenantId: string | null;
   unit: string;
   property: string;
   propertyId: string;
@@ -476,6 +477,7 @@ export interface BudgetMortgageRow {
 export interface DelinquencyTenant {
   leaseId: string;
   tenant: string;
+  tenantId: string | null;
   unit: string;
   property: string;
   propertyId: string;

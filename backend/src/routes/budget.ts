@@ -43,9 +43,11 @@ router.get('/monthly', async (req, res, next) => {
       const collected = lease.rentPayments.reduce((s, p) => s + toNum(p.amount), 0);
       const remaining = Math.max(0, expected - collected);
       const tenant    = lease.leaseTenants[0]?.tenant.fullName ?? 'Unknown';
+      const tenantId  = lease.leaseTenants[0]?.tenant.id ?? null;
       return {
         leaseId: lease.id,
         tenant,
+        tenantId,
         unit: lease.unit.unitLabel,
         property: lease.unit.property.nickname || lease.unit.property.address,
         propertyId: lease.unit.property.id,
@@ -248,6 +250,7 @@ router.get('/delinquency', async (req, res, next) => {
       return {
         leaseId: lease.id,
         tenant: lease.leaseTenants[0]?.tenant.fullName ?? 'Unknown',
+        tenantId: lease.leaseTenants[0]?.tenant.id ?? null,
         unit: lease.unit.unitLabel,
         property: lease.unit.property.nickname || lease.unit.property.address,
         propertyId: lease.unit.property.id,

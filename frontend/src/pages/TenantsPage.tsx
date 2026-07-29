@@ -1,6 +1,18 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { getTenants, createTenant, deleteTenant } from '../api/client';
 import type { Tenant } from '../types';
+
+function formatPhone(phone?: string | null): string {
+  if (!phone) return '';
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length === 10) return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+  if (digits.length === 11 && digits[0] === '1') return `(${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
+  return phone;
+}
+function telHref(phone?: string | null): string {
+  return `tel:${(phone ?? '').replace(/\D/g, '')}`;
+}
 
 export default function TenantsPage({ embedded }: { embedded?: boolean } = {}) {
   const [tenants, setTenants] = useState<Tenant[]>([]);
@@ -97,9 +109,15 @@ export default function TenantsPage({ embedded }: { embedded?: boolean } = {}) {
                 const activeLeases = t.leaseTenants?.filter(lt => lt.lease?.status === 'ACTIVE') || [];
                 return (
                   <tr key={t.id} className="hover:bg-white/[0.02]">
-                    <td className="px-4 py-3 font-medium text-white">{t.fullName}</td>
-                    <td className="px-4 py-3 text-gray-400">{t.email || '—'}</td>
-                    <td className="px-4 py-3 text-gray-400">{t.phone || '—'}</td>
+                    <td className="px-4 py-3 font-medium">
+                      <Link to={`/tenants/${t.id}`} className="text-white hover:text-amber-400">{t.fullName}</Link>
+                    </td>
+                    <td className="px-4 py-3 text-gray-400">
+                      {t.email ? <a href={`mailto:${t.email}`} className="text-amber-400 hover:text-amber-300" onClick={e => e.stopPropagation()}>{t.email}</a> : '—'}
+                    </td>
+                    <td className="px-4 py-3 text-gray-400">
+                      {t.phone ? <a href={telHref(t.phone)} className="text-amber-400 hover:text-amber-300" onClick={e => e.stopPropagation()}>{formatPhone(t.phone)}</a> : '—'}
+                    </td>
                     <td className="px-4 py-3">
                       {activeLeases.length > 0 ? (
                         <span className="text-xs bg-green-900/40 text-green-300 px-2 py-0.5 rounded-full">

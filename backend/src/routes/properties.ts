@@ -75,17 +75,24 @@ router.get('/', async (req, res, next) => {
 router.get('/lookup', async (req, res, next) => {
   try {
     const { address, city, state, zip } = req.query as Record<string, string>;
-    if (!address || !city || !state || !zip) {
-      return res.status(400).json({ error: 'address, city, state, and zip are required' });
+    if (!address || !city || !state) {
+      return res.status(400).json({ error: 'address, city, and state are required' });
     }
 
-    const [record, valuation] = await Promise.all([
-      lookupPropertyRecord({ address, city, state, zip }).catch(() => null),
-      lookupValueEstimate({ address, city, state, zip }).catch(() => null),
+    const q = { address, city, state, zip: zip || undefined };
+    const [recordResult, valuationResult] = await Promise.allSettled([
+      lookupPropertyRecord(q),
+      lookupValueEstimate(q),
     ]);
 
+    const record = recordResult.status === 'fulfilled' ? recordResult.value : null;
+    const valuation = valuationResult.status === 'fulfilled' ? valuationResult.value : null;
+
     if (!record && !valuation) {
-      return res.status(404).json({ error: 'No RentCast data found for this address' });
+      const reason = recordResult.status === 'rejected'
+        ? (recordResult.reason?.response?.data?.message || recordResult.reason?.message || 'Unknown error')
+        : 'No RentCast data found for this address';
+      return res.status(404).json({ error: reason });
     }
 
     res.json({ record, valuation });

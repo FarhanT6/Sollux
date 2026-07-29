@@ -12,6 +12,19 @@ const money = (n?: number | string | null) =>
   n == null ? '—' : Number(n).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const fmtDate = (d?: string | null) => d ? format(new Date(d), 'MMM d, yyyy') : '—';
 
+// Formats a 10 (or 11 with US country code) digit phone number as (***) ***-****.
+// Falls back to the raw value for anything else (extensions, international, partial entry).
+function formatPhone(phone?: string | null): string {
+  if (!phone) return '';
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length === 10) return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+  if (digits.length === 11 && digits[0] === '1') return `(${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
+  return phone;
+}
+function telHref(phone?: string | null): string {
+  return `tel:${(phone ?? '').replace(/\D/g, '')}`;
+}
+
 function readFileAsBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -29,7 +42,7 @@ export default function TenantDetailPage() {
   const [tenant, setTenant] = useState<FullTenant | null>(null);
   const [loading, setLoading] = useState(true);
   const [editingContact, setEditingContact] = useState(false);
-  const [contactForm, setContactForm] = useState({ fullName: '', email: '', phone: '', address: '', notes: '' });
+  const [contactForm, setContactForm] = useState({ fullName: '', email: '', phone: '', notes: '' });
   const [savingContact, setSavingContact] = useState(false);
   const [maintenanceByLease, setMaintenanceByLease] = useState<Record<string, Improvement[]>>({});
 
@@ -38,8 +51,7 @@ export default function TenantDetailPage() {
     getTenant(id).then(t => {
       setTenant(t as FullTenant);
       setContactForm({
-        fullName: t.fullName, email: t.email ?? '', phone: t.phone ?? '',
-        address: (t as any).address ?? '', notes: t.notes ?? '',
+        fullName: t.fullName, email: t.email ?? '', phone: t.phone ?? '', notes: t.notes ?? '',
       });
     }).finally(() => setLoading(false));
   }
@@ -77,7 +89,6 @@ export default function TenantDetailPage() {
         fullName: contactForm.fullName,
         email: contactForm.email || undefined,
         phone: contactForm.phone || undefined,
-        address: contactForm.address || undefined,
         notes: contactForm.notes || undefined,
       });
       setEditingContact(false);
@@ -113,9 +124,18 @@ export default function TenantDetailPage() {
       <div className="card p-4 mt-4">
         {!editingContact ? (
           <div className="grid grid-cols-2 gap-4 text-sm">
-            <div><p className="text-xs text-gray-500 mb-0.5">Email</p><p className="text-gray-200">{tenant.email || '—'}</p></div>
-            <div><p className="text-xs text-gray-500 mb-0.5">Phone</p><p className="text-gray-200">{tenant.phone || '—'}</p></div>
-            <div className="col-span-2"><p className="text-xs text-gray-500 mb-0.5">Address</p><p className="text-gray-200">{(tenant as any).address || '—'}</p></div>
+            <div>
+              <p className="text-xs text-gray-500 mb-0.5">Email</p>
+              {tenant.email
+                ? <a href={`mailto:${tenant.email}`} className="text-amber-400 hover:text-amber-300">{tenant.email}</a>
+                : <p className="text-gray-200">—</p>}
+            </div>
+            <div>
+              <p className="text-xs text-gray-500 mb-0.5">Phone</p>
+              {tenant.phone
+                ? <a href={telHref(tenant.phone)} className="text-amber-400 hover:text-amber-300">{formatPhone(tenant.phone)}</a>
+                : <p className="text-gray-200">—</p>}
+            </div>
             {tenant.notes && <div className="col-span-2"><p className="text-xs text-gray-500 mb-0.5">Notes</p><p className="text-gray-300">{tenant.notes}</p></div>}
           </div>
         ) : (
@@ -123,7 +143,6 @@ export default function TenantDetailPage() {
             <input placeholder="Full name *" value={contactForm.fullName} onChange={e => setContactForm(f => ({ ...f, fullName: e.target.value }))} className="input-dark text-sm col-span-2" />
             <input placeholder="Email" value={contactForm.email} onChange={e => setContactForm(f => ({ ...f, email: e.target.value }))} className="input-dark text-sm" />
             <input placeholder="Phone" value={contactForm.phone} onChange={e => setContactForm(f => ({ ...f, phone: e.target.value }))} className="input-dark text-sm" />
-            <input placeholder="Address" value={contactForm.address} onChange={e => setContactForm(f => ({ ...f, address: e.target.value }))} className="input-dark text-sm col-span-2" />
             <textarea placeholder="Notes" value={contactForm.notes} onChange={e => setContactForm(f => ({ ...f, notes: e.target.value }))} className="input-dark text-sm col-span-2" rows={2} />
             <div className="col-span-2 flex gap-2 justify-end">
               <button onClick={() => { setEditingContact(false); load(); }} className="btn text-xs">Cancel</button>
@@ -216,6 +235,9 @@ function LeaseCard({ lease, maintenance, onChanged }: {
         </div>
         <div className="flex items-center gap-2">
           <span className={`pill text-xs ${lease.status === 'ACTIVE' ? 'pill-green' : lease.status === 'PENDING' ? 'pill-amber' : 'pill-gray'}`}>{lease.status}</span>
+          {lease.status === 'ACTIVE' && (
+            <Link to="/finances?tab=budget" className="text-xs text-gray-500 hover:text-gray-300">View in Budget</Link>
+          )}
           <button onClick={() => setEditing(e => !e)} className="text-xs text-amber-400 hover:text-amber-300">{editing ? 'Cancel' : 'Edit'}</button>
         </div>
       </div>
