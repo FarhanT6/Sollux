@@ -178,6 +178,7 @@ export interface Loan {
   loanType: LoanType;
   lender: string;
   accountLast4?: string;
+  accountNumber?: string | null; // full number, only populated on GET /loans/:id
   originalAmount?: number;
   interestRate?: number;
   originationDate?: string;

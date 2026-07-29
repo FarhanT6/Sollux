@@ -572,6 +572,7 @@ model Loan {
   loanType           LoanType
   lender             String
   accountLast4       String?
+  accountNumberEnc   String?         // AES-256 encrypted full account number
   originalAmount     Decimal?        @db.Decimal(14, 2)
   interestRate       Decimal?        @db.Decimal(6, 3)
   originationDate    DateTime?

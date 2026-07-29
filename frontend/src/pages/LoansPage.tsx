@@ -26,7 +26,7 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
     propertyId: '', loanType: 'MORTGAGE' as LoanType,
-    lender: '', accountLast4: '', originalAmount: '', interestRate: '',
+    lender: '', accountNumber: '', originalAmount: '', interestRate: '',
     originationDate: '', maturityDate: '', monthlyPayment: '', escrowAmount: '', currentBalance: '',
     dueDay: '', gracePeriodDays: '',
     notes: '', isPersonal: false, isActive: true,
@@ -48,7 +48,7 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
         propertyId: form.propertyId || undefined,
         loanType: form.loanType,
         lender: form.lender,
-        accountLast4: form.accountLast4 || undefined,
+        accountNumber: form.accountNumber || undefined,
         originalAmount: form.originalAmount ? parseFloat(form.originalAmount) : undefined,
         interestRate: form.interestRate ? parseFloat(form.interestRate) : undefined,
         originationDate: form.originationDate || undefined,
@@ -156,8 +156,8 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
               <input value={form.lender} onChange={e => setForm(f => ({ ...f, lender: e.target.value }))} className="input-dark w-full" required />
             </div>
             <div>
-              <label className="text-xs text-gray-400 block mb-1">Account (last 4)</label>
-              <input maxLength={4} value={form.accountLast4} onChange={e => setForm(f => ({ ...f, accountLast4: e.target.value }))} className="input-dark w-full" />
+              <label className="text-xs text-gray-400 block mb-1">Account number</label>
+              <input value={form.accountNumber} onChange={e => setForm(f => ({ ...f, accountNumber: e.target.value }))} className="input-dark w-full" />
             </div>
             <div>
               <label className="text-xs text-gray-400 block mb-1">Original amount</label>

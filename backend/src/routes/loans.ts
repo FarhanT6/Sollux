@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { calculateCurrentBalance, buildAmortizationSchedule } from '../lib/amortization';
+import { encryptOptional, decryptOptional } from '../crypto/encrypt';
 
 const router = Router();
 router.use(attachDbUser);
@@ -22,7 +23,7 @@ function serializeLoanPayment(p: any) {
 }
 
 function serializeLoan(l: any) {
-  const out = { ...l };
+  const { accountNumberEnc, ...out } = l;
   for (const f of DECIMAL_LOAN_FIELDS) if (out[f] != null) out[f] = Number(out[f]);
   if (Array.isArray(out.loanPayments)) out.loanPayments = out.loanPayments.map(serializeLoanPayment);
   return out;
@@ -45,6 +46,7 @@ const LoanSchema = z.object({
   loanType: z.enum(['MORTGAGE','HELOC','AUTO','PERSONAL','STUDENT','INSTALLMENT_PLAN','CREDIT_LINE','OTHER']),
   lender: z.string().min(1),
   accountLast4: z.string().max(4).optional().nullable(),
+  accountNumber: z.string().optional().nullable(),
   originalAmount: z.number().optional().nullable(),
   interestRate: z.number().optional().nullable(),
   originationDate: z.string().transform(s => new Date(s)).optional().nullable(),
@@ -133,7 +135,7 @@ router.get('/:id', async (req, res, next) => {
       },
     });
     if (!loan) return res.status(404).json({ error: 'Loan not found' });
-    res.json(serializeLoan(loan));
+    res.json({ ...serializeLoan(loan), accountNumber: decryptOptional(loan.accountNumberEnc) });
   } catch (err) { next(err); }
 });
 
@@ -177,10 +179,13 @@ router.post('/', async (req, res, next) => {
       const prop = await db.property.findFirst({ where: { id: data.propertyId, userId: req.dbUserId! } });
       if (!prop) return res.status(404).json({ error: 'Property not found' });
     }
-    const { propertyId, prepaymentPenaltyJson, ...rest } = data;
+    const { propertyId, prepaymentPenaltyJson, accountNumber, ...rest } = data;
     const loan = await db.loan.create({
       data: {
         ...rest,
+        ...(accountNumber
+          ? { accountNumberEnc: encryptOptional(accountNumber), accountLast4: accountNumber.slice(-4) }
+          : {}),
         userId: req.dbUserId!,
         prepaymentPenaltyJson: prepaymentPenaltyJson ?? Prisma.DbNull,
         ...(propertyId != null ? { property: { connect: { id: propertyId } } } : {}),
@@ -192,13 +197,19 @@ router.post('/', async (req, res, next) => {
 
 router.patch('/:id', async (req, res, next) => {
   try {
-    const { propertyId, prepaymentPenaltyJson, ...rest } = LoanSchema.partial().parse(req.body);
+    const { propertyId, prepaymentPenaltyJson, accountNumber, ...rest } = LoanSchema.partial().parse(req.body);
     const existing = await db.loan.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
     if (!existing) return res.status(404).json({ error: 'Loan not found' });
     const loan = await db.loan.update({
       where: { id: req.params.id },
       data: {
         ...rest,
+        ...(accountNumber !== undefined
+          ? {
+              accountNumberEnc: encryptOptional(accountNumber),
+              accountLast4: accountNumber ? accountNumber.slice(-4) : null,
+            }
+          : {}),
         ...(prepaymentPenaltyJson !== undefined
           ? { prepaymentPenaltyJson: prepaymentPenaltyJson ?? Prisma.DbNull }
           : {}),

@@ -185,7 +185,7 @@ function EditModal({ loan, properties, onClose, onSave }: {
     lender: loan.lender,
     loanType: loan.loanType,
     paymentType: loan.paymentType ?? 'PRINCIPAL_AND_INTEREST',
-    accountLast4: loan.accountLast4 ?? '',
+    accountNumber: loan.accountNumber ?? '',
     originalAmount: loan.originalAmount != null ? String(loan.originalAmount) : '',
     interestRate: loan.interestRate != null ? String(loan.interestRate) : '',
     monthlyPayment: loan.monthlyPayment != null ? String(loan.monthlyPayment) : '',
@@ -234,7 +234,7 @@ function EditModal({ loan, properties, onClose, onSave }: {
         lender: form.lender,
         loanType: form.loanType,
         paymentType: form.paymentType,
-        accountLast4: form.accountLast4 || null,
+        accountNumber: form.accountNumber || null,
         originalAmount: form.originalAmount ? parseFloat(form.originalAmount) : null,
         interestRate: form.interestRate ? parseFloat(form.interestRate) : null,
         monthlyPayment: form.monthlyPayment ? parseFloat(form.monthlyPayment) : null,
@@ -370,8 +370,8 @@ function EditModal({ loan, properties, onClose, onSave }: {
                 </select>
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Account # (last 4)</label>
-                <input maxLength={4} value={form.accountLast4} onChange={f('accountLast4')} className="input-dark w-full text-sm" placeholder="1234" />
+                <label className="block text-xs text-gray-500 mb-1">Account number</label>
+                <input value={form.accountNumber} onChange={f('accountNumber')} className="input-dark w-full text-sm" placeholder="Full account number" />
               </div>
               <div className="flex flex-col justify-end gap-2 pb-0.5">
                 <label className="flex items-center gap-2 cursor-pointer">
@@ -611,7 +611,11 @@ export default function LoanDetailPage() {
           <p className="text-sm text-gray-400 mt-0.5">
             {LOAN_TYPE_LABELS[loan.loanType] ?? loan.loanType}
             {loan.paymentType === 'INTEREST_ONLY' && <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded" style={{ background: 'rgba(245,166,35,0.12)', color: '#F5A623' }}>Interest only</span>}
-            {loan.accountLast4 && <span> &middot; &middot;&middot;&middot;{loan.accountLast4}</span>}
+            {loan.accountNumber ? (
+              <span> &middot; Acct #{loan.accountNumber}</span>
+            ) : loan.accountLast4 ? (
+              <span> &middot; &middot;&middot;&middot;{loan.accountLast4}</span>
+            ) : null}
             {loan.property && (
               <> &middot; <Link to={`/properties/${loan.property.id}`} className="text-amber-400 hover:text-amber-300">{loan.property.nickname || loan.property.address}</Link></>
             )}
