@@ -134,7 +134,7 @@ function PenaltyEditor({ value, onChange }: {
               type="number" min={1} max={120}
               value={value.periodMonths}
               onChange={e => updateField('periodMonths', parseInt(e.target.value) || 1)}
-              className="input-base w-32 text-sm"
+              className="input-dark w-32 text-sm"
             />
           </div>
 
@@ -149,15 +149,15 @@ function PenaltyEditor({ value, onChange }: {
                   <span className="text-gray-500 w-16 flex-shrink-0">Month</span>
                   <input type="number" min={0} value={tier.startMonth}
                     onChange={e => updateTier(i, 'startMonth', parseInt(e.target.value) || 0)}
-                    className="input-base w-16 text-sm text-center" placeholder="0" />
+                    className="input-dark w-16 text-sm text-center" placeholder="0" />
                   <span className="text-gray-600">–</span>
                   <input type="number" min={1} value={tier.endMonth}
                     onChange={e => updateTier(i, 'endMonth', parseInt(e.target.value) || 1)}
-                    className="input-base w-16 text-sm text-center" placeholder="24" />
+                    className="input-dark w-16 text-sm text-center" placeholder="24" />
                   <span className="text-gray-500">→</span>
                   <input type="number" min={0} max={100} step={0.1} value={tier.rate}
                     onChange={e => updateTier(i, 'rate', parseFloat(e.target.value) || 0)}
-                    className="input-base w-16 text-sm text-center" placeholder="3" />
+                    className="input-dark w-16 text-sm text-center" placeholder="3" />
                   <span className="text-gray-500">%</span>
                   {value.tiers.length > 1 && (
                     <button type="button" onClick={() => removeTier(i)} className="text-gray-600 hover:text-red-400 ml-1">✕</button>
@@ -267,17 +267,17 @@ function EditModal({ loan, properties, onClose, onSave }: {
           <div className="grid grid-cols-2 gap-3">
             <div className="col-span-2">
               <label className="block text-xs text-gray-500 mb-1">Lender / name</label>
-              <input value={form.lender} onChange={f('lender')} className="input-base w-full text-sm" placeholder="e.g. Monty James" />
+              <input value={form.lender} onChange={f('lender')} className="input-dark w-full text-sm" placeholder="e.g. Monty James" />
             </div>
             <div>
               <label className="block text-xs text-gray-500 mb-1">Loan type</label>
-              <select value={form.loanType} onChange={f('loanType')} className="input-base w-full text-sm">
+              <select value={form.loanType} onChange={f('loanType')} className="input-dark w-full text-sm">
                 {LOAN_TYPES.map(t => <option key={t} value={t}>{LOAN_TYPE_LABELS[t]}</option>)}
               </select>
             </div>
             <div>
               <label className="block text-xs text-gray-500 mb-1">Payment structure</label>
-              <select value={form.paymentType} onChange={f('paymentType')} className="input-base w-full text-sm">
+              <select value={form.paymentType} onChange={f('paymentType')} className="input-dark w-full text-sm">
                 <option value="PRINCIPAL_AND_INTEREST">P+I (Principal & Interest)</option>
                 <option value="INTEREST_ONLY">Interest only</option>
               </select>
@@ -290,15 +290,15 @@ function EditModal({ loan, properties, onClose, onSave }: {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Original loan amount</label>
-                <input type="number" value={form.originalAmount} onChange={f('originalAmount')} className="input-base w-full text-sm" placeholder="150000" />
+                <input type="number" value={form.originalAmount} onChange={f('originalAmount')} className="input-dark w-full text-sm" placeholder="150000" />
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Interest rate (%)</label>
-                <input type="number" step="0.001" value={form.interestRate} onChange={f('interestRate')} className="input-base w-full text-sm" placeholder="10.0" />
+                <input type="number" step="0.001" value={form.interestRate} onChange={f('interestRate')} className="input-dark w-full text-sm" placeholder="10.0" />
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Monthly payment</label>
-                <input type="number" value={form.monthlyPayment} onChange={f('monthlyPayment')} className="input-base w-full text-sm" placeholder="1250" />
+                <input type="number" value={form.monthlyPayment} onChange={f('monthlyPayment')} className="input-dark w-full text-sm" placeholder="1250" />
               </div>
               <div>
                 <div className="flex items-center justify-between mb-1">
@@ -312,7 +312,7 @@ function EditModal({ loan, properties, onClose, onSave }: {
                     ⟳ Auto-calc
                   </button>
                 </div>
-                <input type="number" value={form.currentBalance} onChange={f('currentBalance')} className="input-base w-full text-sm" placeholder="148000" />
+                <input type="number" value={form.currentBalance} onChange={f('currentBalance')} className="input-dark w-full text-sm" placeholder="148000" />
               </div>
             </div>
           </div>
@@ -323,11 +323,11 @@ function EditModal({ loan, properties, onClose, onSave }: {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Origination date</label>
-                <input type="date" value={form.originationDate} onChange={f('originationDate')} className="input-base w-full text-sm" />
+                <input type="date" value={form.originationDate} onChange={f('originationDate')} className="input-dark w-full text-sm" />
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Maturity date</label>
-                <input type="date" value={form.maturityDate} onChange={f('maturityDate')} className="input-base w-full text-sm" />
+                <input type="date" value={form.maturityDate} onChange={f('maturityDate')} className="input-dark w-full text-sm" />
               </div>
             </div>
           </div>
@@ -338,7 +338,7 @@ function EditModal({ loan, properties, onClose, onSave }: {
             <div className="grid grid-cols-2 gap-3">
               <div className="col-span-2">
                 <label className="block text-xs text-gray-500 mb-1">Attached property</label>
-                <select value={form.propertyId} onChange={f('propertyId')} className="input-base w-full text-sm">
+                <select value={form.propertyId} onChange={f('propertyId')} className="input-dark w-full text-sm">
                   <option value="">— No property —</option>
                   {properties.map(p => (
                     <option key={p.id} value={p.id}>{p.nickname || p.address}{p.city ? `, ${p.city}` : ''}</option>
@@ -347,7 +347,7 @@ function EditModal({ loan, properties, onClose, onSave }: {
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Account # (last 4)</label>
-                <input maxLength={4} value={form.accountLast4} onChange={f('accountLast4')} className="input-base w-full text-sm" placeholder="1234" />
+                <input maxLength={4} value={form.accountLast4} onChange={f('accountLast4')} className="input-dark w-full text-sm" placeholder="1234" />
               </div>
               <div className="flex flex-col justify-end gap-2 pb-0.5">
                 <label className="flex items-center gap-2 cursor-pointer">
@@ -366,7 +366,7 @@ function EditModal({ loan, properties, onClose, onSave }: {
             </div>
             <div className="mt-3">
               <label className="block text-xs text-gray-500 mb-1">Notes</label>
-              <textarea value={form.notes} onChange={f('notes')} rows={2} className="input-base w-full text-sm resize-none" placeholder="VVW loan, ~$150k…" />
+              <textarea value={form.notes} onChange={f('notes')} rows={2} className="input-dark w-full text-sm resize-none" placeholder="VVW loan, ~$150k…" />
             </div>
           </div>
 
@@ -501,7 +501,7 @@ function PrepayoffCalc({ loan, currentBalance, penalty, calc }: {
             type="number"
             value={payoffAmount}
             onChange={e => setPayoffAmount(e.target.value)}
-            className="input-base w-full text-sm"
+            className="input-dark w-full text-sm"
             placeholder={String(Math.round(currentBalance))}
           />
         </div>
@@ -552,6 +552,9 @@ export default function LoanDetailPage() {
   const currentBalance = useMemo(() => amort?.balance.balance ?? Number(loan?.currentBalance ?? 0), [amort, loan]);
   const originalAmount = useMemo(() => Number(loan?.originalAmount ?? 0), [loan]);
   const paidOff = useMemo(() => originalAmount > 0 ? Math.max(0, Math.min(100, ((originalAmount - currentBalance) / originalAmount) * 100)) : 0, [originalAmount, currentBalance]);
+  // "manual" method with no currentBalance on file means we have nothing to
+  // calculate from at all — showing $0 / 100% paid off would be a lie, not a fact.
+  const hasBalanceData = amort ? (amort.balance.method !== 'manual' || loan?.currentBalance != null) : true;
 
   if (loading) return <div className="p-6 text-gray-500 text-sm">Loading…</div>;
   if (!loan || !amort) return <div className="p-6 text-gray-500 text-sm">Loan not found</div>;
@@ -606,8 +609,10 @@ export default function LoanDetailPage() {
       <div className="grid grid-cols-4 gap-3 mt-5">
         <div className="stat-card">
           <p className="text-xs text-gray-500 mb-1">Current balance</p>
-          <p className="text-xl font-semibold text-red-400">{money(balance.balance)}</p>
-          <p className="text-xs text-gray-600 mt-1">{BALANCE_METHOD_LABELS[balance.method]}</p>
+          <p className={`text-xl font-semibold ${hasBalanceData ? 'text-red-400' : 'text-gray-500'}`}>
+            {hasBalanceData ? money(balance.balance) : '—'}
+          </p>
+          <p className="text-xs text-gray-600 mt-1">{hasBalanceData ? BALANCE_METHOD_LABELS[balance.method] : 'No balance on file'}</p>
         </div>
         <div className="stat-card">
           <p className="text-xs text-gray-500 mb-1">Monthly payment</p>
@@ -629,7 +634,12 @@ export default function LoanDetailPage() {
       </div>
 
       {/* Payoff progress bar */}
-      {originalAmount > 0 && (
+      {originalAmount > 0 && !hasBalanceData && (
+        <div className="mt-4 mb-6 card p-4 text-xs text-gray-500">
+          No current balance on file for this loan yet — enter one (or an origination date + payment history) under Edit to see payoff progress.
+        </div>
+      )}
+      {originalAmount > 0 && hasBalanceData && (
         <div className="mt-4 mb-6 card p-4">
           <div className="flex items-center justify-between mb-2">
             <p className="text-xs text-gray-500">Payoff progress</p>
