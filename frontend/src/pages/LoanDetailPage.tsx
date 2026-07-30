@@ -229,51 +229,8 @@ function EditModal({ loan, properties, onClose, onSave }: {
     setForm(prev => ({ ...prev, currentBalance: String(Math.max(0, Math.round(balance * 100) / 100)) }));
   }
 
-  function autoCalcPayment() {
-    const r = parseFloat(form.interestRate) / 12 / 100;
-    if (isNaN(r)) return;
-
-    if (form.paymentType === 'INTEREST_ONLY') {
-      // Interest-only payment is just this period's interest on whatever
-      // balance is currently on file (fall back to the original amount for
-      // a brand-new loan with no balance entered yet).
-      const balance = parseFloat(form.currentBalance) || parseFloat(form.originalAmount);
-      if (isNaN(balance) || balance <= 0) return;
-      setForm(prev => ({ ...prev, monthlyPayment: String(Math.round(balance * r * 100) / 100) }));
-      return;
-    }
-
-    // Standard amortizing payment over the full origination-to-maturity term.
-    const P = parseFloat(form.originalAmount);
-    const origin = form.originationDate ? new Date(form.originationDate) : null;
-    const maturity = form.maturityDate ? new Date(form.maturityDate) : null;
-    if (!origin || !maturity || isNaN(P) || P <= 0) return;
-    const n = Math.max(1, Math.round(
-      (maturity.getFullYear() - origin.getFullYear()) * 12 + (maturity.getMonth() - origin.getMonth())
-    ));
-    const payment = r > 0
-      ? (P * r * Math.pow(1 + r, n)) / (Math.pow(1 + r, n) - 1)
-      : P / n;
-    setForm(prev => ({ ...prev, monthlyPayment: String(Math.round(payment * 100) / 100) }));
-  }
-
   const f = (field: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setForm(prev => ({ ...prev, [field]: e.target.value }));
-
-  // Switching to Interest Only should immediately reflect the interest-only
-  // payment, not leave whatever number was on file from a P&I calculation —
-  // that stale-looking number was the bug: the dropdown changed but nothing
-  // recalculated until Auto-calc was clicked again.
-  function handlePaymentTypeChange(e: React.ChangeEvent<HTMLSelectElement>) {
-    const value = e.target.value;
-    setForm(prev => {
-      if (value !== 'INTEREST_ONLY') return { ...prev, paymentType: value };
-      const r = parseFloat(prev.interestRate) / 12 / 100;
-      const balance = parseFloat(prev.currentBalance) || parseFloat(prev.originalAmount);
-      if (isNaN(r) || isNaN(balance) || balance <= 0) return { ...prev, paymentType: value };
-      return { ...prev, paymentType: value, monthlyPayment: String(Math.round(balance * r * 100) / 100) };
-    });
-  }
 
   async function handleSave() {
     if (!form.lender) return;
@@ -334,7 +291,7 @@ function EditModal({ loan, properties, onClose, onSave }: {
             </div>
             <div>
               <label className="block text-xs text-gray-500 mb-1">Payment structure</label>
-              <select value={form.paymentType} onChange={handlePaymentTypeChange} className="input-dark w-full text-sm">
+              <select value={form.paymentType} onChange={f('paymentType')} className="input-dark w-full text-sm">
                 <option value="PRINCIPAL_AND_INTEREST">P+I (Principal & Interest)</option>
                 <option value="INTEREST_ONLY">Interest only</option>
               </select>
@@ -359,19 +316,7 @@ function EditModal({ loan, properties, onClose, onSave }: {
                 <input type="number" step="0.001" value={form.interestRate} onChange={f('interestRate')} className="input-dark w-full text-sm" placeholder="10.0" />
               </div>
               <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs text-gray-500">Monthly payment (P&amp;I)</label>
-                  <button
-                    type="button"
-                    onClick={autoCalcPayment}
-                    className="text-xs text-amber-400 hover:text-amber-300 transition-colors"
-                    title={form.paymentType === 'INTEREST_ONLY'
-                      ? 'Calculate from current balance & interest rate'
-                      : 'Calculate from original amount, interest rate, origination & maturity dates'}
-                  >
-                    ⟳ Auto-calc
-                  </button>
-                </div>
+                <label className="block text-xs text-gray-500 mb-1">Monthly payment (P&amp;I)</label>
                 <input type="number" value={form.monthlyPayment} onChange={f('monthlyPayment')} className="input-dark w-full text-sm" placeholder="1250" />
               </div>
               <div>
