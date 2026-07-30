@@ -34,7 +34,6 @@ export default function TenantsPage({ embedded }: { embedded?: boolean } = {}) {
   const [form, setForm] = useState({ fullName: '', email: '', phone: '', notes: '' });
   const [saving, setSaving] = useState(false);
   const [filterPropId, setFilterPropId] = useState('');
-  const [filterState, setFilterState] = useState('');
 
   useEffect(() => {
     Promise.all([getTenants(), getProperties()])
@@ -42,14 +41,9 @@ export default function TenantsPage({ embedded }: { embedded?: boolean } = {}) {
       .finally(() => setLoading(false));
   }, []);
 
-  const states = useMemo(
-    () => Array.from(new Set(properties.map(p => p.state).filter(Boolean))).sort(),
-    [properties]
-  );
-
-  // Group + sort tenants by where they live: state, then city, then
-  // property, then unit — so the list reads like a walk through the
-  // portfolio instead of an alphabetical jumble of names.
+  // Group + sort tenants by property, then unit — matching the same
+  // property/unit grouping used on Rent Roll and Budget, so the list reads
+  // as a walk through the portfolio instead of an alphabetical jumble.
   const sorted = useMemo(() => {
     const withLocation = tenants.map(t => {
       const plt = primaryLeaseTenant(t);
@@ -60,14 +54,7 @@ export default function TenantsPage({ embedded }: { embedded?: boolean } = {}) {
 
     return withLocation
       .filter(x => !filterPropId || x.property?.id === filterPropId)
-      .filter(x => !filterState || x.property?.state === filterState)
       .sort((a, b) => {
-        const stateA = a.property?.state || '￿';
-        const stateB = b.property?.state || '￿';
-        if (stateA !== stateB) return stateA.localeCompare(stateB);
-        const cityA = a.property?.city || '￿';
-        const cityB = b.property?.city || '￿';
-        if (cityA !== cityB) return cityA.localeCompare(cityB);
         const propA = a.property?.nickname || a.property?.address || '￿';
         const propB = b.property?.nickname || b.property?.address || '￿';
         if (propA !== propB) return propA.localeCompare(propB);
@@ -76,7 +63,7 @@ export default function TenantsPage({ embedded }: { embedded?: boolean } = {}) {
         if (unitA !== unitB) return unitA.localeCompare(unitB);
         return a.tenant.fullName.localeCompare(b.tenant.fullName);
       });
-  }, [tenants, filterPropId, filterState]);
+  }, [tenants, filterPropId]);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -119,14 +106,6 @@ export default function TenantsPage({ embedded }: { embedded?: boolean } = {}) {
 
       {/* Filters */}
       <div className="flex gap-3 mb-4">
-        <select
-          value={filterState}
-          onChange={e => setFilterState(e.target.value)}
-          className="input-dark text-sm w-40"
-        >
-          <option value="">All states</option>
-          {states.map(s => <option key={s} value={s}>{s}</option>)}
-        </select>
         <select
           value={filterPropId}
           onChange={e => setFilterPropId(e.target.value)}
@@ -175,7 +154,7 @@ export default function TenantsPage({ embedded }: { embedded?: boolean } = {}) {
             <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
               <tr className="text-left text-gray-400">
                 <th className="px-4 py-3">Name</th>
-                <th className="px-4 py-3">Property / Location</th>
+                <th className="px-4 py-3">Unit / Property</th>
                 <th className="px-4 py-3">Email</th>
                 <th className="px-4 py-3">Phone</th>
                 <th className="px-4 py-3">Leases</th>
@@ -194,7 +173,7 @@ export default function TenantsPage({ embedded }: { embedded?: boolean } = {}) {
                       {property ? (
                         <>
                           <div className={hasActiveLease ? 'text-white' : 'text-gray-500'}>
-                            {property.nickname || property.address}{unit?.unitLabel ? ` · ${unit.unitLabel}` : ''}
+                            {unit?.unitLabel ? `${unit.unitLabel} · ` : ''}{property.nickname || property.address}
                           </div>
                           <div className="text-xs text-gray-500">{property.city}, {property.state}</div>
                         </>
