@@ -99,7 +99,7 @@ export interface LeaseTenant {
 export interface Lease {
   id: string;
   unitId: string;
-  unit?: Unit & { property?: Pick<Property, 'id' | 'address' | 'nickname'> };
+  unit?: Unit & { property?: Pick<Property, 'id' | 'address' | 'nickname' | 'city' | 'state'> };
   startDate: string;
   endDate?: string;
   rentAmount: number;

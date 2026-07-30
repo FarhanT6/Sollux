@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getTenants, createTenant, deleteTenant } from '../api/client';
-import type { Tenant } from '../types';
+import { getTenants, createTenant, deleteTenant, getProperties } from '../api/client';
+import type { Tenant, Property } from '../types';
 
 function formatPhone(phone?: string | null): string {
   if (!phone) return '';
@@ -14,16 +14,69 @@ function telHref(phone?: string | null): string {
   return `tel:${(phone ?? '').replace(/\D/g, '')}`;
 }
 
+// A tenant can carry multiple leases over time; pick the one that best
+// represents "where they live now" for display, filtering, and sorting —
+// the active lease if there is one, otherwise the most recently started.
+function primaryLeaseTenant(t: Tenant) {
+  const lts = t.leaseTenants || [];
+  const active = lts.filter(lt => lt.lease?.status === 'ACTIVE');
+  const pool = active.length > 0 ? active : lts;
+  return [...pool].sort((a, b) =>
+    new Date(b.lease?.startDate ?? 0).getTime() - new Date(a.lease?.startDate ?? 0).getTime()
+  )[0];
+}
+
 export default function TenantsPage({ embedded }: { embedded?: boolean } = {}) {
   const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [properties, setProperties] = useState<Property[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ fullName: '', email: '', phone: '', notes: '' });
   const [saving, setSaving] = useState(false);
+  const [filterPropId, setFilterPropId] = useState('');
+  const [filterState, setFilterState] = useState('');
 
   useEffect(() => {
-    getTenants().then(setTenants).finally(() => setLoading(false));
+    Promise.all([getTenants(), getProperties()])
+      .then(([t, p]) => { setTenants(t); setProperties(p); })
+      .finally(() => setLoading(false));
   }, []);
+
+  const states = useMemo(
+    () => Array.from(new Set(properties.map(p => p.state).filter(Boolean))).sort(),
+    [properties]
+  );
+
+  // Group + sort tenants by where they live: state, then city, then
+  // property, then unit — so the list reads like a walk through the
+  // portfolio instead of an alphabetical jumble of names.
+  const sorted = useMemo(() => {
+    const withLocation = tenants.map(t => {
+      const plt = primaryLeaseTenant(t);
+      const property = plt?.lease?.unit?.property;
+      const unit = plt?.lease?.unit;
+      return { tenant: t, property, unit, hasActiveLease: plt?.lease?.status === 'ACTIVE' };
+    });
+
+    return withLocation
+      .filter(x => !filterPropId || x.property?.id === filterPropId)
+      .filter(x => !filterState || x.property?.state === filterState)
+      .sort((a, b) => {
+        const stateA = a.property?.state || '￿';
+        const stateB = b.property?.state || '￿';
+        if (stateA !== stateB) return stateA.localeCompare(stateB);
+        const cityA = a.property?.city || '￿';
+        const cityB = b.property?.city || '￿';
+        if (cityA !== cityB) return cityA.localeCompare(cityB);
+        const propA = a.property?.nickname || a.property?.address || '￿';
+        const propB = b.property?.nickname || b.property?.address || '￿';
+        if (propA !== propB) return propA.localeCompare(propB);
+        const unitA = a.unit?.unitLabel || '';
+        const unitB = b.unit?.unitLabel || '';
+        if (unitA !== unitB) return unitA.localeCompare(unitB);
+        return a.tenant.fullName.localeCompare(b.tenant.fullName);
+      });
+  }, [tenants, filterPropId, filterState]);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -49,7 +102,7 @@ export default function TenantsPage({ embedded }: { embedded?: boolean } = {}) {
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-xl font-semibold text-white">Tenants</h1>
-            <p className="text-sm text-gray-400 mt-0.5">{tenants.length} tenants</p>
+            <p className="text-sm text-gray-400 mt-0.5">{sorted.length} of {tenants.length} tenants</p>
           </div>
           <button onClick={() => setShowForm(v => !v)} className="btn-primary text-sm">
             {showForm ? 'Cancel' : '+ Add Tenant'}
@@ -57,12 +110,34 @@ export default function TenantsPage({ embedded }: { embedded?: boolean } = {}) {
         </div>
       ) : (
         <div className="flex items-center justify-between mb-4">
-          <p className="section-label mb-0">{tenants.length} tenants</p>
+          <p className="section-label mb-0">{sorted.length} of {tenants.length} tenants</p>
           <button onClick={() => setShowForm(v => !v)} className="btn text-xs">
             {showForm ? 'Cancel' : '+ Add tenant'}
           </button>
         </div>
       )}
+
+      {/* Filters */}
+      <div className="flex gap-3 mb-4">
+        <select
+          value={filterState}
+          onChange={e => setFilterState(e.target.value)}
+          className="input-dark text-sm w-40"
+        >
+          <option value="">All states</option>
+          {states.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <select
+          value={filterPropId}
+          onChange={e => setFilterPropId(e.target.value)}
+          className="input-dark text-sm flex-1 max-w-xs"
+        >
+          <option value="">All properties</option>
+          {properties.map(p => (
+            <option key={p.id} value={p.id}>{p.nickname || p.address}</option>
+          ))}
+        </select>
+      </div>
 
       {showForm && (
         <form onSubmit={handleCreate} className="rounded-xl p-5 mb-5" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
@@ -92,12 +167,15 @@ export default function TenantsPage({ embedded }: { embedded?: boolean } = {}) {
         <div className="text-gray-500 text-sm">Loading…</div>
       ) : tenants.length === 0 ? (
         <div className="text-center py-16 text-gray-500">No tenants yet</div>
+      ) : sorted.length === 0 ? (
+        <div className="text-center py-16 text-gray-500">No tenants match your filters</div>
       ) : (
         <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
           <table className="w-full text-sm">
             <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
               <tr className="text-left text-gray-400">
                 <th className="px-4 py-3">Name</th>
+                <th className="px-4 py-3">Property / Location</th>
                 <th className="px-4 py-3">Email</th>
                 <th className="px-4 py-3">Phone</th>
                 <th className="px-4 py-3">Leases</th>
@@ -105,12 +183,24 @@ export default function TenantsPage({ embedded }: { embedded?: boolean } = {}) {
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
-              {tenants.map(t => {
+              {sorted.map(({ tenant: t, property, unit, hasActiveLease }) => {
                 const activeLeases = t.leaseTenants?.filter(lt => lt.lease?.status === 'ACTIVE') || [];
                 return (
                   <tr key={t.id} className="hover:bg-white/[0.02]">
                     <td className="px-4 py-3 font-medium">
                       <Link to={`/tenants/${t.id}`} className="text-white hover:text-amber-400">{t.fullName}</Link>
+                    </td>
+                    <td className="px-4 py-3">
+                      {property ? (
+                        <>
+                          <div className={hasActiveLease ? 'text-white' : 'text-gray-500'}>
+                            {property.nickname || property.address}{unit?.unitLabel ? ` · ${unit.unitLabel}` : ''}
+                          </div>
+                          <div className="text-xs text-gray-500">{property.city}, {property.state}</div>
+                        </>
+                      ) : (
+                        <span className="text-gray-600">—</span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-gray-400">
                       {t.email ? <a href={`mailto:${t.email}`} className="text-amber-400 hover:text-amber-300" onClick={e => e.stopPropagation()}>{t.email}</a> : '—'}

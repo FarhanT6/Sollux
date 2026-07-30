@@ -20,7 +20,7 @@ router.get('/', async (req, res, next) => {
       where: { userId: req.dbUserId! },
       include: {
         leaseTenants: {
-          include: { lease: { include: { unit: { include: { property: { select: { id: true, address: true, nickname: true } } } } } } },
+          include: { lease: { include: { unit: { include: { property: { select: { id: true, address: true, nickname: true, city: true, state: true } } } } } } },
         },
       },
       orderBy: { fullName: 'asc' },
