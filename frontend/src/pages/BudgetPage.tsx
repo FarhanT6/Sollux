@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState, useCallback } from 'react';
+import { Fragment, useEffect, useMemo, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import {
   getBudgetMonthly, getBudgetDelinquency,
@@ -216,56 +216,7 @@ function OverviewTab({ budget }: { budget: BudgetSummary }) {
       {/* Rent collection by property */}
       <Section title="Rent Collection" badge={`${fmt(rent.collected)} / ${fmt(rent.expected)}`}>
         <ProgressBar value={rent.collected} total={rent.expected} color="emerald" />
-        <div className="mt-3 overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-gray-500 text-xs uppercase tracking-wider border-b border-white/5">
-                <th className="text-left pb-2">Tenant</th>
-                <th className="text-left pb-2">Unit / Property</th>
-                <th className="text-right pb-2">Expected</th>
-                <th className="text-right pb-2">Collected</th>
-                <th className="text-right pb-2">Remaining</th>
-                <th className="text-right pb-2">Arrears</th>
-                <th className="text-left pb-2 pl-3">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rent.rows.map(row => (
-                <tr key={row.leaseId} className="border-b border-white/5 hover:bg-white/2">
-                  <td className="py-2 text-white font-medium">
-                    {row.tenantId
-                      ? <Link to={`/tenants/${row.tenantId}`} className="hover:text-amber-400">{row.tenant}</Link>
-                      : row.tenant}
-                  </td>
-                  <td className="py-2 text-gray-400">{row.unit} · {row.property}</td>
-                  <td className="py-2 text-right text-gray-300">{fmt(row.expected)}</td>
-                  <td className="py-2 text-right text-emerald-500">{fmt(row.collected)}</td>
-                  <td className="py-2 text-right text-amber-500">{row.remaining > 0 ? fmt(row.remaining) : '—'}</td>
-                  <td className="py-2 text-right text-red-500">{row.arrearsBalance > 0 ? fmt(row.arrearsBalance) : '—'}</td>
-                  <td className="py-2 pl-3">
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${
-                      row.status === 'paid'    ? 'bg-emerald-900/40 text-emerald-500' :
-                      row.status === 'partial' ? 'bg-amber-900/50 text-amber-500' :
-                                                 'bg-red-900/50 text-red-500'
-                    }`}>
-                      {row.status}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr className="text-sm font-semibold text-white border-t border-white/10">
-                <td colSpan={2} className="pt-2">Total</td>
-                <td className="pt-2 text-right">{fmt(rent.expected)}</td>
-                <td className="pt-2 text-right text-emerald-500">{fmt(rent.collected)}</td>
-                <td className="pt-2 text-right text-amber-500">{rent.outstanding > 0 ? fmt(rent.outstanding) : '—'}</td>
-                <td className="pt-2 text-right text-red-500">{fmt(rent.rows.reduce((s, r) => s + r.arrearsBalance, 0))}</td>
-                <td />
-              </tr>
-            </tfoot>
-          </table>
-        </div>
+        <RentCollectionTable rows={rent.rows} outstanding={rent.outstanding} expected={rent.expected} collected={rent.collected} />
       </Section>
 
       {/* Mortgages */}
@@ -326,6 +277,125 @@ function OverviewTab({ budget }: { budget: BudgetSummary }) {
           </div>
         </div>
       </Section>
+    </div>
+  );
+}
+
+// ─── Rent Collection table (filterable, sorted by property) ──
+
+const RENT_STATUS_FILTERS = ['all', 'paid', 'partial', 'unpaid'] as const;
+type RentStatusFilter = typeof RENT_STATUS_FILTERS[number];
+
+function RentCollectionTable({ rows, outstanding, expected, collected }: {
+  rows: import('../types').BudgetRentRow[];
+  outstanding: number; expected: number; collected: number;
+}) {
+  const [propertyFilter, setPropertyFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState<RentStatusFilter>('all');
+
+  const properties = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const r of rows) seen.set(r.propertyId, r.property);
+    return [...seen.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  }, [rows]);
+
+  const sortedRows = useMemo(() => {
+    return [...rows]
+      .filter(r => propertyFilter === 'all' || r.propertyId === propertyFilter)
+      .filter(r => statusFilter === 'all' || r.status === statusFilter)
+      .sort((a, b) =>
+        a.property.localeCompare(b.property, undefined, { numeric: true }) ||
+        a.unit.localeCompare(b.unit, undefined, { numeric: true }) ||
+        a.tenant.localeCompare(b.tenant, undefined, { numeric: true })
+      );
+  }, [rows, propertyFilter, statusFilter]);
+
+  const filtered = propertyFilter !== 'all' || statusFilter !== 'all';
+  const totalExpected  = filtered ? sortedRows.reduce((s, r) => s + r.expected, 0) : expected;
+  const totalCollected = filtered ? sortedRows.reduce((s, r) => s + r.collected, 0) : collected;
+  const totalRemaining = sortedRows.reduce((s, r) => s + r.remaining, 0);
+  const totalArrears   = sortedRows.reduce((s, r) => s + r.arrearsBalance, 0);
+
+  return (
+    <div className="mt-3">
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <select value={propertyFilter} onChange={e => setPropertyFilter(e.target.value)} className="input-dark text-xs">
+          <option value="all">All properties</option>
+          {properties.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+        <div className="flex gap-1">
+          {RENT_STATUS_FILTERS.map(s => (
+            <button key={s} onClick={() => setStatusFilter(s)}
+              className={`text-xs px-2.5 py-1 rounded-full border capitalize ${
+                statusFilter === s
+                  ? 'border-amber-500 text-amber-400'
+                  : 'border-white/10 text-gray-400 hover:text-gray-200'
+              }`}>
+              {s}
+            </button>
+          ))}
+        </div>
+        {filtered && (
+          <button onClick={() => { setPropertyFilter('all'); setStatusFilter('all'); }}
+            className="text-xs text-gray-500 hover:text-gray-300 ml-1">Clear filters</button>
+        )}
+        <span className="text-xs text-gray-500 ml-auto">{sortedRows.length} of {rows.length} tenants</span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-gray-500 text-xs uppercase tracking-wider border-b border-white/5">
+              <th className="text-left pb-2">Tenant</th>
+              <th className="text-left pb-2">Unit / Property</th>
+              <th className="text-right pb-2">Expected</th>
+              <th className="text-right pb-2">Collected</th>
+              <th className="text-right pb-2">Remaining</th>
+              <th className="text-right pb-2">Arrears</th>
+              <th className="text-left pb-2 pl-3">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sortedRows.map(row => (
+              <tr key={row.leaseId} className="border-b border-white/5 hover:bg-white/2">
+                <td className="py-2 text-white font-medium">
+                  {row.tenantId
+                    ? <Link to={`/tenants/${row.tenantId}`} className="hover:text-amber-400">{row.tenant}</Link>
+                    : row.tenant}
+                </td>
+                <td className="py-2 text-gray-400">{row.unit} · {row.property}</td>
+                <td className="py-2 text-right text-gray-300">{fmt(row.expected)}</td>
+                <td className="py-2 text-right text-emerald-500">{fmt(row.collected)}</td>
+                <td className="py-2 text-right text-amber-500">{row.remaining > 0 ? fmt(row.remaining) : '—'}</td>
+                <td className="py-2 text-right text-red-500">{row.arrearsBalance > 0 ? fmt(row.arrearsBalance) : '—'}</td>
+                <td className="py-2 pl-3">
+                  <span className={`text-xs px-2 py-0.5 rounded-full ${
+                    row.status === 'paid'    ? 'bg-emerald-900/40 text-emerald-500' :
+                    row.status === 'partial' ? 'bg-amber-900/50 text-amber-500' :
+                                               'bg-red-900/50 text-red-500'
+                  }`}>
+                    {row.status}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr className="text-sm font-semibold text-white border-t border-white/10">
+              <td colSpan={2} className="pt-2">{filtered ? 'Filtered total' : 'Total'}</td>
+              <td className="pt-2 text-right">{fmt(totalExpected)}</td>
+              <td className="pt-2 text-right text-emerald-500">{fmt(totalCollected)}</td>
+              <td className="pt-2 text-right text-amber-500">{(filtered ? totalRemaining : outstanding) > 0 ? fmt(filtered ? totalRemaining : outstanding) : '—'}</td>
+              <td className="pt-2 text-right text-red-500">{fmt(totalArrears)}</td>
+              <td />
+            </tr>
+          </tfoot>
+        </table>
+        {sortedRows.length === 0 && (
+          <p className="text-center text-gray-500 py-8">No tenants match the current filters.</p>
+        )}
+      </div>
     </div>
   );
 }
