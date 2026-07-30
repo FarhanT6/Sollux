@@ -194,6 +194,7 @@ function EditModal({ loan, properties, onClose, onSave }: {
     originalAmount: loan.originalAmount != null ? String(loan.originalAmount) : '',
     interestRate: loan.interestRate != null ? String(loan.interestRate) : '',
     monthlyPayment: loan.monthlyPayment != null ? String(loan.monthlyPayment) : '',
+    balloonPaymentAmount: loan.balloonPaymentAmount != null ? String(loan.balloonPaymentAmount) : '',
     escrowAmount: loan.escrowAmount != null ? String(loan.escrowAmount) : '',
     currentBalance: loan.currentBalance != null ? String(loan.currentBalance) : '',
     dueDay: loan.dueDay != null ? String(loan.dueDay) : '',
@@ -287,6 +288,7 @@ function EditModal({ loan, properties, onClose, onSave }: {
         originalAmount: form.originalAmount ? parseFloat(form.originalAmount) : null,
         interestRate: form.interestRate ? parseFloat(form.interestRate) : null,
         monthlyPayment: form.monthlyPayment ? parseFloat(form.monthlyPayment) : null,
+        balloonPaymentAmount: form.balloonPaymentAmount ? parseFloat(form.balloonPaymentAmount) : null,
         escrowAmount: form.escrowAmount ? parseFloat(form.escrowAmount) : null,
         currentBalance: form.currentBalance ? parseFloat(form.currentBalance) : null,
         dueDay: form.dueDay ? parseInt(form.dueDay, 10) : null,
@@ -390,6 +392,16 @@ function EditModal({ loan, properties, onClose, onSave }: {
                 </div>
                 <input type="number" value={form.currentBalance} onChange={f('currentBalance')} className="input-dark w-full text-sm" placeholder="148000" />
               </div>
+              {form.paymentType === 'INTEREST_ONLY' && (
+                <div className="col-span-2">
+                  <label className="block text-xs text-gray-500 mb-1">Balloon payment amount</label>
+                  <input type="number" value={form.balloonPaymentAmount} onChange={f('balloonPaymentAmount')} className="input-dark w-full text-sm" placeholder="e.g. 426320.12" />
+                  <p className="text-xs text-gray-600 mt-1">
+                    The actual lump-sum payoff due at maturity, if it's a fixed amount from the note rather than
+                    just the projected balance — leave blank to project the payoff from balance + that month's interest.
+                  </p>
+                </div>
+              )}
               {form.monthlyPayment && (
                 <div>
                   <p className="text-xs text-gray-500 mb-1">Total monthly (P&amp;I + escrow)</p>
@@ -652,6 +664,16 @@ export default function LoanDetailPage() {
 
   const { balance, amortization } = amort;
 
+  // For negative-am/interest-only schedules that end in a real balloon
+  // payoff (last row's balance hits 0), the "peak" balance the loan grows
+  // to is the row before that — the final row itself is the lump-sum payoff,
+  // not another month of growth.
+  const lastScheduleRow = amortization.schedule[amortization.schedule.length - 1];
+  const reachesBalloonPayoff = lastScheduleRow?.balance === 0 && amortization.schedule.length > 1;
+  const peakBalanceRow = reachesBalloonPayoff
+    ? amortization.schedule[amortization.schedule.length - 2]
+    : lastScheduleRow;
+
   const history = (loan.loanPayments || [])
     .filter(p => p.balanceAfter != null)
     .slice()
@@ -706,7 +728,12 @@ export default function LoanDetailPage() {
       {amortization.negativeAmortization && (
         <div className="mt-4 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-4 py-2.5">
           The payment on file doesn't cover the monthly interest — unpaid interest is capitalizing into the balance instead of paying it down.
-          {amortization.scheduleEndsAt && (
+          {reachesBalloonPayoff && lastScheduleRow ? (
+            <> Balance grows to <span className="font-medium">{money(peakBalanceRow?.balance ?? 0)}</span> by{' '}
+            <span className="font-medium">{format(new Date(peakBalanceRow?.date ?? lastScheduleRow.date), 'MMM yyyy')}</span>, then the{' '}
+            <span className="font-medium">{money(lastScheduleRow.paymentAmount)}</span> balloon payment due{' '}
+            <span className="font-medium">{format(new Date(lastScheduleRow.date), 'MMM yyyy')}</span> pays it off.</>
+          ) : amortization.scheduleEndsAt && (
             <> Projected through <span className="font-medium">{format(new Date(amortization.scheduleEndsAt), 'MMM yyyy')}</span>, that adds up to{' '}
             <span className="font-medium">{moneyPrecise(amortization.totalDeferredInterest)}</span> of deferred interest added to the balance.</>
           )}
@@ -753,9 +780,13 @@ export default function LoanDetailPage() {
           {amortization.negativeAmortization ? (
             <>
               <p className="text-xl font-semibold text-red-400">Growing</p>
-              {amortization.scheduleEndsAt && (
+              {reachesBalloonPayoff && lastScheduleRow ? (
                 <p className="text-xs text-gray-600 mt-1">
-                  {money(amortization.schedule[amortization.schedule.length - 1]?.balance)} by {format(new Date(amortization.scheduleEndsAt), 'MMM yyyy')}
+                  Balloon due {format(new Date(lastScheduleRow.date), 'MMM yyyy')}: {money(lastScheduleRow.paymentAmount)}
+                </p>
+              ) : amortization.scheduleEndsAt && (
+                <p className="text-xs text-gray-600 mt-1">
+                  {money(peakBalanceRow?.balance ?? 0)} by {format(new Date(amortization.scheduleEndsAt), 'MMM yyyy')}
                 </p>
               )}
             </>

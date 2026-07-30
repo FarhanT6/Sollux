@@ -184,6 +184,7 @@ export interface Loan {
   originationDate?: string;
   maturityDate?: string;
   monthlyPayment?: number;
+  balloonPaymentAmount?: number;
   escrowAmount?: number;
   currentBalance?: number;
   dueDay?: number;

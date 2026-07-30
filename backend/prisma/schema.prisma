@@ -578,6 +578,7 @@ model Loan {
   originationDate    DateTime?
   maturityDate       DateTime?
   monthlyPayment     Decimal?        @db.Decimal(10, 2)
+  balloonPaymentAmount Decimal?      @db.Decimal(14, 2) // final lump-sum payoff, when it differs from the recurring monthlyPayment (interest-only/negative-am balloons)
   escrowAmount       Decimal?        @db.Decimal(10, 2) // taxes/insurance portion, on top of P&I
   currentBalance     Decimal?        @db.Decimal(14, 2)
   dueDay             Int?            // day of month payment is due, e.g. 1

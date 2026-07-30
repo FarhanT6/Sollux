@@ -13,7 +13,7 @@ router.use(attachDbUser);
 // which silently breaks any frontend arithmetic or currency formatting on
 // them (e.g. "4256.4" + "1360.64" === "4256.41360.64" via string
 // concatenation). Convert to plain numbers before they leave the API.
-const DECIMAL_LOAN_FIELDS = ['originalAmount', 'interestRate', 'monthlyPayment', 'escrowAmount', 'currentBalance'] as const;
+const DECIMAL_LOAN_FIELDS = ['originalAmount', 'interestRate', 'monthlyPayment', 'balloonPaymentAmount', 'escrowAmount', 'currentBalance'] as const;
 const DECIMAL_PAYMENT_FIELDS = ['billAmount', 'amount', 'lateFee', 'principal', 'interest', 'escrow', 'balanceAfter'] as const;
 
 function serializeLoanPayment(p: any) {
@@ -52,6 +52,7 @@ const LoanSchema = z.object({
   originationDate: z.string().transform(s => new Date(s)).optional().nullable(),
   maturityDate: z.string().transform(s => new Date(s)).optional().nullable(),
   monthlyPayment: z.number().optional().nullable(),
+  balloonPaymentAmount: z.number().optional().nullable(),
   escrowAmount: z.number().optional().nullable(),
   currentBalance: z.number().optional().nullable(),
   dueDay: z.number().int().min(1).max(31).optional().nullable(),
@@ -158,6 +159,7 @@ router.get('/:id/amortization', async (req, res, next) => {
       currentBalance: loan.currentBalance != null ? Number(loan.currentBalance) : null,
       loanType: loan.loanType,
       paymentType: loan.paymentType,
+      balloonPaymentAmount: loan.balloonPaymentAmount != null ? Number(loan.balloonPaymentAmount) : null,
     };
     const paymentsInput = loan.loanPayments.map(p => ({
       date: p.date,
