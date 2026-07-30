@@ -18,6 +18,7 @@ export interface LoanInput {
   currentBalance: number | null; // manually-entered fallback/seed value
   loanType: string;
   paymentType?: string | null;   // 'INTEREST_ONLY' forces principal to 0 in the forward projection
+  balloonPaymentAmount?: number | null; // final lump-sum payoff at maturityDate, when it differs from monthlyPayment
 }
 
 export interface PaymentInput {
@@ -195,6 +196,13 @@ export function buildAmortizationSchedule(
     ? Math.min(600, Math.max(1, loan.maturityDate ? monthsBetween(startDate, loan.maturityDate) : 120))
     : null;
 
+  // Negative-am/interest-only loans with a stated maturity date end in a
+  // real balloon payoff, not another regular payment — the note's final
+  // installment is a distinct lump sum (principal + that month's interest),
+  // not just another $X recurring payment. Without this the projection
+  // would keep compounding past the maturity date's true payoff amount.
+  const isBalloonMaturity = (negativeAmortization || isInterestOnly) && loan.maturityDate != null;
+
   const schedule: AmortizationRow[] = [];
   let balance = balanceResult.balance;
   let totalInterestRemaining = 0;
@@ -203,17 +211,20 @@ export function buildAmortizationSchedule(
   // Cap at 600 rows (50 years) as a hard safety limit against runaway loops.
   for (let i = 1; i <= 600 && (flatHorizonMonths != null ? i <= flatHorizonMonths : balance > 0.01); i++) {
     const interest = balance * monthlyRate;
-    let principal = isInterestOnly ? 0 : payment - interest;
-    let paymentAmount = isInterestOnly ? interest : payment;
+    const isFinalBalloonRow = isBalloonMaturity && i === flatHorizonMonths;
+    let principal = isFinalBalloonRow ? balance : isInterestOnly ? 0 : payment - interest;
+    let paymentAmount = isFinalBalloonRow
+      ? (loan.balloonPaymentAmount ?? balance + interest)
+      : isInterestOnly ? interest : payment;
 
     if (!negativeAmortization && !isInterestOnly && principal >= balance) {
       principal = balance;
       paymentAmount = balance + interest;
     }
 
-    if (principal < 0) totalDeferredInterest += -principal;
+    if (!isFinalBalloonRow && principal < 0) totalDeferredInterest += -principal;
 
-    balance = Math.max(0, balance - principal);
+    balance = isFinalBalloonRow ? 0 : Math.max(0, balance - principal);
     totalInterestRemaining += interest;
 
     schedule.push({
@@ -227,6 +238,7 @@ export function buildAmortizationSchedule(
   }
 
   const last = schedule[schedule.length - 1];
+  const reachedPayoff = last != null && last.balance === 0;
 
   return {
     isAmortizing: true,
@@ -235,8 +247,8 @@ export function buildAmortizationSchedule(
     negativeAmortization,
     isInterestOnly,
     schedule,
-    payoffDate: (negativeAmortization || isInterestOnly) ? null : (last?.date ?? null),
-    monthsRemaining: (negativeAmortization || isInterestOnly) ? null : schedule.length,
+    payoffDate: reachedPayoff ? last!.date : null,
+    monthsRemaining: reachedPayoff ? schedule.length : null,
     totalInterestRemaining: Math.round(totalInterestRemaining * 100) / 100,
     totalDeferredInterest: Math.round(totalDeferredInterest * 100) / 100,
     scheduleEndsAt: last?.date ?? null,
