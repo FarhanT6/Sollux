@@ -44,6 +44,7 @@ export default function AppLayout() {
   const { user } = useUser();
   const { signOut } = useClerk();
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   useEffect(() => {
     getDashboardSummary().then(setSummary).catch(() => {});
@@ -51,14 +52,36 @@ export default function AppLayout() {
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: '#1e1e1e' }}>
-      <aside className="w-52 flex-shrink-0 flex flex-col" style={{ background: '#161616', borderRight: '1px solid rgba(255,255,255,0.07)' }}>
-        <div className="px-4 py-4 flex items-center gap-2" style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
-          <div className="w-7 h-7 rounded-lg bg-gold-500 flex items-center justify-center">
-            <div className="w-3 h-3 rounded-full bg-white" />
+      {!sidebarOpen && (
+        <button
+          onClick={() => setSidebarOpen(true)}
+          className="fixed top-4 left-4 z-50 w-9 h-9 flex items-center justify-center rounded-lg text-gray-400 hover:text-white transition-colors"
+          style={{ background: '#161616', border: '1px solid rgba(255,255,255,0.1)' }}
+          title="Show sidebar"
+        >
+          <Ico d="M3 6h18M3 12h18M3 18h18" />
+        </button>
+      )}
+      <aside
+        className={`flex-shrink-0 flex flex-col overflow-hidden transition-all duration-200 ${sidebarOpen ? 'w-52' : 'w-0'}`}
+        style={{ background: '#161616', borderRight: sidebarOpen ? '1px solid rgba(255,255,255,0.07)' : 'none' }}
+      >
+        <div className="px-4 py-4 flex items-center justify-between gap-2" style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-7 h-7 rounded-lg bg-gold-500 flex items-center justify-center flex-shrink-0">
+              <div className="w-3 h-3 rounded-full bg-white" />
+            </div>
+            <span className="text-base font-semibold tracking-tight text-white whitespace-nowrap">
+              Sol<span className="text-gold-500">lux</span>
+            </span>
           </div>
-          <span className="text-base font-semibold tracking-tight text-white">
-            Sol<span className="text-gold-500">lux</span>
-          </span>
+          <button
+            onClick={() => setSidebarOpen(false)}
+            className="w-7 h-7 flex-shrink-0 flex items-center justify-center rounded-lg text-gray-500 hover:text-white hover:bg-white/5 transition-colors"
+            title="Hide sidebar"
+          >
+            <Ico d="M3 6h18M3 12h18M3 18h18" />
+          </button>
         </div>
 
         <nav className="flex-1 px-2 py-3 overflow-y-auto">

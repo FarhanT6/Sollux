@@ -22,6 +22,7 @@ const LeaseSchema = z.object({
   status: z.enum(['ACTIVE', 'ENDED', 'PENDING', 'TERMINATED']).default('ACTIVE'),
   documentUrl: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
+  arrearsBalance: z.number().min(0).optional(),
   tenantIds: z.array(z.string()).optional(),
   manualLikelihood: z.enum(['high', 'medium', 'low', 'none']).optional().nullable(),
   manualLikelihoodNote: z.string().optional().nullable(),

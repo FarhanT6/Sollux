@@ -586,18 +586,25 @@ function TenantsTab({ propertyId, leases, setLeases }: {
   const [expandLease, setExpandLease] = useState<string | null>(null);
   const [payments, setPayments] = useState<Record<string, any[]>>({});
   const [editLease, setEditLease] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ rentAmount: '', securityDeposit: '', startDate: '', endDate: '', leaseType: 'MONTH_TO_MONTH', status: 'ACTIVE', notes: '' });
+  const [editForm, setEditForm] = useState({ unitId: '', rentAmount: '', securityDeposit: '', startDate: '', endDate: '', leaseType: 'MONTH_TO_MONTH', status: 'ACTIVE', arrearsBalance: '', notes: '' });
   const [savingEdit, setSavingEdit] = useState(false);
   const [showNewLease, setShowNewLease] = useState(false);
+  const [units, setUnits] = useState<Unit[]>([]);
+
+  useEffect(() => {
+    getUnits({ propertyId }).then(setUnits);
+  }, [propertyId]);
 
   function openEditLease(lease: Lease) {
     setEditForm({
+      unitId: lease.unitId,
       rentAmount: String(lease.rentAmount ?? ''),
       securityDeposit: String(lease.securityDeposit ?? ''),
       startDate: lease.startDate?.slice(0, 10) ?? '',
       endDate: lease.endDate?.slice(0, 10) ?? '',
       leaseType: lease.leaseType,
       status: lease.status,
+      arrearsBalance: String(lease.arrearsBalance ?? ''),
       notes: lease.notes ?? '',
     });
     setEditLease(lease.id);
@@ -607,12 +614,14 @@ function TenantsTab({ propertyId, leases, setLeases }: {
     setSavingEdit(true);
     try {
       await updateLease(leaseId, {
+        unitId: editForm.unitId || undefined,
         rentAmount: parseFloat(editForm.rentAmount) || undefined,
         securityDeposit: editForm.securityDeposit ? parseFloat(editForm.securityDeposit) : null,
         startDate: editForm.startDate || undefined,
         endDate: editForm.endDate || null,
         leaseType: editForm.leaseType,
         status: editForm.status,
+        arrearsBalance: editForm.arrearsBalance !== '' ? parseFloat(editForm.arrearsBalance) : undefined,
         notes: editForm.notes || undefined,
       });
       const updated = await getLeases({ propertyId });
@@ -748,6 +757,9 @@ function TenantsTab({ propertyId, leases, setLeases }: {
 
                 {editLease === lease.id && (
                   <div className="px-4 py-3 grid grid-cols-3 gap-2" style={{ background: 'rgba(255,255,255,0.03)', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                    <select value={editForm.unitId} onChange={e => setEditForm(f => ({ ...f, unitId: e.target.value }))} className="input-dark text-xs">
+                      {units.map(u => <option key={u.id} value={u.id}>{u.unitLabel}</option>)}
+                    </select>
                     <input type="number" placeholder="Rent/mo" value={editForm.rentAmount} onChange={e => setEditForm(f => ({ ...f, rentAmount: e.target.value }))} className="input-dark text-xs" />
                     <input type="number" placeholder="Security deposit" value={editForm.securityDeposit} onChange={e => setEditForm(f => ({ ...f, securityDeposit: e.target.value }))} className="input-dark text-xs" />
                     <select value={editForm.status} onChange={e => setEditForm(f => ({ ...f, status: e.target.value }))} className="input-dark text-xs">
@@ -759,6 +771,10 @@ function TenantsTab({ propertyId, leases, setLeases }: {
                       <option value="MONTH_TO_MONTH">Month-to-month</option>
                       <option value="FIXED_TERM">Fixed term</option>
                     </select>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-0.5">Arrears balance</label>
+                      <input type="number" placeholder="0" value={editForm.arrearsBalance} onChange={e => setEditForm(f => ({ ...f, arrearsBalance: e.target.value }))} className="input-dark text-xs w-full" />
+                    </div>
                     <input placeholder="Notes" value={editForm.notes} onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))} className="input-dark text-xs col-span-3" />
                     <div className="col-span-3 flex justify-end">
                       <button onClick={() => saveEditLease(lease.id)} disabled={savingEdit} className="btn btn-primary text-xs">{savingEdit ? '…' : 'Save changes'}</button>
