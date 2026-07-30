@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { clerkMiddleware, getAuth, requireAuth as clerkRequireAuth } from '@clerk/express';
+import { clerkClient, clerkMiddleware, getAuth, requireAuth as clerkRequireAuth } from '@clerk/express';
 import { db } from '../config/db';
 
 // Extend Express Request to include userId
@@ -26,14 +26,26 @@ export async function attachDbUser(req: Request, res: Response, next: NextFuncti
 
     let user = await db.user.findUnique({ where: { clerkUserId } });
 
-    // Auto-create user record on first request (after Clerk registration)
+    // Auto-create user record on first request (after Clerk registration).
+    // sessionClaims does NOT include email/name by default — Clerk only puts
+    // those in the JWT if you've explicitly added them as custom claims in
+    // the dashboard. Without that, clerkUser.sessionClaims?.email was always
+    // undefined, so every new signup fell back to the same empty string —
+    // which collided with the `email @unique` constraint the instant a
+    // second account tried to sign up, throwing a Prisma unique-constraint
+    // error on every single request from that second account. Fetch the
+    // real email from Clerk's API instead of trusting the session claims.
     if (!user) {
-      const clerkUser = getAuth(req) as any;
+      const clerkUser = await clerkClient.users.getUser(clerkUserId);
+      const primaryEmail = clerkUser.emailAddresses.find(e => e.id === clerkUser.primaryEmailAddressId)?.emailAddress
+        ?? clerkUser.emailAddresses[0]?.emailAddress
+        ?? `${clerkUserId}@no-email.sollux.local`;
+      const fullName = [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(' ') || 'User';
       user = await db.user.create({
         data: {
           clerkUserId,
-          email: clerkUser.sessionClaims?.email || '',
-          fullName: clerkUser.sessionClaims?.name || 'User',
+          email: primaryEmail,
+          fullName,
         },
       });
     }
