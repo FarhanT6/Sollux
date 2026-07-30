@@ -343,7 +343,7 @@ function EditModal({ loan, properties, onClose, onSave }: {
               </div>
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs text-gray-500">Monthly payment (P&amp;I)</label>
+                  <label className="text-xs text-gray-500">Monthly payment {form.paymentType === 'INTEREST_ONLY' ? '(Interest only)' : '(P&I)'}</label>
                   <button
                     type="button"
                     onClick={autoCalcPayment}

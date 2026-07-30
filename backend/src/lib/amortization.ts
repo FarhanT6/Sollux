@@ -120,7 +120,16 @@ export function calculateCurrentBalance(loan: LoanInput, payments: PaymentInput[
     }
   }
 
-  // 5. Nothing on file at all.
+  // 5. No origination date to project a theoretical schedule from, but we
+  // do know the original loan amount and there's no payment history —
+  // assume nothing has been paid down yet rather than silently reporting a
+  // $0 balance (which would also wrongly disable amortization/negative-am
+  // detection for a loan that's very much still active).
+  if (loan.originalAmount != null) {
+    return { balance: loan.originalAmount, asOfDate: iso(new Date()), method: 'manual' };
+  }
+
+  // 6. Nothing on file at all.
   return { balance: 0, asOfDate: iso(new Date()), method: 'manual' };
 }
 
