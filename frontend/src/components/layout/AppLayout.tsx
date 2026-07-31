@@ -121,7 +121,7 @@ export default function AppLayout() {
         </div>
       </aside>
 
-      <main className="flex-1 overflow-y-auto" style={{ background: '#1e1e1e' }}>
+      <main className={`flex-1 overflow-y-auto ${!sidebarOpen ? 'pt-12' : ''}`} style={{ background: '#1e1e1e' }}>
         <Outlet />
       </main>
     </div>

@@ -33,7 +33,7 @@ function MonthlyChart({ data }: { data: MonthlyPnL[] }) {
   const ticks = [0, maxVal * 0.25, maxVal * 0.5, maxVal * 0.75, maxVal];
 
   return (
-    <div className="card p-4 mb-5">
+    <div className="card p-4 mb-5 max-w-3xl">
       <p className="text-xs text-gray-500 mb-3 flex items-center gap-4">
         <span className="flex items-center gap-1.5"><span style={{ width: 10, height: 10, borderRadius: 2, background: '#10b981', display: 'inline-block' }} />Income</span>
         <span className="flex items-center gap-1.5"><span style={{ width: 10, height: 10, borderRadius: 2, background: '#ef4444', display: 'inline-block' }} />Expenses</span>

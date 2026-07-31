@@ -101,6 +101,45 @@ router.get('/monthly', async (req, res, next) => {
     const mortgageTotal = mortgageRows.reduce((s, m) => s + m.monthlyPayment, 0);
     const mortgagePaid  = mortgageRows.reduce((s, m) => s + m.paid, 0);
 
+    // ── Utility bills (statements due/issued this month) ──
+    const utilityStatements = await db.statement.findMany({
+      where: {
+        utilityAccount: { property: { userId } },
+        OR: [
+          { dueDate: { gte: monthStart, lte: monthEnd } },
+          { dueDate: null, statementDate: { gte: monthStart, lte: monthEnd } },
+        ],
+      },
+      include: {
+        utilityAccount: {
+          select: {
+            providerName: true, category: true,
+            property: { select: { id: true, nickname: true, address: true } },
+          },
+        },
+      },
+      orderBy: { dueDate: 'asc' },
+    });
+
+    const utilityRows = utilityStatements.map(s => {
+      const due  = toNum(s.amountDue);
+      const paid = s.amountPaid != null ? toNum(s.amountPaid) : 0;
+      return {
+        statementId: s.id,
+        provider: s.utilityAccount.providerName,
+        category: s.utilityAccount.category,
+        property: s.utilityAccount.property.nickname || s.utilityAccount.property.address,
+        propertyId: s.utilityAccount.property.id,
+        amountDue: due,
+        amountPaid: paid,
+        dueDate: s.dueDate,
+        status: s.amountPaid != null ? 'paid' : 'unpaid',
+      };
+    });
+
+    const utilitiesTotal = utilityRows.reduce((s, r) => s + r.amountDue, 0);
+    const utilitiesPaid  = utilityRows.reduce((s, r) => s + r.amountPaid, 0);
+
     // ── Other income ─────────────────────────────────────
     const otherIncomeRows = await db.otherIncome.findMany({
       where: { userId, receivedDate: { gte: monthStart, lte: monthEnd } },
@@ -136,16 +175,17 @@ router.get('/monthly', async (req, res, next) => {
     // ── Net positions ────────────────────────────────────
     const totalIncome         = rentCollected + otherIncomeTotal;
     const totalExpected       = rentExpected  + otherIncomeTotal;
-    const totalExpenses       = mortgageTotal + expensesTotal;
+    const totalExpenses       = mortgageTotal + expensesTotal + utilitiesTotal;
 
-    const realisticNet = totalCashOnHand + rentCollected + otherIncomeTotal - mortgageTotal - expensesTotal;
-    const idealNet     = totalCashOnHand + rentExpected  + otherIncomeTotal - mortgageTotal - expensesTotal;
+    const realisticNet = totalCashOnHand + rentCollected + otherIncomeTotal - mortgageTotal - expensesTotal - utilitiesTotal;
+    const idealNet     = totalCashOnHand + rentExpected  + otherIncomeTotal - mortgageTotal - expensesTotal - utilitiesTotal;
 
     res.json({
       year,
       month,
       rent: { rows: rentRows, expected: rentExpected, collected: rentCollected, outstanding: rentExpected - rentCollected },
       mortgages: { rows: mortgageRows, total: mortgageTotal, paid: mortgagePaid, unpaid: mortgageTotal - mortgagePaid },
+      utilities: { rows: utilityRows, total: utilitiesTotal, paid: utilitiesPaid, unpaid: utilitiesTotal - utilitiesPaid },
       otherIncome: { rows: otherIncomeRows, total: otherIncomeTotal },
       expenses: { total: expensesTotal },
       bankAccounts: bankAccounts.map(a => ({
