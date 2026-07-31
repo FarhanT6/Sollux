@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { getExpenses, createExpense, updateExpense, deleteExpense, getProperties } from '../api/client';
 import type { Expense, Property, ExpenseCategory } from '../types';
 import { EXPENSE_CATEGORY_LABELS } from '../types';
@@ -207,7 +208,13 @@ export default function ExpensesPage({ embedded }: { embedded?: boolean } = {}) 
               {filtered.map(e => (
                 <tr key={e.id} className={`hover:bg-white/[0.02] ${e.isPersonal ? 'opacity-50' : ''}`}>
                   <td className="px-4 py-3 text-gray-400 text-xs">{format(new Date(e.date), 'MMM d, yyyy')}</td>
-                  <td className="px-4 py-3 text-gray-300 text-xs">{e.property?.nickname || e.property?.address || '—'}</td>
+                  <td className="px-4 py-3 text-gray-300 text-xs">
+                    {e.propertyId ? (
+                      <Link to={`/portfolio/${e.propertyId}?tab=Expenses`} className="hover:text-amber-400 transition-colors">
+                        {e.property?.nickname || e.property?.address || '—'}
+                      </Link>
+                    ) : (e.property?.nickname || e.property?.address || '—')}
+                  </td>
                   <td className="px-4 py-3">
                     <span className="text-xs bg-white/5 text-gray-300 px-2 py-0.5 rounded">
                       {EXPENSE_CATEGORY_LABELS[e.category]}
