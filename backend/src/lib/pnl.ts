@@ -45,7 +45,7 @@ function monthsOverlap(range: DateRange, from?: Date | null, to?: Date | null): 
 export async function getPropertyPnL(propertyId: string, range: DateRange, userId: string): Promise<PropertyPnL> {
   const property = await db.property.findFirstOrThrow({ where: { id: propertyId, userId } });
 
-  const [rentPayments, expenses, policies, taxAssessments, loans] = await Promise.all([
+  const [rentPayments, expenses, policies, taxAssessments, loans, utilityStatements] = await Promise.all([
     db.rentPayment.findMany({
       where: { paidDate: { gte: range.start, lt: range.end }, lease: { unit: { propertyId } } },
     }),
@@ -55,11 +55,23 @@ export async function getPropertyPnL(propertyId: string, range: DateRange, userI
     db.insurancePolicy.findMany({ where: { propertyId, isPersonal: false, isActive: true } }),
     db.taxAssessment.findMany({ where: { propertyId } }),
     db.loan.findMany({ where: { propertyId, isPersonal: false, isActive: true }, include: { loanPayments: true } }),
+    db.statement.findMany({
+      where: {
+        amountDue: { not: null },
+        utilityAccount: { propertyId },
+        OR: [
+          { dueDate: { gte: range.start, lt: range.end } },
+          { dueDate: null, statementDate: { gte: range.start, lt: range.end } },
+        ],
+      },
+    }),
   ]);
 
   const rentalIncome = rentPayments.reduce((s, p) => s + toNum(p.amount), 0);
 
-  const operatingExpenses = expenses
+  const utilityExpense = utilityStatements.reduce((s, st) => s + toNum(st.amountDue), 0);
+
+  const operatingExpenses = utilityExpense + expenses
     .filter(e => e.category !== 'INSURANCE' && e.category !== 'PROPERTY_TAX' && e.category !== 'MORTGAGE_DEBT_SERVICE' && e.category !== 'CAPITAL_IMPROVEMENT')
     .reduce((s, e) => s + toNum(e.amount), 0);
 
@@ -113,12 +125,24 @@ export async function getMonthlyPnL(year: number, userId: string, propertyId?: s
     ? { loan: { propertyId, isPersonal: false, isActive: true } }
     : { loan: { userId, isPersonal: false, isActive: true } };
 
-  const [rentPayments, expenses, policies, taxAssessments, loanPayments] = await Promise.all([
+  const utilityAccountFilter = propertyId ? { propertyId } : { property: { userId } };
+
+  const [rentPayments, expenses, policies, taxAssessments, loanPayments, utilityStatements] = await Promise.all([
     db.rentPayment.findMany({ where: { paidDate: { gte: yearStart, lt: yearEnd }, ...leaseFilter } }),
     db.expense.findMany({ where: { date: { gte: yearStart, lt: yearEnd }, isCapEx: false, isPersonal: false, ...propertyFilter } }),
     db.insurancePolicy.findMany({ where: { isPersonal: false, isActive: true, ...propertyFilter } }),
     db.taxAssessment.findMany({ where: propertyFilter }),
     db.loanPayment.findMany({ where: { date: { gte: yearStart, lt: yearEnd }, ...loanFilter } }),
+    db.statement.findMany({
+      where: {
+        amountDue: { not: null },
+        utilityAccount: utilityAccountFilter,
+        OR: [
+          { dueDate: { gte: yearStart, lt: yearEnd } },
+          { dueDate: null, statementDate: { gte: yearStart, lt: yearEnd } },
+        ],
+      },
+    }),
   ]);
 
   return Array.from({ length: 12 }, (_, i) => {
@@ -128,8 +152,12 @@ export async function getMonthlyPnL(year: number, userId: string, propertyId?: s
 
     const rentalIncome = rentPayments.filter(p => p.paidDate >= start && p.paidDate < end).reduce((s, p) => s + toNum(p.amount), 0);
     const monthExpenses = expenses.filter(e => e.date >= start && e.date < end);
+    const monthUtilities = utilityStatements.filter(st => {
+      const d = st.dueDate ?? st.statementDate;
+      return d >= start && d < end;
+    });
 
-    const operatingExpenses = monthExpenses
+    const operatingExpenses = monthUtilities.reduce((s, st) => s + toNum(st.amountDue), 0) + monthExpenses
       .filter(e => e.category !== 'INSURANCE' && e.category !== 'PROPERTY_TAX' && e.category !== 'MORTGAGE_DEBT_SERVICE' && e.category !== 'CAPITAL_IMPROVEMENT')
       .reduce((s, e) => s + toNum(e.amount), 0);
     const loggedDebtService = monthExpenses.filter(e => e.category === 'MORTGAGE_DEBT_SERVICE').reduce((s, e) => s + toNum(e.amount), 0);

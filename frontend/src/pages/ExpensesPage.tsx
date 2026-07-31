@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { getExpenses, createExpense, updateExpense, deleteExpense, getProperties } from '../api/client';
 import type { Expense, Property, ExpenseCategory } from '../types';
 import { EXPENSE_CATEGORY_LABELS } from '../types';
@@ -207,7 +208,13 @@ export default function ExpensesPage({ embedded }: { embedded?: boolean } = {}) 
               {filtered.map(e => (
                 <tr key={e.id} className={`hover:bg-white/[0.02] ${e.isPersonal ? 'opacity-50' : ''}`}>
                   <td className="px-4 py-3 text-gray-400 text-xs">{format(new Date(e.date), 'MMM d, yyyy')}</td>
-                  <td className="px-4 py-3 text-gray-300 text-xs">{e.property?.nickname || e.property?.address || '—'}</td>
+                  <td className="px-4 py-3 text-gray-300 text-xs">
+                    {e.propertyId ? (
+                      <Link to={`/portfolio/${e.propertyId}?tab=Expenses`} className="hover:text-amber-400 transition-colors">
+                        {e.property?.nickname || e.property?.address || '—'}
+                      </Link>
+                    ) : (e.property?.nickname || e.property?.address || '—')}
+                  </td>
                   <td className="px-4 py-3">
                     <span className="text-xs bg-white/5 text-gray-300 px-2 py-0.5 rounded">
                       {EXPENSE_CATEGORY_LABELS[e.category]}
@@ -217,19 +224,26 @@ export default function ExpensesPage({ embedded }: { embedded?: boolean } = {}) 
                   <td className="px-4 py-3 font-medium text-white">{money(Number(e.amount))}</td>
                   <td className="px-4 py-3">
                     <div className="flex gap-1.5">
+                      {e.source === 'utility' && <span className="text-xs bg-blue-900/40 text-blue-300 px-1.5 py-0.5 rounded">Utility</span>}
                       {e.isCapEx && <span className="text-xs bg-blue-900/40 text-blue-300 px-1.5 py-0.5 rounded">CapEx</span>}
                       {e.isPersonal && <span className="text-xs bg-purple-900/40 text-purple-300 px-1.5 py-0.5 rounded">Personal</span>}
                     </div>
                   </td>
                   <td className="px-4 py-3 text-right">
-                    <button
-                      onClick={() => togglePersonal(e)}
-                      className="text-xs text-gray-500 hover:text-gray-300 mr-3"
-                      title={e.isPersonal ? 'Mark as property expense' : 'Mark as personal'}
-                    >
-                      {e.isPersonal ? 'Unmk personal' : 'Mk personal'}
-                    </button>
-                    <button onClick={async () => { if (confirm('Delete?')) { await deleteExpense(e.id); setExpenses(prev => prev.filter(x => x.id !== e.id)); } }} className="text-xs text-red-500 hover:text-red-400">Del</button>
+                    {e.source === 'utility' ? (
+                      <Link to={`/properties/${e.propertyId}/utilities/${e.utilityAccountId}`} className="text-xs text-amber-400 hover:text-amber-300">View bill</Link>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => togglePersonal(e)}
+                          className="text-xs text-gray-500 hover:text-gray-300 mr-3"
+                          title={e.isPersonal ? 'Mark as property expense' : 'Mark as personal'}
+                        >
+                          {e.isPersonal ? 'Unmk personal' : 'Mk personal'}
+                        </button>
+                        <button onClick={async () => { if (confirm('Delete?')) { await deleteExpense(e.id); setExpenses(prev => prev.filter(x => x.id !== e.id)); } }} className="text-xs text-red-500 hover:text-red-400">Del</button>
+                      </>
+                    )}
                   </td>
                 </tr>
               ))}

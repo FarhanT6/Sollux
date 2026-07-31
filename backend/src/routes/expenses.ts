@@ -32,7 +32,49 @@ router.get('/', async (req, res, next) => {
       include: { property: { select: { id: true, address: true, nickname: true } } },
       orderBy: { date: 'desc' },
     });
-    res.json(expenses);
+
+    // Utility bills are operating expenses too, but they live in the
+    // Statement/UtilityAccount tables (scraped/imported), not the Expense
+    // table — merge them in read-only so they show up alongside manually
+    // logged expenses instead of being invisible to the operating
+    // statement. isCapEx/isPersonal/category filters exclude them the same
+    // way they'd exclude a real UTILITIES expense row, since that's what
+    // they represent.
+    const includeUtilities = isCapEx !== 'true' && isPersonal !== 'true' && (!category || category === 'UTILITIES');
+    const utilityExpenses = includeUtilities ? await db.statement.findMany({
+      where: {
+        amountDue: { not: null },
+        utilityAccount: {
+          property: { userId: req.dbUserId! },
+          ...(propertyId ? { propertyId: propertyId as string } : {}),
+        },
+      },
+      include: { utilityAccount: { include: { property: { select: { id: true, address: true, nickname: true } } } } },
+      orderBy: { statementDate: 'desc' },
+    }) : [];
+
+    const utilityRows = utilityExpenses.map(s => ({
+      id: `stmt_${s.id}`,
+      propertyId: s.utilityAccount.propertyId,
+      utilityAccountId: s.utilityAccountId,
+      property: s.utilityAccount.property,
+      category: 'UTILITIES' as const,
+      amount: s.amountDue,
+      date: (s.dueDate ?? s.statementDate).toISOString(),
+      vendor: s.utilityAccount.providerName,
+      description: `${s.utilityAccount.category} bill`,
+      isCapEx: false,
+      isPersonal: false,
+      documentUrl: s.pdfUrl,
+      createdAt: s.createdAt,
+      source: 'utility' as const,
+      editable: false,
+    }));
+
+    const merged = [...expenses.map(e => ({ ...e, source: 'manual' as const, editable: true })), ...utilityRows]
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+    res.json(merged);
   } catch (err) { next(err); }
 });
 
