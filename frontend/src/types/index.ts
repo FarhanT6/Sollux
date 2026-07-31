@@ -482,6 +482,18 @@ export interface BudgetMortgageRow {
   status: 'paid' | 'unpaid';
 }
 
+export interface BudgetUtilityRow {
+  statementId: string;
+  provider: string;
+  category: string;
+  property: string;
+  propertyId: string;
+  amountDue: number;
+  amountPaid: number;
+  dueDate: string | null;
+  status: 'paid' | 'unpaid';
+}
+
 export interface DelinquencyTenant {
   leaseId: string;
   tenant: string;
@@ -514,6 +526,12 @@ export interface BudgetSummary {
   };
   mortgages: {
     rows: BudgetMortgageRow[];
+    total: number;
+    paid: number;
+    unpaid: number;
+  };
+  utilities: {
+    rows: BudgetUtilityRow[];
     total: number;
     paid: number;
     unpaid: number;

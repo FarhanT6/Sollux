@@ -106,24 +106,46 @@ router.get('/', async (req, res, next) => {
     const result = loans.map(l => serializeLoan({
       ...l,
       interestPaidToDate: interestPaidByLoan.get(l.id) ?? 0,
-      totalInterestLifetime: computeLifetimeInterest(l),
+      totalInterestLifetime: computeRemainingInterest(l),
     }));
 
     res.json(result);
   } catch (err) { next(err); }
 });
 
-// Closed-form total interest over the life of the loan, from the standard
-// amortization term formula — n = ln(PMT / (PMT - P*r)) / ln(1 + r).
-// Returns null when there isn't enough on file to compute it.
-function computeLifetimeInterest(l: { originalAmount: Prisma.Decimal | null; interestRate: Prisma.Decimal | null; monthlyPayment: Prisma.Decimal | null }): number | null {
-  if (l.originalAmount == null || l.interestRate == null || l.monthlyPayment == null) return null;
-  const principal = Number(l.originalAmount);
-  const payment = Number(l.monthlyPayment);
-  const rate = Number(l.interestRate) / 100 / 12;
-  if (rate <= 0 || payment <= principal * rate) return null; // doesn't amortize with this payment
-  const termMonths = Math.log(payment / (payment - principal * rate)) / Math.log(1 + rate);
-  return Math.round((payment * termMonths - principal) * 100) / 100;
+// Remaining interest from now to payoff, via the same amortization engine
+// the single-loan detail page uses. Replaces an old closed-form formula
+// (n = ln(PMT / (PMT - P*r)) / ln(1 + r)) that assumed standard P&I
+// amortization — it returned null for interest-only/negative-am loans, and
+// was numerically unstable whenever the payment landed only fractions of a
+// cent above the interest-only threshold (routine when a payment was set
+// via the interest-only Auto-calc, which rounds to the cent): the term
+// blew up toward infinity, producing multi-million-dollar "total interest"
+// for an ordinary loan. buildAmortizationSchedule is bounded — it caps
+// interest-only/negative-am projections at the loan's maturity date (or a
+// sane horizon), so it can't blow up the same way, and it also gives an
+// answer for interest-only/negative-am loans instead of null.
+function computeRemainingInterest(l: {
+  originalAmount: Prisma.Decimal | null; interestRate: Prisma.Decimal | null; monthlyPayment: Prisma.Decimal | null;
+  originationDate: Date | null; maturityDate: Date | null; currentBalance: Prisma.Decimal | null;
+  loanType: string; paymentType: string; balloonPaymentAmount: Prisma.Decimal | null;
+}): number | null {
+  if (l.originalAmount == null || l.interestRate == null) return null;
+  const loanInput = {
+    originalAmount: Number(l.originalAmount),
+    interestRate: Number(l.interestRate),
+    originationDate: l.originationDate,
+    maturityDate: l.maturityDate,
+    monthlyPayment: l.monthlyPayment != null ? Number(l.monthlyPayment) : null,
+    currentBalance: l.currentBalance != null ? Number(l.currentBalance) : null,
+    loanType: l.loanType,
+    paymentType: l.paymentType,
+    balloonPaymentAmount: l.balloonPaymentAmount != null ? Number(l.balloonPaymentAmount) : null,
+  };
+  const balanceResult = calculateCurrentBalance(loanInput, []);
+  if (balanceResult.balance <= 0) return null;
+  const amortization = buildAmortizationSchedule(loanInput, balanceResult, []);
+  return amortization.isAmortizing ? amortization.totalInterestRemaining : null;
 }
 
 router.get('/:id', async (req, res, next) => {

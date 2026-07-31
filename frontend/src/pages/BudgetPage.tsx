@@ -210,7 +210,7 @@ export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
 // ─── Overview Tab ─────────────────────────────────────────
 
 function OverviewTab({ budget }: { budget: BudgetSummary }) {
-  const { rent, mortgages } = budget;
+  const { rent, mortgages, utilities } = budget;
   return (
     <div className="space-y-6">
       {/* Rent collection by property */}
@@ -262,6 +262,52 @@ function OverviewTab({ budget }: { budget: BudgetSummary }) {
         </div>
       </Section>
 
+      {/* Utility bills */}
+      <Section title="Utility Bills" badge={`${fmt(utilities.paid)} paid of ${fmt(utilities.total)}`}>
+        <ProgressBar value={utilities.paid} total={utilities.total} color="blue" />
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-gray-500 text-xs uppercase tracking-wider border-b border-white/5">
+                <th className="text-left pb-2">Provider</th>
+                <th className="text-left pb-2">Property</th>
+                <th className="text-right pb-2">Due</th>
+                <th className="text-right pb-2">Paid</th>
+                <th className="text-left pb-2 pl-3">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {utilities.rows.map(row => (
+                <tr key={row.statementId} className="border-b border-white/5 hover:bg-white/2">
+                  <td className="py-2 text-white">{row.provider}</td>
+                  <td className="py-2 text-gray-400">{row.property}</td>
+                  <td className="py-2 text-right text-gray-300">{fmt(row.amountDue)}</td>
+                  <td className="py-2 text-right text-emerald-500">{row.amountPaid > 0 ? fmt(row.amountPaid) : '—'}</td>
+                  <td className="py-2 pl-3">
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${
+                      row.status === 'paid'
+                        ? 'bg-emerald-900/40 text-emerald-500'
+                        : 'bg-red-900/50 text-red-500'
+                    }`}>{row.status}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="text-sm font-semibold text-white border-t border-white/10">
+                <td colSpan={2} className="pt-2">Total</td>
+                <td className="pt-2 text-right">{fmt(utilities.total)}</td>
+                <td className="pt-2 text-right text-emerald-500">{fmt(utilities.paid)}</td>
+                <td className="pt-2 pl-3 text-red-500">{utilities.unpaid > 0 ? `${fmt(utilities.unpaid)} left` : '✓'}</td>
+              </tr>
+            </tfoot>
+          </table>
+          {utilities.rows.length === 0 && (
+            <p className="text-center text-gray-500 py-8">No utility bills due or issued this month.</p>
+          )}
+        </div>
+      </Section>
+
       {/* Summary */}
       <Section title="Month Summary">
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
@@ -269,6 +315,7 @@ function OverviewTab({ budget }: { budget: BudgetSummary }) {
           <SummaryLine label="Other income"   value={fmt(budget.otherIncome.total)} color="emerald" />
           <SummaryLine label="Total income"   value={fmt(budget.summary.totalIncome)} color="emerald" bold />
           <SummaryLine label="Mortgages"      value={fmt(budget.mortgages.total)} color="red" />
+          <SummaryLine label="Utility bills"  value={fmt(budget.utilities.total)} color="red" />
           <SummaryLine label="Other expenses" value={fmt(budget.expenses.total)} color="red" />
           <SummaryLine label="Total expenses" value={fmt(budget.summary.totalExpenses)} color="red" bold />
           <div className="col-span-2 md:col-span-3 border-t border-white/10 pt-3 grid grid-cols-2 gap-4">
