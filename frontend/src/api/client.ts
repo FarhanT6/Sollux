@@ -28,7 +28,7 @@ import type {
   Property, UtilityAccount, Statement, Payment, AIInsight, DashboardSummary,
   Unit, Tenant, LeaseTenant, Lease, RentPayment, RentNotice, Expense, Loan, LoanPayment,
   InsurancePolicy, TaxAssessment, Improvement, LegalMatter, PropertyPnL, MonthlyPnL,
-  BankAccount, OtherIncome, BudgetSummary, DelinquencyTenant,
+  BankAccount, OtherIncome, BudgetSummary, DelinquencyTenant, BudgetForecast,
 } from '../types';
 
 // Dashboard
@@ -309,6 +309,8 @@ export const getBudgetMonthly = (year: number, month: number, includePersonal = 
   api.get<BudgetSummary>('/budget/monthly', { params: { year, month, includePersonal } }).then(r => r.data);
 export const getBudgetDelinquency = () =>
   api.get<{ tenants: DelinquencyTenant[]; totalArrears: number; totalExpectedCollection: number }>('/budget/delinquency').then(r => r.data);
+export const getBudgetForecast = (months = 6) =>
+  api.get<BudgetForecast>('/budget/forecast', { params: { months } }).then(r => r.data);
 
 // AI portfolio query
 export const queryPortfolio = (query: string) =>

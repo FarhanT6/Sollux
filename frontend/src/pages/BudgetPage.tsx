@@ -1,13 +1,13 @@
 import { Fragment, useEffect, useMemo, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  getBudgetMonthly, getBudgetDelinquency,
+  getBudgetMonthly, getBudgetDelinquency, getBudgetForecast,
   getBankAccounts, createBankAccount, updateBankAccount, deleteBankAccount, recordBankBalance,
   createOtherIncome, deleteOtherIncome, updateLease,
 } from '../api/client';
 import type {
   BudgetSummary, BankAccount, DelinquencyTenant, OtherIncome,
-  BankAccountType, OtherIncomeCategory,
+  BankAccountType, OtherIncomeCategory, BudgetForecast,
 } from '../types';
 import { OTHER_INCOME_LABELS } from '../types';
 
@@ -57,8 +57,10 @@ export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
   const [budget,       setBudget]       = useState<BudgetSummary | null>(null);
   const [delinquency,  setDelinquency]  = useState<{ tenants: DelinquencyTenant[]; totalArrears: number; totalExpectedCollection: number } | null>(null);
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
+  const [forecast,     setForecast]     = useState<BudgetForecast | null>(null);
+  const [forecastLoading, setForecastLoading] = useState(false);
   const [loading,      setLoading]      = useState(true);
-  const [activeTab,       setActiveTab]       = useState<'overview' | 'delinquency' | 'banks' | 'income'>('overview');
+  const [activeTab,       setActiveTab]       = useState<'overview' | 'delinquency' | 'banks' | 'income' | 'forecast'>('overview');
   const [includePersonal, setIncludePersonal] = useState(false);
 
   // Modals / forms
@@ -82,6 +84,12 @@ export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
   }, [year, month, includePersonal]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (activeTab !== 'forecast' || forecast) return;
+    setForecastLoading(true);
+    getBudgetForecast(6).then(setForecast).catch(console.error).finally(() => setForecastLoading(false));
+  }, [activeTab, forecast]);
 
   const cashOnHand = budget?.cashSummary.totalCashOnHand ?? 0;
   const net        = budget?.summary.realisticNet ?? 0;
@@ -141,14 +149,14 @@ export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
 
       {/* Tabs */}
       <div className="flex gap-1 mb-5 border-b border-white/10">
-        {(['overview','delinquency','banks','income'] as const).map(t => (
+        {(['overview','delinquency','banks','income','forecast'] as const).map(t => (
           <button key={t} onClick={() => setActiveTab(t)}
             className={`px-4 py-2 text-sm font-medium capitalize transition-colors ${
               activeTab === t
                 ? 'text-white border-b-2 border-gold-500 -mb-px'
                 : 'text-gray-400 hover:text-gray-200'
             }`}>
-            {t === 'delinquency' ? 'Delinquency' : t === 'banks' ? 'Banks & Cash' : t === 'income' ? 'Other Income' : 'Overview'}
+            {t === 'delinquency' ? 'Delinquency' : t === 'banks' ? 'Banks & Cash' : t === 'income' ? 'Other Income' : t === 'forecast' ? 'Forecast' : 'Overview'}
           </button>
         ))}
       </div>
@@ -178,6 +186,11 @@ export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
               onAdd={() => setShowAddIncome(true)}
               onDelete={async id => { await deleteOtherIncome(id); load(); }}
             />
+          )}
+          {activeTab === 'forecast' && (
+            forecastLoading || !forecast
+              ? <div className="flex items-center justify-center h-64 text-gray-500">Loading…</div>
+              : <ForecastTab data={forecast} />
           )}
         </>
       )}
@@ -702,6 +715,65 @@ function OtherIncomeTab({ rows, total, onAdd, onDelete }: {
       {rows.length === 0 && (
         <p className="text-center text-gray-500 py-12">No other income recorded for this month.</p>
       )}
+    </div>
+  );
+}
+
+// ─── Forecast Tab ───────────────────────────────────────────
+
+function ForecastTab({ data }: { data: BudgetForecast }) {
+  const { months, baseline } = data;
+  const maxAbsNet = Math.max(1, ...months.map(m => Math.abs(m.netCashFlow)));
+
+  return (
+    <div className="space-y-6">
+      <div className="rounded-xl border border-white/10 bg-white/3 p-4">
+        <p className="text-xs text-gray-500">
+          Projected from recurring baselines — <span className="text-gray-300">{fmt(baseline.rentBaseline)}/mo</span> rent across{' '}
+          {baseline.activeLeaseCount} active lease{baseline.activeLeaseCount === 1 ? '' : 's'},{' '}
+          <span className="text-gray-300">{fmt(baseline.mortgageBaseline)}/mo</span> across {baseline.activeLoanCount} active loan{baseline.activeLoanCount === 1 ? '' : 's'}, and{' '}
+          <span className="text-gray-300">{fmt(baseline.utilityBaseline)}/mo</span> utilities (trailing average across {baseline.utilityAccountsWithData} account{baseline.utilityAccountsWithData === 1 ? '' : 's'} with bill history).
+          Not a guess at one-off income or expenses — assumes nothing changes.
+        </p>
+      </div>
+
+      <Section title="Next 6 Months">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-gray-500 text-xs uppercase tracking-wider border-b border-white/5">
+                <th className="text-left pb-2">Month</th>
+                <th className="text-right pb-2">Rent</th>
+                <th className="text-right pb-2">Mortgages</th>
+                <th className="text-right pb-2">Utilities</th>
+                <th className="text-right pb-2">Net cash flow</th>
+                <th className="text-left pb-2 pl-3">Trend</th>
+              </tr>
+            </thead>
+            <tbody>
+              {months.map(m => (
+                <tr key={m.month} className="border-b border-white/5 hover:bg-white/2">
+                  <td className="py-2 text-white font-medium">{m.label}</td>
+                  <td className="py-2 text-right text-emerald-500">{fmt(m.rentalIncome)}</td>
+                  <td className="py-2 text-right text-red-500">{fmt(m.mortgages)}</td>
+                  <td className="py-2 text-right text-red-500">{fmt(m.utilities)}</td>
+                  <td className={`py-2 text-right font-semibold ${m.netCashFlow >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                    {fmt(m.netCashFlow, { sign: true })}
+                  </td>
+                  <td className="py-2 pl-3">
+                    <div className="w-24 h-2 bg-white/10 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${m.netCashFlow >= 0 ? 'bg-emerald-500' : 'bg-red-500'}`}
+                        style={{ width: `${(Math.abs(m.netCashFlow) / maxAbsNet) * 100}%` }}
+                      />
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Section>
     </div>
   );
 }

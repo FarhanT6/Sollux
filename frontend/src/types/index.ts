@@ -555,6 +555,27 @@ export interface BudgetSummary {
   };
 }
 
+export interface BudgetForecastMonth {
+  month: string;
+  label: string;
+  rentalIncome: number;
+  mortgages: number;
+  utilities: number;
+  netCashFlow: number;
+}
+
+export interface BudgetForecast {
+  months: BudgetForecastMonth[];
+  baseline: {
+    rentBaseline: number;
+    mortgageBaseline: number;
+    utilityBaseline: number;
+    activeLeaseCount: number;
+    activeLoanCount: number;
+    utilityAccountsWithData: number;
+  };
+}
+
 export const OTHER_INCOME_LABELS: Record<OtherIncomeCategory, string> = {
   APPLIANCE_SERVICE:   'Appliance – Service Call',
   APPLIANCE_DELIVERY:  'Appliance – Delivery',

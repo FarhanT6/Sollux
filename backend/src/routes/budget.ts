@@ -324,4 +324,88 @@ router.get('/delinquency', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/budget/forecast?months=6
+// Forward-looking cash flow projection from recurring baselines — active
+// lease rent, active loan payments, and a trailing average of each utility
+// account's bills. Not a guess at one-off income/expenses; this is meant to
+// answer "if nothing changes, what does the next N months look like."
+router.get('/forecast', async (req, res, next) => {
+  try {
+    const months = Math.min(24, Math.max(1, parseInt((req.query.months as string) || '6')));
+    const userId = req.dbUserId!;
+    const today = new Date();
+    const horizonStart = new Date(today.getFullYear(), today.getMonth(), 1);
+
+    const [activeLeases, activeLoans, utilityAccounts] = await Promise.all([
+      db.lease.findMany({
+        where: { status: 'ACTIVE', unit: { property: { userId } } },
+        select: { id: true, rentAmount: true, endDate: true, unit: { select: { property: { select: { nickname: true, address: true } } } } },
+      }),
+      db.loan.findMany({
+        where: { userId, isActive: true, isPersonal: false },
+        select: { id: true, lender: true, monthlyPayment: true, escrowAmount: true, maturityDate: true },
+      }),
+      db.utilityAccount.findMany({
+        where: { property: { userId }, isActive: true },
+        include: { statements: { orderBy: { statementDate: 'desc' }, take: 3 } },
+      }),
+    ]);
+
+    // Trailing-average projected monthly cost per utility account — bills
+    // fluctuate (usage, season), so a single most-recent bill would be
+    // noisy; average of the last up-to-3 statements smooths that out.
+    const utilityMonthlyBaseline = utilityAccounts.reduce((sum, acct) => {
+      if (acct.statements.length === 0) return sum;
+      const avg = acct.statements.reduce((s, st) => s + toNum(st.amountDue), 0) / acct.statements.length;
+      return sum + avg;
+    }, 0);
+
+    const rentBaseline = activeLeases.reduce((s, l) => s + toNum(l.rentAmount), 0);
+    const mortgageBaseline = activeLoans.reduce((s, l) => s + toNum(l.monthlyPayment) + toNum(l.escrowAmount), 0);
+
+    const monthsOut = Array.from({ length: months }, (_, i) => {
+      const monthDate = new Date(horizonStart.getFullYear(), horizonStart.getMonth() + i, 1);
+
+      // Exclude a lease's rent once its end date has passed by that month —
+      // a fixed-term lease that's known to end shouldn't be projected as
+      // ongoing income past its own end date.
+      const rentalIncome = activeLeases.reduce((s, l) => {
+        if (l.endDate && new Date(l.endDate) < monthDate) return s;
+        return s + toNum(l.rentAmount);
+      }, 0);
+
+      // Same idea for loans reaching maturity — don't project a payment
+      // past the month the loan is scheduled to pay off.
+      const mortgages = activeLoans.reduce((s, l) => {
+        if (l.maturityDate && new Date(l.maturityDate) < monthDate) return s;
+        return s + toNum(l.monthlyPayment) + toNum(l.escrowAmount);
+      }, 0);
+
+      const utilities = utilityMonthlyBaseline;
+      const netCashFlow = rentalIncome - mortgages - utilities;
+
+      return {
+        month: `${monthDate.getFullYear()}-${String(monthDate.getMonth() + 1).padStart(2, '0')}`,
+        label: monthDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+        rentalIncome: Math.round(rentalIncome * 100) / 100,
+        mortgages: Math.round(mortgages * 100) / 100,
+        utilities: Math.round(utilities * 100) / 100,
+        netCashFlow: Math.round(netCashFlow * 100) / 100,
+      };
+    });
+
+    res.json({
+      months: monthsOut,
+      baseline: {
+        rentBaseline: Math.round(rentBaseline * 100) / 100,
+        mortgageBaseline: Math.round(mortgageBaseline * 100) / 100,
+        utilityBaseline: Math.round(utilityMonthlyBaseline * 100) / 100,
+        activeLeaseCount: activeLeases.length,
+        activeLoanCount: activeLoans.length,
+        utilityAccountsWithData: utilityAccounts.filter(a => a.statements.length > 0).length,
+      },
+    });
+  } catch (err) { next(err); }
+});
+
 export default router;
