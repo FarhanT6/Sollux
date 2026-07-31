@@ -1229,8 +1229,14 @@ function ExpensesTab({ propertyId, expenses, setExpenses }: {
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
-              {filtered.map(e => (
-                <tr key={e.id} onClick={() => openEdit(e)} className="hover:bg-white/[0.02] cursor-pointer">
+              {filtered.map(e => {
+                const isUtility = e.source === 'utility';
+                return (
+                <tr key={e.id}
+                  onClick={() => isUtility
+                    ? window.open(`/properties/${e.propertyId}/utilities/${e.utilityAccountId}`, '_self')
+                    : openEdit(e)}
+                  className="hover:bg-white/[0.02] cursor-pointer">
                   <td className="px-4 py-3 text-gray-400 text-xs">{fmtDate(e.date)}</td>
                   <td className="px-4 py-3 text-gray-300">{EXPENSE_CATEGORY_LABELS[e.category] ?? e.category}</td>
                   <td className="px-4 py-3 text-gray-400">{e.vendor || '—'}</td>
@@ -1238,12 +1244,14 @@ function ExpensesTab({ propertyId, expenses, setExpenses }: {
                   <td className="px-4 py-3 font-medium text-white">{money(Number(e.amount))}</td>
                   <td className="px-4 py-3">
                     <div className="flex gap-1 flex-wrap">
+                      {isUtility && <span className="pill pill-blue" title="Synced from utility bills, not a manual entry — click to view the account">Utility</span>}
                       <span className={`pill ${e.isCapEx ? 'pill-purple' : 'pill-gray'}`}>{e.isCapEx ? 'CapEx' : 'OpEx'}</span>
                       {e.isPersonal && <span className="pill pill-amber">Personal</span>}
                     </div>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>

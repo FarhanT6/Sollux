@@ -157,6 +157,12 @@ export interface Expense {
   documentUrl?: string;
   createdAt: string;
   property?: Pick<Property, 'id' | 'address' | 'nickname'>;
+  // 'utility' rows are read-only — merged in from scraped/imported utility
+  // statements, not a real Expense record. Edit/delete at the source
+  // (the utility account) instead of here.
+  source?: 'manual' | 'utility';
+  editable?: boolean;
+  utilityAccountId?: string;
 }
 
 export interface PrepaymentPenaltyTier {
