@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { format } from 'date-fns';
 import {
@@ -1117,10 +1117,35 @@ function ExpensesTab({ propertyId, expenses, setExpenses }: {
   const [form, setForm] = useState(EMPTY_EXPENSE_FORM);
   const [saving, setSaving] = useState(false);
   const [filterCat, setFilterCat] = useState('');
+  const [view, setView] = useState<'list' | 'vendor' | 'month'>('list');
 
   const filtered = [...expenses]
     .filter(e => !filterCat || e.category === filterCat)
     .sort((a, b) => b.date.localeCompare(a.date));
+
+  const byVendor = useMemo(() => {
+    const map = new Map<string, { vendor: string; count: number; total: number; isUtility: boolean }>();
+    for (const e of filtered) {
+      const key = e.vendor || '—';
+      const cur = map.get(key) ?? { vendor: key, count: 0, total: 0, isUtility: e.source === 'utility' };
+      cur.count += 1;
+      cur.total += Number(e.amount);
+      map.set(key, cur);
+    }
+    return [...map.values()].sort((a, b) => b.total - a.total);
+  }, [filtered]);
+
+  const byMonth = useMemo(() => {
+    const map = new Map<string, { month: string; utilityTotal: number; otherTotal: number }>();
+    for (const e of filtered) {
+      const key = e.date.slice(0, 7); // YYYY-MM
+      const cur = map.get(key) ?? { month: key, utilityTotal: 0, otherTotal: 0 };
+      if (e.source === 'utility') cur.utilityTotal += Number(e.amount);
+      else cur.otherTotal += Number(e.amount);
+      map.set(key, cur);
+    }
+    return [...map.values()].sort((a, b) => b.month.localeCompare(a.month));
+  }, [filtered]);
 
   function openNew() {
     setForm(EMPTY_EXPENSE_FORM);
@@ -1173,12 +1198,20 @@ function ExpensesTab({ propertyId, expenses, setExpenses }: {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex gap-2 items-center">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+        <div className="flex gap-2 items-center flex-wrap">
           <select value={filterCat} onChange={e => setFilterCat(e.target.value)} className="input-dark text-sm">
             <option value="">All categories</option>
             {Object.entries(EXPENSE_CATEGORY_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
+          <div className="flex gap-1">
+            {([['list', 'List'], ['vendor', 'By Vendor'], ['month', 'By Month']] as const).map(([key, label]) => (
+              <button key={key} onClick={() => setView(key)}
+                className={`text-xs px-2.5 py-1.5 rounded-lg border ${view === key ? 'border-amber-500 text-amber-400' : 'border-white/10 text-gray-400 hover:text-gray-200'}`}>
+                {label}
+              </button>
+            ))}
+          </div>
           <span className="text-xs text-gray-500">Total: <span className="text-white font-medium">{money(total)}</span></span>
         </div>
         <button onClick={() => formMode === 'closed' ? openNew() : setFormMode('closed')} className="btn text-xs">+ Add expense</button>
@@ -1215,6 +1248,64 @@ function ExpensesTab({ propertyId, expenses, setExpenses }: {
 
       {filtered.length === 0 ? (
         <div className="text-center py-12 text-gray-500 text-sm">No expenses recorded</div>
+      ) : view === 'vendor' ? (
+        <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
+          <table className="w-full text-sm">
+            <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
+              <tr className="text-left text-gray-400 text-xs">
+                <th className="px-4 py-3">Vendor / Provider</th>
+                <th className="px-4 py-3">Type</th>
+                <th className="px-4 py-3">Bills</th>
+                <th className="px-4 py-3">Total</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/5">
+              {byVendor.map(v => (
+                <tr key={v.vendor} className="hover:bg-white/[0.02]">
+                  <td className="px-4 py-3 text-gray-200">{v.vendor}</td>
+                  <td className="px-4 py-3">{v.isUtility && <span className="text-xs bg-blue-900/40 text-blue-300 px-1.5 py-0.5 rounded">Utility</span>}</td>
+                  <td className="px-4 py-3 text-gray-400">{v.count}</td>
+                  <td className="px-4 py-3 font-medium text-white">{money(v.total)}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="border-t border-white/10 font-semibold text-white">
+                <td className="px-4 py-3" colSpan={3}>Total</td>
+                <td className="px-4 py-3">{money(total)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      ) : view === 'month' ? (
+        <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
+          <table className="w-full text-sm">
+            <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
+              <tr className="text-left text-gray-400 text-xs">
+                <th className="px-4 py-3">Month</th>
+                <th className="px-4 py-3">Utilities</th>
+                <th className="px-4 py-3">Other OpEx</th>
+                <th className="px-4 py-3">Total</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/5">
+              {byMonth.map(m => (
+                <tr key={m.month} className="hover:bg-white/[0.02]">
+                  <td className="px-4 py-3 text-gray-200">{format(new Date(`${m.month}-01T00:00:00`), 'MMM yyyy')}</td>
+                  <td className="px-4 py-3 text-gray-400">{m.utilityTotal > 0 ? money(m.utilityTotal) : '—'}</td>
+                  <td className="px-4 py-3 text-gray-400">{m.otherTotal > 0 ? money(m.otherTotal) : '—'}</td>
+                  <td className="px-4 py-3 font-medium text-white">{money(m.utilityTotal + m.otherTotal)}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="border-t border-white/10 font-semibold text-white">
+                <td className="px-4 py-3" colSpan={3}>Total</td>
+                <td className="px-4 py-3">{money(total)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
       ) : (
         <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
           <table className="w-full text-sm">
