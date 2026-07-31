@@ -38,17 +38,42 @@ function isStatementPaid(s: any, payments: any[] = []): boolean {
   return sumSinceStmt >= openBalance - 0.01;
 }
 
+// Whether an arrears balance was ever cleared, looked up across the WHOLE
+// forward chain of later statements — not just the very next one. A past-due
+// amount routinely takes more than one billing cycle to clear (e.g. Dec's
+// balance still shows up on Jan's bill, but is gone by Feb's). Checking only
+// one statement ahead meant Dec would show "Overdue" forever the moment Jan
+// didn't fully clear it, even though Feb proves it eventually did.
+// `statements` must be sorted newest-first (as the API already returns it).
+function computeResolvedByFutureCheckpoint(statements: any[]): Set<string> {
+  const resolved = new Set<string>();
+  let sawZeroCheckpoint = false;
+  // Iterate newest -> oldest; sawZeroCheckpoint tracks whether any statement
+  // strictly newer than the current one has already shown a fully-cleared
+  // (previousBalance === 0) bill.
+  for (const s of statements) {
+    if (sawZeroCheckpoint) resolved.add(s.id);
+    const prevBal = Number((s.rawDataJson as any)?.previousBalance ?? 0);
+    if (prevBal === 0) sawZeroCheckpoint = true;
+  }
+  return resolved;
+}
+
+function isEffectivelyPaid(s: any, payments: any[], resolvedByFuture: Set<string>): boolean {
+  return isStatementPaid(s, payments) || resolvedByFuture.has(s.id);
+}
+
 // "Past due" / "Prev balance" on a statement is a frozen snapshot of what the
 // provider printed on that bill. Once the prior statement is marked paid in
 // Sollux, that snapshot is stale — suppress the past-due display for it.
-function isPriorStatementPaid(current: any, all: any[], payments: any[] = []): boolean {
+function isPriorStatementPaid(current: any, all: any[], payments: any[] = [], resolvedByFuture: Set<string> = new Set()): boolean {
   const idx = all.findIndex(x => x.id === current.id);
   if (idx === -1 || idx + 1 >= all.length) return false;
-  return isStatementPaid(all[idx + 1], payments);
+  return isEffectivelyPaid(all[idx + 1], payments, resolvedByFuture);
 }
 
-function statementStatus(s: any, payments: any[] = [], newerStmt?: any, isLatest = false): { color: 'green' | 'amber' | 'red'; label: string } {
-  if (isStatementPaid(s, payments)) return { color: 'green', label: 'Paid' };
+function statementStatus(s: any, payments: any[] = [], newerStmt?: any, isLatest = false, resolvedByFuture: Set<string> = new Set()): { color: 'green' | 'amber' | 'red'; label: string } {
+  if (isEffectivelyPaid(s, payments, resolvedByFuture)) return { color: 'green', label: 'Paid' };
 
   if (!isLatest && newerStmt) {
     const newerPrevBal = Number((newerStmt.rawDataJson as any)?.previousBalance ?? 0);
@@ -532,6 +557,9 @@ export default function UtilityDetailPage() {
 
   const statements: any[] = useMemo(() => account?.statements || [], [account]);
   const payments: any[] = useMemo(() => account?.payments || [], [account]);
+  // Computed from the FULL statement history (not the filtered/searched
+  // view) so status stays correct regardless of year filter or search.
+  const resolvedByFuture = useMemo(() => computeResolvedByFutureCheckpoint(statements), [statements]);
 
   const stmtYears = useMemo(() => {
     const years = new Set(statements.map(s => new Date(s.statementDate).getFullYear().toString()));
@@ -779,15 +807,15 @@ export default function UtilityDetailPage() {
                 {filteredStatements.map((s, idx) => {
                   // filteredStatements sorted DESC; [idx-1] is more recent; idx===0 is latest
                   const isLatest = idx === 0 && yearFilter === 'all' && !search;
-                  const { color: sc, label: sl } = statementStatus(s, payments, filteredStatements[idx - 1], isLatest);
+                  const { color: sc, label: sl } = statementStatus(s, payments, filteredStatements[idx - 1], isLatest, resolvedByFuture);
                   const raw = s.rawDataJson as Record<string, unknown> | undefined;
                   const pastDue     = raw?.pastDue      != null ? Number(raw.pastDue)      : null;
                   const totalDue    = (raw?.accountBalance ?? raw?.totalDue) != null
                                       ? Number(raw?.accountBalance ?? raw?.totalDue) : null;
                   const prevBal     = raw?.previousBalance != null ? Number(raw.previousBalance) : null;
                   const currentBill = raw?.currentBill   != null ? Number(raw.currentBill)   : null;
-                  const isPaid = s.amountPaid != null || (s.rawDataJson as any)?.isPaid === true;
-                  const priorPaid = isPriorStatementPaid(s, statements, payments);
+                  const isPaid = isEffectivelyPaid(s, payments, resolvedByFuture);
+                  const priorPaid = isPriorStatementPaid(s, statements, payments, resolvedByFuture);
                   return (
                     <div key={s.id} className="rounded-xl px-5 py-4 flex items-center gap-4"
                       style={{
