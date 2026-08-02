@@ -24,11 +24,15 @@ import api, {
   updateBankAccount,
   deleteBankAccount,
   recordBankBalance,
+  getIndexRates,
+  createIndexRate,
+  deleteIndexRate,
 } from '../api/client';
 import type { PlaidItem } from '../api/client';
-import type { BankAccount } from '../types';
+import type { BankAccount, IndexRate } from '../types';
+import { format } from 'date-fns';
 
-type SettingsTab = 'account' | 'notifications' | 'banking';
+type SettingsTab = 'account' | 'notifications' | 'banking' | 'rates';
 
 export default function SettingsPage() {
   const { user } = useUser();
@@ -68,12 +72,13 @@ export default function SettingsPage() {
         subtitle={
           tab === 'notifications' ? 'Configure how and when Sollux alerts you'
           : tab === 'banking'     ? 'Connect bank accounts for automatic daily balance snapshots'
+          : tab === 'rates'       ? 'Reference rate history for variable-rate loans (e.g. WSJ Prime Rate)'
           : 'Manage your account and subscription'
         }
       />
 
       <div className="flex border-b px-6" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
-        {(['account', 'notifications', 'banking'] as SettingsTab[]).map(t => (
+        {(['account', 'notifications', 'banking', 'rates'] as SettingsTab[]).map(t => (
           <button
             key={t}
             onClick={() => setSearchParams({ tab: t }, { replace: true })}
@@ -147,6 +152,8 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
+      ) : tab === 'rates' ? (
+        <RatesTab />
       ) : (
       <div className="px-6 py-5 max-w-2xl">
 
@@ -281,6 +288,110 @@ export default function SettingsPage() {
 
       </div>
       )}
+    </div>
+  );
+}
+
+// ── Rates Tab ────────────────────────────────────────────────────────────────
+
+function RatesTab() {
+  const [rates, setRates]     = useState<IndexRate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [rate, setRate]       = useState('');
+  const [effectiveDate, setEffectiveDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [notes, setNotes]     = useState('');
+  const [saving, setSaving]   = useState(false);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    getIndexRates('PRIME').then(setRates).finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function handleAdd() {
+    if (!rate || !effectiveDate) return;
+    setSaving(true);
+    try {
+      await createIndexRate({ indexName: 'PRIME', rate: parseFloat(rate), effectiveDate, notes: notes || undefined });
+      setRate(''); setNotes('');
+      load();
+    } finally { setSaving(false); }
+  }
+
+  async function handleDelete(id: string) {
+    if (!confirm('Delete this rate entry?')) return;
+    await deleteIndexRate(id);
+    setRates(prev => prev.filter(r => r.id !== id));
+  }
+
+  const current = rates[0];
+
+  return (
+    <div className="px-6 py-5 max-w-2xl">
+      <div className="card p-5 mb-4">
+        <h2 className="text-sm font-semibold text-white mb-1">WSJ Prime Rate</h2>
+        <p className="text-xs text-gray-500 mb-4">
+          Sollux has no live market data feed — log Prime rate changes here as they happen (or whenever you notice one),
+          and every variable-rate loan indexed to Prime recalculates its interest rate automatically on its own reset anniversary.
+        </p>
+        {current && (
+          <div className="rounded-lg px-3 py-2.5 mb-4" style={{ background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.2)' }}>
+            <p className="text-xs text-gray-400">Current Prime</p>
+            <p className="text-lg font-semibold text-amber-400">{current.rate}%</p>
+            <p className="text-xs text-gray-500">as of {format(new Date(current.effectiveDate), 'MMM d, yyyy')}</p>
+          </div>
+        )}
+        <div className="grid grid-cols-3 gap-3 mb-3">
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">New rate (%)</label>
+            <input type="number" step="0.001" value={rate} onChange={e => setRate(e.target.value)} className="input-dark w-full text-sm" placeholder="8.50" />
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Effective date</label>
+            <input type="date" value={effectiveDate} onChange={e => setEffectiveDate(e.target.value)} className="input-dark w-full text-sm" />
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Notes (optional)</label>
+            <input value={notes} onChange={e => setNotes(e.target.value)} className="input-dark w-full text-sm" placeholder="Fed cut" />
+          </div>
+        </div>
+        <button onClick={handleAdd} disabled={saving || !rate || !effectiveDate} className="btn-primary text-sm px-4 py-2 disabled:opacity-50">
+          {saving ? 'Saving…' : '+ Log rate change'}
+        </button>
+      </div>
+
+      <div className="card p-5">
+        <h2 className="text-sm font-semibold text-white mb-3">History</h2>
+        {loading ? (
+          <p className="text-sm text-gray-500">Loading…</p>
+        ) : rates.length === 0 ? (
+          <p className="text-sm text-gray-500">No Prime rate logged yet — add one above to activate any variable-rate loans.</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-gray-500 text-xs uppercase tracking-wider border-b border-white/5">
+                <th className="text-left pb-2">Effective</th>
+                <th className="text-right pb-2">Rate</th>
+                <th className="text-left pb-2 pl-3">Notes</th>
+                <th className="pb-2"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rates.map(r => (
+                <tr key={r.id} className="border-b border-white/5">
+                  <td className="py-2 text-gray-300">{format(new Date(r.effectiveDate), 'MMM d, yyyy')}</td>
+                  <td className="py-2 text-right text-white font-medium">{r.rate}%</td>
+                  <td className="py-2 pl-3 text-gray-500">{r.notes || '—'}</td>
+                  <td className="py-2 text-right">
+                    <button onClick={() => handleDelete(r.id)} className="text-xs text-red-500 hover:text-red-400">Del</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   );
 }

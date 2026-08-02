@@ -193,6 +193,10 @@ function EditModal({ loan, properties, onClose, onSave }: {
     accountNumber: loan.accountNumber ?? '',
     originalAmount: loan.originalAmount != null ? String(loan.originalAmount) : '',
     interestRate: loan.interestRate != null ? String(loan.interestRate) : '',
+    rateType: loan.rateType ?? 'FIXED',
+    rateIndex: loan.rateIndex ?? 'PRIME',
+    rateMargin: loan.rateMargin != null ? String(loan.rateMargin) : '',
+    rateAdjustmentMonths: loan.rateAdjustmentMonths != null ? String(loan.rateAdjustmentMonths) : '12',
     monthlyPayment: loan.monthlyPayment != null ? String(loan.monthlyPayment) : '',
     balloonPaymentAmount: loan.balloonPaymentAmount != null ? String(loan.balloonPaymentAmount) : '',
     escrowAmount: loan.escrowAmount != null ? String(loan.escrowAmount) : '',
@@ -287,6 +291,10 @@ function EditModal({ loan, properties, onClose, onSave }: {
         accountNumber: form.accountNumber || null,
         originalAmount: form.originalAmount ? parseFloat(form.originalAmount) : null,
         interestRate: form.interestRate ? parseFloat(form.interestRate) : null,
+        rateType: form.rateType,
+        rateIndex: form.rateType === 'VARIABLE' ? form.rateIndex : null,
+        rateMargin: form.rateType === 'VARIABLE' && form.rateMargin ? parseFloat(form.rateMargin) : null,
+        rateAdjustmentMonths: form.rateType === 'VARIABLE' && form.rateAdjustmentMonths ? parseInt(form.rateAdjustmentMonths, 10) : null,
         monthlyPayment: form.monthlyPayment ? parseFloat(form.monthlyPayment) : null,
         balloonPaymentAmount: form.balloonPaymentAmount ? parseFloat(form.balloonPaymentAmount) : null,
         escrowAmount: form.escrowAmount ? parseFloat(form.escrowAmount) : null,
@@ -356,8 +364,39 @@ function EditModal({ loan, properties, onClose, onSave }: {
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Interest rate (%)</label>
-                <input type="number" step="0.001" value={form.interestRate} onChange={f('interestRate')} className="input-dark w-full text-sm" placeholder="10.0" />
+                <input type="number" step="0.001" value={form.interestRate} onChange={f('interestRate')} className="input-dark w-full text-sm" placeholder="10.0"
+                  disabled={form.rateType === 'VARIABLE'} title={form.rateType === 'VARIABLE' ? 'Auto-calculated from the index rate + margin below — not editable directly while variable' : undefined} />
               </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Rate type</label>
+                <select value={form.rateType} onChange={e => setForm(f => ({ ...f, rateType: e.target.value as 'FIXED' | 'VARIABLE' }))} className="input-dark w-full text-sm">
+                  <option value="FIXED">Fixed</option>
+                  <option value="VARIABLE">Variable (indexed)</option>
+                </select>
+              </div>
+              {form.rateType === 'VARIABLE' && (
+                <div className="col-span-2 grid grid-cols-3 gap-3 rounded-lg p-3" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Index</label>
+                    <select value={form.rateIndex} onChange={e => setForm(f => ({ ...f, rateIndex: e.target.value }))} className="input-dark w-full text-sm">
+                      <option value="PRIME">Prime</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Margin (%)</label>
+                    <input type="number" step="0.001" value={form.rateMargin} onChange={f('rateMargin')} className="input-dark w-full text-sm" placeholder="-1.0" />
+                    <p className="text-xs text-gray-600 mt-1">e.g. -1.0 = 1% below index</p>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Resets every (months)</label>
+                    <input type="number" min={1} value={form.rateAdjustmentMonths} onChange={f('rateAdjustmentMonths')} className="input-dark w-full text-sm" placeholder="12" />
+                  </div>
+                  <p className="col-span-3 text-xs text-gray-500">
+                    Interest rate is recalculated automatically as {form.rateIndex} + margin on each reset anniversary — log {form.rateIndex} rate changes under Settings.
+                    {loan.nextRateAdjustment && <> Next reset: <span className="text-gray-300">{format(new Date(loan.nextRateAdjustment), 'MMM d, yyyy')}</span>.</>}
+                  </p>
+                </div>
+              )}
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="text-xs text-gray-500">Monthly payment (P&amp;I)</label>
@@ -809,9 +848,18 @@ export default function LoanDetailPage() {
           )}
         </div>
         <div className="stat-card">
-          <p className="text-xs text-gray-500 mb-1">Interest rate</p>
+          <p className="text-xs text-gray-500 mb-1">
+            Interest rate{loan.rateType === 'VARIABLE' && <span className="ml-1 text-amber-400">(variable)</span>}
+          </p>
           <p className="text-xl font-semibold text-white">{loan.interestRate != null ? `${loan.interestRate}%` : '—'}</p>
-          <p className="text-xs text-gray-600 mt-1">{money(amortization.totalInterestRemaining)} interest remaining</p>
+          {loan.rateType === 'VARIABLE' ? (
+            <p className="text-xs text-gray-600 mt-1">
+              {loan.rateIndex} {loan.rateMargin != null && Number(loan.rateMargin) >= 0 ? '+' : ''}{loan.rateMargin}%
+              {loan.nextRateAdjustment && <> · resets {format(new Date(loan.nextRateAdjustment), 'MMM yyyy')}</>}
+            </p>
+          ) : (
+            <p className="text-xs text-gray-600 mt-1">{money(amortization.totalInterestRemaining)} interest remaining</p>
+          )}
         </div>
       </div>
 
