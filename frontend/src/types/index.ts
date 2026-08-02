@@ -177,6 +177,16 @@ export interface PrepaymentPenalty {
   tiers: PrepaymentPenaltyTier[];
 }
 
+export interface LoanExtension {
+  id: string;
+  loanId: string;
+  months: number;
+  previousMaturityDate?: string | null;
+  newMaturityDate: string;
+  notes?: string | null;
+  extendedAt: string;
+}
+
 export interface IndexRate {
   id: string;
   indexName: string;
@@ -218,6 +228,7 @@ export interface Loan {
   createdAt: string;
   property?: Pick<Property, 'id' | 'address' | 'nickname'>;
   loanPayments?: LoanPayment[];
+  loanExtensions?: LoanExtension[];
   interestPaidToDate?: number;
   totalInterestLifetime?: number | null;
 }

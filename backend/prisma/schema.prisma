@@ -604,7 +604,8 @@ model Loan {
   createdAt              DateTime        @default(now())
   updatedAt              DateTime        @updatedAt
 
-  loanPayments LoanPayment[]
+  loanPayments   LoanPayment[]
+  loanExtensions LoanExtension[]
 
   @@index([propertyId])
   @@index([userId])
@@ -642,6 +643,23 @@ model IndexRate {
 
   @@index([userId, indexName, effectiveDate])
   @@map("index_rates")
+}
+
+// Audit trail of maturity-date extensions on a loan — e.g. a lender-granted
+// option to extend a balloon/maturity out further. Each row is one exercised
+// extension; Loan.maturityDate always reflects the current (latest) date.
+model LoanExtension {
+  id                  String   @id @default(cuid())
+  loanId              String
+  loan                Loan     @relation(fields: [loanId], references: [id], onDelete: Cascade)
+  months              Int      // length of this extension, in months
+  previousMaturityDate DateTime?
+  newMaturityDate     DateTime
+  notes               String?
+  extendedAt          DateTime @default(now())
+
+  @@index([loanId])
+  @@map("loan_extensions")
 }
 
 model LoanPayment {

@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { getLoan, getLoanAmortization, updateLoan, getProperties } from '../api/client';
+import { getLoan, getLoanAmortization, updateLoan, getProperties, extendLoan } from '../api/client';
 import type { Loan, Property, LoanType, PrepaymentPenalty, PrepaymentPenaltyTier } from '../types';
 import { format, addMonths } from 'date-fns';
 
@@ -677,6 +677,7 @@ export default function LoanDetailPage() {
   const [showFullSchedule, setShowFullSchedule] = useState(false);
   const [chartFullRange, setChartFullRange] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
+  const [showExtend, setShowExtend] = useState(false);
 
   const reload = () => {
     if (!id) return Promise.resolve();
@@ -760,9 +761,21 @@ export default function LoanDetailPage() {
         <div className="flex items-center gap-2">
           {loan.isPersonal && <span className="pill pill-purple">Personal</span>}
           {!loan.isActive && <span className="pill pill-gray">Closed</span>}
+          {loan.maturityDate && (
+            <button onClick={() => setShowExtend(true)} className="btn text-sm">Extend</button>
+          )}
           <button onClick={() => setShowEdit(true)} className="btn text-sm">Edit</button>
         </div>
       </div>
+
+      {loan.maturityDate && (
+        <p className="text-xs text-gray-500 mt-1">
+          Maturity: <span className="text-gray-300">{format(new Date(loan.maturityDate), 'MMM d, yyyy')}</span>
+          {loan.loanExtensions && loan.loanExtensions.length > 0 && (
+            <span> &middot; extended {loan.loanExtensions.length} time{loan.loanExtensions.length > 1 ? 's' : ''}</span>
+          )}
+        </p>
+      )}
 
       {amortization.negativeAmortization && (
         <div className="mt-4 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-4 py-2.5">
@@ -902,6 +915,27 @@ export default function LoanDetailPage() {
       {/* Prepayment penalty */}
       <PrepaymentCard loan={loan} currentBalance={currentBalance} />
 
+      {/* Extension history */}
+      {loan.loanExtensions && loan.loanExtensions.length > 0 && (
+        <div className="card p-4 mb-6">
+          <p className="text-sm font-medium text-white mb-3">Extension history</p>
+          <div className="space-y-2">
+            {loan.loanExtensions.map(ext => (
+              <div key={ext.id} className="flex items-center justify-between text-xs border-b border-white/5 pb-2 last:border-0 last:pb-0">
+                <div className="text-gray-400">
+                  <span className="text-white font-medium">+{ext.months} month{ext.months !== 1 ? 's' : ''}</span>
+                  {ext.previousMaturityDate && (
+                    <> — {format(new Date(ext.previousMaturityDate), 'MMM yyyy')} &rarr; {format(new Date(ext.newMaturityDate), 'MMM yyyy')}</>
+                  )}
+                  {ext.notes && <span className="text-gray-500"> · {ext.notes}</span>}
+                </div>
+                <span className="text-gray-600">{format(new Date(ext.extendedAt), 'MMM d, yyyy')}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Balance over time chart */}
       {chartData.length > 1 && (
         <div className="card p-4 mb-6">
@@ -1027,6 +1061,87 @@ export default function LoanDetailPage() {
           onSave={updated => { setLoan(updated); reload(); }}
         />
       )}
+
+      {/* Extend modal */}
+      {showExtend && loan.maturityDate && (
+        <ExtendLoanModal
+          loan={loan}
+          onClose={() => setShowExtend(false)}
+          onSave={async () => { setShowExtend(false); await reload(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function ExtendLoanModal({ loan, onClose, onSave }: {
+  loan: Loan; onClose: () => void; onSave: () => void;
+}) {
+  const [months, setMonths] = useState('12');
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const currentMaturity = loan.maturityDate ? new Date(loan.maturityDate) : null;
+  const monthsNum = parseInt(months, 10);
+  const previewDate = currentMaturity && monthsNum > 0
+    ? new Date(currentMaturity.getFullYear(), currentMaturity.getMonth() + monthsNum, currentMaturity.getDate())
+    : null;
+
+  async function handleSave() {
+    if (!monthsNum || monthsNum <= 0) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await extendLoan(loan.id, { months: monthsNum, notes: notes || undefined });
+      onSave();
+    } catch {
+      setError('Failed to extend loan. Please try again.');
+    } finally { setSaving(false); }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="w-full max-w-md rounded-2xl p-6" style={{ background: '#1a1a1a', border: '1px solid rgba(255,255,255,0.1)' }}>
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-lg font-semibold text-white">Extend loan</h3>
+          <button onClick={onClose} className="text-gray-500 hover:text-white text-xl leading-none">×</button>
+        </div>
+
+        {error && <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-3">{error}</div>}
+
+        <p className="text-xs text-gray-500 mb-3">
+          Current maturity: <span className="text-gray-300">{currentMaturity ? format(currentMaturity, 'MMM d, yyyy') : '—'}</span>
+        </p>
+
+        <label className="block text-xs text-gray-500 mb-1">Extend by</label>
+        <div className="flex gap-2 mb-3">
+          {[12, 24, 36, 60].map(m => (
+            <button key={m} type="button" onClick={() => setMonths(String(m))}
+              className={`text-xs px-3 py-1.5 rounded-lg border ${months === String(m) ? 'border-amber-500 text-amber-400' : 'border-white/10 text-gray-400 hover:text-gray-200'}`}>
+              {m % 12 === 0 ? `${m / 12}yr` : `${m}mo`}
+            </button>
+          ))}
+          <input type="number" min={1} value={months} onChange={e => setMonths(e.target.value)}
+            className="input-dark text-xs w-20 text-center" placeholder="Months" />
+        </div>
+
+        {previewDate && (
+          <p className="text-xs text-gray-500 mb-3">
+            New maturity: <span className="text-emerald-400 font-medium">{format(previewDate, 'MMM d, yyyy')}</span>
+          </p>
+        )}
+
+        <label className="block text-xs text-gray-500 mb-1">Notes (optional)</label>
+        <input value={notes} onChange={e => setNotes(e.target.value)} className="input-dark w-full text-sm mb-4" placeholder="e.g. exercised lender's 2-year extension option" />
+
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="btn text-sm">Cancel</button>
+          <button onClick={handleSave} disabled={saving || !monthsNum} className="btn-primary text-sm disabled:opacity-50">
+            {saving ? 'Extending…' : 'Extend loan'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

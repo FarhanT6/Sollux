@@ -197,6 +197,7 @@ router.get('/:id', async (req, res, next) => {
         property: { select: { id: true, address: true, nickname: true } },
         loanPayments: { orderBy: { date: 'desc' } },
         utilityAccount: { select: { id: true, providerName: true, category: true } },
+        loanExtensions: { orderBy: { extendedAt: 'desc' } },
       },
     });
     if (!rawLoan) return res.status(404).json({ error: 'Loan not found' });
@@ -317,6 +318,38 @@ router.delete('/:id', async (req, res, next) => {
     if (!existing) return res.status(404).json({ error: 'Loan not found' });
     await db.loan.delete({ where: { id: req.params.id } });
     res.status(204).send();
+  } catch (err) { next(err); }
+});
+
+const ExtendLoanSchema = z.object({
+  months: z.number().int().positive(),
+  notes: z.string().optional().nullable(),
+});
+
+// POST /api/loans/:id/extend — exercise a maturity-date extension (e.g. a
+// lender-granted option to push the balloon out further). Records an audit
+// row and moves maturityDate forward from whatever it currently is.
+router.post('/:id/extend', async (req, res, next) => {
+  try {
+    const { months, notes } = ExtendLoanSchema.parse(req.body);
+    const existing = await db.loan.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
+    if (!existing) return res.status(404).json({ error: 'Loan not found' });
+    if (!existing.maturityDate) {
+      return res.status(400).json({ error: 'This loan has no maturity date on file to extend from — set one first.' });
+    }
+
+    const previousMaturityDate = existing.maturityDate;
+    const newMaturityDate = new Date(previousMaturityDate);
+    newMaturityDate.setMonth(newMaturityDate.getMonth() + months);
+
+    const [loan] = await db.$transaction([
+      db.loan.update({ where: { id: req.params.id }, data: { maturityDate: newMaturityDate } }),
+      db.loanExtension.create({
+        data: { loanId: req.params.id, months, previousMaturityDate, newMaturityDate, notes: notes || null },
+      }),
+    ]);
+
+    res.json(serializeLoan(loan));
   } catch (err) { next(err); }
 });
 

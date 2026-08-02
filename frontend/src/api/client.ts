@@ -145,6 +145,8 @@ export const createLoanPayment = (loanId: string, data: Partial<LoanPayment>) =>
   api.post<LoanPayment>(`/loans/${loanId}/payments`, data).then(r => r.data);
 export const deleteLoanPayment = (loanId: string, paymentId: string) =>
   api.delete(`/loans/${loanId}/payments/${paymentId}`);
+export const extendLoan = (id: string, data: { months: number; notes?: string }) =>
+  api.post<Loan>(`/loans/${id}/extend`, data).then(r => r.data);
 
 // Index rates (e.g. WSJ Prime Rate history, for variable-rate loans)
 export const getIndexRates = (indexName?: string) =>
