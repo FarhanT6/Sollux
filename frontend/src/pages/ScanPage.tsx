@@ -160,7 +160,8 @@ export default function ScanPage() {
       });
       setStep('saved');
     } catch (e: any) {
-      const detail = e?.response?.data?.error || e?.response?.status || e?.message;
+      const body = e?.response?.data;
+      const detail = body ? [body.error, body.code, body.details ? JSON.stringify(body.details) : null].filter(Boolean).join(' — ') : (e?.response?.status || e?.message);
       setError(detail ? `Failed to save the document: ${detail}` : 'Failed to save the document. Please try again.');
     } finally {
       setSaving(false);
