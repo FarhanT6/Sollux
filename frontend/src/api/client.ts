@@ -30,6 +30,7 @@ import type {
   InsurancePolicy, TaxAssessment, Improvement, LegalMatter, PropertyPnL, MonthlyPnL,
   BankAccount, OtherIncome, BudgetSummary, DelinquencyTenant, BudgetForecast, IndexRate,
   ReconciliationProfile, ReconciliationStatement, ReconciliationLineItem,
+  Document, DocumentClassification, DocumentMatch, DocumentCategory,
 } from '../types';
 
 // Dashboard
@@ -170,6 +171,24 @@ export const applyReconciliationStatement = (id: string) =>
   api.post<ReconciliationStatement>(`/reconciliation/statements/${id}/apply`).then(r => r.data);
 export const deleteReconciliationStatement = (id: string) =>
   api.delete(`/reconciliation/statements/${id}`);
+
+// Scanned/digitized documents (phone scans, printer imports — auto-sorted mail)
+export const getDocuments = (params?: { propertyId?: string; category?: DocumentCategory }) =>
+  api.get<Document[]>('/scanned-documents', { params }).then(r => r.data);
+export const analyzeScannedDocument = (fileData: string) =>
+  api.post<{
+    classified: DocumentClassification;
+    match: DocumentMatch;
+    properties: { id: string; address: string; nickname?: string }[];
+  }>('/scanned-documents/analyze', { fileData }).then(r => r.data);
+export const confirmScannedDocument = (data: {
+  fileData: string; filename?: string; propertyId?: string | null;
+  category: DocumentCategory; title: string; pageCount: number; notes?: string;
+}) => api.post<Document>('/scanned-documents', data).then(r => r.data);
+export const getDocumentUrl = (id: string) =>
+  api.get<{ url: string }>(`/scanned-documents/${id}/url`).then(r => r.data.url);
+export const deleteDocument = (id: string) =>
+  api.delete(`/scanned-documents/${id}`);
 
 // Index rates (e.g. WSJ Prime Rate history, for variable-rate loans)
 export const getIndexRates = (indexName?: string) =>

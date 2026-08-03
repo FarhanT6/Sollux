@@ -27,6 +27,10 @@ const NAV = [
     icon: <Ico><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></Ico>,
   },
   {
+    to: '/scan', label: 'Scan',
+    icon: <Ico><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 3v18"/><path d="M4 12h4"/></Ico>,
+  },
+  {
     to: '/finances', label: 'Finances',
     icon: <Ico><rect x="3" y="13" width="4" height="8" rx="0.5"/><rect x="10" y="7" width="4" height="14" rx="0.5"/><rect x="17" y="3" width="4" height="18" rx="0.5"/></Ico>,
   },

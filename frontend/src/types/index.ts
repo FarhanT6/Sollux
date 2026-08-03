@@ -214,6 +214,50 @@ export interface ReconciliationStatement {
   createdAt: string;
 }
 
+export type DocumentCategory =
+  | 'UTILITY' | 'INSURANCE' | 'TAX' | 'LEGAL' | 'HOA' | 'EXPENSE_RECEIPT' | 'LEASE' | 'OTHER';
+
+export interface Document {
+  id: string;
+  propertyId?: string | null;
+  property?: Pick<Property, 'id' | 'address' | 'nickname'> | null;
+  category: DocumentCategory;
+  title: string;
+  s3Key: string;
+  s3Url?: string | null;
+  pageCount: number;
+  sourceType: string;
+  linkedType?: string | null;
+  linkedId?: string | null;
+  notes?: string | null;
+  createdAt: string;
+}
+
+export interface DocumentClassification {
+  category: DocumentCategory;
+  title: string;
+  address: string | null;
+  vendor: string | null;
+  documentDate: string | null;
+}
+
+export interface DocumentMatch {
+  confidence: 'high' | 'medium' | 'low' | 'none';
+  propertyId: string | null;
+  propertyName: string | null;
+}
+
+export const DOCUMENT_CATEGORY_LABELS: Record<DocumentCategory, string> = {
+  UTILITY: 'Utility',
+  INSURANCE: 'Insurance',
+  TAX: 'Tax',
+  LEGAL: 'Legal',
+  HOA: 'HOA',
+  EXPENSE_RECEIPT: 'Expense receipt',
+  LEASE: 'Lease',
+  OTHER: 'Other / Misc',
+};
+
 export interface LoanExtension {
   id: string;
   loanId: string;

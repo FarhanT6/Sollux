@@ -86,6 +86,7 @@ model Property {
   improvements    Improvement[]
   legalMatters    LegalMatter[]
   reconciliationProfiles ReconciliationProfile[]
+  documents        Document[]
 
   @@index([userId, state])
   @@map("properties")
@@ -708,6 +709,43 @@ model ReconciliationStatement {
 
   @@index([userId, profileId])
   @@map("reconciliation_statements")
+}
+
+// ─── SCANNED / DIGITIZED DOCUMENTS ──────────────────────────────────────────
+// Generic per-property document store — phone scans, printer imports, or
+// plain uploads (bills, taxes, insurance, HOA, legal, misc mail) that don't
+// belong to one of the more specific record types above. Auto-sort tries to
+// point linkedType/linkedId at the record it matches; DocumentCategory.OTHER
+// with no link is the fallback "Documents" bucket.
+model Document {
+  id           String           @id @default(cuid())
+  userId       String
+  propertyId   String?
+  property     Property?        @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  category     DocumentCategory @default(OTHER)
+  title        String
+  s3Key        String
+  s3Url        String?
+  pageCount    Int              @default(1)
+  sourceType   String           @default("SCAN") // SCAN | UPLOAD
+  linkedType   String?          // 'Expense' | 'InsurancePolicy' | 'TaxAssessment' | 'UtilityAccount'
+  linkedId     String?
+  notes        String?
+  createdAt    DateTime         @default(now())
+
+  @@index([userId, propertyId])
+  @@map("documents")
+}
+
+enum DocumentCategory {
+  UTILITY
+  INSURANCE
+  TAX
+  LEGAL
+  HOA
+  EXPENSE_RECEIPT
+  LEASE
+  OTHER
 }
 
 model LoanPayment {

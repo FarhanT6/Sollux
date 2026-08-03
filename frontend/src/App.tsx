@@ -13,6 +13,7 @@ import TenantsHubPage from './pages/TenantsHubPage';
 import PortfolioPage from './pages/PortfolioPage';
 import PropertyHubPage from './pages/PropertyHubPage';
 import ImportPage from './pages/ImportPage';
+import ScanPage from './pages/ScanPage';
 // Still used for deep-link detail pages
 import LoanDetailPage from './pages/LoanDetailPage';
 import NoticeDetailPage from './pages/NoticeDetailPage';
@@ -68,6 +69,7 @@ export default function App() {
 
           {/* Import */}
           <Route path="import" element={<ImportPage />} />
+        <Route path="scan" element={<ScanPage />} />
 
           {/* Legacy redirects — preserve old bookmarks and back-nav */}
           <Route path="rent-roll"     element={<Navigate to="/tenants" replace />} />
