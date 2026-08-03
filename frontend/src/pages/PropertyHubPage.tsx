@@ -10,18 +10,19 @@ import {
   updateTaxAssessment, deleteTaxAssessment, updateImprovement, deleteImprovement,
   updateLease, updateProperty, lookupPropertyByAddress,
   createLease, getTenants, createTenant, getUnits, createUnit,
+  getDocuments, getDocumentUrl, deleteDocument,
 } from '../api/client';
 import type {
   Property, Lease, Loan, Expense, InsurancePolicy, TaxAssessment,
-  Improvement, PropertyPnL, Tenant, Unit,
+  Improvement, PropertyPnL, Tenant, Unit, Document, DocumentCategory,
 } from '../types';
-import { PROPERTY_TYPE_LABELS, EXPENSE_CATEGORY_LABELS } from '../types';
+import { PROPERTY_TYPE_LABELS, EXPENSE_CATEGORY_LABELS, DOCUMENT_CATEGORY_LABELS } from '../types';
 
 const money = (n: number) =>
   n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const pct = (n: number) => `${n > 0 ? '+' : ''}${n.toFixed(1)}%`;
 const fmtDate = (d?: string | null) => d ? format(new Date(d), 'MMM d, yyyy') : '—';
-const TABS = ['Overview', 'Tenants', 'Loans', 'Expenses', 'Insurance', 'Maintenance', 'Tax'] as const;
+const TABS = ['Overview', 'Tenants', 'Loans', 'Expenses', 'Insurance', 'Maintenance', 'Tax', 'Documents'] as const;
 type Tab = typeof TABS[number];
 
 export default function PropertyHubPage() {
@@ -39,6 +40,7 @@ export default function PropertyHubPage() {
   const [policies, setPolicies] = useState<InsurancePolicy[]>([]);
   const [taxes, setTaxes]       = useState<TaxAssessment[]>([]);
   const [improvements, setImprovements] = useState<Improvement[]>([]);
+  const [documents, setDocuments] = useState<Document[]>([]);
   const [pnl, setPnl] = useState<PropertyPnL | null>(null);
   const [showEditProperty, setShowEditProperty] = useState(false);
 
@@ -76,6 +78,8 @@ export default function PropertyHubPage() {
       getTaxAssessments({ propertyId: id }).then(setTaxes);
     } else if (activeTab === 'Maintenance') {
       getImprovements({ propertyId: id }).then(setImprovements);
+    } else if (activeTab === 'Documents') {
+      getDocuments({ propertyId: id }).then(setDocuments);
     }
   }, [id, activeTab]);
 
@@ -174,6 +178,7 @@ export default function PropertyHubPage() {
         {activeTab === 'Insurance' && <InsuranceTab propertyId={id!} policies={policies} setPolicies={setPolicies} />}
         {activeTab === 'Maintenance' && <MaintenanceTab propertyId={id!} items={improvements} setItems={setImprovements} />}
         {activeTab === 'Tax' && <TaxTab propertyId={id!} taxes={taxes} setTaxes={setTaxes} />}
+        {activeTab === 'Documents' && <DocumentsTab propertyId={id!} documents={documents} setDocuments={setDocuments} />}
       </div>
 
       {showEditProperty && (
@@ -1347,6 +1352,7 @@ function ExpensesTab({ propertyId, expenses, setExpenses }: {
           </table>
         </div>
       )}
+      <ScannedDocuments propertyId={propertyId} category="EXPENSE_RECEIPT" />
     </div>
   );
 }
@@ -1495,6 +1501,7 @@ function InsuranceTab({ propertyId, policies, setPolicies }: {
           })}
         </div>
       )}
+      <ScannedDocuments propertyId={propertyId} category="INSURANCE" />
     </div>
   );
 }
@@ -1748,6 +1755,96 @@ function TaxTab({ propertyId, taxes, setTaxes }: {
                   {t.notes && <p className="text-xs text-gray-600 mt-1">{t.notes}</p>}
                 </div>
                 <p className="text-base font-semibold text-white flex-shrink-0 ml-4">{money(Number(t.annualTaxAmount))}/yr</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <ScannedDocuments propertyId={propertyId} category="TAX" />
+    </div>
+  );
+}
+
+// ─── Scanned documents (from the Scan page) ──────────────────────────────────
+
+function ScannedDocuments({ propertyId, category }: { propertyId: string; category: DocumentCategory }) {
+  const [docs, setDocs] = useState<Document[] | null>(null);
+
+  useEffect(() => {
+    getDocuments({ propertyId, category }).then(setDocs);
+  }, [propertyId, category]);
+
+  async function view(doc: Document) {
+    const url = await getDocumentUrl(doc.id);
+    window.open(url, '_blank');
+  }
+  async function remove(doc: Document) {
+    if (!confirm('Delete this scanned document?')) return;
+    await deleteDocument(doc.id);
+    setDocs(prev => (prev ?? []).filter(d => d.id !== doc.id));
+  }
+
+  if (!docs || docs.length === 0) return null;
+
+  return (
+    <div className="mt-6">
+      <p className="text-xs text-gray-500 uppercase tracking-wide mb-2">Scanned documents</p>
+      <div className="space-y-2">
+        {docs.map(d => (
+          <div key={d.id} className="card p-3 flex items-center justify-between">
+            <div>
+              <p className="text-sm text-white">{d.title}</p>
+              <p className="text-xs text-gray-500">{fmtDate(d.createdAt)} · {d.pageCount} page{d.pageCount !== 1 ? 's' : ''}</p>
+            </div>
+            <div className="flex gap-3 flex-shrink-0">
+              <button onClick={() => view(d)} className="text-xs text-amber-400 hover:text-amber-300">View</button>
+              <button onClick={() => remove(d)} className="text-xs text-red-500 hover:text-red-400">Delete</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DocumentsTab({ propertyId, documents, setDocuments }: {
+  propertyId: string; documents: Document[]; setDocuments: (d: Document[]) => void;
+}) {
+  async function view(doc: Document) {
+    const url = await getDocumentUrl(doc.id);
+    window.open(url, '_blank');
+  }
+  async function remove(doc: Document) {
+    if (!confirm('Delete this scanned document?')) return;
+    await deleteDocument(doc.id);
+    setDocuments(documents.filter(d => d.id !== doc.id));
+  }
+
+  const sorted = [...documents].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+  return (
+    <div>
+      <p className="text-xs text-gray-500 mb-4">
+        {documents.length} scanned document{documents.length !== 1 ? 's' : ''} for this property. Scan new ones from the{' '}
+        <Link to="/scan" className="text-amber-400 hover:text-amber-300">Scan</Link> page.
+      </p>
+      {sorted.length === 0 ? (
+        <div className="text-center py-12 text-gray-500 text-sm">No scanned documents yet</div>
+      ) : (
+        <div className="space-y-2">
+          {sorted.map(d => (
+            <div key={d.id} className="card p-3 flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2 mb-0.5">
+                  <p className="text-sm font-semibold text-white">{d.title}</p>
+                  <span className="pill pill-gray">{DOCUMENT_CATEGORY_LABELS[d.category]}</span>
+                </div>
+                <p className="text-xs text-gray-500">{fmtDate(d.createdAt)} · {d.pageCount} page{d.pageCount !== 1 ? 's' : ''}</p>
+                {d.notes && <p className="text-xs text-gray-600 mt-1">{d.notes}</p>}
+              </div>
+              <div className="flex gap-3 flex-shrink-0">
+                <button onClick={() => view(d)} className="text-xs text-amber-400 hover:text-amber-300">View</button>
+                <button onClick={() => remove(d)} className="text-xs text-red-500 hover:text-red-400">Delete</button>
               </div>
             </div>
           ))}
