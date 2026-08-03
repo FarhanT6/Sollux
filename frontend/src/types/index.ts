@@ -177,6 +177,43 @@ export interface PrepaymentPenalty {
   tiers: PrepaymentPenaltyTier[];
 }
 
+export interface ReconciliationLineItem {
+  type: 'RENT' | 'LOAN_PAYMENT' | 'EXPENSE' | 'OTHER';
+  targetId?: string | null;
+  targetLabel?: string | null;
+  description?: string | null;
+  amount: number;
+  direction: 'CREDIT' | 'DEBIT';
+}
+
+export interface ReconciliationProfile {
+  id: string;
+  name: string;
+  propertyId?: string | null;
+  property?: Pick<Property, 'id' | 'address' | 'nickname'> | null;
+  leaseId?: string | null;
+  managementFeeCategory?: string | null;
+  loanIds: string[];
+  notes?: string | null;
+  createdAt: string;
+}
+
+export interface ReconciliationStatement {
+  id: string;
+  profileId: string;
+  profile?: { id: string; name: string };
+  statementDate: string;
+  documentS3Key?: string | null;
+  documentUrl?: string | null;
+  lineItems: ReconciliationLineItem[];
+  netAmount: number;
+  status: 'DRAFT' | 'APPLIED';
+  appliedAt?: string | null;
+  createdRecordIds?: { rentPaymentIds: string[]; loanPaymentIds: string[]; expenseIds: string[] } | null;
+  notes?: string | null;
+  createdAt: string;
+}
+
 export interface LoanExtension {
   id: string;
   loanId: string;
