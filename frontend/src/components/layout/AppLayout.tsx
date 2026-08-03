@@ -19,7 +19,7 @@ const NAV = [
     icon: <Ico><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></Ico>,
   },
   {
-    to: '/properties', label: 'Utilities (Expenses)',
+    to: '/properties', label: 'Utilities',
     icon: <Ico><path d="M3 21h18"/><path d="M6 21V7l6-4 6 4v14"/><path d="M9 21v-9h6v9"/></Ico>,
   },
   {
