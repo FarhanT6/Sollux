@@ -13,7 +13,7 @@ router.use(attachDbUser);
 // which silently breaks any frontend arithmetic or currency formatting on
 // them (e.g. "4256.4" + "1360.64" === "4256.41360.64" via string
 // concatenation). Convert to plain numbers before they leave the API.
-const DECIMAL_LOAN_FIELDS = ['originalAmount', 'interestRate', 'monthlyPayment', 'balloonPaymentAmount', 'escrowAmount', 'currentBalance'] as const;
+const DECIMAL_LOAN_FIELDS = ['originalAmount', 'interestRate', 'monthlyPayment', 'balloonPaymentAmount', 'escrowAmount', 'currentBalance', 'rateMargin'] as const;
 const DECIMAL_PAYMENT_FIELDS = ['billAmount', 'amount', 'lateFee', 'principal', 'interest', 'escrow', 'balanceAfter'] as const;
 
 function serializeLoanPayment(p: any) {
@@ -59,6 +59,11 @@ const LoanSchema = z.object({
   gracePeriodDays: z.number().int().min(0).optional().nullable(),
   paymentType: z.enum(['PRINCIPAL_AND_INTEREST', 'INTEREST_ONLY']).default('PRINCIPAL_AND_INTEREST'),
   paymentStructureChangedAt: z.string().transform(s => new Date(s)).optional().nullable(),
+  rateType: z.enum(['FIXED', 'VARIABLE']).default('FIXED'),
+  rateIndex: z.string().optional().nullable(),
+  rateMargin: z.number().optional().nullable(),
+  rateAdjustmentMonths: z.number().int().min(1).optional().nullable(),
+  nextRateAdjustment: z.string().transform(s => new Date(s)).optional().nullable(),
   prepaymentPenaltyJson: PrepaymentPenaltySchema.optional(),
   notes: z.string().optional().nullable(),
   isPersonal: z.boolean().default(false),
@@ -79,10 +84,44 @@ const LoanPaymentSchema = z.object({
   notes: z.string().optional().nullable(),
 });
 
+// Applies a due rate reset for a VARIABLE-rate loan: looks up the
+// IndexRate entry that was in effect as of the loan's nextRateAdjustment
+// date (not today's rate — the reset locks in whatever the index was AT
+// the anniversary, same as a real ARM), applies the margin, and advances
+// nextRateAdjustment forward. Loops (capped) so a loan nobody's opened in
+// N years still only applies each period's *own* historical rate rather
+// than jumping straight to today's.
+async function recalcVariableRate(loan: any): Promise<any> {
+  if (loan.rateType !== 'VARIABLE' || !loan.rateIndex || loan.rateMargin == null || !loan.rateAdjustmentMonths || !loan.nextRateAdjustment) {
+    return loan;
+  }
+  const today = new Date();
+  let nextAdjustment = new Date(loan.nextRateAdjustment);
+  let currentRate: number | Prisma.Decimal = loan.interestRate;
+  let changed = false;
+
+  for (let i = 0; i < 60 && nextAdjustment <= today; i++) {
+    const indexEntry = await db.indexRate.findFirst({
+      where: { userId: loan.userId, indexName: loan.rateIndex, effectiveDate: { lte: nextAdjustment } },
+      orderBy: { effectiveDate: 'desc' },
+    });
+    if (!indexEntry) break; // no rate logged yet as of that date — leave as-is rather than guess
+    currentRate = Number(indexEntry.rate) + Number(loan.rateMargin);
+    const advanced = new Date(nextAdjustment);
+    advanced.setMonth(advanced.getMonth() + loan.rateAdjustmentMonths);
+    nextAdjustment = advanced;
+    changed = true;
+  }
+
+  if (!changed) return loan;
+  const updated = await db.loan.update({ where: { id: loan.id }, data: { interestRate: currentRate, nextRateAdjustment: nextAdjustment } });
+  return { ...loan, interestRate: updated.interestRate, nextRateAdjustment: updated.nextRateAdjustment };
+}
+
 router.get('/', async (req, res, next) => {
   try {
     const { propertyId, isPersonal, isActive } = req.query;
-    const loans = await db.loan.findMany({
+    const rawLoans = await db.loan.findMany({
       where: {
         userId: req.dbUserId!,
         ...(propertyId ? { propertyId: propertyId as string } : {}),
@@ -95,6 +134,8 @@ router.get('/', async (req, res, next) => {
       },
       orderBy: { createdAt: 'asc' },
     });
+
+    const loans = await Promise.all(rawLoans.map(recalcVariableRate));
 
     const interestAgg = await db.loanPayment.groupBy({
       by: ['loanId'],
@@ -150,15 +191,17 @@ function computeRemainingInterest(l: {
 
 router.get('/:id', async (req, res, next) => {
   try {
-    const loan = await db.loan.findFirst({
+    const rawLoan = await db.loan.findFirst({
       where: { id: req.params.id, userId: req.dbUserId! },
       include: {
         property: { select: { id: true, address: true, nickname: true } },
         loanPayments: { orderBy: { date: 'desc' } },
         utilityAccount: { select: { id: true, providerName: true, category: true } },
+        loanExtensions: { orderBy: { extendedAt: 'desc' } },
       },
     });
-    if (!loan) return res.status(404).json({ error: 'Loan not found' });
+    if (!rawLoan) return res.status(404).json({ error: 'Loan not found' });
+    const loan = await recalcVariableRate(rawLoan);
     res.json({ ...serializeLoan(loan), accountNumber: decryptOptional(loan.accountNumberEnc) });
   } catch (err) { next(err); }
 });
@@ -166,11 +209,12 @@ router.get('/:id', async (req, res, next) => {
 // GET /api/loans/:id/amortization — auto-calculated balance + payoff projection
 router.get('/:id/amortization', async (req, res, next) => {
   try {
-    const loan = await db.loan.findFirst({
+    const rawLoan = await db.loan.findFirst({
       where: { id: req.params.id, userId: req.dbUserId! },
       include: { loanPayments: { orderBy: { date: 'desc' } } },
     });
-    if (!loan) return res.status(404).json({ error: 'Loan not found' });
+    if (!rawLoan) return res.status(404).json({ error: 'Loan not found' });
+    const loan = await recalcVariableRate(rawLoan);
 
     const loanInput = {
       originalAmount: loan.originalAmount != null ? Number(loan.originalAmount) : null,
@@ -183,7 +227,7 @@ router.get('/:id/amortization', async (req, res, next) => {
       paymentType: loan.paymentType,
       balloonPaymentAmount: loan.balloonPaymentAmount != null ? Number(loan.balloonPaymentAmount) : null,
     };
-    const paymentsInput = loan.loanPayments.map(p => ({
+    const paymentsInput = loan.loanPayments.map((p: any) => ({
       date: p.date,
       amount: Number(p.amount),
       principal: p.principal != null ? Number(p.principal) : null,
@@ -198,6 +242,16 @@ router.get('/:id/amortization', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// A newly-set-to-VARIABLE loan needs an initial nextRateAdjustment to
+// anchor its reset cycle to, if the caller didn't provide one explicitly —
+// anchor to the loan's origination date (its natural anniversary), or
+// today if there's no origination date on file.
+function deriveDefaultNextAdjustment(rateAdjustmentMonths: number, originationDate: Date | null | undefined): Date {
+  const anchor = originationDate ? new Date(originationDate) : new Date();
+  anchor.setMonth(anchor.getMonth() + rateAdjustmentMonths);
+  return anchor;
+}
+
 router.post('/', async (req, res, next) => {
   try {
     const data = LoanSchema.parse(req.body);
@@ -206,6 +260,9 @@ router.post('/', async (req, res, next) => {
       if (!prop) return res.status(404).json({ error: 'Property not found' });
     }
     const { propertyId, prepaymentPenaltyJson, accountNumber, ...rest } = data;
+    if (rest.rateType === 'VARIABLE' && rest.nextRateAdjustment == null && rest.rateAdjustmentMonths) {
+      rest.nextRateAdjustment = deriveDefaultNextAdjustment(rest.rateAdjustmentMonths, rest.originationDate);
+    }
     const loan = await db.loan.create({
       data: {
         ...rest,
@@ -226,6 +283,11 @@ router.patch('/:id', async (req, res, next) => {
     const { propertyId, prepaymentPenaltyJson, accountNumber, ...rest } = LoanSchema.partial().parse(req.body);
     const existing = await db.loan.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
     if (!existing) return res.status(404).json({ error: 'Loan not found' });
+    const effectiveRateType = rest.rateType ?? existing.rateType;
+    const effectiveAdjustmentMonths = rest.rateAdjustmentMonths ?? existing.rateAdjustmentMonths;
+    if (effectiveRateType === 'VARIABLE' && rest.nextRateAdjustment === undefined && existing.nextRateAdjustment == null && effectiveAdjustmentMonths) {
+      rest.nextRateAdjustment = deriveDefaultNextAdjustment(effectiveAdjustmentMonths, rest.originationDate ?? existing.originationDate);
+    }
     const loan = await db.loan.update({
       where: { id: req.params.id },
       data: {
@@ -256,6 +318,38 @@ router.delete('/:id', async (req, res, next) => {
     if (!existing) return res.status(404).json({ error: 'Loan not found' });
     await db.loan.delete({ where: { id: req.params.id } });
     res.status(204).send();
+  } catch (err) { next(err); }
+});
+
+const ExtendLoanSchema = z.object({
+  months: z.number().int().positive(),
+  notes: z.string().optional().nullable(),
+});
+
+// POST /api/loans/:id/extend — exercise a maturity-date extension (e.g. a
+// lender-granted option to push the balloon out further). Records an audit
+// row and moves maturityDate forward from whatever it currently is.
+router.post('/:id/extend', async (req, res, next) => {
+  try {
+    const { months, notes } = ExtendLoanSchema.parse(req.body);
+    const existing = await db.loan.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
+    if (!existing) return res.status(404).json({ error: 'Loan not found' });
+    if (!existing.maturityDate) {
+      return res.status(400).json({ error: 'This loan has no maturity date on file to extend from — set one first.' });
+    }
+
+    const previousMaturityDate = existing.maturityDate;
+    const newMaturityDate = new Date(previousMaturityDate);
+    newMaturityDate.setMonth(newMaturityDate.getMonth() + months);
+
+    const [loan] = await db.$transaction([
+      db.loan.update({ where: { id: req.params.id }, data: { maturityDate: newMaturityDate } }),
+      db.loanExtension.create({
+        data: { loanId: req.params.id, months, previousMaturityDate, newMaturityDate, notes: notes || null },
+      }),
+    ]);
+
+    res.json(serializeLoan(loan));
   } catch (err) { next(err); }
 });
 

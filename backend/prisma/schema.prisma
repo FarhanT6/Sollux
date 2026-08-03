@@ -587,12 +587,25 @@ model Loan {
   paymentType            String          @default("PRINCIPAL_AND_INTEREST")
   paymentStructureChangedAt DateTime?     // when paymentType last changed, e.g. converted from P&I to interest-only
   prepaymentPenaltyJson  Json?
+  // Variable-rate structure — e.g. "1% below Prime, resets annually".
+  // rateType FIXED (default) means `interestRate` above is just a static
+  // number entered/edited manually, same as always. rateType VARIABLE means
+  // `interestRate` is instead kept in sync automatically: on each loan's
+  // rate-adjustment anniversary, it's recomputed as (latest known value of
+  // rateIndex from IndexRate) + rateMargin, and nextRateAdjustment advances
+  // by rateAdjustmentMonths. See recalcVariableRate() in routes/loans.ts.
+  rateType               String          @default("FIXED") // 'FIXED' | 'VARIABLE'
+  rateIndex              String?         // e.g. 'PRIME' — must match an IndexRate.indexName
+  rateMargin             Decimal?        @db.Decimal(6, 3) // signed: -1.0 = "1% below index", +2.0 = "2% above index"
+  rateAdjustmentMonths   Int?            // how often the rate resets, e.g. 12 for annual
+  nextRateAdjustment     DateTime?       // next date the rate is due to reset; advances each time it fires
   isPersonal             Boolean         @default(false)
   isActive               Boolean         @default(true)
   createdAt              DateTime        @default(now())
   updatedAt              DateTime        @updatedAt
 
-  loanPayments LoanPayment[]
+  loanPayments   LoanPayment[]
+  loanExtensions LoanExtension[]
 
   @@index([propertyId])
   @@index([userId])
@@ -612,6 +625,41 @@ enum LoanType {
   COMMERCIAL
   HARD_MONEY
   OTHER
+}
+
+// ─── REFERENCE RATE HISTORY ────────────────────────────────
+// User-logged history of a reference rate (e.g. WSJ Prime Rate) over time —
+// Sollux has no live market data feed, so this is manually maintained.
+// Variable-rate loans look up the most recent entry as of their rate-reset
+// date to compute their new interestRate (see Loan.rateIndex/rateMargin).
+model IndexRate {
+  id            String   @id @default(cuid())
+  userId        String
+  indexName     String   // e.g. 'PRIME'
+  rate          Decimal  @db.Decimal(6, 3)
+  effectiveDate DateTime
+  notes         String?
+  createdAt     DateTime @default(now())
+
+  @@index([userId, indexName, effectiveDate])
+  @@map("index_rates")
+}
+
+// Audit trail of maturity-date extensions on a loan — e.g. a lender-granted
+// option to extend a balloon/maturity out further. Each row is one exercised
+// extension; Loan.maturityDate always reflects the current (latest) date.
+model LoanExtension {
+  id                  String   @id @default(cuid())
+  loanId              String
+  loan                Loan     @relation(fields: [loanId], references: [id], onDelete: Cascade)
+  months              Int      // length of this extension, in months
+  previousMaturityDate DateTime?
+  newMaturityDate     DateTime
+  notes               String?
+  extendedAt          DateTime @default(now())
+
+  @@index([loanId])
+  @@map("loan_extensions")
 }
 
 model LoanPayment {

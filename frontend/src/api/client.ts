@@ -28,7 +28,7 @@ import type {
   Property, UtilityAccount, Statement, Payment, AIInsight, DashboardSummary,
   Unit, Tenant, LeaseTenant, Lease, RentPayment, RentNotice, Expense, Loan, LoanPayment,
   InsurancePolicy, TaxAssessment, Improvement, LegalMatter, PropertyPnL, MonthlyPnL,
-  BankAccount, OtherIncome, BudgetSummary, DelinquencyTenant, BudgetForecast,
+  BankAccount, OtherIncome, BudgetSummary, DelinquencyTenant, BudgetForecast, IndexRate,
 } from '../types';
 
 // Dashboard
@@ -145,6 +145,16 @@ export const createLoanPayment = (loanId: string, data: Partial<LoanPayment>) =>
   api.post<LoanPayment>(`/loans/${loanId}/payments`, data).then(r => r.data);
 export const deleteLoanPayment = (loanId: string, paymentId: string) =>
   api.delete(`/loans/${loanId}/payments/${paymentId}`);
+export const extendLoan = (id: string, data: { months: number; notes?: string }) =>
+  api.post<Loan>(`/loans/${id}/extend`, data).then(r => r.data);
+
+// Index rates (e.g. WSJ Prime Rate history, for variable-rate loans)
+export const getIndexRates = (indexName?: string) =>
+  api.get<IndexRate[]>('/index-rates', { params: indexName ? { indexName } : undefined }).then(r => r.data);
+export const createIndexRate = (data: { indexName?: string; rate: number; effectiveDate: string; notes?: string }) =>
+  api.post<IndexRate>('/index-rates', data).then(r => r.data);
+export const deleteIndexRate = (id: string) =>
+  api.delete(`/index-rates/${id}`);
 
 // Insurance
 export const getInsurancePolicies = (params?: { propertyId?: string }) =>

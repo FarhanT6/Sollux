@@ -177,6 +177,25 @@ export interface PrepaymentPenalty {
   tiers: PrepaymentPenaltyTier[];
 }
 
+export interface LoanExtension {
+  id: string;
+  loanId: string;
+  months: number;
+  previousMaturityDate?: string | null;
+  newMaturityDate: string;
+  notes?: string | null;
+  extendedAt: string;
+}
+
+export interface IndexRate {
+  id: string;
+  indexName: string;
+  rate: number;
+  effectiveDate: string;
+  notes?: string | null;
+  createdAt: string;
+}
+
 export interface Loan {
   id: string;
   propertyId?: string;
@@ -197,6 +216,11 @@ export interface Loan {
   gracePeriodDays?: number;
   paymentType?: string;
   paymentStructureChangedAt?: string | null;
+  rateType?: 'FIXED' | 'VARIABLE';
+  rateIndex?: string | null;
+  rateMargin?: number | null; // signed: -1.0 = "1% below index", +2.0 = "2% above index"
+  rateAdjustmentMonths?: number | null;
+  nextRateAdjustment?: string | null;
   prepaymentPenaltyJson?: PrepaymentPenalty | null;
   notes?: string;
   isPersonal: boolean;
@@ -204,6 +228,7 @@ export interface Loan {
   createdAt: string;
   property?: Pick<Property, 'id' | 'address' | 'nickname'>;
   loanPayments?: LoanPayment[];
+  loanExtensions?: LoanExtension[];
   interestPaidToDate?: number;
   totalInterestLifetime?: number | null;
 }
