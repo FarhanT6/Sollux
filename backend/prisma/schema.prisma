@@ -85,6 +85,8 @@ model Property {
   taxAssessments  TaxAssessment[]
   improvements    Improvement[]
   legalMatters    LegalMatter[]
+  reconciliationProfiles ReconciliationProfile[]
+  documents        Document[]
 
   @@index([userId, state])
   @@map("properties")
@@ -660,6 +662,90 @@ model LoanExtension {
 
   @@index([loanId])
   @@map("loan_extensions")
+}
+
+// ─── RECONCILIATION STATEMENTS ──────────────────────────────
+// For a third party (e.g. a property manager) who nets multiple things
+// together in one monthly statement — collects rent for a property they
+// manage, deducts their management fee, and also collects payments on
+// unrelated loans on the owner's behalf. A profile is the reusable mapping
+// (which lease's rent, which loans, which expense category); a statement is
+// one month's actual numbers against that mapping. Applying a statement
+// creates the real RentPayment/LoanPayment/Expense records it represents.
+model ReconciliationProfile {
+  id                     String   @id @default(cuid())
+  userId                 String
+  name                   String   // e.g. "Monty James"
+  propertyId             String?
+  property               Property? @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  leaseId                String?  // which lease's rent this collector remits, if any
+  managementFeeCategory  String?  // ExpenseCategory string, if this profile deducts a mgmt fee
+  loanIds                Json     // string[] of Loan ids this profile also collects payments for
+  notes                  String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  statements ReconciliationStatement[]
+
+  @@index([userId])
+  @@map("reconciliation_profiles")
+}
+
+model ReconciliationStatement {
+  id               String                @id @default(cuid())
+  userId           String
+  profileId        String
+  profile          ReconciliationProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  statementDate    DateTime
+  documentS3Key    String?
+  documentUrl      String?
+  lineItems        Json                  // [{ type: 'RENT'|'LOAN_PAYMENT'|'EXPENSE'|'OTHER', targetId, targetLabel, description, amount, direction: 'CREDIT'|'DEBIT' }]
+  netAmount        Decimal               @db.Decimal(12, 2)
+  status           String                @default("DRAFT") // DRAFT | APPLIED
+  appliedAt        DateTime?
+  createdRecordIds Json?                 // { rentPaymentIds: [], loanPaymentIds: [], expenseIds: [] } — for traceability
+  notes            String?
+  createdAt        DateTime              @default(now())
+
+  @@index([userId, profileId])
+  @@map("reconciliation_statements")
+}
+
+// ─── SCANNED / DIGITIZED DOCUMENTS ──────────────────────────────────────────
+// Generic per-property document store — phone scans, printer imports, or
+// plain uploads (bills, taxes, insurance, HOA, legal, misc mail) that don't
+// belong to one of the more specific record types above. Auto-sort tries to
+// point linkedType/linkedId at the record it matches; DocumentCategory.OTHER
+// with no link is the fallback "Documents" bucket.
+model Document {
+  id           String           @id @default(cuid())
+  userId       String
+  propertyId   String?
+  property     Property?        @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  category     DocumentCategory @default(OTHER)
+  title        String
+  s3Key        String
+  s3Url        String?
+  pageCount    Int              @default(1)
+  sourceType   String           @default("SCAN") // SCAN | UPLOAD
+  linkedType   String?          // 'Expense' | 'InsurancePolicy' | 'TaxAssessment' | 'UtilityAccount'
+  linkedId     String?
+  notes        String?
+  createdAt    DateTime         @default(now())
+
+  @@index([userId, propertyId])
+  @@map("documents")
+}
+
+enum DocumentCategory {
+  UTILITY
+  INSURANCE
+  TAX
+  LEGAL
+  HOA
+  EXPENSE_RECEIPT
+  LEASE
+  OTHER
 }
 
 model LoanPayment {

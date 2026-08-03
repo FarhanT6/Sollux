@@ -177,6 +177,87 @@ export interface PrepaymentPenalty {
   tiers: PrepaymentPenaltyTier[];
 }
 
+export interface ReconciliationLineItem {
+  type: 'RENT' | 'LOAN_PAYMENT' | 'EXPENSE' | 'OTHER';
+  targetId?: string | null;
+  targetLabel?: string | null;
+  description?: string | null;
+  amount: number;
+  direction: 'CREDIT' | 'DEBIT';
+}
+
+export interface ReconciliationProfile {
+  id: string;
+  name: string;
+  propertyId?: string | null;
+  property?: Pick<Property, 'id' | 'address' | 'nickname'> | null;
+  leaseId?: string | null;
+  managementFeeCategory?: string | null;
+  loanIds: string[];
+  notes?: string | null;
+  createdAt: string;
+}
+
+export interface ReconciliationStatement {
+  id: string;
+  profileId: string;
+  profile?: { id: string; name: string };
+  statementDate: string;
+  documentS3Key?: string | null;
+  documentUrl?: string | null;
+  lineItems: ReconciliationLineItem[];
+  netAmount: number;
+  status: 'DRAFT' | 'APPLIED';
+  appliedAt?: string | null;
+  createdRecordIds?: { rentPaymentIds: string[]; loanPaymentIds: string[]; expenseIds: string[] } | null;
+  notes?: string | null;
+  createdAt: string;
+}
+
+export type DocumentCategory =
+  | 'UTILITY' | 'INSURANCE' | 'TAX' | 'LEGAL' | 'HOA' | 'EXPENSE_RECEIPT' | 'LEASE' | 'OTHER';
+
+export interface Document {
+  id: string;
+  propertyId?: string | null;
+  property?: Pick<Property, 'id' | 'address' | 'nickname'> | null;
+  category: DocumentCategory;
+  title: string;
+  s3Key: string;
+  s3Url?: string | null;
+  pageCount: number;
+  sourceType: string;
+  linkedType?: string | null;
+  linkedId?: string | null;
+  notes?: string | null;
+  createdAt: string;
+}
+
+export interface DocumentClassification {
+  category: DocumentCategory;
+  title: string;
+  address: string | null;
+  vendor: string | null;
+  documentDate: string | null;
+}
+
+export interface DocumentMatch {
+  confidence: 'high' | 'medium' | 'low' | 'none';
+  propertyId: string | null;
+  propertyName: string | null;
+}
+
+export const DOCUMENT_CATEGORY_LABELS: Record<DocumentCategory, string> = {
+  UTILITY: 'Utility',
+  INSURANCE: 'Insurance',
+  TAX: 'Tax',
+  LEGAL: 'Legal',
+  HOA: 'HOA',
+  EXPENSE_RECEIPT: 'Expense receipt',
+  LEASE: 'Lease',
+  OTHER: 'Other / Misc',
+};
+
 export interface LoanExtension {
   id: string;
   loanId: string;

@@ -29,6 +29,8 @@ import type {
   Unit, Tenant, LeaseTenant, Lease, RentPayment, RentNotice, Expense, Loan, LoanPayment,
   InsurancePolicy, TaxAssessment, Improvement, LegalMatter, PropertyPnL, MonthlyPnL,
   BankAccount, OtherIncome, BudgetSummary, DelinquencyTenant, BudgetForecast, IndexRate,
+  ReconciliationProfile, ReconciliationStatement, ReconciliationLineItem,
+  Document, DocumentClassification, DocumentMatch, DocumentCategory,
 } from '../types';
 
 // Dashboard
@@ -147,6 +149,46 @@ export const deleteLoanPayment = (loanId: string, paymentId: string) =>
   api.delete(`/loans/${loanId}/payments/${paymentId}`);
 export const extendLoan = (id: string, data: { months: number; notes?: string }) =>
   api.post<Loan>(`/loans/${id}/extend`, data).then(r => r.data);
+
+// Reconciliation (e.g. a property manager who nets rent, a management fee,
+// and unrelated loan payments together in one monthly statement)
+export const getReconciliationProfiles = () =>
+  api.get<ReconciliationProfile[]>('/reconciliation/profiles').then(r => r.data);
+export const createReconciliationProfile = (data: Partial<ReconciliationProfile>) =>
+  api.post<ReconciliationProfile>('/reconciliation/profiles', data).then(r => r.data);
+export const updateReconciliationProfile = (id: string, data: Partial<ReconciliationProfile>) =>
+  api.patch<ReconciliationProfile>(`/reconciliation/profiles/${id}`, data).then(r => r.data);
+export const deleteReconciliationProfile = (id: string) =>
+  api.delete(`/reconciliation/profiles/${id}`);
+export const getReconciliationStatements = (profileId?: string) =>
+  api.get<ReconciliationStatement[]>('/reconciliation/statements', { params: profileId ? { profileId } : undefined }).then(r => r.data);
+export const createReconciliationStatement = (data: {
+  profileId: string; statementDate: string; lineItems: ReconciliationLineItem[]; notes?: string;
+}) => api.post<ReconciliationStatement>('/reconciliation/statements', data).then(r => r.data);
+export const uploadReconciliationDocument = (statementId: string, fileData: string, filename: string) =>
+  api.post<ReconciliationStatement>(`/reconciliation/statements/${statementId}/document`, { fileData, filename }).then(r => r.data);
+export const applyReconciliationStatement = (id: string) =>
+  api.post<ReconciliationStatement>(`/reconciliation/statements/${id}/apply`).then(r => r.data);
+export const deleteReconciliationStatement = (id: string) =>
+  api.delete(`/reconciliation/statements/${id}`);
+
+// Scanned/digitized documents (phone scans, printer imports — auto-sorted mail)
+export const getDocuments = (params?: { propertyId?: string; category?: DocumentCategory }) =>
+  api.get<Document[]>('/scanned-documents', { params }).then(r => r.data);
+export const analyzeScannedDocument = (fileData: string) =>
+  api.post<{
+    classified: DocumentClassification;
+    match: DocumentMatch;
+    properties: { id: string; address: string; nickname?: string }[];
+  }>('/scanned-documents/analyze', { fileData }).then(r => r.data);
+export const confirmScannedDocument = (data: {
+  fileData: string; filename?: string; propertyId?: string | null;
+  category: DocumentCategory; title: string; pageCount: number; notes?: string;
+}) => api.post<Document>('/scanned-documents', data).then(r => r.data);
+export const getDocumentUrl = (id: string) =>
+  api.get<{ url: string }>(`/scanned-documents/${id}/url`).then(r => r.data.url);
+export const deleteDocument = (id: string) =>
+  api.delete(`/scanned-documents/${id}`);
 
 // Index rates (e.g. WSJ Prime Rate history, for variable-rate loans)
 export const getIndexRates = (indexName?: string) =>

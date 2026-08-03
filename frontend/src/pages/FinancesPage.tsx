@@ -4,14 +4,16 @@ import PnLPage from './PnLPage';
 import BudgetPage from './BudgetPage';
 import LoansPage from './LoansPage';
 import ExpensesPage from './ExpensesPage';
+import ReconciliationPage from './ReconciliationPage';
 
-type Tab = 'pnl' | 'budget' | 'loans' | 'expenses';
+type Tab = 'pnl' | 'budget' | 'loans' | 'expenses' | 'reconciliation';
 
 const TABS: { key: Tab; label: string }[] = [
-  { key: 'pnl',      label: 'P&L'      },
-  { key: 'budget',   label: 'Budget'   },
-  { key: 'loans',    label: 'Loans'    },
-  { key: 'expenses', label: 'Expenses' },
+  { key: 'pnl',            label: 'P&L'            },
+  { key: 'budget',         label: 'Budget'         },
+  { key: 'loans',          label: 'Loans'          },
+  { key: 'expenses',       label: 'Expenses'       },
+  { key: 'reconciliation', label: 'Reconciliation' },
 ];
 
 export default function FinancesPage() {
@@ -23,10 +25,11 @@ export default function FinancesPage() {
   }
 
   const subtitles: Record<Tab, string> = {
-    pnl:      'Net operating income and cash flow by property',
-    budget:   'Monthly cash position, rent collection, and delinquency',
-    loans:    'Mortgages, HELOCs, and installment plans',
-    expenses: 'Operating and capital expenditures across all properties',
+    pnl:            'Net operating income and cash flow by property',
+    budget:         'Monthly cash position, rent collection, and delinquency',
+    loans:          'Mortgages, HELOCs, and installment plans',
+    expenses:       'Operating and capital expenditures across all properties',
+    reconciliation: 'Monthly statements from managers/collectors who net rent, fees, and loan payments together',
   };
 
   return (
@@ -54,6 +57,7 @@ export default function FinancesPage() {
         {tab === 'budget'   && <BudgetPage embedded />}
         {tab === 'loans'    && <LoansPage embedded />}
         {tab === 'expenses' && <ExpensesPage embedded />}
+        {tab === 'reconciliation' && <ReconciliationPage embedded />}
       </div>
     </div>
   );
