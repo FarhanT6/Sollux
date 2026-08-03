@@ -159,8 +159,9 @@ export default function ScanPage() {
         pageCount: pages.length,
       });
       setStep('saved');
-    } catch {
-      setError('Failed to save the document. Please try again.');
+    } catch (e: any) {
+      const detail = e?.response?.data?.error || e?.response?.status || e?.message;
+      setError(detail ? `Failed to save the document: ${detail}` : 'Failed to save the document. Please try again.');
     } finally {
       setSaving(false);
     }
