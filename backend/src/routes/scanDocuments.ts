@@ -19,7 +19,7 @@ router.get('/', async (req, res, next) => {
     const documents = await db.document.findMany({
       where: {
         userId: req.dbUserId!,
-        ...(propertyId ? { propertyId: propertyId as string } : {}),
+        ...(propertyId === 'none' ? { propertyId: null } : propertyId ? { propertyId: propertyId as string } : {}),
         ...(category ? { category: category as any } : {}),
       },
       include: { property: { select: { id: true, address: true, nickname: true } } },
