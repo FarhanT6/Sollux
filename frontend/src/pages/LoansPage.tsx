@@ -111,6 +111,8 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
   const [properties, setProperties] = useState<Property[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [propertyFilter, setPropertyFilter] = useState('');
+  const [sortBy, setSortBy] = useState<'lender' | 'balance' | 'maturity' | 'rate'>('lender');
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
     propertyId: '', loanType: 'MORTGAGE' as LoanType,
@@ -156,11 +158,27 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
   }
 
   const searchLower = search.toLowerCase();
-  const displayedLoans = !searchLower ? loans : loans.filter(l =>
-    l.lender.toLowerCase().includes(searchLower) ||
-    (l.property?.nickname || '').toLowerCase().includes(searchLower) ||
-    (l.property?.address || '').toLowerCase().includes(searchLower)
-  );
+  const displayedLoans = loans
+    .filter(l => !searchLower ||
+      l.lender.toLowerCase().includes(searchLower) ||
+      (l.property?.nickname || '').toLowerCase().includes(searchLower) ||
+      (l.property?.address || '').toLowerCase().includes(searchLower)
+    )
+    .filter(l => !propertyFilter || l.propertyId === propertyFilter)
+    .sort((a, b) => {
+      // Closed/inactive loans always sink to the bottom, regardless of sort.
+      if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
+      switch (sortBy) {
+        case 'balance':  return Number(b.currentBalance ?? 0) - Number(a.currentBalance ?? 0);
+        case 'maturity': {
+          const am = a.maturityDate ? new Date(a.maturityDate).getTime() : Infinity;
+          const bm = b.maturityDate ? new Date(b.maturityDate).getTime() : Infinity;
+          return am - bm;
+        }
+        case 'rate': return Number(b.interestRate ?? 0) - Number(a.interestRate ?? 0);
+        default:     return a.lender.localeCompare(b.lender);
+      }
+    });
 
   const activeLoans = loans.filter(l => l.isActive && !l.isPersonal);
   const totalDebt = activeLoans.reduce((s, l) => s + Number(l.currentBalance ?? 0), 0);
@@ -215,6 +233,18 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
                 />
                 {search && <button onClick={() => setSearch('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 text-xs leading-none">×</button>}
               </div>
+              <select value={propertyFilter} onChange={e => setPropertyFilter(e.target.value)}
+                className="text-xs px-2.5 py-1.5 rounded-lg bg-white/5 border border-white/10 text-white outline-none">
+                <option value="">All properties</option>
+                {properties.map(p => <option key={p.id} value={p.id}>{p.nickname || p.address}</option>)}
+              </select>
+              <select value={sortBy} onChange={e => setSortBy(e.target.value as typeof sortBy)}
+                className="text-xs px-2.5 py-1.5 rounded-lg bg-white/5 border border-white/10 text-white outline-none">
+                <option value="lender">Sort: Lender</option>
+                <option value="balance">Sort: Balance (high–low)</option>
+                <option value="maturity">Sort: Maturity (soonest first)</option>
+                <option value="rate">Sort: Rate (high–low)</option>
+              </select>
             </div>
             <button onClick={() => setShowForm(v => !v)} className="btn text-xs">
               {showForm ? 'Cancel' : '+ Add loan'}

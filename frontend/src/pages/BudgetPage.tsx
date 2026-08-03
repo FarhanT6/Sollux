@@ -4,6 +4,7 @@ import {
   getBudgetMonthly, getBudgetDelinquency, getBudgetForecast,
   getBankAccounts, createBankAccount, updateBankAccount, deleteBankAccount, recordBankBalance,
   createOtherIncome, deleteOtherIncome, updateLease,
+  createRentPayment, createLoanPayment,
 } from '../api/client';
 import type {
   BudgetSummary, BankAccount, DelinquencyTenant, OtherIncome,
@@ -166,7 +167,7 @@ export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
       ) : (
         <>
           {activeTab === 'overview' && budget && (
-            <OverviewTab budget={budget} />
+            <OverviewTab budget={budget} onChanged={load} />
           )}
           {activeTab === 'delinquency' && delinquency && (
             <DelinquencyTab data={delinquency} onChanged={load} />
@@ -222,14 +223,16 @@ export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
 
 // ─── Overview Tab ─────────────────────────────────────────
 
-function OverviewTab({ budget }: { budget: BudgetSummary }) {
+function OverviewTab({ budget, onChanged }: { budget: BudgetSummary; onChanged: () => void }) {
   const { rent, mortgages, utilities } = budget;
+  const [logMortgage, setLogMortgage] = useState<import('../types').BudgetMortgageRow | null>(null);
+
   return (
     <div className="space-y-6">
       {/* Rent collection by property */}
       <Section title="Rent Collection" badge={`${fmt(rent.collected)} / ${fmt(rent.expected)}`}>
         <ProgressBar value={rent.collected} total={rent.expected} color="emerald" />
-        <RentCollectionTable rows={rent.rows} outstanding={rent.outstanding} expected={rent.expected} collected={rent.collected} />
+        <RentCollectionTable rows={rent.rows} outstanding={rent.outstanding} expected={rent.expected} collected={rent.collected} onChanged={onChanged} />
       </Section>
 
       {/* Mortgages */}
@@ -244,12 +247,15 @@ function OverviewTab({ budget }: { budget: BudgetSummary }) {
                 <th className="text-right pb-2">Monthly</th>
                 <th className="text-right pb-2">Paid</th>
                 <th className="text-left pb-2 pl-3">Status</th>
+                <th className="text-right pb-2"></th>
               </tr>
             </thead>
             <tbody>
               {mortgages.rows.map(row => (
                 <tr key={row.loanId} className="border-b border-white/5 hover:bg-white/2">
-                  <td className="py-2 text-white">{row.lender}</td>
+                  <td className="py-2 text-white">
+                    <Link to={`/loans/${row.loanId}`} className="hover:text-amber-400">{row.lender}</Link>
+                  </td>
                   <td className="py-2 text-gray-400">{row.property}</td>
                   <td className="py-2 text-right text-gray-300">{fmt(row.monthlyPayment)}</td>
                   <td className="py-2 text-right text-emerald-500">{row.paid > 0 ? fmt(row.paid) : '—'}</td>
@@ -260,6 +266,11 @@ function OverviewTab({ budget }: { budget: BudgetSummary }) {
                         : 'bg-red-900/50 text-red-500'
                     }`}>{row.status}</span>
                   </td>
+                  <td className="py-2 text-right">
+                    {row.status !== 'paid' && (
+                      <button onClick={() => setLogMortgage(row)} className="text-xs text-amber-400 hover:text-amber-300">Log payment</button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -269,11 +280,20 @@ function OverviewTab({ budget }: { budget: BudgetSummary }) {
                 <td className="pt-2 text-right">{fmt(mortgages.total)}</td>
                 <td className="pt-2 text-right text-emerald-500">{fmt(mortgages.paid)}</td>
                 <td className="pt-2 pl-3 text-red-500">{mortgages.unpaid > 0 ? `${fmt(mortgages.unpaid)} left` : '✓'}</td>
+                <td />
               </tr>
             </tfoot>
           </table>
         </div>
       </Section>
+
+      {logMortgage && (
+        <LogMortgagePaymentModal
+          row={logMortgage}
+          onClose={() => setLogMortgage(null)}
+          onSaved={() => { setLogMortgage(null); onChanged(); }}
+        />
+      )}
 
       {/* Utility bills */}
       <Section title="Utility Bills" badge={`${fmt(utilities.paid)} paid of ${fmt(utilities.total)}`}>
@@ -346,12 +366,14 @@ function OverviewTab({ budget }: { budget: BudgetSummary }) {
 const RENT_STATUS_FILTERS = ['all', 'paid', 'partial', 'unpaid'] as const;
 type RentStatusFilter = typeof RENT_STATUS_FILTERS[number];
 
-function RentCollectionTable({ rows, outstanding, expected, collected }: {
+function RentCollectionTable({ rows, outstanding, expected, collected, onChanged }: {
   rows: import('../types').BudgetRentRow[];
   outstanding: number; expected: number; collected: number;
+  onChanged: () => void;
 }) {
   const [propertyFilter, setPropertyFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState<RentStatusFilter>('all');
+  const [logRent, setLogRent] = useState<import('../types').BudgetRentRow | null>(null);
 
   const properties = useMemo(() => {
     const seen = new Map<string, string>();
@@ -414,6 +436,7 @@ function RentCollectionTable({ rows, outstanding, expected, collected }: {
               <th className="text-right pb-2">Remaining</th>
               <th className="text-right pb-2">Arrears</th>
               <th className="text-left pb-2 pl-3">Status</th>
+              <th className="text-right pb-2"></th>
             </tr>
           </thead>
           <tbody>
@@ -438,6 +461,11 @@ function RentCollectionTable({ rows, outstanding, expected, collected }: {
                     {row.status}
                   </span>
                 </td>
+                <td className="py-2 text-right">
+                  {row.status !== 'paid' && (
+                    <button onClick={() => setLogRent(row)} className="text-xs text-amber-400 hover:text-amber-300">Log payment</button>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -449,6 +477,7 @@ function RentCollectionTable({ rows, outstanding, expected, collected }: {
               <td className="pt-2 text-right text-amber-500">{(filtered ? totalRemaining : outstanding) > 0 ? fmt(filtered ? totalRemaining : outstanding) : '—'}</td>
               <td className="pt-2 text-right text-red-500">{fmt(totalArrears)}</td>
               <td />
+              <td />
             </tr>
           </tfoot>
         </table>
@@ -456,6 +485,14 @@ function RentCollectionTable({ rows, outstanding, expected, collected }: {
           <p className="text-center text-gray-500 py-8">No tenants match the current filters.</p>
         )}
       </div>
+
+      {logRent && (
+        <LogRentPaymentModal
+          row={logRent}
+          onClose={() => setLogRent(null)}
+          onSaved={() => { setLogRent(null); onChanged(); }}
+        />
+      )}
     </div>
   );
 }
@@ -838,6 +875,96 @@ function ScoreBar({ score }: { score: number }) {
 }
 
 // ─── Modals ───────────────────────────────────────────────
+
+function LogRentPaymentModal({ row, onClose, onSaved }: {
+  row: import('../types').BudgetRentRow; onClose: () => void; onSaved: () => void;
+}) {
+  const [amount, setAmount] = useState(String(row.remaining > 0 ? row.remaining : row.expected));
+  const [paidDate, setPaidDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [method, setMethod] = useState('ZELLE');
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    if (!amount) return;
+    setSaving(true);
+    try {
+      const now = new Date();
+      await createRentPayment({
+        leaseId: row.leaseId,
+        periodDate: new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1)).toISOString(),
+        amount: parseFloat(amount),
+        paidDate,
+        method,
+        notes: notes || undefined,
+      });
+      onSaved();
+    } finally { setSaving(false); }
+  }
+
+  return (
+    <ModalShell title={`Log payment — ${row.tenant}`} onClose={onClose}>
+      <p className="text-xs text-gray-500 mb-3">{row.unit} · {row.property}</p>
+      <label className="field-label">Amount *</label>
+      <input type="number" value={amount} onChange={e => setAmount(e.target.value)} className="field-input mb-3 w-full" />
+      <label className="field-label">Paid date</label>
+      <input type="date" value={paidDate} onChange={e => setPaidDate(e.target.value)} className="field-input mb-3 w-full" />
+      <label className="field-label">Method</label>
+      <select value={method} onChange={e => setMethod(e.target.value)} className="field-input mb-3 w-full">
+        {['ZELLE','CHECK','CASH','ACH','MONEY_ORDER','OTHER'].map(m => <option key={m} value={m}>{m}</option>)}
+      </select>
+      <label className="field-label">Notes</label>
+      <input value={notes} onChange={e => setNotes(e.target.value)} className="field-input mb-4 w-full" />
+      <div className="flex justify-end gap-2">
+        <button onClick={onClose} className="btn-ghost px-4 py-2 text-sm">Cancel</button>
+        <button disabled={!amount || saving} onClick={handleSave} className="btn-primary px-4 py-2 text-sm disabled:opacity-50">
+          {saving ? 'Saving…' : 'Log payment'}
+        </button>
+      </div>
+    </ModalShell>
+  );
+}
+
+function LogMortgagePaymentModal({ row, onClose, onSaved }: {
+  row: import('../types').BudgetMortgageRow; onClose: () => void; onSaved: () => void;
+}) {
+  const [amount, setAmount] = useState(String(row.monthlyPayment));
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    if (!amount) return;
+    setSaving(true);
+    try {
+      await createLoanPayment(row.loanId, {
+        date,
+        amount: parseFloat(amount),
+        status: 'PAID',
+        notes: notes || undefined,
+      });
+      onSaved();
+    } finally { setSaving(false); }
+  }
+
+  return (
+    <ModalShell title={`Log payment — ${row.lender}`} onClose={onClose}>
+      <p className="text-xs text-gray-500 mb-3">{row.property}</p>
+      <label className="field-label">Amount *</label>
+      <input type="number" value={amount} onChange={e => setAmount(e.target.value)} className="field-input mb-3 w-full" />
+      <label className="field-label">Paid date</label>
+      <input type="date" value={date} onChange={e => setDate(e.target.value)} className="field-input mb-3 w-full" />
+      <label className="field-label">Notes</label>
+      <input value={notes} onChange={e => setNotes(e.target.value)} className="field-input mb-4 w-full" />
+      <div className="flex justify-end gap-2">
+        <button onClick={onClose} className="btn-ghost px-4 py-2 text-sm">Cancel</button>
+        <button disabled={!amount || saving} onClick={handleSave} className="btn-primary px-4 py-2 text-sm disabled:opacity-50">
+          {saving ? 'Saving…' : 'Log payment'}
+        </button>
+      </div>
+    </ModalShell>
+  );
+}
 
 function AddBankModal({ onClose, onSave }: { onClose: () => void; onSave: (data: any) => Promise<void> }) {
   const [form, setForm] = useState({ name: '', last4: '', bank: '', accountType: 'CHECKING' as BankAccountType, notes: '' });
