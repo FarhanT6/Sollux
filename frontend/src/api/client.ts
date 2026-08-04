@@ -189,6 +189,17 @@ export const getDocumentUrl = (id: string) =>
   api.get<{ url: string }>(`/scanned-documents/${id}/url`).then(r => r.data.url);
 
 // Reports (Rent Roll / T-12 xlsx exports, generated from real Sollux data)
+export const RENT_ROLL_COLUMNS: { key: string; label: string }[] = [
+  { key: 'bdba', label: 'BD/BA' },
+  { key: 'status', label: 'Status' },
+  { key: 'moveIn', label: 'Move-in Date' },
+  { key: 'periodStart', label: 'Period Start' },
+  { key: 'periodEnd', label: 'Period End' },
+  { key: 'agreementType', label: 'Agreement Type' },
+  { key: 'rent', label: 'Monthly Rent ($)' },
+  { key: 'deposit', label: 'Deposits Held ($)' },
+];
+
 async function downloadReport(path: string, filename: string) {
   const res = await api.get(path, { responseType: 'blob' });
   const url = URL.createObjectURL(res.data as Blob);
@@ -200,10 +211,18 @@ async function downloadReport(path: string, filename: string) {
   a.remove();
   URL.revokeObjectURL(url);
 }
-export const downloadRentRoll = (propertyId: string, propertyName: string) =>
-  downloadReport(`/reports/rent-roll/${propertyId}`, `Rent Roll - ${propertyName}.xlsx`);
-export const downloadT12 = (propertyId: string, propertyName: string) =>
-  downloadReport(`/reports/t12/${propertyId}`, `T12 - ${propertyName}.xlsx`);
+export const downloadRentRoll = (propertyId: string, propertyName: string, columns?: string[]) =>
+  downloadReport(
+    `/reports/rent-roll/${propertyId}${columns ? `?columns=${encodeURIComponent(columns.join(','))}` : ''}`,
+    `Rent Roll - ${propertyName}.xlsx`,
+  );
+export const downloadT12 = (propertyId: string, propertyName: string, rows?: string[]) =>
+  downloadReport(
+    `/reports/t12/${propertyId}${rows ? `?rows=${encodeURIComponent(rows.join(','))}` : ''}`,
+    `T12 - ${propertyName}.xlsx`,
+  );
+export const getT12Manifest = (propertyId: string) =>
+  api.get<{ incomeRows: string[]; expenseRows: string[] }>(`/reports/t12/${propertyId}/manifest`).then(r => r.data);
 export const deleteDocument = (id: string) =>
   api.delete(`/scanned-documents/${id}`);
 

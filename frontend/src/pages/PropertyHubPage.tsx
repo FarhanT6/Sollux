@@ -11,6 +11,7 @@ import {
   updateLease, updateProperty, lookupPropertyByAddress,
   createLease, getTenants, createTenant, getUnits, createUnit,
   getDocuments, getDocumentUrl, deleteDocument, downloadRentRoll, downloadT12,
+  getT12Manifest, RENT_ROLL_COLUMNS,
 } from '../api/client';
 import type {
   Property, Lease, Loan, Expense, InsurancePolicy, TaxAssessment,
@@ -43,6 +44,7 @@ export default function PropertyHubPage() {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [pnl, setPnl] = useState<PropertyPnL | null>(null);
   const [showEditProperty, setShowEditProperty] = useState(false);
+  const [exportModal, setExportModal] = useState<'rentroll' | 't12' | null>(null);
 
   const loaded = useRef<Set<Tab>>(new Set());
 
@@ -133,12 +135,12 @@ export default function PropertyHubPage() {
                 </span>
               )}
               <button
-                onClick={() => downloadRentRoll(property.id, property.nickname || property.address)}
+                onClick={() => setExportModal('rentroll')}
                 className="btn text-xs ml-1"
                 title="Export a Rent Roll workbook (unit, lease, and rent data)"
               >Rent Roll</button>
               <button
-                onClick={() => downloadT12(property.id, property.nickname || property.address)}
+                onClick={() => setExportModal('t12')}
                 className="btn text-xs"
                 title="Export a trailing-12-month operating statement"
               >T-12</button>
@@ -194,6 +196,121 @@ export default function PropertyHubPage() {
       {showEditProperty && (
         <PropertyEditModal property={property} onClose={() => setShowEditProperty(false)} onSave={setProperty} />
       )}
+      {exportModal && (
+        <ReportExportModal
+          kind={exportModal}
+          propertyId={property.id}
+          propertyName={property.nickname || property.address}
+          onClose={() => setExportModal(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Report export modal (choose columns/rows before downloading) ───────────
+
+function ReportExportModal({ kind, propertyId, propertyName, onClose }: {
+  kind: 'rentroll' | 't12'; propertyId: string; propertyName: string; onClose: () => void;
+}) {
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [manifestLoaded, setManifestLoaded] = useState(kind === 'rentroll');
+  const [downloading, setDownloading] = useState(false);
+
+  const rentRollOptions = RENT_ROLL_COLUMNS;
+  const [t12IncomeRows, setT12IncomeRows] = useState<string[]>([]);
+  const [t12ExpenseRows, setT12ExpenseRows] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (kind === 'rentroll') {
+      setSelected(new Set(rentRollOptions.map(c => c.key)));
+      return;
+    }
+    getT12Manifest(propertyId).then(m => {
+      setT12IncomeRows(m.incomeRows);
+      setT12ExpenseRows(m.expenseRows);
+      setSelected(new Set([...m.incomeRows, ...m.expenseRows]));
+      setManifestLoaded(true);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind, propertyId]);
+
+  function toggle(key: string) {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }
+
+  async function handleExport() {
+    setDownloading(true);
+    try {
+      if (kind === 'rentroll') {
+        await downloadRentRoll(propertyId, propertyName, [...selected]);
+      } else {
+        // Income rows (Rents Collected, GROSS INCOME, NET INCOME) are always part of
+        // the statement's structure — only expense line items are actually optional.
+        const rows = t12ExpenseRows.filter(r => selected.has(r));
+        await downloadT12(propertyId, propertyName, rows);
+      }
+      onClose();
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="w-full max-w-md rounded-2xl p-6 max-h-[85vh] overflow-y-auto" style={{ background: '#1a1a1a', border: '1px solid rgba(255,255,255,0.1)' }}>
+        <div className="flex justify-between items-center mb-1">
+          <h3 className="text-lg font-semibold text-white">{kind === 'rentroll' ? 'Export Rent Roll' : 'Export T-12'}</h3>
+          <button onClick={onClose} className="text-gray-500 hover:text-white text-xl leading-none">×</button>
+        </div>
+        <p className="text-xs text-gray-500 mb-4">Choose what to include.</p>
+
+        {!manifestLoaded ? (
+          <p className="text-sm text-gray-500 py-6 text-center">Loading…</p>
+        ) : kind === 'rentroll' ? (
+          <div className="space-y-1.5 mb-5">
+            {rentRollOptions.map(c => (
+              <label key={c.key} className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer px-1 py-1 hover:bg-white/5 rounded">
+                <input type="checkbox" checked={selected.has(c.key)} onChange={() => toggle(c.key)} />
+                {c.label}
+              </label>
+            ))}
+          </div>
+        ) : (
+          <div className="mb-5">
+            <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">Income (always included)</p>
+            <div className="space-y-1 mb-3">
+              {t12IncomeRows.map(label => (
+                <p key={label} className="text-sm text-gray-500 px-1 py-1">{label}</p>
+              ))}
+            </div>
+            <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">Expenses</p>
+            {t12ExpenseRows.length === 0 ? (
+              <p className="text-xs text-gray-600 px-1">No expense data in the trailing 12 months.</p>
+            ) : (
+              <div className="space-y-1">
+                {t12ExpenseRows.map(label => (
+                  <label key={label} className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer px-1 py-1 hover:bg-white/5 rounded">
+                    <input type="checkbox" checked={selected.has(label)} onChange={() => toggle(label)} />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="btn-ghost px-4 py-2 text-sm">Cancel</button>
+          <button disabled={downloading || !manifestLoaded} onClick={handleExport} className="btn-primary px-4 py-2 text-sm disabled:opacity-50">
+            {downloading ? 'Exporting…' : 'Export'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
