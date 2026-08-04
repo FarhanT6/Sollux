@@ -1,8 +1,13 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { format } from 'date-fns';
 import { PageHeader } from '../components/ui';
 import { loadOpenCv } from '../lib/opencvLoader';
-import { analyzeScannedDocument, confirmScannedDocument } from '../api/client';
-import type { DocumentCategory, DocumentClassification, DocumentMatch } from '../types';
+import {
+  analyzeScannedDocument, confirmScannedDocument,
+  getDocuments, getDocumentUrl, deleteDocument, getProperties,
+} from '../api/client';
+import type { DocumentCategory, DocumentClassification, DocumentMatch, Document, Property } from '../types';
 import { DOCUMENT_CATEGORY_LABELS } from '../types';
 
 type Corners = {
@@ -20,6 +25,9 @@ interface ScannedPage {
 type Step = 'capture' | 'analyzing' | 'review' | 'saved';
 
 export default function ScanPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const mainTab = (searchParams.get('tab') as 'capture' | 'library') || 'capture';
+
   const [pages, setPages] = useState<ScannedPage[]>([]);
   const [capturing, setCapturing] = useState<{ img: HTMLImageElement; corners: Corners } | null>(null);
   const [step, setStep] = useState<Step>('capture');
@@ -186,6 +194,25 @@ export default function ScanPage() {
     <div>
       <PageHeader title="Scan" subtitle="Digitize physical mail — auto edge-detect, correct, and file it to the right property" />
 
+      <div className="flex border-b px-6" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
+        {(['capture', 'library'] as const).map(t => (
+          <button
+            key={t}
+            onClick={() => setSearchParams({ tab: t }, { replace: true })}
+            className={`text-sm py-3 px-4 border-b-2 transition-colors ${
+              mainTab === t
+                ? 'border-amber-400 text-amber-400 font-medium'
+                : 'border-transparent text-gray-500 hover:text-gray-300'
+            }`}
+          >
+            {t === 'capture' ? 'Scan' : 'Library'}
+          </button>
+        ))}
+      </div>
+
+      {mainTab === 'library' ? (
+        <DocumentLibrary />
+      ) : (
       <div className="p-6 max-w-3xl mx-auto">
         {error && (
           <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-4">{error}</div>
@@ -267,6 +294,81 @@ export default function ScanPage() {
           </>
         )}
       </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Document library (all scanned documents, including unfiled) ────────────
+
+function DocumentLibrary() {
+  const [documents, setDocuments] = useState<Document[] | null>(null);
+  const [properties, setProperties] = useState<Property[]>([]);
+  const [propertyFilter, setPropertyFilter] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('');
+
+  useEffect(() => {
+    getProperties().then(setProperties);
+  }, []);
+
+  useEffect(() => {
+    getDocuments({
+      propertyId: propertyFilter || undefined,
+      category: (categoryFilter || undefined) as DocumentCategory | undefined,
+    }).then(setDocuments);
+  }, [propertyFilter, categoryFilter]);
+
+  async function view(doc: Document) {
+    const url = await getDocumentUrl(doc.id);
+    window.open(url, '_blank');
+  }
+  async function remove(doc: Document) {
+    if (!confirm('Delete this scanned document?')) return;
+    await deleteDocument(doc.id);
+    setDocuments(prev => (prev ?? []).filter(d => d.id !== doc.id));
+  }
+
+  return (
+    <div className="p-6 max-w-3xl mx-auto">
+      <div className="flex gap-3 mb-4">
+        <select value={propertyFilter} onChange={e => setPropertyFilter(e.target.value)} className="field-input flex-1">
+          <option value="">All properties</option>
+          <option value="none">Unfiled (no property match)</option>
+          {properties.map(p => <option key={p.id} value={p.id}>{p.nickname || p.address}</option>)}
+        </select>
+        <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)} className="field-input flex-1">
+          <option value="">All categories</option>
+          {Object.entries(DOCUMENT_CATEGORY_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </select>
+      </div>
+
+      {!documents ? (
+        <p className="text-sm text-gray-500 py-8 text-center">Loading…</p>
+      ) : documents.length === 0 ? (
+        <p className="text-sm text-gray-500 py-8 text-center">No scanned documents match these filters.</p>
+      ) : (
+        <div className="space-y-2">
+          {documents.map(d => (
+            <div key={d.id} className="card p-3 flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2 mb-0.5">
+                  <p className="text-sm font-semibold text-white">{d.title}</p>
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-white/10 text-gray-300">{DOCUMENT_CATEGORY_LABELS[d.category]}</span>
+                  {!d.propertyId && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-900/40 text-amber-400">Unfiled</span>}
+                </div>
+                <p className="text-xs text-gray-500">
+                  {d.property ? (d.property.nickname || d.property.address) + ' · ' : ''}
+                  {format(new Date(d.createdAt), 'MMM d, yyyy')} · {d.pageCount} page{d.pageCount !== 1 ? 's' : ''}
+                </p>
+              </div>
+              <div className="flex gap-3 flex-shrink-0">
+                <button onClick={() => view(d)} className="text-xs text-amber-400 hover:text-amber-300">View</button>
+                <button onClick={() => remove(d)} className="text-xs text-red-500 hover:text-red-400">Delete</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

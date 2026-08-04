@@ -79,7 +79,7 @@ export default function App() {
           <Route path="loans"         element={<Navigate to="/finances?tab=loans" replace />} />
           <Route path="expenses"      element={<Navigate to="/finances?tab=expenses" replace />} />
           <Route path="payments"      element={<Navigate to="/properties" replace />} />
-          <Route path="documents"     element={<Navigate to="/properties" replace />} />
+          <Route path="documents"     element={<Navigate to="/scan?tab=library" replace />} />
           <Route path="notifications" element={<Navigate to="/settings?tab=notifications" replace />} />
 
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
