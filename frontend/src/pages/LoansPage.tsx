@@ -19,7 +19,10 @@ function LoanTable({ title, loans, setLoans }: {
   title: string; loans: Loan[]; setLoans: (updater: (prev: Loan[]) => Loan[]) => void;
 }) {
   if (loans.length === 0) return null;
-  const activeLoans = loans.filter(l => l.isActive);
+  // Excludes isPersonal loans, same as the page-level summary tiles — a
+  // group subtotal that included them while the portfolio total didn't
+  // would show a bigger group number than the total it's part of.
+  const activeLoans = loans.filter(l => l.isActive && !l.isPersonal);
   const balanceTotal = activeLoans.reduce((s, l) => s + Number(l.currentBalance ?? 0), 0);
   const monthlyTotal = activeLoans.reduce((s, l) => s + Number(l.monthlyPayment ?? 0) + Number(l.escrowAmount ?? 0), 0);
 

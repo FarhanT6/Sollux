@@ -295,15 +295,16 @@ function NewStatementModal({ profile, loans, onClose, onCreated }: {
 
   const [statementDate, setStatementDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [items, setItems] = useState<ReconciliationLineItem[]>(() => {
+    const today = new Date().toISOString().slice(0, 10);
     const initial: ReconciliationLineItem[] = [];
     if (profile.leaseId) {
-      initial.push({ type: 'RENT', targetId: profile.leaseId, targetLabel: 'Rent collected', description: 'Rent collected', amount: 0, direction: 'CREDIT' });
+      initial.push({ type: 'RENT', targetId: profile.leaseId, targetLabel: 'Rent collected', description: 'Rent collected', amount: 0, direction: 'CREDIT', date: today });
     }
     if (profile.managementFeeCategory) {
-      initial.push({ type: 'EXPENSE', targetId: null, targetLabel: 'Management fee', description: 'Management fee', amount: 0, direction: 'DEBIT' });
+      initial.push({ type: 'EXPENSE', targetId: null, targetLabel: 'Management fee', description: 'Management fee', amount: 0, direction: 'DEBIT', date: today });
     }
     for (const l of profileLoans) {
-      initial.push({ type: 'LOAN_PAYMENT', targetId: l.id, targetLabel: l.lender, description: `${l.lender} loan payment`, amount: 0, direction: 'DEBIT' });
+      initial.push({ type: 'LOAN_PAYMENT', targetId: l.id, targetLabel: l.lender, description: `${l.lender} loan payment`, amount: 0, direction: 'DEBIT', date: today });
     }
     return initial;
   });
@@ -318,7 +319,7 @@ function NewStatementModal({ profile, loans, onClose, onCreated }: {
     setItems(prev => prev.map((it, idx) => idx === i ? { ...it, ...patch } : it));
   }
   function addOtherItem() {
-    setItems(prev => [...prev, { type: 'OTHER', targetId: null, targetLabel: null, description: '', amount: 0, direction: 'DEBIT' }]);
+    setItems(prev => [...prev, { type: 'OTHER', targetId: null, targetLabel: null, description: '', amount: 0, direction: 'DEBIT', date: statementDate }]);
   }
   function removeItem(i: number) {
     setItems(prev => prev.filter((_, idx) => idx !== i));
@@ -363,11 +364,18 @@ function NewStatementModal({ profile, loans, onClose, onCreated }: {
         <div className="space-y-2 mb-3">
           {items.map((it, i) => (
             <div key={i} className="flex items-center gap-2">
-              <span className={`text-xs px-1.5 py-0.5 rounded flex-shrink-0 w-24 text-center ${it.direction === 'CREDIT' ? 'bg-emerald-900/40 text-emerald-400' : 'bg-red-900/40 text-red-400'}`}>
+              <button
+                type="button"
+                onClick={() => updateItem(i, { direction: it.direction === 'CREDIT' ? 'DEBIT' : 'CREDIT' })}
+                title="Click to flip"
+                className={`text-xs px-1.5 py-0.5 rounded flex-shrink-0 w-24 text-center cursor-pointer transition-colors ${it.direction === 'CREDIT' ? 'bg-emerald-900/40 text-emerald-400 hover:bg-emerald-900/60' : 'bg-red-900/40 text-red-400 hover:bg-red-900/60'}`}
+              >
                 {it.direction === 'CREDIT' ? 'Owed to you' : 'Deducted'}
-              </span>
+              </button>
               <input value={it.description ?? ''} onChange={e => updateItem(i, { description: e.target.value })}
                 placeholder="Description" className="field-input text-sm flex-1" />
+              <input type="date" value={it.date ?? statementDate} onChange={e => updateItem(i, { date: e.target.value })}
+                title="Date this actually hit the account" className="field-input text-sm w-36" />
               <input type="number" value={it.amount || ''} onChange={e => updateItem(i, { amount: parseFloat(e.target.value) || 0 })}
                 placeholder="0.00" className="field-input text-sm w-28" />
               {it.type === 'OTHER' && (
