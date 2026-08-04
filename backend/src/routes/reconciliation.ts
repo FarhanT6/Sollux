@@ -28,6 +28,10 @@ const LineItemSchema = z.object({
   description: z.string().optional().nullable(),
   amount: z.number(),
   direction: z.enum(['CREDIT', 'DEBIT']),
+  // The actual date this line hit the account (e.g. rent received 8/8, but
+  // loan payments/mgmt fee deducted 8/3) — falls back to statementDate
+  // when not set, so older statements without per-item dates still work.
+  date: z.string().optional().nullable(),
 });
 
 const StatementSchema = z.object({
@@ -157,13 +161,15 @@ router.post('/statements/:id/apply', async (req, res, next) => {
 
     await db.$transaction(async tx => {
       for (const item of lineItems) {
+        const itemDate = item.date ? new Date(item.date) : statement.statementDate;
+
         if (item.type === 'RENT' && item.targetId) {
           const p = await tx.rentPayment.create({
             data: {
               leaseId: item.targetId,
               periodDate,
               amount: item.amount,
-              paidDate: statement.statementDate,
+              paidDate: itemDate,
               method: 'OTHER',
               notes: `Reconciled via ${profile.name} statement (${item.description ?? ''})`.trim(),
             },
@@ -173,7 +179,7 @@ router.post('/statements/:id/apply', async (req, res, next) => {
           const p = await tx.loanPayment.create({
             data: {
               loanId: item.targetId,
-              date: statement.statementDate,
+              date: itemDate,
               amount: item.amount,
               status: 'PAID',
               notes: `Reconciled via ${profile.name} statement (${item.description ?? ''})`.trim(),
@@ -186,7 +192,7 @@ router.post('/statements/:id/apply', async (req, res, next) => {
               propertyId: profile.propertyId,
               category: (profile.managementFeeCategory ?? 'PROPERTY_MANAGEMENT') as any,
               amount: item.amount,
-              date: statement.statementDate,
+              date: itemDate,
               vendor: profile.name,
               description: item.description || undefined,
               isCapEx: false,

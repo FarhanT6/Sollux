@@ -184,6 +184,7 @@ export interface ReconciliationLineItem {
   description?: string | null;
   amount: number;
   direction: 'CREDIT' | 'DEBIT';
+  date?: string | null; // YYYY-MM-DD — the date this line actually hit the account; falls back to statementDate
 }
 
 export interface ReconciliationProfile {
