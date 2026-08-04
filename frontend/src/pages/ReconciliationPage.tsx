@@ -363,9 +363,14 @@ function NewStatementModal({ profile, loans, onClose, onCreated }: {
         <div className="space-y-2 mb-3">
           {items.map((it, i) => (
             <div key={i} className="flex items-center gap-2">
-              <span className={`text-xs px-1.5 py-0.5 rounded flex-shrink-0 w-24 text-center ${it.direction === 'CREDIT' ? 'bg-emerald-900/40 text-emerald-400' : 'bg-red-900/40 text-red-400'}`}>
+              <button
+                type="button"
+                onClick={() => updateItem(i, { direction: it.direction === 'CREDIT' ? 'DEBIT' : 'CREDIT' })}
+                title="Click to flip"
+                className={`text-xs px-1.5 py-0.5 rounded flex-shrink-0 w-24 text-center cursor-pointer transition-colors ${it.direction === 'CREDIT' ? 'bg-emerald-900/40 text-emerald-400 hover:bg-emerald-900/60' : 'bg-red-900/40 text-red-400 hover:bg-red-900/60'}`}
+              >
                 {it.direction === 'CREDIT' ? 'Owed to you' : 'Deducted'}
-              </span>
+              </button>
               <input value={it.description ?? ''} onChange={e => updateItem(i, { description: e.target.value })}
                 placeholder="Description" className="field-input text-sm flex-1" />
               <input type="number" value={it.amount || ''} onChange={e => updateItem(i, { amount: parseFloat(e.target.value) || 0 })}
