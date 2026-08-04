@@ -187,6 +187,23 @@ export const confirmScannedDocument = (data: {
 }) => api.post<Document>('/scanned-documents', data).then(r => r.data);
 export const getDocumentUrl = (id: string) =>
   api.get<{ url: string }>(`/scanned-documents/${id}/url`).then(r => r.data.url);
+
+// Reports (Rent Roll / T-12 xlsx exports, generated from real Sollux data)
+async function downloadReport(path: string, filename: string) {
+  const res = await api.get(path, { responseType: 'blob' });
+  const url = URL.createObjectURL(res.data as Blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+export const downloadRentRoll = (propertyId: string, propertyName: string) =>
+  downloadReport(`/reports/rent-roll/${propertyId}`, `Rent Roll - ${propertyName}.xlsx`);
+export const downloadT12 = (propertyId: string, propertyName: string) =>
+  downloadReport(`/reports/t12/${propertyId}`, `T12 - ${propertyName}.xlsx`);
 export const deleteDocument = (id: string) =>
   api.delete(`/scanned-documents/${id}`);
 

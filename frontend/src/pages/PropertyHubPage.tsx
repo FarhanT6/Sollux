@@ -10,7 +10,7 @@ import {
   updateTaxAssessment, deleteTaxAssessment, updateImprovement, deleteImprovement,
   updateLease, updateProperty, lookupPropertyByAddress,
   createLease, getTenants, createTenant, getUnits, createUnit,
-  getDocuments, getDocumentUrl, deleteDocument,
+  getDocuments, getDocumentUrl, deleteDocument, downloadRentRoll, downloadT12,
 } from '../api/client';
 import type {
   Property, Lease, Loan, Expense, InsurancePolicy, TaxAssessment,
@@ -132,6 +132,16 @@ export default function PropertyHubPage() {
                   {occ}% occupied
                 </span>
               )}
+              <button
+                onClick={() => downloadRentRoll(property.id, property.nickname || property.address)}
+                className="btn text-xs ml-1"
+                title="Export a Rent Roll workbook (unit, lease, and rent data)"
+              >Rent Roll</button>
+              <button
+                onClick={() => downloadT12(property.id, property.nickname || property.address)}
+                className="btn text-xs"
+                title="Export a trailing-12-month operating statement"
+              >T-12</button>
               <button onClick={() => setShowEditProperty(true)} className="btn text-xs ml-1">Edit</button>
             </div>
           </div>
