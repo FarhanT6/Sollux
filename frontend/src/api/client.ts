@@ -31,7 +31,7 @@ import type {
   BankAccount, OtherIncome, BudgetSummary, DelinquencyTenant, BudgetForecast, IndexRate,
   ReconciliationProfile, ReconciliationStatement, ReconciliationLineItem,
   Document, DocumentClassification, DocumentMatch, DocumentCategory,
-  IncomingTransaction, IncomingTransactionStatus, OutgoingTransaction,
+  IncomingTransaction, IncomingTransactionStatus, OutgoingTransaction, UtilityCandidate,
 } from '../types';
 
 // Dashboard
@@ -434,8 +434,11 @@ export const getOutgoingTransactions = (status?: IncomingTransactionStatus) =>
   api.get<OutgoingTransaction[]>('/expense-transactions', { params: status ? { status } : undefined }).then(r => r.data);
 export const syncOutgoingTransactions = () =>
   api.post<{ itemsSynced: number; added: number; errors: string[] }>('/expense-transactions/sync').then(r => r.data);
-export const matchOutgoingTransaction = (id: string, data: { propertyId?: string | null; category?: string | null }) =>
-  api.patch<OutgoingTransaction>(`/expense-transactions/${id}`, data).then(r => r.data);
+export const matchOutgoingTransaction = (id: string, data: {
+  propertyId?: string | null; category?: string | null; utilityAccountId?: string | null; statementId?: string | null;
+}) => api.patch<OutgoingTransaction>(`/expense-transactions/${id}`, data).then(r => r.data);
+export const getUtilityCandidates = (id: string) =>
+  api.get<UtilityCandidate[]>(`/expense-transactions/${id}/utility-candidates`).then(r => r.data);
 export const applyOutgoingTransaction = (id: string) =>
   api.post<OutgoingTransaction>(`/expense-transactions/${id}/apply`).then(r => r.data);
 export const ignoreOutgoingTransaction = (id: string) =>

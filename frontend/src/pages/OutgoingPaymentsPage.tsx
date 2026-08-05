@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react';
 import { format } from 'date-fns';
 import {
   getOutgoingTransactions, syncOutgoingTransactions, matchOutgoingTransaction,
-  applyOutgoingTransaction, ignoreOutgoingTransaction, getProperties,
+  applyOutgoingTransaction, ignoreOutgoingTransaction, getProperties, getUtilityCandidates,
 } from '../api/client';
-import type { OutgoingTransaction, IncomingTransactionStatus, Property, ExpenseCategory } from '../types';
+import type { OutgoingTransaction, IncomingTransactionStatus, Property, ExpenseCategory, UtilityCandidate } from '../types';
 import { EXPENSE_CATEGORY_LABELS } from '../types';
 
 const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
@@ -55,7 +55,13 @@ export default function OutgoingPaymentsPage({ embedded }: { embedded?: boolean 
   }
 
   async function handleProperty(id: string, propertyId: string) {
-    await matchOutgoingTransaction(id, { propertyId: propertyId || null });
+    await matchOutgoingTransaction(id, { propertyId: propertyId || null, utilityAccountId: null, statementId: null });
+    load();
+  }
+  async function handleCandidate(id: string, candidate: UtilityCandidate | null) {
+    await matchOutgoingTransaction(id, candidate
+      ? { propertyId: candidate.propertyId, utilityAccountId: candidate.utilityAccountId, statementId: candidate.statementId }
+      : { propertyId: null, utilityAccountId: null, statementId: null });
     load();
   }
   async function handleCategory(id: string, category: string) {
@@ -126,6 +132,8 @@ export default function OutgoingPaymentsPage({ embedded }: { embedded?: boolean 
                   </p>
                 ) : tx.status === 'IGNORED' ? (
                   <p className="text-xs text-gray-600">Ignored</p>
+                ) : tx.matchType === 'UTILITY' ? (
+                  <UtilityMatchRow tx={tx} onCandidate={handleCandidate} onApply={handleApply} onIgnore={handleIgnore} />
                 ) : (
                   <>
                     <select
@@ -138,15 +146,13 @@ export default function OutgoingPaymentsPage({ embedded }: { embedded?: boolean 
                         <option key={p.id} value={p.id}>{p.nickname || p.address}</option>
                       ))}
                     </select>
-                    {tx.matchType !== 'UTILITY' && (
-                      <select
-                        value={tx.category ?? 'REPAIRS_MAINTENANCE'}
-                        onChange={e => handleCategory(tx.id, e.target.value)}
-                        className="field-input text-xs flex-shrink-0 w-40"
-                      >
-                        {Object.entries(EXPENSE_CATEGORY_LABELS).map(([k, v]) => <option key={k} value={k as ExpenseCategory}>{v}</option>)}
-                      </select>
-                    )}
+                    <select
+                      value={tx.category ?? 'REPAIRS_MAINTENANCE'}
+                      onChange={e => handleCategory(tx.id, e.target.value)}
+                      className="field-input text-xs flex-shrink-0 w-40"
+                    >
+                      {Object.entries(EXPENSE_CATEGORY_LABELS).map(([k, v]) => <option key={k} value={k as ExpenseCategory}>{v}</option>)}
+                    </select>
                     <button
                       disabled={!tx.propertyId}
                       onClick={() => handleApply(tx.id)}
@@ -161,5 +167,58 @@ export default function OutgoingPaymentsPage({ embedded }: { embedded?: boolean 
         </div>
       )}
     </div>
+  );
+}
+
+// ─── Utility payment row: candidate statement picker ─────────────────────────
+// Cross-references the payment amount against every unpaid statement on any
+// provider-matched utility account (across all properties), within a $20
+// tolerance. When exactly one property has a plausible statement it's
+// pre-selected; ambiguous cases (or none close enough) are left for the user
+// to pick here.
+
+function UtilityMatchRow({ tx, onCandidate, onApply, onIgnore }: {
+  tx: OutgoingTransaction;
+  onCandidate: (id: string, candidate: UtilityCandidate | null) => void;
+  onApply: (id: string) => void;
+  onIgnore: (id: string) => void;
+}) {
+  const [candidates, setCandidates] = useState<UtilityCandidate[] | null>(null);
+
+  useEffect(() => {
+    getUtilityCandidates(tx.id).then(setCandidates);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tx.id]);
+
+  const selectedKey = tx.statementId ?? '';
+
+  function handleChange(value: string) {
+    if (!value) { onCandidate(tx.id, null); return; }
+    const candidate = candidates?.find(c => c.statementId === value) ?? null;
+    onCandidate(tx.id, candidate);
+  }
+
+  return (
+    <>
+      <select
+        value={selectedKey}
+        onChange={e => handleChange(e.target.value)}
+        className="field-input text-xs flex-1"
+      >
+        <option value="">— No statement matched —</option>
+        {candidates?.map(c => (
+          <option key={c.statementId} value={c.statementId}>
+            {c.propertyLabel} — {format(new Date(c.statementDate), 'MMM yyyy')} — {money(c.amountDue)}
+            {c.withinTolerance ? '' : ` (off by ${money(c.diff)})`}
+          </option>
+        ))}
+      </select>
+      <button
+        disabled={!tx.propertyId}
+        onClick={() => onApply(tx.id)}
+        className="text-xs text-amber-400 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed flex-shrink-0"
+      >Apply</button>
+      <button onClick={() => onIgnore(tx.id)} className="text-xs text-red-500 hover:text-red-400 flex-shrink-0">Ignore</button>
+    </>
   );
 }

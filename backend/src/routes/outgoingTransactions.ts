@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
-import { syncAllWatchedAccounts } from '../services/transactionMatchService';
+import { syncAllWatchedAccounts, findUtilityCandidates } from '../services/transactionMatchService';
 
 const router = Router();
 router.use(attachDbUser);
@@ -32,25 +32,50 @@ router.post('/sync', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// PATCH /:id — set/override property, utility account, or category before applying
+// GET /:id/utility-candidates — every unpaid statement on a provider-matched
+// utility account, closest-amount first, for the manual vetting picker.
+router.get('/:id/utility-candidates', async (req, res, next) => {
+  try {
+    const tx = await db.outgoingTransaction.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
+    if (!tx) return res.status(404).json({ error: 'Transaction not found' });
+    const candidates = await findUtilityCandidates(tx.name, Number(tx.amount), req.dbUserId!);
+    res.json(candidates);
+  } catch (err) { next(err); }
+});
+
+// PATCH /:id — set/override property, utility account/statement, or category before applying
 router.patch('/:id', async (req, res, next) => {
   try {
     const tx = await db.outgoingTransaction.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
     if (!tx) return res.status(404).json({ error: 'Transaction not found' });
     if (tx.status === 'APPLIED') return res.status(400).json({ error: 'Already applied — cannot re-match' });
 
-    const { propertyId, category } = req.body as { propertyId?: string | null; category?: string | null };
+    const { propertyId, category, utilityAccountId, statementId } = req.body as {
+      propertyId?: string | null; category?: string | null; utilityAccountId?: string | null; statementId?: string | null;
+    };
+
     if (propertyId) {
       const prop = await db.property.findFirst({ where: { id: propertyId, userId: req.dbUserId! } });
       if (!prop) return res.status(404).json({ error: 'Property not found' });
     }
+    if (utilityAccountId) {
+      const acct = await db.utilityAccount.findFirst({ where: { id: utilityAccountId, property: { userId: req.dbUserId! } } });
+      if (!acct) return res.status(404).json({ error: 'Utility account not found' });
+    }
+    if (statementId) {
+      const stmt = await db.statement.findFirst({ where: { id: statementId, utilityAccount: { property: { userId: req.dbUserId! } } } });
+      if (!stmt) return res.status(404).json({ error: 'Statement not found' });
+    }
 
+    const nextPropertyId = propertyId !== undefined ? propertyId : tx.propertyId;
     const updated = await db.outgoingTransaction.update({
       where: { id: tx.id },
       data: {
-        propertyId: propertyId !== undefined ? propertyId : tx.propertyId,
+        propertyId: nextPropertyId,
         category: category !== undefined ? category : tx.category,
-        status: (propertyId ?? tx.propertyId) ? 'SUGGESTED' : 'UNMATCHED',
+        utilityAccountId: utilityAccountId !== undefined ? utilityAccountId : tx.utilityAccountId,
+        statementId: statementId !== undefined ? statementId : tx.statementId,
+        status: nextPropertyId ? 'SUGGESTED' : 'UNMATCHED',
       },
     });
     res.json(updated);

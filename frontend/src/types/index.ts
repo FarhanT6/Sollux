@@ -283,6 +283,18 @@ export interface IncomingTransaction {
 
 export type OutgoingMatchType = 'HARDWARE' | 'UTILITY';
 
+export interface UtilityCandidate {
+  utilityAccountId: string;
+  propertyId: string;
+  propertyLabel: string;
+  providerName: string;
+  statementId: string;
+  statementDate: string;
+  amountDue: number;
+  diff: number;
+  withinTolerance: boolean;
+}
+
 export interface OutgoingTransaction {
   id: string;
   bankAccountId: string;

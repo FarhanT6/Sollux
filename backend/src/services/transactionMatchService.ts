@@ -82,28 +82,75 @@ async function matchLease(counterpartyName: string, userId: string): Promise<str
 
 const HARDWARE_STORE_PATTERN = /home depot|lowe'?s|ace hardware|menards|harbor freight|tractor supply|floor\s*(&|and)\s*decor|sherwin.?williams/i;
 
-interface UtilityMatch { utilityAccountId: string; propertyId: string; providerName: string }
+// When the same provider (e.g. SDGE) has accounts on more than one
+// property, a bank descriptor alone can't say which one a payment is for
+// — so candidates are cross-referenced against every unpaid statement's
+// amount. A candidate within this many dollars of the payment is
+// considered plausible; the property is used as the "does exactly one
+// property have a plausible statement" check.
+const UTILITY_MATCH_TOLERANCE = 20;
 
-/** Fuzzy-match a merchant name against the user's utility accounts by provider name. */
-async function matchUtilityAccount(merchantName: string, userId: string): Promise<UtilityMatch | null> {
+export interface UtilityCandidate {
+  utilityAccountId: string;
+  propertyId: string;
+  propertyLabel: string;
+  providerName: string;
+  statementId: string;
+  statementDate: Date;
+  amountDue: number;
+  diff: number;
+  withinTolerance: boolean;
+}
+
+/**
+ * Every unpaid statement on a provider-name-matched utility account,
+ * annotated with how close its amount is to the payment. Returned
+ * regardless of tolerance (sorted closest-first) so a manual reviewer
+ * always has something to pick from, even for an odd/partial payment.
+ */
+export async function findUtilityCandidates(merchantName: string, amount: number, userId: string): Promise<UtilityCandidate[]> {
   const words = normalizeWords(merchantName);
-  if (words.length === 0) return null;
+  if (words.length === 0) return [];
 
   const accounts = await db.utilityAccount.findMany({
     where: { property: { userId }, isActive: true },
-    select: { id: true, propertyId: true, providerName: true },
+    select: {
+      id: true, propertyId: true, providerName: true,
+      property: { select: { address: true, nickname: true } },
+      statements: {
+        where: { amountPaid: null, amountDue: { not: null } },
+        select: { id: true, statementDate: true, amountDue: true },
+      },
+    },
   });
 
-  const matches = accounts.filter(a => {
+  const providerMatches = accounts.filter(a => {
     const providerWords = normalizeWords(a.providerName);
     if (providerWords.length === 0) return false;
     const overlap = providerWords.filter(w => words.includes(w)).length;
     return overlap >= 1 && overlap / providerWords.length >= 0.5;
   });
 
-  return matches.length === 1
-    ? { utilityAccountId: matches[0].id, propertyId: matches[0].propertyId, providerName: matches[0].providerName }
-    : null;
+  const candidates: UtilityCandidate[] = [];
+  for (const acct of providerMatches) {
+    for (const stmt of acct.statements) {
+      const amountDue = Number(stmt.amountDue);
+      const diff = Math.abs(amountDue - amount);
+      candidates.push({
+        utilityAccountId: acct.id,
+        propertyId: acct.propertyId,
+        propertyLabel: acct.property.nickname || acct.property.address,
+        providerName: acct.providerName,
+        statementId: stmt.id,
+        statementDate: stmt.statementDate,
+        amountDue,
+        diff,
+        withinTolerance: diff <= UTILITY_MATCH_TOLERANCE,
+      });
+    }
+  }
+
+  return candidates.sort((a, b) => a.diff - b.diff);
 }
 
 interface ExpenseMatch {
@@ -114,30 +161,36 @@ interface ExpenseMatch {
   statementId: string | null;
 }
 
-async function detectExpenseMatch(name: string, userId: string): Promise<ExpenseMatch | null> {
+async function detectExpenseMatch(name: string, amount: number, userId: string): Promise<ExpenseMatch | null> {
   if (HARDWARE_STORE_PATTERN.test(name)) {
     return { matchType: 'HARDWARE', propertyId: null, utilityAccountId: null, category: 'REPAIRS_MAINTENANCE', statementId: null };
   }
 
-  const utilityMatch = await matchUtilityAccount(name, userId);
-  if (utilityMatch) {
-    // Prefer marking an existing open statement paid over creating a
-    // duplicate Expense — utility Statement amounts already feed the
-    // Budget as operating expenses, so double-logging would inflate it.
-    const openStatement = await db.statement.findFirst({
-      where: { utilityAccountId: utilityMatch.utilityAccountId, amountPaid: null },
-      orderBy: { statementDate: 'desc' },
-    });
+  const candidates = await findUtilityCandidates(name, amount, userId);
+  if (candidates.length === 0) return null; // no provider-name match at all — not a utility payment
+
+  const plausible = candidates.filter(c => c.withinTolerance);
+  const distinctAccounts = new Set(plausible.map(c => c.utilityAccountId));
+
+  if (distinctAccounts.size === 1) {
+    // Exactly one property has a statement in the right ballpark — within
+    // that property, pay down the OLDEST unpaid statement first (real
+    // arrears get caught up in order), not just whichever amount is closest.
+    const winner = plausible.reduce((oldest, c) => c.statementDate < oldest.statementDate ? c : oldest);
     return {
       matchType: 'UTILITY',
-      propertyId: utilityMatch.propertyId,
-      utilityAccountId: utilityMatch.utilityAccountId,
+      propertyId: winner.propertyId,
+      utilityAccountId: winner.utilityAccountId,
       category: 'UTILITIES',
-      statementId: openStatement?.id ?? null,
+      statementId: winner.statementId,
     };
   }
 
-  return null;
+  // Either no statement is close enough, or more than one property's
+  // account has one — genuinely ambiguous. Flag it as a utility payment
+  // so the review UI offers the candidate picker, but leave the specific
+  // property/statement for a human to confirm.
+  return { matchType: 'UTILITY', propertyId: null, utilityAccountId: null, category: 'UTILITIES', statementId: null };
 }
 
 // ─── Sync ──────────────────────────────────────────────────────────────────
@@ -192,7 +245,7 @@ export async function syncTransactionsForItem(plaidItemId: string) {
 
       // Positive amount = money moving OUT of the account (a debit/purchase).
       if (bankAccount.watchForExpenses && tx.amount > 0) {
-        const match = await detectExpenseMatch(name, plaidItem.userId);
+        const match = await detectExpenseMatch(name, tx.amount, plaidItem.userId);
         if (match) {
           await db.outgoingTransaction.upsert({
             where: { plaidTransactionId: tx.transaction_id },
