@@ -481,14 +481,24 @@ function SortablePlaidCard({
                   )}
                 </div>
                 {acct.accountType !== 'CREDIT_CARD' && (
-                  <label className="flex items-center gap-1.5 mt-1.5 text-xs text-gray-400 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={!!acct.watchForRentPayments}
-                      onChange={async e => { await updateBankAccount(acct.id, { watchForRentPayments: e.target.checked }); onToggleWatch(); }}
-                    />
-                    Watch for rent payments (Zelle/Venmo/PayPal/Cash App)
-                  </label>
+                  <div className="mt-1.5 space-y-1">
+                    <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={!!acct.watchForRentPayments}
+                        onChange={async e => { await updateBankAccount(acct.id, { watchForRentPayments: e.target.checked }); onToggleWatch(); }}
+                      />
+                      Watch for rent payments (Zelle/Venmo/PayPal/Cash App)
+                    </label>
+                    <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={!!acct.watchForExpenses}
+                        onChange={async e => { await updateBankAccount(acct.id, { watchForExpenses: e.target.checked }); onToggleWatch(); }}
+                      />
+                      Watch for expenses (hardware stores, utility payments)
+                    </label>
+                  </div>
                 )}
               </div>
               <div className="text-right">

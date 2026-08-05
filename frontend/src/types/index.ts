@@ -281,6 +281,28 @@ export interface IncomingTransaction {
   createdAt: string;
 }
 
+export type OutgoingMatchType = 'HARDWARE' | 'UTILITY';
+
+export interface OutgoingTransaction {
+  id: string;
+  bankAccountId: string;
+  bankAccount?: { id: string; name: string; bank?: string | null };
+  amount: number;
+  date: string;
+  name: string;
+  matchType?: OutgoingMatchType | null;
+  propertyId?: string | null;
+  property?: Pick<Property, 'id' | 'address' | 'nickname'> | null;
+  utilityAccountId?: string | null;
+  utilityAccount?: { id: string; providerName: string } | null;
+  category?: ExpenseCategory | null;
+  statementId?: string | null;
+  status: IncomingTransactionStatus;
+  appliedType?: string | null;
+  appliedId?: string | null;
+  createdAt: string;
+}
+
 export interface LoanExtension {
   id: string;
   loanId: string;
@@ -577,6 +599,7 @@ export interface BankAccount {
   sortOrder: number;
   notes?: string;
   watchForRentPayments?: boolean;
+  watchForExpenses?: boolean;
   plaidAccountId?: string | null;
   balance: number;
   creditLimit?: number;
