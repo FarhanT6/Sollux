@@ -5,8 +5,10 @@ import BudgetPage from './BudgetPage';
 import LoansPage from './LoansPage';
 import ExpensesPage from './ExpensesPage';
 import ReconciliationPage from './ReconciliationPage';
+import IncomingPaymentsPage from './IncomingPaymentsPage';
+import OutgoingPaymentsPage from './OutgoingPaymentsPage';
 
-type Tab = 'pnl' | 'budget' | 'loans' | 'expenses' | 'reconciliation';
+type Tab = 'pnl' | 'budget' | 'loans' | 'expenses' | 'reconciliation' | 'incoming' | 'outgoing';
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'pnl',            label: 'P&L'            },
@@ -14,6 +16,8 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'loans',          label: 'Loans'          },
   { key: 'expenses',       label: 'Expenses'       },
   { key: 'reconciliation', label: 'Reconciliation' },
+  { key: 'incoming',       label: 'Incoming Payments' },
+  { key: 'outgoing',       label: 'Expense Payments' },
 ];
 
 export default function FinancesPage() {
@@ -30,6 +34,8 @@ export default function FinancesPage() {
     loans:          'Mortgages, HELOCs, and installment plans',
     expenses:       'Operating and capital expenditures across all properties',
     reconciliation: 'Monthly statements from managers/collectors who net rent, fees, and loan payments together',
+    incoming:       'Zelle, Venmo, PayPal, and Cash App transfers matched to tenants',
+    outgoing:       'Hardware-store purchases and utility bill payments matched to properties',
   };
 
   return (
@@ -58,6 +64,8 @@ export default function FinancesPage() {
         {tab === 'loans'    && <LoansPage embedded />}
         {tab === 'expenses' && <ExpensesPage embedded />}
         {tab === 'reconciliation' && <ReconciliationPage embedded />}
+        {tab === 'incoming' && <IncomingPaymentsPage embedded />}
+        {tab === 'outgoing' && <OutgoingPaymentsPage embedded />}
       </div>
     </div>
   );

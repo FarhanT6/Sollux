@@ -31,6 +31,7 @@ import type {
   BankAccount, OtherIncome, BudgetSummary, DelinquencyTenant, BudgetForecast, IndexRate,
   ReconciliationProfile, ReconciliationStatement, ReconciliationLineItem,
   Document, DocumentClassification, DocumentMatch, DocumentCategory,
+  IncomingTransaction, IncomingTransactionStatus, OutgoingTransaction, UtilityCandidate,
 } from '../types';
 
 // Dashboard
@@ -416,6 +417,33 @@ export const deletePlaidItem = (id: string) =>
 export const syncPlaidBalances = () =>
   api.post<{ synced: number; failed: number }>('/plaid/sync').then(r => r.data);
 
+// Incoming P2P transactions (rent via Zelle/Venmo/PayPal/Cash App)
+export const getIncomingTransactions = (status?: IncomingTransactionStatus) =>
+  api.get<IncomingTransaction[]>('/transactions', { params: status ? { status } : undefined }).then(r => r.data);
+export const syncIncomingTransactions = () =>
+  api.post<{ itemsSynced: number; added: number; errors: string[] }>('/transactions/sync').then(r => r.data);
+export const matchIncomingTransaction = (id: string, leaseId: string | null) =>
+  api.patch<IncomingTransaction>(`/transactions/${id}`, { leaseId }).then(r => r.data);
+export const applyIncomingTransaction = (id: string) =>
+  api.post<IncomingTransaction>(`/transactions/${id}/apply`).then(r => r.data);
+export const ignoreIncomingTransaction = (id: string) =>
+  api.post<IncomingTransaction>(`/transactions/${id}/ignore`).then(r => r.data);
+
+// Outgoing transactions (hardware-store expenses, utility bill payments)
+export const getOutgoingTransactions = (status?: IncomingTransactionStatus) =>
+  api.get<OutgoingTransaction[]>('/expense-transactions', { params: status ? { status } : undefined }).then(r => r.data);
+export const syncOutgoingTransactions = () =>
+  api.post<{ itemsSynced: number; added: number; errors: string[] }>('/expense-transactions/sync').then(r => r.data);
+export const matchOutgoingTransaction = (id: string, data: {
+  propertyId?: string | null; category?: string | null; utilityAccountId?: string | null; statementId?: string | null;
+}) => api.patch<OutgoingTransaction>(`/expense-transactions/${id}`, data).then(r => r.data);
+export const getUtilityCandidates = (id: string) =>
+  api.get<UtilityCandidate[]>(`/expense-transactions/${id}/utility-candidates`).then(r => r.data);
+export const applyOutgoingTransaction = (id: string) =>
+  api.post<OutgoingTransaction>(`/expense-transactions/${id}/apply`).then(r => r.data);
+export const ignoreOutgoingTransaction = (id: string) =>
+  api.post<OutgoingTransaction>(`/expense-transactions/${id}/ignore`).then(r => r.data);
+
 export interface PlaidItem {
   id: string;
   institutionName: string;
@@ -429,6 +457,9 @@ export interface PlaidItem {
     ownerLabel: string | null;
     accountType: string;
     isActive: boolean;
+    watchForRentPayments?: boolean;
+    watchForExpenses?: boolean;
+    plaidAccountId?: string | null;
     balances: Array<{
       balance: number;
       available: number | null;

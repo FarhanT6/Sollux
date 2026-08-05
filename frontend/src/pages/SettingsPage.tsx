@@ -418,12 +418,13 @@ const MANUAL_PRESETS = [
 
 // ── Sortable Plaid institution card ──────────────────────────────────────────
 function SortablePlaidCard({
-  item, balVisible, disp, onDisconnect,
+  item, balVisible, disp, onDisconnect, onToggleWatch,
 }: {
   item: PlaidItem;
   balVisible: boolean;
   disp: (n: number | null | undefined) => string;
   onDisconnect: (id: string, name: string) => void;
+  onToggleWatch: () => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.id });
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 };
@@ -479,6 +480,26 @@ function SortablePlaidCard({
                     <span className="text-xs text-gray-600">· Auto-synced {fmtDate(bal.asOfDate)}</span>
                   )}
                 </div>
+                {acct.accountType !== 'CREDIT_CARD' && (
+                  <div className="mt-1.5 space-y-1">
+                    <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={!!acct.watchForRentPayments}
+                        onChange={async e => { await updateBankAccount(acct.id, { watchForRentPayments: e.target.checked }); onToggleWatch(); }}
+                      />
+                      Watch for rent payments (Zelle/Venmo/PayPal/Cash App)
+                    </label>
+                    <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={!!acct.watchForExpenses}
+                        onChange={async e => { await updateBankAccount(acct.id, { watchForExpenses: e.target.checked }); onToggleWatch(); }}
+                      />
+                      Watch for expenses (hardware stores, utility payments)
+                    </label>
+                  </div>
+                )}
               </div>
               <div className="text-right">
                 <p className={`text-sm font-semibold ${acct.accountType === 'CREDIT_CARD' ? 'text-red-400' : 'text-white'}`}>
@@ -754,7 +775,7 @@ function BankingTab() {
               <SortableContext items={sortedItems.map(i => i.id)} strategy={verticalListSortingStrategy}>
                 <div className="space-y-3 mb-4">
                   {sortedItems.map(item => (
-                    <SortablePlaidCard key={item.id} item={item} balVisible={balVisible} disp={disp} onDisconnect={handleDisconnect} />
+                    <SortablePlaidCard key={item.id} item={item} balVisible={balVisible} disp={disp} onDisconnect={handleDisconnect} onToggleWatch={loadAll} />
                   ))}
                 </div>
               </SortableContext>
