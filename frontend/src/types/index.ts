@@ -259,6 +259,28 @@ export const DOCUMENT_CATEGORY_LABELS: Record<DocumentCategory, string> = {
   OTHER: 'Other / Misc',
 };
 
+export type IncomingTransactionStatus = 'UNMATCHED' | 'SUGGESTED' | 'APPLIED' | 'IGNORED';
+export type PaymentChannel = 'ZELLE' | 'VENMO' | 'PAYPAL' | 'CASH_APP' | 'APPLE_CASH' | 'OTHER';
+
+export interface IncomingTransaction {
+  id: string;
+  bankAccountId: string;
+  bankAccount?: { id: string; name: string; bank?: string | null };
+  amount: number;
+  date: string;
+  name: string;
+  channel?: PaymentChannel | null;
+  matchedLeaseId?: string | null;
+  matchedLease?: {
+    id: string;
+    unit: { unitLabel: string; property: { id: string; address: string; nickname?: string | null } };
+    leaseTenants: { tenant: { fullName: string } }[];
+  } | null;
+  status: IncomingTransactionStatus;
+  rentPaymentId?: string | null;
+  createdAt: string;
+}
+
 export interface LoanExtension {
   id: string;
   loanId: string;
@@ -554,6 +576,8 @@ export interface BankAccount {
   isActive: boolean;
   sortOrder: number;
   notes?: string;
+  watchForRentPayments?: boolean;
+  plaidAccountId?: string | null;
   balance: number;
   creditLimit?: number;
   asOfDate?: string;

@@ -31,6 +31,7 @@ import type {
   BankAccount, OtherIncome, BudgetSummary, DelinquencyTenant, BudgetForecast, IndexRate,
   ReconciliationProfile, ReconciliationStatement, ReconciliationLineItem,
   Document, DocumentClassification, DocumentMatch, DocumentCategory,
+  IncomingTransaction, IncomingTransactionStatus,
 } from '../types';
 
 // Dashboard
@@ -416,6 +417,18 @@ export const deletePlaidItem = (id: string) =>
 export const syncPlaidBalances = () =>
   api.post<{ synced: number; failed: number }>('/plaid/sync').then(r => r.data);
 
+// Incoming P2P transactions (rent via Zelle/Venmo/PayPal/Cash App)
+export const getIncomingTransactions = (status?: IncomingTransactionStatus) =>
+  api.get<IncomingTransaction[]>('/transactions', { params: status ? { status } : undefined }).then(r => r.data);
+export const syncIncomingTransactions = () =>
+  api.post<{ itemsSynced: number; added: number; errors: string[] }>('/transactions/sync').then(r => r.data);
+export const matchIncomingTransaction = (id: string, leaseId: string | null) =>
+  api.patch<IncomingTransaction>(`/transactions/${id}`, { leaseId }).then(r => r.data);
+export const applyIncomingTransaction = (id: string) =>
+  api.post<IncomingTransaction>(`/transactions/${id}/apply`).then(r => r.data);
+export const ignoreIncomingTransaction = (id: string) =>
+  api.post<IncomingTransaction>(`/transactions/${id}/ignore`).then(r => r.data);
+
 export interface PlaidItem {
   id: string;
   institutionName: string;
@@ -429,6 +442,8 @@ export interface PlaidItem {
     ownerLabel: string | null;
     accountType: string;
     isActive: boolean;
+    watchForRentPayments?: boolean;
+    plaidAccountId?: string | null;
     balances: Array<{
       balance: number;
       available: number | null;

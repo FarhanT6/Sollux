@@ -31,6 +31,7 @@ model User {
   bankAccounts            BankAccount[]
   plaidItems              PlaidItem[]
   otherIncome             OtherIncome[]
+  incomingTransactions    IncomingTransaction[]
 
   @@map("users")
 }
@@ -465,6 +466,7 @@ model Lease {
   leaseTenants LeaseTenant[]
   rentPayments RentPayment[]
   rentNotices  RentNotice[]
+  incomingTransactions IncomingTransaction[]
 
   @@map("leases")
 }
@@ -899,14 +901,42 @@ model BankAccount {
   isActive       Boolean         @default(true)
   sortOrder      Int             @default(0)
   notes          String?
+  // Rent-via-P2P matching: only accounts explicitly opted in are scanned
+  // for Zelle/Venmo/PayPal/Cash App-style incoming transfers. (The Plaid
+  // sync cursor lives on PlaidItem, not here — it's scoped per access
+  // token/Item, and one Item can have several accounts.)
+  watchForRentPayments Boolean   @default(false)
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
 
   balances BankBalance[]
+  incomingTransactions IncomingTransaction[]
 
   @@index([userId])
   @@index([plaidItemId])
   @@map("bank_accounts")
+}
+
+// ─── INCOMING P2P TRANSACTIONS (rent via Zelle/Venmo/PayPal/Cash App) ───────
+model IncomingTransaction {
+  id                 String      @id @default(cuid())
+  userId             String
+  user               User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bankAccountId      String
+  bankAccount        BankAccount @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
+  plaidTransactionId String      @unique
+  amount             Decimal     @db.Decimal(10, 2)
+  date               DateTime
+  name               String      // Plaid's transaction name/counterparty description
+  channel            String?     // ZELLE | VENMO | PAYPAL | CASH_APP | APPLE_CASH | OTHER
+  matchedLeaseId     String?
+  matchedLease       Lease?      @relation(fields: [matchedLeaseId], references: [id], onDelete: SetNull)
+  status             String      @default("UNMATCHED") // UNMATCHED | SUGGESTED | APPLIED | IGNORED
+  rentPaymentId      String?     // set once applied, for traceability
+  createdAt          DateTime    @default(now())
+
+  @@index([userId, status])
+  @@map("incoming_transactions")
 }
 
 model PlaidItem {
@@ -919,6 +949,7 @@ model PlaidItem {
   institutionName String
   isActive        Boolean     @default(true)
   lastSyncedAt    DateTime?
+  plaidTxCursor   String?     // /transactions/sync cursor — scoped per Item
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
 
