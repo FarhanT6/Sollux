@@ -34,6 +34,7 @@ interface AmortizationResponse {
     negativeAmortization: boolean;
     isInterestOnly: boolean;
     schedule: { paymentNumber: number; date: string; paymentAmount: number; principal: number; interest: number; balance: number }[];
+    historicalSchedule: { paymentNumber: number; date: string; paymentAmount: number; principal: number; interest: number; balance: number }[];
     payoffDate: string | null;
     monthsRemaining: number | null;
     totalInterestRemaining: number;
@@ -675,6 +676,7 @@ export default function LoanDetailPage() {
   const [properties, setProperties] = useState<Property[]>([]);
   const [loading, setLoading] = useState(true);
   const [showFullSchedule, setShowFullSchedule] = useState(false);
+  const [scheduleView, setScheduleView] = useState<'remaining' | 'past'>('remaining');
   const [chartFullRange, setChartFullRange] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [showExtend, setShowExtend] = useState(false);
@@ -973,14 +975,30 @@ export default function LoanDetailPage() {
       {amortization.isAmortizing && amortization.schedule.length > 0 && (
         <div className="card p-4 mb-6">
           <div className="flex items-center justify-between mb-3">
-            <p className="text-sm font-medium text-white">
-              {amortization.negativeAmortization ? 'Projected balance schedule (negative amortization)'
-                : amortization.isInterestOnly ? 'Projected interest-only schedule'
-                : 'Remaining amortization schedule'}
-            </p>
-            {amortization.schedule.length > 12 && (
+            <div className="flex items-center gap-3">
+              <p className="text-sm font-medium text-white">
+                {scheduleView === 'past'
+                  ? 'Past months (calculated from origination — not actual payment records)'
+                  : amortization.negativeAmortization ? 'Projected balance schedule (negative amortization)'
+                  : amortization.isInterestOnly ? 'Projected interest-only schedule'
+                  : 'Remaining amortization schedule'}
+              </p>
+              {amortization.historicalSchedule.length > 0 && (
+                <div className="flex rounded-lg overflow-hidden border border-white/10 text-xs flex-shrink-0">
+                  <button
+                    onClick={() => setScheduleView('remaining')}
+                    className={`px-2.5 py-1 ${scheduleView === 'remaining' ? 'bg-amber-500/20 text-amber-400' : 'text-gray-500 hover:text-gray-300'}`}
+                  >Remaining</button>
+                  <button
+                    onClick={() => setScheduleView('past')}
+                    className={`px-2.5 py-1 ${scheduleView === 'past' ? 'bg-amber-500/20 text-amber-400' : 'text-gray-500 hover:text-gray-300'}`}
+                  >Past</button>
+                </div>
+              )}
+            </div>
+            {(scheduleView === 'past' ? amortization.historicalSchedule : amortization.schedule).length > 12 && (
               <button onClick={() => setShowFullSchedule(v => !v)} className="text-xs text-amber-400 hover:text-amber-300">
-                {showFullSchedule ? 'Show less' : `Show all ${amortization.schedule.length}`}
+                {showFullSchedule ? 'Show less' : `Show all ${(scheduleView === 'past' ? amortization.historicalSchedule : amortization.schedule).length}`}
               </button>
             )}
           </div>
@@ -997,18 +1015,22 @@ export default function LoanDetailPage() {
                 </tr>
               </thead>
               <tbody>
-                {(showFullSchedule ? amortization.schedule : amortization.schedule.slice(0, 12)).map(row => (
-                  <tr key={row.paymentNumber}>
-                    <td className="text-gray-600">{row.paymentNumber}</td>
-                    <td>{format(new Date(row.date), 'MMM yyyy')}</td>
-                    <td className="text-right font-mono">{moneyPrecise(row.paymentAmount)}</td>
-                    <td className={`text-right font-mono ${row.principal < 0 ? 'text-red-400' : 'text-green-400'}`}>
-                      {row.principal < 0 ? `+${moneyPrecise(-row.principal)}` : moneyPrecise(row.principal)}
-                    </td>
-                    <td className="text-right font-mono text-gray-400">{moneyPrecise(row.interest)}</td>
-                    <td className="text-right font-mono">{moneyPrecise(row.balance)}</td>
-                  </tr>
-                ))}
+                {(() => {
+                  const rows = scheduleView === 'past' ? amortization.historicalSchedule : amortization.schedule;
+                  const visible = showFullSchedule ? rows : (scheduleView === 'past' ? rows.slice(-12) : rows.slice(0, 12));
+                  return visible.map(row => (
+                    <tr key={row.paymentNumber}>
+                      <td className="text-gray-600">{row.paymentNumber}</td>
+                      <td>{format(new Date(row.date), 'MMM yyyy')}</td>
+                      <td className="text-right font-mono">{moneyPrecise(row.paymentAmount)}</td>
+                      <td className={`text-right font-mono ${row.principal < 0 ? 'text-red-400' : 'text-green-400'}`}>
+                        {row.principal < 0 ? `+${moneyPrecise(-row.principal)}` : moneyPrecise(row.principal)}
+                      </td>
+                      <td className="text-right font-mono text-gray-400">{moneyPrecise(row.interest)}</td>
+                      <td className="text-right font-mono">{moneyPrecise(row.balance)}</td>
+                    </tr>
+                  ));
+                })()}
               </tbody>
             </table>
           </div>
