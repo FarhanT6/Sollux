@@ -58,6 +58,7 @@ export interface AmortizationResult {
   scheduleEndsAt: string | null;  // last projected date — payoff date, or projection horizon if negatively amortizing
   totalPaidToDate: number;
   totalInterestToDate: number;
+  historicalSchedule: AmortizationRow[]; // origination date through the current-balance date, calculated (not actual payment records)
 }
 
 const REVOLVING_TYPES = new Set(['HELOC', 'CREDIT_LINE']);
@@ -131,6 +132,51 @@ function computeMonthlyPayment(principal: number, monthlyRate: number, termMonth
   return (principal * monthlyRate * factor) / (factor - 1);
 }
 
+// Reconstructs the schedule from origination through the current-balance
+// date, assuming a constant payment/rate the whole way — this is a
+// calculated view, not the actual recorded payment history (see the
+// Payment History table for that), useful for seeing where a given past
+// month's payment split between principal and interest.
+function buildHistoricalSchedule(loan: LoanInput, balanceResult: BalanceResult, monthlyRate: number): AmortizationRow[] {
+  if (!loan.originationDate || loan.originalAmount == null) return [];
+  const asOfDate = new Date(balanceResult.asOfDate);
+  const totalMonths = monthsBetween(loan.originationDate, asOfDate);
+  if (totalMonths <= 0) return [];
+
+  let payment = loan.monthlyPayment ?? null;
+  if (!payment && loan.maturityDate) {
+    const termMonths = Math.max(1, monthsBetween(loan.originationDate, loan.maturityDate));
+    payment = computeMonthlyPayment(loan.originalAmount, monthlyRate, termMonths);
+  }
+  if (!payment) payment = computeMonthlyPayment(loan.originalAmount, monthlyRate, 360);
+
+  const rows: AmortizationRow[] = [];
+  let balance = loan.originalAmount;
+  for (let i = 1; i <= totalMonths && i <= 600; i++) {
+    const interest = balance * monthlyRate;
+    let principal = payment - interest;
+    let paymentAmount = payment;
+    if (principal >= balance) {
+      principal = balance;
+      paymentAmount = balance + interest;
+    }
+    balance = Math.max(0, balance - Math.max(0, principal));
+
+    rows.push({
+      paymentNumber: i,
+      date: iso(addMonths(loan.originationDate, i)),
+      paymentAmount: Math.round(paymentAmount * 100) / 100,
+      principal: Math.round(principal * 100) / 100,
+      interest: Math.round(interest * 100) / 100,
+      balance: Math.round(balance * 100) / 100,
+    });
+
+    if (balance <= 0.01) break;
+  }
+
+  return rows;
+}
+
 export function buildAmortizationSchedule(
   loan: LoanInput,
   balanceResult: BalanceResult,
@@ -157,6 +203,7 @@ export function buildAmortizationSchedule(
       scheduleEndsAt: null,
       totalPaidToDate,
       totalInterestToDate,
+      historicalSchedule: [],
     };
   }
 
@@ -252,6 +299,7 @@ export function buildAmortizationSchedule(
     totalInterestRemaining: Math.round(totalInterestRemaining * 100) / 100,
     totalDeferredInterest: Math.round(totalDeferredInterest * 100) / 100,
     scheduleEndsAt: last?.date ?? null,
+    historicalSchedule: buildHistoricalSchedule(loan, balanceResult, monthlyRate),
     totalPaidToDate,
     totalInterestToDate,
   };
