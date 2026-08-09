@@ -15,7 +15,7 @@ const UtilitySchema = z.object({
   accountNumber: z.string().optional(),
   username: z.string().optional(),
   password: z.string().optional(),
-  loginUrl: z.string().url().optional(),
+  loginUrl: z.union([z.string().url(), z.literal('')]).optional().transform(v => v === '' ? null : v),
   category: z.enum(['ELECTRIC', 'GAS', 'WATER', 'SEWER', 'TRASH', 'SOLAR',
     'INTERNET', 'PHONE', 'INSURANCE', 'HOA', 'TAXES', 'OTHER']),
   notes: z.string().optional(),
