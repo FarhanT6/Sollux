@@ -180,6 +180,15 @@ model Statement {
   amountDue          Decimal?        @db.Decimal(10, 2)
   amountPaid         Decimal?        @db.Decimal(10, 2)
   balance            Decimal?        @db.Decimal(10, 2)
+  // First-class columns for line items that used to live only inside
+  // rawDataJson (scraper-specific keys like "penalties"/"pastDue") — kept
+  // as real, queryable fields so manual entry, PDF import, and the fees
+  // summary report all agree on one shape. Reads still fall back to the
+  // matching rawDataJson key for older scraped statements that predate
+  // these columns (see resolveStatementFields in statements.ts).
+  penaltiesFees      Decimal?        @db.Decimal(10, 2)
+  pastDueCarried     Decimal?        @db.Decimal(10, 2)
+  notes              String?
   usageValue         Decimal?        @db.Decimal(10, 3)
   usageUnit          String?
   ratePlan           String?

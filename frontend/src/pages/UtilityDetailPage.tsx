@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   getUtility, syncUtility, deleteUtility, getStatementDownloadUrl,
   getPaymentPlan, createPaymentPlan, updatePaymentPlan, deletePaymentPlan,
-  upsertUtilityLoan, deleteUtilityLoan, patchStatement,
+  upsertUtilityLoan, deleteUtilityLoan, patchStatement, createStatement,
 } from '../api/client';
 import { CATEGORY_LABELS, CATEGORY_COLORS } from '../types';
 import { Pill, Skeleton, EmptyState } from '../components/ui';
@@ -501,6 +501,7 @@ export default function UtilityDetailPage() {
   const [loan, setLoan]           = useState<any>(null);
   const [showLoanModal, setShowLoanModal] = useState(false);
   const [markingPaid, setMarkingPaid] = useState<string | null>(null);
+  const [editingStatement, setEditingStatement] = useState<any | null>(null);
 
   useEffect(() => {
     if (!accountId) return;
@@ -794,9 +795,21 @@ export default function UtilityDetailPage() {
                 <option value="all">All years</option>
                 {years.map(y => <option key={y} value={y}>{y}</option>)}
               </select>
+              {tab === 'statements' && (
+                <button onClick={() => setEditingStatement({})} className="btn text-xs">+ Add statement</button>
+              )}
             </div>
           )}
         </div>
+
+        {editingStatement !== null && accountId && (
+          <StatementModal
+            accountId={accountId}
+            statement={editingStatement}
+            onClose={() => setEditingStatement(null)}
+            onSaved={() => { setEditingStatement(null); getUtility(accountId).then(a => { setAccount(a); setLoan((a as any).loan ?? null); }); }}
+          />
+        )}
 
         {/* ── Statements ───────────────────────────────────── */}
         {tab === 'statements' && (
@@ -910,6 +923,14 @@ export default function UtilityDetailPage() {
                             📄 PDF
                           </button>
                         )}
+                        <button
+                          onClick={() => setEditingStatement(s)}
+                          title="Edit statement"
+                          className="text-xs px-2 py-1 rounded transition-colors text-gray-500 hover:text-white"
+                          style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
+                        >
+                          Edit
+                        </button>
                       </div>
                     </div>
                   );
@@ -994,6 +1015,109 @@ export default function UtilityDetailPage() {
               </div>
             )
         )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Add / edit statement (manual entry) ─────────────────────────────────────
+
+function StatementModal({ accountId, statement, onClose, onSaved }: {
+  accountId: string; statement: any; onClose: () => void; onSaved: () => void;
+}) {
+  const isEdit = !!statement?.id;
+  const [statementDate, setStatementDate] = useState(statement?.statementDate?.slice(0, 10) ?? new Date().toISOString().slice(0, 10));
+  const [dueDate, setDueDate] = useState(statement?.dueDate?.slice(0, 10) ?? '');
+  const [amountDue, setAmountDue] = useState(statement?.amountDue != null ? String(statement.amountDue) : '');
+  const [amountPaid, setAmountPaid] = useState(statement?.amountPaid != null ? String(statement.amountPaid) : '');
+  const [penaltiesFees, setPenaltiesFees] = useState(statement?.penaltiesFees != null ? String(statement.penaltiesFees) : '');
+  const [pastDueCarried, setPastDueCarried] = useState(statement?.pastDueCarried != null ? String(statement.pastDueCarried) : '');
+  const [notes, setNotes] = useState(statement?.notes ?? '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const num = (v: string) => v.trim() === '' ? null : parseFloat(v);
+
+  async function handleSave() {
+    setSaving(true);
+    setError('');
+    try {
+      if (isEdit) {
+        await patchStatement(statement.id, {
+          statementDate, dueDate: dueDate || null,
+          amountDue: num(amountDue), amountPaid: num(amountPaid),
+          penaltiesFees: num(penaltiesFees), pastDueCarried: num(pastDueCarried),
+          notes: notes || null,
+        });
+      } else {
+        await createStatement({
+          utilityAccountId: accountId, statementDate, dueDate: dueDate || null,
+          amountDue: num(amountDue), amountPaid: num(amountPaid),
+          penaltiesFees: num(penaltiesFees), pastDueCarried: num(pastDueCarried),
+          notes: notes || null,
+        });
+      }
+      onSaved();
+    } catch (err: any) {
+      setError(err?.response?.data?.error || 'Failed to save statement');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const fieldCls = 'w-full rounded-lg px-3 py-2 text-sm text-white bg-white/5 border border-white/10 focus:border-amber-500/50 outline-none';
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+      <div className="w-full max-w-sm rounded-2xl p-6 space-y-3" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.08)' }} onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-white">{isEdit ? 'Edit statement' : 'Add statement'}</h3>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-lg leading-none">×</button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Statement date</label>
+            <input type="date" className={fieldCls} value={statementDate} onChange={e => setStatementDate(e.target.value)} />
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Due date</label>
+            <input type="date" className={fieldCls} value={dueDate} onChange={e => setDueDate(e.target.value)} />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Amount due</label>
+            <input type="number" step="0.01" className={fieldCls} value={amountDue} onChange={e => setAmountDue(e.target.value)} placeholder="0.00" />
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Amount paid</label>
+            <input type="number" step="0.01" className={fieldCls} value={amountPaid} onChange={e => setAmountPaid(e.target.value)} placeholder="0.00" />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Penalties / fees</label>
+            <input type="number" step="0.01" className={fieldCls} value={penaltiesFees} onChange={e => setPenaltiesFees(e.target.value)} placeholder="0.00" />
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Past due carried</label>
+            <input type="number" step="0.01" className={fieldCls} value={pastDueCarried} onChange={e => setPastDueCarried(e.target.value)} placeholder="0.00" />
+          </div>
+        </div>
+        <div>
+          <label className="text-xs text-gray-400 block mb-1">Comments</label>
+          <input className={fieldCls} value={notes} onChange={e => setNotes(e.target.value)} placeholder="e.g. Waste container swap, lock replacement" />
+        </div>
+
+        {error && <p className="text-xs text-red-400">{error}</p>}
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button onClick={onClose} className="btn text-xs">Cancel</button>
+          <button onClick={handleSave} disabled={saving} className="btn btn-primary text-xs disabled:opacity-50">
+            {saving ? 'Saving…' : isEdit ? 'Save' : 'Add statement'}
+          </button>
+        </div>
       </div>
     </div>
   );

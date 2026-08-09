@@ -18,6 +18,7 @@ interface ExtractedBill {
   previousBalance:    number | null;
   paymentsReceived:   number | null;
   currentCharges:     number | null;
+  lateFee:            number | null;
   usageValue:         number | null;
   usageUnit:          string | null;
   ratePlan:           string | null;
@@ -872,6 +873,7 @@ function BillCard({
             ['Amount due',   fmt$(ex.amountDue)],
             ['Current chgs', fmt$(ex.currentCharges)],
             ['Prev balance', fmt$(ex.previousBalance)],
+            ['Late fee',     fmt$(ex.lateFee)],
             ['Payments',     fmt$(ex.paymentsReceived)],
             ['Usage',        ex.usageValue != null ? `${ex.usageValue} ${ex.usageUnit || ''}` : ' - '],
             ['Rate plan',    ex.ratePlan || ' - '],

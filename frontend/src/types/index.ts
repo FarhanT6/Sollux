@@ -504,6 +504,9 @@ export interface Statement {
   amountDue?: number;
   amountPaid?: number;
   balance?: number;
+  penaltiesFees?: number;
+  pastDueCarried?: number;
+  notes?: string;
   usageValue?: number;
   usageUnit?: string;
   ratePlan?: string;
@@ -513,6 +516,21 @@ export interface Statement {
   utilityAccount?: Pick<UtilityAccount, 'providerName' | 'category'> & {
     property?: Pick<Property, 'address' | 'nickname'>;
   };
+}
+
+export interface StatementSummaryRow {
+  id: string;
+  statementDate: string;
+  amountDue: number | null;
+  amountPaid: number | null;
+  penaltiesFees: number | null;
+  pastDueCarried: number | null;
+  notes?: string | null;
+  utilityAccountId: string;
+  providerName: string;
+  category: UtilityCategory;
+  propertyId: string;
+  propertyLabel: string;
 }
 
 export interface Payment {
