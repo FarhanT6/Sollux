@@ -240,6 +240,15 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
             />
           </Field>
 
+          <Field label="Pay/login link (optional)" htmlFor="login-url">
+            <Input
+              id="login-url"
+              value={form.loginUrl}
+              onChange={e => set('loginUrl', e.target.value)}
+              placeholder="https://provider.com/login"
+            />
+          </Field>
+
           <Field label="Notes (optional)" htmlFor="notes">
             <Input
               id="notes"

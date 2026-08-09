@@ -296,6 +296,8 @@ export const deleteUtility = (id: string) =>
   api.delete(`/utilities/${id}`);
 export const syncUtility = (id: string) =>
   api.post<{ jobId: string }>(`/utilities/${id}/sync`).then(r => r.data);
+export const revealUtilityAccountNumber = (id: string) =>
+  api.get<{ accountNumber: string | null }>(`/utilities/${id}/account-number`).then(r => r.data);
 
 // Statements
 export const getStatements = (params: { utilityAccountId?: string; propertyId?: string }) =>

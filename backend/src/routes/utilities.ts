@@ -116,6 +116,20 @@ router.get('/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/utilities/:id/account-number — decrypt and reveal the full
+// account number on explicit user request (not included in normal list/
+// detail responses, which only carry the masked "****1234" display value).
+router.get('/:id/account-number', async (req, res, next) => {
+  try {
+    const account = await db.utilityAccount.findFirst({
+      where: { id: req.params.id, property: { userId: req.dbUserId! } },
+      select: { accountNumberEnc: true },
+    });
+    if (!account) return res.status(404).json({ error: 'Not found' });
+    res.json({ accountNumber: decryptOptional(account.accountNumberEnc) });
+  } catch (err) { next(err); }
+});
+
 // POST /api/utilities/:id/sync — trigger manual scrape
 router.post('/:id/sync', async (req, res, next) => {
   try {

@@ -4,6 +4,7 @@ import {
   getUtility, syncUtility, deleteUtility, getStatementDownloadUrl,
   getPaymentPlan, createPaymentPlan, updatePaymentPlan, deletePaymentPlan,
   upsertUtilityLoan, deleteUtilityLoan, patchStatement, createStatement,
+  revealUtilityAccountNumber,
 } from '../api/client';
 import { CATEGORY_LABELS, CATEGORY_COLORS } from '../types';
 import { Pill, Skeleton, EmptyState } from '../components/ui';
@@ -502,6 +503,8 @@ export default function UtilityDetailPage() {
   const [showLoanModal, setShowLoanModal] = useState(false);
   const [markingPaid, setMarkingPaid] = useState<string | null>(null);
   const [editingStatement, setEditingStatement] = useState<any | null>(null);
+  const [revealedAccountNumber, setRevealedAccountNumber] = useState<string | null>(null);
+  const [revealingAccountNumber, setRevealingAccountNumber] = useState(false);
 
   useEffect(() => {
     if (!accountId) return;
@@ -521,6 +524,18 @@ export default function UtilityDetailPage() {
         statements: (prev.statements ?? []).map((r: any) => r.id === s.id ? { ...r, amountPaid: updated.amountPaid } : r),
       } : prev);
     } catch { } finally { setMarkingPaid(null); }
+  }
+
+  async function toggleAccountNumber() {
+    if (!accountId) return;
+    if (revealedAccountNumber != null) { setRevealedAccountNumber(null); return; }
+    setRevealingAccountNumber(true);
+    try {
+      const { accountNumber } = await revealUtilityAccountNumber(accountId);
+      setRevealedAccountNumber(accountNumber ?? '');
+    } finally {
+      setRevealingAccountNumber(false);
+    }
   }
 
   async function handleSync() {
@@ -681,7 +696,19 @@ export default function UtilityDetailPage() {
             <h1 className="text-base font-semibold text-white">{account.providerName}</h1>
             <span className="text-xs text-gray-500">{(CATEGORY_LABELS as Record<string, string>)[account.category]}</span>
             {account.accountNumber && (
-              <span className="font-mono text-xs text-gray-600">{account.accountNumber}</span>
+              <span className="flex items-center gap-1">
+                <span className="font-mono text-xs text-gray-600">
+                  {revealedAccountNumber != null ? revealedAccountNumber : account.accountNumber}
+                </span>
+                <button
+                  onClick={toggleAccountNumber}
+                  disabled={revealingAccountNumber}
+                  title={revealedAccountNumber != null ? 'Hide account number' : 'Show full account number'}
+                  className="text-gray-500 hover:text-gray-300 transition-colors disabled:opacity-40"
+                >
+                  {revealingAccountNumber ? '…' : revealedAccountNumber != null ? '🙈' : '👁'}
+                </button>
+              </span>
             )}
           </div>
         </div>

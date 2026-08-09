@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { getProperty, getStatements, getPayments, getInsights, syncUtility, updateUtility, deleteUtility, updateProperty, deleteProperty, markInsightRead, dismissInsight, getStatementDownloadUrl } from '../api/client';
+import { getProperty, getStatements, getPayments, getInsights, syncUtility, updateUtility, deleteUtility, updateProperty, deleteProperty, markInsightRead, dismissInsight, getStatementDownloadUrl, revealUtilityAccountNumber } from '../api/client';
 import type { Property, Statement, Payment, AIInsight, UtilityAccount } from '../types';
 import { CATEGORY_LABELS, CATEGORY_COLORS } from '../types';
 import { PageHeader, StatCard, InsightCard, Skeleton, EmptyState, Pill } from '../components/ui';
@@ -611,6 +611,20 @@ function UtilityAccountCardWithHistory({
 function UtilityAccountCard({
   account, payments, syncing, onSync, onEdit, onDelete
 }: { account: UtilityAccount; payments: Payment[]; syncing: boolean; onSync: () => void; onEdit: () => void; onDelete: () => void }) {
+  const [revealedAccountNumber, setRevealedAccountNumber] = useState<string | null>(null);
+  const [revealingAccountNumber, setRevealingAccountNumber] = useState(false);
+
+  async function toggleAccountNumber() {
+    if (revealedAccountNumber != null) { setRevealedAccountNumber(null); return; }
+    setRevealingAccountNumber(true);
+    try {
+      const { accountNumber } = await revealUtilityAccountNumber(account.id);
+      setRevealedAccountNumber(accountNumber ?? '');
+    } finally {
+      setRevealingAccountNumber(false);
+    }
+  }
+
   const latest = account.statements?.[0];
   const dueDate = latest?.dueDate ? new Date(latest.dueDate) : null;
   const color = CATEGORY_COLORS[account.category] || '#888';
@@ -674,7 +688,21 @@ function UtilityAccountCard({
                 Delete
               </button>
             </div>
-            <p className="text-xs font-mono text-gray-400">{account.accountNumber || 'No account #'}</p>
+            {account.accountNumber ? (
+              <p className="text-xs font-mono text-gray-400 flex items-center gap-1">
+                {revealedAccountNumber != null ? revealedAccountNumber : account.accountNumber}
+                <button
+                  onClick={toggleAccountNumber}
+                  disabled={revealingAccountNumber}
+                  title={revealedAccountNumber != null ? 'Hide account number' : 'Show full account number'}
+                  className="text-gray-500 hover:text-gray-300 transition-colors disabled:opacity-40"
+                >
+                  {revealingAccountNumber ? '…' : revealedAccountNumber != null ? '🙈' : '👁'}
+                </button>
+              </p>
+            ) : (
+              <p className="text-xs font-mono text-gray-400">No account #</p>
+            )}
           </div>
         </div>
         <Pill color={pillColor}>{statusLabel}</Pill>
