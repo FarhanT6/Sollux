@@ -51,14 +51,28 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
     notes: '',
     useGmail: false,
   });
+  const [selectedTile, setSelectedTile] = useState('');
+  const [otherName, setOtherName] = useState('');
 
   function set(key: string, value: string | boolean) {
     setForm(prev => ({ ...prev, [key]: value }));
   }
 
   function selectProvider(name: string) {
-    set('providerName', name);
-    set('providerSlug', PROVIDER_SLUGS[name] || 'gmail-fallback');
+    setSelectedTile(name);
+    if (name === 'Other') {
+      set('providerName', otherName);
+      set('providerSlug', 'gmail-fallback');
+    } else {
+      set('providerName', name);
+      set('providerSlug', PROVIDER_SLUGS[name] || 'gmail-fallback');
+    }
+  }
+
+  function handleOtherNameChange(value: string) {
+    setOtherName(value);
+    set('providerName', value);
+    set('providerSlug', 'gmail-fallback');
   }
 
   async function handleSubmit() {
@@ -129,7 +143,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
                     key={name}
                     onClick={() => selectProvider(name)}
                     className={`text-xs px-2 py-2 rounded-lg border text-left transition-colors relative ${
-                      form.providerName === name
+                      selectedTile === name
                         ? 'bg-amber-500/10 border-amber-500/30 text-amber-400 font-medium'
                         : 'bg-white/5 border-white/10 text-gray-300 hover:border-white/20'
                     }`}
@@ -143,6 +157,18 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
               })}
             </div>
           </Field>
+
+          {selectedTile === 'Other' && (
+            <Field label="Utility/service name" htmlFor="other-name" required>
+              <Input
+                id="other-name"
+                autoFocus
+                value={otherName}
+                onChange={e => handleOtherNameChange(e.target.value)}
+                placeholder="e.g. Keystone HOA"
+              />
+            </Field>
+          )}
 
           {form.providerName && (
             <p className="text-xs text-gray-400 mt-1">
