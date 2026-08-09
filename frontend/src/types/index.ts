@@ -504,6 +504,7 @@ export interface Statement {
   amountDue?: number;
   amountPaid?: number;
   balance?: number;
+  chargesExcludingFees?: number;
   penaltiesFees?: number;
   pastDueCarried?: number;
   notes?: string;
@@ -523,8 +524,10 @@ export interface StatementSummaryRow {
   statementDate: string;
   amountDue: number | null;
   amountPaid: number | null;
+  chargesExcludingFees: number | null;
   penaltiesFees: number | null;
   pastDueCarried: number | null;
+  totalDueWithPastDue: number | null;
   notes?: string | null;
   utilityAccountId: string;
   providerName: string;

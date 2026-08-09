@@ -61,6 +61,7 @@ router.get('/', async (req, res, next) => {
 
 const FEE_KEYS = ['penalties', 'lateFee', 'afterDueDateAmt'];
 const PAST_DUE_KEYS = ['pastDue', 'previousBalance'];
+const CHARGES_EXCL_FEES_KEYS = ['currentCharges'];
 
 function firstNumeric(raw: Record<string, unknown> | null | undefined, keys: string[]): number | null {
   if (!raw) return null;
@@ -107,13 +108,17 @@ router.get('/summary', async (req, res, next) => {
 
     const rows = statements.map(s => {
       const raw = s.rawDataJson as Record<string, unknown> | null;
+      const amountDue = s.amountDue != null ? Number(s.amountDue) : null;
+      const pastDueCarried = s.pastDueCarried != null ? Number(s.pastDueCarried) : firstNumeric(raw, PAST_DUE_KEYS);
       return {
         id: s.id,
         statementDate: s.statementDate,
-        amountDue: s.amountDue != null ? Number(s.amountDue) : null,
+        amountDue,
         amountPaid: s.amountPaid != null ? Number(s.amountPaid) : null,
+        chargesExcludingFees: s.chargesExcludingFees != null ? Number(s.chargesExcludingFees) : firstNumeric(raw, CHARGES_EXCL_FEES_KEYS),
         penaltiesFees: s.penaltiesFees != null ? Number(s.penaltiesFees) : firstNumeric(raw, FEE_KEYS),
-        pastDueCarried: s.pastDueCarried != null ? Number(s.pastDueCarried) : firstNumeric(raw, PAST_DUE_KEYS),
+        pastDueCarried,
+        totalDueWithPastDue: amountDue != null || pastDueCarried != null ? (amountDue ?? 0) + (pastDueCarried ?? 0) : null,
         notes: s.notes,
         utilityAccountId: s.utilityAccount.id,
         providerName: s.utilityAccount.providerName,
@@ -133,6 +138,7 @@ const StatementSchema = z.object({
   dueDate: z.string().optional().nullable().transform(s => (s ? new Date(s) : null)),
   amountDue: z.number().optional().nullable(),
   amountPaid: z.number().optional().nullable(),
+  chargesExcludingFees: z.number().optional().nullable(),
   penaltiesFees: z.number().optional().nullable(),
   pastDueCarried: z.number().optional().nullable(),
   notes: z.string().optional().nullable(),
@@ -155,6 +161,7 @@ router.post('/', async (req, res, next) => {
         amountDue: data.amountDue ?? null,
         balance: data.amountDue ?? null,
         amountPaid: data.amountPaid ?? null,
+        chargesExcludingFees: data.chargesExcludingFees ?? null,
         penaltiesFees: data.penaltiesFees ?? null,
         pastDueCarried: data.pastDueCarried ?? null,
         notes: data.notes ?? null,
@@ -184,6 +191,7 @@ router.patch('/:id', async (req, res, next) => {
         ...(data.dueDate !== undefined && { dueDate: data.dueDate }),
         ...(data.amountDue !== undefined && { amountDue: data.amountDue, balance: data.amountDue }),
         ...(data.amountPaid !== undefined && { amountPaid: data.amountPaid }),
+        ...(data.chargesExcludingFees !== undefined && { chargesExcludingFees: data.chargesExcludingFees }),
         ...(data.penaltiesFees !== undefined && { penaltiesFees: data.penaltiesFees }),
         ...(data.pastDueCarried !== undefined && { pastDueCarried: data.pastDueCarried }),
         ...(data.notes !== undefined && { notes: data.notes }),

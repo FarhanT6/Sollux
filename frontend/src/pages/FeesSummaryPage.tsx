@@ -6,14 +6,16 @@ import { PageHeader } from '../components/ui';
 
 const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 
-type Metric = 'penaltiesFees' | 'amountDue' | 'amountPaid' | 'pastDueCarried';
+type Metric = 'penaltiesFees' | 'amountDue' | 'chargesExcludingFees' | 'amountPaid' | 'pastDueCarried' | 'totalDueWithPastDue';
 type GroupBy = 'month' | 'year' | 'all';
 
 const METRICS: { key: Metric; label: string }[] = [
+  { key: 'amountDue', label: 'Total Due' },
+  { key: 'chargesExcludingFees', label: 'Due w/o Penalties & Fees' },
   { key: 'penaltiesFees', label: 'Penalties / Fees' },
-  { key: 'amountDue', label: 'Amount Due' },
-  { key: 'amountPaid', label: 'Amount Paid' },
-  { key: 'pastDueCarried', label: 'Past Due Carried' },
+  { key: 'pastDueCarried', label: 'Past Due' },
+  { key: 'amountPaid', label: 'Paid' },
+  { key: 'totalDueWithPastDue', label: 'Total Due w/ Past Due' },
 ];
 
 function periodKey(dateStr: string, groupBy: GroupBy): string {

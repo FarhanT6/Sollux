@@ -306,11 +306,12 @@ export const deleteStatement = (id: string) =>
   api.delete<{ success: boolean }>(`/statements/${id}`).then(r => r.data);
 export const patchStatement = (id: string, data: {
   amountPaid?: number | null; statementDate?: string; dueDate?: string | null;
-  amountDue?: number | null; penaltiesFees?: number | null; pastDueCarried?: number | null; notes?: string | null;
+  amountDue?: number | null; chargesExcludingFees?: number | null;
+  penaltiesFees?: number | null; pastDueCarried?: number | null; notes?: string | null;
 }) => api.patch<Statement>(`/statements/${id}`, data).then(r => r.data);
 export const createStatement = (data: {
   utilityAccountId: string; statementDate: string; dueDate?: string | null;
-  amountDue?: number | null; amountPaid?: number | null;
+  amountDue?: number | null; amountPaid?: number | null; chargesExcludingFees?: number | null;
   penaltiesFees?: number | null; pastDueCarried?: number | null; notes?: string | null;
 }) => api.post<Statement>('/statements', data).then(r => r.data);
 export const getStatementsSummary = (params?: { propertyId?: string; utilityAccountId?: string }) =>

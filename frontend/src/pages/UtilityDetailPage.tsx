@@ -1030,6 +1030,7 @@ function StatementModal({ accountId, statement, onClose, onSaved }: {
   const [dueDate, setDueDate] = useState(statement?.dueDate?.slice(0, 10) ?? '');
   const [amountDue, setAmountDue] = useState(statement?.amountDue != null ? String(statement.amountDue) : '');
   const [amountPaid, setAmountPaid] = useState(statement?.amountPaid != null ? String(statement.amountPaid) : '');
+  const [chargesExcludingFees, setChargesExcludingFees] = useState(statement?.chargesExcludingFees != null ? String(statement.chargesExcludingFees) : '');
   const [penaltiesFees, setPenaltiesFees] = useState(statement?.penaltiesFees != null ? String(statement.penaltiesFees) : '');
   const [pastDueCarried, setPastDueCarried] = useState(statement?.pastDueCarried != null ? String(statement.pastDueCarried) : '');
   const [notes, setNotes] = useState(statement?.notes ?? '');
@@ -1046,6 +1047,7 @@ function StatementModal({ accountId, statement, onClose, onSaved }: {
         await patchStatement(statement.id, {
           statementDate, dueDate: dueDate || null,
           amountDue: num(amountDue), amountPaid: num(amountPaid),
+          chargesExcludingFees: num(chargesExcludingFees),
           penaltiesFees: num(penaltiesFees), pastDueCarried: num(pastDueCarried),
           notes: notes || null,
         });
@@ -1053,6 +1055,7 @@ function StatementModal({ accountId, statement, onClose, onSaved }: {
         await createStatement({
           utilityAccountId: accountId, statementDate, dueDate: dueDate || null,
           amountDue: num(amountDue), amountPaid: num(amountPaid),
+          chargesExcludingFees: num(chargesExcludingFees),
           penaltiesFees: num(penaltiesFees), pastDueCarried: num(pastDueCarried),
           notes: notes || null,
         });
@@ -1087,22 +1090,36 @@ function StatementModal({ accountId, statement, onClose, onSaved }: {
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="text-xs text-gray-400 block mb-1">Amount due</label>
+            <label className="text-xs text-gray-400 block mb-1">Total due <span className="text-gray-500">(this period, w/ fees)</span></label>
             <input type="number" step="0.01" className={fieldCls} value={amountDue} onChange={e => setAmountDue(e.target.value)} placeholder="0.00" />
           </div>
           <div>
-            <label className="text-xs text-gray-400 block mb-1">Amount paid</label>
+            <label className="text-xs text-gray-400 block mb-1">Paid</label>
             <input type="number" step="0.01" className={fieldCls} value={amountPaid} onChange={e => setAmountPaid(e.target.value)} placeholder="0.00" />
           </div>
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
+            <label className="text-xs text-gray-400 block mb-1">Due w/o penalties &amp; fees</label>
+            <input type="number" step="0.01" className={fieldCls} value={chargesExcludingFees} onChange={e => setChargesExcludingFees(e.target.value)} placeholder="0.00" />
+          </div>
+          <div>
             <label className="text-xs text-gray-400 block mb-1">Penalties / fees</label>
             <input type="number" step="0.01" className={fieldCls} value={penaltiesFees} onChange={e => setPenaltiesFees(e.target.value)} placeholder="0.00" />
           </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="text-xs text-gray-400 block mb-1">Past due carried</label>
+            <label className="text-xs text-gray-400 block mb-1">Past due <span className="text-gray-500">(prior periods)</span></label>
             <input type="number" step="0.01" className={fieldCls} value={pastDueCarried} onChange={e => setPastDueCarried(e.target.value)} placeholder="0.00" />
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Total due w/ past due</label>
+            <div className={`${fieldCls} flex items-center text-gray-300`}>
+              {num(amountDue) != null || num(pastDueCarried) != null
+                ? `$${((num(amountDue) ?? 0) + (num(pastDueCarried) ?? 0)).toFixed(2)}`
+                : '—'}
+            </div>
           </div>
         </div>
         <div>
