@@ -59,6 +59,7 @@ export interface ExtractedBillData {
   previousBalance:    number | null;
   paymentsReceived:   number | null;
   currentCharges:     number | null;
+  lateFee:            number | null;
   usageValue:         number | null;
   usageUnit:          string | null;   // kWh, CCF, therms, gallons, etc.
   ratePlan:           string | null;
@@ -106,6 +107,7 @@ Schema (use null for any field not present in the document):
   "previousBalance": number or null — prior balance carried forward,
   "paymentsReceived": number or null — payments or credits applied since last bill,
   "currentCharges": number or null — new charges this period,
+  "lateFee": number or null — late fee, penalty, or overdue charge added this period (not the base amount due),
   "usageValue": number or null — consumption quantity if applicable (kWh, CCF, gallons, etc.),
   "usageUnit": "string or null — kWh | CCF | therms | gallons | HCF | pickup | other",
   "ratePlan": "string or null — rate schedule, plan name, or tier",
@@ -560,6 +562,15 @@ async function extractWithRegex(pdfBuffer: Buffer, filename: string): Promise<Ex
     /auto.?pay\s+(?:amount|payment)/i,
   ]);
 
+  // ── Late fee / penalty ────────────────────────────────────────────────────
+  const lateFee: number | null = findDollarNear(text, [
+    /late\s+fee/i,
+    /late\s+(?:payment\s+)?(?:charge|penalty)/i,
+    /penalty\s+(?:amount|charge)/i,
+    /overdue\s+charge/i,
+    /nsf\s+fee/i,
+  ]);
+
   // ── Current charges ───────────────────────────────────────────────────────
   let currentCharges: number | null = findDollarNear(text, [
     /current\s+charges?/i,
@@ -730,6 +741,7 @@ async function extractWithRegex(pdfBuffer: Buffer, filename: string): Promise<Ex
     previousBalance,
     paymentsReceived,
     currentCharges,
+    lateFee,
     usageValue,
     usageUnit,
     ratePlan,
@@ -1003,7 +1015,7 @@ export async function parseBill(
         providerName: null, serviceAddress: null, accountNumber: null,
         statementDate: null, dueDate: null, billingPeriodStart: null,
         billingPeriodEnd: null, amountDue: null, previousBalance: null,
-        paymentsReceived: null, currentCharges: null, usageValue: null,
+        paymentsReceived: null, currentCharges: null, lateFee: null, usageValue: null,
         usageUnit: null, ratePlan: null, isPaid: false,
         utilityType: 'other', chargeBreakdown: null, alerts: [],
       },

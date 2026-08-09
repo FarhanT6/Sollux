@@ -177,9 +177,24 @@ model Statement {
   dueDate            DateTime?
   billingPeriodStart DateTime?
   billingPeriodEnd   DateTime?
+  // amountDue = "Total due": this period's charges INCLUDING penalties/fees
+  // but NOT including past due carried from prior periods.
   amountDue          Decimal?        @db.Decimal(10, 2)
   amountPaid         Decimal?        @db.Decimal(10, 2)
   balance            Decimal?        @db.Decimal(10, 2)
+  // First-class columns for line items that used to live only inside
+  // rawDataJson (scraper-specific keys like "penalties"/"pastDue") — kept
+  // as real, queryable fields so manual entry, PDF import, and the fees
+  // summary report all agree on one shape. Reads still fall back to the
+  // matching rawDataJson key for older scraped statements that predate
+  // these columns (see resolveStatementFields in statements.ts).
+  // "Due w/o penalties and fees": this period's base charges only —
+  // amountDue minus penaltiesFees. "Total due w/ past due" isn't stored;
+  // it's amountDue + pastDueCarried, computed wherever it's displayed.
+  chargesExcludingFees Decimal?      @db.Decimal(10, 2)
+  penaltiesFees      Decimal?        @db.Decimal(10, 2)
+  pastDueCarried     Decimal?        @db.Decimal(10, 2)
+  notes              String?
   usageValue         Decimal?        @db.Decimal(10, 3)
   usageUnit          String?
   ratePlan           String?

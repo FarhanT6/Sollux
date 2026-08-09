@@ -25,7 +25,7 @@ api.interceptors.response.use(
 export default api;
 
 import type {
-  Property, UtilityAccount, Statement, Payment, AIInsight, DashboardSummary,
+  Property, UtilityAccount, Statement, StatementSummaryRow, Payment, AIInsight, DashboardSummary,
   Unit, Tenant, LeaseTenant, Lease, RentPayment, RentNotice, Expense, Loan, LoanPayment,
   InsurancePolicy, TaxAssessment, Improvement, LegalMatter, PropertyPnL, MonthlyPnL,
   BankAccount, OtherIncome, BudgetSummary, DelinquencyTenant, BudgetForecast, IndexRate,
@@ -304,8 +304,18 @@ export const getStatementDownloadUrl = (id: string) =>
   api.get<{ url: string }>(`/statements/${id}/download`).then(r => r.data);
 export const deleteStatement = (id: string) =>
   api.delete<{ success: boolean }>(`/statements/${id}`).then(r => r.data);
-export const patchStatement = (id: string, data: { amountPaid?: number | null }) =>
-  api.patch(`/statements/${id}`, data).then(r => r.data);
+export const patchStatement = (id: string, data: {
+  amountPaid?: number | null; statementDate?: string; dueDate?: string | null;
+  amountDue?: number | null; chargesExcludingFees?: number | null;
+  penaltiesFees?: number | null; pastDueCarried?: number | null; notes?: string | null;
+}) => api.patch<Statement>(`/statements/${id}`, data).then(r => r.data);
+export const createStatement = (data: {
+  utilityAccountId: string; statementDate: string; dueDate?: string | null;
+  amountDue?: number | null; amountPaid?: number | null; chargesExcludingFees?: number | null;
+  penaltiesFees?: number | null; pastDueCarried?: number | null; notes?: string | null;
+}) => api.post<Statement>('/statements', data).then(r => r.data);
+export const getStatementsSummary = (params?: { propertyId?: string; utilityAccountId?: string }) =>
+  api.get<StatementSummaryRow[]>('/statements/summary', { params }).then(r => r.data);
 
 // Utility payments
 export const getPayments = (params: { utilityAccountId?: string; propertyId?: string }) =>
