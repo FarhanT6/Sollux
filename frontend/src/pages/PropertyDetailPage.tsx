@@ -333,6 +333,7 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
     username:      '',
     password:      '',
     notes:         (account as any).notes || '',
+    loginUrl:      account.loginUrl || '',
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -349,6 +350,7 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
       if (form.username.trim())      patch.username      = form.username.trim();
       if (form.password.trim())      patch.password      = form.password.trim();
       if (form.notes.trim()         !== ((account as any).notes || '')) patch.notes = form.notes.trim();
+      if (form.loginUrl.trim()      !== (account.loginUrl || ''))       patch.loginUrl = form.loginUrl.trim();
       if (Object.keys(patch).length === 0) { onClose(); return; }
       await updateUtility(account.id, patch);
       onSaved();
@@ -397,6 +399,10 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
               <label className="text-xs text-gray-400 block mb-1">Password</label>
               <input type="password" className={fieldCls} placeholder="New password" value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} />
             </div>
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Pay/login link</label>
+            <input className={fieldCls} placeholder="https://provider.com/login" value={form.loginUrl} onChange={e => setForm(f => ({ ...f, loginUrl: e.target.value }))} />
           </div>
           <div>
             <label className="text-xs text-gray-400 block mb-1">Notes (optional)</label>
@@ -748,13 +754,26 @@ function UtilityAccountCard({
             );
           })()}
         </div>
-        <button
-          onClick={onSync}
-          disabled={syncing}
-          className="btn text-xs ml-3 flex-shrink-0"
-        >
-          {syncing ? 'Syncing…' : 'Sync ↻'}
-        </button>
+        <div className="flex items-center gap-2 ml-3 flex-shrink-0">
+          {account.loginUrl && (
+            <a
+              href={account.loginUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={`Pay on ${account.providerName}'s site`}
+              className="btn text-xs"
+            >
+              Pay ↗
+            </a>
+          )}
+          <button
+            onClick={onSync}
+            disabled={syncing}
+            className="btn text-xs"
+          >
+            {syncing ? 'Syncing…' : 'Sync ↻'}
+          </button>
+        </div>
       </div>
 
       {/* No credentials banner */}
