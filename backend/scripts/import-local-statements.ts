@@ -156,10 +156,10 @@ async function main() {
   const propertyQuery = getArg('property');
   const dryRun = args.includes('--dry-run');
   const method: 'ai' | 'regex' = args.includes('--ai') ? 'ai' : 'regex';
-  // Comma-separated list of folder-name substrings to exclude entirely —
-  // useful for a folder like "Cars" that mixes real statements in with
-  // insurance docs, bank statements, and other junk that shouldn't become
-  // loan statements. Handle those separately once sorted.
+  // Comma-separated list of substrings to exclude — matched against both
+  // the top-level category folder name and each file's full relative path,
+  // so this can drop an entire folder (e.g. "Cars") or just specific loose
+  // files within one (e.g. "Myaccount.pdf,chase.com").
   const skipFolders = (getArg('skip') || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
   if (!dir || !email || !propertyQuery) {
@@ -182,10 +182,12 @@ async function main() {
   console.log(`Property: ${property.nickname || property.address} (${property.id})`);
 
   const allFiles = walkPdfs(dir);
-  const files = allFiles.filter(f => !skipFolders.some(s => f.categoryFolder.toLowerCase().includes(s)));
+  const files = allFiles.filter(f => !skipFolders.some(s =>
+    f.categoryFolder.toLowerCase().includes(s) || f.relPath.toLowerCase().includes(s)
+  ));
   const excludedCount = allFiles.length - files.length;
   console.log(`Found ${allFiles.length} PDFs across ${new Set(allFiles.map(f => f.categoryFolder)).size} folders. Method: ${method}${dryRun ? ' (DRY RUN)' : ''}`);
-  if (excludedCount > 0) console.log(`Excluding ${excludedCount} files from folders matching --skip: ${skipFolders.join(', ')}`);
+  if (excludedCount > 0) console.log(`Excluding ${excludedCount} files matching --skip: ${skipFolders.join(', ')}`);
   console.log('');
 
   const skippedFolders = new Set<string>();
