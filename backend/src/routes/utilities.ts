@@ -19,6 +19,7 @@ const UtilitySchema = z.object({
   category: z.enum(['ELECTRIC', 'GAS', 'WATER', 'SEWER', 'TRASH', 'SOLAR',
     'INTERNET', 'PHONE', 'INSURANCE', 'HOA', 'TAXES', 'OTHER']),
   notes: z.string().optional(),
+  isActive: z.boolean().optional(),
 });
 
 // GET /api/utilities?propertyId=xxx
@@ -184,6 +185,10 @@ router.patch('/:id', async (req, res, next) => {
         }),
         ...(username !== undefined && { usernameEnc: encryptOptional(username) }),
         ...(password !== undefined && { passwordEnc: encryptOptional(password) }),
+        // Deactivating pauses the auto-scraper too (no point syncing an account
+        // you've marked as no longer in use); reactivating resumes it.
+        ...(rest.isActive === false && { syncEnabled: false }),
+        ...(rest.isActive === true && { syncEnabled: true }),
       },
     });
 
