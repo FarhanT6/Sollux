@@ -355,7 +355,7 @@ export default function PropertyDetailPage() {
   );
 }
 
-const UTILITY_CATEGORIES = ['ELECTRIC','GAS','WATER','SEWER','TRASH','SOLAR','INTERNET','PHONE','INSURANCE','HOA','TAXES','LOAN','OTHER'];
+const UTILITY_CATEGORIES = ['ELECTRIC','GAS','WATER','SEWER','TRASH','SOLAR','INTERNET','PHONE','INSURANCE','HOA','TAXES','LOAN','CREDIT_CARD','OTHER'];
 
 function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccount; onClose: () => void; onSaved: () => void }) {
   const [form, setForm] = useState({
@@ -429,7 +429,7 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
       // dropdown — otherwise we'd silently overwrite an existing policy's/
       // loan's type with the form's default every time they save.
       if (form.category === 'INSURANCE' && insuranceTypeTouched) patch.insuranceType = insuranceType;
-      if (form.category === 'LOAN' && loanTypeTouched) patch.loanType = loanType;
+      if ((form.category === 'LOAN' || form.category === 'CREDIT_CARD') && loanTypeTouched) patch.loanType = loanType;
       if (Object.keys(patch).length === 0) { onClose(); return; }
       await updateUtility(account.id, patch);
       onSaved();
@@ -458,7 +458,7 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
             <div>
               <label className="text-xs text-gray-400 block mb-1">Category</label>
               <select className={fieldCls} value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value as any }))}>
-                {UTILITY_CATEGORIES.map(c => <option key={c} value={c}>{c.charAt(0) + c.slice(1).toLowerCase()}</option>)}
+                {UTILITY_CATEGORIES.map(c => <option key={c} value={c}>{CATEGORY_LABELS[c as keyof typeof CATEGORY_LABELS]}</option>)}
               </select>
             </div>
           </div>
@@ -474,7 +474,7 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
               </select>
             </div>
           )}
-          {form.category === 'LOAN' && (
+          {(form.category === 'LOAN' || form.category === 'CREDIT_CARD') && (
             <div>
               <label className="text-xs text-gray-400 block mb-1">Loan type</label>
               <select

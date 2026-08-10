@@ -5,7 +5,7 @@ export type PropertyType =
 export type PropertyStatus = 'ACTIVE' | 'SOLD' | 'UNDER_CONTRACT' | 'INACTIVE';
 export type UtilityCategory =
   | 'ELECTRIC' | 'GAS' | 'WATER' | 'SEWER' | 'TRASH'
-  | 'SOLAR' | 'INTERNET' | 'PHONE' | 'INSURANCE' | 'HOA' | 'TAXES' | 'LOAN' | 'OTHER';
+  | 'SOLAR' | 'INTERNET' | 'PHONE' | 'INSURANCE' | 'HOA' | 'TAXES' | 'LOAN' | 'CREDIT_CARD' | 'OTHER';
 export type InsightType = 'ANOMALY' | 'SAVINGS' | 'REMINDER' | 'INFO' | 'OUTAGE';
 export type InsightSeverity = 'INFO' | 'WARNING' | 'ALERT';
 export type PaymentStatus = 'PAID' | 'PENDING' | 'FAILED' | 'PARTIAL';
@@ -587,13 +587,13 @@ export interface DashboardSummary {
 export const CATEGORY_LABELS: Record<UtilityCategory, string> = {
   ELECTRIC: 'Electric', GAS: 'Gas', WATER: 'Water', SEWER: 'Sewer',
   TRASH: 'Trash', SOLAR: 'Solar', INTERNET: 'Internet', PHONE: 'Phone',
-  INSURANCE: 'Insurance', HOA: 'HOA', TAXES: 'Taxes', LOAN: 'Loan', OTHER: 'Other',
+  INSURANCE: 'Insurance', HOA: 'HOA', TAXES: 'Taxes', LOAN: 'Loan', CREDIT_CARD: 'Credit Card', OTHER: 'Other',
 };
 
 export const CATEGORY_COLORS: Record<UtilityCategory, string> = {
   ELECTRIC: '#F5A623', GAS: '#5DCAA5', WATER: '#378ADD', SEWER: '#7F77DD',
   TRASH: '#888780', SOLAR: '#EF9F27', INTERNET: '#D4537E', PHONE: '#F0997B',
-  INSURANCE: '#E24B4A', HOA: '#1D9E75', TAXES: '#534AB7', LOAN: '#4AA8E2', OTHER: '#B4B2A9',
+  INSURANCE: '#E24B4A', HOA: '#1D9E75', TAXES: '#534AB7', LOAN: '#4AA8E2', CREDIT_CARD: '#C9598A', OTHER: '#B4B2A9',
 };
 
 export const LOAN_TYPE_LABELS: Record<string, string> = {

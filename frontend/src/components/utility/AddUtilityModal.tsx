@@ -148,12 +148,12 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
         loginUrl: form.loginUrl || undefined,
         notes: form.notes || undefined,
         insuranceType: form.category === 'INSURANCE' ? insuranceType : undefined,
-        loanType: form.category === 'LOAN' ? loanType : undefined,
+        loanType: (form.category === 'LOAN' || form.category === 'CREDIT_CARD') ? loanType : undefined,
       });
-      // LOAN category auto-links on the backend; the checkbox below only
-      // applies to other categories that also happen to be a loan (e.g. a
+      // LOAN/CREDIT_CARD categories auto-link on the backend; the checkbox
+      // below only applies to other categories that also happen to be a loan (e.g. a
       // solar financing account still categorized as SOLAR).
-      if (isLoan && form.category !== 'LOAN') {
+      if (isLoan && form.category !== 'LOAN' && form.category !== 'CREDIT_CARD') {
         await upsertUtilityLoan(account.id, { lender: form.providerName, loanType });
       }
       onSuccess();
@@ -271,7 +271,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
             </div>
           )}
 
-          {form.category === 'LOAN' ? (
+          {(form.category === 'LOAN' || form.category === 'CREDIT_CARD') ? (
             <div className="mb-4 p-3 bg-white/5 rounded-lg">
               <p className="text-xs text-gray-400 mb-2">
                 🔗 This will also appear under <span className="text-gray-300 font-medium">Portfolio → Loans</span> for this property — if a loan with this lender name already exists there unlinked, it'll link to it instead of creating a duplicate. Add the balance/rate/payment there.
@@ -284,7 +284,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
               </Select>
             </div>
           ) : (
-            /* Loan link on a non-LOAN category — e.g. a solar financing account still categorized as SOLAR */
+            /* Loan link on a non-LOAN/CREDIT_CARD category — e.g. a solar financing account still categorized as SOLAR */
             <div className="mb-4 p-3 bg-white/5 rounded-lg">
               <label className="flex items-start gap-2 cursor-pointer">
                 <input

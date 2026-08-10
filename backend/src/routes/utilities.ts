@@ -68,18 +68,19 @@ async function syncLoanActiveForUtility(account: { id: string; isActive: boolean
   });
 }
 
-// Auto-links a LOAN-category utility account (auto loan, student loan, etc.)
-// to a Portfolio → Loans entry, the same way INSURANCE auto-links to a
-// policy. If an unlinked Loan on this property already has a matching
-// lender name (e.g. it was entered manually under Portfolio first), link to
-// that one instead of creating a duplicate; otherwise create a new one.
-// Switching category away from LOAN unlinks (not deletes) any existing link.
+// Auto-links a LOAN- or CREDIT_CARD-category utility account (auto loan,
+// student loan, credit card, etc.) to a Portfolio → Loans entry, the same
+// way INSURANCE auto-links to a policy. If an unlinked Loan on this
+// property already has a matching lender name (e.g. it was entered
+// manually under Portfolio first), link to that one instead of creating a
+// duplicate; otherwise create a new one. Switching category away from
+// LOAN/CREDIT_CARD unlinks (not deletes) any existing link.
 async function syncLoanForUtility(
   account: { id: string; propertyId: string; providerName: string; category: string; isActive: boolean },
   userId: string,
   opts: { loanType?: string } = {},
 ) {
-  if (account.category !== 'LOAN') {
+  if (account.category !== 'LOAN' && account.category !== 'CREDIT_CARD') {
     await db.loan.updateMany({
       where: { utilityAccountId: account.id },
       data: { utilityAccountId: null },
@@ -124,7 +125,7 @@ async function syncLoanForUtility(
       propertyId: account.propertyId,
       utilityAccountId: account.id,
       lender: account.providerName,
-      loanType: (opts.loanType as any) || 'OTHER',
+      loanType: (opts.loanType as any) || (account.category === 'CREDIT_CARD' ? 'CREDIT_LINE' : 'OTHER'),
       isActive: account.isActive,
       isPersonal: false,
     },
@@ -140,7 +141,7 @@ const UtilitySchema = z.object({
   password: z.string().optional(),
   loginUrl: z.union([z.string().url(), z.literal('')]).optional().transform(v => v === '' ? null : v),
   category: z.enum(['ELECTRIC', 'GAS', 'WATER', 'SEWER', 'TRASH', 'SOLAR',
-    'INTERNET', 'PHONE', 'INSURANCE', 'HOA', 'TAXES', 'LOAN', 'OTHER']),
+    'INTERNET', 'PHONE', 'INSURANCE', 'HOA', 'TAXES', 'LOAN', 'CREDIT_CARD', 'OTHER']),
   notes: z.string().optional(),
   isActive: z.boolean().optional(),
   // Only relevant when category is INSURANCE — passed through to the linked

@@ -31,17 +31,17 @@
 //       extracted from the PDF, no property). Deduped on re-run by
 //       (vendor, date, amount).
 //
-// Usage (run from backend/, with your real env vars — same DATABASE_URL you
-// already use for `prisma migrate deploy`, plus AWS_* creds for S3):
+// Usage (run from backend/ — reads DATABASE_URL and AWS_* creds from your
+// existing backend/.env automatically, same as `npm run dev`):
 //
-//   DATABASE_URL=... AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
-//     npx tsx scripts/import-local-statements.ts \
+//   npx tsx scripts/import-local-statements.ts \
 //     --dir /path/to/Bills --email you@example.com --property "4349 Vista Verde Way"
 //
 //   Add --dry-run to preview matches/creates without writing anything.
 //   Add --ai to use Claude extraction instead of regex (costs credits,
 //   generally more accurate) for files regex struggles with.
 
+import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
 import { PrismaClient, Prisma } from '@prisma/client';
@@ -63,6 +63,7 @@ const CATEGORY_FOLDER_MAP: Record<string, string> = {
   hoa: 'HOA',
   tax: 'TAXES', taxes: 'TAXES',
   loan: 'LOAN', mortgage: 'LOAN', car: 'LOAN', cars: 'LOAN', auto: 'LOAN',
+  'credit card': 'CREDIT_CARD', 'credit cards': 'CREDIT_CARD',
 };
 
 // Folders imported as personal Expense rows (no property) instead of a
@@ -74,10 +75,31 @@ function isPersonalFolder(folderName: string): boolean {
   return PERSONAL_FOLDERS.some(f => lower.includes(f));
 }
 
+// Files matching one of these (checked against the full path relative to
+// --dir, so subfolder names count too) aren't statements at all — tax
+// forms, insurance policy paperwork, inspection reports, recall notices,
+// etc. — so they're saved as Documents (Portfolio → Documents) instead of
+// being forced into a Statement row. Order matters: first match wins.
+const DOCUMENT_MARKERS: { pattern: RegExp; category: string }[] = [
+  { pattern: /1098|1099/i, category: 'TAX' },
+  { pattern: /declarations? page|id ?card|verification of insurance|payment schedule|cancel(l)?ation? notice|eft ?authorization|election of lower limits|policy ?notice|cover letter|application/i, category: 'INSURANCE' },
+  { pattern: /recall|inspection|servicecart|dealership visit|product recall/i, category: 'OTHER' },
+];
+
+function documentMarkerFor(relPath: string): string | null {
+  for (const { pattern, category } of DOCUMENT_MARKERS) {
+    if (pattern.test(relPath)) return category;
+  }
+  return null;
+}
+
 function categoryForFolder(folderName: string): string | null {
   const lower = folderName.toLowerCase();
   for (const [key, category] of Object.entries(CATEGORY_FOLDER_MAP)) {
-    if (lower.includes(key)) return category;
+    // Word-boundary match, not a raw substring check — otherwise short keys
+    // like "car" false-positive inside unrelated words (e.g. "Credit Cards"
+    // contains "car" as a literal substring of "cards").
+    if (new RegExp(`\\b${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(lower)) return category;
   }
   return null;
 }
@@ -101,8 +123,8 @@ function parseDateFromFilename(filename: string): Date | null {
   return null;
 }
 
-function walkPdfs(root: string): { categoryFolder: string; filePath: string; filename: string }[] {
-  const out: { categoryFolder: string; filePath: string; filename: string }[] = [];
+function walkPdfs(root: string): { categoryFolder: string; filePath: string; filename: string; relPath: string }[] {
+  const out: { categoryFolder: string; filePath: string; filename: string; relPath: string }[] = [];
   for (const categoryFolder of fs.readdirSync(root)) {
     const categoryPath = path.join(root, categoryFolder);
     if (!fs.statSync(categoryPath).isDirectory()) continue;
@@ -115,7 +137,7 @@ function walkPdfs(root: string): { categoryFolder: string; filePath: string; fil
         if (fs.statSync(full).isDirectory()) {
           stack.push(full);
         } else if (entry.toLowerCase().endsWith('.pdf')) {
-          out.push({ categoryFolder, filePath: full, filename: entry });
+          out.push({ categoryFolder, filePath: full, filename: entry, relPath: path.relative(root, full) });
         }
       }
     }
@@ -134,6 +156,11 @@ async function main() {
   const propertyQuery = getArg('property');
   const dryRun = args.includes('--dry-run');
   const method: 'ai' | 'regex' = args.includes('--ai') ? 'ai' : 'regex';
+  // Comma-separated list of substrings to exclude — matched against both
+  // the top-level category folder name and each file's full relative path,
+  // so this can drop an entire folder (e.g. "Cars") or just specific loose
+  // files within one (e.g. "Myaccount.pdf,chase.com").
+  const skipFolders = (getArg('skip') || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
   if (!dir || !email || !propertyQuery) {
     console.error('Usage: npx tsx scripts/import-local-statements.ts --dir <path> --email <you@example.com> --property "<address or nickname>" [--dry-run] [--ai]');
@@ -154,13 +181,59 @@ async function main() {
   }
   console.log(`Property: ${property.nickname || property.address} (${property.id})`);
 
-  const files = walkPdfs(dir);
-  console.log(`Found ${files.length} PDFs across ${new Set(files.map(f => f.categoryFolder)).size} folders. Method: ${method}${dryRun ? ' (DRY RUN)' : ''}\n`);
+  const allFiles = walkPdfs(dir);
+  const files = allFiles.filter(f => !skipFolders.some(s =>
+    f.categoryFolder.toLowerCase().includes(s) || f.relPath.toLowerCase().includes(s)
+  ));
+  const excludedCount = allFiles.length - files.length;
+  console.log(`Found ${allFiles.length} PDFs across ${new Set(allFiles.map(f => f.categoryFolder)).size} folders. Method: ${method}${dryRun ? ' (DRY RUN)' : ''}`);
+  if (excludedCount > 0) console.log(`Excluding ${excludedCount} files matching --skip: ${skipFolders.join(', ')}`);
+  console.log('');
 
   const skippedFolders = new Set<string>();
   let imported = 0, updated = 0, skipped = 0, errored = 0, personalImported = 0, personalSkipped = 0;
+  let docsImported = 0, docsSkipped = 0;
 
   for (const file of files) {
+    const docCategory = documentMarkerFor(file.relPath);
+    if (docCategory) {
+      try {
+        const title = file.filename.replace(/\.pdf$/i, '');
+        const existingDoc = await db.document.findFirst({
+          where: { userId: user.id, propertyId: property.id, title },
+        });
+        if (existingDoc) {
+          console.log(`  [doc, skip exists] ${file.relPath}`);
+          docsSkipped++;
+          continue;
+        }
+
+        console.log(`  [document, ${docCategory}] ${file.relPath}`);
+        if (!dryRun) {
+          const buffer = fs.readFileSync(file.filePath);
+          const key = `${user.id}/documents/${property.id}/${Date.now()}_${sanitizeFilename(file.filename)}`;
+          const s3Url = await uploadDocument(key, buffer);
+          await db.document.create({
+            data: {
+              userId: user.id,
+              propertyId: property.id,
+              category: docCategory as any,
+              title,
+              s3Key: key,
+              s3Url,
+              sourceType: 'UPLOAD',
+              notes: `Imported from ${file.relPath}`,
+            },
+          });
+        }
+        docsImported++;
+      } catch (err) {
+        errored++;
+        console.error(`  ERROR on ${file.filePath}:`, err instanceof Error ? err.message : err);
+      }
+      continue;
+    }
+
     if (isPersonalFolder(file.categoryFolder)) {
       try {
         const buffer = fs.readFileSync(file.filePath);
@@ -246,7 +319,16 @@ async function main() {
         : ex.amountDue;
       const amountDueCurrent = ex.currentCharges ?? ex.amountDue;
 
-      console.log(`  ${file.categoryFolder}/${file.filename} -> ${statementDate.toISOString().slice(0, 10)}, due ${amountDueCurrent ?? '—'}`);
+      const pastDueAmt = ex.previousBalance != null && ex.previousBalance > 0 ? ex.previousBalance : null;
+      console.log(
+        `  ${file.categoryFolder}/${file.filename} -> ${statementDate.toISOString().slice(0, 10)}, ` +
+        `due ${amountDueCurrent ?? '—'}` +
+        (pastDueAmt != null ? `, past due ${pastDueAmt}` : '') +
+        (ex.lateFee != null ? `, late fee ${ex.lateFee}` : '') +
+        (ex.dueDate ? `, due date ${ex.dueDate}` : '') +
+        (ex.billingPeriodStart || ex.billingPeriodEnd ? `, period ${ex.billingPeriodStart ?? '?'}–${ex.billingPeriodEnd ?? '?'}` : '') +
+        (ex.usageValue != null ? `, usage ${ex.usageValue}${ex.usageUnit ?? ''}` : '')
+      );
 
       if (dryRun || !account) { imported++; continue; }
 
@@ -263,9 +345,13 @@ async function main() {
         source: 'local_import', providerName: ex.providerName, serviceAddress: ex.serviceAddress,
         accountNumber: ex.accountNumber, previousBalance: ex.previousBalance,
         paymentsReceived: ex.paymentsReceived, currentCharges: ex.currentCharges, totalDue,
-        pastDue: ex.previousBalance != null && ex.previousBalance > 0 ? ex.previousBalance : undefined,
+        pastDue: pastDueAmt ?? undefined,
         isPaid: ex.isPaid, utilityType: ex.utilityType, chargeBreakdown: ex.chargeBreakdown, alerts: ex.alerts,
       };
+      // Prefer the actual payment amount the statement shows over guessing
+      // "fully paid" from the isPaid flag — that flag only tells us whether
+      // the balance was zeroed out, not how much was actually paid.
+      const amountPaidValue = ex.paymentsReceived ?? (ex.isPaid ? (totalDue ?? amountDueCurrent ?? null) : null);
 
       if (existing) {
         await db.statement.update({
@@ -274,7 +360,11 @@ async function main() {
             statementDate,
             amountDue: amountDueCurrent ?? existing.amountDue,
             balance: totalDue ?? amountDueCurrent ?? existing.balance,
+            amountPaid: amountPaidValue ?? existing.amountPaid,
             dueDate: ex.dueDate ? new Date(ex.dueDate) : existing.dueDate,
+            chargesExcludingFees: ex.currentCharges ?? existing.chargesExcludingFees,
+            penaltiesFees: ex.lateFee ?? existing.penaltiesFees,
+            pastDueCarried: pastDueAmt ?? existing.pastDueCarried,
             rawDataJson: rawData as Prisma.InputJsonValue,
             pdfS3Key,
           },
@@ -289,7 +379,10 @@ async function main() {
             billingPeriodEnd: ex.billingPeriodEnd ? new Date(ex.billingPeriodEnd) : null,
             amountDue: amountDueCurrent ?? null,
             balance: totalDue ?? amountDueCurrent ?? null,
-            amountPaid: ex.isPaid ? (totalDue ?? amountDueCurrent ?? null) : null,
+            amountPaid: amountPaidValue,
+            chargesExcludingFees: ex.currentCharges ?? null,
+            penaltiesFees: ex.lateFee ?? null,
+            pastDueCarried: pastDueAmt,
             usageValue: ex.usageValue ?? null, usageUnit: ex.usageUnit ?? null,
             ratePlan: ex.ratePlan ?? null, pdfS3Key, sourceType: 'MANUAL',
             rawDataJson: rawData as Prisma.InputJsonValue,
@@ -303,7 +396,7 @@ async function main() {
     }
   }
 
-  console.log(`\nDone. Statements — imported ${imported}, updated ${updated}, skipped ${skipped}. Personal expenses — imported ${personalImported}, skipped (already existed) ${personalSkipped}. Errors ${errored}.`);
+  console.log(`\nDone. Statements — imported ${imported}, updated ${updated}, skipped ${skipped}. Personal expenses — imported ${personalImported}, skipped (already existed) ${personalSkipped}. Documents — imported ${docsImported}, skipped (already existed) ${docsSkipped}. Errors ${errored}.`);
   if (skippedFolders.size) {
     console.log(`Skipped folders (no category mapping — add them to CATEGORY_FOLDER_MAP if they should be included): ${[...skippedFolders].join(', ')}`);
   }
