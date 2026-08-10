@@ -77,7 +77,10 @@ function isPersonalFolder(folderName: string): boolean {
 function categoryForFolder(folderName: string): string | null {
   const lower = folderName.toLowerCase();
   for (const [key, category] of Object.entries(CATEGORY_FOLDER_MAP)) {
-    if (lower.includes(key)) return category;
+    // Word-boundary match, not a raw substring check — otherwise short keys
+    // like "car" false-positive inside unrelated words (e.g. "Credit Cards"
+    // contains "car" as a literal substring of "cards").
+    if (new RegExp(`\\b${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(lower)) return category;
   }
   return null;
 }
@@ -134,6 +137,11 @@ async function main() {
   const propertyQuery = getArg('property');
   const dryRun = args.includes('--dry-run');
   const method: 'ai' | 'regex' = args.includes('--ai') ? 'ai' : 'regex';
+  // Comma-separated list of folder-name substrings to exclude entirely —
+  // useful for a folder like "Cars" that mixes real statements in with
+  // insurance docs, bank statements, and other junk that shouldn't become
+  // loan statements. Handle those separately once sorted.
+  const skipFolders = (getArg('skip') || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
   if (!dir || !email || !propertyQuery) {
     console.error('Usage: npx tsx scripts/import-local-statements.ts --dir <path> --email <you@example.com> --property "<address or nickname>" [--dry-run] [--ai]');
@@ -154,8 +162,12 @@ async function main() {
   }
   console.log(`Property: ${property.nickname || property.address} (${property.id})`);
 
-  const files = walkPdfs(dir);
-  console.log(`Found ${files.length} PDFs across ${new Set(files.map(f => f.categoryFolder)).size} folders. Method: ${method}${dryRun ? ' (DRY RUN)' : ''}\n`);
+  const allFiles = walkPdfs(dir);
+  const files = allFiles.filter(f => !skipFolders.some(s => f.categoryFolder.toLowerCase().includes(s)));
+  const excludedCount = allFiles.length - files.length;
+  console.log(`Found ${allFiles.length} PDFs across ${new Set(allFiles.map(f => f.categoryFolder)).size} folders. Method: ${method}${dryRun ? ' (DRY RUN)' : ''}`);
+  if (excludedCount > 0) console.log(`Excluding ${excludedCount} files from folders matching --skip: ${skipFolders.join(', ')}`);
+  console.log('');
 
   const skippedFolders = new Set<string>();
   let imported = 0, updated = 0, skipped = 0, errored = 0, personalImported = 0, personalSkipped = 0;
