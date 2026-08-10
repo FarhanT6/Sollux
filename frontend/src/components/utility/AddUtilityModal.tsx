@@ -1,8 +1,8 @@
-import { useState } from 'react';
-import { createUtility } from '../../api/client';
+import { useState, useEffect } from 'react';
+import { createUtility, getUtilities, upsertUtilityLoan } from '../../api/client';
 import { Modal, Field, Input, Select } from '../ui';
 import type { UtilityCategory } from '../../types';
-import { CATEGORY_LABELS } from '../../types';
+import { CATEGORY_LABELS, LOAN_TYPE_LABELS } from '../../types';
 
 const PROVIDER_SLUGS: Record<string, string> = {
   'SDGE': 'sdge',
@@ -53,6 +53,27 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
   });
   const [selectedTile, setSelectedTile] = useState('');
   const [otherName, setOtherName] = useState('');
+  const [customProviders, setCustomProviders] = useState<Record<string, string>>({});
+  const [isLoan, setIsLoan] = useState(false);
+  const [loanType, setLoanType] = useState('OTHER');
+
+  // Providers added via "Other" on any property don't live in the static
+  // PROVIDER_SLUGS list, so without this they'd vanish from the picker the
+  // next time you go to add a utility — pull in every distinct provider
+  // name/slug the user has already used and merge them in as extra tiles.
+  useEffect(() => {
+    getUtilities().then(accounts => {
+      const extra: Record<string, string> = {};
+      for (const a of accounts) {
+        if (!PROVIDER_SLUGS[a.providerName] && !extra[a.providerName]) {
+          extra[a.providerName] = a.providerSlug;
+        }
+      }
+      setCustomProviders(extra);
+    }).catch(() => {});
+  }, []);
+
+  const allProviders = { ...customProviders, ...PROVIDER_SLUGS };
 
   function set(key: string, value: string | boolean) {
     setForm(prev => ({ ...prev, [key]: value }));
@@ -65,7 +86,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
       set('providerSlug', 'gmail-fallback');
     } else {
       set('providerName', name);
-      set('providerSlug', PROVIDER_SLUGS[name] || 'gmail-fallback');
+      set('providerSlug', allProviders[name] || 'gmail-fallback');
     }
   }
 
@@ -81,7 +102,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
     setLoading(true);
     setError('');
     try {
-      await createUtility({
+      const account = await createUtility({
         propertyId,
         providerName: form.providerName,
         providerSlug: form.useGmail ? 'gmail-fallback' : form.providerSlug,
@@ -92,6 +113,9 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
         loginUrl: form.loginUrl || undefined,
         notes: form.notes || undefined,
       });
+      if (isLoan) {
+        await upsertUtilityLoan(account.id, { lender: form.providerName, loanType });
+      }
       onSuccess();
       onClose();
     } catch (err: any) {
@@ -135,8 +159,8 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
 
           <Field label="Provider" required>
             <div className="grid grid-cols-3 gap-1.5 max-h-52 overflow-y-auto pr-1">
-              {Object.keys(PROVIDER_SLUGS).map(name => {
-                const slug = PROVIDER_SLUGS[name];
+              {Object.keys(allProviders).map(name => {
+                const slug = allProviders[name];
                 const hasLiveScraper = SCRAPER_SUPPORTED.has(slug);
                 return (
                   <button
@@ -190,6 +214,31 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
               </p>
             </div>
           )}
+
+          {/* Non-mortgage loan link (auto, student, solar financing, etc.) */}
+          <div className="mb-4 p-3 bg-white/5 rounded-lg">
+            <label className="flex items-start gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={isLoan}
+                onChange={e => setIsLoan(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span className="text-xs text-gray-300">
+                <span className="font-medium">This is also a loan</span> (auto, student, solar financing, etc.) — 🔗 links it under <span className="text-gray-300 font-medium">Portfolio → Loans</span> too. Add the balance/rate/payment there.
+              </span>
+            </label>
+            {isLoan && (
+              <div className="mt-2">
+                <label className="text-xs text-gray-400 block mb-1">Loan type</label>
+                <Select value={loanType} onChange={e => setLoanType(e.target.value)}>
+                  {Object.entries(LOAN_TYPE_LABELS).filter(([v]) => v !== 'MORTGAGE').map(([v, l]) => (
+                    <option key={v} value={v}>{l}</option>
+                  ))}
+                </Select>
+              </div>
+            )}
+          </div>
 
           {/* Gmail option */}
           <div className="mb-4 p-3 bg-white/5 rounded-lg flex items-start gap-2">
