@@ -31,17 +31,17 @@
 //       extracted from the PDF, no property). Deduped on re-run by
 //       (vendor, date, amount).
 //
-// Usage (run from backend/, with your real env vars — same DATABASE_URL you
-// already use for `prisma migrate deploy`, plus AWS_* creds for S3):
+// Usage (run from backend/ — reads DATABASE_URL and AWS_* creds from your
+// existing backend/.env automatically, same as `npm run dev`):
 //
-//   DATABASE_URL=... AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
-//     npx tsx scripts/import-local-statements.ts \
+//   npx tsx scripts/import-local-statements.ts \
 //     --dir /path/to/Bills --email you@example.com --property "4349 Vista Verde Way"
 //
 //   Add --dry-run to preview matches/creates without writing anything.
 //   Add --ai to use Claude extraction instead of regex (costs credits,
 //   generally more accurate) for files regex struggles with.
 
+import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
 import { PrismaClient, Prisma } from '@prisma/client';
