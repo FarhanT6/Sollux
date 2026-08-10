@@ -143,7 +143,7 @@ const MONTH_MAP: Record<string, string> = {
 
 function parseDate(s: string): string | null {
   // MM/DD/YYYY or M/D/YY
-  let m = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+  let m = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4}|\d{2})(?!\d)/);
   if (m) {
     const yr = m[3].length === 2 ? `20${m[3]}` : m[3];
     return `${yr}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}`;
@@ -181,7 +181,7 @@ function findDollarNear(text: string, labels: RegExp[]): number | null {
 }
 
 function findDateNear(text: string, labels: RegExp[]): string | null {
-  const suffix = '[\\s\\S]{0,60}?(\\d{1,2}[\\/\\-]\\d{1,2}[\\/\\-]\\d{2,4}|\\w{3,9}\\s+\\d{1,2},?\\s+\\d{4})';
+  const suffix = '[\\s\\S]{0,60}?(\\d{1,2}[\\/\\-]\\d{1,2}[\\/\\-](?:\\d{4}|\\d{2})(?!\\d)|\\w{3,9}\\s+\\d{1,2},?\\s+\\d{4})';
   for (const label of labels) {
     const m = text.match(new RegExp(label.source + suffix, label.flags));
     if (m) {
@@ -250,7 +250,7 @@ interface DateHit { date: string; position: number; context: string }
 /** Find every recognisable date pattern in the text. */
 function scanAllDates(text: string): DateHit[] {
   const patterns = [
-    /\b(\d{1,2}\/\d{1,2}\/\d{2,4})\b/g,
+    /\b(\d{1,2}\/\d{1,2}\/(?:\d{4}|\d{2}))(?!\d)\b/g,
     /\b(\d{4}-\d{2}-\d{2})\b/g,
     /\b((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4})\b/gi,
     /\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{4})\b/gi,
