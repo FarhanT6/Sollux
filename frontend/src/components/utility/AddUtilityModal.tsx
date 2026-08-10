@@ -148,8 +148,12 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
         loginUrl: form.loginUrl || undefined,
         notes: form.notes || undefined,
         insuranceType: form.category === 'INSURANCE' ? insuranceType : undefined,
+        loanType: form.category === 'LOAN' ? loanType : undefined,
       });
-      if (isLoan) {
+      // LOAN category auto-links on the backend; the checkbox below only
+      // applies to other categories that also happen to be a loan (e.g. a
+      // solar financing account still categorized as SOLAR).
+      if (isLoan && form.category !== 'LOAN') {
         await upsertUtilityLoan(account.id, { lender: form.providerName, loanType });
       }
       onSuccess();
@@ -267,30 +271,44 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
             </div>
           )}
 
-          {/* Non-mortgage loan link (auto, student, solar financing, etc.) */}
-          <div className="mb-4 p-3 bg-white/5 rounded-lg">
-            <label className="flex items-start gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={isLoan}
-                onChange={e => setIsLoan(e.target.checked)}
-                className="mt-0.5"
-              />
-              <span className="text-xs text-gray-300">
-                <span className="font-medium">This is also a loan</span> (auto, student, solar financing, etc.) — 🔗 links it under <span className="text-gray-300 font-medium">Portfolio → Loans</span> too. Add the balance/rate/payment there.
-              </span>
-            </label>
-            {isLoan && (
-              <div className="mt-2">
-                <label className="text-xs text-gray-400 block mb-1">Loan type</label>
-                <Select value={loanType} onChange={e => setLoanType(e.target.value)}>
-                  {Object.entries(LOAN_TYPE_LABELS).filter(([v]) => v !== 'MORTGAGE').map(([v, l]) => (
-                    <option key={v} value={v}>{l}</option>
-                  ))}
-                </Select>
-              </div>
-            )}
-          </div>
+          {form.category === 'LOAN' ? (
+            <div className="mb-4 p-3 bg-white/5 rounded-lg">
+              <p className="text-xs text-gray-400 mb-2">
+                🔗 This will also appear under <span className="text-gray-300 font-medium">Portfolio → Loans</span> for this property — if a loan with this lender name already exists there unlinked, it'll link to it instead of creating a duplicate. Add the balance/rate/payment there.
+              </p>
+              <label className="text-xs text-gray-400 block mb-1">Loan type</label>
+              <Select value={loanType} onChange={e => setLoanType(e.target.value)}>
+                {Object.entries(LOAN_TYPE_LABELS).filter(([v]) => v !== 'MORTGAGE').map(([v, l]) => (
+                  <option key={v} value={v}>{l}</option>
+                ))}
+              </Select>
+            </div>
+          ) : (
+            /* Loan link on a non-LOAN category — e.g. a solar financing account still categorized as SOLAR */
+            <div className="mb-4 p-3 bg-white/5 rounded-lg">
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={isLoan}
+                  onChange={e => setIsLoan(e.target.checked)}
+                  className="mt-0.5"
+                />
+                <span className="text-xs text-gray-300">
+                  <span className="font-medium">This is also a loan</span> (auto, student, solar financing, etc.) — 🔗 links it under <span className="text-gray-300 font-medium">Portfolio → Loans</span> too. Add the balance/rate/payment there.
+                </span>
+              </label>
+              {isLoan && (
+                <div className="mt-2">
+                  <label className="text-xs text-gray-400 block mb-1">Loan type</label>
+                  <Select value={loanType} onChange={e => setLoanType(e.target.value)}>
+                    {Object.entries(LOAN_TYPE_LABELS).filter(([v]) => v !== 'MORTGAGE').map(([v, l]) => (
+                      <option key={v} value={v}>{l}</option>
+                    ))}
+                  </Select>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Gmail option */}
           <div className="mb-4 p-3 bg-white/5 rounded-lg flex items-start gap-2">

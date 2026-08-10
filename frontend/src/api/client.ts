@@ -288,7 +288,7 @@ export const getUtilities = (propertyId?: string) =>
   api.get<UtilityAccount[]>('/utilities', { params: { propertyId } }).then(r => r.data);
 export const getUtility = (id: string) =>
   api.get<UtilityAccount & { statements: any[]; payments: any[] }>(`/utilities/${id}`).then(r => r.data);
-export const createUtility = (data: Partial<UtilityAccount> & { username?: string; password?: string; insuranceType?: string }) =>
+export const createUtility = (data: Partial<UtilityAccount> & { username?: string; password?: string; insuranceType?: string; loanType?: string }) =>
   api.post<UtilityAccount>('/utilities', data).then(r => r.data);
 export const updateUtility = (id: string, data: any) =>
   api.patch<UtilityAccount>(`/utilities/${id}`, data).then(r => r.data);
@@ -298,6 +298,10 @@ export const syncUtility = (id: string) =>
   api.post<{ jobId: string }>(`/utilities/${id}/sync`).then(r => r.data);
 export const revealUtilityAccountNumber = (id: string) =>
   api.get<{ accountNumber: string | null }>(`/utilities/${id}/account-number`).then(r => r.data);
+export const getUtilityUsername = (id: string) =>
+  api.get<{ username: string | null }>(`/utilities/${id}/username`).then(r => r.data);
+export const getUtilityPassword = (id: string) =>
+  api.get<{ password: string | null }>(`/utilities/${id}/password`).then(r => r.data);
 
 // Statements
 export const getStatements = (params: { utilityAccountId?: string; propertyId?: string }) =>

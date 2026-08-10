@@ -159,6 +159,7 @@ enum UtilityCategory {
   INSURANCE
   HOA
   TAXES
+  LOAN
   OTHER
 }
 
