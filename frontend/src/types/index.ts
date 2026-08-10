@@ -603,6 +603,10 @@ export const LOAN_TYPE_LABELS: Record<string, string> = {
   DSCR: 'DSCR', COMMERCIAL: 'Commercial', HARD_MONEY: 'Hard Money', OTHER: 'Other',
 };
 
+export const INSURANCE_TYPE_LABELS: Record<string, string> = {
+  PROPERTY: 'Property', LIABILITY: 'Liability', FLOOD: 'Flood', UMBRELLA: 'Umbrella', OTHER: 'Other',
+};
+
 export const PROPERTY_TYPE_LABELS: Record<PropertyType, string> = {
   PRIMARY: 'Primary home', RENTAL: 'Rental', INVESTMENT: 'Investment', COMMERCIAL: 'Commercial',
   RESIDENTIAL_SINGLE: 'Single-family', RESIDENTIAL_MULTI: 'Multi-family',

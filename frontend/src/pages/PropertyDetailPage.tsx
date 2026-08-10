@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { getProperty, getStatements, getPayments, getInsights, syncUtility, updateUtility, deleteUtility, updateProperty, deleteProperty, markInsightRead, dismissInsight, getStatementDownloadUrl, revealUtilityAccountNumber } from '../api/client';
 import type { Property, Statement, Payment, AIInsight, UtilityAccount } from '../types';
-import { CATEGORY_LABELS, CATEGORY_COLORS } from '../types';
+import { CATEGORY_LABELS, CATEGORY_COLORS, INSURANCE_TYPE_LABELS } from '../types';
 import { PageHeader, StatCard, InsightCard, Skeleton, EmptyState, Pill } from '../components/ui';
 import { format } from 'date-fns';
 import AddUtilityModal from '../components/utility/AddUtilityModal';
@@ -184,7 +184,7 @@ export default function PropertyDetailPage() {
                   Inactive utility accounts ({inactiveAccounts.length})
                 </button>
                 {showInactive && (
-                  <div className="grid grid-cols-2 gap-3 opacity-60">
+                  <div className="grid grid-cols-2 gap-3">
                     {inactiveAccounts.map(account => (
                       <UtilityAccountCardWithHistory
                         key={account.id}
@@ -371,6 +371,8 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
   const [error, setError] = useState('');
   const [revealedAccountNumber, setRevealedAccountNumber] = useState<string | null>(null);
   const [revealingAccountNumber, setRevealingAccountNumber] = useState(false);
+  const [insuranceType, setInsuranceType] = useState('PROPERTY');
+  const [insuranceTypeTouched, setInsuranceTypeTouched] = useState(false);
 
   async function toggleAccountNumber() {
     if (revealedAccountNumber != null) { setRevealedAccountNumber(null); return; }
@@ -396,6 +398,10 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
       if (form.password.trim())      patch.password      = form.password.trim();
       if (form.notes.trim()         !== ((account as any).notes || '')) patch.notes = form.notes.trim();
       if (form.loginUrl.trim()      !== (account.loginUrl || ''))       patch.loginUrl = form.loginUrl.trim();
+      // Only send insuranceType if the user actually touched the dropdown —
+      // otherwise we'd silently overwrite an existing policy's type (e.g.
+      // FLOOD) with the form's PROPERTY default every time they save.
+      if (form.category === 'INSURANCE' && insuranceTypeTouched) patch.insuranceType = insuranceType;
       if (Object.keys(patch).length === 0) { onClose(); return; }
       await updateUtility(account.id, patch);
       onSaved();
@@ -428,9 +434,21 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
               </select>
             </div>
           </div>
+          {form.category === 'INSURANCE' && (
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Insurance type</label>
+              <select
+                className={fieldCls}
+                value={insuranceType}
+                onChange={e => { setInsuranceType(e.target.value); setInsuranceTypeTouched(true); }}
+              >
+                {Object.entries(INSURANCE_TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </div>
+          )}
           <div>
             <label className="text-xs text-gray-400 block mb-1">
-              Account number
+              {form.category === 'INSURANCE' ? 'Account number (policy number)' : 'Account number'}
               {account.providerSlug === 'wm' && <span className="text-gray-600 ml-1">(e.g. 8-92846-35002)</span>}
             </label>
             {account.accountNumber && (
@@ -746,7 +764,7 @@ function UtilityAccountCard({
     : account.lastSyncStatus === 'FAILED' ? 'red' : 'gray';
 
   return (
-    <div className="card p-4">
+    <div className={`card p-4 ${account.isActive === false ? 'bg-white/[0.01] border-white/5' : ''}`}>
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-center gap-2.5">
           <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: color }} />

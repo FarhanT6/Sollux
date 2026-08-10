@@ -9,14 +9,17 @@ const router = Router();
 router.use(attachDbUser);
 
 // Keeps an INSURANCE-category utility account's linked InsurancePolicy (shown
-// under Portfolio → Insurance) in sync: carrier name and active status flow
-// from the utility account here; premium/dates/documents stay editable only
-// on the policy itself. Called after every utility create/update so adding,
-// renaming, or (de)activating an insurance account under Utilities is
-// reflected on the Portfolio side without the user re-entering it there.
-async function syncInsurancePolicyForUtility(account: {
-  id: string; propertyId: string; providerName: string; category: string; isActive: boolean;
-}) {
+// under Portfolio → Insurance) in sync: carrier name, policy number (from the
+// utility account's "Account number" field — that's the policy number for an
+// insurance account), policy type, and active status flow from the utility
+// account here; premium/dates/documents stay editable only on the policy
+// itself. Called after every utility create/update so adding, renaming, or
+// (de)activating an insurance account under Utilities is reflected on the
+// Portfolio side without the user re-entering it there.
+async function syncInsurancePolicyForUtility(
+  account: { id: string; propertyId: string; providerName: string; category: string; isActive: boolean },
+  opts: { policyNumber?: string; policyType?: string } = {},
+) {
   if (account.category !== 'INSURANCE') {
     // No longer an insurance account — unlink any existing policy but keep
     // it (and its real premium/date data) intact for manual management.
@@ -31,7 +34,12 @@ async function syncInsurancePolicyForUtility(account: {
   if (existing) {
     await db.insurancePolicy.update({
       where: { id: existing.id },
-      data: { carrier: account.providerName, isActive: account.isActive },
+      data: {
+        carrier: account.providerName,
+        isActive: account.isActive,
+        ...(opts.policyNumber !== undefined && { policyNumber: opts.policyNumber }),
+        ...(opts.policyType !== undefined && { policyType: opts.policyType as any }),
+      },
     });
   } else {
     await db.insurancePolicy.create({
@@ -39,6 +47,8 @@ async function syncInsurancePolicyForUtility(account: {
         propertyId: account.propertyId,
         utilityAccountId: account.id,
         carrier: account.providerName,
+        policyNumber: opts.policyNumber || null,
+        policyType: (opts.policyType as any) || 'PROPERTY',
         premiumAmount: 0,
         isActive: account.isActive,
       },
@@ -71,6 +81,9 @@ const UtilitySchema = z.object({
     'INTERNET', 'PHONE', 'INSURANCE', 'HOA', 'TAXES', 'OTHER']),
   notes: z.string().optional(),
   isActive: z.boolean().optional(),
+  // Only relevant when category is INSURANCE — passed through to the linked
+  // InsurancePolicy's policyType, not stored on the utility account itself.
+  insuranceType: z.enum(['PROPERTY', 'LIABILITY', 'FLOOD', 'UMBRELLA', 'OTHER']).optional(),
 });
 
 // GET /api/utilities?propertyId=xxx
@@ -118,7 +131,7 @@ router.get('/', async (req, res, next) => {
 // POST /api/utilities — add new account (encrypts credentials)
 router.post('/', async (req, res, next) => {
   try {
-    const { propertyId, username, password, accountNumber, ...rest } = UtilitySchema.parse(req.body);
+    const { propertyId, username, password, accountNumber, insuranceType, ...rest } = UtilitySchema.parse(req.body);
 
     // Verify property belongs to user
     const property = await db.property.findFirst({
@@ -138,7 +151,7 @@ router.post('/', async (req, res, next) => {
       },
     });
 
-    await syncInsurancePolicyForUtility(account);
+    await syncInsurancePolicyForUtility(account, { policyNumber: accountNumber, policyType: insuranceType });
 
     // Queue initial scrape
     await scrapeQueue.add('scrape', { utilityAccountId: account.id }, {
@@ -221,7 +234,7 @@ router.post('/:id/sync', async (req, res, next) => {
 // PATCH /api/utilities/:id
 router.patch('/:id', async (req, res, next) => {
   try {
-    const { username, password, accountNumber, ...rest } = UtilitySchema.partial().parse(req.body);
+    const { username, password, accountNumber, insuranceType, ...rest } = UtilitySchema.partial().parse(req.body);
 
     const existing = await db.utilityAccount.findFirst({
       where: { id: req.params.id, property: { userId: req.dbUserId! } },
@@ -245,7 +258,7 @@ router.patch('/:id', async (req, res, next) => {
       },
     });
 
-    await syncInsurancePolicyForUtility(updated);
+    await syncInsurancePolicyForUtility(updated, { policyNumber: accountNumber, policyType: insuranceType });
     await syncLoanActiveForUtility(updated);
 
     const { accountNumberEnc, usernameEnc, passwordEnc, ...sanitized } = updated;
