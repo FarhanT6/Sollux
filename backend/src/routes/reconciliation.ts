@@ -189,6 +189,7 @@ router.post('/statements/:id/apply', async (req, res, next) => {
         } else if (item.type === 'EXPENSE' && profile.propertyId) {
           const e = await tx.expense.create({
             data: {
+              userId: req.dbUserId!,
               propertyId: profile.propertyId,
               category: (profile.managementFeeCategory ?? 'PROPERTY_MANAGEMENT') as any,
               amount: item.amount,

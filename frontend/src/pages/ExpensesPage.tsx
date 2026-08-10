@@ -60,10 +60,10 @@ export default function ExpensesPage({ embedded }: { embedded?: boolean } = {}) 
 
   async function handleCreate(ev: React.FormEvent) {
     ev.preventDefault();
-    if (!form.propertyId || !form.amount) return;
+    if ((!form.propertyId && !form.isPersonal) || !form.amount) return;
     setSaving(true);
     try {
-      await createExpense({ ...form, amount: parseFloat(form.amount) });
+      await createExpense({ ...form, propertyId: form.propertyId || undefined, amount: parseFloat(form.amount) });
       await loadExpenses();
       setShowForm(false);
       setForm(f => ({ ...f, amount: '', vendor: '', description: '' }));
@@ -143,9 +143,11 @@ export default function ExpensesPage({ embedded }: { embedded?: boolean } = {}) 
         <form onSubmit={handleCreate} className="rounded-xl p-5 mb-5" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
           <div className="grid grid-cols-3 gap-4 mb-4">
             <div>
-              <label className="text-xs text-gray-400 block mb-1">Property *</label>
-              <select value={form.propertyId} onChange={e => setForm(f => ({ ...f, propertyId: e.target.value }))} className="input-dark w-full" required>
-                <option value="">Select…</option>
+              <label className="text-xs text-gray-400 block mb-1">
+                Property {form.isPersonal ? '(optional)' : '*'}
+              </label>
+              <select value={form.propertyId} onChange={e => setForm(f => ({ ...f, propertyId: e.target.value }))} className="input-dark w-full" required={!form.isPersonal}>
+                <option value="">{form.isPersonal ? 'None — purely personal' : 'Select…'}</option>
                 {properties.map(p => <option key={p.id} value={p.id}>{p.nickname || p.address}</option>)}
               </select>
             </div>
@@ -179,7 +181,7 @@ export default function ExpensesPage({ embedded }: { embedded?: boolean } = {}) 
             </label>
             <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
               <input type="checkbox" checked={form.isPersonal} onChange={e => setForm(f => ({ ...f, isPersonal: e.target.checked }))} />
-              Personal (exclude from P&L)
+              Personal (excluded from P&L — property optional)
             </label>
           </div>
           <button type="submit" disabled={saving} className="btn-primary text-sm">{saving ? 'Saving…' : 'Log Expense'}</button>
@@ -213,7 +215,9 @@ export default function ExpensesPage({ embedded }: { embedded?: boolean } = {}) 
                       <Link to={`/portfolio/${e.propertyId}?tab=Expenses`} className="hover:text-amber-400 transition-colors">
                         {e.property?.nickname || e.property?.address || '—'}
                       </Link>
-                    ) : (e.property?.nickname || e.property?.address || '—')}
+                    ) : (
+                      <span className="text-gray-500 italic">Personal</span>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <span className="text-xs bg-white/5 text-gray-300 px-2 py-0.5 rounded">

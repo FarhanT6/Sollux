@@ -1,8 +1,8 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { getProperty, getStatements, getPayments, getInsights, syncUtility, updateUtility, deleteUtility, updateProperty, deleteProperty, markInsightRead, dismissInsight, getStatementDownloadUrl, revealUtilityAccountNumber } from '../api/client';
+import { getProperty, getStatements, getPayments, getInsights, syncUtility, updateUtility, deleteUtility, updateProperty, deleteProperty, markInsightRead, dismissInsight, getStatementDownloadUrl, revealUtilityAccountNumber, getUtilityUsername, getUtilityPassword } from '../api/client';
 import type { Property, Statement, Payment, AIInsight, UtilityAccount } from '../types';
-import { CATEGORY_LABELS, CATEGORY_COLORS, INSURANCE_TYPE_LABELS } from '../types';
+import { CATEGORY_LABELS, CATEGORY_COLORS, INSURANCE_TYPE_LABELS, LOAN_TYPE_LABELS } from '../types';
 import { PageHeader, StatCard, InsightCard, Skeleton, EmptyState, Pill } from '../components/ui';
 import { format } from 'date-fns';
 import AddUtilityModal from '../components/utility/AddUtilityModal';
@@ -355,7 +355,7 @@ export default function PropertyDetailPage() {
   );
 }
 
-const UTILITY_CATEGORIES = ['ELECTRIC','GAS','WATER','SEWER','TRASH','SOLAR','INTERNET','PHONE','INSURANCE','HOA','TAXES','OTHER'];
+const UTILITY_CATEGORIES = ['ELECTRIC','GAS','WATER','SEWER','TRASH','SOLAR','INTERNET','PHONE','INSURANCE','HOA','TAXES','LOAN','OTHER'];
 
 function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccount; onClose: () => void; onSaved: () => void }) {
   const [form, setForm] = useState({
@@ -373,6 +373,22 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
   const [revealingAccountNumber, setRevealingAccountNumber] = useState(false);
   const [insuranceType, setInsuranceType] = useState('PROPERTY');
   const [insuranceTypeTouched, setInsuranceTypeTouched] = useState(false);
+  const [loanType, setLoanType] = useState('OTHER');
+  const [loanTypeTouched, setLoanTypeTouched] = useState(false);
+  const [revealedPassword, setRevealedPassword] = useState<string | null>(null);
+  const [revealingPassword, setRevealingPassword] = useState(false);
+  const [fetchedUsername, setFetchedUsername] = useState<string | null>(null);
+
+  // Username is low-sensitivity (just a login/email) so it's always shown,
+  // fetched once on open and prefilled into the editable field. Password
+  // stays hidden until explicitly revealed below.
+  useEffect(() => {
+    if (!account.hasCredentials) return;
+    getUtilityUsername(account.id).then(({ username }) => {
+      setFetchedUsername(username ?? '');
+      setForm(f => ({ ...f, username: username ?? '' }));
+    }).catch(() => {});
+  }, [account.id]);
 
   async function toggleAccountNumber() {
     if (revealedAccountNumber != null) { setRevealedAccountNumber(null); return; }
@@ -385,6 +401,17 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
     }
   }
 
+  async function togglePassword() {
+    if (revealedPassword != null) { setRevealedPassword(null); return; }
+    setRevealingPassword(true);
+    try {
+      const { password } = await getUtilityPassword(account.id);
+      setRevealedPassword(password ?? '');
+    } finally {
+      setRevealingPassword(false);
+    }
+  }
+
   const fieldCls = 'w-full rounded-lg px-3 py-2 text-sm text-white bg-white/5 border border-white/10 focus:border-amber-500/50 outline-none';
 
   async function handleSave() {
@@ -394,14 +421,15 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
       if (form.providerName.trim()  !== account.providerName) patch.providerName = form.providerName.trim();
       if (form.category             !== account.category)     patch.category     = form.category;
       if (form.accountNumber.trim()) patch.accountNumber = form.accountNumber.trim();
-      if (form.username.trim())      patch.username      = form.username.trim();
+      if (form.username.trim() !== (fetchedUsername ?? '')) patch.username = form.username.trim();
       if (form.password.trim())      patch.password      = form.password.trim();
       if (form.notes.trim()         !== ((account as any).notes || '')) patch.notes = form.notes.trim();
       if (form.loginUrl.trim()      !== (account.loginUrl || ''))       patch.loginUrl = form.loginUrl.trim();
-      // Only send insuranceType if the user actually touched the dropdown —
-      // otherwise we'd silently overwrite an existing policy's type (e.g.
-      // FLOOD) with the form's PROPERTY default every time they save.
+      // Only send insuranceType/loanType if the user actually touched the
+      // dropdown — otherwise we'd silently overwrite an existing policy's/
+      // loan's type with the form's default every time they save.
       if (form.category === 'INSURANCE' && insuranceTypeTouched) patch.insuranceType = insuranceType;
+      if (form.category === 'LOAN' && loanTypeTouched) patch.loanType = loanType;
       if (Object.keys(patch).length === 0) { onClose(); return; }
       await updateUtility(account.id, patch);
       onSaved();
@@ -446,6 +474,18 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
               </select>
             </div>
           )}
+          {form.category === 'LOAN' && (
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Loan type</label>
+              <select
+                className={fieldCls}
+                value={loanType}
+                onChange={e => { setLoanType(e.target.value); setLoanTypeTouched(true); }}
+              >
+                {Object.entries(LOAN_TYPE_LABELS).filter(([v]) => v !== 'MORTGAGE').map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </div>
+          )}
           <div>
             <label className="text-xs text-gray-400 block mb-1">
               {form.category === 'INSURANCE' ? 'Account number (policy number)' : 'Account number'}
@@ -479,13 +519,29 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Username / Email</label>
                 <input
-                  className={fieldCls} placeholder="New login" value={form.username}
+                  className={fieldCls} placeholder="Your login email or username" value={form.username}
                   onChange={e => setForm(f => ({ ...f, username: e.target.value }))}
                   autoComplete="off" name="utility-username" type="text"
                 />
               </div>
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Password</label>
+                {account.hasCredentials && (
+                  <div className="flex items-center gap-1.5 mb-1.5">
+                    <span className="font-mono text-xs text-gray-400 truncate">
+                      {revealedPassword != null ? revealedPassword : '••••••••'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={togglePassword}
+                      disabled={revealingPassword}
+                      title={revealedPassword != null ? 'Hide password' : 'Show current password'}
+                      className="text-gray-500 hover:text-gray-300 transition-colors disabled:opacity-40 flex-shrink-0"
+                    >
+                      {revealingPassword ? '…' : revealedPassword != null ? '🙈' : '👁'}
+                    </button>
+                  </div>
+                )}
                 <input
                   type="password" className={fieldCls} placeholder="New password" value={form.password}
                   onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
@@ -705,21 +761,15 @@ function UtilityAccountCardWithHistory({
         account={account} payments={payments} syncing={syncing} onSync={onSync}
         onEdit={() => setEditing(true)} onDelete={() => setDeleting(true)}
         onToggleActive={handleToggleActive} togglingActive={togglingActive}
+        onOpenDetail={() => navigate(`/properties/${propertyId}/utilities/${account.id}`)}
       />
-      <button
-        onClick={() => navigate(`/properties/${propertyId}/utilities/${account.id}`)}
-        className="mt-1.5 ml-1 text-xs text-gray-500 hover:text-[#F5A623] transition-colors flex items-center gap-1"
-      >
-        <span>›</span>
-        View statements &amp; payments
-      </button>
     </div>
   );
 }
 
 function UtilityAccountCard({
-  account, payments, syncing, onSync, onEdit, onDelete, onToggleActive, togglingActive
-}: { account: UtilityAccount; payments: Payment[]; syncing: boolean; onSync: () => void; onEdit: () => void; onDelete: () => void; onToggleActive: () => void; togglingActive: boolean }) {
+  account, payments, syncing, onSync, onEdit, onDelete, onToggleActive, togglingActive, onOpenDetail
+}: { account: UtilityAccount; payments: Payment[]; syncing: boolean; onSync: () => void; onEdit: () => void; onDelete: () => void; onToggleActive: () => void; togglingActive: boolean; onOpenDetail: () => void }) {
   const [revealedAccountNumber, setRevealedAccountNumber] = useState<string | null>(null);
   const [revealingAccountNumber, setRevealingAccountNumber] = useState(false);
 
@@ -791,12 +841,18 @@ function UtilityAccountCard({
   }, [menuOpen]);
 
   return (
-    <div className={`card p-4 min-h-[212px] flex flex-col ${account.isActive === false ? 'bg-white/[0.01] border-white/5' : ''}`}>
+    <div className={`card p-4 flex flex-col ${account.isActive === false ? 'bg-white/[0.01] border-white/5' : ''}`}>
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-center gap-2.5 min-w-0">
           <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: color }} />
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-white truncate">{account.providerName}</p>
+            <button
+              onClick={onOpenDetail}
+              title="View statements & payments"
+              className="text-sm font-semibold text-white truncate hover:text-[#F5A623] transition-colors text-left"
+            >
+              {account.providerName}
+            </button>
             {account.accountNumber ? (
               <p className="text-xs font-mono text-gray-400 flex items-center gap-1">
                 {revealedAccountNumber != null ? revealedAccountNumber : account.accountNumber}

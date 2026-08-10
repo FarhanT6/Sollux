@@ -6,8 +6,8 @@ import { attachDbUser } from '../middleware/requireAuth';
 const router = Router();
 router.use(attachDbUser);
 
-const ExpenseSchema = z.object({
-  propertyId: z.string(),
+const ExpenseFields = z.object({
+  propertyId: z.string().optional().nullable(),
   category: z.enum(['UTILITIES','REPAIRS_MAINTENANCE','LANDSCAPING','PROPERTY_MANAGEMENT','LEGAL','INSURANCE','PROPERTY_TAX','HOA','MORTGAGE_DEBT_SERVICE','CAPITAL_IMPROVEMENT','SUPPLIES','TRAVEL','ADVERTISING','OTHER']),
   amount: z.number().positive(),
   date: z.string().transform(s => new Date(s)),
@@ -17,13 +17,17 @@ const ExpenseSchema = z.object({
   isPersonal: z.boolean().default(false),
   documentUrl: z.string().optional().nullable(),
 });
+const ExpenseSchema = ExpenseFields.refine(data => data.propertyId || data.isPersonal, {
+  message: 'propertyId is required unless the expense is marked personal',
+  path: ['propertyId'],
+});
 
 router.get('/', async (req, res, next) => {
   try {
     const { propertyId, isCapEx, isPersonal, category } = req.query;
     const expenses = await db.expense.findMany({
       where: {
-        property: { userId: req.dbUserId! },
+        userId: req.dbUserId!,
         ...(propertyId ? { propertyId: propertyId as string } : {}),
         ...(isCapEx !== undefined ? { isCapEx: isCapEx === 'true' } : {}),
         ...(isPersonal !== undefined ? { isPersonal: isPersonal === 'true' } : {}),
@@ -81,18 +85,24 @@ router.get('/', async (req, res, next) => {
 router.post('/', async (req, res, next) => {
   try {
     const data = ExpenseSchema.parse(req.body);
-    const property = await db.property.findFirst({ where: { id: data.propertyId, userId: req.dbUserId! } });
-    if (!property) return res.status(404).json({ error: 'Property not found' });
-    const expense = await db.expense.create({ data });
+    if (data.propertyId) {
+      const property = await db.property.findFirst({ where: { id: data.propertyId, userId: req.dbUserId! } });
+      if (!property) return res.status(404).json({ error: 'Property not found' });
+    }
+    const expense = await db.expense.create({ data: { ...data, userId: req.dbUserId! } });
     res.status(201).json(expense);
   } catch (err) { next(err); }
 });
 
 router.patch('/:id', async (req, res, next) => {
   try {
-    const data = ExpenseSchema.partial().parse(req.body);
-    const existing = await db.expense.findFirst({ where: { id: req.params.id, property: { userId: req.dbUserId! } } });
+    const data = ExpenseFields.partial().parse(req.body);
+    const existing = await db.expense.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
     if (!existing) return res.status(404).json({ error: 'Expense not found' });
+    if (data.propertyId) {
+      const property = await db.property.findFirst({ where: { id: data.propertyId, userId: req.dbUserId! } });
+      if (!property) return res.status(404).json({ error: 'Property not found' });
+    }
     const expense = await db.expense.update({ where: { id: req.params.id }, data });
     res.json(expense);
   } catch (err) { next(err); }
@@ -100,7 +110,7 @@ router.patch('/:id', async (req, res, next) => {
 
 router.delete('/:id', async (req, res, next) => {
   try {
-    const existing = await db.expense.findFirst({ where: { id: req.params.id, property: { userId: req.dbUserId! } } });
+    const existing = await db.expense.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
     if (!existing) return res.status(404).json({ error: 'Expense not found' });
     await db.expense.delete({ where: { id: req.params.id } });
     res.status(204).send();
