@@ -472,11 +472,19 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-xs text-gray-400 block mb-1">Username / Email</label>
-              <input className={fieldCls} placeholder="New login" value={form.username} onChange={e => setForm(f => ({ ...f, username: e.target.value }))} />
+              <input
+                className={fieldCls} placeholder="New login" value={form.username}
+                onChange={e => setForm(f => ({ ...f, username: e.target.value }))}
+                autoComplete="off" name="utility-username" type="text"
+              />
             </div>
             <div>
               <label className="text-xs text-gray-400 block mb-1">Password</label>
-              <input type="password" className={fieldCls} placeholder="New password" value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} />
+              <input
+                type="password" className={fieldCls} placeholder="New password" value={form.password}
+                onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
+                autoComplete="new-password" name="utility-password"
+              />
             </div>
           </div>
           <div>

@@ -240,7 +240,7 @@ function SortablePropertyCard({ property, onEdit, onDelete }: { property: Proper
 }
 
 function PropertyCard({ property, onEdit, onDelete }: { property: Property; onEdit: () => void; onDelete: () => void }) {
-  const accounts = property.utilityAccounts || [];
+  const accounts = (property.utilityAccounts || []).filter(a => a.isActive !== false);
 
   // Same reconciliation logic as the detail page: if recent payments cover the open
   // balance, treat the account as paid even if the provider's API hasn't reflected it.
