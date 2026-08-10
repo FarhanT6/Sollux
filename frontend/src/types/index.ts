@@ -146,7 +146,7 @@ export interface RentNotice {
 
 export interface Expense {
   id: string;
-  propertyId: string;
+  propertyId?: string | null;
   category: ExpenseCategory;
   amount: number;
   date: string;

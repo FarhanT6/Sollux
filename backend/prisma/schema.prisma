@@ -551,8 +551,12 @@ model RentNotice {
 // ─── EXPENSES ────────────────────────────────────────────
 model Expense {
   id          String          @id @default(cuid())
-  propertyId  String
-  property    Property        @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  // userId makes ownership independent of having a property — a personal
+  // expense (isPersonal true) can have propertyId null entirely, same
+  // pattern Loan already uses for personal (non-real-estate) loans.
+  userId      String
+  propertyId  String?
+  property    Property?       @relation(fields: [propertyId], references: [id], onDelete: Cascade)
   category    ExpenseCategory
   amount      Decimal         @db.Decimal(10, 2)
   date        DateTime
@@ -565,6 +569,7 @@ model Expense {
   updatedAt   DateTime        @updatedAt
 
   @@index([propertyId, date])
+  @@index([userId, date])
   @@map("expenses")
 }
 

@@ -109,6 +109,7 @@ router.post('/:id/apply', async (req, res, next) => {
         // Statement already got paid another way since this was suggested — fall back to an Expense.
         const expense = await db.expense.create({
           data: {
+            userId: req.dbUserId!,
             propertyId: property.id,
             category: 'UTILITIES',
             amount: tx.amount,
@@ -125,6 +126,7 @@ router.post('/:id/apply', async (req, res, next) => {
     } else {
       const expense = await db.expense.create({
         data: {
+          userId: req.dbUserId!,
           propertyId: property.id,
           category: (tx.category ?? 'REPAIRS_MAINTENANCE') as any,
           amount: tx.amount,

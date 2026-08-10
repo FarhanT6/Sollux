@@ -150,7 +150,7 @@ router.get('/monthly', async (req, res, next) => {
     // ── Expenses (non-mortgage) ───────────────────────────
     const expenses = await db.expense.findMany({
       where: {
-        property: { userId },
+        userId,
         date: { gte: monthStart, lte: monthEnd },
         ...(includePersonal ? {} : { isPersonal: false }),
       },

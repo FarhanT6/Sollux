@@ -61,7 +61,7 @@ router.post('/query', async (req: Request, res: Response) => {
       }),
 
       db.expense.findMany({
-        where: { property: { userId }, date: { gte: startOfMonth }, isPersonal: false },
+        where: { userId, date: { gte: startOfMonth }, isPersonal: false },
         include: { property: { select: { address: true, nickname: true } } },
         orderBy: { date: 'desc' },
       }),

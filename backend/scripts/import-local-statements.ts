@@ -11,18 +11,25 @@
 //
 // CategoryFolderName is mapped to a UtilityCategory via CATEGORY_FOLDER_MAP
 // below (case-insensitive substring match) — edit it if your folder names
-// don't match. Folders/files that don't match anything are skipped and
-// listed at the end so nothing is silently dropped.
+// don't match. Folders matching PERSONAL_FOLDERS (also below) are imported
+// as personal Expense rows instead (no property, isPersonal: true) rather
+// than a property-tied utility account — for things like a cemetery plot
+// or a printer subscription that aren't a property bill. Folders that
+// don't match anything are skipped and listed at the end so nothing is
+// silently dropped.
 //
 // For each PDF:
 //   1. Extract fields with the same regex parser the app's "Free mode"
 //      Drive import uses (no AI, no cost).
-//   2. Find an existing UtilityAccount for (property, category) — matched
-//      loosely by provider name if there are several; auto-created if none
-//      exists yet (mirrors what the in-app Drive import does automatically
-//      for a matched property with no account).
-//   3. Upload the PDF to S3 and create/update the Statement row for that
-//      billing month (idempotent — re-running won't duplicate).
+//   2a. Utility folders: find an existing UtilityAccount for (property,
+//       category) — matched loosely by provider name if there are several;
+//       auto-created if none exists yet (mirrors what the in-app Drive
+//       import does automatically for a matched property with no account).
+//       Upload the PDF to S3 and create/update the Statement row for that
+//       billing month (idempotent — re-running won't duplicate).
+//   2b. Personal folders: create a personal Expense row (amount + date
+//       extracted from the PDF, no property). Deduped on re-run by
+//       (vendor, date, amount).
 //
 // Usage (run from backend/, with your real env vars — same DATABASE_URL you
 // already use for `prisma migrate deploy`, plus AWS_* creds for S3):
@@ -57,6 +64,15 @@ const CATEGORY_FOLDER_MAP: Record<string, string> = {
   tax: 'TAXES', taxes: 'TAXES',
   loan: 'LOAN', mortgage: 'LOAN', car: 'LOAN', cars: 'LOAN', auto: 'LOAN',
 };
+
+// Folders imported as personal Expense rows (no property) instead of a
+// utility account — edit freely for your own folder names.
+const PERSONAL_FOLDERS = ['eternal hills', 'hp instant ink'];
+
+function isPersonalFolder(folderName: string): boolean {
+  const lower = folderName.toLowerCase();
+  return PERSONAL_FOLDERS.some(f => lower.includes(f));
+}
 
 function categoryForFolder(folderName: string): string | null {
   const lower = folderName.toLowerCase();
@@ -142,9 +158,50 @@ async function main() {
   console.log(`Found ${files.length} PDFs across ${new Set(files.map(f => f.categoryFolder)).size} folders. Method: ${method}${dryRun ? ' (DRY RUN)' : ''}\n`);
 
   const skippedFolders = new Set<string>();
-  let imported = 0, updated = 0, skipped = 0, errored = 0;
+  let imported = 0, updated = 0, skipped = 0, errored = 0, personalImported = 0, personalSkipped = 0;
 
   for (const file of files) {
+    if (isPersonalFolder(file.categoryFolder)) {
+      try {
+        const buffer = fs.readFileSync(file.filePath);
+        const { extracted: ex } = await parseBill(buffer, file.filename, user.id, method);
+        const filenameDate = parseDateFromFilename(file.filename);
+        const date = ex.statementDate ? new Date(ex.statementDate) : (filenameDate ?? new Date());
+        const amount = ex.amountDue ?? ex.currentCharges ?? 0;
+        const vendor = ex.providerName || file.categoryFolder;
+
+        const existing = await db.expense.findFirst({
+          where: { userId: user.id, isPersonal: true, vendor, date, amount },
+        });
+        if (existing) {
+          console.log(`  [skip, exists] ${file.categoryFolder}/${file.filename}`);
+          personalSkipped++;
+          continue;
+        }
+
+        console.log(`  [personal expense] ${file.categoryFolder}/${file.filename} -> ${date.toISOString().slice(0, 10)}, ${amount}`);
+        if (!dryRun) {
+          await db.expense.create({
+            data: {
+              userId: user.id,
+              propertyId: null,
+              category: 'OTHER',
+              amount,
+              date,
+              vendor,
+              description: file.filename,
+              isPersonal: true,
+            },
+          });
+        }
+        personalImported++;
+      } catch (err) {
+        errored++;
+        console.error(`  ERROR on ${file.filePath}:`, err instanceof Error ? err.message : err);
+      }
+      continue;
+    }
+
     const category = categoryForFolder(file.categoryFolder);
     if (!category) { skippedFolders.add(file.categoryFolder); skipped++; continue; }
 
@@ -246,7 +303,7 @@ async function main() {
     }
   }
 
-  console.log(`\nDone. Imported ${imported}, updated ${updated}, skipped ${skipped}, errors ${errored}.`);
+  console.log(`\nDone. Statements — imported ${imported}, updated ${updated}, skipped ${skipped}. Personal expenses — imported ${personalImported}, skipped (already existed) ${personalSkipped}. Errors ${errored}.`);
   if (skippedFolders.size) {
     console.log(`Skipped folders (no category mapping — add them to CATEGORY_FOLDER_MAP if they should be included): ${[...skippedFolders].join(', ')}`);
   }
