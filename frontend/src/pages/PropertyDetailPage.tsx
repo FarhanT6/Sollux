@@ -369,6 +369,19 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [revealedAccountNumber, setRevealedAccountNumber] = useState<string | null>(null);
+  const [revealingAccountNumber, setRevealingAccountNumber] = useState(false);
+
+  async function toggleAccountNumber() {
+    if (revealedAccountNumber != null) { setRevealedAccountNumber(null); return; }
+    setRevealingAccountNumber(true);
+    try {
+      const { accountNumber } = await revealUtilityAccountNumber(account.id);
+      setRevealedAccountNumber(accountNumber ?? '');
+    } finally {
+      setRevealingAccountNumber(false);
+    }
+  }
 
   const fieldCls = 'w-full rounded-lg px-3 py-2 text-sm text-white bg-white/5 border border-white/10 focus:border-amber-500/50 outline-none';
 
@@ -420,7 +433,23 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
               Account number
               {account.providerSlug === 'wm' && <span className="text-gray-600 ml-1">(e.g. 8-92846-35002)</span>}
             </label>
-            <input className={fieldCls} placeholder={account.accountNumber || 'Full account number'} value={form.accountNumber} onChange={e => setForm(f => ({ ...f, accountNumber: e.target.value }))} />
+            {account.accountNumber && (
+              <div className="flex items-center gap-1.5 mb-1.5">
+                <span className="font-mono text-xs text-gray-400">
+                  Current: {revealedAccountNumber != null ? revealedAccountNumber : account.accountNumber}
+                </span>
+                <button
+                  type="button"
+                  onClick={toggleAccountNumber}
+                  disabled={revealingAccountNumber}
+                  title={revealedAccountNumber != null ? 'Hide account number' : 'Show full account number'}
+                  className="text-gray-500 hover:text-gray-300 transition-colors disabled:opacity-40"
+                >
+                  {revealingAccountNumber ? '…' : revealedAccountNumber != null ? '🙈' : '👁'}
+                </button>
+              </div>
+            )}
+            <input className={fieldCls} placeholder="Enter a new account number to replace it" value={form.accountNumber} onChange={e => setForm(f => ({ ...f, accountNumber: e.target.value }))} />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
