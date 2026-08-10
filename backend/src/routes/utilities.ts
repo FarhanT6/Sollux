@@ -8,6 +8,44 @@ import { scrapeQueue } from '../workers/queues';
 const router = Router();
 router.use(attachDbUser);
 
+// Keeps an INSURANCE-category utility account's linked InsurancePolicy (shown
+// under Portfolio → Insurance) in sync: carrier name and active status flow
+// from the utility account here; premium/dates/documents stay editable only
+// on the policy itself. Called after every utility create/update so adding,
+// renaming, or (de)activating an insurance account under Utilities is
+// reflected on the Portfolio side without the user re-entering it there.
+async function syncInsurancePolicyForUtility(account: {
+  id: string; propertyId: string; providerName: string; category: string; isActive: boolean;
+}) {
+  if (account.category !== 'INSURANCE') {
+    // No longer an insurance account — unlink any existing policy but keep
+    // it (and its real premium/date data) intact for manual management.
+    await db.insurancePolicy.updateMany({
+      where: { utilityAccountId: account.id },
+      data: { utilityAccountId: null },
+    });
+    return;
+  }
+
+  const existing = await db.insurancePolicy.findUnique({ where: { utilityAccountId: account.id } });
+  if (existing) {
+    await db.insurancePolicy.update({
+      where: { id: existing.id },
+      data: { carrier: account.providerName, isActive: account.isActive },
+    });
+  } else {
+    await db.insurancePolicy.create({
+      data: {
+        propertyId: account.propertyId,
+        utilityAccountId: account.id,
+        carrier: account.providerName,
+        premiumAmount: 0,
+        isActive: account.isActive,
+      },
+    });
+  }
+}
+
 const UtilitySchema = z.object({
   propertyId: z.string(),
   providerName: z.string().min(1),
@@ -19,6 +57,7 @@ const UtilitySchema = z.object({
   category: z.enum(['ELECTRIC', 'GAS', 'WATER', 'SEWER', 'TRASH', 'SOLAR',
     'INTERNET', 'PHONE', 'INSURANCE', 'HOA', 'TAXES', 'OTHER']),
   notes: z.string().optional(),
+  isActive: z.boolean().optional(),
 });
 
 // GET /api/utilities?propertyId=xxx
@@ -86,6 +125,8 @@ router.post('/', async (req, res, next) => {
       },
     });
 
+    await syncInsurancePolicyForUtility(account);
+
     // Queue initial scrape
     await scrapeQueue.add('scrape', { utilityAccountId: account.id }, {
       attempts: 3,
@@ -113,6 +154,20 @@ router.get('/:id', async (req, res, next) => {
     if (!account) return res.status(404).json({ error: 'Not found' });
     const { accountNumberEnc, usernameEnc, passwordEnc, ...rest } = account;
     res.json({ ...rest, hasCredentials: !!usernameEnc });
+  } catch (err) { next(err); }
+});
+
+// GET /api/utilities/:id/account-number — decrypt and reveal the full
+// account number on explicit user request (not included in normal list/
+// detail responses, which only carry the masked "****1234" display value).
+router.get('/:id/account-number', async (req, res, next) => {
+  try {
+    const account = await db.utilityAccount.findFirst({
+      where: { id: req.params.id, property: { userId: req.dbUserId! } },
+      select: { accountNumberEnc: true },
+    });
+    if (!account) return res.status(404).json({ error: 'Not found' });
+    res.json({ accountNumber: decryptOptional(account.accountNumberEnc) });
   } catch (err) { next(err); }
 });
 
@@ -170,8 +225,14 @@ router.patch('/:id', async (req, res, next) => {
         }),
         ...(username !== undefined && { usernameEnc: encryptOptional(username) }),
         ...(password !== undefined && { passwordEnc: encryptOptional(password) }),
+        // Deactivating pauses the auto-scraper too (no point syncing an account
+        // you've marked as no longer in use); reactivating resumes it.
+        ...(rest.isActive === false && { syncEnabled: false }),
+        ...(rest.isActive === true && { syncEnabled: true }),
       },
     });
+
+    await syncInsurancePolicyForUtility(updated);
 
     const { accountNumberEnc, usernameEnc, passwordEnc, ...sanitized } = updated;
     res.json(sanitized);

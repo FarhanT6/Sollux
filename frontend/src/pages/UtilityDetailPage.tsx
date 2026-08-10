@@ -1,9 +1,10 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
-  getUtility, syncUtility, deleteUtility, getStatementDownloadUrl,
+  getUtility, syncUtility, deleteUtility, updateUtility, getStatementDownloadUrl,
   getPaymentPlan, createPaymentPlan, updatePaymentPlan, deletePaymentPlan,
   upsertUtilityLoan, deleteUtilityLoan, patchStatement, createStatement,
+  revealUtilityAccountNumber,
 } from '../api/client';
 import { CATEGORY_LABELS, CATEGORY_COLORS } from '../types';
 import { Pill, Skeleton, EmptyState } from '../components/ui';
@@ -502,6 +503,9 @@ export default function UtilityDetailPage() {
   const [showLoanModal, setShowLoanModal] = useState(false);
   const [markingPaid, setMarkingPaid] = useState<string | null>(null);
   const [editingStatement, setEditingStatement] = useState<any | null>(null);
+  const [revealedAccountNumber, setRevealedAccountNumber] = useState<string | null>(null);
+  const [revealingAccountNumber, setRevealingAccountNumber] = useState(false);
+  const [togglingActive, setTogglingActive] = useState(false);
 
   useEffect(() => {
     if (!accountId) return;
@@ -523,6 +527,18 @@ export default function UtilityDetailPage() {
     } catch { } finally { setMarkingPaid(null); }
   }
 
+  async function toggleAccountNumber() {
+    if (!accountId) return;
+    if (revealedAccountNumber != null) { setRevealedAccountNumber(null); return; }
+    setRevealingAccountNumber(true);
+    try {
+      const { accountNumber } = await revealUtilityAccountNumber(accountId);
+      setRevealedAccountNumber(accountNumber ?? '');
+    } finally {
+      setRevealingAccountNumber(false);
+    }
+  }
+
   async function handleSync() {
     if (!accountId) return;
     setSyncing(true);
@@ -539,6 +555,17 @@ export default function UtilityDetailPage() {
       };
       setTimeout(poll, 2000);
     } catch { setSyncing(false); }
+  }
+
+  async function toggleActive() {
+    if (!accountId) return;
+    setTogglingActive(true);
+    try {
+      const updated = await updateUtility(accountId, { isActive: account.isActive === false });
+      setAccount((prev: any) => prev ? { ...prev, isActive: updated.isActive, syncEnabled: updated.syncEnabled } : prev);
+    } finally {
+      setTogglingActive(false);
+    }
   }
 
   async function handleDelete() {
@@ -680,14 +707,41 @@ export default function UtilityDetailPage() {
             </div>
             <h1 className="text-base font-semibold text-white">{account.providerName}</h1>
             <span className="text-xs text-gray-500">{(CATEGORY_LABELS as Record<string, string>)[account.category]}</span>
+            {account.isActive === false && (
+              <span className="text-xs px-1.5 py-0.5 rounded-full text-gray-400 border border-white/10 bg-white/5">Inactive</span>
+            )}
             {account.accountNumber && (
-              <span className="font-mono text-xs text-gray-600">{account.accountNumber}</span>
+              <span className="flex items-center gap-1">
+                <span className="font-mono text-xs text-gray-600">
+                  {revealedAccountNumber != null ? revealedAccountNumber : account.accountNumber}
+                </span>
+                <button
+                  onClick={toggleAccountNumber}
+                  disabled={revealingAccountNumber}
+                  title={revealedAccountNumber != null ? 'Hide account number' : 'Show full account number'}
+                  className="text-gray-500 hover:text-gray-300 transition-colors disabled:opacity-40"
+                >
+                  {revealingAccountNumber ? '…' : revealedAccountNumber != null ? '🙈' : '👁'}
+                </button>
+              </span>
             )}
           </div>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={handleSync} disabled={syncing || deleting} className="btn btn-primary text-xs">
             {syncing ? 'Syncing…' : 'Sync ↻'}
+          </button>
+          <button
+            onClick={toggleActive}
+            disabled={togglingActive}
+            title={account.isActive === false ? 'Reactivate this account' : 'Mark inactive — keeps all history, pauses syncing'}
+            className={`text-xs px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40 ${
+              account.isActive === false
+                ? 'text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10'
+                : 'text-gray-400 hover:text-white hover:bg-white/10'
+            }`}
+          >
+            {togglingActive ? '…' : account.isActive === false ? 'Reactivate' : 'Deactivate'}
           </button>
           <button
             onClick={handleDelete}

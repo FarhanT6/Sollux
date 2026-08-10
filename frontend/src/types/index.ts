@@ -390,6 +390,7 @@ export interface LoanPayment {
 export interface InsurancePolicy {
   id: string;
   propertyId: string;
+  utilityAccountId?: string | null;
   carrier: string;
   policyNumber?: string;
   policyType: InsuranceType;

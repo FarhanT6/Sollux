@@ -141,6 +141,7 @@ model UtilityAccount {
   insights     AIInsight[]
   paymentPlan  PaymentPlan?
   loan         Loan?
+  insurancePolicy      InsurancePolicy?
   outgoingTransactions OutgoingTransaction[]
 
   @@map("utility_accounts")
@@ -800,6 +801,13 @@ model InsurancePolicy {
   id               String           @id @default(cuid())
   propertyId       String
   property         Property         @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  // Set when this policy was created from (or linked to) an INSURANCE-category
+  // utility account, so the two stay in sync — carrier name and active status
+  // flow from the utility account; premium/dates/documents are still managed
+  // here. SetNull (not Cascade) so deleting the utility account never deletes
+  // policy history, only unlinks it.
+  utilityAccountId String?          @unique
+  utilityAccount   UtilityAccount?  @relation(fields: [utilityAccountId], references: [id], onDelete: SetNull)
   carrier          String
   policyNumber     String?
   policyType       InsuranceType    @default(PROPERTY)

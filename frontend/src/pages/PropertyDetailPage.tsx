@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { getProperty, getStatements, getPayments, getInsights, syncUtility, updateUtility, deleteUtility, updateProperty, deleteProperty, markInsightRead, dismissInsight, getStatementDownloadUrl } from '../api/client';
+import { getProperty, getStatements, getPayments, getInsights, syncUtility, updateUtility, deleteUtility, updateProperty, deleteProperty, markInsightRead, dismissInsight, getStatementDownloadUrl, revealUtilityAccountNumber } from '../api/client';
 import type { Property, Statement, Payment, AIInsight, UtilityAccount } from '../types';
 import { CATEGORY_LABELS, CATEGORY_COLORS } from '../types';
 import { PageHeader, StatCard, InsightCard, Skeleton, EmptyState, Pill } from '../components/ui';
@@ -22,6 +22,7 @@ export default function PropertyDetailPage() {
   const [showAddUtility, setShowAddUtility] = useState(false);
   const [showEditProperty, setShowEditProperty] = useState(false);
   const [showDeleteProperty, setShowDeleteProperty] = useState(false);
+  const [showInactive, setShowInactive] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -39,13 +40,15 @@ export default function PropertyDetailPage() {
   }, [id]);
 
   const accounts = property?.utilityAccounts || [];
-  const monthlyTotal = accounts.reduce((s, a) => {
+  const activeAccounts = accounts.filter(a => a.isActive !== false);
+  const inactiveAccounts = accounts.filter(a => a.isActive === false);
+  const monthlyTotal = activeAccounts.reduce((s, a) => {
     const stmt = a.statements?.[0];
     const raw = stmt?.rawDataJson as Record<string, unknown> | undefined;
     const bal = (raw?.accountBalance ?? raw?.totalDue ?? (stmt as any)?.balance ?? stmt?.amountDue) as number | undefined;
     return s + Number(bal ?? 0);
   }, 0);
-  const lastSynced = accounts.map(a => a.lastSyncedAt).filter(Boolean).sort().pop();
+  const lastSynced = activeAccounts.map(a => a.lastSyncedAt).filter(Boolean).sort().pop();
 
   async function handleSync(accountId: string) {
     setSyncing(accountId);
@@ -153,9 +156,11 @@ export default function PropertyDetailPage() {
             </div>
             {accounts.length === 0 ? (
               <EmptyState icon="⚡" title="No utility accounts" body="Add a utility account to start tracking bills for this property." />
+            ) : activeAccounts.length === 0 ? (
+              <p className="text-sm text-gray-500 py-4">No active utility accounts.</p>
             ) : (
               <div className="grid grid-cols-2 gap-3">
-                {accounts.map(account => (
+                {activeAccounts.map(account => (
                   <UtilityAccountCardWithHistory
                     key={account.id}
                     account={account}
@@ -166,6 +171,33 @@ export default function PropertyDetailPage() {
                     onRefresh={() => getProperty(id!).then(setProperty)}
                   />
                 ))}
+              </div>
+            )}
+
+            {inactiveAccounts.length > 0 && (
+              <div className="mt-6">
+                <button
+                  onClick={() => setShowInactive(v => !v)}
+                  className="text-xs text-gray-500 hover:text-gray-300 transition-colors flex items-center gap-1 mb-3"
+                >
+                  <span>{showInactive ? '▾' : '▸'}</span>
+                  Inactive utility accounts ({inactiveAccounts.length})
+                </button>
+                {showInactive && (
+                  <div className="grid grid-cols-2 gap-3 opacity-60">
+                    {inactiveAccounts.map(account => (
+                      <UtilityAccountCardWithHistory
+                        key={account.id}
+                        account={account}
+                        payments={payments.filter(p => p.utilityAccountId === account.id)}
+                        propertyId={id!}
+                        syncing={syncing === account.id}
+                        onSync={() => handleSync(account.id)}
+                        onRefresh={() => getProperty(id!).then(setProperty)}
+                      />
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </>
@@ -590,13 +622,28 @@ function UtilityAccountCardWithHistory({
 }: { account: UtilityAccount; payments: Payment[]; syncing: boolean; onSync: () => void; onRefresh: () => void; propertyId: string }) {
   const [editing,  setEditing]  = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [togglingActive, setTogglingActive] = useState(false);
   const navigate = useNavigate();
+
+  async function handleToggleActive() {
+    setTogglingActive(true);
+    try {
+      await updateUtility(account.id, { isActive: account.isActive === false });
+      onRefresh();
+    } finally {
+      setTogglingActive(false);
+    }
+  }
 
   return (
     <div>
       {editing  && <EditUtilityModal   account={account} onClose={() => setEditing(false)}  onSaved={onRefresh} />}
       {deleting && <DeleteUtilityModal account={account} onClose={() => setDeleting(false)} onDeleted={onRefresh} />}
-      <UtilityAccountCard account={account} payments={payments} syncing={syncing} onSync={onSync} onEdit={() => setEditing(true)} onDelete={() => setDeleting(true)} />
+      <UtilityAccountCard
+        account={account} payments={payments} syncing={syncing} onSync={onSync}
+        onEdit={() => setEditing(true)} onDelete={() => setDeleting(true)}
+        onToggleActive={handleToggleActive} togglingActive={togglingActive}
+      />
       <button
         onClick={() => navigate(`/properties/${propertyId}/utilities/${account.id}`)}
         className="mt-1.5 ml-1 text-xs text-gray-500 hover:text-[#F5A623] transition-colors flex items-center gap-1"
@@ -609,8 +656,22 @@ function UtilityAccountCardWithHistory({
 }
 
 function UtilityAccountCard({
-  account, payments, syncing, onSync, onEdit, onDelete
-}: { account: UtilityAccount; payments: Payment[]; syncing: boolean; onSync: () => void; onEdit: () => void; onDelete: () => void }) {
+  account, payments, syncing, onSync, onEdit, onDelete, onToggleActive, togglingActive
+}: { account: UtilityAccount; payments: Payment[]; syncing: boolean; onSync: () => void; onEdit: () => void; onDelete: () => void; onToggleActive: () => void; togglingActive: boolean }) {
+  const [revealedAccountNumber, setRevealedAccountNumber] = useState<string | null>(null);
+  const [revealingAccountNumber, setRevealingAccountNumber] = useState(false);
+
+  async function toggleAccountNumber() {
+    if (revealedAccountNumber != null) { setRevealedAccountNumber(null); return; }
+    setRevealingAccountNumber(true);
+    try {
+      const { accountNumber } = await revealUtilityAccountNumber(account.id);
+      setRevealedAccountNumber(accountNumber ?? '');
+    } finally {
+      setRevealingAccountNumber(false);
+    }
+  }
+
   const latest = account.statements?.[0];
   const dueDate = latest?.dueDate ? new Date(latest.dueDate) : null;
   const color = CATEGORY_COLORS[account.category] || '#888';
@@ -635,9 +696,12 @@ function UtilityAccountCard({
   const isPastDue = !isPaid && dueDate != null && dueDate < now;
   const isDueSoon = !isPaid && !isPastDue && dueDate != null && dueDate <= new Date(Date.now() + 7 * 86400000);
 
-  // Status pill: paid > past due > due soon > sync status.
-  // Bill state takes priority over sync state because the user cares about whether they owe money.
-  const statusLabel = isPaid ? 'Paid'
+  // Status pill: inactive overrides everything else — an account you've
+  // deactivated isn't "past due" or "syncing", it's just parked.
+  // Otherwise: paid > past due > due soon > sync status, since bill state
+  // takes priority over sync state (the user cares about whether they owe money).
+  const statusLabel = account.isActive === false ? 'Inactive'
+    : isPaid ? 'Paid'
     : isPastDue ? 'Past due'
     : isDueSoon ? 'Due soon'
     : account.lastSyncStatus === 'SUCCESS' ? 'Synced'
@@ -645,7 +709,8 @@ function UtilityAccountCard({
     : account.lastSyncStatus === 'PENDING' ? 'Syncing…'
     : 'Not synced';
 
-  const pillColor: any = isPaid ? 'green'
+  const pillColor: any = account.isActive === false ? 'gray'
+    : isPaid ? 'green'
     : isPastDue ? 'red'
     : isDueSoon ? 'amber'
     : account.lastSyncStatus === 'SUCCESS' ? 'green'
@@ -673,8 +738,34 @@ function UtilityAccountCard({
               >
                 Delete
               </button>
+              <button
+                onClick={onToggleActive}
+                disabled={togglingActive}
+                title={account.isActive === false ? 'Reactivate this account' : 'Mark inactive — keeps all history, pauses syncing'}
+                className={`px-1.5 py-0.5 rounded text-xs transition-colors leading-none border disabled:opacity-40 ${
+                  account.isActive === false
+                    ? 'text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10 border-emerald-500/20 hover:border-emerald-500/40'
+                    : 'text-gray-400 hover:text-white hover:bg-white/10 border-white/10 hover:border-white/20'
+                }`}
+              >
+                {togglingActive ? '…' : account.isActive === false ? 'Reactivate' : 'Deactivate'}
+              </button>
             </div>
-            <p className="text-xs font-mono text-gray-400">{account.accountNumber || 'No account #'}</p>
+            {account.accountNumber ? (
+              <p className="text-xs font-mono text-gray-400 flex items-center gap-1">
+                {revealedAccountNumber != null ? revealedAccountNumber : account.accountNumber}
+                <button
+                  onClick={toggleAccountNumber}
+                  disabled={revealingAccountNumber}
+                  title={revealedAccountNumber != null ? 'Hide account number' : 'Show full account number'}
+                  className="text-gray-500 hover:text-gray-300 transition-colors disabled:opacity-40"
+                >
+                  {revealingAccountNumber ? '…' : revealedAccountNumber != null ? '🙈' : '👁'}
+                </button>
+              </p>
+            ) : (
+              <p className="text-xs font-mono text-gray-400">No account #</p>
+            )}
           </div>
         </div>
         <Pill color={pillColor}>{statusLabel}</Pill>

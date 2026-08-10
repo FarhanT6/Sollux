@@ -183,6 +183,14 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
             <p className="text-xs text-amber-400">Your credentials are encrypted with AES-256 before storage and never logged.</p>
           </div>
 
+          {form.category === 'INSURANCE' && (
+            <div className="mb-4 p-3 bg-white/5 rounded-lg">
+              <p className="text-xs text-gray-400">
+                🔗 This will also appear under <span className="text-gray-300 font-medium">Portfolio → Insurance</span> for this property — add the premium amount and dates there. Deactivating this account later marks that policy inactive too.
+              </p>
+            </div>
+          )}
+
           {/* Gmail option */}
           <div className="mb-4 p-3 bg-white/5 rounded-lg flex items-start gap-2">
             <input
@@ -237,6 +245,15 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
               value={form.accountNumber}
               onChange={e => set('accountNumber', e.target.value)}
               placeholder={form.providerSlug === 'wm' ? 'e.g. 8-92846-35002' : 'Full account number from your bill'}
+            />
+          </Field>
+
+          <Field label="Pay/login link (optional)" htmlFor="login-url">
+            <Input
+              id="login-url"
+              value={form.loginUrl}
+              onChange={e => set('loginUrl', e.target.value)}
+              placeholder="https://provider.com/login"
             />
           </Field>
 
