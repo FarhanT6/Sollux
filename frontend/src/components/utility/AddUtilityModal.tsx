@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { createUtility, getUtilities, upsertUtilityLoan } from '../../api/client';
 import { Modal, Field, Input, Select } from '../ui';
 import type { UtilityCategory } from '../../types';
-import { CATEGORY_LABELS, LOAN_TYPE_LABELS } from '../../types';
+import { CATEGORY_LABELS, LOAN_TYPE_LABELS, INSURANCE_TYPE_LABELS } from '../../types';
 
 const PROVIDER_SLUGS: Record<string, string> = {
   'SDGE': 'sdge',
@@ -56,6 +56,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
   const [customProviders, setCustomProviders] = useState<Record<string, string>>({});
   const [isLoan, setIsLoan] = useState(false);
   const [loanType, setLoanType] = useState('OTHER');
+  const [insuranceType, setInsuranceType] = useState('PROPERTY');
 
   // Providers added via "Other" on any property don't live in the static
   // PROVIDER_SLUGS list, so without this they'd vanish from the picker the
@@ -112,6 +113,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
         password: form.useGmail ? undefined : form.password,
         loginUrl: form.loginUrl || undefined,
         notes: form.notes || undefined,
+        insuranceType: form.category === 'INSURANCE' ? insuranceType : undefined,
       });
       if (isLoan) {
         await upsertUtilityLoan(account.id, { lender: form.providerName, loanType });
@@ -209,9 +211,15 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
 
           {form.category === 'INSURANCE' && (
             <div className="mb-4 p-3 bg-white/5 rounded-lg">
-              <p className="text-xs text-gray-400">
+              <p className="text-xs text-gray-400 mb-2">
                 🔗 This will also appear under <span className="text-gray-300 font-medium">Portfolio → Insurance</span> for this property — add the premium amount and dates there. Deactivating this account later marks that policy inactive too.
               </p>
+              <label className="text-xs text-gray-400 block mb-1">Insurance type</label>
+              <Select value={insuranceType} onChange={e => setInsuranceType(e.target.value)}>
+                {Object.entries(INSURANCE_TYPE_LABELS).map(([v, l]) => (
+                  <option key={v} value={v}>{l}</option>
+                ))}
+              </Select>
             </div>
           )}
 
@@ -280,11 +288,13 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
           )}
 
           <Field
-            label="Account number"
+            label={form.category === 'INSURANCE' ? 'Account number (policy number)' : 'Account number'}
             htmlFor="acct"
             required
             hint={
-              form.providerSlug === 'wm'
+              form.category === 'INSURANCE'
+                ? 'Your policy number — also saved as the policy number on the linked Portfolio → Insurance entry'
+                : form.providerSlug === 'wm'
                 ? 'Enter full WM account number, e.g. 8-92846-35002 — used to match this property when one login has multiple service addresses'
                 : 'Found on your bill or provider portal — used to match this property when one login covers multiple accounts'
             }
@@ -293,7 +303,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
               id="acct"
               value={form.accountNumber}
               onChange={e => set('accountNumber', e.target.value)}
-              placeholder={form.providerSlug === 'wm' ? 'e.g. 8-92846-35002' : 'Full account number from your bill'}
+              placeholder={form.category === 'INSURANCE' ? 'Policy number' : form.providerSlug === 'wm' ? 'e.g. 8-92846-35002' : 'Full account number from your bill'}
             />
           </Field>
 

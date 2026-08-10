@@ -288,7 +288,7 @@ export const getUtilities = (propertyId?: string) =>
   api.get<UtilityAccount[]>('/utilities', { params: { propertyId } }).then(r => r.data);
 export const getUtility = (id: string) =>
   api.get<UtilityAccount & { statements: any[]; payments: any[] }>(`/utilities/${id}`).then(r => r.data);
-export const createUtility = (data: Partial<UtilityAccount> & { username?: string; password?: string }) =>
+export const createUtility = (data: Partial<UtilityAccount> & { username?: string; password?: string; insuranceType?: string }) =>
   api.post<UtilityAccount>('/utilities', data).then(r => r.data);
 export const updateUtility = (id: string, data: any) =>
   api.patch<UtilityAccount>(`/utilities/${id}`, data).then(r => r.data);
