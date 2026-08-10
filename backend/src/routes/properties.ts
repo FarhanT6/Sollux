@@ -42,6 +42,7 @@ router.get('/', async (req, res, next) => {
             id: true,
             providerName: true,
             category: true,
+            isActive: true,
             lastSyncStatus: true,
             lastSyncedAt: true,
             statements: {
