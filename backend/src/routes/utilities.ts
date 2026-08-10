@@ -46,6 +46,19 @@ async function syncInsurancePolicyForUtility(account: {
   }
 }
 
+// Keeps a linked Loan (created via the "Link a loan" flow — see
+// PUT /:id/loan below, or the "This is also a loan" option when adding a
+// utility account) in sync with its utility account's active status, the
+// same way insurance policies stay in sync. Never creates a loan on its
+// own — linking a loan is always an explicit user action, since loans need
+// far more detail (rate, balance, term) than a utility account collects.
+async function syncLoanActiveForUtility(account: { id: string; isActive: boolean }) {
+  await db.loan.updateMany({
+    where: { utilityAccountId: account.id },
+    data: { isActive: account.isActive },
+  });
+}
+
 const UtilitySchema = z.object({
   propertyId: z.string(),
   providerName: z.string().min(1),
@@ -233,6 +246,7 @@ router.patch('/:id', async (req, res, next) => {
     });
 
     await syncInsurancePolicyForUtility(updated);
+    await syncLoanActiveForUtility(updated);
 
     const { accountNumberEnc, usernameEnc, passwordEnc, ...sanitized } = updated;
     res.json(sanitized);

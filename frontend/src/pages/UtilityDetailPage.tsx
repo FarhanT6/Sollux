@@ -6,7 +6,7 @@ import {
   upsertUtilityLoan, deleteUtilityLoan, patchStatement, createStatement,
   revealUtilityAccountNumber,
 } from '../api/client';
-import { CATEGORY_LABELS, CATEGORY_COLORS } from '../types';
+import { CATEGORY_LABELS, CATEGORY_COLORS, LOAN_TYPE_LABELS } from '../types';
 import { Pill, Skeleton, EmptyState } from '../components/ui';
 import { format, isAfter } from 'date-fns';
 
@@ -164,13 +164,6 @@ function PaymentPlanModal({
 }
 
 // ── Loan Card ────────────────────────────────────────────────────────────────
-
-const LOAN_TYPE_LABELS: Record<string, string> = {
-  MORTGAGE: 'Mortgage', HELOC: 'HELOC', AUTO: 'Auto', PERSONAL: 'Personal',
-  STUDENT: 'Student', INSTALLMENT_PLAN: 'Installment Plan',
-  CREDIT_LINE: 'Credit Line', SELLER_FINANCING: 'Seller Financing',
-  DSCR: 'DSCR', COMMERCIAL: 'Commercial', HARD_MONEY: 'Hard Money', OTHER: 'Other',
-};
 
 function LoanModal({ accountId, existing, onClose, onSave }: {
   accountId: string; existing: any | null; onClose: () => void; onSave: (l: any) => void;

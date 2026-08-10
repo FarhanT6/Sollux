@@ -596,6 +596,13 @@ export const CATEGORY_COLORS: Record<UtilityCategory, string> = {
   INSURANCE: '#E24B4A', HOA: '#1D9E75', TAXES: '#534AB7', OTHER: '#B4B2A9',
 };
 
+export const LOAN_TYPE_LABELS: Record<string, string> = {
+  MORTGAGE: 'Mortgage', HELOC: 'HELOC', AUTO: 'Auto', PERSONAL: 'Personal',
+  STUDENT: 'Student', INSTALLMENT_PLAN: 'Installment Plan',
+  CREDIT_LINE: 'Credit Line', SELLER_FINANCING: 'Seller Financing',
+  DSCR: 'DSCR', COMMERCIAL: 'Commercial', HARD_MONEY: 'Hard Money', OTHER: 'Other',
+};
+
 export const PROPERTY_TYPE_LABELS: Record<PropertyType, string> = {
   PRIMARY: 'Primary home', RENTAL: 'Rental', INVESTMENT: 'Investment', COMMERCIAL: 'Commercial',
   RESIDENTIAL_SINGLE: 'Single-family', RESIDENTIAL_MULTI: 'Multi-family',
