@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { getProperty, getStatements, getPayments, getInsights, syncUtility, updateUtility, deleteUtility, updateProperty, deleteProperty, markInsightRead, dismissInsight, getStatementDownloadUrl, revealUtilityAccountNumber } from '../api/client';
 import type { Property, Statement, Payment, AIInsight, UtilityAccount } from '../types';
@@ -778,41 +778,25 @@ function UtilityAccountCard({
     : account.lastSyncStatus === 'SUCCESS' ? 'green'
     : account.lastSyncStatus === 'FAILED' ? 'red' : 'gray';
 
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [menuOpen]);
+
   return (
-    <div className={`card p-4 ${account.isActive === false ? 'bg-white/[0.01] border-white/5' : ''}`}>
+    <div className={`card p-4 min-h-[212px] flex flex-col ${account.isActive === false ? 'bg-white/[0.01] border-white/5' : ''}`}>
       <div className="flex items-start justify-between mb-3">
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 min-w-0">
           <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: color }} />
-          <div>
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <p className="text-sm font-semibold text-white">{account.providerName}</p>
-              <button
-                onClick={onEdit}
-                title="Edit account"
-                className="px-1.5 py-0.5 rounded text-xs text-gray-400 hover:text-white hover:bg-white/10 transition-colors leading-none border border-white/10 hover:border-white/20"
-              >
-                Edit
-              </button>
-              <button
-                onClick={onDelete}
-                title="Delete account"
-                className="px-1.5 py-0.5 rounded text-xs text-red-500/60 hover:text-red-400 hover:bg-red-500/10 transition-colors leading-none border border-red-500/20 hover:border-red-500/40"
-              >
-                Delete
-              </button>
-              <button
-                onClick={onToggleActive}
-                disabled={togglingActive}
-                title={account.isActive === false ? 'Reactivate this account' : 'Mark inactive — keeps all history, pauses syncing'}
-                className={`px-1.5 py-0.5 rounded text-xs transition-colors leading-none border disabled:opacity-40 ${
-                  account.isActive === false
-                    ? 'text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10 border-emerald-500/20 hover:border-emerald-500/40'
-                    : 'text-gray-400 hover:text-white hover:bg-white/10 border-white/10 hover:border-white/20'
-                }`}
-              >
-                {togglingActive ? '…' : account.isActive === false ? 'Reactivate' : 'Deactivate'}
-              </button>
-            </div>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-white truncate">{account.providerName}</p>
             {account.accountNumber ? (
               <p className="text-xs font-mono text-gray-400 flex items-center gap-1">
                 {revealedAccountNumber != null ? revealedAccountNumber : account.accountNumber}
@@ -830,9 +814,48 @@ function UtilityAccountCard({
             )}
           </div>
         </div>
-        <Pill color={pillColor}>{statusLabel}</Pill>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <Pill color={pillColor}>{statusLabel}</Pill>
+          <div ref={menuRef} className="relative">
+            <button
+              onClick={() => setMenuOpen(v => !v)}
+              title="Account options"
+              className="w-6 h-6 rounded-lg flex items-center justify-center text-gray-500 hover:text-gray-300 hover:bg-white/10 transition-colors"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/>
+              </svg>
+            </button>
+            {menuOpen && (
+              <div className="absolute right-0 top-7 z-20 w-40 rounded-xl overflow-hidden shadow-xl" style={{ background: '#252525', border: '1px solid rgba(255,255,255,0.1)' }}>
+                <button
+                  onClick={() => { setMenuOpen(false); onEdit(); }}
+                  className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-white/8 transition-colors"
+                >
+                  Edit
+                </button>
+                <button
+                  onClick={() => { setMenuOpen(false); onToggleActive(); }}
+                  disabled={togglingActive}
+                  className={`w-full text-left px-3 py-2 text-xs transition-colors disabled:opacity-40 ${
+                    account.isActive === false ? 'text-emerald-400 hover:bg-emerald-500/10' : 'text-gray-300 hover:bg-white/8'
+                  }`}
+                >
+                  {togglingActive ? '…' : account.isActive === false ? 'Reactivate' : 'Deactivate'}
+                </button>
+                <button
+                  onClick={() => { setMenuOpen(false); onDelete(); }}
+                  className="w-full text-left px-3 py-2 text-xs text-red-400 hover:bg-red-500/10 transition-colors"
+                >
+                  Delete
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
+      <div className="flex-1 flex flex-col">
       <div className="flex items-end justify-between">
         <div className="flex-1 min-w-0">
           {(() => {
@@ -929,35 +952,38 @@ function UtilityAccountCard({
         </div>
       </div>
 
-      {/* No credentials banner */}
-      {account.lastSyncStatus === 'FAILED' && account.lastSyncError?.startsWith('No credentials') && (
-        <div className="mt-3 px-3 py-2 rounded-lg text-xs space-y-1"
-          style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.25)' }}>
-          <p className="font-medium text-indigo-400">Credentials required to sync</p>
-          <p className="text-gray-400">
-            Click <span className="text-gray-200">Edit</span> and add the username and password you use to log in to the{' '}
-            <span className="text-gray-200">{account.providerName}</span> portal.
-          </p>
-        </div>
-      )}
+      <div className="mt-auto">
+        {/* No credentials banner */}
+        {account.lastSyncStatus === 'FAILED' && account.lastSyncError?.startsWith('No credentials') && (
+          <div className="mt-3 px-3 py-2 rounded-lg text-xs space-y-1"
+            style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.25)' }}>
+            <p className="font-medium text-indigo-400">Credentials required to sync</p>
+            <p className="text-gray-400">
+              Click <span className="text-gray-200">Edit</span> and add the username and password you use to log in to the{' '}
+              <span className="text-gray-200">{account.providerName}</span> portal.
+            </p>
+          </div>
+        )}
 
-      {/* MFA required banner */}
-      {account.lastSyncStatus === 'FAILED' && account.lastSyncError?.startsWith('MFA_REQUIRED') && (
-        <div className="mt-3 px-3 py-2 rounded-lg text-xs space-y-1"
-          style={{ background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.25)' }}>
-          <p className="font-medium text-amber-400">Phone verification required</p>
-          <p className="text-gray-400">
-            Log in to <span className="text-gray-200">{account.providerName}</span> manually in your browser,
-            complete the verification code step, then click Sync — Sollux will reuse the trusted session automatically.
-          </p>
-        </div>
-      )}
+        {/* MFA required banner */}
+        {account.lastSyncStatus === 'FAILED' && account.lastSyncError?.startsWith('MFA_REQUIRED') && (
+          <div className="mt-3 px-3 py-2 rounded-lg text-xs space-y-1"
+            style={{ background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.25)' }}>
+            <p className="font-medium text-amber-400">Phone verification required</p>
+            <p className="text-gray-400">
+              Log in to <span className="text-gray-200">{account.providerName}</span> manually in your browser,
+              complete the verification code step, then click Sync — Sollux will reuse the trusted session automatically.
+            </p>
+          </div>
+        )}
 
-      {account.lastSyncedAt && account.lastSyncStatus !== 'FAILED' && (
-        <p className="text-xs text-gray-300 mt-2">
-          Last synced {format(new Date(account.lastSyncedAt), 'MMM d \'at\' h:mm a')}
-        </p>
-      )}
+        {account.lastSyncedAt && account.lastSyncStatus !== 'FAILED' && (
+          <p className="text-xs text-gray-300 mt-2">
+            Last synced {format(new Date(account.lastSyncedAt), 'MMM d \'at\' h:mm a')}
+          </p>
+        )}
+      </div>
+      </div>
     </div>
   );
 }

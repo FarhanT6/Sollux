@@ -24,7 +24,22 @@ const PROVIDER_SLUGS: Record<string, string> = {
   'Service Finance (Solar)': 'service-finance',
   'Bamboo Insurance': 'bamboo-insurance',
   'Safeco Insurance': 'safeco',
-  'Other': 'gmail-fallback',
+};
+
+// Which category each preset provider belongs under, so the picker only
+// shows providers relevant to the category you've selected instead of
+// dumping every electric/insurance/loan servicer into one flat wall of tiles.
+const PROVIDER_CATEGORIES: Record<string, UtilityCategory> = {
+  'SDGE': 'ELECTRIC', 'IID': 'ELECTRIC', 'FPL': 'ELECTRIC',
+  'SoCal Gas': 'GAS',
+  'Brevard County Water': 'WATER', 'Vista Irrigation District': 'WATER',
+  'City of Oceanside': 'WATER', 'City of Imperial': 'WATER',
+  'City of El Centro': 'WATER', 'City of Brawley': 'WATER',
+  'WM': 'TRASH', 'Republic Services': 'TRASH',
+  'Cox': 'INTERNET', 'Spectrum': 'INTERNET',
+  'T-Mobile': 'PHONE', 'AT&T': 'PHONE',
+  'Service Finance (Solar)': 'SOLAR',
+  'Bamboo Insurance': 'INSURANCE', 'Safeco Insurance': 'INSURANCE',
 };
 
 // Providers with a live scraper (vs gmail-fallback only)
@@ -53,7 +68,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
   });
   const [selectedTile, setSelectedTile] = useState('');
   const [otherName, setOtherName] = useState('');
-  const [customProviders, setCustomProviders] = useState<Record<string, string>>({});
+  const [customProviders, setCustomProviders] = useState<Record<string, { slug: string; category: string }>>({});
   const [isLoan, setIsLoan] = useState(false);
   const [loanType, setLoanType] = useState('OTHER');
   const [insuranceType, setInsuranceType] = useState('PROPERTY');
@@ -61,23 +76,42 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
   // Providers added via "Other" on any property don't live in the static
   // PROVIDER_SLUGS list, so without this they'd vanish from the picker the
   // next time you go to add a utility — pull in every distinct provider
-  // name/slug the user has already used and merge them in as extra tiles.
+  // name/slug/category the user has already used and merge them in as extra
+  // tiles, grouped under whichever category they were actually added under.
   useEffect(() => {
     getUtilities().then(accounts => {
-      const extra: Record<string, string> = {};
+      const extra: Record<string, { slug: string; category: string }> = {};
       for (const a of accounts) {
         if (!PROVIDER_SLUGS[a.providerName] && !extra[a.providerName]) {
-          extra[a.providerName] = a.providerSlug;
+          extra[a.providerName] = { slug: a.providerSlug, category: a.category };
         }
       }
       setCustomProviders(extra);
     }).catch(() => {});
   }, []);
 
-  const allProviders = { ...customProviders, ...PROVIDER_SLUGS };
+  const allProviders: Record<string, string> = {
+    ...Object.fromEntries(Object.entries(customProviders).map(([name, p]) => [name, p.slug])),
+    ...PROVIDER_SLUGS,
+  };
+  // Only show providers that belong to the currently-selected category, so
+  // picking "Electric" doesn't surface loan servicers, insurance carriers,
+  // and other unrelated custom providers in the same wall of tiles.
+  const providersForCategory = Object.keys(allProviders).filter(name => {
+    if (customProviders[name]) return customProviders[name].category === form.category;
+    return PROVIDER_CATEGORIES[name] === form.category;
+  });
 
   function set(key: string, value: string | boolean) {
     setForm(prev => ({ ...prev, [key]: value }));
+  }
+
+  function selectCategory(category: string) {
+    // Clear the provider selection too — a tile picked under the old
+    // category rarely still makes sense once the category changes.
+    setSelectedTile('');
+    setOtherName('');
+    setForm(prev => ({ ...prev, category: category as UtilityCategory, providerName: '', providerSlug: '' }));
   }
 
   function selectProvider(name: string) {
@@ -151,7 +185,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
             <Select
               id="category"
               value={form.category}
-              onChange={e => set('category', e.target.value)}
+              onChange={e => selectCategory(e.target.value)}
             >
               {(Object.keys(CATEGORY_LABELS) as UtilityCategory[]).map(c => (
                 <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>
@@ -159,9 +193,9 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
             </Select>
           </Field>
 
-          <Field label="Provider" required>
+          <Field label="Provider" required hint={providersForCategory.length === 0 ? `No saved providers under ${CATEGORY_LABELS[form.category]} yet — pick "Other" below to add one.` : undefined}>
             <div className="grid grid-cols-3 gap-1.5 max-h-52 overflow-y-auto pr-1">
-              {Object.keys(allProviders).map(name => {
+              {providersForCategory.map(name => {
                 const slug = allProviders[name];
                 const hasLiveScraper = SCRAPER_SUPPORTED.has(slug);
                 return (
@@ -181,6 +215,16 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
                   </button>
                 );
               })}
+              <button
+                onClick={() => selectProvider('Other')}
+                className={`text-xs px-2 py-2 rounded-lg border text-left transition-colors ${
+                  selectedTile === 'Other'
+                    ? 'bg-amber-500/10 border-amber-500/30 text-amber-400 font-medium'
+                    : 'bg-white/5 border-white/10 text-gray-300 hover:border-white/20'
+                }`}
+              >
+                Other
+              </button>
             </div>
           </Field>
 
@@ -264,7 +308,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
 
           {!form.useGmail && (
             <>
-              <Field label="Username / Email" htmlFor="username" required>
+              <Field label="Username / Email" htmlFor="username">
                 <Input
                   id="username"
                   type="text"
@@ -274,7 +318,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
                   placeholder="Your login email or username"
                 />
               </Field>
-              <Field label="Password" htmlFor="password" required>
+              <Field label="Password" htmlFor="password">
                 <Input
                   id="password"
                   type="password"
