@@ -160,6 +160,7 @@ enum UtilityCategory {
   HOA
   TAXES
   LOAN
+  CREDIT_CARD
   OTHER
 }
 

@@ -284,12 +284,21 @@ router.post('/stream', attachDbUser, async (req, res) => {
               alerts: ex.alerts,
             };
 
+            const pastDueAmt = ex.previousBalance != null && ex.previousBalance > 0 ? ex.previousBalance : null;
+            // Prefer the actual payment amount the statement shows over
+            // guessing "fully paid" from the isPaid flag.
+            const amountPaidValue = ex.paymentsReceived ?? (ex.isPaid ? (totalDue ?? amountDueCurrent ?? null) : null);
+
             if (existing) {
               await db.statement.update({ where: { id: existing.id }, data: {
                 statementDate,
                 amountDue: amountDueCurrent ?? existing.amountDue,
                 balance: totalDue ?? amountDueCurrent ?? existing.balance,
+                amountPaid: amountPaidValue ?? existing.amountPaid,
                 dueDate: ex.dueDate ? new Date(ex.dueDate) : existing.dueDate,
+                chargesExcludingFees: ex.currentCharges ?? existing.chargesExcludingFees,
+                penaltiesFees: ex.lateFee ?? existing.penaltiesFees,
+                pastDueCarried: pastDueAmt ?? existing.pastDueCarried,
                 rawDataJson: rawData as Prisma.InputJsonValue,
                 ...(pdfS3Key ? { pdfS3Key } : {}),
               }});
@@ -301,7 +310,10 @@ router.post('/stream', attachDbUser, async (req, res) => {
                 billingPeriodEnd:   ex.billingPeriodEnd   ? new Date(ex.billingPeriodEnd)   : null,
                 amountDue: amountDueCurrent ?? null,
                 balance: totalDue ?? amountDueCurrent ?? null,
-                amountPaid: ex.isPaid ? (totalDue ?? amountDueCurrent ?? null) : null,
+                amountPaid: amountPaidValue,
+                chargesExcludingFees: ex.currentCharges ?? null,
+                penaltiesFees: ex.lateFee ?? null,
+                pastDueCarried: pastDueAmt,
                 usageValue: ex.usageValue ?? null, usageUnit: ex.usageUnit ?? null,
                 ratePlan: ex.ratePlan ?? null, pdfS3Key, sourceType: 'MANUAL',
                 rawDataJson: rawData as Prisma.InputJsonValue,
