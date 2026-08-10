@@ -8,6 +8,44 @@ import { scrapeQueue } from '../workers/queues';
 const router = Router();
 router.use(attachDbUser);
 
+// Keeps an INSURANCE-category utility account's linked InsurancePolicy (shown
+// under Portfolio → Insurance) in sync: carrier name and active status flow
+// from the utility account here; premium/dates/documents stay editable only
+// on the policy itself. Called after every utility create/update so adding,
+// renaming, or (de)activating an insurance account under Utilities is
+// reflected on the Portfolio side without the user re-entering it there.
+async function syncInsurancePolicyForUtility(account: {
+  id: string; propertyId: string; providerName: string; category: string; isActive: boolean;
+}) {
+  if (account.category !== 'INSURANCE') {
+    // No longer an insurance account — unlink any existing policy but keep
+    // it (and its real premium/date data) intact for manual management.
+    await db.insurancePolicy.updateMany({
+      where: { utilityAccountId: account.id },
+      data: { utilityAccountId: null },
+    });
+    return;
+  }
+
+  const existing = await db.insurancePolicy.findUnique({ where: { utilityAccountId: account.id } });
+  if (existing) {
+    await db.insurancePolicy.update({
+      where: { id: existing.id },
+      data: { carrier: account.providerName, isActive: account.isActive },
+    });
+  } else {
+    await db.insurancePolicy.create({
+      data: {
+        propertyId: account.propertyId,
+        utilityAccountId: account.id,
+        carrier: account.providerName,
+        premiumAmount: 0,
+        isActive: account.isActive,
+      },
+    });
+  }
+}
+
 const UtilitySchema = z.object({
   propertyId: z.string(),
   providerName: z.string().min(1),
@@ -86,6 +124,8 @@ router.post('/', async (req, res, next) => {
         passwordEnc: encryptOptional(password),
       },
     });
+
+    await syncInsurancePolicyForUtility(account);
 
     // Queue initial scrape
     await scrapeQueue.add('scrape', { utilityAccountId: account.id }, {
@@ -191,6 +231,8 @@ router.patch('/:id', async (req, res, next) => {
         ...(rest.isActive === true && { syncEnabled: true }),
       },
     });
+
+    await syncInsurancePolicyForUtility(updated);
 
     const { accountNumberEnc, usernameEnc, passwordEnc, ...sanitized } = updated;
     res.json(sanitized);

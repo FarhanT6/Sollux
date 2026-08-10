@@ -1558,6 +1558,7 @@ function InsuranceTab({ propertyId, policies, setPolicies }: {
   };
 
   const isEditing = formMode !== 'new' && formMode !== 'closed';
+  const isLinked = isEditing && !!(formMode as InsurancePolicy).utilityAccountId;
 
   return (
     <div>
@@ -1569,7 +1570,16 @@ function InsuranceTab({ propertyId, policies, setPolicies }: {
       {formMode !== 'closed' && (
         <div className="card p-4 mb-4 grid grid-cols-4 gap-3">
           <div className="col-span-4 text-xs font-medium text-gray-400 mb-1">{isEditing ? 'Edit policy' : 'New policy'}</div>
-          <input placeholder="Carrier *" value={form.carrier} onChange={e => setForm(f => ({ ...f, carrier: e.target.value }))} className="input-dark text-sm col-span-2" />
+          {isLinked && (
+            <p className="col-span-4 text-xs text-amber-400/80 bg-amber-500/5 border border-amber-500/20 rounded-lg px-3 py-2 -mt-1 mb-1">
+              🔗 This policy is linked to a utility account. Carrier name and active status are controlled from Utilities — edit them there. Premium, dates, and notes are still yours to manage here.
+            </p>
+          )}
+          <input
+            placeholder="Carrier *" value={form.carrier} disabled={isLinked}
+            onChange={e => setForm(f => ({ ...f, carrier: e.target.value }))}
+            className="input-dark text-sm col-span-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          />
           <input placeholder="Policy number" value={form.policyNumber} onChange={e => setForm(f => ({ ...f, policyNumber: e.target.value }))} className="input-dark text-sm" />
           <select value={form.policyType} onChange={e => setForm(f => ({ ...f, policyType: e.target.value }))} className="input-dark text-sm">
             {['PROPERTY','LIABILITY','FLOOD','UMBRELLA','OTHER'].map(t => <option key={t} value={t}>{t}</option>)}
@@ -1583,8 +1593,8 @@ function InsuranceTab({ propertyId, policies, setPolicies }: {
           <input type="date" placeholder="Effective" value={form.effectiveDate} onChange={e => setForm(f => ({ ...f, effectiveDate: e.target.value }))} className="input-dark text-sm" />
           <input type="date" placeholder="Expiration" value={form.expirationDate} onChange={e => setForm(f => ({ ...f, expirationDate: e.target.value }))} className="input-dark text-sm" />
           <input placeholder="Notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="input-dark text-sm col-span-2" />
-          <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
-            <input type="checkbox" checked={form.isActive} onChange={e => setForm(f => ({ ...f, isActive: e.target.checked }))} />
+          <label className={`flex items-center gap-2 text-xs text-gray-400 ${isLinked ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
+            <input type="checkbox" checked={form.isActive} disabled={isLinked} onChange={e => setForm(f => ({ ...f, isActive: e.target.checked }))} />
             Active
           </label>
           <div className="col-span-4 flex gap-2 justify-end">
@@ -1606,7 +1616,14 @@ function InsuranceTab({ propertyId, policies, setPolicies }: {
               <div key={p.id} onClick={() => openEdit(p)} className="card p-4 cursor-pointer hover:bg-white/[0.02]">
                 <div className="flex items-start justify-between">
                   <div>
-                    <p className="text-sm font-semibold text-white">{p.carrier}</p>
+                    <p className="text-sm font-semibold text-white flex items-center gap-1.5">
+                      {p.carrier}
+                      {p.utilityAccountId && (
+                        <span className="text-xs px-1.5 py-0.5 rounded-full text-amber-400 border border-amber-500/20 bg-amber-500/10" title="Synced from a utility account — carrier name and active status are managed there">
+                          🔗 Linked
+                        </span>
+                      )}
+                    </p>
                     <p className="text-xs text-gray-500">{p.policyType} · {p.policyNumber || 'No policy #'}</p>
                   </div>
                   <div className="text-right">
