@@ -469,22 +469,29 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
             )}
             <input className={fieldCls} placeholder="Enter a new account number to replace it" value={form.accountNumber} onChange={e => setForm(f => ({ ...f, accountNumber: e.target.value }))} />
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs text-gray-400 block mb-1">Username / Email</label>
-              <input
-                className={fieldCls} placeholder="New login" value={form.username}
-                onChange={e => setForm(f => ({ ...f, username: e.target.value }))}
-                autoComplete="off" name="utility-username" type="text"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-gray-400 block mb-1">Password</label>
-              <input
-                type="password" className={fieldCls} placeholder="New password" value={form.password}
-                onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
-                autoComplete="new-password" name="utility-password"
-              />
+          <div>
+            <p className="text-xs mb-1.5">
+              {account.hasCredentials
+                ? <span className="text-emerald-500">✓ Login credentials are saved</span>
+                : <span className="text-amber-400">No login credentials saved yet</span>}
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Username / Email</label>
+                <input
+                  className={fieldCls} placeholder="New login" value={form.username}
+                  onChange={e => setForm(f => ({ ...f, username: e.target.value }))}
+                  autoComplete="off" name="utility-username" type="text"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Password</label>
+                <input
+                  type="password" className={fieldCls} placeholder="New password" value={form.password}
+                  onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
+                  autoComplete="new-password" name="utility-password"
+                />
+              </div>
             </div>
           </div>
           <div>
