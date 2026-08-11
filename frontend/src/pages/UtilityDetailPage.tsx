@@ -22,13 +22,25 @@ function fmtMoney(v?: number | string | null) {
   return isNaN(n) ? '—' : `$${n.toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
 }
 
+// All statement figures come from the dedicated, editable columns
+// (amountDue, amountPaid, pastDueCarried, chargesExcludingFees,
+// penaltiesFees) — never from rawDataJson, which is a frozen import-time
+// snapshot that user edits can't change. Reading rawDataJson here is what
+// made edits appear to "not stick".
+
+// Open balance a statement is asking for: this period's charge plus any
+// prior balance carried into it.
+function openBalanceOf(s: any): number | null {
+  if (s.amountDue == null && s.pastDueCarried == null) return null;
+  return Number(s.amountDue ?? 0) + Number(s.pastDueCarried ?? 0);
+}
+
 // Determine if a statement is paid, including reconciliation against payments that
 // may not yet have posted on the provider's API. Sums all payments dated on/after
 // the statement date; if the sum covers the open balance, treat as paid.
 function isStatementPaid(s: any, payments: any[] = []): boolean {
-  const raw = s.rawDataJson as any;
-  if (s.amountPaid != null || raw?.isPaid === true) return true;
-  const openBalance = (raw?.accountBalance ?? raw?.totalDue ?? s.balance ?? s.amountDue) as number | undefined;
+  if (s.amountPaid != null) return true;
+  const openBalance = openBalanceOf(s);
   if (openBalance == null) return false;
   if (openBalance <= 0.01) return true;
   const stmtDate = s.statementDate ? new Date(s.statementDate) : null;
@@ -50,12 +62,12 @@ function computeResolvedByFutureCheckpoint(statements: any[]): Set<string> {
   const resolved = new Set<string>();
   let sawZeroCheckpoint = false;
   // Iterate newest -> oldest; sawZeroCheckpoint tracks whether any statement
-  // strictly newer than the current one has already shown a fully-cleared
-  // (previousBalance === 0) bill.
+  // strictly newer than the current one carried in a zero balance (its
+  // pastDueCarried is 0/empty), proving the prior bill was cleared.
   for (const s of statements) {
     if (sawZeroCheckpoint) resolved.add(s.id);
-    const prevBal = Number((s.rawDataJson as any)?.previousBalance ?? 0);
-    if (prevBal === 0) sawZeroCheckpoint = true;
+    const carriedIn = Number(s.pastDueCarried ?? 0);
+    if (carriedIn === 0) sawZeroCheckpoint = true;
   }
   return resolved;
 }
@@ -64,9 +76,9 @@ function isEffectivelyPaid(s: any, payments: any[], resolvedByFuture: Set<string
   return isStatementPaid(s, payments) || resolvedByFuture.has(s.id);
 }
 
-// "Past due" / "Prev balance" on a statement is a frozen snapshot of what the
-// provider printed on that bill. Once the prior statement is marked paid in
-// Sollux, that snapshot is stale — suppress the past-due display for it.
+// Past due carried on a statement reflects an older unpaid balance. Once the
+// prior (chronologically older) statement is marked paid in Sollux, that
+// carried-forward figure is stale — suppress the past-due display for it.
 function isPriorStatementPaid(current: any, all: any[], payments: any[] = [], resolvedByFuture: Set<string> = new Set()): boolean {
   const idx = all.findIndex(x => x.id === current.id);
   if (idx === -1 || idx + 1 >= all.length) return false;
@@ -77,17 +89,18 @@ function statementStatus(s: any, payments: any[] = [], newerStmt?: any, isLatest
   if (isEffectivelyPaid(s, payments, resolvedByFuture)) return { color: 'green', label: 'Paid' };
 
   if (!isLatest && newerStmt) {
-    const newerPrevBal = Number((newerStmt.rawDataJson as any)?.previousBalance ?? 0);
+    // The next bill's carried-in balance tells us whether this one was paid:
+    // 0 carried in = this bill was cleared before the next was issued.
+    const newerCarriedIn = Number(newerStmt.pastDueCarried ?? 0);
     const thisDue = Number(s.amountDue ?? 0);
-    if (newerPrevBal === 0) return { color: 'green', label: 'Paid' };
-    if (thisDue > 0 && newerPrevBal >= thisDue - 0.01) {
+    if (newerCarriedIn === 0) return { color: 'green', label: 'Paid' };
+    if (thisDue > 0 && newerCarriedIn >= thisDue - 0.01) {
       const pastDueDate = s.dueDate && isAfter(new Date(), new Date(s.dueDate));
       return pastDueDate ? { color: 'red', label: 'Overdue' } : { color: 'amber', label: 'Due' };
     }
     return { color: 'green', label: 'Paid' };
   }
 
-  if ((s.rawDataJson as any)?.isPastDue === true) return { color: 'red', label: 'Overdue' };
   if (s.dueDate && isAfter(new Date(), new Date(s.dueDate))) return { color: 'red', label: 'Overdue' };
   return { color: 'amber', label: 'Due' };
 }
@@ -615,25 +628,16 @@ export default function UtilityDetailPage() {
     return true;
   }), [payments, yearFilter, search]);
 
-  // Fees/penalties aggregated across all statements
+  // Fees/penalties aggregated across all statements — sourced from the
+  // editable penaltiesFees column so it matches what Edit shows and writes.
   const feesData = useMemo(() => statements.map(s => {
-    const raw = s.rawDataJson as Record<string, unknown> | undefined;
-    if (!raw) return null;
-    const penalties  = raw.penalties  != null ? Number(raw.penalties)  : null;
-    const adjustments= raw.adjustments != null ? Number(raw.adjustments): null;
-    const taxCharge  = raw.taxCharge  != null ? Number(raw.taxCharge)  : null;
-    const afterDue   = raw.afterDueDateAmt != null ? Number(raw.afterDueDateAmt) : null;
-    if ([penalties, adjustments, taxCharge, afterDue].every(v => v == null || v === 0)) return null;
-    return {
-      id: s.id, date: s.statementDate,
-      penalties, adjustments, taxCharge, afterDue,
-      total: (penalties || 0) + (adjustments || 0) + (taxCharge || 0) + (afterDue || 0),
-    };
+    const penalties = s.penaltiesFees != null ? Number(s.penaltiesFees) : null;
+    if (penalties == null || penalties === 0) return null;
+    return { id: s.id, date: s.statementDate, penalties, total: penalties };
   }).filter(Boolean), [statements]);
 
   const totalFees = feesData.reduce((s, r: any) => s + (r?.total || 0), 0);
-  const totalPenalties = feesData.reduce((s, r: any) => s + (r?.penalties || 0), 0);
-  const totalTax = feesData.reduce((s, r: any) => s + (r?.taxCharge || 0), 0);
+  const totalPenalties = totalFees;
 
   const currentYear = new Date().getFullYear();
   const ytdTotal = statements
@@ -645,22 +649,17 @@ export default function UtilityDetailPage() {
     ? ((latestAmt - prevAmt) / prevAmt) * 100 : null;
   const totalPaid = payments.reduce((s, p) => s + Number(p.amount), 0);
 
-  // Past due from latest statement — prefer the dedicated, editable columns over
-  // rawDataJson (a frozen import-time snapshot) so edits actually show up here.
+  // Past due from latest statement — all from the dedicated, editable columns
+  // so edits show up here immediately.
   const latestStmt = statements[0];
-  const latestRaw = latestStmt?.rawDataJson as Record<string, unknown> | undefined;
-  // The prior statement's payment status can make this snapshot stale — see
-  // isPriorStatementPaid for why we don't trust pastDueCarried/rawDataJson.pastDue blindly.
+  // If the prior (older) statement is paid, the balance carried into this one
+  // is stale — suppress it. See isPriorStatementPaid.
   const priorToLatestPaid = latestStmt ? isPriorStatementPaid(latestStmt, statements, payments) : false;
-  const latestPastDue = (!priorToLatestPaid)
-    ? (latestStmt?.pastDueCarried != null ? Number(latestStmt.pastDueCarried)
-      : latestRaw?.pastDue != null ? Number(latestRaw.pastDue) : null)
+  const latestPastDue = (!priorToLatestPaid && latestStmt?.pastDueCarried != null)
+    ? Number(latestStmt.pastDueCarried)
     : null;
-  const latestChargesExclFees = latestStmt?.chargesExcludingFees != null ? Number(latestStmt.chargesExcludingFees)
-    : latestRaw?.currentCharges != null ? Number(latestRaw.currentCharges) : null;
-  const latestOwed = (latestStmt?.amountDue != null || latestStmt?.pastDueCarried != null)
-    ? Number(latestStmt?.amountDue ?? 0) + Number(latestStmt?.pastDueCarried ?? 0)
-    : ((latestRaw?.accountBalance ?? latestRaw?.totalDue) != null ? Number(latestRaw?.accountBalance ?? latestRaw?.totalDue) : null);
+  const latestChargesExclFees = latestStmt?.chargesExcludingFees != null ? Number(latestStmt.chargesExcludingFees) : null;
+  const latestOwed = openBalanceOf(latestStmt);
   // Reconcile the displayed current balance against recent payments. If the user paid
   // a bill but the provider's API hasn't reflected it yet, we still want $0 here.
   const isLatestPaid = latestStmt ? isStatementPaid(latestStmt, payments) : false;
@@ -877,18 +876,10 @@ export default function UtilityDetailPage() {
                   // filteredStatements sorted DESC; [idx-1] is more recent; idx===0 is latest
                   const isLatest = idx === 0 && yearFilter === 'all' && !search;
                   const { color: sc, label: sl } = statementStatus(s, payments, filteredStatements[idx - 1], isLatest, resolvedByFuture);
-                  // Prefer the dedicated, editable columns over rawDataJson — rawDataJson is
-                  // a frozen snapshot from import time, so if it took precedence here, saving
-                  // an edit would never visibly change anything (the bug this replaced).
-                  const raw = s.rawDataJson as Record<string, unknown> | undefined;
-                  const pastDue     = s.pastDueCarried != null ? Number(s.pastDueCarried)
-                                      : raw?.pastDue != null ? Number(raw.pastDue) : null;
-                  const totalDue    = s.amountDue != null || s.pastDueCarried != null
-                                      ? Number(s.amountDue ?? 0) + Number(s.pastDueCarried ?? 0)
-                                      : (raw?.accountBalance ?? raw?.totalDue) != null
-                                        ? Number(raw?.accountBalance ?? raw?.totalDue) : null;
-                  const currentBill = s.chargesExcludingFees != null ? Number(s.chargesExcludingFees)
-                                      : raw?.currentBill != null ? Number(raw.currentBill) : null;
+                  // Everything from the dedicated, editable columns — no
+                  // rawDataJson fallback, so edits always show up.
+                  const pastDue  = s.pastDueCarried != null ? Number(s.pastDueCarried) : null;
+                  const totalDue = openBalanceOf(s);
                   const isPaid = isEffectivelyPaid(s, payments, resolvedByFuture);
                   const priorPaid = isPriorStatementPaid(s, statements, payments, resolvedByFuture);
                   return (
@@ -936,7 +927,9 @@ export default function UtilityDetailPage() {
                        *    show "Bill: $X" so the per-period charge is still visible. */}
                       <div className="text-right flex-shrink-0 w-28">
                         {(() => {
-                          const isFullyPaid = (totalDue === 0 && s.amountPaid != null) || raw?.isPaid === true || (totalDue === 0 && Number(s.amountDue ?? 0) > 0);
+                          // A paid statement shows the bill amount (what was billed);
+                          // an unpaid one shows the open balance owed.
+                          const isFullyPaid = isPaid || (totalDue === 0 && Number(s.amountDue ?? 0) > 0);
                           const amt = Number(s.amountDue ?? 0);
                           const owed = totalDue ?? amt;
                           const primary = isFullyPaid ? amt : owed;
@@ -1035,11 +1028,10 @@ export default function UtilityDetailPage() {
             : (
               <div className="space-y-4 pb-8">
                 {/* Summary cards */}
-                <div className="grid grid-cols-3 gap-3 mb-2">
+                <div className="grid grid-cols-2 gap-3 mb-2">
                   {[
-                    { label: 'Total penalties', value: fmtMoney(totalPenalties), color: totalPenalties > 0 ? 'text-red-400' : 'text-gray-400' },
-                    { label: 'Total taxes/fees', value: fmtMoney(totalTax), color: 'text-orange-400' },
-                    { label: 'All charges total', value: fmtMoney(totalFees), color: 'text-amber-400' },
+                    { label: 'Total penalties / fees', value: fmtMoney(totalPenalties), color: totalPenalties > 0 ? 'text-red-400' : 'text-gray-400' },
+                    { label: 'Across', value: `${feesData.length} bills`, color: 'text-amber-400' },
                   ].map(({ label, value, color: c }) => (
                     <div key={label} className="rounded-xl px-4 py-3" style={{ background: '#161616', border: '1px solid rgba(255,255,255,0.06)' }}>
                       <p className="text-xs text-gray-500 mb-1">{label}</p>
@@ -1057,17 +1049,10 @@ export default function UtilityDetailPage() {
                       <p className="text-sm font-semibold text-orange-400">{fmtMoney(r.total)}</p>
                     </div>
                     <div className="grid grid-cols-2 gap-x-8 gap-y-1.5">
-                      {[
-                        ['Penalties',       r.penalties,  'text-red-400'],
-                        ['Late fee (after due)', r.afterDue, 'text-red-300'],
-                        ['Tax / surcharge', r.taxCharge,  'text-orange-300'],
-                        ['Adjustments',     r.adjustments,'text-gray-300'],
-                      ].filter(([, v]) => v != null && Number(v) !== 0).map(([label, value, c]) => (
-                        <div key={String(label)} className="flex items-center justify-between">
-                          <span className="text-xs text-gray-500">{label}</span>
-                          <span className={`text-xs font-medium ${c}`}>{fmtMoney(Number(value))}</span>
-                        </div>
-                      ))}
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-gray-500">Penalties / fees</span>
+                        <span className="text-xs font-medium text-red-400">{fmtMoney(Number(r.penalties))}</span>
+                      </div>
                     </div>
                   </div>
                 ))}

@@ -44,9 +44,10 @@ export default function PropertyDetailPage() {
   const inactiveAccounts = accounts.filter(a => a.isActive === false);
   const monthlyTotal = activeAccounts.reduce((s, a) => {
     const stmt = a.statements?.[0];
-    const raw = stmt?.rawDataJson as Record<string, unknown> | undefined;
-    const bal = (raw?.accountBalance ?? raw?.totalDue ?? (stmt as any)?.balance ?? stmt?.amountDue) as number | undefined;
-    return s + Number(bal ?? 0);
+    if (!stmt) return s;
+    // Open balance from the editable columns: this period's charge + carried past due.
+    const bal = Number(stmt.amountDue ?? 0) + Number((stmt as any).pastDueCarried ?? 0);
+    return s + bal;
   }, 0);
   const lastSynced = activeAccounts.map(a => a.lastSyncedAt).filter(Boolean).sort().pop();
 
@@ -791,8 +792,10 @@ function UtilityAccountCard({
   // Reconcile balance against recent payments so a payment that hasn't yet posted
   // to the provider's API still shows up correctly. If the latest payment is after
   // the latest statement AND covers the open balance, treat the bill as paid.
-  const raw = latest?.rawDataJson as Record<string, unknown> | undefined;
-  const openBalance = (raw?.accountBalance ?? raw?.totalDue ?? (latest as any)?.balance ?? latest?.amountDue) as number | undefined;
+  // Open balance from the editable columns: current charge + any carried past due.
+  const openBalance = latest
+    ? Number(latest.amountDue ?? 0) + Number((latest as any).pastDueCarried ?? 0)
+    : undefined;
   const stmtDate = latest?.statementDate ? new Date(latest.statementDate) : null;
   const recentPmt = payments
     .filter(p => stmtDate ? new Date(p.paymentDate) >= stmtDate : true)
@@ -801,7 +804,7 @@ function UtilityAccountCard({
     .filter(p => stmtDate ? new Date(p.paymentDate) >= stmtDate : false)
     .reduce((s, p) => s + Number(p.amount ?? 0), 0);
   const isPaidViaPayment = !!recentPmt && openBalance != null && recentPaidSum >= openBalance - 0.01;
-  const isPaidViaStatement = (latest?.amountPaid != null && Number(latest.amountPaid) > 0) || raw?.isPaid === true;
+  const isPaidViaStatement = latest?.amountPaid != null && Number(latest.amountPaid) > 0;
   const isPaid = isPaidViaPayment || isPaidViaStatement;
 
   const now = new Date();
@@ -915,22 +918,18 @@ function UtilityAccountCard({
       <div className="flex items-end justify-between">
         <div className="flex-1 min-w-0">
           {(() => {
-            const raw = latest?.rawDataJson as Record<string, unknown> | undefined;
-            // accountBalance / totalDue = total amount owed (current + past due).
-            // balance is the DB-level field; fall back to amountDue if nothing else is available.
-            const accountBalance = (raw?.accountBalance ?? raw?.totalDue ?? (latest as any)?.balance) as number | undefined;
-            const pastDue = raw?.pastDue as number | undefined;
             const fmt = (n: number) => `$${Number(n).toFixed(2)}`;
 
-            // Total balance = full amount owed including any past due
-            // Current charge = this billing period only (amountDue)
-            // Past due = amount from prior unpaid periods (due immediately)
-            const totalBalance = accountBalance ?? latest?.amountDue;
-            const currentCharge = latest?.amountDue;
-            const pastDueAmt = pastDue && pastDue > 0 ? pastDue
-              : (totalBalance != null && currentCharge != null && totalBalance - currentCharge > 0.01)
-                ? Math.round((totalBalance - currentCharge) * 100) / 100
-                : undefined;
+            // All from the editable columns:
+            //   Current charge = this billing period only (amountDue)
+            //   Past due       = balance carried from prior periods (pastDueCarried)
+            //   Total balance  = current + past due
+            const currentCharge = latest?.amountDue != null ? Number(latest.amountDue) : undefined;
+            const pastDue = (latest as any)?.pastDueCarried != null ? Number((latest as any).pastDueCarried) : undefined;
+            const totalBalance = latest
+              ? Number(latest.amountDue ?? 0) + Number((latest as any).pastDueCarried ?? 0)
+              : undefined;
+            const pastDueAmt = pastDue && pastDue > 0 ? pastDue : undefined;
 
             if (!latest) {
               return (
