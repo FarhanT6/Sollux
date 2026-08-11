@@ -31,6 +31,7 @@ function fmtMoney(v?: number | string | null) {
 // Open balance a statement is asking for: this period's charge plus any
 // prior balance carried into it.
 function openBalanceOf(s: any): number | null {
+  if (!s) return null;
   if (s.amountDue == null && s.pastDueCarried == null) return null;
   return Number(s.amountDue ?? 0) + Number(s.pastDueCarried ?? 0);
 }
