@@ -645,21 +645,30 @@ export default function UtilityDetailPage() {
     ? ((latestAmt - prevAmt) / prevAmt) * 100 : null;
   const totalPaid = payments.reduce((s, p) => s + Number(p.amount), 0);
 
-  // Past due from latest statement
-  const latestRaw = statements[0]?.rawDataJson as Record<string, unknown> | undefined;
+  // Past due from latest statement — prefer the dedicated, editable columns over
+  // rawDataJson (a frozen import-time snapshot) so edits actually show up here.
+  const latestStmt = statements[0];
+  const latestRaw = latestStmt?.rawDataJson as Record<string, unknown> | undefined;
   // The prior statement's payment status can make this snapshot stale — see
-  // isPriorStatementPaid for why we don't trust rawDataJson.pastDue blindly.
-  const priorToLatestPaid = statements[0] ? isPriorStatementPaid(statements[0], statements, payments) : false;
-  const latestPastDue = (latestRaw?.pastDue != null && !priorToLatestPaid) ? Number(latestRaw.pastDue) : null;
-  const rawTotalDue = (latestRaw?.accountBalance ?? latestRaw?.totalDue) as number | undefined;
+  // isPriorStatementPaid for why we don't trust pastDueCarried/rawDataJson.pastDue blindly.
+  const priorToLatestPaid = latestStmt ? isPriorStatementPaid(latestStmt, statements, payments) : false;
+  const latestPastDue = (!priorToLatestPaid)
+    ? (latestStmt?.pastDueCarried != null ? Number(latestStmt.pastDueCarried)
+      : latestRaw?.pastDue != null ? Number(latestRaw.pastDue) : null)
+    : null;
+  const latestChargesExclFees = latestStmt?.chargesExcludingFees != null ? Number(latestStmt.chargesExcludingFees)
+    : latestRaw?.currentCharges != null ? Number(latestRaw.currentCharges) : null;
+  const latestOwed = (latestStmt?.amountDue != null || latestStmt?.pastDueCarried != null)
+    ? Number(latestStmt?.amountDue ?? 0) + Number(latestStmt?.pastDueCarried ?? 0)
+    : ((latestRaw?.accountBalance ?? latestRaw?.totalDue) != null ? Number(latestRaw?.accountBalance ?? latestRaw?.totalDue) : null);
   // Reconcile the displayed current balance against recent payments. If the user paid
   // a bill but the provider's API hasn't reflected it yet, we still want $0 here.
-  const isLatestPaid = statements[0] ? isStatementPaid(statements[0], payments) : false;
+  const isLatestPaid = latestStmt ? isStatementPaid(latestStmt, payments) : false;
   const latestTotalDue = isLatestPaid
     ? 0
-    : (priorToLatestPaid && rawTotalDue != null && latestRaw?.currentCharges != null)
-      ? Number(latestRaw.currentCharges)
-      : rawTotalDue;
+    : (priorToLatestPaid && latestChargesExclFees != null)
+      ? latestChargesExclFees
+      : latestOwed;
 
   if (loading) return <div className="p-6 space-y-4"><Skeleton className="h-24" /><Skeleton className="h-64" /></div>;
   if (!account) return <div className="p-6 text-gray-400">Account not found</div>;
@@ -868,12 +877,18 @@ export default function UtilityDetailPage() {
                   // filteredStatements sorted DESC; [idx-1] is more recent; idx===0 is latest
                   const isLatest = idx === 0 && yearFilter === 'all' && !search;
                   const { color: sc, label: sl } = statementStatus(s, payments, filteredStatements[idx - 1], isLatest, resolvedByFuture);
+                  // Prefer the dedicated, editable columns over rawDataJson — rawDataJson is
+                  // a frozen snapshot from import time, so if it took precedence here, saving
+                  // an edit would never visibly change anything (the bug this replaced).
                   const raw = s.rawDataJson as Record<string, unknown> | undefined;
-                  const pastDue     = raw?.pastDue      != null ? Number(raw.pastDue)      : null;
-                  const totalDue    = (raw?.accountBalance ?? raw?.totalDue) != null
-                                      ? Number(raw?.accountBalance ?? raw?.totalDue) : null;
-                  const prevBal     = raw?.previousBalance != null ? Number(raw.previousBalance) : null;
-                  const currentBill = raw?.currentBill   != null ? Number(raw.currentBill)   : null;
+                  const pastDue     = s.pastDueCarried != null ? Number(s.pastDueCarried)
+                                      : raw?.pastDue != null ? Number(raw.pastDue) : null;
+                  const totalDue    = s.amountDue != null || s.pastDueCarried != null
+                                      ? Number(s.amountDue ?? 0) + Number(s.pastDueCarried ?? 0)
+                                      : (raw?.accountBalance ?? raw?.totalDue) != null
+                                        ? Number(raw?.accountBalance ?? raw?.totalDue) : null;
+                  const currentBill = s.chargesExcludingFees != null ? Number(s.chargesExcludingFees)
+                                      : raw?.currentBill != null ? Number(raw.currentBill) : null;
                   const isPaid = isEffectivelyPaid(s, payments, resolvedByFuture);
                   const priorPaid = isPriorStatementPaid(s, statements, payments, resolvedByFuture);
                   return (
@@ -898,10 +913,7 @@ export default function UtilityDetailPage() {
                         {pastDue != null && pastDue > 0 && !priorPaid && (
                           <p className="text-xs text-red-400 mt-0.5">⚠ Past due: {fmtMoney(pastDue)}</p>
                         )}
-                        {prevBal != null && prevBal > 0 && !priorPaid && (
-                          <p className="text-xs text-gray-500 mt-0.5">Prev balance: {fmtMoney(prevBal)}</p>
-                        )}
-                        {((pastDue ?? 0) > 0 || (prevBal ?? 0) > 0) && priorPaid && (
+                        {(pastDue ?? 0) > 0 && priorPaid && (
                           <p className="text-xs text-green-500 mt-0.5">✓ Prior balance paid</p>
                         )}
                         {s.usageValue && (
