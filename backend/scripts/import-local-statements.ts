@@ -299,7 +299,14 @@ async function main() {
           ...(ex.providerName ? { providerName: { contains: ex.providerName, mode: 'insensitive' } } : {}),
         },
       });
-      if (!account) {
+      // Categories that legitimately hold several distinct accounts per
+      // property (multiple credit cards, multiple loans, multiple policies)
+      // must NOT fall back to "any account in this category" when the
+      // provider name doesn't match — that silently merges unrelated
+      // accounts' statements together. Only single-account-per-property
+      // categories (WATER, ELECTRIC, etc.) get that fallback.
+      const MULTI_ACCOUNT_CATEGORIES = new Set(['LOAN', 'CREDIT_CARD', 'INSURANCE']);
+      if (!account && !MULTI_ACCOUNT_CATEGORIES.has(category)) {
         account = await db.utilityAccount.findFirst({ where: { propertyId: property.id, category: category as any } });
       }
 
