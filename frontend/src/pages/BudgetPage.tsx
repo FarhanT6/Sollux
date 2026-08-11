@@ -124,6 +124,7 @@ export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
           </div>
           <span className="text-xs text-gray-400">Include personal expenses</span>
         </label>
+        <Link to="/finances?tab=personal" className="text-xs text-amber-500 hover:text-amber-400">Manage →</Link>
       </div>
       {/* KPI row */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">

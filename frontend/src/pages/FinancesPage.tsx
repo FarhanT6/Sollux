@@ -4,18 +4,20 @@ import PnLPage from './PnLPage';
 import BudgetPage from './BudgetPage';
 import LoansPage from './LoansPage';
 import ExpensesPage from './ExpensesPage';
+import PersonalExpensesPage from './PersonalExpensesPage';
 import ReconciliationPage from './ReconciliationPage';
 import IncomingPaymentsPage from './IncomingPaymentsPage';
 import OutgoingPaymentsPage from './OutgoingPaymentsPage';
 import FeesSummaryPage from './FeesSummaryPage';
 
-type Tab = 'pnl' | 'budget' | 'loans' | 'expenses' | 'reconciliation' | 'incoming' | 'outgoing' | 'fees';
+type Tab = 'pnl' | 'budget' | 'loans' | 'expenses' | 'personal' | 'reconciliation' | 'incoming' | 'outgoing' | 'fees';
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'pnl',            label: 'P&L'            },
   { key: 'budget',         label: 'Budget'         },
   { key: 'loans',          label: 'Loans'          },
   { key: 'expenses',       label: 'Expenses'       },
+  { key: 'personal',       label: 'Personal Expenses' },
   { key: 'reconciliation', label: 'Reconciliation' },
   { key: 'incoming',       label: 'Incoming Payments' },
   { key: 'outgoing',       label: 'Expense Payments' },
@@ -35,6 +37,7 @@ export default function FinancesPage() {
     budget:         'Monthly cash position, rent collection, and delinquency',
     loans:          'Mortgages, HELOCs, and installment plans',
     expenses:       'Operating and capital expenditures across all properties',
+    personal:       'Auto loans, insurance, credit cards, and other non-property spending',
     reconciliation: 'Monthly statements from managers/collectors who net rent, fees, and loan payments together',
     incoming:       'Zelle, Venmo, PayPal, and Cash App transfers matched to tenants',
     outgoing:       'Hardware-store purchases and utility bill payments matched to properties',
@@ -66,6 +69,7 @@ export default function FinancesPage() {
         {tab === 'budget'   && <BudgetPage embedded />}
         {tab === 'loans'    && <LoansPage embedded />}
         {tab === 'expenses' && <ExpensesPage embedded />}
+        {tab === 'personal' && <PersonalExpensesPage embedded />}
         {tab === 'reconciliation' && <ReconciliationPage embedded />}
         {tab === 'incoming' && <IncomingPaymentsPage embedded />}
         {tab === 'outgoing' && <OutgoingPaymentsPage embedded />}
