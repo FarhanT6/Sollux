@@ -523,6 +523,7 @@ export interface Statement {
 export interface StatementSummaryRow {
   id: string;
   statementDate: string;
+  dueDate: string | null;
   amountDue: number | null;
   amountPaid: number | null;
   chargesExcludingFees: number | null;
