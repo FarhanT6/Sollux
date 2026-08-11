@@ -22,7 +22,14 @@ export type LegalStatus = 'OPEN' | 'CLOSED' | 'ON_HOLD';
 export type ExpenseCategory =
   | 'UTILITIES' | 'REPAIRS_MAINTENANCE' | 'LANDSCAPING' | 'PROPERTY_MANAGEMENT'
   | 'LEGAL' | 'INSURANCE' | 'PROPERTY_TAX' | 'HOA' | 'MORTGAGE_DEBT_SERVICE'
-  | 'CAPITAL_IMPROVEMENT' | 'SUPPLIES' | 'TRAVEL' | 'ADVERTISING' | 'OTHER';
+  | 'CAPITAL_IMPROVEMENT' | 'SUPPLIES' | 'TRAVEL' | 'ADVERTISING' | 'OTHER'
+  | 'AUTO_LOAN' | 'AUTO_INSURANCE' | 'CREDIT_CARD' | 'MEDICAL' | 'PHONE'
+  | 'STUDENT_LOAN' | 'LIFE_INSURANCE' | 'SUBSCRIPTIONS';
+
+export const PERSONAL_EXPENSE_CATEGORIES: ExpenseCategory[] = [
+  'AUTO_LOAN', 'AUTO_INSURANCE', 'CREDIT_CARD', 'MEDICAL', 'PHONE',
+  'STUDENT_LOAN', 'LIFE_INSURANCE', 'SUBSCRIPTIONS', 'OTHER',
+];
 
 export interface User {
   id: string;
@@ -625,6 +632,10 @@ export const EXPENSE_CATEGORY_LABELS: Record<ExpenseCategory, string> = {
   HOA: 'HOA', MORTGAGE_DEBT_SERVICE: 'Mortgage / Debt Service',
   CAPITAL_IMPROVEMENT: 'Capital Improvement', SUPPLIES: 'Supplies',
   TRAVEL: 'Travel', ADVERTISING: 'Advertising', OTHER: 'Other',
+  AUTO_LOAN: 'Auto Loan', AUTO_INSURANCE: 'Auto Insurance',
+  CREDIT_CARD: 'Credit Cards', MEDICAL: 'Medical', PHONE: 'Phone',
+  STUDENT_LOAN: 'Student Loan', LIFE_INSURANCE: 'Life Insurance',
+  SUBSCRIPTIONS: 'Subscriptions',
 };
 
 // ─── Budget / Bank ─────────────────────────────────────────

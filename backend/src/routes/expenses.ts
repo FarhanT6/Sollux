@@ -8,7 +8,7 @@ router.use(attachDbUser);
 
 const ExpenseFields = z.object({
   propertyId: z.string().optional().nullable(),
-  category: z.enum(['UTILITIES','REPAIRS_MAINTENANCE','LANDSCAPING','PROPERTY_MANAGEMENT','LEGAL','INSURANCE','PROPERTY_TAX','HOA','MORTGAGE_DEBT_SERVICE','CAPITAL_IMPROVEMENT','SUPPLIES','TRAVEL','ADVERTISING','OTHER']),
+  category: z.enum(['UTILITIES','REPAIRS_MAINTENANCE','LANDSCAPING','PROPERTY_MANAGEMENT','LEGAL','INSURANCE','PROPERTY_TAX','HOA','MORTGAGE_DEBT_SERVICE','CAPITAL_IMPROVEMENT','SUPPLIES','TRAVEL','ADVERTISING','OTHER','AUTO_LOAN','AUTO_INSURANCE','CREDIT_CARD','MEDICAL','PHONE','STUDENT_LOAN','LIFE_INSURANCE','SUBSCRIPTIONS']),
   amount: z.number().positive(),
   date: z.string().transform(s => new Date(s)),
   vendor: z.string().optional().nullable(),

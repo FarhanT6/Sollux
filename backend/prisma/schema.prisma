@@ -589,6 +589,17 @@ enum ExpenseCategory {
   TRAVEL
   ADVERTISING
   OTHER
+  // Personal (isPersonal: true) categories — shown on the dedicated
+  // Personal Expenses page, distinct from the property-level categories
+  // above (e.g. AUTO_INSURANCE vs. the landlord-policy INSURANCE).
+  AUTO_LOAN
+  AUTO_INSURANCE
+  CREDIT_CARD
+  MEDICAL
+  PHONE
+  STUDENT_LOAN
+  LIFE_INSURANCE
+  SUBSCRIPTIONS
 }
 
 // ─── LOANS ───────────────────────────────────────────────
