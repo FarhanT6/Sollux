@@ -336,13 +336,15 @@ async function main() {
         (ex.usageValue != null ? `, usage ${ex.usageValue}${ex.usageUnit ?? ''}` : '')
       );
 
-      if (dryRun || !account) { imported++; continue; }
+      if (!account) { imported++; continue; }
 
       const monthStart = new Date(statementDate.getFullYear(), statementDate.getMonth(), 1);
       const monthEnd = new Date(statementDate.getFullYear(), statementDate.getMonth() + 1, 0, 23, 59, 59);
       const existing = await db.statement.findFirst({
         where: { utilityAccountId: account.id, statementDate: { gte: monthStart, lte: monthEnd } },
       });
+
+      if (dryRun) { existing ? updated++ : imported++; continue; }
 
       const s3Key = buildStatementKey(user.id, property.id, account.id, statementDate, sanitizeFilename(file.filename));
       const pdfS3Key = await uploadDocument(s3Key, buffer);
