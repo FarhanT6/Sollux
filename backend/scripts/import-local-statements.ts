@@ -161,6 +161,10 @@ async function main() {
   // so this can drop an entire folder (e.g. "Cars") or just specific loose
   // files within one (e.g. "Myaccount.pdf,chase.com").
   const skipFolders = (getArg('skip') || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+  // Comma-separated list of substrings to require — inverse of --skip, for
+  // scoping a run down to just one folder/file while debugging (e.g.
+  // --only "Credit Cards" to see exactly what that folder does in isolation).
+  const onlyFolders = (getArg('only') || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
   if (!dir || !email || !propertyQuery) {
     console.error('Usage: npx tsx scripts/import-local-statements.ts --dir <path> --email <you@example.com> --property "<address or nickname>" [--dry-run] [--ai]');
@@ -182,12 +186,14 @@ async function main() {
   console.log(`Property: ${property.nickname || property.address} (${property.id})`);
 
   const allFiles = walkPdfs(dir);
-  const files = allFiles.filter(f => !skipFolders.some(s =>
-    f.categoryFolder.toLowerCase().includes(s) || f.relPath.toLowerCase().includes(s)
-  ));
+  const files = allFiles
+    .filter(f => !skipFolders.some(s => f.categoryFolder.toLowerCase().includes(s) || f.relPath.toLowerCase().includes(s)))
+    .filter(f => onlyFolders.length === 0 || onlyFolders.some(s => f.categoryFolder.toLowerCase().includes(s) || f.relPath.toLowerCase().includes(s)));
   const excludedCount = allFiles.length - files.length;
   console.log(`Found ${allFiles.length} PDFs across ${new Set(allFiles.map(f => f.categoryFolder)).size} folders. Method: ${method}${dryRun ? ' (DRY RUN)' : ''}`);
-  if (excludedCount > 0) console.log(`Excluding ${excludedCount} files matching --skip: ${skipFolders.join(', ')}`);
+  if (skipFolders.length > 0) console.log(`Excluding files matching --skip: ${skipFolders.join(', ')}`);
+  if (onlyFolders.length > 0) console.log(`Restricting to files matching --only: ${onlyFolders.join(', ')}`);
+  if (excludedCount > 0) console.log(`(${excludedCount} of ${allFiles.length} files filtered out)`);
   console.log('');
 
   const skippedFolders = new Set<string>();
@@ -330,13 +336,15 @@ async function main() {
         (ex.usageValue != null ? `, usage ${ex.usageValue}${ex.usageUnit ?? ''}` : '')
       );
 
-      if (dryRun || !account) { imported++; continue; }
+      if (!account) { imported++; continue; }
 
       const monthStart = new Date(statementDate.getFullYear(), statementDate.getMonth(), 1);
       const monthEnd = new Date(statementDate.getFullYear(), statementDate.getMonth() + 1, 0, 23, 59, 59);
       const existing = await db.statement.findFirst({
         where: { utilityAccountId: account.id, statementDate: { gte: monthStart, lte: monthEnd } },
       });
+
+      if (dryRun) { existing ? updated++ : imported++; continue; }
 
       const s3Key = buildStatementKey(user.id, property.id, account.id, statementDate, sanitizeFilename(file.filename));
       const pdfS3Key = await uploadDocument(s3Key, buffer);
