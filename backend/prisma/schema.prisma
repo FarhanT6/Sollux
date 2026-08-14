@@ -481,12 +481,20 @@ model Lease {
   arrearsCaughtUpThrough DateTime?
   manualLikelihood     String?     // 'high' | 'medium' | 'low' | 'none' — overrides the automated delinquency score
   manualLikelihoodNote String?
+  // Next scheduled rent increase — flexible: a date plus whichever of
+  // {new amount, percent, note} the user filled in. amount takes precedence
+  // over percent for display; note alone is a plain reminder.
+  nextIncreaseDate     DateTime?
+  nextIncreaseAmount   Decimal?    @db.Decimal(10, 2)
+  nextIncreasePercent  Float?
+  nextIncreaseNote     String?
   createdAt            DateTime    @default(now())
   updatedAt            DateTime    @updatedAt
 
   leaseTenants LeaseTenant[]
   rentPayments RentPayment[]
   rentNotices  RentNotice[]
+  rentChanges  RentChange[]
   incomingTransactions IncomingTransaction[]
 
   @@map("leases")
@@ -502,6 +510,23 @@ enum LeaseStatus {
   ENDED
   PENDING
   TERMINATED
+}
+
+// ─── RENT CHANGES (increase/decrease history) ────────────
+// One row per time the monthly rent changed on a lease. Auto-created when
+// rentAmount is edited, and manually addable to backfill past increases.
+model RentChange {
+  id             String   @id @default(cuid())
+  leaseId        String
+  lease          Lease    @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  effectiveDate  DateTime
+  previousAmount Decimal? @db.Decimal(10, 2)
+  newAmount      Decimal  @db.Decimal(10, 2)
+  note           String?
+  createdAt      DateTime @default(now())
+
+  @@index([leaseId, effectiveDate])
+  @@map("rent_changes")
 }
 
 // ─── RENT PAYMENTS ───────────────────────────────────────
@@ -784,6 +809,9 @@ enum DocumentCategory {
   HOA
   EXPENSE_RECEIPT
   LEASE
+  APPLICATION
+  IDENTITY
+  SCREENING
   OTHER
 }
 

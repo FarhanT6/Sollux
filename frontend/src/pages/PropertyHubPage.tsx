@@ -12,12 +12,17 @@ import {
   createLease, getTenants, createTenant, getUnits, createUnit,
   getDocuments, getDocumentUrl, deleteDocument, downloadRentRoll, downloadT12,
   getT12Manifest, RENT_ROLL_COLUMNS,
+  getRentChanges, addRentChange, deleteRentChange, uploadLeaseDocument,
+  getLeaseDocuments, addLeaseDocument, getLeaseDocumentViewUrl, deleteLeaseDocument,
 } from '../api/client';
 import type {
   Property, Lease, Loan, Expense, InsurancePolicy, TaxAssessment,
-  Improvement, PropertyPnL, Tenant, Unit, Document, DocumentCategory,
+  Improvement, PropertyPnL, Tenant, Unit, Document, DocumentCategory, RentChange,
 } from '../types';
 import { PROPERTY_TYPE_LABELS, EXPENSE_CATEGORY_LABELS, DOCUMENT_CATEGORY_LABELS } from '../types';
+import type { Document as DocType } from '../types';
+
+const LEASE_DOC_CATEGORIES = ['LEASE', 'APPLICATION', 'IDENTITY', 'SCREENING', 'OTHER'] as const;
 
 const money = (n: number) =>
   n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
@@ -718,13 +723,28 @@ function TenantsTab({ propertyId, leases, setLeases }: {
   const [expandLease, setExpandLease] = useState<string | null>(null);
   const [payments, setPayments] = useState<Record<string, any[]>>({});
   const [editLease, setEditLease] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ unitId: '', rentAmount: '', securityDeposit: '', startDate: '', endDate: '', leaseType: 'MONTH_TO_MONTH', status: 'ACTIVE', arrearsBalance: '', notes: '' });
+  const [editForm, setEditForm] = useState({
+    unitId: '', rentAmount: '', securityDeposit: '', startDate: '', endDate: '',
+    leaseType: 'MONTH_TO_MONTH', status: 'ACTIVE', arrearsBalance: '', notes: '',
+    rentEffectiveDate: '',
+    nextIncreaseDate: '', nextIncreaseAmount: '', nextIncreasePercent: '', nextIncreaseNote: '',
+  });
+  const [editTenantIds, setEditTenantIds] = useState<string[]>([]);
+  const [newTenantName, setNewTenantName] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
+  const [uploadingDoc, setUploadingDoc] = useState(false);
+  const [docCategory, setDocCategory] = useState<string>('LEASE');
+  const [leaseDocs, setLeaseDocs] = useState<Record<string, DocType[]>>({});
   const [showNewLease, setShowNewLease] = useState(false);
   const [units, setUnits] = useState<Unit[]>([]);
+  const [allTenants, setAllTenants] = useState<Tenant[]>([]);
+  const [rentChanges, setRentChanges] = useState<Record<string, RentChange[]>>({});
+  // Inline "add past rent change" mini-form state, keyed by lease id
+  const [rcForm, setRcForm] = useState<{ leaseId: string; effectiveDate: string; newAmount: string; note: string } | null>(null);
 
   useEffect(() => {
     getUnits({ propertyId }).then(setUnits);
+    getTenants().then(setAllTenants);
   }, [propertyId]);
 
   function openEditLease(lease: Lease) {
@@ -738,11 +758,30 @@ function TenantsTab({ propertyId, leases, setLeases }: {
       status: lease.status,
       arrearsBalance: String(lease.arrearsBalance ?? ''),
       notes: lease.notes ?? '',
+      rentEffectiveDate: '',
+      nextIncreaseDate: lease.nextIncreaseDate?.slice(0, 10) ?? '',
+      nextIncreaseAmount: lease.nextIncreaseAmount != null ? String(lease.nextIncreaseAmount) : '',
+      nextIncreasePercent: lease.nextIncreasePercent != null ? String(lease.nextIncreasePercent) : '',
+      nextIncreaseNote: lease.nextIncreaseNote ?? '',
     });
+    setEditTenantIds((lease.leaseTenants ?? []).map(lt => lt.tenantId));
+    setNewTenantName('');
+    setDocCategory('LEASE');
     setEditLease(lease.id);
+    if (!leaseDocs[lease.id]) getLeaseDocuments(lease.id).then(d => setLeaseDocs(prev => ({ ...prev, [lease.id]: d })));
+  }
+
+  async function addCoTenant() {
+    const name = newTenantName.trim();
+    if (!name) return;
+    const created = await createTenant({ fullName: name });
+    setAllTenants(prev => [...prev, created]);
+    setEditTenantIds(prev => [...prev, created.id]);
+    setNewTenantName('');
   }
 
   async function saveEditLease(leaseId: string) {
+    const rentChanged = parseFloat(editForm.rentAmount || '0') !== Number(leases.find(l => l.id === leaseId)?.rentAmount ?? 0);
     setSavingEdit(true);
     try {
       await updateLease(leaseId, {
@@ -755,11 +794,71 @@ function TenantsTab({ propertyId, leases, setLeases }: {
         status: editForm.status,
         arrearsBalance: editForm.arrearsBalance !== '' ? parseFloat(editForm.arrearsBalance) : undefined,
         notes: editForm.notes || undefined,
+        tenantIds: editTenantIds,
+        rentEffectiveDate: rentChanged && editForm.rentEffectiveDate ? editForm.rentEffectiveDate : undefined,
+        nextIncreaseDate: editForm.nextIncreaseDate || null,
+        nextIncreaseAmount: editForm.nextIncreaseAmount ? parseFloat(editForm.nextIncreaseAmount) : null,
+        nextIncreasePercent: editForm.nextIncreasePercent ? parseFloat(editForm.nextIncreasePercent) : null,
+        nextIncreaseNote: editForm.nextIncreaseNote || null,
       });
       const updated = await getLeases({ propertyId });
       setLeases(updated);
+      // Refresh rent-change history if this lease's history is open
+      if (rentChanges[leaseId]) getRentChanges(leaseId).then(rc => setRentChanges(prev => ({ ...prev, [leaseId]: rc })));
       setEditLease(null);
     } finally { setSavingEdit(false); }
+  }
+
+  async function handleLeaseDocUpload(leaseId: string, file: File) {
+    setUploadingDoc(true);
+    try {
+      const reader = new FileReader();
+      const base64: string = await new Promise((resolve, reject) => {
+        reader.onload = () => resolve((reader.result as string).split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      // Categorized attachment (application / ID / screening / lease / other)
+      await addLeaseDocument(leaseId, { fileData: base64, filename: file.name, category: docCategory });
+      // Keep the lease's primary documentUrl in sync when it's the lease agreement,
+      // so existing lease-agreement views still resolve.
+      if (docCategory === 'LEASE') {
+        await uploadLeaseDocument(leaseId, base64, file.name);
+        setLeases(await getLeases({ propertyId }));
+      }
+      const docs = await getLeaseDocuments(leaseId);
+      setLeaseDocs(prev => ({ ...prev, [leaseId]: docs }));
+    } finally { setUploadingDoc(false); }
+  }
+
+  async function viewLeaseDoc(leaseId: string, docId: string) {
+    try {
+      const { url } = await getLeaseDocumentViewUrl(leaseId, docId);
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch { alert('Could not open document.'); }
+  }
+
+  async function removeLeaseDoc(leaseId: string, docId: string) {
+    if (!confirm('Remove this document?')) return;
+    await deleteLeaseDocument(leaseId, docId);
+    setLeaseDocs(prev => ({ ...prev, [leaseId]: (prev[leaseId] ?? []).filter(d => d.id !== docId) }));
+  }
+
+  async function addManualRentChange() {
+    if (!rcForm || !rcForm.newAmount || !rcForm.effectiveDate) return;
+    await addRentChange(rcForm.leaseId, {
+      effectiveDate: rcForm.effectiveDate,
+      newAmount: parseFloat(rcForm.newAmount),
+      note: rcForm.note || undefined,
+    });
+    const rc = await getRentChanges(rcForm.leaseId);
+    setRentChanges(prev => ({ ...prev, [rcForm.leaseId]: rc }));
+    setRcForm(null);
+  }
+
+  async function removeRentChange(leaseId: string, changeId: string) {
+    await deleteRentChange(leaseId, changeId);
+    setRentChanges(prev => ({ ...prev, [leaseId]: (prev[leaseId] ?? []).filter(c => c.id !== changeId) }));
   }
 
   const filtered = leases
@@ -797,6 +896,10 @@ function TenantsTab({ propertyId, leases, setLeases }: {
     if (!payments[leaseId]) {
       const p = await getRentPayments({ leaseId });
       setPayments(prev => ({ ...prev, [leaseId]: p }));
+    }
+    if (!rentChanges[leaseId]) {
+      const rc = await getRentChanges(leaseId);
+      setRentChanges(prev => ({ ...prev, [leaseId]: rc }));
     }
   }
 
@@ -867,6 +970,21 @@ function TenantsTab({ propertyId, leases, setLeases }: {
                       <p className="text-sm font-semibold text-white">{money(Number(lease.rentAmount))}/mo</p>
                       {arrears > 0 && <p className="text-xs text-red-400">{money(arrears)} arrears</p>}
                       {Number(lease.securityDeposit ?? 0) > 0 && <p className="text-xs text-gray-500">{money(Number(lease.securityDeposit))} dep.</p>}
+                      {lease.rentChanges && lease.rentChanges.length > 0 && (
+                        <p className="text-xs text-gray-500">Last raised {fmtDate(lease.rentChanges[0].effectiveDate)}</p>
+                      )}
+                      {(() => {
+                        const d = lease.nextIncreaseDate;
+                        if (!d && !lease.nextIncreaseNote) return null;
+                        const amt = lease.nextIncreaseAmount != null ? Number(lease.nextIncreaseAmount) : null;
+                        const pctVal = lease.nextIncreasePercent != null ? Number(lease.nextIncreasePercent) : null;
+                        const detail = amt != null ? `→ ${money(amt)}` : pctVal != null ? `+${pctVal}%` : (lease.nextIncreaseNote || '');
+                        return (
+                          <p className="text-xs text-amber-400" title={lease.nextIncreaseNote || ''}>
+                            ↑ Next{d ? ` ${fmtDate(d)}` : ''}{detail ? ` ${detail}` : ''}
+                          </p>
+                        );
+                      })()}
                     </div>
                   </div>
                   <div className="flex gap-3 mt-2.5">
@@ -888,27 +1006,106 @@ function TenantsTab({ propertyId, leases, setLeases }: {
                 </div>
 
                 {editLease === lease.id && (
-                  <div className="px-4 py-3 grid grid-cols-3 gap-2" style={{ background: 'rgba(255,255,255,0.03)', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                    <select value={editForm.unitId} onChange={e => setEditForm(f => ({ ...f, unitId: e.target.value }))} className="input-dark text-xs">
-                      {units.map(u => <option key={u.id} value={u.id}>{u.unitLabel}</option>)}
-                    </select>
-                    <input type="number" placeholder="Rent/mo" value={editForm.rentAmount} onChange={e => setEditForm(f => ({ ...f, rentAmount: e.target.value }))} className="input-dark text-xs" />
-                    <input type="number" placeholder="Security deposit" value={editForm.securityDeposit} onChange={e => setEditForm(f => ({ ...f, securityDeposit: e.target.value }))} className="input-dark text-xs" />
-                    <select value={editForm.status} onChange={e => setEditForm(f => ({ ...f, status: e.target.value }))} className="input-dark text-xs">
-                      {['ACTIVE', 'ENDED', 'PENDING', 'TERMINATED'].map(s => <option key={s} value={s}>{s}</option>)}
-                    </select>
-                    <input type="date" value={editForm.startDate} onChange={e => setEditForm(f => ({ ...f, startDate: e.target.value }))} className="input-dark text-xs" />
-                    <input type="date" value={editForm.endDate} onChange={e => setEditForm(f => ({ ...f, endDate: e.target.value }))} className="input-dark text-xs" placeholder="End date" />
-                    <select value={editForm.leaseType} onChange={e => setEditForm(f => ({ ...f, leaseType: e.target.value }))} className="input-dark text-xs">
-                      <option value="MONTH_TO_MONTH">Month-to-month</option>
-                      <option value="FIXED_TERM">Fixed term</option>
-                    </select>
-                    <div>
-                      <label className="block text-xs text-gray-500 mb-0.5">Arrears balance</label>
-                      <input type="number" placeholder="0" value={editForm.arrearsBalance} onChange={e => setEditForm(f => ({ ...f, arrearsBalance: e.target.value }))} className="input-dark text-xs w-full" />
+                  <div className="px-4 py-3 space-y-3" style={{ background: 'rgba(255,255,255,0.03)', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                    <div className="grid grid-cols-3 gap-2">
+                      <select value={editForm.unitId} onChange={e => setEditForm(f => ({ ...f, unitId: e.target.value }))} className="input-dark text-xs">
+                        {units.map(u => <option key={u.id} value={u.id}>{u.unitLabel}</option>)}
+                      </select>
+                      <input type="number" placeholder="Rent/mo" value={editForm.rentAmount} onChange={e => setEditForm(f => ({ ...f, rentAmount: e.target.value }))} className="input-dark text-xs" />
+                      <input type="number" placeholder="Security deposit" value={editForm.securityDeposit} onChange={e => setEditForm(f => ({ ...f, securityDeposit: e.target.value }))} className="input-dark text-xs" />
+                      <select value={editForm.status} onChange={e => setEditForm(f => ({ ...f, status: e.target.value }))} className="input-dark text-xs">
+                        {['ACTIVE', 'ENDED', 'PENDING', 'TERMINATED'].map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                      <input type="date" value={editForm.startDate} onChange={e => setEditForm(f => ({ ...f, startDate: e.target.value }))} className="input-dark text-xs" />
+                      <input type="date" value={editForm.endDate} onChange={e => setEditForm(f => ({ ...f, endDate: e.target.value }))} className="input-dark text-xs" placeholder="End date" />
+                      <select value={editForm.leaseType} onChange={e => setEditForm(f => ({ ...f, leaseType: e.target.value }))} className="input-dark text-xs">
+                        <option value="MONTH_TO_MONTH">Month-to-month</option>
+                        <option value="FIXED_TERM">Fixed term</option>
+                      </select>
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-0.5">Arrears balance</label>
+                        <input type="number" placeholder="0" value={editForm.arrearsBalance} onChange={e => setEditForm(f => ({ ...f, arrearsBalance: e.target.value }))} className="input-dark text-xs w-full" />
+                      </div>
                     </div>
-                    <input placeholder="Notes" value={editForm.notes} onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))} className="input-dark text-xs col-span-3" />
-                    <div className="col-span-3 flex justify-end">
+
+                    {/* When rent changed, capture the effective date for the history log */}
+                    {parseFloat(editForm.rentAmount || '0') !== Number(lease.rentAmount) && (
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs text-gray-400">Rent change effective</label>
+                        <input type="date" value={editForm.rentEffectiveDate} onChange={e => setEditForm(f => ({ ...f, rentEffectiveDate: e.target.value }))} className="input-dark text-xs" />
+                        <span className="text-xs text-gray-500">(defaults to today if blank)</span>
+                      </div>
+                    )}
+
+                    {/* Co-tenants */}
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">Tenants on this lease</label>
+                      <div className="flex flex-wrap gap-1.5 mb-2">
+                        {editTenantIds.length === 0 && <span className="text-xs text-gray-600">No tenants</span>}
+                        {editTenantIds.map((tid, i) => {
+                          const t = allTenants.find(x => x.id === tid);
+                          return (
+                            <span key={tid} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.08)' }}>
+                              {i === 0 && <span className="text-amber-400" title="Primary">★</span>}
+                              {t?.fullName ?? '…'}
+                              <button onClick={() => setEditTenantIds(prev => prev.filter(x => x !== tid))} className="text-gray-500 hover:text-red-400">✕</button>
+                            </span>
+                          );
+                        })}
+                      </div>
+                      <div className="flex gap-2 flex-wrap items-center">
+                        <select value="" onChange={e => { if (e.target.value) setEditTenantIds(prev => prev.includes(e.target.value) ? prev : [...prev, e.target.value]); }} className="input-dark text-xs">
+                          <option value="">+ Add existing tenant…</option>
+                          {allTenants.filter(t => !editTenantIds.includes(t.id)).map(t => <option key={t.id} value={t.id}>{t.fullName}</option>)}
+                        </select>
+                        <input value={newTenantName} onChange={e => setNewTenantName(e.target.value)} placeholder="…or new tenant name" className="input-dark text-xs" />
+                        <button onClick={addCoTenant} disabled={!newTenantName.trim()} className="btn text-xs disabled:opacity-40">Add</button>
+                      </div>
+                    </div>
+
+                    {/* Next scheduled rent increase */}
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">Next scheduled rent increase (fill any of these)</label>
+                      <div className="grid grid-cols-4 gap-2">
+                        <input type="date" value={editForm.nextIncreaseDate} onChange={e => setEditForm(f => ({ ...f, nextIncreaseDate: e.target.value }))} className="input-dark text-xs" title="Effective date" />
+                        <input type="number" placeholder="New amount $" value={editForm.nextIncreaseAmount} onChange={e => setEditForm(f => ({ ...f, nextIncreaseAmount: e.target.value }))} className="input-dark text-xs" />
+                        <input type="number" placeholder="% increase" value={editForm.nextIncreasePercent} onChange={e => setEditForm(f => ({ ...f, nextIncreasePercent: e.target.value }))} className="input-dark text-xs" />
+                        <input placeholder="Note" value={editForm.nextIncreaseNote} onChange={e => setEditForm(f => ({ ...f, nextIncreaseNote: e.target.value }))} className="input-dark text-xs" />
+                      </div>
+                    </div>
+
+                    <input placeholder="Notes" value={editForm.notes} onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))} className="input-dark text-xs w-full" />
+
+                    {/* Documents — lease agreement, application, ID, screening, etc. */}
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">Documents</label>
+                      <div className="flex items-center gap-2 flex-wrap mb-2">
+                        <select value={docCategory} onChange={e => setDocCategory(e.target.value)} className="input-dark text-xs">
+                          {LEASE_DOC_CATEGORIES.map(c => <option key={c} value={c}>{DOCUMENT_CATEGORY_LABELS[c]}</option>)}
+                        </select>
+                        <label className="text-xs text-amber-400 hover:text-amber-300 cursor-pointer">
+                          {uploadingDoc ? 'Uploading…' : '+ Import file'}
+                          <input type="file" accept="application/pdf,image/*" className="hidden" disabled={uploadingDoc}
+                            onChange={e => { const f = e.target.files?.[0]; if (f) handleLeaseDocUpload(lease.id, f); e.target.value = ''; }} />
+                        </label>
+                      </div>
+                      <div className="space-y-1">
+                        {(leaseDocs[lease.id] ?? []).length === 0 ? (
+                          <span className="text-xs text-gray-600">No documents attached</span>
+                        ) : (
+                          (leaseDocs[lease.id] ?? []).map(d => (
+                            <div key={d.id} className="flex items-center gap-2 text-xs group">
+                              <span className="px-1.5 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.08)' }}>{DOCUMENT_CATEGORY_LABELS[d.category]}</span>
+                              <button onClick={() => viewLeaseDoc(lease.id, d.id)} className="text-gray-300 hover:text-amber-400 truncate max-w-[200px]">{d.title}</button>
+                              <span className="text-gray-600">{fmtDate(d.createdAt)}</span>
+                              <button onClick={() => removeLeaseDoc(lease.id, d.id)} className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 ml-auto">✕</button>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex justify-end">
                       <button onClick={() => saveEditLease(lease.id)} disabled={savingEdit} className="btn btn-primary text-xs">{savingEdit ? '…' : 'Save changes'}</button>
                     </div>
                   </div>
@@ -929,32 +1126,78 @@ function TenantsTab({ propertyId, leases, setLeases }: {
 
                 {isExpanded && (
                   <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                    {!payments[lease.id] ? (
-                      <p className="px-4 py-3 text-xs text-gray-500">Loading…</p>
-                    ) : payments[lease.id].length === 0 ? (
-                      <p className="px-4 py-3 text-xs text-gray-500">No payments recorded yet</p>
-                    ) : (
-                      <table className="w-full text-xs">
-                        <thead style={{ background: 'rgba(255,255,255,0.03)' }}>
-                          <tr className="text-left text-gray-500">
-                            <th className="px-4 py-2">Date</th>
-                            <th className="px-4 py-2">Amount</th>
-                            <th className="px-4 py-2">Method</th>
-                            <th className="px-4 py-2">Notes</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {payments[lease.id].map((p: any) => (
-                            <tr key={p.id} className="border-t border-white/5">
-                              <td className="px-4 py-2 text-gray-300">{fmtDate(p.paidDate)}</td>
-                              <td className="px-4 py-2 font-medium text-white">{money(Number(p.amount))}</td>
-                              <td className="px-4 py-2 text-gray-400">{p.method}</td>
-                              <td className="px-4 py-2 text-gray-500">{p.notes || '—'}</td>
+                    {/* Rent change history */}
+                    <div className="px-4 py-3">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <p className="text-xs font-medium text-gray-300">Rent history</p>
+                        <button
+                          onClick={() => setRcForm({ leaseId: lease.id, effectiveDate: new Date().toISOString().slice(0, 10), newAmount: String(lease.rentAmount ?? ''), note: '' })}
+                          className="text-xs text-amber-400 hover:text-amber-300">+ Add past change</button>
+                      </div>
+                      {(rentChanges[lease.id]?.length ?? 0) === 0 ? (
+                        <p className="text-xs text-gray-500">Current rent {money(Number(lease.rentAmount))}/mo · no recorded increases yet</p>
+                      ) : (
+                        <div className="space-y-1">
+                          {rentChanges[lease.id].map(rc => {
+                            const prev = rc.previousAmount != null ? Number(rc.previousAmount) : null;
+                            const pctChange = prev && prev > 0 ? ((Number(rc.newAmount) - prev) / prev) * 100 : null;
+                            return (
+                              <div key={rc.id} className="flex items-center gap-2 text-xs group">
+                                <span className="text-gray-500 w-24">{fmtDate(rc.effectiveDate)}</span>
+                                <span className="text-gray-300">
+                                  {prev != null ? `${money(prev)} → ` : ''}<span className="font-medium text-white">{money(Number(rc.newAmount))}</span>
+                                </span>
+                                {pctChange != null && (
+                                  <span className={pctChange >= 0 ? 'text-red-400' : 'text-emerald-400'}>{pct(pctChange)}</span>
+                                )}
+                                {rc.note && <span className="text-gray-600">· {rc.note}</span>}
+                                <button onClick={() => removeRentChange(lease.id, rc.id)} className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 ml-auto">✕</button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {rcForm?.leaseId === lease.id && (
+                        <div className="flex gap-2 flex-wrap items-center mt-2">
+                          <input type="date" value={rcForm.effectiveDate} onChange={e => setRcForm(f => f && ({ ...f, effectiveDate: e.target.value }))} className="input-dark text-xs" />
+                          <input type="number" placeholder="New rent $" value={rcForm.newAmount} onChange={e => setRcForm(f => f && ({ ...f, newAmount: e.target.value }))} className="input-dark text-xs w-28" />
+                          <input placeholder="Note (optional)" value={rcForm.note} onChange={e => setRcForm(f => f && ({ ...f, note: e.target.value }))} className="input-dark text-xs flex-1 min-w-32" />
+                          <button onClick={addManualRentChange} className="btn btn-primary text-xs">Add</button>
+                          <button onClick={() => setRcForm(null)} className="text-xs text-gray-500 hover:text-gray-300">✕</button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Payment history */}
+                    <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                      <p className="px-4 pt-3 pb-1 text-xs font-medium text-gray-300">Payment history</p>
+                      {!payments[lease.id] ? (
+                        <p className="px-4 py-3 text-xs text-gray-500">Loading…</p>
+                      ) : payments[lease.id].length === 0 ? (
+                        <p className="px-4 py-3 text-xs text-gray-500">No payments recorded yet</p>
+                      ) : (
+                        <table className="w-full text-xs">
+                          <thead style={{ background: 'rgba(255,255,255,0.03)' }}>
+                            <tr className="text-left text-gray-500">
+                              <th className="px-4 py-2">Date</th>
+                              <th className="px-4 py-2">Amount</th>
+                              <th className="px-4 py-2">Method</th>
+                              <th className="px-4 py-2">Notes</th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
+                          </thead>
+                          <tbody>
+                            {payments[lease.id].map((p: any) => (
+                              <tr key={p.id} className="border-t border-white/5">
+                                <td className="px-4 py-2 text-gray-300">{fmtDate(p.paidDate)}</td>
+                                <td className="px-4 py-2 font-medium text-white">{money(Number(p.amount))}</td>
+                                <td className="px-4 py-2 text-gray-400">{p.method}</td>
+                                <td className="px-4 py-2 text-gray-500">{p.notes || '—'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>

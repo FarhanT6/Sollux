@@ -118,10 +118,25 @@ export interface Lease {
   notes?: string;
   arrearsBalance: number;
   arrearsCaughtUpThrough?: string;
+  nextIncreaseDate?: string | null;
+  nextIncreaseAmount?: number | null;
+  nextIncreasePercent?: number | null;
+  nextIncreaseNote?: string | null;
   createdAt: string;
   leaseTenants?: LeaseTenant[];
   rentPayments?: RentPayment[];
   rentNotices?: RentNotice[];
+  rentChanges?: RentChange[];
+}
+
+export interface RentChange {
+  id: string;
+  leaseId: string;
+  effectiveDate: string;
+  previousAmount?: number | null;
+  newAmount: number;
+  note?: string | null;
+  createdAt: string;
 }
 
 export interface RentPayment {
@@ -223,7 +238,8 @@ export interface ReconciliationStatement {
 }
 
 export type DocumentCategory =
-  | 'UTILITY' | 'INSURANCE' | 'TAX' | 'LEGAL' | 'HOA' | 'EXPENSE_RECEIPT' | 'LEASE' | 'OTHER';
+  | 'UTILITY' | 'INSURANCE' | 'TAX' | 'LEGAL' | 'HOA' | 'EXPENSE_RECEIPT' | 'LEASE'
+  | 'APPLICATION' | 'IDENTITY' | 'SCREENING' | 'OTHER';
 
 export interface Document {
   id: string;
@@ -262,7 +278,10 @@ export const DOCUMENT_CATEGORY_LABELS: Record<DocumentCategory, string> = {
   LEGAL: 'Legal',
   HOA: 'HOA',
   EXPENSE_RECEIPT: 'Expense receipt',
-  LEASE: 'Lease',
+  LEASE: 'Lease agreement',
+  APPLICATION: 'Application',
+  IDENTITY: 'Identity / ID',
+  SCREENING: 'Screening',
   OTHER: 'Other / Misc',
 };
 
