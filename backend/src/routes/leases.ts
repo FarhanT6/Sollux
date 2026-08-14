@@ -209,6 +209,85 @@ router.get('/:id/document', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ── Tenant/lease attachments (application, ID, screening, etc.) ──────────────
+// Stored as generic Documents linked to the lease (linkedType='Lease'), so
+// they show alongside other property documents but scoped to this lease.
+const LeaseDocSchema = z.object({
+  fileData: z.string(),
+  filename: z.string().optional(),
+  category: z.enum(['LEASE', 'APPLICATION', 'IDENTITY', 'SCREENING', 'OTHER']).default('OTHER'),
+  title: z.string().optional().nullable(),
+  notes: z.string().optional().nullable(),
+});
+
+// GET /api/leases/:id/documents — list attachments for a lease
+router.get('/:id/documents', async (req, res, next) => {
+  try {
+    const lease = await db.lease.findFirst({ where: { id: req.params.id, unit: { property: { userId: req.dbUserId! } } } });
+    if (!lease) return res.status(404).json({ error: 'Lease not found' });
+    const docs = await db.document.findMany({
+      where: { userId: req.dbUserId!, linkedType: 'Lease', linkedId: lease.id },
+      orderBy: { createdAt: 'desc' },
+    });
+    res.json(docs);
+  } catch (err) { next(err); }
+});
+
+// POST /api/leases/:id/documents — attach a categorized document to a lease
+router.post('/:id/documents', async (req, res, next) => {
+  try {
+    const data = LeaseDocSchema.parse(req.body);
+    const lease = await db.lease.findFirst({
+      where: { id: req.params.id, unit: { property: { userId: req.dbUserId! } } },
+      include: { unit: { select: { propertyId: true } } },
+    });
+    if (!lease) return res.status(404).json({ error: 'Lease not found' });
+
+    const buffer = Buffer.from(data.fileData, 'base64');
+    const filename = data.filename || `${data.category.toLowerCase()}.pdf`;
+    const key = `${req.dbUserId}/${lease.unit.propertyId}/leases/${lease.id}/${data.category}_${Date.now()}_${sanitizeFilename(filename)}`;
+    const s3Url = await uploadDocument(key, buffer);
+
+    const doc = await db.document.create({
+      data: {
+        userId: req.dbUserId!,
+        propertyId: lease.unit.propertyId,
+        category: data.category as any,
+        title: data.title || filename,
+        s3Key: key,
+        s3Url,
+        sourceType: 'UPLOAD',
+        linkedType: 'Lease',
+        linkedId: lease.id,
+        notes: data.notes || null,
+      },
+    });
+    res.status(201).json(doc);
+  } catch (err) { next(err); }
+});
+
+// GET /api/leases/:id/documents/:docId/url — signed URL to view an attachment
+router.get('/:id/documents/:docId/url', async (req, res, next) => {
+  try {
+    const doc = await db.document.findFirst({
+      where: { id: req.params.docId, userId: req.dbUserId!, linkedType: 'Lease', linkedId: req.params.id },
+    });
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
+    const url = await getSignedDocumentUrl(doc.s3Key);
+    res.json({ url });
+  } catch (err) { next(err); }
+});
+
+// DELETE /api/leases/:id/documents/:docId — remove an attachment
+router.delete('/:id/documents/:docId', async (req, res, next) => {
+  try {
+    await db.document.deleteMany({
+      where: { id: req.params.docId, userId: req.dbUserId!, linkedType: 'Lease', linkedId: req.params.id },
+    });
+    res.status(204).send();
+  } catch (err) { next(err); }
+});
+
 router.delete('/:id', async (req, res, next) => {
   try {
     const existing = await db.lease.findFirst({ where: { id: req.params.id, unit: { property: { userId: req.dbUserId! } } } });

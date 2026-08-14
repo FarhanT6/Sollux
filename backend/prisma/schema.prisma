@@ -809,6 +809,9 @@ enum DocumentCategory {
   HOA
   EXPENSE_RECEIPT
   LEASE
+  APPLICATION
+  IDENTITY
+  SCREENING
   OTHER
 }
 

@@ -104,6 +104,14 @@ export const addRentChange = (leaseId: string, data: { effectiveDate: string; pr
   api.post<RentChange>(`/leases/${leaseId}/rent-changes`, data).then(r => r.data);
 export const deleteRentChange = (leaseId: string, changeId: string) =>
   api.delete(`/leases/${leaseId}/rent-changes/${changeId}`);
+export const getLeaseDocuments = (leaseId: string) =>
+  api.get<Document[]>(`/leases/${leaseId}/documents`).then(r => r.data);
+export const addLeaseDocument = (leaseId: string, data: { fileData: string; filename?: string; category: string; title?: string; notes?: string }) =>
+  api.post<Document>(`/leases/${leaseId}/documents`, data).then(r => r.data);
+export const getLeaseDocumentViewUrl = (leaseId: string, docId: string) =>
+  api.get<{ url: string }>(`/leases/${leaseId}/documents/${docId}/url`).then(r => r.data);
+export const deleteLeaseDocument = (leaseId: string, docId: string) =>
+  api.delete(`/leases/${leaseId}/documents/${docId}`);
 
 // Rent payments
 export const getRentPayments = (params?: { leaseId?: string; propertyId?: string }) =>

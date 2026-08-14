@@ -13,12 +13,16 @@ import {
   getDocuments, getDocumentUrl, deleteDocument, downloadRentRoll, downloadT12,
   getT12Manifest, RENT_ROLL_COLUMNS,
   getRentChanges, addRentChange, deleteRentChange, uploadLeaseDocument,
+  getLeaseDocuments, addLeaseDocument, getLeaseDocumentViewUrl, deleteLeaseDocument,
 } from '../api/client';
 import type {
   Property, Lease, Loan, Expense, InsurancePolicy, TaxAssessment,
   Improvement, PropertyPnL, Tenant, Unit, Document, DocumentCategory, RentChange,
 } from '../types';
 import { PROPERTY_TYPE_LABELS, EXPENSE_CATEGORY_LABELS, DOCUMENT_CATEGORY_LABELS } from '../types';
+import type { Document as DocType } from '../types';
+
+const LEASE_DOC_CATEGORIES = ['LEASE', 'APPLICATION', 'IDENTITY', 'SCREENING', 'OTHER'] as const;
 
 const money = (n: number) =>
   n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
@@ -729,6 +733,8 @@ function TenantsTab({ propertyId, leases, setLeases }: {
   const [newTenantName, setNewTenantName] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
   const [uploadingDoc, setUploadingDoc] = useState(false);
+  const [docCategory, setDocCategory] = useState<string>('LEASE');
+  const [leaseDocs, setLeaseDocs] = useState<Record<string, DocType[]>>({});
   const [showNewLease, setShowNewLease] = useState(false);
   const [units, setUnits] = useState<Unit[]>([]);
   const [allTenants, setAllTenants] = useState<Tenant[]>([]);
@@ -760,7 +766,9 @@ function TenantsTab({ propertyId, leases, setLeases }: {
     });
     setEditTenantIds((lease.leaseTenants ?? []).map(lt => lt.tenantId));
     setNewTenantName('');
+    setDocCategory('LEASE');
     setEditLease(lease.id);
+    if (!leaseDocs[lease.id]) getLeaseDocuments(lease.id).then(d => setLeaseDocs(prev => ({ ...prev, [lease.id]: d })));
   }
 
   async function addCoTenant() {
@@ -810,9 +818,30 @@ function TenantsTab({ propertyId, leases, setLeases }: {
         reader.onerror = reject;
         reader.readAsDataURL(file);
       });
-      await uploadLeaseDocument(leaseId, base64, file.name);
-      setLeases(await getLeases({ propertyId }));
+      // Categorized attachment (application / ID / screening / lease / other)
+      await addLeaseDocument(leaseId, { fileData: base64, filename: file.name, category: docCategory });
+      // Keep the lease's primary documentUrl in sync when it's the lease agreement,
+      // so existing lease-agreement views still resolve.
+      if (docCategory === 'LEASE') {
+        await uploadLeaseDocument(leaseId, base64, file.name);
+        setLeases(await getLeases({ propertyId }));
+      }
+      const docs = await getLeaseDocuments(leaseId);
+      setLeaseDocs(prev => ({ ...prev, [leaseId]: docs }));
     } finally { setUploadingDoc(false); }
+  }
+
+  async function viewLeaseDoc(leaseId: string, docId: string) {
+    try {
+      const { url } = await getLeaseDocumentViewUrl(leaseId, docId);
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch { alert('Could not open document.'); }
+  }
+
+  async function removeLeaseDoc(leaseId: string, docId: string) {
+    if (!confirm('Remove this document?')) return;
+    await deleteLeaseDocument(leaseId, docId);
+    setLeaseDocs(prev => ({ ...prev, [leaseId]: (prev[leaseId] ?? []).filter(d => d.id !== docId) }));
   }
 
   async function addManualRentChange() {
@@ -1047,14 +1076,33 @@ function TenantsTab({ propertyId, leases, setLeases }: {
 
                     <input placeholder="Notes" value={editForm.notes} onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))} className="input-dark text-xs w-full" />
 
-                    {/* Lease document import */}
-                    <div className="flex items-center gap-3">
-                      <label className="text-xs text-amber-400 hover:text-amber-300 cursor-pointer">
-                        {uploadingDoc ? 'Uploading…' : (lease.documentUrl ? 'Replace lease document' : 'Import lease document')}
-                        <input type="file" accept="application/pdf,image/*" className="hidden" disabled={uploadingDoc}
-                          onChange={e => { const f = e.target.files?.[0]; if (f) handleLeaseDocUpload(lease.id, f); e.target.value = ''; }} />
-                      </label>
-                      {lease.documentUrl && <span className="text-xs text-gray-500">✓ document attached</span>}
+                    {/* Documents — lease agreement, application, ID, screening, etc. */}
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">Documents</label>
+                      <div className="flex items-center gap-2 flex-wrap mb-2">
+                        <select value={docCategory} onChange={e => setDocCategory(e.target.value)} className="input-dark text-xs">
+                          {LEASE_DOC_CATEGORIES.map(c => <option key={c} value={c}>{DOCUMENT_CATEGORY_LABELS[c]}</option>)}
+                        </select>
+                        <label className="text-xs text-amber-400 hover:text-amber-300 cursor-pointer">
+                          {uploadingDoc ? 'Uploading…' : '+ Import file'}
+                          <input type="file" accept="application/pdf,image/*" className="hidden" disabled={uploadingDoc}
+                            onChange={e => { const f = e.target.files?.[0]; if (f) handleLeaseDocUpload(lease.id, f); e.target.value = ''; }} />
+                        </label>
+                      </div>
+                      <div className="space-y-1">
+                        {(leaseDocs[lease.id] ?? []).length === 0 ? (
+                          <span className="text-xs text-gray-600">No documents attached</span>
+                        ) : (
+                          (leaseDocs[lease.id] ?? []).map(d => (
+                            <div key={d.id} className="flex items-center gap-2 text-xs group">
+                              <span className="px-1.5 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.08)' }}>{DOCUMENT_CATEGORY_LABELS[d.category]}</span>
+                              <button onClick={() => viewLeaseDoc(lease.id, d.id)} className="text-gray-300 hover:text-amber-400 truncate max-w-[200px]">{d.title}</button>
+                              <span className="text-gray-600">{fmtDate(d.createdAt)}</span>
+                              <button onClick={() => removeLeaseDoc(lease.id, d.id)} className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 ml-auto">✕</button>
+                            </div>
+                          ))
+                        )}
+                      </div>
                     </div>
 
                     <div className="flex justify-end">
