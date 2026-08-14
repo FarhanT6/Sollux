@@ -118,10 +118,25 @@ export interface Lease {
   notes?: string;
   arrearsBalance: number;
   arrearsCaughtUpThrough?: string;
+  nextIncreaseDate?: string | null;
+  nextIncreaseAmount?: number | null;
+  nextIncreasePercent?: number | null;
+  nextIncreaseNote?: string | null;
   createdAt: string;
   leaseTenants?: LeaseTenant[];
   rentPayments?: RentPayment[];
   rentNotices?: RentNotice[];
+  rentChanges?: RentChange[];
+}
+
+export interface RentChange {
+  id: string;
+  leaseId: string;
+  effectiveDate: string;
+  previousAmount?: number | null;
+  newAmount: number;
+  note?: string | null;
+  createdAt: string;
 }
 
 export interface RentPayment {

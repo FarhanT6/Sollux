@@ -26,6 +26,21 @@ const LeaseSchema = z.object({
   tenantIds: z.array(z.string()).optional(),
   manualLikelihood: z.enum(['high', 'medium', 'low', 'none']).optional().nullable(),
   manualLikelihoodNote: z.string().optional().nullable(),
+  // Next scheduled rent increase — any combination of date/amount/percent/note.
+  nextIncreaseDate: z.string().transform(s => (s ? new Date(s) : null)).optional().nullable(),
+  nextIncreaseAmount: z.number().optional().nullable(),
+  nextIncreasePercent: z.number().optional().nullable(),
+  nextIncreaseNote: z.string().optional().nullable(),
+  // When rentAmount changes via PATCH, the effective date to stamp on the
+  // auto-logged rent-change history row (defaults to today).
+  rentEffectiveDate: z.string().transform(s => (s ? new Date(s) : null)).optional().nullable(),
+});
+
+const RentChangeSchema = z.object({
+  effectiveDate: z.string().transform(s => new Date(s)),
+  previousAmount: z.number().optional().nullable(),
+  newAmount: z.number().positive(),
+  note: z.string().optional().nullable(),
 });
 
 router.get('/', async (req, res, next) => {
@@ -43,6 +58,7 @@ router.get('/', async (req, res, next) => {
         unit: { include: { property: { select: { id: true, address: true, nickname: true } } } },
         leaseTenants: { include: { tenant: true } },
         rentPayments: { orderBy: { paidDate: 'desc' }, take: 6 },
+        rentChanges: { orderBy: { effectiveDate: 'desc' } },
       },
       orderBy: { startDate: 'desc' },
     });
@@ -59,6 +75,7 @@ router.get('/:id', async (req, res, next) => {
         leaseTenants: { include: { tenant: true } },
         rentPayments: { orderBy: { paidDate: 'desc' } },
         rentNotices: { orderBy: { noticeDate: 'desc' } },
+        rentChanges: { orderBy: { effectiveDate: 'desc' } },
       },
     });
     if (!lease) return res.status(404).json({ error: 'Lease not found' });
@@ -86,11 +103,74 @@ router.post('/', async (req, res, next) => {
 
 router.patch('/:id', async (req, res, next) => {
   try {
-    const { tenantIds, ...rest } = LeaseSchema.partial().parse(req.body);
+    const { tenantIds, rentEffectiveDate, ...rest } = LeaseSchema.partial().parse(req.body);
     const existing = await db.lease.findFirst({ where: { id: req.params.id, unit: { property: { userId: req.dbUserId! } } } });
     if (!existing) return res.status(404).json({ error: 'Lease not found' });
-    const lease = await db.lease.update({ where: { id: req.params.id }, data: rest });
+
+    // Auto-log a rent change when the rent amount actually changes.
+    if (rest.rentAmount != null && Number(rest.rentAmount) !== Number(existing.rentAmount)) {
+      await db.rentChange.create({
+        data: {
+          leaseId: existing.id,
+          effectiveDate: rentEffectiveDate ?? new Date(),
+          previousAmount: existing.rentAmount,
+          newAmount: rest.rentAmount,
+          note: 'Updated via edit',
+        },
+      });
+    }
+
+    // Sync co-tenants if a tenant list was provided (replace the set).
+    if (tenantIds) {
+      await db.leaseTenant.deleteMany({ where: { leaseId: existing.id } });
+      if (tenantIds.length) {
+        await db.leaseTenant.createMany({
+          data: tenantIds.map((tid, i) => ({ leaseId: existing.id, tenantId: tid, isPrimary: i === 0 })),
+          skipDuplicates: true,
+        });
+      }
+    }
+
+    const lease = await db.lease.update({
+      where: { id: req.params.id },
+      data: rest,
+      include: {
+        leaseTenants: { include: { tenant: true } },
+        rentChanges: { orderBy: { effectiveDate: 'desc' } },
+      },
+    });
     res.json(lease);
+  } catch (err) { next(err); }
+});
+
+// GET /api/leases/:id/rent-changes — rent change history for a lease
+router.get('/:id/rent-changes', async (req, res, next) => {
+  try {
+    const lease = await db.lease.findFirst({ where: { id: req.params.id, unit: { property: { userId: req.dbUserId! } } } });
+    if (!lease) return res.status(404).json({ error: 'Lease not found' });
+    const changes = await db.rentChange.findMany({ where: { leaseId: lease.id }, orderBy: { effectiveDate: 'desc' } });
+    res.json(changes);
+  } catch (err) { next(err); }
+});
+
+// POST /api/leases/:id/rent-changes — manually add a past rent change
+router.post('/:id/rent-changes', async (req, res, next) => {
+  try {
+    const data = RentChangeSchema.parse(req.body);
+    const lease = await db.lease.findFirst({ where: { id: req.params.id, unit: { property: { userId: req.dbUserId! } } } });
+    if (!lease) return res.status(404).json({ error: 'Lease not found' });
+    const change = await db.rentChange.create({ data: { ...data, leaseId: lease.id } });
+    res.status(201).json(change);
+  } catch (err) { next(err); }
+});
+
+// DELETE /api/leases/:id/rent-changes/:changeId — remove a rent change entry
+router.delete('/:id/rent-changes/:changeId', async (req, res, next) => {
+  try {
+    const lease = await db.lease.findFirst({ where: { id: req.params.id, unit: { property: { userId: req.dbUserId! } } } });
+    if (!lease) return res.status(404).json({ error: 'Lease not found' });
+    await db.rentChange.deleteMany({ where: { id: req.params.changeId, leaseId: lease.id } });
+    res.status(204).send();
   } catch (err) { next(err); }
 });
 

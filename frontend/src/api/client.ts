@@ -26,7 +26,7 @@ export default api;
 
 import type {
   Property, UtilityAccount, Statement, StatementSummaryRow, Payment, AIInsight, DashboardSummary,
-  Unit, Tenant, LeaseTenant, Lease, RentPayment, RentNotice, Expense, Loan, LoanPayment,
+  Unit, Tenant, LeaseTenant, Lease, RentPayment, RentNotice, RentChange, Expense, Loan, LoanPayment,
   InsurancePolicy, TaxAssessment, Improvement, LegalMatter, PropertyPnL, MonthlyPnL,
   BankAccount, OtherIncome, BudgetSummary, DelinquencyTenant, BudgetForecast, IndexRate,
   ReconciliationProfile, ReconciliationStatement, ReconciliationLineItem,
@@ -98,6 +98,12 @@ export const uploadLeaseDocument = (id: string, fileData: string, filename: stri
   api.post<Lease>(`/leases/${id}/document`, { fileData, filename }).then(r => r.data);
 export const getLeaseDocumentUrl = (id: string) =>
   api.get<{ url: string; expiresIn: number }>(`/leases/${id}/document`).then(r => r.data);
+export const getRentChanges = (leaseId: string) =>
+  api.get<RentChange[]>(`/leases/${leaseId}/rent-changes`).then(r => r.data);
+export const addRentChange = (leaseId: string, data: { effectiveDate: string; previousAmount?: number | null; newAmount: number; note?: string | null }) =>
+  api.post<RentChange>(`/leases/${leaseId}/rent-changes`, data).then(r => r.data);
+export const deleteRentChange = (leaseId: string, changeId: string) =>
+  api.delete(`/leases/${leaseId}/rent-changes/${changeId}`);
 
 // Rent payments
 export const getRentPayments = (params?: { leaseId?: string; propertyId?: string }) =>
