@@ -16,7 +16,7 @@ import {
   getLeaseDocuments, addLeaseDocument, getLeaseDocumentViewUrl, deleteLeaseDocument, extractLeaseTerms,
   addScheduledIncrease, applyScheduledIncrease, deleteScheduledIncrease,
   addLeaseUtilityCharge, deleteLeaseUtilityCharge, getTurnover, getBankAccounts,
-  addPaymentAlias, deletePaymentAlias,
+  addPaymentAlias, deletePaymentAlias, deleteRentPayment,
 } from '../api/client';
 import type {
   Property, Lease, Loan, Expense, InsurancePolicy, TaxAssessment,
@@ -915,6 +915,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   const [newTenantName, setNewTenantName] = useState('');
   const [deletingTenant, setDeletingTenant] = useState<string | null>(null);
   const [deletingLease, setDeletingLease] = useState<string | null>(null);
+  const [deletingPayment, setDeletingPayment] = useState<string | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [uploadingDoc, setUploadingDoc] = useState(false);
   const [docCategory, setDocCategory] = useState<string>('LEASE');
@@ -1049,6 +1050,34 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   async function removeAlias(leaseId: string, aliasId: string) {
     await deletePaymentAlias(leaseId, aliasId);
     setLeases(await getLeases({ propertyId }));
+  }
+
+  // Deleting a payment moves money: whatever it applied to arrears goes back on
+  // the balance, and the month it covered may fall overdue again. Both are
+  // server-side, so reload the lease rather than patching local state.
+  async function removePayment(leaseId: string, p: any) {
+    const applied = Number(p.appliedToArrears ?? 0);
+    const message = [
+      `Delete the ${money(Number(p.amount))} payment from ${fmtDateSafe(p.paidDate)}?`,
+      applied > 0 ? `\n${money(applied)} of it paid down the balance and will be added back.` : '',
+      '\nThis cannot be undone.',
+    ].filter(Boolean).join('\n');
+    if (!confirm(message)) return;
+
+    setDeletingPayment(p.id);
+    try {
+      await deleteRentPayment(p.id);
+      const [fresh, updatedLeases] = await Promise.all([
+        getRentPayments({ leaseId }),
+        getLeases({ propertyId }),
+      ]);
+      setPayments(prev => ({ ...prev, [leaseId]: fresh }));
+      setLeases(updatedLeases);
+    } catch (err: any) {
+      alert(err?.response?.data?.error ?? 'Could not delete that payment.');
+    } finally {
+      setDeletingPayment(null);
+    }
   }
 
   async function saveEditLease(leaseId: string) {
@@ -1904,6 +1933,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                               <th className="px-4 py-2">Amount</th>
                               <th className="px-4 py-2">Method</th>
                               <th className="px-4 py-2">Notes</th>
+                              <th className="px-4 py-2 w-8"></th>
                             </tr>
                           </thead>
                           <tbody>
@@ -1916,6 +1946,13 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                                   {p.bankAccount && <span className="text-gray-600"> → {bankLabel(p.bankAccount as BankAccount)}</span>}
                                 </td>
                                 <td className="px-4 py-2 text-gray-500">{p.notes || '—'}</td>
+                                <td className="px-4 py-2 text-right">
+                                  <button onClick={() => removePayment(lease.id, p)} disabled={deletingPayment === p.id}
+                                    title="Delete this payment"
+                                    className="text-gray-600 hover:text-red-400 disabled:opacity-40">
+                                    {deletingPayment === p.id ? '…' : '✕'}
+                                  </button>
+                                </td>
                               </tr>
                             ))}
                           </tbody>
