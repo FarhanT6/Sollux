@@ -7,7 +7,14 @@ declare global {
   namespace Express {
     interface Request {
       userId?: string;
+      // The account whose data this request operates on. For a shared-access
+      // member this is the OWNER's id, so every route scopes to the shared
+      // account without needing to know about sharing.
       dbUserId?: string;
+      // The signed-in person's own user id (differs from dbUserId for members).
+      actingUserId?: string;
+      // True when the signed-in person owns the account (not a member).
+      isAccountOwner?: boolean;
     }
   }
 }
@@ -15,6 +22,43 @@ declare global {
 // Clerk auth middleware
 export { clerkMiddleware };
 export const requireAuth = clerkRequireAuth();
+
+// Normalize a phone to digits so "(760) 672-7717", "7606727717" and
+// "+17606727717" all match the same invite.
+function normalizePhone(p?: string | null): string | null {
+  if (!p) return null;
+  const digits = p.replace(/\D/g, '');
+  return digits.length > 10 ? digits.slice(-10) : digits || null;
+}
+
+// If this user has a pending shared-access invite (by email or phone), link
+// them to the owner's account. Guards against self-invite and nesting.
+async function linkPendingInvite(user: { id: string; email: string; phone: string | null }) {
+  const phone = normalizePhone(user.phone);
+  const candidates = await db.accountInvite.findMany({
+    where: { acceptedAt: null },
+  });
+  const match = candidates.find(inv =>
+    (inv.email && inv.email.toLowerCase() === user.email.toLowerCase()) ||
+    (phone && normalizePhone(inv.phone) === phone)
+  );
+  if (!match || match.ownerUserId === user.id) return null;
+
+  // Never link to an owner who is themselves a member (no nesting).
+  const owner = await db.user.findUnique({ where: { id: match.ownerUserId } });
+  if (!owner || owner.ownerUserId) return null;
+
+  const updated = await db.user.update({
+    where: { id: user.id },
+    data: { ownerUserId: match.ownerUserId },
+  });
+  await db.accountInvite.update({
+    where: { id: match.id },
+    data: { acceptedAt: new Date(), acceptedByUserId: user.id },
+  });
+  console.log(`[SharedAccess] Linked ${user.email} to owner ${match.ownerUserId}`);
+  return updated;
+}
 
 // Middleware to attach the database User record to the request
 export async function attachDbUser(req: Request, res: Response, next: NextFunction) {
@@ -41,16 +85,30 @@ export async function attachDbUser(req: Request, res: Response, next: NextFuncti
         ?? clerkUser.emailAddresses[0]?.emailAddress
         ?? `${clerkUserId}@no-email.sollux.local`;
       const fullName = [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(' ') || 'User';
+      const primaryPhone = clerkUser.phoneNumbers.find(p => p.id === clerkUser.primaryPhoneNumberId)?.phoneNumber
+        ?? clerkUser.phoneNumbers[0]?.phoneNumber
+        ?? null;
       user = await db.user.create({
         data: {
           clerkUserId,
           email: primaryEmail,
           fullName,
+          phone: primaryPhone,
         },
       });
     }
 
-    req.dbUserId = user.id;
+    // Shared access: if this person was invited to someone's account and
+    // hasn't been linked yet, link them now (matched by email or phone).
+    if (!user.ownerUserId) {
+      const linked = await linkPendingInvite(user);
+      if (linked) user = linked;
+    }
+
+    req.actingUserId = user.id;
+    req.isAccountOwner = !user.ownerUserId;
+    // Members operate on the owner's data.
+    req.dbUserId = user.ownerUserId ?? user.id;
     next();
   } catch (err) {
     next(err);

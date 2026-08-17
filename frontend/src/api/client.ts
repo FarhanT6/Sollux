@@ -197,6 +197,22 @@ export const applyReconciliationStatement = (id: string) =>
 export const deleteReconciliationStatement = (id: string) =>
   api.delete(`/reconciliation/statements/${id}`);
 
+// Shared ("family") account access
+export interface AccountMember { id: string; email: string; fullName: string; phone?: string | null; createdAt?: string }
+export interface AccountInvite { id: string; email?: string | null; phone?: string | null; createdAt: string }
+export interface AccountInfo {
+  owner: AccountMember | null;
+  members: AccountMember[];
+  pendingInvites: AccountInvite[];
+  me: { id: string; email: string; fullName: string } | null;
+  isOwner: boolean;
+}
+export const getAccount = () => api.get<AccountInfo>('/account').then(r => r.data);
+export const inviteAccountMember = (data: { email?: string; phone?: string }) =>
+  api.post<{ linked: boolean }>('/account/invites', data).then(r => r.data);
+export const cancelAccountInvite = (id: string) => api.delete(`/account/invites/${id}`);
+export const removeAccountMember = (id: string) => api.delete(`/account/members/${id}`);
+
 // Scanned/digitized documents (phone scans, printer imports — auto-sorted mail)
 export const getDocuments = (params?: { propertyId?: string; category?: DocumentCategory }) =>
   api.get<Document[]>('/scanned-documents', { params }).then(r => r.data);
