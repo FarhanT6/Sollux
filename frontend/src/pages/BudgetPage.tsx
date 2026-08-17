@@ -723,33 +723,35 @@ function OtherIncomeTab({ rows, total, onAdd, onDelete }: {
         <button onClick={onAdd} className="btn-primary text-sm px-4 py-2">+ Add Income</button>
       </div>
 
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="text-gray-500 text-xs uppercase tracking-wider border-b border-white/5">
-            <th className="text-left pb-2">Date</th>
-            <th className="text-left pb-2">Category</th>
-            <th className="text-left pb-2">Description</th>
-            <th className="text-left pb-2">Method</th>
-            <th className="text-right pb-2">Amount</th>
-            <th className="text-right pb-2"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(r => (
-            <tr key={r.id} className="border-b border-white/5 hover:bg-white/2">
-              <td className="py-2 text-gray-400">{new Date(r.receivedDate).toLocaleDateString()}</td>
-              <td className="py-2 text-gray-300">{OTHER_INCOME_LABELS[r.category]}</td>
-              <td className="py-2 text-gray-400">{r.description || '—'}</td>
-              <td className="py-2 text-gray-500">{r.method || '—'}</td>
-              <td className="py-2 text-right text-emerald-500 font-semibold">{fmt(r.amount)}</td>
-              <td className="py-2 text-right">
-                <button onClick={() => { if (confirm('Delete?')) onDelete(r.id); }}
-                  className="text-red-500 hover:text-red-300 text-xs">✕</button>
-              </td>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-gray-500 text-xs uppercase tracking-wider border-b border-white/5">
+              <th className="text-left pb-2">Date</th>
+              <th className="text-left pb-2">Category</th>
+              <th className="text-left pb-2">Description</th>
+              <th className="text-left pb-2">Method</th>
+              <th className="text-right pb-2">Amount</th>
+              <th className="text-right pb-2"></th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map(r => (
+              <tr key={r.id} className="border-b border-white/5 hover:bg-white/2">
+                <td className="py-2 text-gray-400">{new Date(r.receivedDate).toLocaleDateString()}</td>
+                <td className="py-2 text-gray-300">{OTHER_INCOME_LABELS[r.category]}</td>
+                <td className="py-2 text-gray-400">{r.description || '—'}</td>
+                <td className="py-2 text-gray-500">{r.method || '—'}</td>
+                <td className="py-2 text-right text-emerald-500 font-semibold">{fmt(r.amount)}</td>
+                <td className="py-2 text-right">
+                  <button onClick={() => { if (confirm('Delete?')) onDelete(r.id); }}
+                    className="text-red-500 hover:text-red-300 text-xs">✕</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       {rows.length === 0 && (
         <p className="text-center text-gray-500 py-12">No other income recorded for this month.</p>
       )}

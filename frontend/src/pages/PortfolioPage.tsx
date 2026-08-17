@@ -2,11 +2,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { getProperties, getLeases, getLoans } from '../api/client';
 import type { Property, Lease, Loan } from '../types';
-
-const TYPE_LABELS: Record<string, string> = {
-  SINGLE_FAMILY: 'SFR', MULTI_FAMILY: 'Multi', COMMERCIAL: 'Commercial',
-  CONDO: 'Condo', TOWNHOUSE: 'Townhouse', MOBILE_HOME: 'Mobile', LAND: 'Land', OTHER: 'Other',
-};
+import { PROPERTY_TYPE_LABELS } from '../types';
 
 const money = (n: number) =>
   n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
@@ -121,7 +117,7 @@ export default function PortfolioPage() {
 
       <div className="px-6 py-5">
         {/* Summary cards */}
-        <div className="grid grid-cols-5 gap-3 mb-5">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-5">
           {[
             { label: 'Monthly rent roll', value: money(totals.rent), color: 'text-white' },
             { label: 'Monthly net', value: `${totals.net >= 0 ? '' : '-'}${money(Math.abs(totals.net))}`, color: totals.net >= 0 ? 'text-emerald-400' : 'text-red-400' },
@@ -150,7 +146,7 @@ export default function PortfolioPage() {
           </select>
           <select value={filterType}   onChange={e => setFilterType(e.target.value)}   className="input-dark text-sm">
             <option value="">All types</option>
-            {types.map(t => <option key={t} value={t}>{TYPE_LABELS[t] ?? t}</option>)}
+            {types.map(t => <option key={t} value={t}>{PROPERTY_TYPE_LABELS[t] ?? t}</option>)}
           </select>
           <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="input-dark text-sm">
             <option value="">All statuses</option>
@@ -168,7 +164,7 @@ export default function PortfolioPage() {
 
         {/* Grid */}
         {loading ? (
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
             {Array(6).fill(0).map((_, i) => (
               <div key={i} className="card h-36 animate-pulse" style={{ background: 'rgba(255,255,255,0.04)' }} />
             ))}
@@ -184,7 +180,7 @@ export default function PortfolioPage() {
               const groupNet = groupProps.reduce((s, p) => s + (stats[p.id]?.net ?? 0), 0);
               return (
                 <div key={groupName} className="rounded-xl p-3" style={{ border: '1px solid rgba(245,166,35,0.2)', background: 'rgba(245,166,35,0.03)' }}>
-                  <div className="flex items-center justify-between px-1 pb-2 mb-1">
+                  <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 px-1 pb-2 mb-1">
                     <p className="text-xs font-semibold text-amber-400 uppercase tracking-wide">{groupName} · {groupProps.length} parcels</p>
                     <p className="text-xs text-gray-400">
                       <span className={groupNet >= 0 ? 'text-emerald-400' : 'text-red-400'} title="Rent minus monthly debt service (P&I + escrow)">
@@ -193,14 +189,14 @@ export default function PortfolioPage() {
                       {' · '}{money(groupRent)}/mo · {groupArrears > 0 ? <span className="text-red-400">{money(groupArrears)} arrears</span> : 'no arrears'} · {money(groupEquity)} equity
                     </p>
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                     {groupProps.map(p => <PropertyCard key={p.id} p={p} stat={stats[p.id]} />)}
                   </div>
                 </div>
               );
             })}
             {ungrouped.length > 0 && (
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                 {ungrouped.map(p => <PropertyCard key={p.id} p={p} stat={stats[p.id]} />)}
               </div>
             )}
@@ -227,7 +223,7 @@ function PropertyCard({ p, stat }: { p: Property; stat?: { rent: number; arrears
           <p className="text-xs text-gray-500">{p.city}, {p.state}</p>
         </div>
         <div className="flex gap-1.5 flex-shrink-0 ml-2 flex-wrap justify-end">
-          <span className="pill pill-gray">{TYPE_LABELS[p.type] ?? p.type}</span>
+          <span className="pill pill-gray">{PROPERTY_TYPE_LABELS[p.type] ?? p.type}</span>
           {occ !== null && (
             <span className={`pill ${occ === 100 ? 'pill-green' : occ >= 75 ? 'pill-amber' : 'pill-red'}`}>
               {occ}% occ
@@ -235,7 +231,7 @@ function PropertyCard({ p, stat }: { p: Property; stat?: { rent: number; arrears
           )}
         </div>
       </div>
-      <div className="grid grid-cols-4 gap-3 pt-3" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-3 gap-y-2 pt-3" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
         <div>
           <p className="text-xs text-gray-500 mb-0.5">Net/mo</p>
           <p className={`text-sm font-semibold ${s.net > 0 ? 'text-emerald-400' : s.net < 0 ? 'text-red-400' : 'text-gray-600'}`}

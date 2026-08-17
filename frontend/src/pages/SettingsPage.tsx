@@ -293,7 +293,7 @@ function RatesTab() {
             <p className="text-xs text-gray-500">as of {fmtDateSafe(current.effectiveDate, 'MMM d, yyyy')}</p>
           </div>
         )}
-        <div className="grid grid-cols-3 gap-3 mb-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-3">
           <div>
             <label className="text-xs text-gray-400 block mb-1">New rate (%)</label>
             <input type="number" step="0.001" value={rate} onChange={e => setRate(e.target.value)} className="input-dark w-full text-sm" placeholder="8.50" />
@@ -319,28 +319,30 @@ function RatesTab() {
         ) : rates.length === 0 ? (
           <p className="text-sm text-gray-500">No Prime rate logged yet — add one above to activate any variable-rate loans.</p>
         ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-gray-500 text-xs uppercase tracking-wider border-b border-white/5">
-                <th className="text-left pb-2">Effective</th>
-                <th className="text-right pb-2">Rate</th>
-                <th className="text-left pb-2 pl-3">Notes</th>
-                <th className="pb-2"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {rates.map(r => (
-                <tr key={r.id} className="border-b border-white/5">
-                  <td className="py-2 text-gray-300">{fmtDateSafe(r.effectiveDate, 'MMM d, yyyy')}</td>
-                  <td className="py-2 text-right text-white font-medium">{r.rate}%</td>
-                  <td className="py-2 pl-3 text-gray-500">{r.notes || '—'}</td>
-                  <td className="py-2 text-right">
-                    <button onClick={() => handleDelete(r.id)} className="text-xs text-red-500 hover:text-red-400">Del</button>
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-gray-500 text-xs uppercase tracking-wider border-b border-white/5">
+                  <th className="text-left pb-2">Effective</th>
+                  <th className="text-right pb-2">Rate</th>
+                  <th className="text-left pb-2 pl-3">Notes</th>
+                  <th className="pb-2"></th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {rates.map(r => (
+                  <tr key={r.id} className="border-b border-white/5">
+                    <td className="py-2 text-gray-300">{fmtDateSafe(r.effectiveDate, 'MMM d, yyyy')}</td>
+                    <td className="py-2 text-right text-white font-medium">{r.rate}%</td>
+                    <td className="py-2 pl-3 text-gray-500">{r.notes || '—'}</td>
+                    <td className="py-2 text-right">
+                      <button onClick={() => handleDelete(r.id)} className="text-xs text-red-500 hover:text-red-400">Del</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </div>
@@ -697,7 +699,7 @@ function BankingTab() {
 
           {/* 3 buckets */}
           {buckets.length > 0 && (
-            <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${buckets.length}, 1fr)` }}>
+            <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
               {buckets.map(b => (
                 <div key={b.label} className="card p-3">
                   <p className="text-xs text-gray-500 mb-1">{b.label}</p>

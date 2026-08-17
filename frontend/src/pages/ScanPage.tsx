@@ -273,7 +273,7 @@ export default function ScanPage() {
             </div>
 
             {pages.length > 0 && (
-              <div className="grid grid-cols-3 sm:grid-cols-4 gap-3 mb-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 sm:grid-cols-4 gap-3 mb-6">
                 {pages.map((p, i) => (
                   <div key={p.id} className="relative rounded-lg overflow-hidden border border-white/10">
                     <img src={p.dataUrl} alt={`Page ${i + 1}`} className="w-full h-32 object-cover" />

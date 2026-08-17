@@ -125,7 +125,7 @@ export default function StatementHistoryPanel({ utilityAccountId }: Props) {
           </div>
         ) : null;
       })()}
-      <div className="grid grid-cols-3 gap-3 mb-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
         {[
           { label: 'Latest bill', value: fmtMoney(latestAmt) },
           { label: 'MoM change', value: momLabel, color: momColor },

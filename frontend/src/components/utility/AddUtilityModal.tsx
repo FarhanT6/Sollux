@@ -198,7 +198,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
           </Field>
 
           <Field label="Provider" required hint={providersForCategory.length === 0 ? `No saved providers under ${CATEGORY_LABELS[form.category]} yet — pick "Other" below to add one.` : undefined}>
-            <div className="grid grid-cols-3 gap-1.5 max-h-52 overflow-y-auto pr-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5 max-h-52 overflow-y-auto pr-1">
               {providersForCategory.map(name => {
                 const slug = allProviders[name];
                 const hasLiveScraper = SCRAPER_SUPPORTED.has(slug);

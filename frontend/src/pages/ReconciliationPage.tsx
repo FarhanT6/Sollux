@@ -107,43 +107,45 @@ export default function ReconciliationPage({ embedded }: { embedded?: boolean } 
                 <p className="text-sm text-gray-500 py-8 text-center">No statements logged for this profile yet.</p>
               ) : (
                 <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
-                  <table className="w-full text-sm">
-                    <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
-                      <tr className="text-left text-gray-400 text-xs">
-                        <th className="px-4 py-3">Date</th>
-                        <th className="px-4 py-3">Line items</th>
-                        <th className="px-4 py-3 text-right">Net</th>
-                        <th className="px-4 py-3">Status</th>
-                        <th className="px-4 py-3"></th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-white/5">
-                      {profileStatements.map(s => (
-                        <tr key={s.id}>
-                          <td className="px-4 py-3 text-gray-300 text-xs whitespace-nowrap">{fmtDate(s.statementDate, 'MMM yyyy')}</td>
-                          <td className="px-4 py-3 text-gray-500 text-xs">{s.lineItems.length} item{s.lineItems.length !== 1 ? 's' : ''}</td>
-                          <td className={`px-4 py-3 text-right font-medium ${s.netAmount >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{money(s.netAmount)}</td>
-                          <td className="px-4 py-3">
-                            <span className={`text-xs px-2 py-0.5 rounded-full ${s.status === 'APPLIED' ? 'bg-emerald-900/40 text-emerald-500' : 'bg-amber-900/40 text-amber-400'}`}>
-                              {s.status === 'APPLIED' ? 'Applied' : 'Draft'}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-right whitespace-nowrap">
-                            {s.status === 'DRAFT' ? (
-                              <>
-                                <button onClick={async () => { if (confirm('Apply this statement? This creates the real rent, loan, and expense records.')) { await applyReconciliationStatement(s.id); load(); } }}
-                                  className="text-xs text-amber-400 hover:text-amber-300 mr-3">Apply</button>
-                                <button onClick={async () => { if (confirm('Delete this draft?')) { await deleteReconciliationStatement(s.id); load(); } }}
-                                  className="text-xs text-red-500 hover:text-red-400">Delete</button>
-                              </>
-                            ) : (
-                              <span className="text-xs text-gray-600">{s.appliedAt && fmtDate(s.appliedAt, 'MMM d, yyyy')}</span>
-                            )}
-                          </td>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
+                        <tr className="text-left text-gray-400 text-xs">
+                          <th className="px-4 py-3">Date</th>
+                          <th className="px-4 py-3">Line items</th>
+                          <th className="px-4 py-3 text-right">Net</th>
+                          <th className="px-4 py-3">Status</th>
+                          <th className="px-4 py-3"></th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody className="divide-y divide-white/5">
+                        {profileStatements.map(s => (
+                          <tr key={s.id}>
+                            <td className="px-4 py-3 text-gray-300 text-xs whitespace-nowrap">{fmtDate(s.statementDate, 'MMM yyyy')}</td>
+                            <td className="px-4 py-3 text-gray-500 text-xs">{s.lineItems.length} item{s.lineItems.length !== 1 ? 's' : ''}</td>
+                            <td className={`px-4 py-3 text-right font-medium ${s.netAmount >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{money(s.netAmount)}</td>
+                            <td className="px-4 py-3">
+                              <span className={`text-xs px-2 py-0.5 rounded-full ${s.status === 'APPLIED' ? 'bg-emerald-900/40 text-emerald-500' : 'bg-amber-900/40 text-amber-400'}`}>
+                                {s.status === 'APPLIED' ? 'Applied' : 'Draft'}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-right whitespace-nowrap">
+                              {s.status === 'DRAFT' ? (
+                                <>
+                                  <button onClick={async () => { if (confirm('Apply this statement? This creates the real rent, loan, and expense records.')) { await applyReconciliationStatement(s.id); load(); } }}
+                                    className="text-xs text-amber-400 hover:text-amber-300 mr-3">Apply</button>
+                                  <button onClick={async () => { if (confirm('Delete this draft?')) { await deleteReconciliationStatement(s.id); load(); } }}
+                                    className="text-xs text-red-500 hover:text-red-400">Delete</button>
+                                </>
+                              ) : (
+                                <span className="text-xs text-gray-600">{s.appliedAt && fmtDate(s.appliedAt, 'MMM d, yyyy')}</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               )}
             </>

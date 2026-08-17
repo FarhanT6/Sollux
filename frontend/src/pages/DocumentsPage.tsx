@@ -94,7 +94,7 @@ export default function DocumentsPage({ embedded }: { embedded?: boolean } = {})
         </div>
 
         {loading ? (
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {Array(9).fill(0).map((_, i) => <Skeleton key={i} className="h-28" />)}
           </div>
         ) : filtered.length === 0 ? (
@@ -107,7 +107,7 @@ export default function DocumentsPage({ embedded }: { embedded?: boolean } = {})
                   <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{propName}</p>
                   <span className="text-xs text-gray-600">{stmts.length} statement{stmts.length !== 1 ? 's' : ''}</span>
                 </div>
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {stmts.map(stmt => (
                     <div
                       key={stmt.id}

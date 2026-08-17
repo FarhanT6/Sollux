@@ -204,7 +204,7 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
       ) : (
         <div className="mb-4">
           {/* Summary stats */}
-          <div className="grid grid-cols-3 gap-3 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
             <div className="rounded-xl px-4 py-3" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
               <p className="text-xs text-gray-400 mb-0.5">Total balance</p>
               <p className="text-base font-semibold text-red-400">{money(totalDebt)}</p>
@@ -258,7 +258,7 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
 
       {showForm && (
         <form onSubmit={handleCreate} className="rounded-xl p-5 mb-5" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
-          <div className="grid grid-cols-3 gap-4 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
             <div>
               <label className="text-xs text-gray-400 block mb-1">Property</label>
               <select value={form.propertyId} onChange={e => setForm(f => ({ ...f, propertyId: e.target.value }))} className="input-dark w-full">

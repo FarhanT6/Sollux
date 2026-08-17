@@ -98,7 +98,7 @@ export default function DashboardPage() {
       <div className="px-6 py-5">
         {/* Stats */}
         <p className="section-label mb-2">Portfolio summary</p>
-        <div className="grid grid-cols-4 gap-3 mb-6">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
           {loading ? Array(4).fill(0).map((_, i) => <Skeleton key={i} className="h-20" />) : (
             <>
               <StatCard
@@ -191,7 +191,7 @@ export default function DashboardPage() {
         </div>
 
         {/* Two column layout */}
-        <div className="grid grid-cols-5 gap-5">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-5">
           {/* Upcoming bills */}
           <div className="col-span-3">
             <div className="flex items-center justify-between mb-2.5">
@@ -342,7 +342,7 @@ function CashPositionCard({ items, manualAccounts }: { items: PlaidItem[]; manua
 
         {/* 3-bucket breakdown */}
         {buckets.length > 1 && (
-          <div className="grid gap-2 mb-4" style={{ gridTemplateColumns: `repeat(${buckets.length}, 1fr)` }}>
+          <div className="grid gap-2 mb-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))' }}>
             {buckets.map(b => (
               <div key={b.label} className="rounded-lg p-2.5" style={{ background: 'rgba(255,255,255,0.04)' }}>
                 <p className="text-xs text-gray-500 mb-1">{b.label}</p>
@@ -354,7 +354,7 @@ function CashPositionCard({ items, manualAccounts }: { items: PlaidItem[]; manua
         )}
 
         {/* Individual account chips */}
-        <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(allDisplayAccounts.length, 4)}, 1fr)` }}>
+        <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
           {allDisplayAccounts.slice(0, 8).map((acct: any) => {
             const bal = acct.balances?.[0];
             const displayBal = acct.accountType === 'CREDIT_CARD'
