@@ -817,13 +817,21 @@ function TenantsTab({ propertyId, leases, setLeases }: {
       // Categorized attachment (application / ID / screening / lease / other)
       await addLeaseDocument(leaseId, { fileData: base64, filename: file.name, category: docCategory });
       // Keep the lease's primary documentUrl in sync when it's the lease agreement,
-      // so existing lease-agreement views still resolve.
+      // so existing lease-agreement views still resolve. Best-effort — a hiccup
+      // here must not fail the upload the user just made.
       if (docCategory === 'LEASE') {
-        await uploadLeaseDocument(leaseId, base64, file.name);
-        setLeases(await getLeases({ propertyId }));
+        try {
+          await uploadLeaseDocument(leaseId, base64, file.name);
+          setLeases(await getLeases({ propertyId }));
+        } catch { /* legacy sync is optional; the categorized doc is saved */ }
       }
       const docs = await getLeaseDocuments(leaseId);
       setLeaseDocs(prev => ({ ...prev, [leaseId]: docs }));
+    } catch (err: any) {
+      const msg = err?.response?.status === 413
+        ? 'That file is too large to upload. Try a smaller PDF or compress it.'
+        : (err?.response?.data?.error || 'Upload failed. Please try again.');
+      alert(msg);
     } finally { setUploadingDoc(false); }
   }
 

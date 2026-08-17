@@ -102,6 +102,9 @@ app.use('/api/', limiter);
 // ─── Body parsing ─────────────────────────────────────────
 app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }));
 app.use('/api/import', express.json({ limit: '100mb' }));
+// Lease/tenant document uploads (lease agreements, applications, scans) can be
+// large multi-page PDFs — allow well above the default before the global cap.
+app.use('/api/leases', express.json({ limit: '50mb' }));
 app.use(express.json({ limit: '10mb' }));
 
 // ─── Health check ─────────────────────────────────────────
