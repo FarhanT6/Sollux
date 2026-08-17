@@ -19,6 +19,7 @@
 import { plaidClient } from '../config/plaid';
 import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';
+import { recordRentPayment, periodStartOf } from './rentPaymentService';
 
 // ─── Incoming (rent via P2P) ──────────────────────────────────────────────
 
@@ -83,27 +84,42 @@ function normalizeWords(s: string): string[] {
   return s.toLowerCase().replace(/[^a-z\s]/g, '').replace(/\s+/g, ' ').trim().split(' ').filter(w => w.length > 1);
 }
 
-/** Fuzzy-match a counterparty name against a user's active tenants. Returns the lease id on a confident single match. */
-async function matchLease(counterpartyName: string, userId: string): Promise<string | null> {
+interface LeaseMatch {
+  leaseId: string;
+  /** True when the descriptor matched a payer name the owner entered by hand. */
+  viaAlias: boolean;
+}
+
+/**
+ * Fuzzy-match a counterparty name against a user's active tenants, and against
+ * the payer names they listed for each lease. Returns a match only when exactly
+ * one lease fits — two tenants sharing a surname must stay ambiguous.
+ */
+async function matchLease(counterpartyName: string, userId: string): Promise<LeaseMatch | null> {
   const words = normalizeWords(counterpartyName);
   if (words.length === 0) return null;
 
   const activeLeases = await db.lease.findMany({
     where: { status: 'ACTIVE', unit: { property: { userId } } },
-    include: { leaseTenants: { include: { tenant: true } } },
+    include: { leaseTenants: { include: { tenant: true } }, paymentAliases: true },
   });
 
-  const matches = activeLeases.filter(lease =>
-    lease.leaseTenants.some(lt => {
-      const tenantWords = normalizeWords(lt.tenant.fullName);
-      if (tenantWords.length === 0) return false;
-      const overlap = tenantWords.filter(w => words.includes(w)).length;
-      // Require at least one strong word match (e.g. last name) and decent overlap
-      return overlap >= 1 && overlap / tenantWords.length >= 0.5;
-    })
-  );
+  const fits = (candidate: string) => {
+    const candidateWords = normalizeWords(candidate);
+    if (candidateWords.length === 0) return false;
+    const overlap = candidateWords.filter(w => words.includes(w)).length;
+    // At least one strong word (e.g. a surname) plus decent overall overlap.
+    return overlap >= 1 && overlap / candidateWords.length >= 0.5;
+  };
 
-  return matches.length === 1 ? matches[0].id : null;
+  // An alias is something the owner typed specifically to be recognised, so it
+  // is the stronger signal and is tested first.
+  const aliasMatches = activeLeases.filter(l => l.paymentAliases.some(a => fits(a.name)));
+  if (aliasMatches.length === 1) return { leaseId: aliasMatches[0].id, viaAlias: true };
+  if (aliasMatches.length > 1) return null;
+
+  const tenantMatches = activeLeases.filter(l => l.leaseTenants.some(lt => fits(lt.tenant.fullName)));
+  return tenantMatches.length === 1 ? { leaseId: tenantMatches[0].id, viaAlias: false } : null;
 }
 
 /**
@@ -264,22 +280,26 @@ export async function syncTransactionsForItem(plaidItemId: string) {
       if (bankAccount.watchForRentPayments && tx.amount < 0) {
         const channel = detectChannel(name);
         if (channel) {
+          // Already seen — /transactions/sync can replay, and applying twice
+          // would double-credit the tenant.
+          const seen = await db.incomingTransaction.findUnique({
+            where: { plaidTransactionId: tx.transaction_id }, select: { id: true },
+          });
+          if (seen) continue;
+
           const amount = Math.abs(tx.amount);
           const counterparty = extractCounterpartyName(name);
           // Name first — it identifies the payer. Fall back to the rent amount,
           // which is all a bare "MOBILE DEPOSIT" gives us to go on.
-          const matchedLeaseId =
-            await matchLease(counterparty, plaidItem.userId)
-            ?? await matchLeaseByAmount(amount, plaidItem.userId);
+          const nameMatch = await matchLease(counterparty, plaidItem.userId);
+          const matchedLeaseId = nameMatch?.leaseId ?? await matchLeaseByAmount(amount, plaidItem.userId);
 
           // A bank-channel credit we can't tie to a tenant is far more likely
           // to be payroll or a transfer than rent, so leave it out entirely.
           if (!matchedLeaseId && !SELF_IDENTIFYING.includes(channel)) continue;
 
-          await db.incomingTransaction.upsert({
-            where: { plaidTransactionId: tx.transaction_id },
-            update: {},
-            create: {
+          const created = await db.incomingTransaction.create({
+            data: {
               userId: plaidItem.userId,
               bankAccountId: bankAccount.id,
               plaidTransactionId: tx.transaction_id,
@@ -292,6 +312,26 @@ export async function syncTransactionsForItem(plaidItemId: string) {
             },
           });
           added += 1;
+
+          // Auto-log only on an alias hit. The owner wrote that name down for
+          // exactly this purpose, so the match is theirs, not a guess — every
+          // other match still waits for review, because a wrongly applied
+          // payment moves a balance and shows up in Budget and the P&L.
+          if (nameMatch?.viaAlias) {
+            const payment = await recordRentPayment({
+              leaseId: nameMatch.leaseId,
+              periodDate: periodStartOf(new Date(tx.date)),
+              amount,
+              paidDate: new Date(tx.date),
+              method: (CHANNEL_TO_METHOD[channel] ?? 'OTHER') as any,
+              bankAccountId: bankAccount.id,
+              notes: `Auto-logged — "${name}" matches an expected payer name`,
+            });
+            await db.incomingTransaction.update({
+              where: { id: created.id },
+              data: { status: 'APPLIED', rentPaymentId: payment.id },
+            });
+          }
           continue;
         }
       }

@@ -12,6 +12,7 @@ import FinancesPage from './pages/FinancesPage';
 import TenantsHubPage from './pages/TenantsHubPage';
 import PortfolioPage from './pages/PortfolioPage';
 import PropertyHubPage from './pages/PropertyHubPage';
+import IncomingPaymentsPage from './pages/IncomingPaymentsPage';
 import ImportPage from './pages/ImportPage';
 import ScanPage from './pages/ScanPage';
 // Still used for deep-link detail pages
@@ -62,6 +63,9 @@ export default function App() {
           <Route path="tenants" element={<TenantsHubPage />} />
           <Route path="tenants/:id" element={<TenantDetailPage />} />
           <Route path="notices/:id" element={<NoticeDetailPage />} />
+
+          {/* Incoming bank payments awaiting review */}
+          <Route path="incoming-payments" element={<IncomingPaymentsPage />} />
 
           {/* Standalone pages */}
           <Route path="insights" element={<InsightsPage />} />

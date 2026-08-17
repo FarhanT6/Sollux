@@ -39,6 +39,10 @@ const NAV = [
     icon: <Ico><path d="M3 21h18"/><path d="M9 21V7H5l7-5 7 5v14"/><rect x="9" y="13" width="2" height="4"/><rect x="13" y="13" width="2" height="4"/></Ico>,
   },
   {
+    to: '/incoming-payments', label: 'Payments',
+    icon: <Ico><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/><path d="M6 15h4"/></Ico>,
+  },
+  {
     to: '/insights', label: 'Insights',
     icon: <Ico d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z" />,
   },

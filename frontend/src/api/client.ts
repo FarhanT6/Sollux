@@ -32,7 +32,7 @@ import type {
   ReconciliationProfile, ReconciliationStatement, ReconciliationLineItem,
   Document, DocumentClassification, DocumentMatch, DocumentCategory,
   IncomingTransaction, IncomingTransactionStatus, OutgoingTransaction, UtilityCandidate,
-  TurnoverReport,
+  TurnoverReport, LeasePaymentAlias,
 } from '../types';
 
 // Dashboard
@@ -127,6 +127,10 @@ export const applyScheduledIncrease = (leaseId: string, sid: string, override?: 
   api.post<ScheduledRentIncrease>(`/leases/${leaseId}/scheduled-increases/${sid}/apply`, override || {}).then(r => r.data);
 export const deleteScheduledIncrease = (leaseId: string, sid: string) =>
   api.delete(`/leases/${leaseId}/scheduled-increases/${sid}`);
+export const addPaymentAlias = (leaseId: string, data: { name: string; note?: string }) =>
+  api.post<LeasePaymentAlias>(`/leases/${leaseId}/payment-aliases`, data).then(r => r.data);
+export const deletePaymentAlias = (leaseId: string, aliasId: string) =>
+  api.delete(`/leases/${leaseId}/payment-aliases/${aliasId}`);
 export const addLeaseUtilityCharge = (leaseId: string, data: { category: string; amount: number; note?: string | null }) =>
   api.post<LeaseUtilityCharge>(`/leases/${leaseId}/utility-charges`, data).then(r => r.data);
 export const deleteLeaseUtilityCharge = (leaseId: string, chargeId: string) =>

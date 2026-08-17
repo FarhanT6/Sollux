@@ -16,6 +16,7 @@ import {
   getLeaseDocuments, addLeaseDocument, getLeaseDocumentViewUrl, deleteLeaseDocument, extractLeaseTerms,
   addScheduledIncrease, applyScheduledIncrease, deleteScheduledIncrease,
   addLeaseUtilityCharge, deleteLeaseUtilityCharge, getTurnover, getBankAccounts,
+  addPaymentAlias, deletePaymentAlias,
 } from '../api/client';
 import type {
   Property, Lease, Loan, Expense, InsurancePolicy, TaxAssessment,
@@ -909,6 +910,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   const [siForm, setSiForm] = useState({ effectiveDate: '', newAmount: '', percent: '', percentMax: '', note: '' });
   // Inline "add utility contribution" form (which utility + how much of the payment)
   const [ucForm, setUcForm] = useState({ category: 'WATER', amount: '', note: '' });
+  const [aliasForm, setAliasForm] = useState({ name: '', note: '' });
   const [editTenantIds, setEditTenantIds] = useState<string[]>([]);
   const [newTenantName, setNewTenantName] = useState('');
   const [deletingTenant, setDeletingTenant] = useState<string | null>(null);
@@ -1034,6 +1036,19 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
     } finally {
       setDeletingLease(null);
     }
+  }
+
+  async function addAlias(leaseId: string) {
+    const name = aliasForm.name.trim();
+    if (!name) return;
+    await addPaymentAlias(leaseId, { name, note: aliasForm.note.trim() || undefined });
+    setAliasForm({ name: '', note: '' });
+    setLeases(await getLeases({ propertyId }));
+  }
+
+  async function removeAlias(leaseId: string, aliasId: string) {
+    await deletePaymentAlias(leaseId, aliasId);
+    setLeases(await getLeases({ propertyId }));
   }
 
   async function saveEditLease(leaseId: string) {
@@ -1597,6 +1612,37 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                           </p>
                         );
                       })()}
+                    </div>
+
+                    {/* Expected payer names — drives Plaid auto-logging */}
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">
+                        Expected payer names — rent from these names is logged automatically
+                      </label>
+                      <div className="flex flex-wrap gap-1.5 mb-2">
+                        {(lease.paymentAliases ?? []).length === 0 && (
+                          <span className="text-xs text-gray-600">None — only the tenants' own names are recognised</span>
+                        )}
+                        {(lease.paymentAliases ?? []).map(a => (
+                          <span key={a.id} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.08)' }}>
+                            {a.name}
+                            {a.note && <span className="text-gray-500">({a.note})</span>}
+                            <button onClick={() => removeAlias(lease.id, a.id)} className="text-gray-500 hover:text-red-400">✕</button>
+                          </span>
+                        ))}
+                      </div>
+                      <div className="flex gap-2 flex-wrap items-center">
+                        <input value={aliasForm.name} onChange={e => setAliasForm(f => ({ ...f, name: e.target.value }))}
+                          placeholder="Name on the transfer, e.g. Jose Contreras" className="input-dark text-xs w-56" />
+                        <input value={aliasForm.note} onChange={e => setAliasForm(f => ({ ...f, note: e.target.value }))}
+                          placeholder="Who they are (optional)" className="input-dark text-xs w-44" />
+                        <button onClick={() => addAlias(lease.id)} disabled={!aliasForm.name.trim()} className="btn text-xs disabled:opacity-40">Add name</button>
+                      </div>
+                      <p className="text-xs text-gray-600 mt-1">
+                        Rent often arrives from a spouse, a relative or an employer. A bank transfer naming
+                        someone listed here is matched to this lease and logged without asking; anything else
+                        waits for you in <Link to="/incoming-payments" className="text-amber-400 hover:text-amber-300">Payments</Link>.
+                      </p>
                     </div>
 
                     {/* Utility contributions — portion of the payment that isn't rent */}

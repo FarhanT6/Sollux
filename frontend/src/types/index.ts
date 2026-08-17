@@ -164,6 +164,17 @@ export interface Lease {
   rentChanges?: RentChange[];
   scheduledIncreases?: ScheduledRentIncrease[];
   utilityCharges?: LeaseUtilityCharge[];
+  paymentAliases?: LeasePaymentAlias[];
+}
+
+// A name this lease's rent may arrive under — a spouse, a relative, an
+// employer, a housing authority. Matched against bank transaction descriptors.
+export interface LeasePaymentAlias {
+  id: string;
+  leaseId: string;
+  name: string;
+  note?: string | null;
+  createdAt: string;
 }
 
 // Portion of the tenant's monthly payment that reimburses a utility.
