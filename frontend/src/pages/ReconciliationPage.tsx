@@ -11,6 +11,7 @@ import type {
 } from '../types';
 import { EXPENSE_CATEGORY_LABELS } from '../types';
 import { format } from 'date-fns';
+import { fmtDate } from '../lib/date';
 
 const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 
@@ -119,7 +120,7 @@ export default function ReconciliationPage({ embedded }: { embedded?: boolean } 
                     <tbody className="divide-y divide-white/5">
                       {profileStatements.map(s => (
                         <tr key={s.id}>
-                          <td className="px-4 py-3 text-gray-300 text-xs whitespace-nowrap">{format(new Date(s.statementDate), 'MMM yyyy')}</td>
+                          <td className="px-4 py-3 text-gray-300 text-xs whitespace-nowrap">{fmtDate(s.statementDate, 'MMM yyyy')}</td>
                           <td className="px-4 py-3 text-gray-500 text-xs">{s.lineItems.length} item{s.lineItems.length !== 1 ? 's' : ''}</td>
                           <td className={`px-4 py-3 text-right font-medium ${s.netAmount >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{money(s.netAmount)}</td>
                           <td className="px-4 py-3">
@@ -136,7 +137,7 @@ export default function ReconciliationPage({ embedded }: { embedded?: boolean } 
                                   className="text-xs text-red-500 hover:text-red-400">Delete</button>
                               </>
                             ) : (
-                              <span className="text-xs text-gray-600">{s.appliedAt && format(new Date(s.appliedAt), 'MMM d, yyyy')}</span>
+                              <span className="text-xs text-gray-600">{s.appliedAt && fmtDate(s.appliedAt, 'MMM d, yyyy')}</span>
                             )}
                           </td>
                         </tr>

@@ -4,6 +4,7 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { getLoan, getLoanAmortization, updateLoan, getProperties, extendLoan } from '../api/client';
 import type { Loan, Property, LoanType, PrepaymentPenalty, PrepaymentPenaltyTier } from '../types';
 import { format, addMonths } from 'date-fns';
+import { fmtDate } from '../lib/date';
 
 const money = (n: number | null | undefined) =>
   n == null ? '—' : n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
@@ -394,7 +395,7 @@ function EditModal({ loan, properties, onClose, onSave }: {
                   </div>
                   <p className="col-span-3 text-xs text-gray-500">
                     Interest rate is recalculated automatically as {form.rateIndex} + margin on each reset anniversary — log {form.rateIndex} rate changes under Settings.
-                    {loan.nextRateAdjustment && <> Next reset: <span className="text-gray-300">{format(new Date(loan.nextRateAdjustment), 'MMM d, yyyy')}</span>.</>}
+                    {loan.nextRateAdjustment && <> Next reset: <span className="text-gray-300">{fmtDate(loan.nextRateAdjustment, 'MMM d, yyyy')}</span>.</>}
                   </p>
                 </div>
               )}
@@ -742,7 +743,7 @@ export default function LoanDetailPage() {
             {LOAN_TYPE_LABELS[loan.loanType] ?? loan.loanType}
             {loan.paymentType === 'INTEREST_ONLY' && (
               <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded" style={{ background: 'rgba(245,166,35,0.12)', color: '#F5A623' }}>
-                Interest only{loan.paymentStructureChangedAt ? ` since ${format(new Date(loan.paymentStructureChangedAt), 'MMM yyyy')}` : ''}
+                Interest only{loan.paymentStructureChangedAt ? ` since ${fmtDate(loan.paymentStructureChangedAt, 'MMM yyyy')}` : ''}
               </span>
             )}
             {loan.accountNumber ? (
@@ -772,7 +773,7 @@ export default function LoanDetailPage() {
 
       {loan.maturityDate && (
         <p className="text-xs text-gray-500 mt-1">
-          Maturity: <span className="text-gray-300">{format(new Date(loan.maturityDate), 'MMM d, yyyy')}</span>
+          Maturity: <span className="text-gray-300">{fmtDate(loan.maturityDate, 'MMM d, yyyy')}</span>
           {loan.loanExtensions && loan.loanExtensions.length > 0 && (
             <span> &middot; extended {loan.loanExtensions.length} time{loan.loanExtensions.length > 1 ? 's' : ''}</span>
           )}
@@ -784,11 +785,11 @@ export default function LoanDetailPage() {
           The payment on file doesn't cover the monthly interest — unpaid interest is capitalizing into the balance instead of paying it down.
           {reachesBalloonPayoff && lastScheduleRow ? (
             <> Balance grows to <span className="font-medium">{money(peakBalanceRow?.balance ?? 0)}</span> by{' '}
-            <span className="font-medium">{format(new Date(peakBalanceRow?.date ?? lastScheduleRow.date), 'MMM yyyy')}</span>, then the{' '}
+            <span className="font-medium">{fmtDate(peakBalanceRow?.date ?? lastScheduleRow.date, 'MMM yyyy')}</span>, then the{' '}
             <span className="font-medium">{money(lastScheduleRow.paymentAmount)}</span> balloon payment due{' '}
-            <span className="font-medium">{format(new Date(lastScheduleRow.date), 'MMM yyyy')}</span> pays it off.</>
+            <span className="font-medium">{fmtDate(lastScheduleRow.date, 'MMM yyyy')}</span> pays it off.</>
           ) : amortization.scheduleEndsAt && (
-            <> Projected through <span className="font-medium">{format(new Date(amortization.scheduleEndsAt), 'MMM yyyy')}</span>, that adds up to{' '}
+            <> Projected through <span className="font-medium">{fmtDate(amortization.scheduleEndsAt, 'MMM yyyy')}</span>, that adds up to{' '}
             <span className="font-medium">{moneyPrecise(amortization.totalDeferredInterest)}</span> of deferred interest added to the balance.</>
           )}
         </div>
@@ -796,10 +797,10 @@ export default function LoanDetailPage() {
 
       {amortization.isInterestOnly && (
         <div className="mt-4 text-xs text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-lg px-4 py-2.5">
-          Payments aren't reducing principal — this loan is interest-only{loan.paymentStructureChangedAt ? ` as of ${format(new Date(loan.paymentStructureChangedAt), 'MMMM yyyy')}` : ''}.
+          Payments aren't reducing principal — this loan is interest-only{loan.paymentStructureChangedAt ? ` as of ${fmtDate(loan.paymentStructureChangedAt, 'MMMM yyyy')}` : ''}.
           {amortization.scheduleEndsAt && (
             <> Balance projected to stay flat at <span className="font-medium">{money(balance.balance)}</span> through{' '}
-            <span className="font-medium">{format(new Date(amortization.scheduleEndsAt), 'MMM yyyy')}</span>.</>
+            <span className="font-medium">{fmtDate(amortization.scheduleEndsAt, 'MMM yyyy')}</span>.</>
           )}
         </div>
       )}
@@ -836,11 +837,11 @@ export default function LoanDetailPage() {
               <p className="text-xl font-semibold text-red-400">Growing</p>
               {reachesBalloonPayoff && lastScheduleRow ? (
                 <p className="text-xs text-gray-600 mt-1">
-                  Balloon due {format(new Date(lastScheduleRow.date), 'MMM yyyy')}: {money(lastScheduleRow.paymentAmount)}
+                  Balloon due {fmtDate(lastScheduleRow.date, 'MMM yyyy')}: {money(lastScheduleRow.paymentAmount)}
                 </p>
               ) : amortization.scheduleEndsAt && (
                 <p className="text-xs text-gray-600 mt-1">
-                  {money(peakBalanceRow?.balance ?? 0)} by {format(new Date(amortization.scheduleEndsAt), 'MMM yyyy')}
+                  {money(peakBalanceRow?.balance ?? 0)} by {fmtDate(amortization.scheduleEndsAt, 'MMM yyyy')}
                 </p>
               )}
             </>
@@ -849,14 +850,14 @@ export default function LoanDetailPage() {
               <p className="text-xl font-semibold text-amber-400">Flat</p>
               {amortization.scheduleEndsAt && (
                 <p className="text-xs text-gray-600 mt-1">
-                  Interest-only through {format(new Date(amortization.scheduleEndsAt), 'MMM yyyy')}
+                  Interest-only through {fmtDate(amortization.scheduleEndsAt, 'MMM yyyy')}
                 </p>
               )}
             </>
           ) : (
             <>
               <p className={`text-xl font-semibold ${amortization.payoffDate ? 'text-green-400' : 'text-gray-500'}`}>
-                {amortization.payoffDate ? format(new Date(amortization.payoffDate), 'MMM yyyy') : '—'}
+                {amortization.payoffDate ? fmtDate(amortization.payoffDate, 'MMM yyyy') : '—'}
               </p>
               {amortization.monthsRemaining && <p className="text-xs text-gray-600 mt-1">{amortization.monthsRemaining} payments left</p>}
             </>
@@ -870,7 +871,7 @@ export default function LoanDetailPage() {
           {loan.rateType === 'VARIABLE' ? (
             <p className="text-xs text-gray-600 mt-1">
               {loan.rateIndex} {loan.rateMargin != null && Number(loan.rateMargin) >= 0 ? '+' : ''}{loan.rateMargin}%
-              {loan.nextRateAdjustment && <> · resets {format(new Date(loan.nextRateAdjustment), 'MMM yyyy')}</>}
+              {loan.nextRateAdjustment && <> · resets {fmtDate(loan.nextRateAdjustment, 'MMM yyyy')}</>}
             </p>
           ) : (
             <p className="text-xs text-gray-600 mt-1">{money(amortization.totalInterestRemaining)} interest remaining</p>
@@ -927,11 +928,11 @@ export default function LoanDetailPage() {
                 <div className="text-gray-400">
                   <span className="text-white font-medium">+{ext.months} month{ext.months !== 1 ? 's' : ''}</span>
                   {ext.previousMaturityDate && (
-                    <> — {format(new Date(ext.previousMaturityDate), 'MMM yyyy')} &rarr; {format(new Date(ext.newMaturityDate), 'MMM yyyy')}</>
+                    <> — {fmtDate(ext.previousMaturityDate, 'MMM yyyy')} &rarr; {fmtDate(ext.newMaturityDate, 'MMM yyyy')}</>
                   )}
                   {ext.notes && <span className="text-gray-500"> · {ext.notes}</span>}
                 </div>
-                <span className="text-gray-600">{format(new Date(ext.extendedAt), 'MMM d, yyyy')}</span>
+                <span className="text-gray-600">{fmtDate(ext.extendedAt, 'MMM d, yyyy')}</span>
               </div>
             ))}
           </div>
@@ -958,11 +959,11 @@ export default function LoanDetailPage() {
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false} />
-              <XAxis dataKey="date" tickFormatter={d => format(new Date(d), 'MMM yy')} stroke="#6b7280" fontSize={11} tickLine={false} axisLine={false} minTickGap={40} />
+              <XAxis dataKey="date" tickFormatter={d => fmtDate(d, 'MMM yy')} stroke="#6b7280" fontSize={11} tickLine={false} axisLine={false} minTickGap={40} />
               <YAxis tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} stroke="#6b7280" fontSize={11} tickLine={false} axisLine={false} width={48} />
               <Tooltip
                 contentStyle={{ background: '#242424', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 12 }}
-                labelFormatter={d => format(new Date(d), 'MMM d, yyyy')}
+                labelFormatter={d => fmtDate(d, 'MMM d, yyyy')}
                 formatter={(v: number) => [moneyPrecise(v), 'Balance']}
               />
               <Area type="monotone" dataKey="balance" stroke="#f87171" strokeWidth={2} fill="url(#balanceFill)" dot={false} />
@@ -1021,7 +1022,7 @@ export default function LoanDetailPage() {
                   return visible.map(row => (
                     <tr key={row.paymentNumber}>
                       <td className="text-gray-600">{row.paymentNumber}</td>
-                      <td>{format(new Date(row.date), 'MMM yyyy')}</td>
+                      <td>{fmtDate(row.date, 'MMM yyyy')}</td>
                       <td className="text-right font-mono">{moneyPrecise(row.paymentAmount)}</td>
                       <td className={`text-right font-mono ${row.principal < 0 ? 'text-red-400' : 'text-green-400'}`}>
                         {row.principal < 0 ? `+${moneyPrecise(-row.principal)}` : moneyPrecise(row.principal)}
@@ -1057,7 +1058,7 @@ export default function LoanDetailPage() {
               <tbody>
                 {loan.loanPayments.map(p => (
                   <tr key={p.id}>
-                    <td>{format(new Date(p.date), 'MMM d, yyyy')}</td>
+                    <td>{fmtDate(p.date, 'MMM d, yyyy')}</td>
                     <td className="text-right font-mono">{moneyPrecise(p.amount)}</td>
                     <td className="text-right font-mono text-green-400">{p.principal != null ? moneyPrecise(p.principal) : '—'}</td>
                     <td className="text-right font-mono text-gray-400">{p.interest != null ? moneyPrecise(p.interest) : '—'}</td>

@@ -6,6 +6,7 @@ import { CATEGORY_LABELS, CATEGORY_COLORS, INSURANCE_TYPE_LABELS, LOAN_TYPE_LABE
 import { PageHeader, StatCard, InsightCard, Skeleton, EmptyState, Pill } from '../components/ui';
 import { format } from 'date-fns';
 import AddUtilityModal from '../components/utility/AddUtilityModal';
+import { fmtDate } from '../lib/date';
 
 type Tab = 'utilities' | 'payments' | 'insights' | 'documents';
 
@@ -122,7 +123,7 @@ export default function PropertyDetailPage() {
       <div className="px-6 py-4 border-b border-white/8">
         <div className="grid grid-cols-4 gap-3">
           <StatCard label="Monthly total" value={`$${monthlyTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} />
-          <StatCard label="Last synced" value={lastSynced ? format(new Date(lastSynced), 'h:mm a') : 'Never'} sub={lastSynced ? format(new Date(lastSynced), 'MMM d') : ''} />
+          <StatCard label="Last synced" value={lastSynced ? format(new Date(lastSynced), 'h:mm a') : 'Never'} sub={lastSynced ? fmtDate(lastSynced, 'MMM d') : ''} />
           <StatCard label="Utility accounts" value={accounts.length} sub="All connected" subColor="green" />
           <StatCard label="AI insights" value={insights.filter(i => !i.isRead).length} sub={insights.filter(i => !i.isRead).length > 0 ? 'Unread' : 'All clear'} subColor={insights.filter(i => !i.isRead).length > 0 ? 'red' : 'neutral'} />
         </div>
@@ -226,7 +227,7 @@ export default function PropertyDetailPage() {
                     <tr key={p.id}>
                       <td className="font-medium">{p.utilityAccount?.providerName}</td>
                       <td className="font-semibold">${Number(p.amount).toFixed(2)}</td>
-                      <td className="text-gray-500">{format(new Date(p.paymentDate), 'MMM d, yyyy')}</td>
+                      <td className="text-gray-500">{fmtDate(p.paymentDate, 'MMM d, yyyy')}</td>
                       <td><span className="font-mono text-xs text-gray-400">{p.confirmationNumber || '—'}</span></td>
                       <td><Pill color="green">Paid</Pill></td>
                     </tr>
@@ -314,11 +315,11 @@ export default function PropertyDetailPage() {
                               }
                             </div>
                             <p className="text-xs font-medium text-gray-200 truncate">
-                              {format(new Date(stmt.statementDate), 'MMM d, yyyy')}
+                              {fmtDate(stmt.statementDate, 'MMM d, yyyy')}
                             </p>
                             <p className="text-xs text-gray-400 mt-0.5">
                               {stmt.amountDue ? `$${Number(stmt.amountDue).toFixed(2)}` : 'No amount'}
-                              {stmt.dueDate ? ` · Due ${format(new Date(stmt.dueDate), 'MMM d')}` : ''}
+                              {stmt.dueDate ? ` · Due ${fmtDate(stmt.dueDate, 'MMM d')}` : ''}
                             </p>
                             <p className="text-xs mt-1" style={{ color: stmt.pdfS3Key ? '#ef4444' : '#6b7280' }}>
                               {stmt.pdfS3Key ? '📄 PDF' : 'No PDF'}
@@ -953,7 +954,7 @@ function UtilityAccountCard({
                 {isPaid && recentPmt && !isPaidViaStatement && (
                   <div className="mt-1 flex items-center gap-1.5">
                     <span className="text-xs text-emerald-400">
-                      Paid {fmt(Number(recentPmt.amount))} on {format(new Date(recentPmt.paymentDate), 'MMM d')}
+                      Paid {fmt(Number(recentPmt.amount))} on {fmtDate(recentPmt.paymentDate, 'MMM d')}
                     </span>
                   </div>
                 )}

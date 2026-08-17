@@ -22,13 +22,14 @@ import type {
 } from '../types';
 import { PROPERTY_TYPE_LABELS, EXPENSE_CATEGORY_LABELS, DOCUMENT_CATEGORY_LABELS } from '../types';
 import type { Document as DocType } from '../types';
+import { fmtDate as fmtDateSafe } from '../lib/date';
 
 const LEASE_DOC_CATEGORIES = ['LEASE', 'APPLICATION', 'IDENTITY', 'SCREENING', 'OTHER'] as const;
 
 const money = (n: number) =>
   n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const pct = (n: number) => `${n > 0 ? '+' : ''}${n.toFixed(1)}%`;
-const fmtDate = (d?: string | null) => d ? format(new Date(d), 'MMM d, yyyy') : '—';
+const fmtDate = (d?: string | null) => fmtDateSafe(d);
 const TABS = ['Overview', 'Tenants', 'Loans', 'Expenses', 'Insurance', 'Maintenance', 'Tax', 'Documents'] as const;
 type Tab = typeof TABS[number];
 
@@ -161,7 +162,7 @@ export default function PropertyHubPage() {
               { label: 'Arrears', value: money(totalArrears), color: totalArrears > 0 ? 'text-red-400' : 'text-gray-600' },
               { label: 'Est. value', value: property.estimatedValue ? money(Number(property.estimatedValue)) : '—', color: 'text-white' },
               { label: 'Equity', value: equity > 0 ? money(equity) : '—', color: 'text-emerald-400' },
-              { label: 'Acquired', value: property.acquisitionDate ? format(new Date(property.acquisitionDate), 'MMM yyyy') : '—', color: 'text-gray-400' },
+              { label: 'Acquired', value: property.acquisitionDate ? fmtDateSafe(property.acquisitionDate, 'MMM yyyy') : '—', color: 'text-gray-400' },
               { label: 'Purchase price', value: property.acquisitionPrice ? money(Number(property.acquisitionPrice)) : '—', color: 'text-gray-400' },
             ].map(s => (
               <div key={s.label}>

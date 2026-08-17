@@ -7,10 +7,10 @@ import {
   getImprovements,
 } from '../api/client';
 import type { Tenant, Lease, LeaseTenant, RentPayment, Improvement } from '../types';
+import { fmtDate } from '../lib/date';
 
 const money = (n?: number | string | null) =>
   n == null ? '—' : Number(n).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
-const fmtDate = (d?: string | null) => d ? format(new Date(d), 'MMM d, yyyy') : '—';
 
 // Formats a 10 (or 11 with US country code) digit phone number as (***) ***-****.
 // Falls back to the raw value for anything else (extensions, international, partial entry).

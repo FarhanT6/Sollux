@@ -6,6 +6,7 @@ import {
 } from '../api/client';
 import type { OutgoingTransaction, IncomingTransactionStatus, Property, ExpenseCategory, UtilityCandidate } from '../types';
 import { EXPENSE_CATEGORY_LABELS } from '../types';
+import { fmtDate } from '../lib/date';
 
 const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 
@@ -117,7 +118,7 @@ export default function OutgoingPaymentsPage({ embedded }: { embedded?: boolean 
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
                   <span className="text-xs px-1.5 py-0.5 rounded bg-white/10 text-gray-300">{MATCH_TYPE_LABELS[tx.matchType ?? ''] ?? 'Other'}</span>
-                  <span className="text-xs text-gray-500">{format(new Date(tx.date), 'MMM d, yyyy')}</span>
+                  <span className="text-xs text-gray-500">{fmtDate(tx.date, 'MMM d, yyyy')}</span>
                   <span className="text-xs text-gray-600">· {tx.bankAccount?.name}</span>
                   {tx.utilityAccount && <span className="text-xs text-gray-600">· {tx.utilityAccount.providerName}</span>}
                 </div>
@@ -208,7 +209,7 @@ function UtilityMatchRow({ tx, onCandidate, onApply, onIgnore }: {
         <option value="">— No statement matched —</option>
         {candidates?.map(c => (
           <option key={c.statementId} value={c.statementId}>
-            {c.propertyLabel} — {format(new Date(c.statementDate), 'MMM yyyy')} — {money(c.amountDue)}
+            {c.propertyLabel} — {fmtDate(c.statementDate, 'MMM yyyy')} — {money(c.amountDue)}
             {c.withinTolerance ? '' : ` (off by ${money(c.diff)})`}
           </option>
         ))}
