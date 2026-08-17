@@ -252,7 +252,7 @@ export interface ReconciliationStatement {
 
 export type DocumentCategory =
   | 'UTILITY' | 'INSURANCE' | 'TAX' | 'LEGAL' | 'HOA' | 'EXPENSE_RECEIPT' | 'LEASE'
-  | 'APPLICATION' | 'IDENTITY' | 'SCREENING' | 'OTHER';
+  | 'APPLICATION' | 'IDENTITY' | 'SCREENING' | 'MAINTENANCE' | 'OTHER';
 
 export interface Document {
   id: string;
@@ -295,6 +295,7 @@ export const DOCUMENT_CATEGORY_LABELS: Record<DocumentCategory, string> = {
   APPLICATION: 'Application',
   IDENTITY: 'Identity / ID',
   SCREENING: 'Screening',
+  MAINTENANCE: 'Maintenance',
   OTHER: 'Other / Misc',
 };
 

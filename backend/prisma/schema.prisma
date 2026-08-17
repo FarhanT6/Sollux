@@ -832,6 +832,7 @@ enum DocumentCategory {
   APPLICATION
   IDENTITY
   SCREENING
+  MAINTENANCE
   OTHER
 }
 

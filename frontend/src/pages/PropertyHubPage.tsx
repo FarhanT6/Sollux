@@ -10,7 +10,7 @@ import {
   updateTaxAssessment, deleteTaxAssessment, updateImprovement, deleteImprovement,
   updateLease, updateProperty, lookupPropertyByAddress,
   createLease, getTenants, createTenant, getUnits, createUnit,
-  getDocuments, getDocumentUrl, deleteDocument, downloadRentRoll, downloadT12,
+  getDocuments, getDocumentUrl, deleteDocument, confirmScannedDocument, downloadRentRoll, downloadT12,
   getT12Manifest, RENT_ROLL_COLUMNS,
   getRentChanges, addRentChange, deleteRentChange, uploadLeaseDocument,
   getLeaseDocuments, addLeaseDocument, getLeaseDocumentViewUrl, deleteLeaseDocument,
@@ -2302,29 +2302,81 @@ function ScannedDocuments({ propertyId, category }: { propertyId: string; catego
   );
 }
 
+const PROPERTY_DOC_CATEGORIES: DocumentCategory[] = [
+  'INSURANCE', 'MAINTENANCE', 'TAX', 'EXPENSE_RECEIPT', 'UTILITY', 'LEGAL', 'HOA', 'LEASE', 'OTHER',
+];
+
 function DocumentsTab({ propertyId, documents, setDocuments }: {
   propertyId: string; documents: Document[]; setDocuments: (d: Document[]) => void;
 }) {
+  const [importCategory, setImportCategory] = useState<DocumentCategory>('INSURANCE');
+  const [importing, setImporting] = useState(false);
+  const [filterCategory, setFilterCategory] = useState<string>('');
+
   async function view(doc: Document) {
     const url = await getDocumentUrl(doc.id);
     window.open(url, '_blank');
   }
   async function remove(doc: Document) {
-    if (!confirm('Delete this scanned document?')) return;
+    if (!confirm('Delete this document?')) return;
     await deleteDocument(doc.id);
     setDocuments(documents.filter(d => d.id !== doc.id));
   }
 
-  const sorted = [...documents].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  async function handleImport(file: File) {
+    setImporting(true);
+    try {
+      const base64: string = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve((reader.result as string).split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const created = await confirmScannedDocument({
+        fileData: base64,
+        filename: file.name,
+        propertyId,
+        category: importCategory,
+        title: file.name,
+        pageCount: 1,
+      });
+      setDocuments([created, ...documents]);
+    } catch (err: any) {
+      const msg = err?.response?.status === 413
+        ? 'That file is too large to upload. Try a smaller PDF or compress it.'
+        : (err?.response?.data?.error || 'Upload failed. Please try again.');
+      alert(msg);
+    } finally { setImporting(false); }
+  }
+
+  const sorted = [...documents]
+    .filter(d => !filterCategory || d.category === filterCategory)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
   return (
     <div>
-      <p className="text-xs text-gray-500 mb-4">
-        {documents.length} scanned document{documents.length !== 1 ? 's' : ''} for this property. Scan new ones from the{' '}
-        <Link to="/scan" className="text-amber-400 hover:text-amber-300">Scan</Link> page.
-      </p>
+      {/* Import bar */}
+      <div className="card p-3 mb-4 flex items-center gap-2 flex-wrap">
+        <span className="text-xs text-gray-400">Import a document:</span>
+        <select value={importCategory} onChange={e => setImportCategory(e.target.value as DocumentCategory)} className="input-dark text-xs">
+          {PROPERTY_DOC_CATEGORIES.map(c => <option key={c} value={c}>{DOCUMENT_CATEGORY_LABELS[c]}</option>)}
+        </select>
+        <label className="btn btn-primary text-xs cursor-pointer">
+          {importing ? 'Uploading…' : '+ Import file'}
+          <input type="file" accept="application/pdf,image/*" className="hidden" disabled={importing}
+            onChange={e => { const f = e.target.files?.[0]; if (f) handleImport(f); e.target.value = ''; }} />
+        </label>
+        <span className="text-xs text-gray-600">or scan from the <Link to="/scan" className="text-amber-400 hover:text-amber-300">Scan</Link> page</span>
+        <select value={filterCategory} onChange={e => setFilterCategory(e.target.value)} className="input-dark text-xs ml-auto">
+          <option value="">All categories</option>
+          {PROPERTY_DOC_CATEGORIES.map(c => <option key={c} value={c}>{DOCUMENT_CATEGORY_LABELS[c]}</option>)}
+        </select>
+      </div>
+
       {sorted.length === 0 ? (
-        <div className="text-center py-12 text-gray-500 text-sm">No scanned documents yet</div>
+        <div className="text-center py-12 text-gray-500 text-sm">
+          {filterCategory ? `No ${DOCUMENT_CATEGORY_LABELS[filterCategory as DocumentCategory]} documents.` : 'No documents yet — import one above.'}
+        </div>
       ) : (
         <div className="space-y-2">
           {sorted.map(d => (
