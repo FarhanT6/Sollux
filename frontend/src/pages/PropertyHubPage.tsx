@@ -14,6 +14,7 @@ import {
   getT12Manifest, RENT_ROLL_COLUMNS,
   getRentChanges, addRentChange, deleteRentChange, uploadLeaseDocument,
   getLeaseDocuments, addLeaseDocument, getLeaseDocumentViewUrl, deleteLeaseDocument,
+  addScheduledIncrease, applyScheduledIncrease, deleteScheduledIncrease,
 } from '../api/client';
 import type {
   Property, Lease, Loan, Expense, InsurancePolicy, TaxAssessment,
@@ -727,8 +728,9 @@ function TenantsTab({ propertyId, leases, setLeases }: {
     unitId: '', rentAmount: '', securityDeposit: '', startDate: '', endDate: '',
     leaseType: 'MONTH_TO_MONTH', status: 'ACTIVE', arrearsBalance: '', notes: '',
     rentEffectiveDate: '',
-    nextIncreaseDate: '', nextIncreaseAmount: '', nextIncreasePercent: '', nextIncreaseNote: '',
   });
+  // Inline "add scheduled increase" form (date + amount OR percent + note)
+  const [siForm, setSiForm] = useState({ effectiveDate: '', newAmount: '', percent: '', note: '' });
   const [editTenantIds, setEditTenantIds] = useState<string[]>([]);
   const [newTenantName, setNewTenantName] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
@@ -759,11 +761,8 @@ function TenantsTab({ propertyId, leases, setLeases }: {
       arrearsBalance: String(lease.arrearsBalance ?? ''),
       notes: lease.notes ?? '',
       rentEffectiveDate: '',
-      nextIncreaseDate: lease.nextIncreaseDate?.slice(0, 10) ?? '',
-      nextIncreaseAmount: lease.nextIncreaseAmount != null ? String(lease.nextIncreaseAmount) : '',
-      nextIncreasePercent: lease.nextIncreasePercent != null ? String(lease.nextIncreasePercent) : '',
-      nextIncreaseNote: lease.nextIncreaseNote ?? '',
     });
+    setSiForm({ effectiveDate: '', newAmount: '', percent: '', note: '' });
     setEditTenantIds((lease.leaseTenants ?? []).map(lt => lt.tenantId));
     setNewTenantName('');
     setDocCategory('LEASE');
@@ -796,10 +795,6 @@ function TenantsTab({ propertyId, leases, setLeases }: {
         notes: editForm.notes || undefined,
         tenantIds: editTenantIds,
         rentEffectiveDate: rentChanged && editForm.rentEffectiveDate ? editForm.rentEffectiveDate : undefined,
-        nextIncreaseDate: editForm.nextIncreaseDate || null,
-        nextIncreaseAmount: editForm.nextIncreaseAmount ? parseFloat(editForm.nextIncreaseAmount) : null,
-        nextIncreasePercent: editForm.nextIncreasePercent ? parseFloat(editForm.nextIncreasePercent) : null,
-        nextIncreaseNote: editForm.nextIncreaseNote || null,
       });
       const updated = await getLeases({ propertyId });
       setLeases(updated);
@@ -842,6 +837,38 @@ function TenantsTab({ propertyId, leases, setLeases }: {
     if (!confirm('Remove this document?')) return;
     await deleteLeaseDocument(leaseId, docId);
     setLeaseDocs(prev => ({ ...prev, [leaseId]: (prev[leaseId] ?? []).filter(d => d.id !== docId) }));
+  }
+
+  async function addSchedIncrease(leaseId: string) {
+    if (!siForm.effectiveDate || (!siForm.newAmount && !siForm.percent)) return;
+    await addScheduledIncrease(leaseId, {
+      effectiveDate: siForm.effectiveDate,
+      newAmount: siForm.newAmount ? parseFloat(siForm.newAmount) : null,
+      percent: siForm.percent ? parseFloat(siForm.percent) : null,
+      note: siForm.note || null,
+    });
+    setLeases(await getLeases({ propertyId }));
+    setSiForm({ effectiveDate: '', newAmount: '', percent: '', note: '' });
+  }
+
+  async function applySchedIncrease(leaseId: string, sid: string) {
+    if (!confirm('Apply this increase now? It becomes the current rent and is logged to rent history.')) return;
+    await applyScheduledIncrease(leaseId, sid);
+    setLeases(await getLeases({ propertyId }));
+    if (rentChanges[leaseId]) getRentChanges(leaseId).then(rc => setRentChanges(prev => ({ ...prev, [leaseId]: rc })));
+  }
+
+  async function removeSchedIncrease(leaseId: string, sid: string) {
+    await deleteScheduledIncrease(leaseId, sid);
+    setLeases(await getLeases({ propertyId }));
+  }
+
+  // Resulting amount for a scheduled increase: explicit amount wins, else
+  // current rent + percent of current rent (matches "% of current rent").
+  function projectedAmount(currentRent: number, amount?: number | null, percent?: number | null): number | null {
+    if (amount != null && !Number.isNaN(amount)) return amount;
+    if (percent != null && !Number.isNaN(percent)) return Math.round(currentRent * (1 + percent / 100) * 100) / 100;
+    return null;
   }
 
   async function addManualRentChange() {
@@ -974,14 +1001,16 @@ function TenantsTab({ propertyId, leases, setLeases }: {
                         <p className="text-xs text-gray-500">Last raised {fmtDate(lease.rentChanges[0].effectiveDate)}</p>
                       )}
                       {(() => {
-                        const d = lease.nextIncreaseDate;
-                        if (!d && !lease.nextIncreaseNote) return null;
-                        const amt = lease.nextIncreaseAmount != null ? Number(lease.nextIncreaseAmount) : null;
-                        const pctVal = lease.nextIncreasePercent != null ? Number(lease.nextIncreasePercent) : null;
-                        const detail = amt != null ? `→ ${money(amt)}` : pctVal != null ? `+${pctVal}%` : (lease.nextIncreaseNote || '');
+                        const next = (lease.scheduledIncreases ?? [])[0];
+                        if (!next) return null;
+                        const amt = next.newAmount != null ? Number(next.newAmount)
+                          : next.percent != null ? Math.round(Number(lease.rentAmount) * (1 + Number(next.percent) / 100) * 100) / 100
+                          : null;
+                        const detail = amt != null ? `→ ${money(amt)}` : (next.note || '');
+                        const more = (lease.scheduledIncreases ?? []).length - 1;
                         return (
-                          <p className="text-xs text-amber-400" title={lease.nextIncreaseNote || ''}>
-                            ↑ Next{d ? ` ${fmtDate(d)}` : ''}{detail ? ` ${detail}` : ''}
+                          <p className="text-xs text-amber-400" title={next.note || ''}>
+                            ↑ Next {fmtDate(next.effectiveDate)}{detail ? ` ${detail}` : ''}{more > 0 ? ` +${more} more` : ''}
                           </p>
                         );
                       })()}
@@ -1030,10 +1059,10 @@ function TenantsTab({ propertyId, leases, setLeases }: {
 
                     {/* When rent changed, capture the effective date for the history log */}
                     {parseFloat(editForm.rentAmount || '0') !== Number(lease.rentAmount) && (
-                      <div className="flex items-center gap-2">
-                        <label className="text-xs text-gray-400">Rent change effective</label>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <label className="text-xs text-gray-400">This rent change took effect on</label>
                         <input type="date" value={editForm.rentEffectiveDate} onChange={e => setEditForm(f => ({ ...f, rentEffectiveDate: e.target.value }))} className="input-dark text-xs" />
-                        <span className="text-xs text-gray-500">(defaults to today if blank)</span>
+                        <span className="text-xs text-gray-500">→ logged to rent history (defaults to today)</span>
                       </div>
                     )}
 
@@ -1063,14 +1092,46 @@ function TenantsTab({ propertyId, leases, setLeases }: {
                       </div>
                     </div>
 
-                    {/* Next scheduled rent increase */}
+                    {/* Scheduled (future) rent increases — supports multiple */}
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">Next scheduled rent increase (fill any of these)</label>
+                      <label className="block text-xs text-gray-500 mb-1">Scheduled rent increases (planned — not yet applied)</label>
+                      <div className="space-y-1 mb-2">
+                        {(lease.scheduledIncreases ?? []).length === 0 && <span className="text-xs text-gray-600">None scheduled</span>}
+                        {(lease.scheduledIncreases ?? []).map(si => {
+                          const target = projectedAmount(Number(lease.rentAmount), si.newAmount != null ? Number(si.newAmount) : null, si.percent != null ? Number(si.percent) : null);
+                          return (
+                            <div key={si.id} className="flex items-center gap-2 text-xs group flex-wrap">
+                              <span className="text-gray-500 w-24">{fmtDate(si.effectiveDate)}</span>
+                              <span className="text-gray-300">
+                                {si.percent != null ? <span className="text-amber-400">+{si.percent}%</span> : null}
+                                {target != null && <> → <span className="font-medium text-white">{money(target)}</span></>}
+                                {si.percent != null && <span className="text-gray-600"> (from {money(Number(lease.rentAmount))})</span>}
+                              </span>
+                              {si.note && <span className="text-gray-600">· {si.note}</span>}
+                              <button onClick={() => applySchedIncrease(lease.id, si.id)} className="text-emerald-400 hover:text-emerald-300 ml-auto">Apply now</button>
+                              <button onClick={() => removeSchedIncrease(lease.id, si.id)} className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400">✕</button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {/* Add a scheduled increase with live calculator */}
                       <div className="grid grid-cols-4 gap-2">
-                        <input type="date" value={editForm.nextIncreaseDate} onChange={e => setEditForm(f => ({ ...f, nextIncreaseDate: e.target.value }))} className="input-dark text-xs" title="Effective date" />
-                        <input type="number" placeholder="New amount $" value={editForm.nextIncreaseAmount} onChange={e => setEditForm(f => ({ ...f, nextIncreaseAmount: e.target.value }))} className="input-dark text-xs" />
-                        <input type="number" placeholder="% increase" value={editForm.nextIncreasePercent} onChange={e => setEditForm(f => ({ ...f, nextIncreasePercent: e.target.value }))} className="input-dark text-xs" />
-                        <input placeholder="Note" value={editForm.nextIncreaseNote} onChange={e => setEditForm(f => ({ ...f, nextIncreaseNote: e.target.value }))} className="input-dark text-xs" />
+                        <input type="date" value={siForm.effectiveDate} onChange={e => setSiForm(f => ({ ...f, effectiveDate: e.target.value }))} className="input-dark text-xs" title="Effective date" />
+                        <input type="number" placeholder="New amount $" value={siForm.newAmount} onChange={e => setSiForm(f => ({ ...f, newAmount: e.target.value, percent: e.target.value ? '' : f.percent }))} className="input-dark text-xs" />
+                        <input type="number" placeholder="% increase" value={siForm.percent} onChange={e => setSiForm(f => ({ ...f, percent: e.target.value, newAmount: e.target.value ? '' : f.newAmount }))} className="input-dark text-xs" />
+                        <input placeholder="Note" value={siForm.note} onChange={e => setSiForm(f => ({ ...f, note: e.target.value }))} className="input-dark text-xs" />
+                      </div>
+                      <div className="flex items-center gap-3 mt-1.5">
+                        {(() => {
+                          const preview = projectedAmount(Number(lease.rentAmount), siForm.newAmount ? parseFloat(siForm.newAmount) : null, siForm.percent ? parseFloat(siForm.percent) : null);
+                          return preview != null ? (
+                            <span className="text-xs text-gray-400">
+                              New rent: <span className="font-medium text-white">{money(preview)}</span>
+                              {siForm.percent && <span className="text-gray-600"> ({money(Number(lease.rentAmount))} + {siForm.percent}%)</span>}
+                            </span>
+                          ) : <span className="text-xs text-gray-600">Enter an amount or a %</span>;
+                        })()}
+                        <button onClick={() => addSchedIncrease(lease.id)} disabled={!siForm.effectiveDate || (!siForm.newAmount && !siForm.percent)} className="btn text-xs disabled:opacity-40 ml-auto">Add increase</button>
                       </div>
                     </div>
 

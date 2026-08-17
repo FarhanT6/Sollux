@@ -495,6 +495,7 @@ model Lease {
   rentPayments RentPayment[]
   rentNotices  RentNotice[]
   rentChanges  RentChange[]
+  scheduledIncreases ScheduledRentIncrease[]
   incomingTransactions IncomingTransaction[]
 
   @@map("leases")
@@ -527,6 +528,24 @@ model RentChange {
 
   @@index([leaseId, effectiveDate])
   @@map("rent_changes")
+}
+
+// ─── SCHEDULED RENT INCREASES (future/planned) ───────────
+// Multiple upcoming increases per lease. Each is a plan: an effective date
+// plus either an explicit new amount or a percent (applied to current rent).
+model ScheduledRentIncrease {
+  id            String   @id @default(cuid())
+  leaseId       String
+  lease         Lease    @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  effectiveDate DateTime
+  newAmount     Decimal? @db.Decimal(10, 2)
+  percent       Float?
+  note          String?
+  applied       Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  @@index([leaseId, effectiveDate])
+  @@map("scheduled_rent_increases")
 }
 
 // ─── RENT PAYMENTS ───────────────────────────────────────
