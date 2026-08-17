@@ -10,7 +10,8 @@ import { fmtDate } from '../lib/date';
 const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 
 const CHANNEL_LABELS: Record<string, string> = {
-  ZELLE: 'Zelle', VENMO: 'Venmo', PAYPAL: 'PayPal', CASH_APP: 'Cash App', APPLE_CASH: 'Apple Cash', OTHER: 'Other',
+  ZELLE: 'Zelle', VENMO: 'Venmo', PAYPAL: 'PayPal', CASH_APP: 'Cash App', APPLE_CASH: 'Apple Cash',
+  CHECK: 'Check', ACH: 'ACH', DEPOSIT: 'Deposit', OTHER: 'Other',
 };
 
 const FILTERS: { key: IncomingTransactionStatus | 'ALL'; label: string }[] = [
@@ -74,7 +75,7 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
       {!embedded && (
         <div className="mb-4">
           <h1 className="text-xl font-semibold text-white">Incoming Payments</h1>
-          <p className="text-sm text-gray-400 mt-0.5">Zelle, Venmo, PayPal, and Cash App transfers into your watched bank accounts, matched to tenants</p>
+          <p className="text-sm text-gray-400 mt-0.5">Transfers, checks and deposits into your watched bank accounts, matched to tenants</p>
         </div>
       )}
 

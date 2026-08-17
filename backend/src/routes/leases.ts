@@ -69,6 +69,7 @@ router.get('/', async (req, res, next) => {
         rentChanges: { orderBy: { effectiveDate: 'desc' } },
         scheduledIncreases: { where: { applied: false }, orderBy: { effectiveDate: 'asc' } },
         utilityCharges: { orderBy: { createdAt: 'asc' } },
+        paymentAliases: { orderBy: { createdAt: 'asc' } },
       },
       orderBy: { startDate: 'desc' },
     });
@@ -88,6 +89,7 @@ router.get('/:id', async (req, res, next) => {
         rentChanges: { orderBy: { effectiveDate: 'desc' } },
         scheduledIncreases: { where: { applied: false }, orderBy: { effectiveDate: 'asc' } },
         utilityCharges: { orderBy: { createdAt: 'asc' } },
+        paymentAliases: { orderBy: { createdAt: 'asc' } },
       },
     });
     if (!lease) return res.status(404).json({ error: 'Lease not found' });
@@ -210,6 +212,34 @@ router.delete('/:id/utility-charges/:chargeId', async (req, res, next) => {
     const lease = await db.lease.findFirst({ where: { id: req.params.id, unit: { property: { userId: req.dbUserId! } } } });
     if (!lease) return res.status(404).json({ error: 'Lease not found' });
     await db.leaseUtilityCharge.deleteMany({ where: { id: req.params.chargeId, leaseId: lease.id } });
+    res.status(204).send();
+  } catch (err) { next(err); }
+});
+
+// ── Expected payer names (payment aliases) ──────────────────────────────────
+// Bank descriptors carry whoever sent the money, which is often not the tenant.
+const PaymentAliasSchema = z.object({
+  name: z.string().min(1),
+  note: z.string().optional().nullable(),
+});
+
+// POST /api/leases/:id/payment-aliases — add a name rent may arrive under
+router.post('/:id/payment-aliases', async (req, res, next) => {
+  try {
+    const data = PaymentAliasSchema.parse(req.body);
+    const lease = await db.lease.findFirst({ where: { id: req.params.id, unit: { property: { userId: req.dbUserId! } } } });
+    if (!lease) return res.status(404).json({ error: 'Lease not found' });
+    const created = await db.leasePaymentAlias.create({ data: { ...data, leaseId: lease.id } });
+    res.status(201).json(created);
+  } catch (err) { next(err); }
+});
+
+// DELETE /api/leases/:id/payment-aliases/:aliasId
+router.delete('/:id/payment-aliases/:aliasId', async (req, res, next) => {
+  try {
+    const lease = await db.lease.findFirst({ where: { id: req.params.id, unit: { property: { userId: req.dbUserId! } } } });
+    if (!lease) return res.status(404).json({ error: 'Lease not found' });
+    await db.leasePaymentAlias.deleteMany({ where: { id: req.params.aliasId, leaseId: lease.id } });
     res.status(204).send();
   } catch (err) { next(err); }
 });

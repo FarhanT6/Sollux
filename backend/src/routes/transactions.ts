@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
-import { syncAllWatchedAccounts } from '../services/transactionMatchService';
+import { syncAllWatchedAccounts, CHANNEL_TO_METHOD } from '../services/transactionMatchService';
+import { recordRentPayment, periodStartOf } from '../services/rentPaymentService';
 
 const router = Router();
 router.use(attachDbUser);
@@ -68,16 +69,17 @@ router.post('/:id/apply', async (req, res, next) => {
     const lease = await db.lease.findFirst({ where: { id: tx.matchedLeaseId, unit: { property: { userId: req.dbUserId! } } } });
     if (!lease) return res.status(404).json({ error: 'Matched lease not found' });
 
-    const periodDate = new Date(tx.date.getFullYear(), tx.date.getMonth(), 1);
-    const payment = await db.rentPayment.create({
-      data: {
-        leaseId: lease.id,
-        periodDate,
-        amount: tx.amount,
-        paidDate: tx.date,
-        method: (tx.channel === 'ZELLE' ? 'ZELLE' : 'OTHER') as any,
-        notes: `Auto-matched from ${tx.channel ?? 'bank'} transaction: "${tx.name}"`,
-      },
+    // Goes through the shared recorder so an auto-applied payment splits
+    // against arrears exactly like a hand-entered one, and carries the account
+    // the money actually landed in.
+    const payment = await recordRentPayment({
+      leaseId: lease.id,
+      periodDate: periodStartOf(tx.date),
+      amount: Number(tx.amount),
+      paidDate: tx.date,
+      method: (CHANNEL_TO_METHOD[(tx.channel ?? 'OTHER') as keyof typeof CHANNEL_TO_METHOD] ?? 'OTHER') as any,
+      bankAccountId: tx.bankAccountId,
+      notes: `Auto-matched from ${tx.channel ?? 'bank'} transaction: "${tx.name}"`,
     });
 
     const updated = await db.incomingTransaction.update({

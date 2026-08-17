@@ -535,6 +535,7 @@ model Lease {
   rentChanges          RentChange[]
   scheduledIncreases   ScheduledRentIncrease[]
   utilityCharges       LeaseUtilityCharge[]
+  paymentAliases       LeasePaymentAlias[]
   incomingTransactions IncomingTransaction[]
 
   @@map("leases")
@@ -594,6 +595,22 @@ model ScheduledRentIncrease {
 // TOTAL the tenant pays (what Budget/Rent Roll/P&L collect on); base rent is
 // derived as rentAmount minus the sum of these charges. Leases with utilities
 // included in rent simply have no rows here.
+// Names a lease's rent may legitimately arrive under: a spouse, an adult
+// child, an employer, a housing authority. Bank descriptors carry the sender's
+// name, not the tenant's, so without these a Zelle from "JOSE CONTRERAS" for
+// Cristina's unit never matches.
+model LeasePaymentAlias {
+  id        String   @id @default(cuid())
+  leaseId   String
+  lease     Lease    @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  name      String
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@index([leaseId])
+  @@map("lease_payment_aliases")
+}
+
 model LeaseUtilityCharge {
   id        String   @id @default(cuid())
   leaseId   String

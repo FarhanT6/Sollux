@@ -23,6 +23,13 @@ export const RENT_PAYMENT_METHODS: RentPaymentMethod[] = [
   'VENMO', 'CASH_APP', 'PAYPAL', 'APPLE_CASH', 'MONEY_ORDER', 'CARD', 'OTHER',
 ];
 
+// Methods where the money lands in one of the owner's accounts, so it is worth
+// recording which. Cash and the P2P apps sit in their own balances until they
+// are moved, so asking there would be noise.
+export const BANK_LINKED_METHODS: RentPaymentMethod[] = [
+  'BANK_DEPOSIT', 'CHECK', 'ACH', 'MONEY_ORDER', 'ZELLE',
+];
+
 export const RENT_PAYMENT_METHOD_LABELS: Record<RentPaymentMethod, string> = {
   ZELLE:        'Zelle',
   CHECK:        'Check',
@@ -157,6 +164,17 @@ export interface Lease {
   rentChanges?: RentChange[];
   scheduledIncreases?: ScheduledRentIncrease[];
   utilityCharges?: LeaseUtilityCharge[];
+  paymentAliases?: LeasePaymentAlias[];
+}
+
+// A name this lease's rent may arrive under — a spouse, a relative, an
+// employer, a housing authority. Matched against bank transaction descriptors.
+export interface LeasePaymentAlias {
+  id: string;
+  leaseId: string;
+  name: string;
+  note?: string | null;
+  createdAt: string;
 }
 
 // Portion of the tenant's monthly payment that reimburses a utility.
