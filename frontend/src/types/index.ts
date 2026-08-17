@@ -146,6 +146,7 @@ export interface ScheduledRentIncrease {
   effectiveDate: string;
   newAmount?: number | null;
   percent?: number | null;
+  percentMax?: number | null;
   note?: string | null;
   applied: boolean;
   createdAt: string;

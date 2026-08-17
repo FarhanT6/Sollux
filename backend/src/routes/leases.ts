@@ -181,6 +181,7 @@ const ScheduledIncreaseSchema = z.object({
   effectiveDate: z.string().transform(s => new Date(s)),
   newAmount: z.number().optional().nullable(),
   percent: z.number().optional().nullable(),
+  percentMax: z.number().optional().nullable(),
   note: z.string().optional().nullable(),
 });
 
@@ -204,12 +205,20 @@ router.post('/:id/scheduled-increases/:sid/apply', async (req, res, next) => {
     const sched = await db.scheduledRentIncrease.findFirst({ where: { id: req.params.sid, leaseId: lease.id } });
     if (!sched) return res.status(404).json({ error: 'Scheduled increase not found' });
 
+    // Optional override at apply time — needed for a range (the user picks the
+    // actual percent/amount within the planned range).
+    const override = z.object({ percent: z.number().optional(), amount: z.number().optional() }).parse(req.body || {});
+
     const prev = Number(lease.rentAmount);
-    const newAmount = sched.newAmount != null
-      ? Number(sched.newAmount)
-      : sched.percent != null
-        ? Math.round(prev * (1 + Number(sched.percent) / 100) * 100) / 100
-        : prev;
+    const newAmount = override.amount != null
+      ? override.amount
+      : override.percent != null
+        ? Math.round(prev * (1 + override.percent / 100) * 100) / 100
+        : sched.newAmount != null
+          ? Number(sched.newAmount)
+          : sched.percent != null
+            ? Math.round(prev * (1 + Number(sched.percent) / 100) * 100) / 100
+            : prev;
 
     await db.rentChange.create({
       data: { leaseId: lease.id, effectiveDate: sched.effectiveDate, previousAmount: prev, newAmount, note: sched.note || 'Scheduled increase applied' },

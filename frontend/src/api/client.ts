@@ -112,10 +112,10 @@ export const getLeaseDocumentViewUrl = (leaseId: string, docId: string) =>
   api.get<{ url: string }>(`/leases/${leaseId}/documents/${docId}/url`).then(r => r.data);
 export const deleteLeaseDocument = (leaseId: string, docId: string) =>
   api.delete(`/leases/${leaseId}/documents/${docId}`);
-export const addScheduledIncrease = (leaseId: string, data: { effectiveDate: string; newAmount?: number | null; percent?: number | null; note?: string | null }) =>
+export const addScheduledIncrease = (leaseId: string, data: { effectiveDate: string; newAmount?: number | null; percent?: number | null; percentMax?: number | null; note?: string | null }) =>
   api.post<ScheduledRentIncrease>(`/leases/${leaseId}/scheduled-increases`, data).then(r => r.data);
-export const applyScheduledIncrease = (leaseId: string, sid: string) =>
-  api.post<ScheduledRentIncrease>(`/leases/${leaseId}/scheduled-increases/${sid}/apply`, {}).then(r => r.data);
+export const applyScheduledIncrease = (leaseId: string, sid: string, override?: { percent?: number; amount?: number }) =>
+  api.post<ScheduledRentIncrease>(`/leases/${leaseId}/scheduled-increases/${sid}/apply`, override || {}).then(r => r.data);
 export const deleteScheduledIncrease = (leaseId: string, sid: string) =>
   api.delete(`/leases/${leaseId}/scheduled-increases/${sid}`);
 
