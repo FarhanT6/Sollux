@@ -9,7 +9,7 @@ import {
   updateExpense, deleteExpense, updateInsurancePolicy, deleteInsurancePolicy,
   updateTaxAssessment, deleteTaxAssessment, updateImprovement, deleteImprovement,
   updateLease, updateProperty, lookupPropertyByAddress,
-  createLease, getTenants, createTenant, getUnits, createUnit,
+  createLease, getTenants, createTenant, deleteTenant, getUnits, createUnit,
   getDocuments, getDocumentUrl, deleteDocument, confirmScannedDocument, downloadRentRoll, downloadT12,
   getT12Manifest, RENT_ROLL_COLUMNS,
   getRentChanges, addRentChange, deleteRentChange, uploadLeaseDocument,
@@ -774,6 +774,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   const [ucForm, setUcForm] = useState({ category: 'WATER', amount: '', note: '' });
   const [editTenantIds, setEditTenantIds] = useState<string[]>([]);
   const [newTenantName, setNewTenantName] = useState('');
+  const [deletingTenant, setDeletingTenant] = useState<string | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [uploadingDoc, setUploadingDoc] = useState(false);
   const [docCategory, setDocCategory] = useState<string>('LEASE');
@@ -827,6 +828,31 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
     setAllTenants(prev => [...prev, created]);
     setEditTenantIds(prev => [...prev, created.id]);
     setNewTenantName('');
+  }
+
+  // Permanently delete the tenant record itself — not the same as taking them
+  // off this lease. The LeaseTenant links cascade, so the tenant disappears
+  // from every lease they were on (here and on other properties), which is why
+  // we re-fetch leases afterwards rather than just patching local state.
+  async function deleteTenantRecord(tenantId: string) {
+    const t = allTenants.find(x => x.id === tenantId);
+    const name = t?.fullName ?? 'this tenant';
+    const onLeases = leases.filter(l => (l.leaseTenants ?? []).some(lt => lt.tenantId === tenantId)).length;
+    const warning = onLeases > 0
+      ? `\n\nThey are on ${onLeases} lease${onLeases === 1 ? '' : 's'} at this property and will be removed from ${onLeases === 1 ? 'it' : 'them'}. The lease${onLeases === 1 ? '' : 's'}, rent history, and payments are kept.`
+      : '';
+    if (!confirm(`Permanently delete ${name}?${warning}\n\nThis cannot be undone. To just take them off this lease instead, use the ✕ on their name.`)) return;
+    setDeletingTenant(tenantId);
+    try {
+      await deleteTenant(tenantId);
+      setAllTenants(prev => prev.filter(x => x.id !== tenantId));
+      setEditTenantIds(prev => prev.filter(x => x !== tenantId));
+      setLeases(await getLeases({ propertyId }));
+    } catch (err: any) {
+      alert(err?.response?.data?.error ?? 'Could not delete that tenant.');
+    } finally {
+      setDeletingTenant(null);
+    }
   }
 
   async function saveEditLease(leaseId: string) {
@@ -1281,7 +1307,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                     {/* Co-tenants */}
                     <div>
                       <label className="block text-xs text-gray-500 mb-1">Tenants on this lease</label>
-                      <div className="flex flex-wrap gap-1.5 mb-2">
+                      <div className="flex flex-wrap gap-1.5 mb-1">
                         {editTenantIds.length === 0 && <span className="text-xs text-gray-600">No tenants</span>}
                         {editTenantIds.map((tid, i) => {
                           const t = allTenants.find(x => x.id === tid);
@@ -1289,11 +1315,19 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                             <span key={tid} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.08)' }}>
                               {i === 0 && <span className="text-amber-400" title="Primary">★</span>}
                               {t?.fullName ?? '…'}
-                              <button onClick={() => setEditTenantIds(prev => prev.filter(x => x !== tid))} className="text-gray-500 hover:text-red-400">✕</button>
+                              <button onClick={() => setEditTenantIds(prev => prev.filter(x => x !== tid))}
+                                title="Remove from this lease (saved with Save changes)"
+                                className="text-gray-500 hover:text-red-400">✕</button>
+                              <button onClick={() => deleteTenantRecord(tid)} disabled={deletingTenant === tid}
+                                title="Delete this tenant permanently"
+                                className="text-gray-600 hover:text-red-500 disabled:opacity-40">
+                                {deletingTenant === tid ? '…' : '🗑'}
+                              </button>
                             </span>
                           );
                         })}
                       </div>
+                      <p className="text-xs text-gray-600 mb-2">✕ takes them off this lease · 🗑 deletes the tenant everywhere</p>
                       <div className="flex gap-2 flex-wrap items-center">
                         <select value="" onChange={e => { if (e.target.value) setEditTenantIds(prev => prev.includes(e.target.value) ? prev : [...prev, e.target.value]); }} className="input-dark text-xs">
                           <option value="">+ Add existing tenant…</option>
