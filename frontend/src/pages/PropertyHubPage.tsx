@@ -15,11 +15,12 @@ import {
   getRentChanges, addRentChange, deleteRentChange, uploadLeaseDocument,
   getLeaseDocuments, addLeaseDocument, getLeaseDocumentViewUrl, deleteLeaseDocument, extractLeaseTerms,
   addScheduledIncrease, applyScheduledIncrease, deleteScheduledIncrease,
-  addLeaseUtilityCharge, deleteLeaseUtilityCharge,
+  addLeaseUtilityCharge, deleteLeaseUtilityCharge, getTurnover,
 } from '../api/client';
 import type {
   Property, Lease, Loan, Expense, InsurancePolicy, TaxAssessment,
   Improvement, PropertyPnL, Tenant, Unit, Document, DocumentCategory, PropertyType, RentChange, ScheduledRentIncrease, LeaseUtilityCharge,
+  TurnoverReport, UnitTurnover,
 } from '../types';
 import { PROPERTY_TYPE_LABELS, EXPENSE_CATEGORY_LABELS, DOCUMENT_CATEGORY_LABELS, CATEGORY_LABELS } from '../types';
 import type { Document as DocType } from '../types';
@@ -66,7 +67,7 @@ const money = (n: number) =>
   n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const pct = (n: number) => `${n > 0 ? '+' : ''}${n.toFixed(1)}%`;
 const fmtDate = (d?: string | null) => fmtDateSafe(d);
-const TABS = ['Overview', 'Tenants', 'Loans', 'Expenses', 'Insurance', 'Maintenance', 'Tax', 'Documents'] as const;
+const TABS = ['Overview', 'Tenants', 'Turnover', 'Loans', 'Expenses', 'Insurance', 'Maintenance', 'Tax', 'Documents'] as const;
 type Tab = typeof TABS[number];
 
 export default function PropertyHubPage() {
@@ -85,6 +86,7 @@ export default function PropertyHubPage() {
   const [taxes, setTaxes]       = useState<TaxAssessment[]>([]);
   const [improvements, setImprovements] = useState<Improvement[]>([]);
   const [documents, setDocuments] = useState<Document[]>([]);
+  const [turnover, setTurnover] = useState<TurnoverReport | null>(null);
   const [pnl, setPnl] = useState<PropertyPnL | null>(null);
   const [showEditProperty, setShowEditProperty] = useState(false);
   const [exportModal, setExportModal] = useState<'rentroll' | 't12' | null>(null);
@@ -113,6 +115,8 @@ export default function PropertyHubPage() {
       ]).then(([l, lo, p]) => { setLeases(l); setLoans(lo); setPnl(p); });
     } else if (activeTab === 'Tenants') {
       getLeases({ propertyId: id }).then(setLeases);
+    } else if (activeTab === 'Turnover') {
+      getTurnover({ propertyId: id }).then(setTurnover);
     } else if (activeTab === 'Loans') {
       getLoans({ propertyId: id }).then(setLoans);
     } else if (activeTab === 'Expenses') {
@@ -228,6 +232,7 @@ export default function PropertyHubPage() {
       <div className="px-6 py-5">
         {activeTab === 'Overview' && <OverviewTab property={property} pnl={pnl} leases={activeLeases} loans={loans.filter(l => l.isActive)} />}
         {activeTab === 'Tenants' && <TenantsTab propertyId={id!} leases={leases} setLeases={setLeases} propertyType={property.type} />}
+        {activeTab === 'Turnover' && <TurnoverTab report={turnover} />}
         {activeTab === 'Loans' && <LoansTab propertyId={id!} loans={loans} setLoans={setLoans} />}
         {activeTab === 'Expenses' && <ExpensesTab propertyId={id!} expenses={expenses} setExpenses={setExpenses} />}
         {activeTab === 'Insurance' && <InsuranceTab propertyId={id!} policies={policies} setPolicies={setPolicies} />}
@@ -742,6 +747,131 @@ function OverviewTab({ property, pnl, leases, loans }: {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Turnover ──────────────────────────────────────────────────────────────────
+// Tenancy history per unit, the vacancy gap between consecutive tenants, and
+// what that gap cost. All of it derives from the lease timeline, so it works
+// over leases entered long before this view existed.
+
+function TurnoverTab({ report }: { report: TurnoverReport | null }) {
+  if (!report) return <div className="text-center py-12 text-gray-500 text-sm">Loading…</div>;
+
+  const { summary, units } = report;
+  if (units.length === 0) {
+    return <div className="text-center py-12 text-gray-500 text-sm">No lease history for this property yet</div>;
+  }
+
+  const days = (n: number) => `${n} day${n === 1 ? '' : 's'}`;
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+        <Stat label="Turnovers" value={String(summary.turnovers)}
+          sub={summary.avgVacancyDays != null ? `${summary.avgVacancyDays} days avg vacant` : undefined} />
+        <Stat label="Rent lost to vacancy" value={money(summary.totalRentLost)} tone={summary.totalRentLost > 0 ? 'red' : undefined}
+          sub={summary.totalDaysVacant > 0 ? `over ${days(summary.totalDaysVacant)}` : 'no vacancy recorded'} />
+        <Stat label="Avg tenancy" value={summary.avgTenancyMonths != null ? `${summary.avgTenancyMonths} mo` : '—'}
+          sub={summary.unitsTracked > 1 ? `across ${summary.unitsTracked} units` : undefined} />
+        <Stat label="Vacant now" value={String(summary.currentlyVacant)}
+          tone={summary.currentlyVacant > 0 ? 'red' : undefined}
+          sub={summary.currentlyVacant > 0 ? `${money(summary.ongoingRentLost)} lost so far` : 'fully occupied'} />
+      </div>
+
+      {units.map(u => <UnitTurnoverCard key={u.unitId} unit={u} />)}
+    </div>
+  );
+}
+
+function Stat({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: 'red' | 'green' }) {
+  const color = tone === 'red' ? 'text-red-400' : tone === 'green' ? 'text-emerald-400' : 'text-white';
+  return (
+    <div className="card px-4 py-3">
+      <p className="text-xs text-gray-500">{label}</p>
+      <p className={`text-lg font-semibold ${color}`}>{value}</p>
+      {sub && <p className="text-xs text-gray-600">{sub}</p>}
+    </div>
+  );
+}
+
+function UnitTurnoverCard({ unit }: { unit: UnitTurnover }) {
+  const names = (ns: string[]) => (ns.length ? ns.join(', ') : 'Unnamed tenant');
+  // Newest first reads better as a history — the current tenant is on top.
+  const tenancies = unit.tenancies.slice().reverse();
+  const turnoverFor = (leaseId: string) => unit.turnovers.find(t => t.incomingLeaseId === leaseId);
+
+  return (
+    <div className="card overflow-hidden">
+      <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+        <p className="text-sm font-semibold text-white">Unit {unit.unitLabel}</p>
+        <p className="text-xs text-gray-500">
+          {unit.tenancies.length} tenanc{unit.tenancies.length === 1 ? 'y' : 'ies'}
+          {unit.turnovers.length > 0 && ` · ${unit.turnovers.length} turnover${unit.turnovers.length === 1 ? '' : 's'}`}
+        </p>
+      </div>
+
+      {unit.currentVacancy && (
+        <div className="px-4 py-2.5 text-xs" style={{ background: 'rgba(239,68,68,0.08)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+          <span className="text-red-400 font-medium">Vacant {unit.currentVacancy.daysVacant} days</span>
+          <span className="text-gray-400">
+            {' '}since {fmtDateSafe(unit.currentVacancy.vacatedOn)} — {names(unit.currentVacancy.lastTenants)} moved out.
+            {' '}{money(unit.currentVacancy.lostSoFar)} lost at {money(unit.currentVacancy.lastRent)}/mo, and counting.
+          </span>
+        </div>
+      )}
+
+      <div className="px-4 py-3 space-y-0">
+        {tenancies.map((t, i) => {
+          const gap = turnoverFor(t.leaseId);
+          return (
+            <div key={t.leaseId}>
+              <div className="flex items-start gap-3 py-2">
+                <span className={`mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${t.isCurrent ? 'bg-emerald-400' : 'bg-gray-600'}`} />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm text-white">
+                    {names(t.tenants)}
+                    {t.businessName && <span className="text-gray-400"> · {t.businessName}</span>}
+                    {t.isCurrent && <span className="pill pill-green text-xs ml-2">Current</span>}
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    {fmtDateSafe(t.startDate)} – {t.isCurrent ? 'present' : (t.endDate ? fmtDateSafe(t.endDate) : 'no end date')}
+                    {t.months != null && ` · ${t.months} mo`}
+                  </p>
+                </div>
+                <p className="text-sm text-white flex-shrink-0">{money(t.rentAmount)}/mo</p>
+              </div>
+
+              {/* The gap that preceded this tenancy, drawn between the two it separates. */}
+              {gap && (
+                <div className="ml-[0.6rem] pl-4 py-2 text-xs" style={{ borderLeft: '2px dashed rgba(255,255,255,0.12)' }}>
+                  {gap.daysVacant > 0 ? (
+                    <span className="text-gray-400">
+                      <span className="text-amber-400 font-medium">{gap.daysVacant} days vacant</span>
+                      {' '}· {money(gap.rentLost)} lost rent
+                    </span>
+                  ) : (
+                    <span className="text-emerald-400">No vacancy — re-let immediately</span>
+                  )}
+                  {gap.rentChange !== 0 && (
+                    <span className={gap.rentChange > 0 ? 'text-emerald-400' : 'text-red-400'}>
+                      {' '}· rent {gap.rentChange > 0 ? 'up' : 'down'} {money(Math.abs(gap.rentChange))}
+                      {gap.rentChangePct != null && ` (${pct(gap.rentChangePct)})`}
+                    </span>
+                  )}
+                  {gap.daysVacant > 0 && gap.rentChange > 0 && (
+                    <span className="text-gray-600">
+                      {' '}· breaks even in {Math.ceil(gap.rentLost / gap.rentChange)} mo
+                    </span>
+                  )}
+                </div>
+              )}
+              {i < tenancies.length - 1 && !gap && <div className="ml-[0.6rem] h-2" style={{ borderLeft: '2px solid rgba(255,255,255,0.06)' }} />}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
