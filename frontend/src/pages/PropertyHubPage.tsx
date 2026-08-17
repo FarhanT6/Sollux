@@ -19,7 +19,7 @@ import {
 } from '../api/client';
 import type {
   Property, Lease, Loan, Expense, InsurancePolicy, TaxAssessment,
-  Improvement, PropertyPnL, Tenant, Unit, Document, DocumentCategory, RentChange, ScheduledRentIncrease, LeaseUtilityCharge,
+  Improvement, PropertyPnL, Tenant, Unit, Document, DocumentCategory, PropertyType, RentChange, ScheduledRentIncrease, LeaseUtilityCharge,
 } from '../types';
 import { PROPERTY_TYPE_LABELS, EXPENSE_CATEGORY_LABELS, DOCUMENT_CATEGORY_LABELS, CATEGORY_LABELS } from '../types';
 import type { Document as DocType } from '../types';
@@ -202,7 +202,7 @@ export default function PropertyHubPage() {
       {/* Tab content */}
       <div className="px-6 py-5">
         {activeTab === 'Overview' && <OverviewTab property={property} pnl={pnl} leases={activeLeases} loans={loans.filter(l => l.isActive)} />}
-        {activeTab === 'Tenants' && <TenantsTab propertyId={id!} leases={leases} setLeases={setLeases} />}
+        {activeTab === 'Tenants' && <TenantsTab propertyId={id!} leases={leases} setLeases={setLeases} propertyType={property.type} />}
         {activeTab === 'Loans' && <LoansTab propertyId={id!} loans={loans} setLoans={setLoans} />}
         {activeTab === 'Expenses' && <ExpensesTab propertyId={id!} expenses={expenses} setExpenses={setExpenses} />}
         {activeTab === 'Insurance' && <InsuranceTab propertyId={id!} policies={policies} setPolicies={setPolicies} />}
@@ -723,9 +723,10 @@ function OverviewTab({ property, pnl, leases, loans }: {
 
 // ─── Tenants ───────────────────────────────────────────────────────────────────
 
-function TenantsTab({ propertyId, leases, setLeases }: {
-  propertyId: string; leases: Lease[]; setLeases: (l: Lease[]) => void;
+function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
+  propertyId: string; leases: Lease[]; setLeases: (l: Lease[]) => void; propertyType?: PropertyType;
 }) {
+  const isCommercial = propertyType === 'COMMERCIAL';
   const [filterStatus, setFilterStatus] = useState('ACTIVE');
   const [showPayForm, setShowPayForm] = useState<string | null>(null);
   const [payAmount, setPayAmount] = useState('');
@@ -740,6 +741,7 @@ function TenantsTab({ propertyId, leases, setLeases }: {
     unitId: '', rentAmount: '', securityDeposit: '', startDate: '', endDate: '',
     leaseType: 'MONTH_TO_MONTH', status: 'ACTIVE', arrearsBalance: '', notes: '',
     rentEffectiveDate: '',
+    lateFeeAmount: '', lateFeePercent: '', lateFeeGraceDays: '', businessName: '',
   });
   // Inline "add scheduled increase" form (date + amount OR percent/range + note)
   const [siForm, setSiForm] = useState({ effectiveDate: '', newAmount: '', percent: '', percentMax: '', note: '' });
@@ -775,6 +777,10 @@ function TenantsTab({ propertyId, leases, setLeases }: {
       arrearsBalance: String(lease.arrearsBalance ?? ''),
       notes: lease.notes ?? '',
       rentEffectiveDate: '',
+      lateFeeAmount: lease.lateFeeAmount != null ? String(lease.lateFeeAmount) : '',
+      lateFeePercent: lease.lateFeePercent != null ? String(lease.lateFeePercent) : '',
+      lateFeeGraceDays: lease.lateFeeGraceDays != null ? String(lease.lateFeeGraceDays) : '',
+      businessName: lease.businessName ?? '',
     });
     setSiForm({ effectiveDate: '', newAmount: '', percent: '', percentMax: '', note: '' });
     setUcForm({ category: 'WATER', amount: '', note: '' });
@@ -810,6 +816,10 @@ function TenantsTab({ propertyId, leases, setLeases }: {
         notes: editForm.notes || undefined,
         tenantIds: editTenantIds,
         rentEffectiveDate: rentChanged && editForm.rentEffectiveDate ? editForm.rentEffectiveDate : undefined,
+        lateFeeAmount: editForm.lateFeeAmount ? parseFloat(editForm.lateFeeAmount) : null,
+        lateFeePercent: editForm.lateFeePercent ? parseFloat(editForm.lateFeePercent) : null,
+        lateFeeGraceDays: editForm.lateFeeGraceDays ? parseInt(editForm.lateFeeGraceDays) : null,
+        businessName: editForm.businessName || null,
       });
       const updated = await getLeases({ propertyId });
       setLeases(updated);
@@ -1065,8 +1075,14 @@ function TenantsTab({ propertyId, leases, setLeases }: {
                           {lease.status}
                         </span>
                       </div>
+                      {lease.businessName && (
+                        <p className="text-xs text-gray-400">{lease.businessName}</p>
+                      )}
                       <p className="text-xs text-gray-500">
                         Unit {lease.unit?.unitLabel} · {lease.leaseType === 'FIXED_TERM' ? `${fmtDate(lease.startDate)} – ${fmtDate(lease.endDate)}` : `Month-to-month from ${fmtDate(lease.startDate)}`}
+                        {lease.leaseType === 'MONTH_TO_MONTH' && lease.endDate && new Date(lease.endDate) < new Date() && (
+                          <span className="text-gray-600"> · holdover since {fmtDate(lease.endDate)}</span>
+                        )}
                       </p>
                     </div>
                     <div className="text-right flex-shrink-0">
@@ -1176,6 +1192,46 @@ function TenantsTab({ propertyId, leases, setLeases }: {
                         <input value={newTenantName} onChange={e => setNewTenantName(e.target.value)} placeholder="…or new tenant name" className="input-dark text-xs" />
                         <button onClick={addCoTenant} disabled={!newTenantName.trim()} className="btn text-xs disabled:opacity-40">Add</button>
                       </div>
+                    </div>
+
+                    {/* Commercial: business/entity on the lease */}
+                    {isCommercial && (
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1">Business name (commercial lease)</label>
+                        <input placeholder="e.g. Acme Coffee LLC" value={editForm.businessName}
+                          onChange={e => setEditForm(f => ({ ...f, businessName: e.target.value }))}
+                          className="input-dark text-xs w-full" />
+                      </div>
+                    )}
+
+                    {/* Late fee — flat amount or percent of rent, with grace period */}
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">Late fee (leave blank if none)</label>
+                      <div className="grid grid-cols-3 gap-2">
+                        <input type="number" placeholder="Flat amount $" value={editForm.lateFeeAmount}
+                          onChange={e => setEditForm(f => ({ ...f, lateFeeAmount: e.target.value, lateFeePercent: e.target.value ? '' : f.lateFeePercent }))}
+                          className="input-dark text-xs" />
+                        <input type="number" placeholder="% of rent" value={editForm.lateFeePercent}
+                          onChange={e => setEditForm(f => ({ ...f, lateFeePercent: e.target.value, lateFeeAmount: e.target.value ? '' : f.lateFeeAmount }))}
+                          className="input-dark text-xs" />
+                        <input type="number" placeholder="Grace days" value={editForm.lateFeeGraceDays}
+                          onChange={e => setEditForm(f => ({ ...f, lateFeeGraceDays: e.target.value }))}
+                          className="input-dark text-xs" title="Days after the due date before the fee applies" />
+                      </div>
+                      {(() => {
+                        const rentNow = parseFloat(editForm.rentAmount || '0') || Number(lease.rentAmount);
+                        const fee = editForm.lateFeePercent
+                          ? round2(rentNow * parseFloat(editForm.lateFeePercent) / 100)
+                          : editForm.lateFeeAmount ? parseFloat(editForm.lateFeeAmount) : null;
+                        if (fee == null || Number.isNaN(fee)) return null;
+                        return (
+                          <p className="text-xs text-gray-400 mt-1.5">
+                            Late fee: <span className="font-medium text-white">{money(fee)}</span>
+                            {editForm.lateFeePercent && <span className="text-gray-600"> ({editForm.lateFeePercent}% of {money(rentNow)})</span>}
+                            {editForm.lateFeeGraceDays && <span className="text-gray-600"> · after {editForm.lateFeeGraceDays} day grace</span>}
+                          </p>
+                        );
+                      })()}
                     </div>
 
                     {/* Utility contributions — portion of the payment that isn't rent */}

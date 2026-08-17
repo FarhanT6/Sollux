@@ -53,3 +53,27 @@ export async function applyDueRentIncreases(now = new Date()): Promise<number> {
   if (applied > 0) console.log(`[RentIncrease] Auto-applied ${applied} due scheduled increase(s)`);
   return applied;
 }
+
+// A fixed-term lease that has passed its end date without being renewed
+// continues month-to-month by default (holdover). Flip those to
+// MONTH_TO_MONTH so rent roll / projections treat them correctly, keeping
+// them ACTIVE — the tenant is still in place.
+export async function rolloverExpiredLeases(now = new Date()): Promise<number> {
+  const expired = await db.lease.findMany({
+    where: {
+      status: 'ACTIVE',
+      leaseType: 'FIXED_TERM',
+      endDate: { not: null, lt: now },
+    },
+    select: { id: true },
+  });
+
+  if (expired.length === 0) return 0;
+
+  await db.lease.updateMany({
+    where: { id: { in: expired.map(l => l.id) } },
+    data: { leaseType: 'MONTH_TO_MONTH' },
+  });
+  console.log(`[LeaseRollover] ${expired.length} expired fixed-term lease(s) rolled to month-to-month`);
+  return expired.length;
+}

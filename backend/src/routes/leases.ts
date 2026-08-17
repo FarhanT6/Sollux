@@ -34,6 +34,12 @@ const LeaseSchema = z.object({
   // When rentAmount changes via PATCH, the effective date to stamp on the
   // auto-logged rent-change history row (defaults to today).
   rentEffectiveDate: z.string().transform(s => (s ? new Date(s) : null)).optional().nullable(),
+  // Late fee: flat amount or percent of rent, with an optional grace period.
+  lateFeeAmount: z.number().optional().nullable(),
+  lateFeePercent: z.number().optional().nullable(),
+  lateFeeGraceDays: z.number().int().optional().nullable(),
+  // Commercial: business/entity on the lease.
+  businessName: z.string().optional().nullable(),
 });
 
 const RentChangeSchema = z.object({

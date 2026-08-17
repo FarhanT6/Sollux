@@ -488,6 +488,13 @@ model Lease {
   nextIncreaseAmount   Decimal?    @db.Decimal(10, 2)
   nextIncreasePercent  Float?
   nextIncreaseNote     String?
+  // Late fee: either a flat amount or a percent of rent (percent wins when set).
+  // graceDays = days after the due day before the fee applies.
+  lateFeeAmount        Decimal?    @db.Decimal(10, 2)
+  lateFeePercent       Float?
+  lateFeeGraceDays     Int?
+  // Commercial leases: the business/entity on the lease alongside the person.
+  businessName         String?
   createdAt            DateTime    @default(now())
   updatedAt            DateTime    @updatedAt
 

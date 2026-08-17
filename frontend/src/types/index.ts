@@ -122,6 +122,10 @@ export interface Lease {
   nextIncreaseAmount?: number | null;
   nextIncreasePercent?: number | null;
   nextIncreaseNote?: string | null;
+  lateFeeAmount?: number | null;
+  lateFeePercent?: number | null;
+  lateFeeGraceDays?: number | null;
+  businessName?: string | null;
   createdAt: string;
   leaseTenants?: LeaseTenant[];
   rentPayments?: RentPayment[];
