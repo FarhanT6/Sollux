@@ -15,14 +15,15 @@ import {
   getRentChanges, addRentChange, deleteRentChange, uploadLeaseDocument,
   getLeaseDocuments, addLeaseDocument, getLeaseDocumentViewUrl, deleteLeaseDocument, extractLeaseTerms,
   addScheduledIncrease, applyScheduledIncrease, deleteScheduledIncrease,
-  addLeaseUtilityCharge, deleteLeaseUtilityCharge, getTurnover,
+  addLeaseUtilityCharge, deleteLeaseUtilityCharge, getTurnover, getBankAccounts,
 } from '../api/client';
 import type {
   Property, Lease, Loan, Expense, InsurancePolicy, TaxAssessment,
   Improvement, PropertyPnL, Tenant, Unit, Document, DocumentCategory, PropertyType, RentChange, ScheduledRentIncrease, LeaseUtilityCharge,
-  TurnoverReport, UnitTurnover,
+  TurnoverReport, UnitTurnover, BankAccount, RentPaymentMethod,
 } from '../types';
-import { PROPERTY_TYPE_LABELS, EXPENSE_CATEGORY_LABELS, DOCUMENT_CATEGORY_LABELS, CATEGORY_LABELS } from '../types';
+import { PROPERTY_TYPE_LABELS, EXPENSE_CATEGORY_LABELS, DOCUMENT_CATEGORY_LABELS, CATEGORY_LABELS,
+  RENT_PAYMENT_METHODS, RENT_PAYMENT_METHOD_LABELS } from '../types';
 import type { Document as DocType } from '../types';
 import { fmtDate as fmtDateSafe, monthKey, localMonthKey } from '../lib/date';
 
@@ -62,6 +63,10 @@ function rentBreakdown(lease: Lease) {
   const utilities = (lease.utilityCharges ?? []).reduce((s, c) => s + Number(c.amount), 0);
   return { total, utilities, baseRent: Math.round((total - utilities) * 100) / 100 };
 }
+
+// "Chase Checking ••4821" — bank and last4 are both optional in the schema.
+const bankLabel = (b: BankAccount) =>
+  [b.name, b.last4 ? `••${b.last4}` : null].filter(Boolean).join(' ');
 
 const money = (n: number) =>
   n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
@@ -888,6 +893,8 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   const [payDate, setPayDate]     = useState(() => new Date().toISOString().slice(0, 10));
   const [payMethod, setPayMethod] = useState('ZELLE');
   const [payNotes, setPayNotes]   = useState('');
+  const [payBankAccountId, setPayBankAccountId] = useState('');
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
   const [saving, setSaving]       = useState(false);
   const [expandLease, setExpandLease] = useState<string | null>(null);
   const [payments, setPayments] = useState<Record<string, any[]>>({});
@@ -923,6 +930,8 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   useEffect(() => {
     getUnits({ propertyId }).then(setUnits);
     getTenants().then(setAllTenants);
+    // Only the accounts actually available to attribute a deposit to.
+    getBankAccounts().then(bs => setBankAccounts(bs.filter(b => b.isActive)));
   }, [propertyId]);
 
   function openEditLease(lease: Lease) {
@@ -1259,12 +1268,13 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
         amount: parseFloat(payAmount),
         paidDate: payDate,
         method: payMethod,
+        bankAccountId: payMethod === 'BANK_DEPOSIT' ? (payBankAccountId || undefined) : undefined,
         notes: payNotes || undefined,
       });
       const updated = await getLeases({ propertyId });
       setLeases(updated);
       setShowPayForm(null);
-      setPayAmount(''); setPayNotes('');
+      setPayAmount(''); setPayNotes(''); setPayBankAccountId('');
       // Refresh payment history for this lease if expanded
       if (payments[leaseId]) {
         getRentPayments({ leaseId }).then(p => setPayments(prev => ({ ...prev, [leaseId]: p })));
@@ -1757,8 +1767,25 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                     <input type="number" placeholder="Amount" value={payAmount} onChange={e => setPayAmount(e.target.value)} className="input-dark text-xs w-28" />
                     <input type="date"   value={payDate}   onChange={e => setPayDate(e.target.value)}   className="input-dark text-xs w-36" />
                     <select value={payMethod} onChange={e => setPayMethod(e.target.value)} className="input-dark text-xs">
-                      {['ZELLE','CHECK','CASH','ACH','MONEY_ORDER','OTHER'].map(m => <option key={m} value={m}>{m}</option>)}
+                      {RENT_PAYMENT_METHODS.map(m => <option key={m} value={m}>{RENT_PAYMENT_METHOD_LABELS[m]}</option>)}
                     </select>
+                    {/* Which account received it — only meaningful once the
+                        money landed somewhere of the owner's, so this stays out
+                        of the way for cash and P2P apps. */}
+                    {payMethod === 'BANK_DEPOSIT' && (
+                      bankAccounts.length === 0 ? (
+                        <span className="text-xs text-gray-500 self-center">
+                          No bank accounts yet — <Link to="/settings" className="text-amber-400 hover:text-amber-300">link one</Link>
+                        </span>
+                      ) : (
+                        <select value={payBankAccountId} onChange={e => setPayBankAccountId(e.target.value)} className="input-dark text-xs">
+                          <option value="">— Which account? —</option>
+                          {bankAccounts.map(b => (
+                            <option key={b.id} value={b.id}>{bankLabel(b)}</option>
+                          ))}
+                        </select>
+                      )
+                    )}
                     <input placeholder="Notes (optional)" value={payNotes} onChange={e => setPayNotes(e.target.value)} className="input-dark text-xs flex-1 min-w-32" />
                     <button onClick={() => logPayment(lease.id)} disabled={saving} className="btn btn-primary text-xs">{saving ? '…' : 'Log'}</button>
                     <button onClick={() => setShowPayForm(null)} className="text-xs text-gray-500 hover:text-gray-300">✕</button>
@@ -1832,7 +1859,10 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                               <tr key={p.id} className="border-t border-white/5">
                                 <td className="px-4 py-2 text-gray-300">{fmtDate(p.paidDate)}</td>
                                 <td className="px-4 py-2 font-medium text-white">{money(Number(p.amount))}</td>
-                                <td className="px-4 py-2 text-gray-400">{p.method}</td>
+                                <td className="px-4 py-2 text-gray-400">
+                                  {RENT_PAYMENT_METHOD_LABELS[p.method as RentPaymentMethod] ?? p.method}
+                                  {p.bankAccount && <span className="text-gray-600"> → {bankLabel(p.bankAccount as BankAccount)}</span>}
+                                </td>
                                 <td className="px-4 py-2 text-gray-500">{p.notes || '—'}</td>
                               </tr>
                             ))}

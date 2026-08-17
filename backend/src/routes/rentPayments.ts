@@ -14,7 +14,13 @@ const RentPaymentSchema = z.object({
   // any excess against the outstanding balance. Pass a number to override.
   appliedToArrears: z.number().optional(),
   paidDate: z.string().transform(s => new Date(s)),
-  method: z.enum(['CASH','CHECK','ZELLE','ACH','MONEY_ORDER','CARD','OTHER']).default('OTHER'),
+  method: z.enum([
+    'CASH','CHECK','ZELLE','ACH','MONEY_ORDER','CARD',
+    'VENMO','PAYPAL','CASH_APP','APPLE_CASH','BANK_DEPOSIT','OTHER',
+  ]).default('OTHER'),
+  // Which of the owner's accounts received it. Required in practice for
+  // BANK_DEPOSIT, optional for anything else.
+  bankAccountId: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
 });
 
@@ -29,7 +35,10 @@ router.get('/', async (req, res, next) => {
           ...(propertyId ? { unit: { propertyId: propertyId as string } } : {}),
         },
       },
-      include: { lease: { include: { unit: { include: { property: { select: { id: true, address: true, nickname: true } } } } } } },
+      include: {
+        lease: { include: { unit: { include: { property: { select: { id: true, address: true, nickname: true } } } } } },
+        bankAccount: { select: { id: true, name: true, bank: true, last4: true } },
+      },
       orderBy: { paidDate: 'desc' },
     });
     res.json(payments);
@@ -41,6 +50,13 @@ router.post('/', async (req, res, next) => {
     const data = RentPaymentSchema.parse(req.body);
     const lease = await db.lease.findFirst({ where: { id: data.leaseId, unit: { property: { userId: req.dbUserId! } } } });
     if (!lease) return res.status(404).json({ error: 'Lease not found' });
+
+    // Never take a bank account id on trust — it would let one account attach
+    // a payment to another account's bank record.
+    if (data.bankAccountId) {
+      const acct = await db.bankAccount.findFirst({ where: { id: data.bankAccountId, userId: req.dbUserId! } });
+      if (!acct) return res.status(404).json({ error: 'Bank account not found' });
+    }
     // Split the payment unless the caller was explicit. A tenant who owes back
     // rent usually pays one lump sum: it covers this period's rent first, and
     // whatever is left pays down the balance. Without this the excess was

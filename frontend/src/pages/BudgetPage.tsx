@@ -10,7 +10,7 @@ import type {
   BudgetSummary, BankAccount, DelinquencyTenant, OtherIncome,
   BankAccountType, OtherIncomeCategory, BudgetForecast,
 } from '../types';
-import { OTHER_INCOME_LABELS } from '../types';
+import { OTHER_INCOME_LABELS, RENT_PAYMENT_METHODS, RENT_PAYMENT_METHOD_LABELS } from '../types';
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
@@ -912,7 +912,7 @@ function LogRentPaymentModal({ row, onClose, onSaved }: {
       <input type="date" value={paidDate} onChange={e => setPaidDate(e.target.value)} className="field-input mb-3 w-full" />
       <label className="field-label">Method</label>
       <select value={method} onChange={e => setMethod(e.target.value)} className="field-input mb-3 w-full">
-        {['ZELLE','CHECK','CASH','ACH','MONEY_ORDER','OTHER'].map(m => <option key={m} value={m}>{m}</option>)}
+        {RENT_PAYMENT_METHODS.map(m => <option key={m} value={m}>{RENT_PAYMENT_METHOD_LABELS[m]}</option>)}
       </select>
       <label className="field-label">Notes</label>
       <input value={notes} onChange={e => setNotes(e.target.value)} className="field-input mb-4 w-full" />
