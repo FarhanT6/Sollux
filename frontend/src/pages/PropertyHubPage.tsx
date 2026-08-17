@@ -1255,8 +1255,9 @@ function TenantsTab({ propertyId, leases, setLeases }: {
                                 <span className="text-gray-300">
                                   {prev != null ? `${money(prev)} → ` : ''}<span className="font-medium text-white">{money(Number(rc.newAmount))}</span>
                                 </span>
+                                {/* Rent is income: an increase is good (green), a decrease is not. */}
                                 {pctChange != null && (
-                                  <span className={pctChange >= 0 ? 'text-red-400' : 'text-emerald-400'}>{pct(pctChange)}</span>
+                                  <span className={pctChange >= 0 ? 'text-emerald-400' : 'text-red-400'}>{pct(pctChange)}</span>
                                 )}
                                 {rc.note && <span className="text-gray-600">· {rc.note}</span>}
                                 <button onClick={() => removeRentChange(lease.id, rc.id)} className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 ml-auto">✕</button>
