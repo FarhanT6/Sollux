@@ -1399,14 +1399,31 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                           .filter(p => monthKey(p.periodDate) === thisMonth)
                           .reduce((s, p) => s + Number(p.amount), 0);
                         const owed = Math.max(0, Number(lease.rentAmount) - paidThisPeriod);
-                        if (owed <= 0) return null;
+                        const monthName = format(now, 'MMMM');
+
+                        // Always say where the month stands. Hiding the line
+                        // once rent was covered made a paid tenant and a broken
+                        // calculation look identical — there was no way to tell
+                        // "collected" from "not working".
+                        if (owed <= 0) {
+                          const over = paidThisPeriod - Number(lease.rentAmount);
+                          return (
+                            <p className="text-xs text-emerald-400">
+                              {monthName} paid
+                              {over > 0 && <span className="text-gray-500"> · {money(over)} toward balance</span>}
+                            </p>
+                          );
+                        }
+
                         const dueDay = lease.rentDueDay ?? 1;
                         const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
                         const dueDate = new Date(now.getFullYear(), now.getMonth(), Math.min(dueDay, daysInMonth));
                         const overdue = now > dueDate;
+                        const partial = paidThisPeriod > 0;
                         return (
                           <p className={`text-xs ${overdue ? 'text-red-400' : 'text-gray-500'}`}>
-                            {money(owed)} {overdue ? 'overdue this month' : `due ${fmtDateSafe(dueDate.toISOString(), 'MMM d')}`}
+                            {money(owed)} {overdue ? `overdue for ${monthName}` : `due ${fmtDateSafe(dueDate.toISOString(), 'MMM d')}`}
+                            {partial && <span className="text-gray-500"> · {money(paidThisPeriod)} paid</span>}
                           </p>
                         );
                       })()}
