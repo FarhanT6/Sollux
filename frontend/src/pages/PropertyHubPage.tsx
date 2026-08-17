@@ -835,8 +835,8 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   // from every lease they were on (here and on other properties), which is why
   // we re-fetch leases afterwards rather than just patching local state.
   async function deleteTenantRecord(tenantId: string) {
-    const t = allTenants.find(x => x.id === tenantId);
-    const name = t?.fullName ?? 'this tenant';
+    const fromLease = leases.flatMap(l => l.leaseTenants ?? []).find(lt => lt.tenantId === tenantId)?.tenant;
+    const name = (fromLease ?? allTenants.find(x => x.id === tenantId))?.fullName ?? 'this tenant';
     const onLeases = leases.filter(l => (l.leaseTenants ?? []).some(lt => lt.tenantId === tenantId)).length;
     const warning = onLeases > 0
       ? `\n\nThey are on ${onLeases} lease${onLeases === 1 ? '' : 's'} at this property and will be removed from ${onLeases === 1 ? 'it' : 'them'}. The lease${onLeases === 1 ? '' : 's'}, rent history, and payments are kept.`
@@ -1140,7 +1140,18 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
         <NewLeaseModal
           propertyId={propertyId}
           onClose={() => setShowNewLease(false)}
-          onCreated={async () => { setLeases(await getLeases({ propertyId })); setShowNewLease(false); }}
+          onCreated={async () => {
+            // The modal can create units and tenants of its own, so refresh
+            // those lists too — otherwise the edit form can't resolve the new
+            // unit or tenant names and renders a blank select / "…" chips.
+            const [freshLeases, freshUnits, freshTenants] = await Promise.all([
+              getLeases({ propertyId }), getUnits({ propertyId }), getTenants(),
+            ]);
+            setLeases(freshLeases);
+            setUnits(freshUnits);
+            setAllTenants(freshTenants);
+            setShowNewLease(false);
+          }}
         />
       )}
 
@@ -1266,6 +1277,12 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                   <div className="px-4 py-3 space-y-3" style={{ background: 'rgba(255,255,255,0.03)', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                     <div className="grid grid-cols-3 gap-2">
                       <select value={editForm.unitId} onChange={e => setEditForm(f => ({ ...f, unitId: e.target.value }))} className="input-dark text-xs">
+                        {/* The lease carries its own unit, so offer it even when
+                            the units list hasn't caught up — a select with no
+                            matching option renders blank. */}
+                        {!units.some(u => u.id === lease.unitId) && lease.unit && (
+                          <option value={lease.unitId}>{lease.unit.unitLabel}</option>
+                        )}
                         {units.map(u => <option key={u.id} value={u.id}>{u.unitLabel}</option>)}
                       </select>
                       <input type="number" placeholder="Rent/mo" value={editForm.rentAmount} onChange={e => setEditForm(f => ({ ...f, rentAmount: e.target.value }))} className="input-dark text-xs" />
@@ -1310,7 +1327,11 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                       <div className="flex flex-wrap gap-1.5 mb-1">
                         {editTenantIds.length === 0 && <span className="text-xs text-gray-600">No tenants</span>}
                         {editTenantIds.map((tid, i) => {
-                          const t = allTenants.find(x => x.id === tid);
+                          // Prefer the tenant record the lease already carries —
+                          // allTenants is fetched on mount and may not include
+                          // someone created since, which rendered a bare "…".
+                          const t = (lease.leaseTenants ?? []).find(lt => lt.tenantId === tid)?.tenant
+                            ?? allTenants.find(x => x.id === tid);
                           return (
                             <span key={tid} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.08)' }}>
                               {i === 0 && <span className="text-amber-400" title="Primary">★</span>}
