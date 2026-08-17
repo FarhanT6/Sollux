@@ -48,7 +48,10 @@ export type LoanType = 'MORTGAGE' | 'HELOC' | 'AUTO' | 'PERSONAL' | 'STUDENT' | 
 export type InsuranceType = 'PROPERTY' | 'LIABILITY' | 'FLOOD' | 'UMBRELLA' | 'OTHER';
 export type PremiumFrequency = 'MONTHLY' | 'ANNUAL' | 'SEMI_ANNUAL';
 export type TaxStatus = 'UNPAID' | 'PAID' | 'PARTIALLY_PAID' | 'DELINQUENT';
-export type LegalStatus = 'OPEN' | 'CLOSED' | 'ON_HOLD';
+export type LegalStatus =
+  | 'OPEN' | 'PENDING_FILING' | 'FILED' | 'IN_LITIGATION' | 'DISCOVERY'
+  | 'AWAITING_HEARING' | 'JUDGMENT' | 'APPEAL' | 'COLLECTIONS'
+  | 'ON_HOLD' | 'SETTLED' | 'DISMISSED' | 'CLOSED';
 export type ExpenseCategory =
   | 'UTILITIES' | 'REPAIRS_MAINTENANCE' | 'LANDSCAPING' | 'PROPERTY_MANAGEMENT'
   | 'LEGAL' | 'INSURANCE' | 'PROPERTY_TAX' | 'HOA' | 'MORTGAGE_DEBT_SERVICE'
@@ -312,7 +315,8 @@ export interface ReconciliationStatement {
 
 export type DocumentCategory =
   | 'UTILITY' | 'INSURANCE' | 'TAX' | 'LEGAL' | 'HOA' | 'EXPENSE_RECEIPT' | 'LEASE'
-  | 'APPLICATION' | 'IDENTITY' | 'SCREENING' | 'MAINTENANCE' | 'OTHER';
+  | 'APPLICATION' | 'IDENTITY' | 'SCREENING' | 'MAINTENANCE'
+  | 'CONTRACT' | 'COURT_FILING' | 'CORRESPONDENCE' | 'OTHER';
 
 export interface Document {
   id: string;
@@ -356,6 +360,9 @@ export const DOCUMENT_CATEGORY_LABELS: Record<DocumentCategory, string> = {
   IDENTITY: 'Identity / ID',
   SCREENING: 'Screening',
   MAINTENANCE: 'Maintenance',
+  CONTRACT: 'Contract',
+  COURT_FILING: 'Court filing',
+  CORRESPONDENCE: 'Correspondence',
   OTHER: 'Other / Misc',
 };
 
@@ -534,22 +541,151 @@ export interface Improvement {
   property?: Pick<Property, 'id' | 'address' | 'nickname'>;
 }
 
+export interface LegalEvent {
+  id: string;
+  legalMatterId: string;
+  date: string;
+  eventType: string;
+  title: string;
+  notes?: string | null;
+  outcome?: string | null;
+  isCompleted: boolean;
+  createdAt: string;
+}
+
+export interface LegalFee {
+  id: string;
+  legalMatterId: string;
+  date: string;
+  category: string;
+  description?: string | null;
+  amount: number;
+  hours?: number | null;
+  hourlyRate?: number | null;
+  payee?: string | null;
+  invoiceNumber?: string | null;
+  isPaid: boolean;
+  paidDate?: string | null;
+  bankAccountId?: string | null;
+  notes?: string | null;
+  createdAt: string;
+}
+
 export interface LegalMatter {
   id: string;
-  propertyId?: string;
+  propertyId?: string | null;
+  leaseId?: string | null;
   userId: string;
   title: string;
   matterType: string;
   status: LegalStatus;
-  filedDate?: string;
-  closedDate?: string;
-  attorney?: string;
-  caseNumber?: string;
-  description?: string;
-  documentUrl?: string;
+  priority?: string | null;
+  filedDate?: string | null;
+  closedDate?: string | null;
+  nextHearingDate?: string | null;
+  responseDueDate?: string | null;
+  statuteDeadline?: string | null;
+  attorney?: string | null;
+  attorneyFirm?: string | null;
+  attorneyEmail?: string | null;
+  attorneyPhone?: string | null;
+  court?: string | null;
+  jurisdiction?: string | null;
+  judge?: string | null;
+  caseNumber?: string | null;
+  opposingParty?: string | null;
+  opposingCounsel?: string | null;
+  claimAmount?: number | null;
+  judgmentAmount?: number | null;
+  amountCollected?: number | null;
+  settlementAmount?: number | null;
+  outcome?: string | null;
+  description?: string | null;
+  notes?: string | null;
+  documentUrl?: string | null;
   createdAt: string;
-  property?: Pick<Property, 'id' | 'address' | 'nickname'>;
+  property?: Pick<Property, 'id' | 'address' | 'nickname'> | null;
+  lease?: {
+    id: string;
+    unit?: { unitLabel: string; property?: Pick<Property, 'id' | 'address' | 'nickname'> };
+    leaseTenants?: { tenant: { id: string; fullName: string } }[];
+  } | null;
+  events?: LegalEvent[];
+  fees?: LegalFee[];
+  documents?: Document[];
 }
+
+export interface LegalSummary {
+  totalMatters: number;
+  openMatters: number;
+  byType: Record<string, number>;
+  totalFees: number;
+  unpaidFees: number;
+  claimExposure: number;
+  judgmentsAwarded: number;
+  judgmentsCollected: number;
+  overdueDeadlines: number;
+  upcoming: { matterId: string; title: string; kind: string; date: string }[];
+}
+
+// Free text in the database — this is the canonical list the UI offers, so a
+// state-specific or unusual matter can still be typed in.
+export const LEGAL_MATTER_TYPES: string[] = [
+  'Eviction', 'Unlawful detainer', 'Notice to quit', 'Rent collection',
+  'Lease dispute', 'Security deposit dispute', 'Habitability claim',
+  'Lawsuit (defendant)', 'Lawsuit (plaintiff)', 'Small claims',
+  'Contract dispute', 'Construction defect', 'Insurance claim / dispute',
+  'Personal injury', 'Property damage', 'Code violation', 'HOA dispute',
+  'Boundary / easement', 'Title dispute', 'Lien / mechanics lien',
+  'Foreclosure', 'Bankruptcy (tenant)', 'Zoning / permitting',
+  'Fair housing complaint', 'Collections / judgment enforcement', 'Other',
+];
+
+export const LEGAL_STATUS_LABELS: Record<string, string> = {
+  OPEN: 'Open', PENDING_FILING: 'Pending filing', FILED: 'Filed',
+  IN_LITIGATION: 'In litigation', DISCOVERY: 'Discovery',
+  AWAITING_HEARING: 'Awaiting hearing', JUDGMENT: 'Judgment',
+  APPEAL: 'On appeal', SETTLED: 'Settled', DISMISSED: 'Dismissed',
+  COLLECTIONS: 'Collections', ON_HOLD: 'On hold', CLOSED: 'Closed',
+};
+
+// Ordered roughly by how a matter progresses, so the dropdown reads as a path.
+export const LEGAL_STATUSES: string[] = [
+  'OPEN', 'PENDING_FILING', 'FILED', 'IN_LITIGATION', 'DISCOVERY',
+  'AWAITING_HEARING', 'JUDGMENT', 'APPEAL', 'COLLECTIONS', 'ON_HOLD',
+  'SETTLED', 'DISMISSED', 'CLOSED',
+];
+
+export const LEGAL_CLOSED_STATUSES = ['CLOSED', 'SETTLED', 'DISMISSED'];
+
+export const LEGAL_EVENT_TYPES: string[] = [
+  'FILING', 'SERVICE', 'HEARING', 'MOTION', 'DISCOVERY', 'MEDIATION',
+  'JUDGMENT', 'APPEAL', 'SETTLEMENT', 'LOCKOUT', 'NOTICE', 'CORRESPONDENCE', 'OTHER',
+];
+
+export const LEGAL_EVENT_LABELS: Record<string, string> = {
+  FILING: 'Filing', SERVICE: 'Service of process', HEARING: 'Hearing',
+  MOTION: 'Motion', DISCOVERY: 'Discovery', MEDIATION: 'Mediation',
+  JUDGMENT: 'Judgment', APPEAL: 'Appeal', SETTLEMENT: 'Settlement',
+  LOCKOUT: 'Lockout / writ', NOTICE: 'Notice served', CORRESPONDENCE: 'Correspondence',
+  OTHER: 'Other',
+};
+
+export const LEGAL_FEE_CATEGORIES: string[] = [
+  'RETAINER', 'HOURLY', 'FLAT_FEE', 'FILING_FEE', 'SERVICE_FEE',
+  'COURT_COST', 'EXPERT', 'TRANSCRIPT', 'SETTLEMENT', 'JUDGMENT_PAID', 'OTHER',
+];
+
+export const LEGAL_FEE_LABELS: Record<string, string> = {
+  RETAINER: 'Retainer', HOURLY: 'Hourly billing', FLAT_FEE: 'Flat fee',
+  FILING_FEE: 'Court filing fee', SERVICE_FEE: 'Process service',
+  COURT_COST: 'Court costs', EXPERT: 'Expert / witness', TRANSCRIPT: 'Transcript',
+  SETTLEMENT: 'Settlement paid', JUDGMENT_PAID: 'Judgment paid', OTHER: 'Other',
+};
+
+export const LEGAL_PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'URGENT'];
+
+export const LEGAL_DOC_CATEGORIES = ['LEGAL', 'CONTRACT', 'COURT_FILING', 'CORRESPONDENCE', 'IDENTITY', 'OTHER'];
 
 export interface PropertyPnL {
   propertyId: string;

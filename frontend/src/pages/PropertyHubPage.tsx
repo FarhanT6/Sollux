@@ -28,6 +28,7 @@ import { PROPERTY_TYPE_LABELS, EXPENSE_CATEGORY_LABELS, DOCUMENT_CATEGORY_LABELS
   RENT_PAYMENT_METHODS, RENT_PAYMENT_METHOD_LABELS, BANK_LINKED_METHODS } from '../types';
 import type { Document as DocType } from '../types';
 import { fmtDate as fmtDateSafe, monthKey, localMonthKey } from '../lib/date';
+import LegalPage from './LegalPage';
 
 const LEASE_DOC_CATEGORIES = ['LEASE', 'APPLICATION', 'IDENTITY', 'SCREENING', 'OTHER'] as const;
 
@@ -74,7 +75,7 @@ const money = (n: number) =>
   n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const pct = (n: number) => `${n > 0 ? '+' : ''}${n.toFixed(1)}%`;
 const fmtDate = (d?: string | null) => fmtDateSafe(d);
-const TABS = ['Overview', 'Tenants', 'Turnover', 'Loans', 'Expenses', 'Insurance', 'Maintenance', 'Tax', 'Documents'] as const;
+const TABS = ['Overview', 'Tenants', 'Turnover', 'Loans', 'Expenses', 'Insurance', 'Maintenance', 'Tax', 'Legal', 'Documents'] as const;
 type Tab = typeof TABS[number];
 
 export default function PropertyHubPage() {
@@ -245,6 +246,7 @@ export default function PropertyHubPage() {
         {activeTab === 'Insurance' && <InsuranceTab propertyId={id!} policies={policies} setPolicies={setPolicies} />}
         {activeTab === 'Maintenance' && <MaintenanceTab propertyId={id!} items={improvements} setItems={setImprovements} />}
         {activeTab === 'Tax' && <TaxTab propertyId={id!} taxes={taxes} setTaxes={setTaxes} />}
+        {activeTab === 'Legal' && <LegalPage embedded propertyId={id!} />}
         {activeTab === 'Documents' && <DocumentsTab propertyId={id!} documents={documents} setDocuments={setDocuments} />}
       </div>
 

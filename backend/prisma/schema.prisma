@@ -531,11 +531,13 @@ model Lease {
 
   leaseTenants         LeaseTenant[]
   rentPayments         RentPayment[]
+  legalFees            LegalFee[]
   rentNotices          RentNotice[]
   rentChanges          RentChange[]
   scheduledIncreases   ScheduledRentIncrease[]
   utilityCharges       LeaseUtilityCharge[]
   paymentAliases       LeasePaymentAlias[]
+  legalMatters         LegalMatter[]
   incomingTransactions IncomingTransaction[]
 
   @@map("leases")
@@ -921,6 +923,9 @@ enum DocumentCategory {
   IDENTITY
   SCREENING
   MAINTENANCE
+  CONTRACT
+  COURT_FILING
+  CORRESPONDENCE
   OTHER
 }
 
@@ -1044,19 +1049,62 @@ model LegalMatter {
   property    Property?   @relation(fields: [propertyId], references: [id])
   userId      String
   title       String
+  // Free text rather than an enum: the useful taxonomy differs by state and
+  // keeps growing, and a wrong enum value is a migration. The UI offers a
+  // canonical list. See LEGAL_MATTER_TYPES on the frontend.
   matterType  String
   status      LegalStatus @default(OPEN)
+  priority    String? // LOW | MEDIUM | HIGH | URGENT
   filedDate   DateTime?
   closedDate  DateTime?
   attorney    String?
   caseNumber  String?
   description String?
   documentUrl String?
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
+
+  // Which tenancy this concerns — evictions and most disputes are about one
+  // lease. SetNull so ending a lease never destroys the legal record of it.
+  leaseId String?
+  lease   Lease?  @relation(fields: [leaseId], references: [id], onDelete: SetNull)
+
+  // Counsel
+  attorneyFirm  String?
+  attorneyEmail String?
+  attorneyPhone String?
+
+  // Court / venue
+  court        String?
+  jurisdiction String?
+  judge        String?
+
+  // The other side
+  opposingParty   String?
+  opposingCounsel String?
+
+  // Money at stake and recovered. claimAmount is what is sought, judgment what
+  // was awarded, collected what has actually been received — they diverge, and
+  // the gap is the whole point of tracking a judgment.
+  claimAmount      Decimal? @db.Decimal(12, 2)
+  judgmentAmount   Decimal? @db.Decimal(12, 2)
+  amountCollected  Decimal? @db.Decimal(12, 2)
+  settlementAmount Decimal? @db.Decimal(12, 2)
+
+  // Dates that carry consequences if missed.
+  nextHearingDate DateTime?
+  responseDueDate DateTime?
+  statuteDeadline DateTime?
+
+  outcome   String?
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  events LegalEvent[]
+  fees   LegalFee[]
 
   @@index([propertyId])
   @@index([userId])
+  @@index([leaseId])
   @@map("legal_matters")
 }
 
@@ -1064,6 +1112,63 @@ enum LegalStatus {
   OPEN
   CLOSED
   ON_HOLD
+  PENDING_FILING
+  FILED
+  IN_LITIGATION
+  DISCOVERY
+  AWAITING_HEARING
+  JUDGMENT
+  APPEAL
+  SETTLED
+  DISMISSED
+  COLLECTIONS
+}
+
+// One entry on a matter's timeline: a filing, a service of process, a hearing,
+// a judgment, a lockout. Kept separate from notes so dates stay queryable and
+// upcoming hearings can be surfaced.
+model LegalEvent {
+  id            String      @id @default(cuid())
+  legalMatterId String
+  legalMatter   LegalMatter @relation(fields: [legalMatterId], references: [id], onDelete: Cascade)
+  date          DateTime
+  eventType     String // FILING | SERVICE | HEARING | MOTION | JUDGMENT | APPEAL | SETTLEMENT | LOCKOUT | NOTICE | CORRESPONDENCE | OTHER
+  title         String
+  notes         String?
+  outcome       String?
+  isCompleted   Boolean     @default(true) // false = scheduled, still ahead
+  createdAt     DateTime    @default(now())
+
+  @@index([legalMatterId, date])
+  @@map("legal_events")
+}
+
+// Attorney fees, court costs, and anything else a matter costs — plus what has
+// actually been paid, which is not the same thing.
+model LegalFee {
+  id            String       @id @default(cuid())
+  legalMatterId String
+  legalMatter   LegalMatter  @relation(fields: [legalMatterId], references: [id], onDelete: Cascade)
+  date          DateTime
+  category      String // RETAINER | HOURLY | FLAT_FEE | FILING_FEE | SERVICE_FEE | COURT_COST | EXPERT | SETTLEMENT | JUDGMENT_PAID | OTHER
+  description   String?
+  amount        Decimal      @db.Decimal(12, 2)
+  hours         Decimal?     @db.Decimal(8, 2)
+  hourlyRate    Decimal?     @db.Decimal(10, 2)
+  payee         String?
+  invoiceNumber String?
+  isPaid        Boolean      @default(false)
+  paidDate      DateTime?
+  bankAccountId String?
+  bankAccount   BankAccount? @relation(fields: [bankAccountId], references: [id], onDelete: SetNull)
+  notes         String?
+  createdAt     DateTime     @default(now())
+  Lease         Lease?       @relation(fields: [leaseId], references: [id])
+  leaseId       String?
+
+  @@index([legalMatterId, date])
+  @@index([bankAccountId])
+  @@map("legal_fees")
 }
 
 // ─── BANK ACCOUNTS ───────────────────────────────────────
@@ -1097,6 +1202,7 @@ model BankAccount {
   incomingTransactions IncomingTransaction[]
   outgoingTransactions OutgoingTransaction[]
   rentPayments         RentPayment[]
+  LegalFee             LegalFee[]
 
   @@index([userId])
   @@index([plaidItemId])

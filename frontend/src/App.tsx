@@ -12,6 +12,7 @@ import FinancesPage from './pages/FinancesPage';
 import TenantsHubPage from './pages/TenantsHubPage';
 import PortfolioPage from './pages/PortfolioPage';
 import PropertyHubPage from './pages/PropertyHubPage';
+import LegalPage from './pages/LegalPage';
 import ImportPage from './pages/ImportPage';
 import ScanPage from './pages/ScanPage';
 // Still used for deep-link detail pages
@@ -65,6 +66,9 @@ export default function App() {
 
           {/* Lives as a Finances tab; keep the direct URL working for links. */}
           <Route path="incoming-payments" element={<Navigate to="/finances?tab=incoming" replace />} />
+
+          {/* Legal */}
+          <Route path="legal" element={<LegalPage />} />
 
           {/* Standalone pages */}
           <Route path="insights" element={<InsightsPage />} />

@@ -32,7 +32,7 @@ import type {
   ReconciliationProfile, ReconciliationStatement, ReconciliationLineItem,
   Document, DocumentClassification, DocumentMatch, DocumentCategory,
   IncomingTransaction, IncomingTransactionStatus, OutgoingTransaction, UtilityCandidate,
-  TurnoverReport, LeasePaymentAlias,
+  TurnoverReport, LeasePaymentAlias, LegalEvent, LegalFee, LegalSummary,
 } from '../types';
 
 // Dashboard
@@ -319,7 +319,7 @@ export const deleteImprovement = (id: string) =>
   api.delete(`/improvements/${id}`);
 
 // Legal
-export const getLegalMatters = (params?: { propertyId?: string; status?: string }) =>
+export const getLegalMatters = (params?: { propertyId?: string; status?: string; matterType?: string; open?: string }) =>
   api.get<LegalMatter[]>('/legal', { params }).then(r => r.data);
 export const createLegalMatter = (data: Partial<LegalMatter>) =>
   api.post<LegalMatter>('/legal', data).then(r => r.data);
@@ -327,6 +327,33 @@ export const updateLegalMatter = (id: string, data: Partial<LegalMatter>) =>
   api.patch<LegalMatter>(`/legal/${id}`, data).then(r => r.data);
 export const deleteLegalMatter = (id: string) =>
   api.delete(`/legal/${id}`);
+export const getLegalMatter = (id: string) =>
+  api.get<LegalMatter>(`/legal/${id}`).then(r => r.data);
+export const getLegalSummary = () =>
+  api.get<LegalSummary>('/legal/summary').then(r => r.data);
+// Timeline
+export const addLegalEvent = (matterId: string, data: Partial<LegalEvent>) =>
+  api.post<LegalEvent>(`/legal/${matterId}/events`, data).then(r => r.data);
+export const updateLegalEvent = (matterId: string, eventId: string, data: Partial<LegalEvent>) =>
+  api.patch<LegalEvent>(`/legal/${matterId}/events/${eventId}`, data).then(r => r.data);
+export const deleteLegalEvent = (matterId: string, eventId: string) =>
+  api.delete(`/legal/${matterId}/events/${eventId}`);
+// Fees and payments
+export const addLegalFee = (matterId: string, data: Partial<LegalFee>) =>
+  api.post<LegalFee>(`/legal/${matterId}/fees`, data).then(r => r.data);
+export const updateLegalFee = (matterId: string, feeId: string, data: Partial<LegalFee>) =>
+  api.patch<LegalFee>(`/legal/${matterId}/fees/${feeId}`, data).then(r => r.data);
+export const deleteLegalFee = (matterId: string, feeId: string) =>
+  api.delete(`/legal/${matterId}/fees/${feeId}`);
+// Documents
+export const getLegalDocuments = (matterId: string) =>
+  api.get<Document[]>(`/legal/${matterId}/documents`).then(r => r.data);
+export const addLegalDocument = (matterId: string, data: { fileData: string; filename?: string; category: string; title?: string; notes?: string }) =>
+  api.post<Document>(`/legal/${matterId}/documents`, data).then(r => r.data);
+export const getLegalDocumentUrl = (matterId: string, docId: string) =>
+  api.get<{ url: string }>(`/legal/${matterId}/documents/${docId}/url`).then(r => r.data);
+export const deleteLegalDocument = (matterId: string, docId: string) =>
+  api.delete(`/legal/${matterId}/documents/${docId}`);
 
 // P&L
 export const getPortfolioPnL = (params?: { start?: string; end?: string }) =>
