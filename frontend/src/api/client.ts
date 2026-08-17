@@ -110,6 +110,14 @@ export const addLeaseDocument = (leaseId: string, data: { fileData: string; file
   api.post<Document>(`/leases/${leaseId}/documents`, data).then(r => r.data);
 export const getLeaseDocumentViewUrl = (leaseId: string, docId: string) =>
   api.get<{ url: string }>(`/leases/${leaseId}/documents/${docId}/url`).then(r => r.data);
+export interface ExtractedLeaseTerms {
+  startDate: string | null; endDate: string | null; rentAmount: number | null;
+  securityDeposit: number | null; leaseType: 'FIXED_TERM' | 'MONTH_TO_MONTH' | null;
+  rentDueDay: number | null; lateFeeAmount: number | null; lateFeePercent: number | null;
+  lateFeeGraceDays: number | null; tenantNames: string[]; businessName: string | null; notes: string | null;
+}
+export const extractLeaseTerms = (leaseId: string, fileData: string, filename: string) =>
+  api.post<ExtractedLeaseTerms>(`/leases/${leaseId}/extract-terms`, { fileData, filename }).then(r => r.data);
 export const deleteLeaseDocument = (leaseId: string, docId: string) =>
   api.delete(`/leases/${leaseId}/documents/${docId}`);
 export const addScheduledIncrease = (leaseId: string, data: { effectiveDate: string; newAmount?: number | null; percent?: number | null; percentMax?: number | null; note?: string | null }) =>
