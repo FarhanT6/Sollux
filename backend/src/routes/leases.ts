@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { uploadDocument, getSignedDocumentUrl } from '../services/s3Service';
+import { extractLeaseTerms } from '../services/leaseExtract';
 
 const router = Router();
 router.use(attachDbUser);
@@ -23,6 +24,7 @@ const LeaseSchema = z.object({
   documentUrl: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
   arrearsBalance: z.number().min(0).optional(),
+  rentDueDay: z.number().int().min(1).max(31).optional().nullable(),
   tenantIds: z.array(z.string()).optional(),
   manualLikelihood: z.enum(['high', 'medium', 'low', 'none']).optional().nullable(),
   manualLikelihoodNote: z.string().optional().nullable(),
@@ -365,6 +367,26 @@ router.post('/:id/documents', async (req, res, next) => {
     });
     res.status(201).json(doc);
   } catch (err) { next(err); }
+});
+
+// POST /api/leases/:id/extract-terms — read lease dates/terms out of a lease
+// PDF using AI. Returns a SUGGESTION only; the user confirms before saving.
+router.post('/:id/extract-terms', async (req, res, next) => {
+  try {
+    const lease = await db.lease.findFirst({ where: { id: req.params.id, unit: { property: { userId: req.dbUserId! } } } });
+    if (!lease) return res.status(404).json({ error: 'Lease not found' });
+
+    const { fileData, filename } = req.body as { fileData?: string; filename?: string };
+    if (!fileData) return res.status(400).json({ error: 'fileData (base64) is required' });
+
+    const terms = await extractLeaseTerms(Buffer.from(fileData, 'base64'), filename || 'lease.pdf');
+    res.json(terms);
+  } catch (err: any) {
+    if (err?.message?.includes('ANTHROPIC_API_KEY')) {
+      return res.status(503).json({ error: 'AI extraction is not configured on the server.' });
+    }
+    next(err);
+  }
 });
 
 // GET /api/leases/:id/documents/:docId/url — signed URL to view an attachment

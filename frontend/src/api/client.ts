@@ -110,6 +110,14 @@ export const addLeaseDocument = (leaseId: string, data: { fileData: string; file
   api.post<Document>(`/leases/${leaseId}/documents`, data).then(r => r.data);
 export const getLeaseDocumentViewUrl = (leaseId: string, docId: string) =>
   api.get<{ url: string }>(`/leases/${leaseId}/documents/${docId}/url`).then(r => r.data);
+export interface ExtractedLeaseTerms {
+  startDate: string | null; endDate: string | null; rentAmount: number | null;
+  securityDeposit: number | null; leaseType: 'FIXED_TERM' | 'MONTH_TO_MONTH' | null;
+  rentDueDay: number | null; lateFeeAmount: number | null; lateFeePercent: number | null;
+  lateFeeGraceDays: number | null; tenantNames: string[]; businessName: string | null; notes: string | null;
+}
+export const extractLeaseTerms = (leaseId: string, fileData: string, filename: string) =>
+  api.post<ExtractedLeaseTerms>(`/leases/${leaseId}/extract-terms`, { fileData, filename }).then(r => r.data);
 export const deleteLeaseDocument = (leaseId: string, docId: string) =>
   api.delete(`/leases/${leaseId}/documents/${docId}`);
 export const addScheduledIncrease = (leaseId: string, data: { effectiveDate: string; newAmount?: number | null; percent?: number | null; percentMax?: number | null; note?: string | null }) =>
@@ -196,6 +204,22 @@ export const applyReconciliationStatement = (id: string) =>
   api.post<ReconciliationStatement>(`/reconciliation/statements/${id}/apply`).then(r => r.data);
 export const deleteReconciliationStatement = (id: string) =>
   api.delete(`/reconciliation/statements/${id}`);
+
+// Shared ("family") account access
+export interface AccountMember { id: string; email: string; fullName: string; phone?: string | null; createdAt?: string }
+export interface AccountInvite { id: string; email?: string | null; phone?: string | null; createdAt: string }
+export interface AccountInfo {
+  owner: AccountMember | null;
+  members: AccountMember[];
+  pendingInvites: AccountInvite[];
+  me: { id: string; email: string; fullName: string } | null;
+  isOwner: boolean;
+}
+export const getAccount = () => api.get<AccountInfo>('/account').then(r => r.data);
+export const inviteAccountMember = (data: { email?: string; phone?: string }) =>
+  api.post<{ linked: boolean }>('/account/invites', data).then(r => r.data);
+export const cancelAccountInvite = (id: string) => api.delete(`/account/invites/${id}`);
+export const removeAccountMember = (id: string) => api.delete(`/account/members/${id}`);
 
 // Scanned/digitized documents (phone scans, printer imports — auto-sorted mail)
 export const getDocuments = (params?: { propertyId?: string; category?: DocumentCategory }) =>

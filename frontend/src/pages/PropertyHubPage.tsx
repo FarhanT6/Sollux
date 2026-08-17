@@ -9,11 +9,11 @@ import {
   updateExpense, deleteExpense, updateInsurancePolicy, deleteInsurancePolicy,
   updateTaxAssessment, deleteTaxAssessment, updateImprovement, deleteImprovement,
   updateLease, updateProperty, lookupPropertyByAddress,
-  createLease, getTenants, createTenant, getUnits, createUnit,
+  createLease, getTenants, createTenant, deleteTenant, getUnits, createUnit,
   getDocuments, getDocumentUrl, deleteDocument, confirmScannedDocument, downloadRentRoll, downloadT12,
   getT12Manifest, RENT_ROLL_COLUMNS,
   getRentChanges, addRentChange, deleteRentChange, uploadLeaseDocument,
-  getLeaseDocuments, addLeaseDocument, getLeaseDocumentViewUrl, deleteLeaseDocument,
+  getLeaseDocuments, addLeaseDocument, getLeaseDocumentViewUrl, deleteLeaseDocument, extractLeaseTerms,
   addScheduledIncrease, applyScheduledIncrease, deleteScheduledIncrease,
   addLeaseUtilityCharge, deleteLeaseUtilityCharge,
 } from '../api/client';
@@ -28,6 +28,31 @@ import { fmtDate as fmtDateSafe } from '../lib/date';
 const LEASE_DOC_CATEGORIES = ['LEASE', 'APPLICATION', 'IDENTITY', 'SCREENING', 'OTHER'] as const;
 
 const UTILITY_CHARGE_CATEGORIES = ['WATER', 'ELECTRIC', 'GAS', 'SEWER', 'TRASH', 'INTERNET', 'PHONE', 'SOLAR', 'OTHER'];
+
+// Lease term status: expired / expiring soon / active, from the end date.
+// A fixed-term lease past its end date continues month-to-month (holdover)
+// until a new one is signed — the worker flips leaseType, and we surface it
+// here so it's visible either way.
+function leaseTermStatus(lease: Lease): { label: string; pill: 'green' | 'amber' | 'red' | 'gray'; detail: string } | null {
+  if (lease.status !== 'ACTIVE') return null;
+  if (!lease.endDate) return { label: 'Month-to-month', pill: 'gray', detail: 'No fixed end date' };
+
+  const end = new Date(lease.endDate);
+  const now = new Date();
+  const days = Math.ceil((end.getTime() - now.getTime()) / 86400000);
+
+  if (days < 0) {
+    return {
+      label: 'Holdover',
+      pill: 'red',
+      detail: `Lease ended ${Math.abs(days)} day${Math.abs(days) === 1 ? '' : 's'} ago — continuing month-to-month until a new lease is signed`,
+    };
+  }
+  if (days <= 60) {
+    return { label: `Expires in ${days}d`, pill: 'amber', detail: `Lease ends ${fmtDateSafe(lease.endDate)}` };
+  }
+  return { label: 'Active term', pill: 'green', detail: `Lease ends ${fmtDateSafe(lease.endDate)}` };
+}
 
 // A lease's rentAmount is the TOTAL the tenant pays. Utility charges break out
 // the reimbursement portion, so base rent is the remainder.
@@ -741,7 +766,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
     unitId: '', rentAmount: '', securityDeposit: '', startDate: '', endDate: '',
     leaseType: 'MONTH_TO_MONTH', status: 'ACTIVE', arrearsBalance: '', notes: '',
     rentEffectiveDate: '',
-    lateFeeAmount: '', lateFeePercent: '', lateFeeGraceDays: '', businessName: '',
+    lateFeeAmount: '', lateFeePercent: '', lateFeeGraceDays: '', businessName: '', rentDueDay: '',
   });
   // Inline "add scheduled increase" form (date + amount OR percent/range + note)
   const [siForm, setSiForm] = useState({ effectiveDate: '', newAmount: '', percent: '', percentMax: '', note: '' });
@@ -749,10 +774,14 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   const [ucForm, setUcForm] = useState({ category: 'WATER', amount: '', note: '' });
   const [editTenantIds, setEditTenantIds] = useState<string[]>([]);
   const [newTenantName, setNewTenantName] = useState('');
+  const [deletingTenant, setDeletingTenant] = useState<string | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [uploadingDoc, setUploadingDoc] = useState(false);
   const [docCategory, setDocCategory] = useState<string>('LEASE');
   const [leaseDocs, setLeaseDocs] = useState<Record<string, DocType[]>>({});
+  // AI-suggested lease terms from an uploaded lease agreement (user confirms)
+  const [suggested, setSuggested] = useState<{ leaseId: string; terms: any } | null>(null);
+  const [extracting, setExtracting] = useState(false);
   const [showNewLease, setShowNewLease] = useState(false);
   const [units, setUnits] = useState<Unit[]>([]);
   const [allTenants, setAllTenants] = useState<Tenant[]>([]);
@@ -781,6 +810,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
       lateFeePercent: lease.lateFeePercent != null ? String(lease.lateFeePercent) : '',
       lateFeeGraceDays: lease.lateFeeGraceDays != null ? String(lease.lateFeeGraceDays) : '',
       businessName: lease.businessName ?? '',
+      rentDueDay: lease.rentDueDay != null ? String(lease.rentDueDay) : '',
     });
     setSiForm({ effectiveDate: '', newAmount: '', percent: '', percentMax: '', note: '' });
     setUcForm({ category: 'WATER', amount: '', note: '' });
@@ -798,6 +828,31 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
     setAllTenants(prev => [...prev, created]);
     setEditTenantIds(prev => [...prev, created.id]);
     setNewTenantName('');
+  }
+
+  // Permanently delete the tenant record itself — not the same as taking them
+  // off this lease. The LeaseTenant links cascade, so the tenant disappears
+  // from every lease they were on (here and on other properties), which is why
+  // we re-fetch leases afterwards rather than just patching local state.
+  async function deleteTenantRecord(tenantId: string) {
+    const fromLease = leases.flatMap(l => l.leaseTenants ?? []).find(lt => lt.tenantId === tenantId)?.tenant;
+    const name = (fromLease ?? allTenants.find(x => x.id === tenantId))?.fullName ?? 'this tenant';
+    const onLeases = leases.filter(l => (l.leaseTenants ?? []).some(lt => lt.tenantId === tenantId)).length;
+    const warning = onLeases > 0
+      ? `\n\nThey are on ${onLeases} lease${onLeases === 1 ? '' : 's'} at this property and will be removed from ${onLeases === 1 ? 'it' : 'them'}. The lease${onLeases === 1 ? '' : 's'}, rent history, and payments are kept.`
+      : '';
+    if (!confirm(`Permanently delete ${name}?${warning}\n\nThis cannot be undone. To just take them off this lease instead, use the ✕ on their name.`)) return;
+    setDeletingTenant(tenantId);
+    try {
+      await deleteTenant(tenantId);
+      setAllTenants(prev => prev.filter(x => x.id !== tenantId));
+      setEditTenantIds(prev => prev.filter(x => x !== tenantId));
+      setLeases(await getLeases({ propertyId }));
+    } catch (err: any) {
+      alert(err?.response?.data?.error ?? 'Could not delete that tenant.');
+    } finally {
+      setDeletingTenant(null);
+    }
   }
 
   async function saveEditLease(leaseId: string) {
@@ -820,6 +875,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
         lateFeePercent: editForm.lateFeePercent ? parseFloat(editForm.lateFeePercent) : null,
         lateFeeGraceDays: editForm.lateFeeGraceDays ? parseInt(editForm.lateFeeGraceDays) : null,
         businessName: editForm.businessName || null,
+        rentDueDay: editForm.rentDueDay ? parseInt(editForm.rentDueDay) : null,
       });
       const updated = await getLeases({ propertyId });
       setLeases(updated);
@@ -851,12 +907,45 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
       }
       const docs = await getLeaseDocuments(leaseId);
       setLeaseDocs(prev => ({ ...prev, [leaseId]: docs }));
+
+      // For a lease agreement, offer to read the term dates out of the PDF.
+      if (docCategory === 'LEASE') {
+        setExtracting(true);
+        try {
+          const terms = await extractLeaseTerms(leaseId, base64, file.name);
+          if (terms.startDate || terms.endDate || terms.rentAmount) {
+            setSuggested({ leaseId, terms });
+          }
+        } catch { /* extraction is a convenience; the upload already succeeded */ }
+        finally { setExtracting(false); }
+      }
     } catch (err: any) {
       const msg = err?.response?.status === 413
         ? 'That file is too large to upload. Try a smaller PDF or compress it.'
         : (err?.response?.data?.error || 'Upload failed. Please try again.');
       alert(msg);
     } finally { setUploadingDoc(false); }
+  }
+
+  // Copy AI-read lease terms into the edit form. Only fills fields the
+  // document actually stated; nothing is saved until "Save changes".
+  function applySuggestedTerms() {
+    if (!suggested) return;
+    const t = suggested.terms;
+    setEditForm(f => ({
+      ...f,
+      startDate: t.startDate || f.startDate,
+      endDate: t.endDate ?? f.endDate,
+      rentAmount: t.rentAmount != null ? String(t.rentAmount) : f.rentAmount,
+      securityDeposit: t.securityDeposit != null ? String(t.securityDeposit) : f.securityDeposit,
+      leaseType: t.leaseType || f.leaseType,
+      rentDueDay: t.rentDueDay != null ? String(t.rentDueDay) : f.rentDueDay,
+      lateFeeAmount: t.lateFeeAmount != null ? String(t.lateFeeAmount) : f.lateFeeAmount,
+      lateFeePercent: t.lateFeePercent != null ? String(t.lateFeePercent) : f.lateFeePercent,
+      lateFeeGraceDays: t.lateFeeGraceDays != null ? String(t.lateFeeGraceDays) : f.lateFeeGraceDays,
+      businessName: t.businessName || f.businessName,
+    }));
+    setSuggested(null);
   }
 
   async function viewLeaseDoc(leaseId: string, docId: string) {
@@ -898,7 +987,15 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
       if (!confirm('Apply this increase now? It becomes the current rent and is logged to rent history.')) return;
     }
     await applyScheduledIncrease(leaseId, si.id, override);
-    setLeases(await getLeases({ propertyId }));
+    const updated = await getLeases({ propertyId });
+    setLeases(updated);
+    // The Apply button lives inside the edit form, whose rentAmount field still
+    // holds the pre-apply value. Without syncing it, a later "Save changes"
+    // would submit the stale rent and silently undo the increase.
+    const fresh = updated.find(l => l.id === leaseId);
+    if (fresh && editLease === leaseId) {
+      setEditForm(f => ({ ...f, rentAmount: String(fresh.rentAmount ?? ''), rentEffectiveDate: '' }));
+    }
     if (rentChanges[leaseId]) getRentChanges(leaseId).then(rc => setRentChanges(prev => ({ ...prev, [leaseId]: rc })));
   }
 
@@ -1043,7 +1140,18 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
         <NewLeaseModal
           propertyId={propertyId}
           onClose={() => setShowNewLease(false)}
-          onCreated={async () => { setLeases(await getLeases({ propertyId })); setShowNewLease(false); }}
+          onCreated={async () => {
+            // The modal can create units and tenants of its own, so refresh
+            // those lists too — otherwise the edit form can't resolve the new
+            // unit or tenant names and renders a blank select / "…" chips.
+            const [freshLeases, freshUnits, freshTenants] = await Promise.all([
+              getLeases({ propertyId }), getUnits({ propertyId }), getTenants(),
+            ]);
+            setLeases(freshLeases);
+            setUnits(freshUnits);
+            setAllTenants(freshTenants);
+            setShowNewLease(false);
+          }}
         />
       )}
 
@@ -1074,6 +1182,11 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                         <span className={`pill text-xs ${lease.status === 'ACTIVE' ? 'pill-green' : lease.status === 'PENDING' ? 'pill-amber' : 'pill-gray'}`}>
                           {lease.status}
                         </span>
+                        {(() => {
+                          const term = leaseTermStatus(lease);
+                          if (!term || term.pill === 'green') return null;
+                          return <span className={`pill text-xs pill-${term.pill}`} title={term.detail}>{term.label}</span>;
+                        })()}
                       </div>
                       {lease.businessName && (
                         <p className="text-xs text-gray-400">{lease.businessName}</p>
@@ -1100,6 +1213,30 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                         );
                       })()}
                       {arrears > 0 && <p className="text-xs text-red-400">{money(arrears)} arrears</p>}
+                      {(() => {
+                        // Current month's rent is due-but-not-arrears until the
+                        // due day passes; after that the worker rolls it in.
+                        if (lease.status !== 'ACTIVE') return null;
+                        const now = new Date();
+                        const periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+                        const paidThisPeriod = (lease.rentPayments ?? [])
+                          .filter(p => {
+                            const d = new Date(p.periodDate);
+                            return d.getFullYear() === periodStart.getFullYear() && d.getMonth() === periodStart.getMonth();
+                          })
+                          .reduce((s, p) => s + Number(p.amount), 0);
+                        const owed = Math.max(0, Number(lease.rentAmount) - paidThisPeriod);
+                        if (owed <= 0) return null;
+                        const dueDay = lease.rentDueDay ?? 1;
+                        const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+                        const dueDate = new Date(now.getFullYear(), now.getMonth(), Math.min(dueDay, daysInMonth));
+                        const overdue = now > dueDate;
+                        return (
+                          <p className={`text-xs ${overdue ? 'text-red-400' : 'text-gray-500'}`}>
+                            {money(owed)} {overdue ? 'overdue this month' : `due ${fmtDateSafe(dueDate.toISOString(), 'MMM d')}`}
+                          </p>
+                        );
+                      })()}
                       {Number(lease.securityDeposit ?? 0) > 0 && <p className="text-xs text-gray-500">{money(Number(lease.securityDeposit))} dep.</p>}
                       {lease.rentChanges && lease.rentChanges.length > 0 && (
                         <p className="text-xs text-gray-500">Last raised {fmtDate(lease.rentChanges[0].effectiveDate)}</p>
@@ -1140,6 +1277,12 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                   <div className="px-4 py-3 space-y-3" style={{ background: 'rgba(255,255,255,0.03)', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                     <div className="grid grid-cols-3 gap-2">
                       <select value={editForm.unitId} onChange={e => setEditForm(f => ({ ...f, unitId: e.target.value }))} className="input-dark text-xs">
+                        {/* The lease carries its own unit, so offer it even when
+                            the units list hasn't caught up — a select with no
+                            matching option renders blank. */}
+                        {!units.some(u => u.id === lease.unitId) && lease.unit && (
+                          <option value={lease.unitId}>{lease.unit.unitLabel}</option>
+                        )}
                         {units.map(u => <option key={u.id} value={u.id}>{u.unitLabel}</option>)}
                       </select>
                       <input type="number" placeholder="Rent/mo" value={editForm.rentAmount} onChange={e => setEditForm(f => ({ ...f, rentAmount: e.target.value }))} className="input-dark text-xs" />
@@ -1157,7 +1300,17 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                         <label className="block text-xs text-gray-500 mb-0.5">Arrears balance</label>
                         <input type="number" placeholder="0" value={editForm.arrearsBalance} onChange={e => setEditForm(f => ({ ...f, arrearsBalance: e.target.value }))} className="input-dark text-xs w-full" />
                       </div>
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-0.5">Rent due day</label>
+                        <input type="number" min={1} max={31} placeholder="1" value={editForm.rentDueDay}
+                          onChange={e => setEditForm(f => ({ ...f, rentDueDay: e.target.value }))}
+                          className="input-dark text-xs w-full"
+                          title="Day of the month rent is due. This month's rent only becomes arrears after this day passes unpaid." />
+                      </div>
                     </div>
+                    <p className="text-xs text-gray-600 -mt-1">
+                      This month's rent isn't counted as arrears until day {editForm.rentDueDay || '1'} passes unpaid — then the unpaid amount rolls into the arrears balance.
+                    </p>
 
                     {/* When rent changed, capture the effective date for the history log */}
                     {parseFloat(editForm.rentAmount || '0') !== Number(lease.rentAmount) && (
@@ -1171,19 +1324,31 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                     {/* Co-tenants */}
                     <div>
                       <label className="block text-xs text-gray-500 mb-1">Tenants on this lease</label>
-                      <div className="flex flex-wrap gap-1.5 mb-2">
+                      <div className="flex flex-wrap gap-1.5 mb-1">
                         {editTenantIds.length === 0 && <span className="text-xs text-gray-600">No tenants</span>}
                         {editTenantIds.map((tid, i) => {
-                          const t = allTenants.find(x => x.id === tid);
+                          // Prefer the tenant record the lease already carries —
+                          // allTenants is fetched on mount and may not include
+                          // someone created since, which rendered a bare "…".
+                          const t = (lease.leaseTenants ?? []).find(lt => lt.tenantId === tid)?.tenant
+                            ?? allTenants.find(x => x.id === tid);
                           return (
                             <span key={tid} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.08)' }}>
                               {i === 0 && <span className="text-amber-400" title="Primary">★</span>}
                               {t?.fullName ?? '…'}
-                              <button onClick={() => setEditTenantIds(prev => prev.filter(x => x !== tid))} className="text-gray-500 hover:text-red-400">✕</button>
+                              <button onClick={() => setEditTenantIds(prev => prev.filter(x => x !== tid))}
+                                title="Remove from this lease (saved with Save changes)"
+                                className="text-gray-500 hover:text-red-400">✕</button>
+                              <button onClick={() => deleteTenantRecord(tid)} disabled={deletingTenant === tid}
+                                title="Delete this tenant permanently"
+                                className="text-gray-600 hover:text-red-500 disabled:opacity-40">
+                                {deletingTenant === tid ? '…' : '🗑'}
+                              </button>
                             </span>
                           );
                         })}
                       </div>
+                      <p className="text-xs text-gray-600 mb-2">✕ takes them off this lease · 🗑 deletes the tenant everywhere</p>
                       <div className="flex gap-2 flex-wrap items-center">
                         <select value="" onChange={e => { if (e.target.value) setEditTenantIds(prev => prev.includes(e.target.value) ? prev : [...prev, e.target.value]); }} className="input-dark text-xs">
                           <option value="">+ Add existing tenant…</option>
@@ -1334,11 +1499,43 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                           {LEASE_DOC_CATEGORIES.map(c => <option key={c} value={c}>{DOCUMENT_CATEGORY_LABELS[c]}</option>)}
                         </select>
                         <label className="text-xs text-amber-400 hover:text-amber-300 cursor-pointer">
-                          {uploadingDoc ? 'Uploading…' : '+ Import file'}
-                          <input type="file" accept="application/pdf,image/*" className="hidden" disabled={uploadingDoc}
+                          {uploadingDoc ? 'Uploading…' : extracting ? 'Reading lease…' : '+ Import file'}
+                          <input type="file" accept="application/pdf,image/*" className="hidden" disabled={uploadingDoc || extracting}
                             onChange={e => { const f = e.target.files?.[0]; if (f) handleLeaseDocUpload(lease.id, f); e.target.value = ''; }} />
                         </label>
+                        {docCategory === 'LEASE' && <span className="text-xs text-gray-600">dates are read from the agreement automatically</span>}
                       </div>
+
+                      {/* AI-read lease terms — review before applying */}
+                      {suggested?.leaseId === lease.id && (
+                        <div className="rounded-lg p-3 mb-2" style={{ background: 'rgba(245,166,35,0.06)', border: '1px solid rgba(245,166,35,0.25)' }}>
+                          <p className="text-xs font-medium text-amber-400 mb-1.5">Found these terms in the lease agreement</p>
+                          <div className="grid grid-cols-2 gap-x-6 gap-y-0.5 mb-2">
+                            {[
+                              ['Start', suggested.terms.startDate ? fmtDate(suggested.terms.startDate) : null],
+                              ['End', suggested.terms.endDate ? fmtDate(suggested.terms.endDate) : null],
+                              ['Rent', suggested.terms.rentAmount != null ? money(suggested.terms.rentAmount) : null],
+                              ['Deposit', suggested.terms.securityDeposit != null ? money(suggested.terms.securityDeposit) : null],
+                              ['Type', suggested.terms.leaseType === 'FIXED_TERM' ? 'Fixed term' : suggested.terms.leaseType === 'MONTH_TO_MONTH' ? 'Month-to-month' : null],
+                              ['Rent due day', suggested.terms.rentDueDay != null ? String(suggested.terms.rentDueDay) : null],
+                              ['Late fee', suggested.terms.lateFeePercent != null ? `${suggested.terms.lateFeePercent}%` : suggested.terms.lateFeeAmount != null ? money(suggested.terms.lateFeeAmount) : null],
+                              ['Grace days', suggested.terms.lateFeeGraceDays != null ? String(suggested.terms.lateFeeGraceDays) : null],
+                              ['Business', suggested.terms.businessName],
+                            ].filter(([, v]) => v).map(([label, v]) => (
+                              <div key={String(label)} className="flex justify-between text-xs">
+                                <span className="text-gray-500">{label}</span>
+                                <span className="text-gray-200">{v}</span>
+                              </div>
+                            ))}
+                          </div>
+                          {suggested.terms.notes && <p className="text-xs text-gray-500 mb-2">{suggested.terms.notes}</p>}
+                          <div className="flex gap-2">
+                            <button onClick={applySuggestedTerms} className="btn btn-primary text-xs">Fill these in</button>
+                            <button onClick={() => setSuggested(null)} className="text-xs text-gray-500 hover:text-gray-300">Ignore</button>
+                            <span className="text-xs text-gray-600 self-center">Review, then Save changes</span>
+                          </div>
+                        </div>
+                      )}
                       <div className="space-y-1">
                         {(leaseDocs[lease.id] ?? []).length === 0 ? (
                           <span className="text-xs text-gray-600">No documents attached</span>

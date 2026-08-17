@@ -32,6 +32,8 @@ import type { PlaidItem } from '../api/client';
 import type { BankAccount, IndexRate } from '../types';
 import { format } from 'date-fns';
 import { fmtDate as fmtDateSafe } from '../lib/date';
+import { getAccount, inviteAccountMember, cancelAccountInvite, removeAccountMember } from '../api/client';
+import type { AccountInfo } from '../api/client';
 
 type SettingsTab = 'account' | 'notifications' | 'banking' | 'rates';
 
@@ -175,6 +177,8 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
+
+        <SharedAccessCard />
 
         <div className="card p-5 mb-4">
           <h2 className="text-sm font-semibold text-white mb-4">Subscription</h2>
@@ -891,5 +895,102 @@ function PlaidConnectButton({ onSuccess }: { onSuccess: () => void }) {
     >
       {loading ? 'Connecting…' : '+ Connect bank'}
     </button>
+  );
+}
+
+// ─── Shared ("family") account access ────────────────────────────────────────
+// Members sign in with their own credentials but see and edit the owner's
+// data — every API route resolves to the owner's account for them.
+function SharedAccessCard() {
+  const [info, setInfo] = useState<AccountInfo | null>(null);
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const load = () => getAccount().then(setInfo).catch(() => {});
+  useEffect(() => { load(); }, []);
+
+  async function add() {
+    if (!email.trim() && !phone.trim()) return;
+    setBusy(true); setErr('');
+    try {
+      await inviteAccountMember({ email: email.trim() || undefined, phone: phone.trim() || undefined });
+      setEmail(''); setPhone('');
+      await load();
+    } catch (e: any) {
+      setErr(e?.response?.data?.error || 'Could not add that person.');
+    } finally { setBusy(false); }
+  }
+
+  if (!info) return null;
+
+  return (
+    <div className="card p-5 mb-4">
+      <h2 className="text-sm font-semibold text-white mb-1">Shared access</h2>
+      <p className="text-xs text-gray-400 mb-4">
+        {info.isOwner
+          ? 'People you add sign in with their own login but see and edit this same account — all properties, tenants, and finances.'
+          : `You have shared access to ${info.owner?.fullName || info.owner?.email || 'another'}'s account. Only the owner can manage members.`}
+      </p>
+
+      <div className="space-y-2 mb-4">
+        <div className="flex items-center justify-between py-2 border-b border-white/8">
+          <div>
+            <p className="text-sm text-gray-100">{info.owner?.fullName || info.owner?.email}</p>
+            <p className="text-xs text-gray-500">{info.owner?.email}</p>
+          </div>
+          <span className="pill pill-amber">Owner</span>
+        </div>
+        {info.members.map(m => (
+          <div key={m.id} className="flex items-center justify-between py-2 border-b border-white/8 last:border-0">
+            <div>
+              <p className="text-sm text-gray-100">{m.fullName || m.email}</p>
+              <p className="text-xs text-gray-500">{m.email}{m.phone ? ` · ${m.phone}` : ''}</p>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="pill pill-green">Full access</span>
+              {info.isOwner && (
+                <button onClick={async () => { if (confirm(`Remove ${m.fullName || m.email}'s access?`)) { await removeAccountMember(m.id); load(); } }}
+                  className="text-xs text-red-400 hover:text-red-300">Remove</button>
+              )}
+            </div>
+          </div>
+        ))}
+        {info.pendingInvites.map(inv => (
+          <div key={inv.id} className="flex items-center justify-between py-2 border-b border-white/8 last:border-0">
+            <div>
+              <p className="text-sm text-gray-300">{inv.email || inv.phone}</p>
+              <p className="text-xs text-gray-500">Access starts when they sign up with this {inv.email ? 'email' : 'phone number'}</p>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="pill pill-gray">Pending</span>
+              {info.isOwner && (
+                <button onClick={async () => { await cancelAccountInvite(inv.id); load(); }}
+                  className="text-xs text-red-400 hover:text-red-300">Cancel</button>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {info.isOwner && (
+        <>
+          <div className="flex gap-2 flex-wrap items-center">
+            <input value={email} onChange={e => setEmail(e.target.value)} placeholder="their@email.com"
+              className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-gray-200 flex-1 min-w-48" />
+            <span className="text-xs text-gray-600">or</span>
+            <input value={phone} onChange={e => setPhone(e.target.value)} placeholder="760-672-7717"
+              className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-gray-200 w-40" />
+            <button onClick={add} disabled={busy || (!email.trim() && !phone.trim())}
+              className="btn btn-primary text-xs disabled:opacity-40">{busy ? 'Adding…' : 'Add person'}</button>
+          </div>
+          {err && <p className="text-xs text-red-400 mt-2">{err}</p>}
+          <p className="text-xs text-gray-600 mt-2">
+            They sign up at Sollux with that email or phone — access links automatically on their first sign-in.
+          </p>
+        </>
+      )}
+    </div>
   );
 }

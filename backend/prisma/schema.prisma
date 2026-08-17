@@ -20,9 +20,17 @@ model User {
   subscriptionTier   SubscriptionTier     @default(BASIC)
   stripeCustomerId   String?
   clerkUserId        String?              @unique
+  // Shared ("family") access: when set, this user signs in with their own
+  // credentials but operates on the owner's data. Every route scopes by the
+  // resolved owner id, so members see and edit exactly the same records.
+  // Owners have this null. One level only — a member cannot own members.
+  ownerUserId        String?
+  owner              User?                @relation("AccountMembers", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  members            User[]               @relation("AccountMembers")
   createdAt          DateTime             @default(now())
   updatedAt          DateTime             @updatedAt
 
+  invitesSent             AccountInvite[]
   properties              Property[]
   notificationPreferences NotificationPreference[]
   gmailTokens             GmailToken[]
@@ -41,6 +49,24 @@ enum SubscriptionTier {
   BASIC
   PRO
   BUSINESS
+}
+
+// Pending shared-access invite. The invitee signs up with their own login
+// (email or phone); on their first authenticated request we match the invite
+// and link them to the owner's account.
+model AccountInvite {
+  id          String    @id @default(cuid())
+  ownerUserId String
+  owner       User      @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  email       String?
+  phone       String?
+  acceptedAt  DateTime?
+  acceptedByUserId String?
+  createdAt   DateTime  @default(now())
+
+  @@index([email])
+  @@index([phone])
+  @@map("account_invites")
 }
 
 // ─── PROPERTIES ──────────────────────────────────────────
@@ -479,6 +505,10 @@ model Lease {
   documentUrl          String?
   notes                String?
   arrearsBalance       Decimal     @default(0) @db.Decimal(10, 2)
+  // Day of month rent is due (1-31, default 1). Current-month rent is NOT
+  // counted as arrears until this day passes unpaid — see accrueOverdueRent.
+  rentDueDay           Int?
+  // Last period already rolled into arrearsBalance, so accrual is idempotent.
   arrearsCaughtUpThrough DateTime?
   manualLikelihood     String?     // 'high' | 'medium' | 'low' | 'none' — overrides the automated delinquency score
   manualLikelihoodNote String?
