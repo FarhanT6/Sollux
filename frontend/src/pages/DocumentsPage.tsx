@@ -7,7 +7,7 @@ import { fmtDate } from '../lib/date';
 
 const inputClass = 'rounded-lg px-3 py-1.5 text-sm text-gray-300 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-amber-500/50 bg-white/6 border border-white/8';
 
-export default function DocumentsPage() {
+export default function DocumentsPage({ embedded }: { embedded?: boolean } = {}) {
   const [statements, setStatements] = useState<Statement[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -65,11 +65,13 @@ export default function DocumentsPage() {
 
   return (
     <div>
-      <PageHeader
-        title="Document vault"
-        subtitle={`${statements.length} statements · ${pdfCount} with PDF · ${properties.length} properties`}
-      />
-      <div className="px-6 py-5">
+      {!embedded && (
+        <PageHeader
+          title="Document vault"
+          subtitle={`${statements.length} statements · ${pdfCount} with PDF · ${properties.length} properties`}
+        />
+      )}
+      <div className={embedded ? '' : 'px-6 py-5'}>
         {/* Filter bar */}
         <div className="flex gap-3 mb-6">
           <input

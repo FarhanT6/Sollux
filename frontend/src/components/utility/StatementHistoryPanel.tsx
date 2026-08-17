@@ -3,7 +3,7 @@ import { format, isAfter } from 'date-fns';
 import { getStatements, deleteStatement, patchStatement } from '../../api/client';
 import type { Statement } from '../../types';
 import { Skeleton, Pill } from '../ui';
-import { fmtDate } from '../../lib/date';
+import { fmtDate, yearOf } from '../../lib/date';
 
 interface Props {
   utilityAccountId: string;
@@ -105,7 +105,7 @@ export default function StatementHistoryPanel({ utilityAccountId }: Props) {
 
   const currentYear = new Date().getFullYear();
   const ytd = rows
-    .filter(r => new Date(r.statementDate).getFullYear() === currentYear)
+    .filter(r => yearOf(r.statementDate) === currentYear)
     .reduce((sum, r) => sum + Number(r.amountDue ?? 0), 0);
 
   return (

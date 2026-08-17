@@ -12,7 +12,6 @@ import FinancesPage from './pages/FinancesPage';
 import TenantsHubPage from './pages/TenantsHubPage';
 import PortfolioPage from './pages/PortfolioPage';
 import PropertyHubPage from './pages/PropertyHubPage';
-import IncomingPaymentsPage from './pages/IncomingPaymentsPage';
 import ImportPage from './pages/ImportPage';
 import ScanPage from './pages/ScanPage';
 // Still used for deep-link detail pages
@@ -64,8 +63,8 @@ export default function App() {
           <Route path="tenants/:id" element={<TenantDetailPage />} />
           <Route path="notices/:id" element={<NoticeDetailPage />} />
 
-          {/* Incoming bank payments awaiting review */}
-          <Route path="incoming-payments" element={<IncomingPaymentsPage />} />
+          {/* Lives as a Finances tab; keep the direct URL working for links. */}
+          <Route path="incoming-payments" element={<Navigate to="/finances?tab=incoming" replace />} />
 
           {/* Standalone pages */}
           <Route path="insights" element={<InsightsPage />} />

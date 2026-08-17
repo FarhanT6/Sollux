@@ -9,7 +9,7 @@ import {
 import { CATEGORY_LABELS, CATEGORY_COLORS, LOAN_TYPE_LABELS } from '../types';
 import { Pill, Skeleton, EmptyState } from '../components/ui';
 import { format, isAfter } from 'date-fns';
-import { fmtDate } from '../lib/date';
+import { fmtDate, yearOf } from '../lib/date';
 
 const CATEGORY_ICONS: Record<string, string> = {
   ELECTRIC: '⚡', GAS: '🔥', WATER: '💧', SEWER: '🚿',
@@ -598,7 +598,7 @@ export default function UtilityDetailPage() {
   const resolvedByFuture = useMemo(() => computeResolvedByFutureCheckpoint(statements), [statements]);
 
   const stmtYears = useMemo(() => {
-    const years = new Set(statements.map(s => new Date(s.statementDate).getFullYear().toString()));
+    const years = new Set(statements.map(s => String(yearOf(s.statementDate))));
     return Array.from(years).sort((a, b) => Number(b) - Number(a));
   }, [statements]);
 
@@ -643,7 +643,7 @@ export default function UtilityDetailPage() {
 
   const currentYear = new Date().getFullYear();
   const ytdTotal = statements
-    .filter(s => new Date(s.statementDate).getFullYear() === currentYear)
+    .filter(s => yearOf(s.statementDate) === currentYear)
     .reduce((sum, s) => sum + Number(s.amountDue ?? 0), 0);
   const latestAmt = statements[0]?.amountDue != null ? Number(statements[0].amountDue) : null;
   const prevAmt = statements[1]?.amountDue != null ? Number(statements[1].amountDue) : null;

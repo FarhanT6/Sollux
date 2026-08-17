@@ -10,6 +10,7 @@ import {
   updateTaxAssessment, deleteTaxAssessment, updateImprovement, deleteImprovement,
   updateLease, updateProperty, lookupPropertyByAddress,
   createLease, getLease, deleteLease, getTenants, createTenant, deleteTenant, getUnits, createUnit,
+  updateUnit, deleteUnit,
   getDocuments, getDocumentUrl, deleteDocument, confirmScannedDocument, downloadRentRoll, downloadT12,
   getT12Manifest, RENT_ROLL_COLUMNS,
   getRentChanges, addRentChange, deleteRentChange, uploadLeaseDocument,
@@ -236,7 +237,7 @@ export default function PropertyHubPage() {
 
       {/* Tab content */}
       <div className="px-6 py-5">
-        {activeTab === 'Overview' && <OverviewTab property={property} pnl={pnl} leases={activeLeases} loans={loans.filter(l => l.isActive)} />}
+        {activeTab === 'Overview' && <OverviewTab property={property} pnl={pnl} leases={activeLeases} loans={loans.filter(l => l.isActive)} onPropertyChange={setProperty} />}
         {activeTab === 'Tenants' && <TenantsTab propertyId={id!} leases={leases} setLeases={setLeases} propertyType={property.type} />}
         {activeTab === 'Turnover' && <TurnoverTab report={turnover} />}
         {activeTab === 'Loans' && <LoansTab propertyId={id!} loans={loans} setLoans={setLoans} />}
@@ -612,10 +613,47 @@ function nextDueDate(dueDay: number): Date {
   return new Date(today.getFullYear(), today.getMonth() + 1, Math.min(dueDay, daysNextMonth));
 }
 
-function OverviewTab({ property, pnl, leases, loans }: {
+function OverviewTab({ property, pnl, leases, loans, onPropertyChange }: {
   property: Property; pnl: PropertyPnL | null; leases: Lease[]; loans: Loan[];
+  onPropertyChange: (p: Property) => void;
 }) {
   const units = property.units ?? [];
+  // Units could be created (inside the new-lease modal) but never renamed or
+  // removed, so a typo in a label was permanent.
+  const [editUnit, setEditUnit] = useState<string | null>(null);
+  const [unitLabel, setUnitLabel] = useState('');
+  const [busyUnit, setBusyUnit] = useState<string | null>(null);
+
+  const refreshProperty = async () => onPropertyChange(await getProperty(property.id));
+
+  async function saveUnitLabel(unitId: string) {
+    const label = unitLabel.trim();
+    if (!label) return;
+    setBusyUnit(unitId);
+    try {
+      await updateUnit(unitId, { unitLabel: label });
+      setEditUnit(null);
+      await refreshProperty();
+    } catch (err: any) {
+      alert(err?.response?.data?.error ?? 'Could not rename that unit.');
+    } finally { setBusyUnit(null); }
+  }
+
+  async function removeUnit(unitId: string, label: string) {
+    const occupied = occupiedUnitIds.has(unitId);
+    const warning = occupied
+      ? '\n\nThis unit has a lease on it. Deleting it deletes that lease and its payments, notices and rent history too.'
+      : '';
+    if (!confirm(`Delete unit "${label}"?${warning}\n\nThis cannot be undone.`)) return;
+    setBusyUnit(unitId);
+    try {
+      await deleteUnit(unitId);
+      await refreshProperty();
+    } catch (err: any) {
+      alert(err?.response?.data?.error ?? 'Could not delete that unit.');
+    } finally { setBusyUnit(null); }
+  }
+
   const occupiedUnitIds = new Set(leases.map(l => l.unitId));
   const totalDebt = loans.reduce((s, l) => s + Number(l.currentBalance ?? 0), 0);
   const equity = Number(property.estimatedValue ?? 0) - totalDebt;
@@ -737,16 +775,33 @@ function OverviewTab({ property, pnl, leases, loans }: {
             {units.map(u => {
               const occupied = occupiedUnitIds.has(u.id);
               return (
-                <div key={u.id} className="card p-3">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <p className="text-sm font-medium text-white">{u.unitLabel}</p>
-                    <span className={`pill ${occupied ? 'pill-green' : 'pill-gray'}`}>
+                <div key={u.id} className="card p-3 group">
+                  <div className="flex items-center justify-between mb-1.5 gap-2">
+                    {editUnit === u.id ? (
+                      <input autoFocus value={unitLabel} onChange={e => setUnitLabel(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') saveUnitLabel(u.id); if (e.key === 'Escape') setEditUnit(null); }}
+                        onBlur={() => saveUnitLabel(u.id)}
+                        className="input-dark text-sm flex-1 min-w-0" />
+                    ) : (
+                      <p className="text-sm font-medium text-white truncate">{u.unitLabel}</p>
+                    )}
+                    <span className={`pill flex-shrink-0 ${occupied ? 'pill-green' : 'pill-gray'}`}>
                       {occupied ? 'Occupied' : 'Vacant'}
                     </span>
                   </div>
-                  <p className="text-xs text-gray-500">
-                    {[u.bedrooms ? `${u.bedrooms}bd` : null, u.bathrooms ? `${u.bathrooms}ba` : null, u.sqft ? `${u.sqft} sqft` : null].filter(Boolean).join(' · ') || 'No details'}
-                  </p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs text-gray-500 truncate">
+                      {[u.bedrooms ? `${u.bedrooms}bd` : null, u.bathrooms ? `${u.bathrooms}ba` : null, u.sqft ? `${u.sqft} sqft` : null].filter(Boolean).join(' · ') || 'No details'}
+                    </p>
+                    {editUnit !== u.id && (
+                      <div className="flex gap-2 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onClick={() => { setEditUnit(u.id); setUnitLabel(u.unitLabel); }} disabled={busyUnit === u.id}
+                          className="text-xs text-gray-500 hover:text-amber-400 disabled:opacity-40">Rename</button>
+                        <button onClick={() => removeUnit(u.id, u.unitLabel)} disabled={busyUnit === u.id}
+                          className="text-xs text-gray-600 hover:text-red-400 disabled:opacity-40">Delete</button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               );
             })}
