@@ -10,21 +10,32 @@ import {
   updateTaxAssessment, deleteTaxAssessment, updateImprovement, deleteImprovement,
   updateLease, updateProperty, lookupPropertyByAddress,
   createLease, getTenants, createTenant, getUnits, createUnit,
-  getDocuments, getDocumentUrl, deleteDocument, downloadRentRoll, downloadT12,
+  getDocuments, getDocumentUrl, deleteDocument, confirmScannedDocument, downloadRentRoll, downloadT12,
   getT12Manifest, RENT_ROLL_COLUMNS,
   getRentChanges, addRentChange, deleteRentChange, uploadLeaseDocument,
   getLeaseDocuments, addLeaseDocument, getLeaseDocumentViewUrl, deleteLeaseDocument,
   addScheduledIncrease, applyScheduledIncrease, deleteScheduledIncrease,
+  addLeaseUtilityCharge, deleteLeaseUtilityCharge,
 } from '../api/client';
 import type {
   Property, Lease, Loan, Expense, InsurancePolicy, TaxAssessment,
-  Improvement, PropertyPnL, Tenant, Unit, Document, DocumentCategory, RentChange, ScheduledRentIncrease,
+  Improvement, PropertyPnL, Tenant, Unit, Document, DocumentCategory, PropertyType, RentChange, ScheduledRentIncrease, LeaseUtilityCharge,
 } from '../types';
-import { PROPERTY_TYPE_LABELS, EXPENSE_CATEGORY_LABELS, DOCUMENT_CATEGORY_LABELS } from '../types';
+import { PROPERTY_TYPE_LABELS, EXPENSE_CATEGORY_LABELS, DOCUMENT_CATEGORY_LABELS, CATEGORY_LABELS } from '../types';
 import type { Document as DocType } from '../types';
 import { fmtDate as fmtDateSafe } from '../lib/date';
 
 const LEASE_DOC_CATEGORIES = ['LEASE', 'APPLICATION', 'IDENTITY', 'SCREENING', 'OTHER'] as const;
+
+const UTILITY_CHARGE_CATEGORIES = ['WATER', 'ELECTRIC', 'GAS', 'SEWER', 'TRASH', 'INTERNET', 'PHONE', 'SOLAR', 'OTHER'];
+
+// A lease's rentAmount is the TOTAL the tenant pays. Utility charges break out
+// the reimbursement portion, so base rent is the remainder.
+function rentBreakdown(lease: Lease) {
+  const total = Number(lease.rentAmount ?? 0);
+  const utilities = (lease.utilityCharges ?? []).reduce((s, c) => s + Number(c.amount), 0);
+  return { total, utilities, baseRent: Math.round((total - utilities) * 100) / 100 };
+}
 
 const money = (n: number) =>
   n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
@@ -191,7 +202,7 @@ export default function PropertyHubPage() {
       {/* Tab content */}
       <div className="px-6 py-5">
         {activeTab === 'Overview' && <OverviewTab property={property} pnl={pnl} leases={activeLeases} loans={loans.filter(l => l.isActive)} />}
-        {activeTab === 'Tenants' && <TenantsTab propertyId={id!} leases={leases} setLeases={setLeases} />}
+        {activeTab === 'Tenants' && <TenantsTab propertyId={id!} leases={leases} setLeases={setLeases} propertyType={property.type} />}
         {activeTab === 'Loans' && <LoansTab propertyId={id!} loans={loans} setLoans={setLoans} />}
         {activeTab === 'Expenses' && <ExpensesTab propertyId={id!} expenses={expenses} setExpenses={setExpenses} />}
         {activeTab === 'Insurance' && <InsuranceTab propertyId={id!} policies={policies} setPolicies={setPolicies} />}
@@ -712,9 +723,10 @@ function OverviewTab({ property, pnl, leases, loans }: {
 
 // ─── Tenants ───────────────────────────────────────────────────────────────────
 
-function TenantsTab({ propertyId, leases, setLeases }: {
-  propertyId: string; leases: Lease[]; setLeases: (l: Lease[]) => void;
+function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
+  propertyId: string; leases: Lease[]; setLeases: (l: Lease[]) => void; propertyType?: PropertyType;
 }) {
+  const isCommercial = propertyType === 'COMMERCIAL';
   const [filterStatus, setFilterStatus] = useState('ACTIVE');
   const [showPayForm, setShowPayForm] = useState<string | null>(null);
   const [payAmount, setPayAmount] = useState('');
@@ -729,9 +741,12 @@ function TenantsTab({ propertyId, leases, setLeases }: {
     unitId: '', rentAmount: '', securityDeposit: '', startDate: '', endDate: '',
     leaseType: 'MONTH_TO_MONTH', status: 'ACTIVE', arrearsBalance: '', notes: '',
     rentEffectiveDate: '',
+    lateFeeAmount: '', lateFeePercent: '', lateFeeGraceDays: '', businessName: '',
   });
   // Inline "add scheduled increase" form (date + amount OR percent/range + note)
   const [siForm, setSiForm] = useState({ effectiveDate: '', newAmount: '', percent: '', percentMax: '', note: '' });
+  // Inline "add utility contribution" form (which utility + how much of the payment)
+  const [ucForm, setUcForm] = useState({ category: 'WATER', amount: '', note: '' });
   const [editTenantIds, setEditTenantIds] = useState<string[]>([]);
   const [newTenantName, setNewTenantName] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
@@ -762,8 +777,13 @@ function TenantsTab({ propertyId, leases, setLeases }: {
       arrearsBalance: String(lease.arrearsBalance ?? ''),
       notes: lease.notes ?? '',
       rentEffectiveDate: '',
+      lateFeeAmount: lease.lateFeeAmount != null ? String(lease.lateFeeAmount) : '',
+      lateFeePercent: lease.lateFeePercent != null ? String(lease.lateFeePercent) : '',
+      lateFeeGraceDays: lease.lateFeeGraceDays != null ? String(lease.lateFeeGraceDays) : '',
+      businessName: lease.businessName ?? '',
     });
     setSiForm({ effectiveDate: '', newAmount: '', percent: '', percentMax: '', note: '' });
+    setUcForm({ category: 'WATER', amount: '', note: '' });
     setEditTenantIds((lease.leaseTenants ?? []).map(lt => lt.tenantId));
     setNewTenantName('');
     setDocCategory('LEASE');
@@ -796,6 +816,10 @@ function TenantsTab({ propertyId, leases, setLeases }: {
         notes: editForm.notes || undefined,
         tenantIds: editTenantIds,
         rentEffectiveDate: rentChanged && editForm.rentEffectiveDate ? editForm.rentEffectiveDate : undefined,
+        lateFeeAmount: editForm.lateFeeAmount ? parseFloat(editForm.lateFeeAmount) : null,
+        lateFeePercent: editForm.lateFeePercent ? parseFloat(editForm.lateFeePercent) : null,
+        lateFeeGraceDays: editForm.lateFeeGraceDays ? parseInt(editForm.lateFeeGraceDays) : null,
+        businessName: editForm.businessName || null,
       });
       const updated = await getLeases({ propertyId });
       setLeases(updated);
@@ -880,6 +904,22 @@ function TenantsTab({ propertyId, leases, setLeases }: {
 
   async function removeSchedIncrease(leaseId: string, sid: string) {
     await deleteScheduledIncrease(leaseId, sid);
+    setLeases(await getLeases({ propertyId }));
+  }
+
+  async function addUtilCharge(leaseId: string) {
+    if (!ucForm.amount) return;
+    await addLeaseUtilityCharge(leaseId, {
+      category: ucForm.category,
+      amount: parseFloat(ucForm.amount),
+      note: ucForm.note || null,
+    });
+    setLeases(await getLeases({ propertyId }));
+    setUcForm({ category: 'WATER', amount: '', note: '' });
+  }
+
+  async function removeUtilCharge(leaseId: string, chargeId: string) {
+    await deleteLeaseUtilityCharge(leaseId, chargeId);
     setLeases(await getLeases({ propertyId }));
   }
 
@@ -1035,12 +1075,30 @@ function TenantsTab({ propertyId, leases, setLeases }: {
                           {lease.status}
                         </span>
                       </div>
+                      {lease.businessName && (
+                        <p className="text-xs text-gray-400">{lease.businessName}</p>
+                      )}
                       <p className="text-xs text-gray-500">
                         Unit {lease.unit?.unitLabel} · {lease.leaseType === 'FIXED_TERM' ? `${fmtDate(lease.startDate)} – ${fmtDate(lease.endDate)}` : `Month-to-month from ${fmtDate(lease.startDate)}`}
+                        {lease.leaseType === 'MONTH_TO_MONTH' && lease.endDate && new Date(lease.endDate) < new Date() && (
+                          <span className="text-gray-600"> · holdover since {fmtDate(lease.endDate)}</span>
+                        )}
                       </p>
                     </div>
                     <div className="text-right flex-shrink-0">
                       <p className="text-sm font-semibold text-white">{money(Number(lease.rentAmount))}/mo</p>
+                      {(() => {
+                        const { utilities, baseRent } = rentBreakdown(lease);
+                        if (utilities <= 0) return null;
+                        const labels = (lease.utilityCharges ?? [])
+                          .map(uc => CATEGORY_LABELS[uc.category as keyof typeof CATEGORY_LABELS] ?? uc.category)
+                          .join(', ');
+                        return (
+                          <p className="text-xs text-gray-500" title={labels}>
+                            {money(baseRent)} rent + {money(utilities)} {labels.toLowerCase()}
+                          </p>
+                        );
+                      })()}
                       {arrears > 0 && <p className="text-xs text-red-400">{money(arrears)} arrears</p>}
                       {Number(lease.securityDeposit ?? 0) > 0 && <p className="text-xs text-gray-500">{money(Number(lease.securityDeposit))} dep.</p>}
                       {lease.rentChanges && lease.rentChanges.length > 0 && (
@@ -1134,6 +1192,90 @@ function TenantsTab({ propertyId, leases, setLeases }: {
                         <input value={newTenantName} onChange={e => setNewTenantName(e.target.value)} placeholder="…or new tenant name" className="input-dark text-xs" />
                         <button onClick={addCoTenant} disabled={!newTenantName.trim()} className="btn text-xs disabled:opacity-40">Add</button>
                       </div>
+                    </div>
+
+                    {/* Commercial: business/entity on the lease */}
+                    {isCommercial && (
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1">Business name (commercial lease)</label>
+                        <input placeholder="e.g. Acme Coffee LLC" value={editForm.businessName}
+                          onChange={e => setEditForm(f => ({ ...f, businessName: e.target.value }))}
+                          className="input-dark text-xs w-full" />
+                      </div>
+                    )}
+
+                    {/* Late fee — flat amount or percent of rent, with grace period */}
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">Late fee (leave blank if none)</label>
+                      <div className="grid grid-cols-3 gap-2">
+                        <input type="number" placeholder="Flat amount $" value={editForm.lateFeeAmount}
+                          onChange={e => setEditForm(f => ({ ...f, lateFeeAmount: e.target.value, lateFeePercent: e.target.value ? '' : f.lateFeePercent }))}
+                          className="input-dark text-xs" />
+                        <input type="number" placeholder="% of rent" value={editForm.lateFeePercent}
+                          onChange={e => setEditForm(f => ({ ...f, lateFeePercent: e.target.value, lateFeeAmount: e.target.value ? '' : f.lateFeeAmount }))}
+                          className="input-dark text-xs" />
+                        <input type="number" placeholder="Grace days" value={editForm.lateFeeGraceDays}
+                          onChange={e => setEditForm(f => ({ ...f, lateFeeGraceDays: e.target.value }))}
+                          className="input-dark text-xs" title="Days after the due date before the fee applies" />
+                      </div>
+                      {(() => {
+                        const rentNow = parseFloat(editForm.rentAmount || '0') || Number(lease.rentAmount);
+                        const fee = editForm.lateFeePercent
+                          ? round2(rentNow * parseFloat(editForm.lateFeePercent) / 100)
+                          : editForm.lateFeeAmount ? parseFloat(editForm.lateFeeAmount) : null;
+                        if (fee == null || Number.isNaN(fee)) return null;
+                        return (
+                          <p className="text-xs text-gray-400 mt-1.5">
+                            Late fee: <span className="font-medium text-white">{money(fee)}</span>
+                            {editForm.lateFeePercent && <span className="text-gray-600"> ({editForm.lateFeePercent}% of {money(rentNow)})</span>}
+                            {editForm.lateFeeGraceDays && <span className="text-gray-600"> · after {editForm.lateFeeGraceDays} day grace</span>}
+                          </p>
+                        );
+                      })()}
+                    </div>
+
+                    {/* Utility contributions — portion of the payment that isn't rent */}
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">
+                        Payments toward utilities (part of the {money(Number(lease.rentAmount))} total — leave empty if utilities are included in rent)
+                      </label>
+                      <div className="space-y-1 mb-2">
+                        {(lease.utilityCharges ?? []).length === 0 && <span className="text-xs text-gray-600">None — full amount is rent</span>}
+                        {(lease.utilityCharges ?? []).map(uc => (
+                          <div key={uc.id} className="flex items-center gap-2 text-xs group">
+                            <span className="px-1.5 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.08)' }}>
+                              {CATEGORY_LABELS[uc.category as keyof typeof CATEGORY_LABELS] ?? uc.category}
+                            </span>
+                            <span className="font-medium text-white">{money(Number(uc.amount))}/mo</span>
+                            {uc.note && <span className="text-gray-600">· {uc.note}</span>}
+                            <button onClick={() => removeUtilCharge(lease.id, uc.id)} className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 ml-auto">✕</button>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="grid grid-cols-4 gap-2">
+                        <select value={ucForm.category} onChange={e => setUcForm(f => ({ ...f, category: e.target.value }))} className="input-dark text-xs">
+                          {UTILITY_CHARGE_CATEGORIES.map(c => (
+                            <option key={c} value={c}>{CATEGORY_LABELS[c as keyof typeof CATEGORY_LABELS] ?? c}</option>
+                          ))}
+                        </select>
+                        <input type="number" placeholder="Amount $/mo" value={ucForm.amount} onChange={e => setUcForm(f => ({ ...f, amount: e.target.value }))} className="input-dark text-xs" />
+                        <input placeholder="Note" value={ucForm.note} onChange={e => setUcForm(f => ({ ...f, note: e.target.value }))} className="input-dark text-xs" />
+                        <button onClick={() => addUtilCharge(lease.id)} disabled={!ucForm.amount} className="btn text-xs disabled:opacity-40">Add utility payment</button>
+                      </div>
+                      {(() => {
+                        const { total, utilities, baseRent } = rentBreakdown(lease);
+                        const pendingAmt = ucForm.amount ? parseFloat(ucForm.amount) : 0;
+                        const projUtil = utilities + (Number.isNaN(pendingAmt) ? 0 : pendingAmt);
+                        return (
+                          <p className="text-xs text-gray-400 mt-1.5">
+                            Rent <span className="font-medium text-white">{money(round2(total - projUtil))}</span>
+                            {projUtil > 0 && <> + utilities <span className="font-medium text-white">{money(projUtil)}</span></>}
+                            {' = total '}<span className="font-medium text-amber-400">{money(total)}</span>
+                            {projUtil !== utilities && <span className="text-gray-600"> (incl. the amount you're adding)</span>}
+                            {baseRent < 0 && <span className="text-red-400"> — utilities exceed the total payment</span>}
+                          </p>
+                        );
+                      })()}
                     </div>
 
                     {/* Scheduled (future) rent increases — multiple, chained */}
@@ -1255,8 +1397,9 @@ function TenantsTab({ propertyId, leases, setLeases }: {
                                 <span className="text-gray-300">
                                   {prev != null ? `${money(prev)} → ` : ''}<span className="font-medium text-white">{money(Number(rc.newAmount))}</span>
                                 </span>
+                                {/* Rent is income: an increase is good (green), a decrease is not. */}
                                 {pctChange != null && (
-                                  <span className={pctChange >= 0 ? 'text-red-400' : 'text-emerald-400'}>{pct(pctChange)}</span>
+                                  <span className={pctChange >= 0 ? 'text-emerald-400' : 'text-red-400'}>{pct(pctChange)}</span>
                                 )}
                                 {rc.note && <span className="text-gray-600">· {rc.note}</span>}
                                 <button onClick={() => removeRentChange(lease.id, rc.id)} className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 ml-auto">✕</button>
@@ -2302,29 +2445,81 @@ function ScannedDocuments({ propertyId, category }: { propertyId: string; catego
   );
 }
 
+const PROPERTY_DOC_CATEGORIES: DocumentCategory[] = [
+  'INSURANCE', 'MAINTENANCE', 'TAX', 'EXPENSE_RECEIPT', 'UTILITY', 'LEGAL', 'HOA', 'LEASE', 'OTHER',
+];
+
 function DocumentsTab({ propertyId, documents, setDocuments }: {
   propertyId: string; documents: Document[]; setDocuments: (d: Document[]) => void;
 }) {
+  const [importCategory, setImportCategory] = useState<DocumentCategory>('INSURANCE');
+  const [importing, setImporting] = useState(false);
+  const [filterCategory, setFilterCategory] = useState<string>('');
+
   async function view(doc: Document) {
     const url = await getDocumentUrl(doc.id);
     window.open(url, '_blank');
   }
   async function remove(doc: Document) {
-    if (!confirm('Delete this scanned document?')) return;
+    if (!confirm('Delete this document?')) return;
     await deleteDocument(doc.id);
     setDocuments(documents.filter(d => d.id !== doc.id));
   }
 
-  const sorted = [...documents].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  async function handleImport(file: File) {
+    setImporting(true);
+    try {
+      const base64: string = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve((reader.result as string).split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const created = await confirmScannedDocument({
+        fileData: base64,
+        filename: file.name,
+        propertyId,
+        category: importCategory,
+        title: file.name,
+        pageCount: 1,
+      });
+      setDocuments([created, ...documents]);
+    } catch (err: any) {
+      const msg = err?.response?.status === 413
+        ? 'That file is too large to upload. Try a smaller PDF or compress it.'
+        : (err?.response?.data?.error || 'Upload failed. Please try again.');
+      alert(msg);
+    } finally { setImporting(false); }
+  }
+
+  const sorted = [...documents]
+    .filter(d => !filterCategory || d.category === filterCategory)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
   return (
     <div>
-      <p className="text-xs text-gray-500 mb-4">
-        {documents.length} scanned document{documents.length !== 1 ? 's' : ''} for this property. Scan new ones from the{' '}
-        <Link to="/scan" className="text-amber-400 hover:text-amber-300">Scan</Link> page.
-      </p>
+      {/* Import bar */}
+      <div className="card p-3 mb-4 flex items-center gap-2 flex-wrap">
+        <span className="text-xs text-gray-400">Import a document:</span>
+        <select value={importCategory} onChange={e => setImportCategory(e.target.value as DocumentCategory)} className="input-dark text-xs">
+          {PROPERTY_DOC_CATEGORIES.map(c => <option key={c} value={c}>{DOCUMENT_CATEGORY_LABELS[c]}</option>)}
+        </select>
+        <label className="btn btn-primary text-xs cursor-pointer">
+          {importing ? 'Uploading…' : '+ Import file'}
+          <input type="file" accept="application/pdf,image/*" className="hidden" disabled={importing}
+            onChange={e => { const f = e.target.files?.[0]; if (f) handleImport(f); e.target.value = ''; }} />
+        </label>
+        <span className="text-xs text-gray-600">or scan from the <Link to="/scan" className="text-amber-400 hover:text-amber-300">Scan</Link> page</span>
+        <select value={filterCategory} onChange={e => setFilterCategory(e.target.value)} className="input-dark text-xs ml-auto">
+          <option value="">All categories</option>
+          {PROPERTY_DOC_CATEGORIES.map(c => <option key={c} value={c}>{DOCUMENT_CATEGORY_LABELS[c]}</option>)}
+        </select>
+      </div>
+
       {sorted.length === 0 ? (
-        <div className="text-center py-12 text-gray-500 text-sm">No scanned documents yet</div>
+        <div className="text-center py-12 text-gray-500 text-sm">
+          {filterCategory ? `No ${DOCUMENT_CATEGORY_LABELS[filterCategory as DocumentCategory]} documents.` : 'No documents yet — import one above.'}
+        </div>
       ) : (
         <div className="space-y-2">
           {sorted.map(d => (

@@ -34,6 +34,12 @@ const LeaseSchema = z.object({
   // When rentAmount changes via PATCH, the effective date to stamp on the
   // auto-logged rent-change history row (defaults to today).
   rentEffectiveDate: z.string().transform(s => (s ? new Date(s) : null)).optional().nullable(),
+  // Late fee: flat amount or percent of rent, with an optional grace period.
+  lateFeeAmount: z.number().optional().nullable(),
+  lateFeePercent: z.number().optional().nullable(),
+  lateFeeGraceDays: z.number().int().optional().nullable(),
+  // Commercial: business/entity on the lease.
+  businessName: z.string().optional().nullable(),
 });
 
 const RentChangeSchema = z.object({
@@ -60,6 +66,7 @@ router.get('/', async (req, res, next) => {
         rentPayments: { orderBy: { paidDate: 'desc' }, take: 6 },
         rentChanges: { orderBy: { effectiveDate: 'desc' } },
         scheduledIncreases: { where: { applied: false }, orderBy: { effectiveDate: 'asc' } },
+        utilityCharges: { orderBy: { createdAt: 'asc' } },
       },
       orderBy: { startDate: 'desc' },
     });
@@ -78,6 +85,7 @@ router.get('/:id', async (req, res, next) => {
         rentNotices: { orderBy: { noticeDate: 'desc' } },
         rentChanges: { orderBy: { effectiveDate: 'desc' } },
         scheduledIncreases: { where: { applied: false }, orderBy: { effectiveDate: 'asc' } },
+        utilityCharges: { orderBy: { createdAt: 'asc' } },
       },
     });
     if (!lease) return res.status(404).json({ error: 'Lease not found' });
@@ -172,6 +180,34 @@ router.delete('/:id/rent-changes/:changeId', async (req, res, next) => {
     const lease = await db.lease.findFirst({ where: { id: req.params.id, unit: { property: { userId: req.dbUserId! } } } });
     if (!lease) return res.status(404).json({ error: 'Lease not found' });
     await db.rentChange.deleteMany({ where: { id: req.params.changeId, leaseId: lease.id } });
+    res.status(204).send();
+  } catch (err) { next(err); }
+});
+
+// ── Lease utility charges (portion of payment that reimburses a utility) ────
+const UtilityChargeSchema = z.object({
+  category: z.string().min(1),
+  amount: z.number(),
+  note: z.string().optional().nullable(),
+});
+
+// POST /api/leases/:id/utility-charges — add a utility contribution line
+router.post('/:id/utility-charges', async (req, res, next) => {
+  try {
+    const data = UtilityChargeSchema.parse(req.body);
+    const lease = await db.lease.findFirst({ where: { id: req.params.id, unit: { property: { userId: req.dbUserId! } } } });
+    if (!lease) return res.status(404).json({ error: 'Lease not found' });
+    const created = await db.leaseUtilityCharge.create({ data: { ...data, leaseId: lease.id } });
+    res.status(201).json(created);
+  } catch (err) { next(err); }
+});
+
+// DELETE /api/leases/:id/utility-charges/:chargeId — remove a line
+router.delete('/:id/utility-charges/:chargeId', async (req, res, next) => {
+  try {
+    const lease = await db.lease.findFirst({ where: { id: req.params.id, unit: { property: { userId: req.dbUserId! } } } });
+    if (!lease) return res.status(404).json({ error: 'Lease not found' });
+    await db.leaseUtilityCharge.deleteMany({ where: { id: req.params.chargeId, leaseId: lease.id } });
     res.status(204).send();
   } catch (err) { next(err); }
 });

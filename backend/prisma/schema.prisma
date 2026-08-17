@@ -100,6 +100,7 @@ enum PropertyType {
   RENTAL
   INVESTMENT
   COMMERCIAL
+  MIXED_USE
   RESIDENTIAL_SINGLE
   RESIDENTIAL_MULTI
   LAND
@@ -488,6 +489,13 @@ model Lease {
   nextIncreaseAmount   Decimal?    @db.Decimal(10, 2)
   nextIncreasePercent  Float?
   nextIncreaseNote     String?
+  // Late fee: either a flat amount or a percent of rent (percent wins when set).
+  // graceDays = days after the due day before the fee applies.
+  lateFeeAmount        Decimal?    @db.Decimal(10, 2)
+  lateFeePercent       Float?
+  lateFeeGraceDays     Int?
+  // Commercial leases: the business/entity on the lease alongside the person.
+  businessName         String?
   createdAt            DateTime    @default(now())
   updatedAt            DateTime    @updatedAt
 
@@ -496,6 +504,7 @@ model Lease {
   rentNotices  RentNotice[]
   rentChanges  RentChange[]
   scheduledIncreases ScheduledRentIncrease[]
+  utilityCharges LeaseUtilityCharge[]
   incomingTransactions IncomingTransaction[]
 
   @@map("leases")
@@ -547,6 +556,25 @@ model ScheduledRentIncrease {
 
   @@index([leaseId, effectiveDate])
   @@map("scheduled_rent_increases")
+}
+
+// ─── LEASE UTILITY CHARGES ───────────────────────────────
+// Portion of a tenant's monthly payment that is a utility reimbursement
+// rather than rent (e.g. "$100 toward water"). Lease.rentAmount remains the
+// TOTAL the tenant pays (what Budget/Rent Roll/P&L collect on); base rent is
+// derived as rentAmount minus the sum of these charges. Leases with utilities
+// included in rent simply have no rows here.
+model LeaseUtilityCharge {
+  id        String   @id @default(cuid())
+  leaseId   String
+  lease     Lease    @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  category  String   // UtilityCategory value: WATER, ELECTRIC, GAS, TRASH, ...
+  amount    Decimal  @db.Decimal(10, 2)
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@index([leaseId])
+  @@map("lease_utility_charges")
 }
 
 // ─── RENT PAYMENTS ───────────────────────────────────────
@@ -832,6 +860,7 @@ enum DocumentCategory {
   APPLICATION
   IDENTITY
   SCREENING
+  MAINTENANCE
   OTHER
 }
 

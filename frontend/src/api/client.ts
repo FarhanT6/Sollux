@@ -26,7 +26,7 @@ export default api;
 
 import type {
   Property, UtilityAccount, Statement, StatementSummaryRow, Payment, AIInsight, DashboardSummary,
-  Unit, Tenant, LeaseTenant, Lease, RentPayment, RentNotice, RentChange, ScheduledRentIncrease, Expense, Loan, LoanPayment,
+  Unit, Tenant, LeaseTenant, Lease, RentPayment, RentNotice, RentChange, ScheduledRentIncrease, LeaseUtilityCharge, Expense, Loan, LoanPayment,
   InsurancePolicy, TaxAssessment, Improvement, LegalMatter, PropertyPnL, MonthlyPnL,
   BankAccount, OtherIncome, BudgetSummary, DelinquencyTenant, BudgetForecast, IndexRate,
   ReconciliationProfile, ReconciliationStatement, ReconciliationLineItem,
@@ -118,6 +118,10 @@ export const applyScheduledIncrease = (leaseId: string, sid: string, override?: 
   api.post<ScheduledRentIncrease>(`/leases/${leaseId}/scheduled-increases/${sid}/apply`, override || {}).then(r => r.data);
 export const deleteScheduledIncrease = (leaseId: string, sid: string) =>
   api.delete(`/leases/${leaseId}/scheduled-increases/${sid}`);
+export const addLeaseUtilityCharge = (leaseId: string, data: { category: string; amount: number; note?: string | null }) =>
+  api.post<LeaseUtilityCharge>(`/leases/${leaseId}/utility-charges`, data).then(r => r.data);
+export const deleteLeaseUtilityCharge = (leaseId: string, chargeId: string) =>
+  api.delete(`/leases/${leaseId}/utility-charges/${chargeId}`);
 
 // Rent payments
 export const getRentPayments = (params?: { leaseId?: string; propertyId?: string }) =>

@@ -53,7 +53,7 @@ const ConfirmSchema = z.object({
   fileData:   z.string(),
   filename:   z.string().optional(),
   propertyId: z.string().optional().nullable(),
-  category:   z.enum(['UTILITY', 'INSURANCE', 'TAX', 'LEGAL', 'HOA', 'EXPENSE_RECEIPT', 'LEASE', 'OTHER']),
+  category:   z.enum(['UTILITY', 'INSURANCE', 'TAX', 'LEGAL', 'HOA', 'EXPENSE_RECEIPT', 'LEASE', 'APPLICATION', 'IDENTITY', 'SCREENING', 'MAINTENANCE', 'OTHER']),
   title:      z.string().min(1),
   pageCount:  z.number().int().min(1).default(1),
   notes:      z.string().optional().nullable(),

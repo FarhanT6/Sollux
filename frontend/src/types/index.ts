@@ -1,6 +1,6 @@
 export type SubscriptionTier = 'BASIC' | 'PRO' | 'BUSINESS';
 export type PropertyType =
-  | 'PRIMARY' | 'RENTAL' | 'INVESTMENT' | 'COMMERCIAL'
+  | 'PRIMARY' | 'RENTAL' | 'INVESTMENT' | 'COMMERCIAL' | 'MIXED_USE'
   | 'RESIDENTIAL_SINGLE' | 'RESIDENTIAL_MULTI' | 'LAND' | 'GOLF_COURSE' | 'OTHER';
 export type PropertyStatus = 'ACTIVE' | 'SOLD' | 'UNDER_CONTRACT' | 'INACTIVE';
 export type UtilityCategory =
@@ -122,12 +122,28 @@ export interface Lease {
   nextIncreaseAmount?: number | null;
   nextIncreasePercent?: number | null;
   nextIncreaseNote?: string | null;
+  lateFeeAmount?: number | null;
+  lateFeePercent?: number | null;
+  lateFeeGraceDays?: number | null;
+  businessName?: string | null;
   createdAt: string;
   leaseTenants?: LeaseTenant[];
   rentPayments?: RentPayment[];
   rentNotices?: RentNotice[];
   rentChanges?: RentChange[];
   scheduledIncreases?: ScheduledRentIncrease[];
+  utilityCharges?: LeaseUtilityCharge[];
+}
+
+// Portion of the tenant's monthly payment that reimburses a utility.
+// rentAmount is the TOTAL they pay; base rent = rentAmount - sum(amount).
+export interface LeaseUtilityCharge {
+  id: string;
+  leaseId: string;
+  category: string;
+  amount: number;
+  note?: string | null;
+  createdAt: string;
 }
 
 export interface RentChange {
@@ -252,7 +268,7 @@ export interface ReconciliationStatement {
 
 export type DocumentCategory =
   | 'UTILITY' | 'INSURANCE' | 'TAX' | 'LEGAL' | 'HOA' | 'EXPENSE_RECEIPT' | 'LEASE'
-  | 'APPLICATION' | 'IDENTITY' | 'SCREENING' | 'OTHER';
+  | 'APPLICATION' | 'IDENTITY' | 'SCREENING' | 'MAINTENANCE' | 'OTHER';
 
 export interface Document {
   id: string;
@@ -295,6 +311,7 @@ export const DOCUMENT_CATEGORY_LABELS: Record<DocumentCategory, string> = {
   APPLICATION: 'Application',
   IDENTITY: 'Identity / ID',
   SCREENING: 'Screening',
+  MAINTENANCE: 'Maintenance',
   OTHER: 'Other / Misc',
 };
 
@@ -649,6 +666,7 @@ export const INSURANCE_TYPE_LABELS: Record<string, string> = {
 
 export const PROPERTY_TYPE_LABELS: Record<PropertyType, string> = {
   PRIMARY: 'Primary home', RENTAL: 'Rental', INVESTMENT: 'Investment', COMMERCIAL: 'Commercial',
+  MIXED_USE: 'Mixed-use',
   RESIDENTIAL_SINGLE: 'Single-family', RESIDENTIAL_MULTI: 'Multi-family',
   LAND: 'Land', GOLF_COURSE: 'Golf course', OTHER: 'Other',
 };
