@@ -13,7 +13,30 @@ export type BillStatus = 'UNPAID' | 'PAID' | 'ON_PAYMENT_PLAN' | 'PAST_DUE';
 export type SyncStatus = 'SUCCESS' | 'FAILED' | 'PENDING' | 'PARTIAL';
 export type LeaseType = 'FIXED_TERM' | 'MONTH_TO_MONTH';
 export type LeaseStatus = 'ACTIVE' | 'ENDED' | 'PENDING' | 'TERMINATED';
-export type RentPaymentMethod = 'CASH' | 'CHECK' | 'ZELLE' | 'ACH' | 'MONEY_ORDER' | 'CARD' | 'OTHER';
+export type RentPaymentMethod =
+  | 'CASH' | 'CHECK' | 'ZELLE' | 'ACH' | 'MONEY_ORDER' | 'CARD'
+  | 'VENMO' | 'PAYPAL' | 'CASH_APP' | 'APPLE_CASH' | 'BANK_DEPOSIT' | 'OTHER';
+
+// Ordered for the payment dropdown — most-used first, OTHER last.
+export const RENT_PAYMENT_METHODS: RentPaymentMethod[] = [
+  'ZELLE', 'CHECK', 'CASH', 'ACH', 'BANK_DEPOSIT',
+  'VENMO', 'CASH_APP', 'PAYPAL', 'APPLE_CASH', 'MONEY_ORDER', 'CARD', 'OTHER',
+];
+
+export const RENT_PAYMENT_METHOD_LABELS: Record<RentPaymentMethod, string> = {
+  ZELLE:        'Zelle',
+  CHECK:        'Check',
+  CASH:         'Cash',
+  ACH:          'ACH / bank transfer',
+  BANK_DEPOSIT: 'Deposited into bank',
+  VENMO:        'Venmo',
+  CASH_APP:     'Cash App',
+  PAYPAL:       'PayPal',
+  APPLE_CASH:   'Apple Cash',
+  MONEY_ORDER:  'Money order',
+  CARD:         'Card',
+  OTHER:        'Other',
+};
 export type LoanType = 'MORTGAGE' | 'HELOC' | 'AUTO' | 'PERSONAL' | 'STUDENT' | 'INSTALLMENT_PLAN' | 'CREDIT_LINE' | 'SELLER_FINANCING' | 'DSCR' | 'COMMERCIAL' | 'HARD_MONEY' | 'OTHER';
 export type InsuranceType = 'PROPERTY' | 'LIABILITY' | 'FLOOD' | 'UMBRELLA' | 'OTHER';
 export type PremiumFrequency = 'MONTHLY' | 'ANNUAL' | 'SEMI_ANNUAL';
@@ -177,6 +200,8 @@ export interface RentPayment {
   appliedToArrears: number;
   paidDate: string;
   method: RentPaymentMethod;
+  bankAccountId?: string | null;
+  bankAccount?: Pick<BankAccount, 'id' | 'name' | 'bank' | 'last4'> | null;
   notes?: string;
   createdAt: string;
   lease?: Lease & { unit?: Unit & { property?: Pick<Property, 'id' | 'address' | 'nickname'> } };
