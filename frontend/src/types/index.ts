@@ -23,6 +23,13 @@ export const RENT_PAYMENT_METHODS: RentPaymentMethod[] = [
   'VENMO', 'CASH_APP', 'PAYPAL', 'APPLE_CASH', 'MONEY_ORDER', 'CARD', 'OTHER',
 ];
 
+// Methods where the money lands in one of the owner's accounts, so it is worth
+// recording which. Cash and the P2P apps sit in their own balances until they
+// are moved, so asking there would be noise.
+export const BANK_LINKED_METHODS: RentPaymentMethod[] = [
+  'BANK_DEPOSIT', 'CHECK', 'ACH', 'MONEY_ORDER', 'ZELLE',
+];
+
 export const RENT_PAYMENT_METHOD_LABELS: Record<RentPaymentMethod, string> = {
   ZELLE:        'Zelle',
   CHECK:        'Check',

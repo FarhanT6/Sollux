@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
+import { recordRentPayment } from '../services/rentPaymentService';
 
 const router = Router();
 router.use(attachDbUser);
@@ -57,33 +58,16 @@ router.post('/', async (req, res, next) => {
       const acct = await db.bankAccount.findFirst({ where: { id: data.bankAccountId, userId: req.dbUserId! } });
       if (!acct) return res.status(404).json({ error: 'Bank account not found' });
     }
-    // Split the payment unless the caller was explicit. A tenant who owes back
-    // rent usually pays one lump sum: it covers this period's rent first, and
-    // whatever is left pays down the balance. Without this the excess was
-    // simply dropped — the month showed as covered but arrears never moved.
-    let appliedToArrears = data.appliedToArrears;
-    if (appliedToArrears == null) {
-      const period = data.periodDate;
-      const periodEnd = new Date(Date.UTC(period.getUTCFullYear(), period.getUTCMonth() + 1, 1));
-      const priorForPeriod = await db.rentPayment.aggregate({
-        where: { leaseId: data.leaseId, periodDate: { gte: period, lt: periodEnd } },
-        _sum: { amount: true },
-      });
-      const alreadyPaid = Number(priorForPeriod._sum.amount ?? 0);
-      const rentStillDue = Math.max(0, Number(lease.rentAmount) - alreadyPaid);
-      const excess = Math.max(0, data.amount - rentStillDue);
-      // Never drive the balance negative — an overpayment beyond what is owed
-      // is a credit, not something to subtract past zero.
-      appliedToArrears = Math.min(excess, Number(lease.arrearsBalance));
-    }
-
-    const payment = await db.rentPayment.create({ data: { ...data, appliedToArrears } });
-    if (appliedToArrears > 0) {
-      await db.lease.update({
-        where: { id: data.leaseId },
-        data: { arrearsBalance: { decrement: appliedToArrears } },
-      });
-    }
+    const payment = await recordRentPayment({
+      leaseId: data.leaseId,
+      periodDate: data.periodDate,
+      amount: data.amount,
+      paidDate: data.paidDate,
+      method: data.method,
+      bankAccountId: data.bankAccountId,
+      notes: data.notes,
+      appliedToArrears: data.appliedToArrears,
+    });
     res.status(201).json(payment);
   } catch (err) { next(err); }
 });

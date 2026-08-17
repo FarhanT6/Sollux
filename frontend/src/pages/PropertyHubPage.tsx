@@ -23,7 +23,7 @@ import type {
   TurnoverReport, UnitTurnover, BankAccount, RentPaymentMethod,
 } from '../types';
 import { PROPERTY_TYPE_LABELS, EXPENSE_CATEGORY_LABELS, DOCUMENT_CATEGORY_LABELS, CATEGORY_LABELS,
-  RENT_PAYMENT_METHODS, RENT_PAYMENT_METHOD_LABELS } from '../types';
+  RENT_PAYMENT_METHODS, RENT_PAYMENT_METHOD_LABELS, BANK_LINKED_METHODS } from '../types';
 import type { Document as DocType } from '../types';
 import { fmtDate as fmtDateSafe, monthKey, localMonthKey } from '../lib/date';
 
@@ -1268,7 +1268,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
         amount: parseFloat(payAmount),
         paidDate: payDate,
         method: payMethod,
-        bankAccountId: payMethod === 'BANK_DEPOSIT' ? (payBankAccountId || undefined) : undefined,
+        bankAccountId: payBankAccountId || undefined,
         notes: payNotes || undefined,
       });
       const updated = await getLeases({ propertyId });
@@ -1766,20 +1766,26 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                   <div className="px-4 py-3 flex gap-2 flex-wrap" style={{ background: 'rgba(255,255,255,0.03)', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                     <input type="number" placeholder="Amount" value={payAmount} onChange={e => setPayAmount(e.target.value)} className="input-dark text-xs w-28" />
                     <input type="date"   value={payDate}   onChange={e => setPayDate(e.target.value)}   className="input-dark text-xs w-36" />
-                    <select value={payMethod} onChange={e => setPayMethod(e.target.value)} className="input-dark text-xs">
+                    <select value={payMethod} onChange={e => {
+                      setPayMethod(e.target.value);
+                      // Drop a stale account if the new method isn't one that
+                      // lands in a bank — the field is hidden, so it would be
+                      // submitted invisibly.
+                      if (!BANK_LINKED_METHODS.includes(e.target.value as RentPaymentMethod)) setPayBankAccountId('');
+                    }} className="input-dark text-xs">
                       {RENT_PAYMENT_METHODS.map(m => <option key={m} value={m}>{RENT_PAYMENT_METHOD_LABELS[m]}</option>)}
                     </select>
                     {/* Which account received it — only meaningful once the
                         money landed somewhere of the owner's, so this stays out
                         of the way for cash and P2P apps. */}
-                    {payMethod === 'BANK_DEPOSIT' && (
+                    {BANK_LINKED_METHODS.includes(payMethod as RentPaymentMethod) && (
                       bankAccounts.length === 0 ? (
                         <span className="text-xs text-gray-500 self-center">
                           No bank accounts yet — <Link to="/settings" className="text-amber-400 hover:text-amber-300">link one</Link>
                         </span>
                       ) : (
                         <select value={payBankAccountId} onChange={e => setPayBankAccountId(e.target.value)} className="input-dark text-xs">
-                          <option value="">— Which account? —</option>
+                          <option value="">{payMethod === 'BANK_DEPOSIT' ? '— Which account? —' : '— Into which account? (optional) —'}</option>
                           {bankAccounts.map(b => (
                             <option key={b.id} value={b.id}>{bankLabel(b)}</option>
                           ))}

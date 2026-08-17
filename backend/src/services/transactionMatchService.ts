@@ -22,15 +22,43 @@ import { decrypt } from '../crypto/encrypt';
 
 // ─── Incoming (rent via P2P) ──────────────────────────────────────────────
 
-type Channel = 'ZELLE' | 'VENMO' | 'PAYPAL' | 'CASH_APP' | 'APPLE_CASH' | 'OTHER';
+type Channel =
+  | 'ZELLE' | 'VENMO' | 'PAYPAL' | 'CASH_APP' | 'APPLE_CASH'
+  | 'CHECK' | 'ACH' | 'DEPOSIT' | 'OTHER';
 
+// Ordered — the first pattern to match wins, so the specific P2P brands are
+// tested before the generic deposit wording that often accompanies them.
 const CHANNEL_PATTERNS: [RegExp, Channel][] = [
   [/zelle/i, 'ZELLE'],
   [/venmo/i, 'VENMO'],
   [/paypal/i, 'PAYPAL'],
   [/cash ?app|square cash|sq \*cash/i, 'CASH_APP'],
   [/apple cash|apple pay cash/i, 'APPLE_CASH'],
+  [/\bche?ck\b|\bchk\b|e-?check/i, 'CHECK'],
+  [/\bach\b|direct\s*dep|dir\s*dep|electronic\s*dep/i, 'ACH'],
+  [/mobile\s*dep|remote\s*dep|branch\s*dep|counter\s*credit|teller|\bdeposit\b/i, 'DEPOSIT'],
 ];
+
+// Brand-name channels carry the payer's name in the descriptor, so a credit on
+// a watched account is worth queueing on the strength of the channel alone.
+// Bank channels don't — "MOBILE DEPOSIT" says nothing about who paid — so those
+// need corroboration from a tenant name or a rent amount before they earn a
+// place in the review queue, or every payroll deposit and transfer would land
+// there too.
+const SELF_IDENTIFYING: Channel[] = ['ZELLE', 'VENMO', 'PAYPAL', 'CASH_APP', 'APPLE_CASH'];
+
+// What to record when one of these is applied as a rent payment.
+export const CHANNEL_TO_METHOD: Record<Channel, string> = {
+  ZELLE: 'ZELLE',
+  VENMO: 'VENMO',
+  PAYPAL: 'PAYPAL',
+  CASH_APP: 'CASH_APP',
+  APPLE_CASH: 'APPLE_CASH',
+  CHECK: 'CHECK',
+  ACH: 'ACH',
+  DEPOSIT: 'BANK_DEPOSIT',
+  OTHER: 'OTHER',
+};
 
 function detectChannel(name: string): Channel | null {
   for (const [re, channel] of CHANNEL_PATTERNS) {
@@ -76,6 +104,21 @@ async function matchLease(counterpartyName: string, userId: string): Promise<str
   );
 
   return matches.length === 1 ? matches[0].id : null;
+}
+
+/**
+ * Match on amount alone, for deposits whose descriptor names no one. A credit
+ * equal to exactly one active lease's rent is a strong signal; if two leases
+ * share that rent there is no way to tell them apart, so it stays unmatched
+ * rather than guessing wrong.
+ */
+async function matchLeaseByAmount(amount: number, userId: string): Promise<string | null> {
+  const leases = await db.lease.findMany({
+    where: { status: 'ACTIVE', unit: { property: { userId } } },
+    select: { id: true, rentAmount: true },
+  });
+  const exact = leases.filter(l => Math.abs(Number(l.rentAmount) - amount) < 0.005);
+  return exact.length === 1 ? exact[0].id : null;
 }
 
 // ─── Outgoing (hardware-store expenses, utility payments) ────────────────
@@ -221,8 +264,18 @@ export async function syncTransactionsForItem(plaidItemId: string) {
       if (bankAccount.watchForRentPayments && tx.amount < 0) {
         const channel = detectChannel(name);
         if (channel) {
+          const amount = Math.abs(tx.amount);
           const counterparty = extractCounterpartyName(name);
-          const matchedLeaseId = await matchLease(counterparty, plaidItem.userId);
+          // Name first — it identifies the payer. Fall back to the rent amount,
+          // which is all a bare "MOBILE DEPOSIT" gives us to go on.
+          const matchedLeaseId =
+            await matchLease(counterparty, plaidItem.userId)
+            ?? await matchLeaseByAmount(amount, plaidItem.userId);
+
+          // A bank-channel credit we can't tie to a tenant is far more likely
+          // to be payroll or a transfer than rent, so leave it out entirely.
+          if (!matchedLeaseId && !SELF_IDENTIFYING.includes(channel)) continue;
+
           await db.incomingTransaction.upsert({
             where: { plaidTransactionId: tx.transaction_id },
             update: {},
@@ -230,7 +283,7 @@ export async function syncTransactionsForItem(plaidItemId: string) {
               userId: plaidItem.userId,
               bankAccountId: bankAccount.id,
               plaidTransactionId: tx.transaction_id,
-              amount: Math.abs(tx.amount),
+              amount,
               date: new Date(tx.date),
               name,
               channel,
