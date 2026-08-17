@@ -7,6 +7,7 @@ import type { PlaidItem } from '../api/client';
 import { StatCard, InsightCard, Skeleton, EmptyState } from '../components/ui';
 import { format } from 'date-fns';
 import AddPropertyModal from '../components/property/AddPropertyModal';
+import { fmtDate } from '../lib/date';
 
 const SUGGESTIONS = [
   "Who hasn't paid rent this month?",
@@ -218,7 +219,7 @@ export default function DashboardPage() {
                         {bill.utilityAccount?.property?.nickname || bill.utilityAccount?.property?.address}
                       </p>
                       <p className="text-xs text-gray-500">
-                        {bill.utilityAccount?.providerName} · Due {bill.dueDate ? format(new Date(bill.dueDate), 'MMM d') : '—'}
+                        {bill.utilityAccount?.providerName} · Due {bill.dueDate ? fmtDate(bill.dueDate, 'MMM d') : '—'}
                       </p>
                     </div>
                     <div className="text-right flex-shrink-0">

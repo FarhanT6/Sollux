@@ -3,9 +3,10 @@ import { format } from 'date-fns';
 import { getStatementsSummary, getProperties } from '../api/client';
 import type { StatementSummaryRow, Property } from '../types';
 import { PageHeader, Modal } from '../components/ui';
+import { fmtDate } from '../lib/date';
 
 const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
-const dateStr = (d: string | null) => d ? format(new Date(d), 'MMM d, yyyy') : '—';
+const dateStr = (d: string | null) => d ? fmtDate(d, 'MMM d, yyyy') : '—';
 
 type Metric = 'penaltiesFees' | 'amountDue' | 'chargesExcludingFees' | 'amountPaid' | 'pastDueCarried' | 'totalDueWithPastDue';
 type GroupBy = 'month' | 'year' | 'all';

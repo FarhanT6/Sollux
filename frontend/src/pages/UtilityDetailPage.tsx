@@ -9,6 +9,7 @@ import {
 import { CATEGORY_LABELS, CATEGORY_COLORS, LOAN_TYPE_LABELS } from '../types';
 import { Pill, Skeleton, EmptyState } from '../components/ui';
 import { format, isAfter } from 'date-fns';
+import { fmtDate } from '../lib/date';
 
 const CATEGORY_ICONS: Record<string, string> = {
   ELECTRIC: '⚡', GAS: '🔥', WATER: '💧', SEWER: '🚿',
@@ -474,7 +475,7 @@ function PaymentPlanCard({
           {plan.startDate && (
             <div>
               <span className="text-gray-500">Started: </span>
-              <span className="text-gray-300">{format(new Date(plan.startDate), 'MMM d, yyyy')}</span>
+              <span className="text-gray-300">{fmtDate(plan.startDate, 'MMM d, yyyy')}</span>
             </div>
           )}
         </div>
@@ -891,7 +892,7 @@ export default function UtilityDetailPage() {
                       }}>
                       {/* Month */}
                       <div className="w-20 flex-shrink-0">
-                        <p className="text-sm font-semibold text-white">{format(new Date(s.statementDate), 'MMM yyyy')}</p>
+                        <p className="text-sm font-semibold text-white">{fmtDate(s.statementDate, 'MMM yyyy')}</p>
                         {isLatest && <p className="text-xs text-amber-500 mt-0.5">Latest</p>}
                       </div>
 
@@ -899,7 +900,7 @@ export default function UtilityDetailPage() {
                       <div className="flex-1 min-w-0">
                         <p className="text-xs text-gray-500">
                           {s.billingPeriodStart && s.billingPeriodEnd
-                            ? `${format(new Date(s.billingPeriodStart), 'MMM d')} – ${format(new Date(s.billingPeriodEnd), 'MMM d, yyyy')}`
+                            ? `${fmtDate(s.billingPeriodStart, 'MMM d')} – ${fmtDate(s.billingPeriodEnd, 'MMM d, yyyy')}`
                             : 'Billing period —'}
                         </p>
                         {pastDue != null && pastDue > 0 && !priorPaid && (
@@ -916,7 +917,7 @@ export default function UtilityDetailPage() {
                       {/* Due date */}
                       <div className="text-right flex-shrink-0 w-24">
                         {s.dueDate && (
-                          <p className="text-xs text-gray-500">Due {format(new Date(s.dueDate), 'MMM d')}</p>
+                          <p className="text-xs text-gray-500">Due {fmtDate(s.dueDate, 'MMM d')}</p>
                         )}
                       </div>
 
@@ -1002,7 +1003,7 @@ export default function UtilityDetailPage() {
                   <div key={p.id} className="rounded-xl px-5 py-4 flex items-center gap-4"
                     style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.06)' }}>
                     <div className="w-28 flex-shrink-0">
-                      <p className="text-sm font-semibold text-white">{format(new Date(p.paymentDate), 'MMM d, yyyy')}</p>
+                      <p className="text-sm font-semibold text-white">{fmtDate(p.paymentDate, 'MMM d, yyyy')}</p>
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm text-gray-300">{p.paymentMethod || 'Payment'}</p>
@@ -1046,7 +1047,7 @@ export default function UtilityDetailPage() {
                   <div key={r.id} className="rounded-xl px-5 py-4"
                     style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.06)' }}>
                     <div className="flex items-center justify-between mb-3">
-                      <p className="text-sm font-semibold text-white">{format(new Date(r.date), 'MMMM yyyy')}</p>
+                      <p className="text-sm font-semibold text-white">{fmtDate(r.date, 'MMMM yyyy')}</p>
                       <p className="text-sm font-semibold text-orange-400">{fmtMoney(r.total)}</p>
                     </div>
                     <div className="grid grid-cols-2 gap-x-8 gap-y-1.5">

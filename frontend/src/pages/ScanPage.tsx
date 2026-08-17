@@ -9,6 +9,7 @@ import {
 } from '../api/client';
 import type { DocumentCategory, DocumentClassification, DocumentMatch, Document, Property } from '../types';
 import { DOCUMENT_CATEGORY_LABELS } from '../types';
+import { fmtDate } from '../lib/date';
 
 type Corners = {
   topLeftCorner: { x: number; y: number };
@@ -358,7 +359,7 @@ function DocumentLibrary() {
                 </div>
                 <p className="text-xs text-gray-500">
                   {d.property ? (d.property.nickname || d.property.address) + ' · ' : ''}
-                  {format(new Date(d.createdAt), 'MMM d, yyyy')} · {d.pageCount} page{d.pageCount !== 1 ? 's' : ''}
+                  {fmtDate(d.createdAt, 'MMM d, yyyy')} · {d.pageCount} page{d.pageCount !== 1 ? 's' : ''}
                 </p>
               </div>
               <div className="flex gap-3 flex-shrink-0">

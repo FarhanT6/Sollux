@@ -31,6 +31,7 @@ import api, {
 import type { PlaidItem } from '../api/client';
 import type { BankAccount, IndexRate } from '../types';
 import { format } from 'date-fns';
+import { fmtDate as fmtDateSafe } from '../lib/date';
 
 type SettingsTab = 'account' | 'notifications' | 'banking' | 'rates';
 
@@ -339,7 +340,7 @@ function RatesTab() {
           <div className="rounded-lg px-3 py-2.5 mb-4" style={{ background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.2)' }}>
             <p className="text-xs text-gray-400">Current Prime</p>
             <p className="text-lg font-semibold text-amber-400">{current.rate}%</p>
-            <p className="text-xs text-gray-500">as of {format(new Date(current.effectiveDate), 'MMM d, yyyy')}</p>
+            <p className="text-xs text-gray-500">as of {fmtDateSafe(current.effectiveDate, 'MMM d, yyyy')}</p>
           </div>
         )}
         <div className="grid grid-cols-3 gap-3 mb-3">
@@ -380,7 +381,7 @@ function RatesTab() {
             <tbody>
               {rates.map(r => (
                 <tr key={r.id} className="border-b border-white/5">
-                  <td className="py-2 text-gray-300">{format(new Date(r.effectiveDate), 'MMM d, yyyy')}</td>
+                  <td className="py-2 text-gray-300">{fmtDateSafe(r.effectiveDate, 'MMM d, yyyy')}</td>
                   <td className="py-2 text-right text-white font-medium">{r.rate}%</td>
                   <td className="py-2 pl-3 text-gray-500">{r.notes || '—'}</td>
                   <td className="py-2 text-right">
@@ -401,8 +402,7 @@ function RatesTab() {
 const money = (n: number | null | undefined) =>
   n == null ? '—' : Number(n).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 
-const fmtDate = (d: string | null | undefined) =>
-  d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+const fmtDate = (d: string | null | undefined) => fmtDateSafe(d);
 
 const ACCOUNT_TYPE_LABELS: Record<string, string> = {
   CHECKING: 'Checking', SAVINGS: 'Savings', CREDIT_CARD: 'Credit card', CASH_POOL: 'Cash / Wallet',

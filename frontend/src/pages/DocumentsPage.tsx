@@ -3,6 +3,7 @@ import { getStatements, getStatementDownloadUrl } from '../api/client';
 import type { Statement } from '../types';
 import { PageHeader, EmptyState, Skeleton } from '../components/ui';
 import { format } from 'date-fns';
+import { fmtDate } from '../lib/date';
 
 const inputClass = 'rounded-lg px-3 py-1.5 text-sm text-gray-300 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-amber-500/50 bg-white/6 border border-white/8';
 
@@ -121,7 +122,7 @@ export default function DocumentsPage() {
                         {stmt.utilityAccount?.providerName}
                       </p>
                       <p className="text-xs text-gray-400 mt-0.5">
-                        {format(new Date(stmt.statementDate), 'MMM d, yyyy')}
+                        {fmtDate(stmt.statementDate, 'MMM d, yyyy')}
                         {stmt.amountDue ? ` · $${Number(stmt.amountDue).toFixed(2)}` : ''}
                       </p>
                       <p className="text-xs mt-1" style={{ color: stmt.pdfS3Key ? '#ef4444' : '#6b7280' }}>

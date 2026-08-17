@@ -5,6 +5,7 @@ import {
   applyIncomingTransaction, ignoreIncomingTransaction, getLeases,
 } from '../api/client';
 import type { IncomingTransaction, IncomingTransactionStatus, Lease } from '../types';
+import { fmtDate } from '../lib/date';
 
 const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 
@@ -108,7 +109,7 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
                   <span className="text-xs px-1.5 py-0.5 rounded bg-white/10 text-gray-300">{CHANNEL_LABELS[tx.channel ?? 'OTHER']}</span>
-                  <span className="text-xs text-gray-500">{format(new Date(tx.date), 'MMM d, yyyy')}</span>
+                  <span className="text-xs text-gray-500">{fmtDate(tx.date, 'MMM d, yyyy')}</span>
                   <span className="text-xs text-gray-600">· {tx.bankAccount?.name}</span>
                 </div>
                 <p className="text-sm font-semibold text-emerald-500">{money(tx.amount)}</p>

@@ -59,6 +59,7 @@ router.get('/', async (req, res, next) => {
         leaseTenants: { include: { tenant: true } },
         rentPayments: { orderBy: { paidDate: 'desc' }, take: 6 },
         rentChanges: { orderBy: { effectiveDate: 'desc' } },
+        scheduledIncreases: { where: { applied: false }, orderBy: { effectiveDate: 'asc' } },
       },
       orderBy: { startDate: 'desc' },
     });
@@ -76,6 +77,7 @@ router.get('/:id', async (req, res, next) => {
         rentPayments: { orderBy: { paidDate: 'desc' } },
         rentNotices: { orderBy: { noticeDate: 'desc' } },
         rentChanges: { orderBy: { effectiveDate: 'desc' } },
+        scheduledIncreases: { where: { applied: false }, orderBy: { effectiveDate: 'asc' } },
       },
     });
     if (!lease) return res.status(404).json({ error: 'Lease not found' });
@@ -170,6 +172,60 @@ router.delete('/:id/rent-changes/:changeId', async (req, res, next) => {
     const lease = await db.lease.findFirst({ where: { id: req.params.id, unit: { property: { userId: req.dbUserId! } } } });
     if (!lease) return res.status(404).json({ error: 'Lease not found' });
     await db.rentChange.deleteMany({ where: { id: req.params.changeId, leaseId: lease.id } });
+    res.status(204).send();
+  } catch (err) { next(err); }
+});
+
+// ── Scheduled (future) rent increases ───────────────────────────────────────
+const ScheduledIncreaseSchema = z.object({
+  effectiveDate: z.string().transform(s => new Date(s)),
+  newAmount: z.number().optional().nullable(),
+  percent: z.number().optional().nullable(),
+  note: z.string().optional().nullable(),
+});
+
+// POST /api/leases/:id/scheduled-increases — add a planned increase
+router.post('/:id/scheduled-increases', async (req, res, next) => {
+  try {
+    const data = ScheduledIncreaseSchema.parse(req.body);
+    const lease = await db.lease.findFirst({ where: { id: req.params.id, unit: { property: { userId: req.dbUserId! } } } });
+    if (!lease) return res.status(404).json({ error: 'Lease not found' });
+    const created = await db.scheduledRentIncrease.create({ data: { ...data, leaseId: lease.id } });
+    res.status(201).json(created);
+  } catch (err) { next(err); }
+});
+
+// POST /api/leases/:id/scheduled-increases/:sid/apply — apply a planned increase:
+// set it as the current rent, log a rent-change history row, mark it applied.
+router.post('/:id/scheduled-increases/:sid/apply', async (req, res, next) => {
+  try {
+    const lease = await db.lease.findFirst({ where: { id: req.params.id, unit: { property: { userId: req.dbUserId! } } } });
+    if (!lease) return res.status(404).json({ error: 'Lease not found' });
+    const sched = await db.scheduledRentIncrease.findFirst({ where: { id: req.params.sid, leaseId: lease.id } });
+    if (!sched) return res.status(404).json({ error: 'Scheduled increase not found' });
+
+    const prev = Number(lease.rentAmount);
+    const newAmount = sched.newAmount != null
+      ? Number(sched.newAmount)
+      : sched.percent != null
+        ? Math.round(prev * (1 + Number(sched.percent) / 100) * 100) / 100
+        : prev;
+
+    await db.rentChange.create({
+      data: { leaseId: lease.id, effectiveDate: sched.effectiveDate, previousAmount: prev, newAmount, note: sched.note || 'Scheduled increase applied' },
+    });
+    await db.lease.update({ where: { id: lease.id }, data: { rentAmount: newAmount } });
+    const updated = await db.scheduledRentIncrease.update({ where: { id: sched.id }, data: { applied: true } });
+    res.json(updated);
+  } catch (err) { next(err); }
+});
+
+// DELETE /api/leases/:id/scheduled-increases/:sid — remove a planned increase
+router.delete('/:id/scheduled-increases/:sid', async (req, res, next) => {
+  try {
+    const lease = await db.lease.findFirst({ where: { id: req.params.id, unit: { property: { userId: req.dbUserId! } } } });
+    if (!lease) return res.status(404).json({ error: 'Lease not found' });
+    await db.scheduledRentIncrease.deleteMany({ where: { id: req.params.sid, leaseId: lease.id } });
     res.status(204).send();
   } catch (err) { next(err); }
 });

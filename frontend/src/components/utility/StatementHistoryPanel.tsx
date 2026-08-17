@@ -3,6 +3,7 @@ import { format, isAfter } from 'date-fns';
 import { getStatements, deleteStatement, patchStatement } from '../../api/client';
 import type { Statement } from '../../types';
 import { Skeleton, Pill } from '../ui';
+import { fmtDate } from '../../lib/date';
 
 interface Props {
   utilityAccountId: string;
@@ -179,11 +180,11 @@ export default function StatementHistoryPanel({ utilityAccountId }: Props) {
                     onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                   >
                     <td className="py-2 pr-4 text-gray-300 whitespace-nowrap pl-2">
-                      {format(new Date(s.statementDate), 'MMM yyyy')}
+                      {fmtDate(s.statementDate, 'MMM yyyy')}
                     </td>
                     <td className="py-2 pr-4 text-gray-400 whitespace-nowrap">
                       {s.billingPeriodStart && s.billingPeriodEnd
-                        ? `${format(new Date(s.billingPeriodStart), 'MMM d')} – ${format(new Date(s.billingPeriodEnd), 'MMM d')}`
+                        ? `${fmtDate(s.billingPeriodStart, 'MMM d')} – ${fmtDate(s.billingPeriodEnd, 'MMM d')}`
                         : '—'}
                     </td>
                     <td className="py-2 pr-4 font-semibold text-white whitespace-nowrap">

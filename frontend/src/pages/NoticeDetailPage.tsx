@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { getNotice, deleteNotice } from '../api/client';
 import type { RentNotice } from '../types';
+import { fmtDate as fmtDateSafe } from '../lib/date';
 
 const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 });
-const fmtDate = (d: string | Date) => new Date(d).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
+const fmtDate = (d: string | Date) => fmtDateSafe(d, 'MMMM d, yyyy');
 
 function U({ children }: { children: React.ReactNode }) {
   return <span style={{ textDecoration: 'underline' }}>{children}</span>;

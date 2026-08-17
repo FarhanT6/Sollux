@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { getLeases, createRentPayment, getProperties, getUnits } from '../api/client';
 import type { Lease, Property, Unit } from '../types';
 import { format } from 'date-fns';
+import { fmtDate } from '../lib/date';
 
 const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 
@@ -152,7 +153,7 @@ export default function RentRollPage({ embedded }: { embedded?: boolean } = {}) 
                       }`}>{lease.status}</span>
                     </td>
                     <td className="px-4 py-3 text-gray-400 text-xs">
-                      {lease.endDate ? format(new Date(lease.endDate), 'MMM d, yyyy') : 'M-to-M'}
+                      {lease.endDate ? fmtDate(lease.endDate, 'MMM d, yyyy') : 'M-to-M'}
                     </td>
                     <td className="px-4 py-3 text-right">
                       {showPayForm === lease.id ? (

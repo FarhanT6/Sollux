@@ -4,6 +4,7 @@ import { getPayments } from '../api/client';
 import type { Payment } from '../types/index';
 import { PageHeader, Pill, EmptyState, Skeleton } from '../components/ui';
 import { format } from 'date-fns';
+import { fmtDate } from '../lib/date';
 
 const CATEGORY_ICONS: Record<string, string> = {
   ELECTRIC: '⚡', GAS: '🔥', WATER: '💧', SEWER: '🚿',
@@ -176,7 +177,7 @@ export default function PaymentsPage() {
                               {/* Date */}
                               <div className="w-28 flex-shrink-0">
                                 <p className="text-sm text-gray-300">
-                                  {format(new Date(p.paymentDate), 'MMM d, yyyy')}
+                                  {fmtDate(p.paymentDate, 'MMM d, yyyy')}
                                 </p>
                               </div>
 

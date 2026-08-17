@@ -127,6 +127,7 @@ export interface Lease {
   rentPayments?: RentPayment[];
   rentNotices?: RentNotice[];
   rentChanges?: RentChange[];
+  scheduledIncreases?: ScheduledRentIncrease[];
 }
 
 export interface RentChange {
@@ -136,6 +137,17 @@ export interface RentChange {
   previousAmount?: number | null;
   newAmount: number;
   note?: string | null;
+  createdAt: string;
+}
+
+export interface ScheduledRentIncrease {
+  id: string;
+  leaseId: string;
+  effectiveDate: string;
+  newAmount?: number | null;
+  percent?: number | null;
+  note?: string | null;
+  applied: boolean;
   createdAt: string;
 }
 
