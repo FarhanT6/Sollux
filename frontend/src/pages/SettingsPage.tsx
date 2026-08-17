@@ -32,7 +32,8 @@ import type { PlaidItem } from '../api/client';
 import type { BankAccount, IndexRate } from '../types';
 import { format } from 'date-fns';
 import { fmtDate as fmtDateSafe } from '../lib/date';
-import { getAccount, inviteAccountMember, cancelAccountInvite, removeAccountMember } from '../api/client';
+import { getAccount, inviteAccountMember, cancelAccountInvite, removeAccountMember,
+  getNotificationPreferences, updateNotificationPreferences } from '../api/client';
 import type { AccountInfo } from '../api/client';
 
 type SettingsTab = 'account' | 'notifications' | 'banking' | 'rates';
@@ -99,62 +100,7 @@ export default function SettingsPage() {
       {tab === 'banking' ? (
         <BankingTab />
       ) : tab === 'notifications' ? (
-        <div className="px-6 py-5 max-w-2xl">
-          <div className="card p-5 mb-4">
-            <h2 className="text-sm font-semibold text-white mb-4">Alert channels</h2>
-            {[
-              { label: 'Email notifications', desc: 'Receive alerts and reminders to your email', id: 'email' },
-              { label: 'SMS notifications', desc: 'Receive alerts via text message (Pro plan)', id: 'sms' },
-              { label: 'Browser push', desc: 'Receive in-browser push notifications', id: 'push' },
-            ].map(item => (
-              <div key={item.id} className="flex items-center justify-between py-3 border-b border-white/8 last:border-0">
-                <div>
-                  <p className="text-sm font-medium text-gray-100">{item.label}</p>
-                  <p className="text-xs text-gray-400">{item.desc}</p>
-                </div>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input type="checkbox" defaultChecked={item.id === 'email'} className="sr-only peer" />
-                  <div className="w-9 h-5 bg-white/10 peer-checked:bg-gold-500 rounded-full transition-colors" />
-                  <div className="absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-4" />
-                </label>
-              </div>
-            ))}
-          </div>
-
-          <div className="card p-5 mb-4">
-            <h2 className="text-sm font-semibold text-white mb-4">Alert types</h2>
-            {[
-              { label: 'Bill due reminders', desc: 'Alert when a bill is due within N days', id: 'due' },
-              { label: 'Anomaly detection', desc: 'Alert when a bill is significantly above average', id: 'anomaly' },
-              { label: 'Payment confirmations', desc: 'Alert when a payment is recorded', id: 'payment' },
-              { label: 'Sync failures', desc: 'Alert when an account fails to sync', id: 'sync' },
-            ].map(item => (
-              <div key={item.id} className="flex items-center justify-between py-3 border-b border-white/8 last:border-0">
-                <div>
-                  <p className="text-sm font-medium text-gray-100">{item.label}</p>
-                  <p className="text-xs text-gray-400">{item.desc}</p>
-                </div>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input type="checkbox" defaultChecked className="sr-only peer" />
-                  <div className="w-9 h-5 bg-white/10 peer-checked:bg-gold-500 rounded-full transition-colors" />
-                  <div className="absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-4" />
-                </label>
-              </div>
-            ))}
-          </div>
-
-          <div className="card p-5">
-            <h2 className="text-sm font-semibold text-white mb-4">Reminder timing</h2>
-            <div className="flex items-center gap-3">
-              <p className="text-sm text-gray-400">Send reminders</p>
-              <select className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-gray-200">
-                <option value="3">3 days before due</option>
-                <option value="5">5 days before due</option>
-                <option value="7">7 days before due</option>
-              </select>
-            </div>
-          </div>
-        </div>
+        <NotificationsTab />
       ) : tab === 'rates' ? (
         <RatesTab />
       ) : (
@@ -347,7 +293,7 @@ function RatesTab() {
             <p className="text-xs text-gray-500">as of {fmtDateSafe(current.effectiveDate, 'MMM d, yyyy')}</p>
           </div>
         )}
-        <div className="grid grid-cols-3 gap-3 mb-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-3">
           <div>
             <label className="text-xs text-gray-400 block mb-1">New rate (%)</label>
             <input type="number" step="0.001" value={rate} onChange={e => setRate(e.target.value)} className="input-dark w-full text-sm" placeholder="8.50" />
@@ -373,28 +319,30 @@ function RatesTab() {
         ) : rates.length === 0 ? (
           <p className="text-sm text-gray-500">No Prime rate logged yet — add one above to activate any variable-rate loans.</p>
         ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-gray-500 text-xs uppercase tracking-wider border-b border-white/5">
-                <th className="text-left pb-2">Effective</th>
-                <th className="text-right pb-2">Rate</th>
-                <th className="text-left pb-2 pl-3">Notes</th>
-                <th className="pb-2"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {rates.map(r => (
-                <tr key={r.id} className="border-b border-white/5">
-                  <td className="py-2 text-gray-300">{fmtDateSafe(r.effectiveDate, 'MMM d, yyyy')}</td>
-                  <td className="py-2 text-right text-white font-medium">{r.rate}%</td>
-                  <td className="py-2 pl-3 text-gray-500">{r.notes || '—'}</td>
-                  <td className="py-2 text-right">
-                    <button onClick={() => handleDelete(r.id)} className="text-xs text-red-500 hover:text-red-400">Del</button>
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-gray-500 text-xs uppercase tracking-wider border-b border-white/5">
+                  <th className="text-left pb-2">Effective</th>
+                  <th className="text-right pb-2">Rate</th>
+                  <th className="text-left pb-2 pl-3">Notes</th>
+                  <th className="pb-2"></th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {rates.map(r => (
+                  <tr key={r.id} className="border-b border-white/5">
+                    <td className="py-2 text-gray-300">{fmtDateSafe(r.effectiveDate, 'MMM d, yyyy')}</td>
+                    <td className="py-2 text-right text-white font-medium">{r.rate}%</td>
+                    <td className="py-2 pl-3 text-gray-500">{r.notes || '—'}</td>
+                    <td className="py-2 text-right">
+                      <button onClick={() => handleDelete(r.id)} className="text-xs text-red-500 hover:text-red-400">Del</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </div>
@@ -751,7 +699,7 @@ function BankingTab() {
 
           {/* 3 buckets */}
           {buckets.length > 0 && (
-            <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${buckets.length}, 1fr)` }}>
+            <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
               {buckets.map(b => (
                 <div key={b.label} className="card p-3">
                   <p className="text-xs text-gray-500 mb-1">{b.label}</p>
@@ -991,6 +939,129 @@ function SharedAccessCard() {
           </p>
         </>
       )}
+    </div>
+  );
+}
+
+// Notification preferences. Every control here used to be a `defaultChecked`
+// toggle with no handler — the page looked configurable but saved nothing,
+// even though /api/notifications/preferences was fully implemented. Each
+// channel × event pair is one NotificationPreference row.
+const NOTIF_CHANNELS = [
+  { id: 'EMAIL', label: 'Email notifications', desc: 'Receive alerts and reminders to your email' },
+  { id: 'SMS',   label: 'SMS notifications',   desc: 'Receive alerts via text message (Pro plan)' },
+  { id: 'PUSH',  label: 'Browser push',        desc: 'Receive in-browser push notifications' },
+] as const;
+
+const NOTIF_EVENTS = [
+  { id: 'BILL_DUE',       label: 'Bill due reminders',    desc: 'Alert when a bill is due within N days' },
+  { id: 'ANOMALY',        label: 'Anomaly detection',     desc: 'Alert when a bill is significantly above average' },
+  { id: 'PAYMENT',        label: 'Payment confirmations', desc: 'Alert when a payment is recorded' },
+  { id: 'SYNC_FAILURE',   label: 'Sync failures',         desc: 'Alert when an account fails to sync' },
+] as const;
+
+interface NotifPref { channel: string; eventType: string; isEnabled: boolean; thresholdDays: number }
+
+function NotificationsTab() {
+  const [prefs, setPrefs] = useState<NotifPref[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState<string | null>(null);
+
+  useEffect(() => {
+    getNotificationPreferences().then(setPrefs).finally(() => setLoading(false));
+  }, []);
+
+  const find = (channel: string, eventType: string) =>
+    prefs.find(p => p.channel === channel && p.eventType === eventType);
+
+  // A channel is on when any event is enabled for it; toggling it sets every
+  // event at once, which is what the single row implies.
+  const channelOn = (channel: string) => NOTIF_EVENTS.some(e => find(channel, e.id)?.isEnabled);
+  // An event row reflects email, the channel that always exists.
+  const eventOn = (eventType: string) => find('EMAIL', eventType)?.isEnabled ?? false;
+  const thresholdDays = find('EMAIL', 'BILL_DUE')?.thresholdDays ?? 5;
+
+  async function save(channel: string, eventType: string, patch: { isEnabled?: boolean; thresholdDays?: number }) {
+    const current = find(channel, eventType);
+    const body = {
+      channel, eventType,
+      isEnabled: patch.isEnabled ?? current?.isEnabled ?? false,
+      thresholdDays: patch.thresholdDays ?? current?.thresholdDays ?? 5,
+    };
+    // Optimistic — a toggle that waits on a round trip feels broken.
+    setPrefs(prev => {
+      const rest = prev.filter(p => !(p.channel === channel && p.eventType === eventType));
+      return [...rest, body];
+    });
+    setSaving(`${channel}:${eventType}`);
+    try {
+      await updateNotificationPreferences(body);
+    } catch {
+      setPrefs(await getNotificationPreferences());
+      alert('Could not save that preference.');
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  const toggleChannel = (channel: string, on: boolean) =>
+    Promise.all(NOTIF_EVENTS.map(e => save(channel, e.id, { isEnabled: on })));
+
+  const toggleEvent = (eventType: string, on: boolean) => save('EMAIL', eventType, { isEnabled: on });
+
+  if (loading) return <div className="px-6 py-5 text-sm text-gray-500">Loading…</div>;
+
+  return (
+    <div className="px-6 py-5 max-w-2xl">
+      <div className="card p-5 mb-4">
+        <h2 className="text-sm font-semibold text-white mb-4">Alert channels</h2>
+        {NOTIF_CHANNELS.map(item => (
+          <Toggle key={item.id} label={item.label} desc={item.desc}
+            checked={channelOn(item.id)} busy={saving?.startsWith(item.id + ':')}
+            onChange={on => toggleChannel(item.id, on)} />
+        ))}
+      </div>
+
+      <div className="card p-5 mb-4">
+        <h2 className="text-sm font-semibold text-white mb-4">Alert types</h2>
+        {NOTIF_EVENTS.map(item => (
+          <Toggle key={item.id} label={item.label} desc={item.desc}
+            checked={eventOn(item.id)} busy={saving === `EMAIL:${item.id}`}
+            onChange={on => toggleEvent(item.id, on)} />
+        ))}
+      </div>
+
+      <div className="card p-5">
+        <h2 className="text-sm font-semibold text-white mb-4">Reminder timing</h2>
+        <div className="flex items-center gap-3">
+          <p className="text-sm text-gray-400">Send reminders</p>
+          <select value={String(thresholdDays)}
+            onChange={e => save('EMAIL', 'BILL_DUE', { thresholdDays: Number(e.target.value) })}
+            className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-gray-200">
+            <option value="3">3 days before due</option>
+            <option value="5">5 days before due</option>
+            <option value="7">7 days before due</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Toggle({ label, desc, checked, busy, onChange }: {
+  label: string; desc: string; checked: boolean; busy?: boolean; onChange: (on: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between py-3 border-b border-white/8 last:border-0">
+      <div>
+        <p className="text-sm font-medium text-gray-100">{label}</p>
+        <p className="text-xs text-gray-400">{desc}</p>
+      </div>
+      <label className={`relative inline-flex items-center cursor-pointer ${busy ? 'opacity-60' : ''}`}>
+        <input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} className="sr-only peer" />
+        <div className="w-9 h-5 bg-white/10 peer-checked:bg-gold-500 rounded-full transition-colors" />
+        <div className="absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-4" />
+      </label>
     </div>
   );
 }

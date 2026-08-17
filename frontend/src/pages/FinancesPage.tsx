@@ -9,8 +9,10 @@ import ReconciliationPage from './ReconciliationPage';
 import IncomingPaymentsPage from './IncomingPaymentsPage';
 import OutgoingPaymentsPage from './OutgoingPaymentsPage';
 import FeesSummaryPage from './FeesSummaryPage';
+import PaymentsPage from './PaymentsPage';
+import DocumentsPage from './DocumentsPage';
 
-type Tab = 'pnl' | 'budget' | 'loans' | 'expenses' | 'personal' | 'reconciliation' | 'incoming' | 'outgoing' | 'fees';
+type Tab = 'pnl' | 'budget' | 'loans' | 'expenses' | 'personal' | 'reconciliation' | 'incoming' | 'outgoing' | 'fees' | 'utility-payments' | 'bills';
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'pnl',            label: 'P&L'            },
@@ -22,6 +24,8 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'incoming',       label: 'Incoming Payments' },
   { key: 'outgoing',       label: 'Expense Payments' },
   { key: 'fees',           label: 'Fees Summary' },
+  { key: 'utility-payments', label: 'Utility Payments' },
+  { key: 'bills',          label: 'Bill Archive'   },
 ];
 
 export default function FinancesPage() {
@@ -39,9 +43,11 @@ export default function FinancesPage() {
     expenses:       'Operating and capital expenditures across all properties',
     personal:       'Auto loans, insurance, credit cards, and other non-property spending',
     reconciliation: 'Monthly statements from managers/collectors who net rent, fees, and loan payments together',
-    incoming:       'Zelle, Venmo, PayPal, and Cash App transfers matched to tenants',
+    incoming:       'Transfers, checks and deposits into watched bank accounts, matched to tenants',
     outgoing:       'Hardware-store purchases and utility bill payments matched to properties',
     fees:           'Any line item, broken down by utility and rolled up by property — month, year, or overall',
+    'utility-payments': 'Payments made against utility accounts, grouped by provider',
+    bills:          'Every statement across all properties, searchable, with PDFs',
   };
 
   return (
@@ -74,6 +80,8 @@ export default function FinancesPage() {
         {tab === 'incoming' && <IncomingPaymentsPage embedded />}
         {tab === 'outgoing' && <OutgoingPaymentsPage embedded />}
         {tab === 'fees' && <FeesSummaryPage embedded />}
+        {tab === 'utility-payments' && <PaymentsPage embedded />}
+        {tab === 'bills' && <DocumentsPage embedded />}
       </div>
     </div>
   );

@@ -518,7 +518,7 @@ function NewPropertyForm({
             placeholder="123 Main St"
           />
         </div>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
           <div className="col-span-1">
             <label className={labelCls}>City *</label>
             <input

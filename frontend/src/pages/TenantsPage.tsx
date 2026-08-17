@@ -94,47 +94,49 @@ export default function TenantsPage({ embedded }: { embedded?: boolean } = {}) {
         <div className="text-center py-16 text-gray-500">No tenants yet</div>
       ) : (
         <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
-          <table className="w-full text-sm">
-            <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
-              <tr className="text-left text-gray-400">
-                <th className="px-4 py-3">Name</th>
-                <th className="px-4 py-3">Email</th>
-                <th className="px-4 py-3">Phone</th>
-                <th className="px-4 py-3">Leases</th>
-                <th className="px-4 py-3"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/5">
-              {tenants.map(t => {
-                const activeLeases = t.leaseTenants?.filter(lt => lt.lease?.status === 'ACTIVE') || [];
-                return (
-                  <tr key={t.id} className="hover:bg-white/[0.02]">
-                    <td className="px-4 py-3 font-medium">
-                      <Link to={`/tenants/${t.id}`} className="text-white hover:text-amber-400">{t.fullName}</Link>
-                    </td>
-                    <td className="px-4 py-3 text-gray-400">
-                      {t.email ? <a href={`mailto:${t.email}`} className="text-amber-400 hover:text-amber-300" onClick={e => e.stopPropagation()}>{t.email}</a> : '—'}
-                    </td>
-                    <td className="px-4 py-3 text-gray-400">
-                      {t.phone ? <a href={telHref(t.phone)} className="text-amber-400 hover:text-amber-300" onClick={e => e.stopPropagation()}>{formatPhone(t.phone)}</a> : '—'}
-                    </td>
-                    <td className="px-4 py-3">
-                      {activeLeases.length > 0 ? (
-                        <span className="text-xs bg-green-900/40 text-green-300 px-2 py-0.5 rounded-full">
-                          {activeLeases.length} active
-                        </span>
-                      ) : (
-                        <span className="text-gray-600 text-xs">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <button onClick={() => handleDelete(t.id)} className="text-xs text-red-500 hover:text-red-400">Remove</button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
+                <tr className="text-left text-gray-400">
+                  <th className="px-4 py-3">Name</th>
+                  <th className="px-4 py-3">Email</th>
+                  <th className="px-4 py-3">Phone</th>
+                  <th className="px-4 py-3">Leases</th>
+                  <th className="px-4 py-3"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {tenants.map(t => {
+                  const activeLeases = t.leaseTenants?.filter(lt => lt.lease?.status === 'ACTIVE') || [];
+                  return (
+                    <tr key={t.id} className="hover:bg-white/[0.02]">
+                      <td className="px-4 py-3 font-medium">
+                        <Link to={`/tenants/${t.id}`} className="text-white hover:text-amber-400">{t.fullName}</Link>
+                      </td>
+                      <td className="px-4 py-3 text-gray-400">
+                        {t.email ? <a href={`mailto:${t.email}`} className="text-amber-400 hover:text-amber-300" onClick={e => e.stopPropagation()}>{t.email}</a> : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-gray-400">
+                        {t.phone ? <a href={telHref(t.phone)} className="text-amber-400 hover:text-amber-300" onClick={e => e.stopPropagation()}>{formatPhone(t.phone)}</a> : '—'}
+                      </td>
+                      <td className="px-4 py-3">
+                        {activeLeases.length > 0 ? (
+                          <span className="text-xs bg-green-900/40 text-green-300 px-2 py-0.5 rounded-full">
+                            {activeLeases.length} active
+                          </span>
+                        ) : (
+                          <span className="text-gray-600 text-xs">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <button onClick={() => handleDelete(t.id)} className="text-xs text-red-500 hover:text-red-400">Remove</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>

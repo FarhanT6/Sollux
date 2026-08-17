@@ -32,6 +32,16 @@ export function monthKey(d?: string | Date | null): string | null {
   return m ? `${m[1]}-${m[2]}` : null;
 }
 
+// Calendar year of a DATE-ONLY value. Same hazard as monthKey: a statement
+// dated Jan 1 read with local getFullYear() lands in the previous year for
+// anyone west of UTC, dropping it out of year filters and YTD totals.
+export function yearOf(d?: string | Date | null): number | null {
+  if (!d) return null;
+  const iso = typeof d === 'string' ? d : d.toISOString();
+  const m = iso.match(/^(\d{4})/);
+  return m ? Number(m[1]) : null;
+}
+
 // "2026-08" for a local Date — the counterpart to monthKey for "right now".
 export function localMonthKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;

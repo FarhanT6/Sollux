@@ -142,7 +142,7 @@ export default function ExpensesPage({ embedded }: { embedded?: boolean } = {}) 
 
       {showForm && (
         <form onSubmit={handleCreate} className="rounded-xl p-5 mb-5" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
-          <div className="grid grid-cols-3 gap-4 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
             <div>
               <label className="text-xs text-gray-400 block mb-1">
                 Property {form.isPersonal ? '(optional)' : '*'}
@@ -195,65 +195,67 @@ export default function ExpensesPage({ embedded }: { embedded?: boolean } = {}) 
         <div className="text-center py-16 text-gray-500">No expenses found</div>
       ) : (
         <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
-          <table className="w-full text-sm">
-            <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
-              <tr className="text-left text-gray-400">
-                <th className="px-4 py-3">Date</th>
-                <th className="px-4 py-3">Property</th>
-                <th className="px-4 py-3">Category</th>
-                <th className="px-4 py-3">Vendor</th>
-                <th className="px-4 py-3">Amount</th>
-                <th className="px-4 py-3">Flags</th>
-                <th className="px-4 py-3"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/5">
-              {filtered.map(e => (
-                <tr key={e.id} className={`hover:bg-white/[0.02] ${e.isPersonal ? 'opacity-50' : ''}`}>
-                  <td className="px-4 py-3 text-gray-400 text-xs">{fmtDate(e.date, 'MMM d, yyyy')}</td>
-                  <td className="px-4 py-3 text-gray-300 text-xs">
-                    {e.propertyId ? (
-                      <Link to={`/portfolio/${e.propertyId}?tab=Expenses`} className="hover:text-amber-400 transition-colors">
-                        {e.property?.nickname || e.property?.address || '—'}
-                      </Link>
-                    ) : (
-                      <span className="text-gray-500 italic">Personal</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className="text-xs bg-white/5 text-gray-300 px-2 py-0.5 rounded">
-                      {EXPENSE_CATEGORY_LABELS[e.category]}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-gray-400 text-xs">{e.vendor || e.description || '—'}</td>
-                  <td className="px-4 py-3 font-medium text-white">{money(Number(e.amount))}</td>
-                  <td className="px-4 py-3">
-                    <div className="flex gap-1.5">
-                      {e.source === 'utility' && <span className="text-xs bg-blue-900/40 text-blue-300 px-1.5 py-0.5 rounded">Utility</span>}
-                      {e.isCapEx && <span className="text-xs bg-blue-900/40 text-blue-300 px-1.5 py-0.5 rounded">CapEx</span>}
-                      {e.isPersonal && <span className="text-xs bg-purple-900/40 text-purple-300 px-1.5 py-0.5 rounded">Personal</span>}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    {e.source === 'utility' ? (
-                      <Link to={`/properties/${e.propertyId}/utilities/${e.utilityAccountId}`} className="text-xs text-amber-400 hover:text-amber-300">View bill</Link>
-                    ) : (
-                      <>
-                        <button
-                          onClick={() => togglePersonal(e)}
-                          className="text-xs text-gray-500 hover:text-gray-300 mr-3"
-                          title={e.isPersonal ? 'Mark as property expense' : 'Mark as personal'}
-                        >
-                          {e.isPersonal ? 'Unmk personal' : 'Mk personal'}
-                        </button>
-                        <button onClick={async () => { if (confirm('Delete?')) { await deleteExpense(e.id); setExpenses(prev => prev.filter(x => x.id !== e.id)); } }} className="text-xs text-red-500 hover:text-red-400">Del</button>
-                      </>
-                    )}
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
+                <tr className="text-left text-gray-400">
+                  <th className="px-4 py-3">Date</th>
+                  <th className="px-4 py-3">Property</th>
+                  <th className="px-4 py-3">Category</th>
+                  <th className="px-4 py-3">Vendor</th>
+                  <th className="px-4 py-3">Amount</th>
+                  <th className="px-4 py-3">Flags</th>
+                  <th className="px-4 py-3"></th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {filtered.map(e => (
+                  <tr key={e.id} className={`hover:bg-white/[0.02] ${e.isPersonal ? 'opacity-50' : ''}`}>
+                    <td className="px-4 py-3 text-gray-400 text-xs">{fmtDate(e.date, 'MMM d, yyyy')}</td>
+                    <td className="px-4 py-3 text-gray-300 text-xs">
+                      {e.propertyId ? (
+                        <Link to={`/portfolio/${e.propertyId}?tab=Expenses`} className="hover:text-amber-400 transition-colors">
+                          {e.property?.nickname || e.property?.address || '—'}
+                        </Link>
+                      ) : (
+                        <span className="text-gray-500 italic">Personal</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="text-xs bg-white/5 text-gray-300 px-2 py-0.5 rounded">
+                        {EXPENSE_CATEGORY_LABELS[e.category]}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-gray-400 text-xs">{e.vendor || e.description || '—'}</td>
+                    <td className="px-4 py-3 font-medium text-white">{money(Number(e.amount))}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex gap-1.5">
+                        {e.source === 'utility' && <span className="text-xs bg-blue-900/40 text-blue-300 px-1.5 py-0.5 rounded">Utility</span>}
+                        {e.isCapEx && <span className="text-xs bg-blue-900/40 text-blue-300 px-1.5 py-0.5 rounded">CapEx</span>}
+                        {e.isPersonal && <span className="text-xs bg-purple-900/40 text-purple-300 px-1.5 py-0.5 rounded">Personal</span>}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      {e.source === 'utility' ? (
+                        <Link to={`/properties/${e.propertyId}/utilities/${e.utilityAccountId}`} className="text-xs text-amber-400 hover:text-amber-300">View bill</Link>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => togglePersonal(e)}
+                            className="text-xs text-gray-500 hover:text-gray-300 mr-3"
+                            title={e.isPersonal ? 'Mark as property expense' : 'Mark as personal'}
+                          >
+                            {e.isPersonal ? 'Unmk personal' : 'Mk personal'}
+                          </button>
+                          <button onClick={async () => { if (confirm('Delete?')) { await deleteExpense(e.id); setExpenses(prev => prev.filter(x => x.id !== e.id)); } }} className="text-xs text-red-500 hover:text-red-400">Del</button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>

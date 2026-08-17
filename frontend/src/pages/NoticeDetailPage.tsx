@@ -86,18 +86,20 @@ export default function NoticeDetailPage() {
           of the premises at <U>&nbsp;&nbsp;{propertyAddress}&nbsp;&nbsp;</U>, there is now due, unpaid, and delinquent rent of:
         </p>
 
-        <table style={{ marginBottom: '1rem' }}>
-          <tbody>
-            {lineItems.map((item, i) => (
-              <tr key={i}>
-                <td style={{ paddingRight: '4px', textAlign: 'right' }}>$</td>
-                <td style={{ paddingRight: '4px' }}><U>&nbsp;&nbsp;{money(item.amount).replace('$', '').trim()}&nbsp;&nbsp;</U></td>
-                <td style={{ paddingRight: '4px' }}>Due</td>
-                <td><U>&nbsp;&nbsp;{fmtDate(item.dueDate)}&nbsp;&nbsp;</U></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="overflow-x-auto">
+          <table style={{ marginBottom: '1rem' }}>
+            <tbody>
+              {lineItems.map((item, i) => (
+                <tr key={i}>
+                  <td style={{ paddingRight: '4px', textAlign: 'right' }}>$</td>
+                  <td style={{ paddingRight: '4px' }}><U>&nbsp;&nbsp;{money(item.amount).replace('$', '').trim()}&nbsp;&nbsp;</U></td>
+                  <td style={{ paddingRight: '4px' }}>Due</td>
+                  <td><U>&nbsp;&nbsp;{fmtDate(item.dueDate)}&nbsp;&nbsp;</U></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
 
         <p style={{ marginBottom: '1rem' }}>
           TOTAL AMOUNT DUE: <U>&nbsp;&nbsp;{money(Number(notice.totalDue))}&nbsp;&nbsp;</U>

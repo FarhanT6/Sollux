@@ -88,6 +88,16 @@ router.delete('/:id', async (req, res, next) => {
         data: { arrearsBalance: { increment: restored } },
       });
     }
+
+    // If a bank transaction created this payment, send it back to the review
+    // queue. Otherwise deleting a wrongly auto-logged payment would strand the
+    // transaction as APPLIED, pointing at a payment that no longer exists, and
+    // it could never be re-matched to the right lease.
+    await db.incomingTransaction.updateMany({
+      where: { rentPaymentId: existing.id },
+      data: { status: 'SUGGESTED', rentPaymentId: null },
+    });
+
     res.status(204).send();
   } catch (err) { next(err); }
 });

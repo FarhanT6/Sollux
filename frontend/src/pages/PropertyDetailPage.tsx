@@ -121,7 +121,7 @@ export default function PropertyDetailPage() {
 
       {/* Property hero stats */}
       <div className="px-6 py-4 border-b border-white/8">
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <StatCard label="Monthly total" value={`$${monthlyTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} />
           <StatCard label="Last synced" value={lastSynced ? format(new Date(lastSynced), 'h:mm a') : 'Never'} sub={lastSynced ? fmtDate(lastSynced, 'MMM d') : ''} />
           <StatCard label="Utility accounts" value={accounts.length} sub="All connected" subColor="green" />
@@ -212,28 +212,30 @@ export default function PropertyDetailPage() {
             {payments.length === 0 ? (
               <EmptyState icon="💳" title="No payments yet" body="Payment history will appear here once accounts are synced." />
             ) : (
-              <table className="table-base">
-                <thead>
-                  <tr>
-                    <th>Utility</th>
-                    <th>Amount</th>
-                    <th>Date</th>
-                    <th>Confirmation #</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {payments.map(p => (
-                    <tr key={p.id}>
-                      <td className="font-medium">{p.utilityAccount?.providerName}</td>
-                      <td className="font-semibold">${Number(p.amount).toFixed(2)}</td>
-                      <td className="text-gray-500">{fmtDate(p.paymentDate, 'MMM d, yyyy')}</td>
-                      <td><span className="font-mono text-xs text-gray-400">{p.confirmationNumber || '—'}</span></td>
-                      <td><Pill color="green">Paid</Pill></td>
+              <div className="overflow-x-auto">
+                <table className="table-base">
+                  <thead>
+                    <tr>
+                      <th>Utility</th>
+                      <th>Amount</th>
+                      <th>Date</th>
+                      <th>Confirmation #</th>
+                      <th>Status</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {payments.map(p => (
+                      <tr key={p.id}>
+                        <td className="font-medium">{p.utilityAccount?.providerName}</td>
+                        <td className="font-semibold">${Number(p.amount).toFixed(2)}</td>
+                        <td className="text-gray-500">{fmtDate(p.paymentDate, 'MMM d, yyyy')}</td>
+                        <td><span className="font-mono text-xs text-gray-400">{p.confirmationNumber || '—'}</span></td>
+                        <td><Pill color="green">Paid</Pill></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </>
         )}
@@ -293,7 +295,7 @@ export default function PropertyDetailPage() {
                         <p className="section-label mb-0">{acct?.providerName || 'Unknown account'}</p>
                         <span className="text-xs text-gray-600">{stmts.length} statement{stmts.length !== 1 ? 's' : ''}</span>
                       </div>
-                      <div className="grid grid-cols-3 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                         {stmts.map(stmt => (
                           <div
                             key={stmt.id}
@@ -651,7 +653,7 @@ function EditPropertyModal({ property, onClose, onSaved }: { property: Property;
             <label className="text-xs text-gray-400 block mb-1">Street address</label>
             <input className={fieldCls} value={form.address} onChange={e => setForm(f => ({ ...f, address: e.target.value }))} />
           </div>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             <div>
               <label className="text-xs text-gray-400 block mb-1">City</label>
               <input className={fieldCls} value={form.city} onChange={e => setForm(f => ({ ...f, city: e.target.value }))} />

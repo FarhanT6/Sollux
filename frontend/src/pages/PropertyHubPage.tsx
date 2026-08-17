@@ -10,13 +10,14 @@ import {
   updateTaxAssessment, deleteTaxAssessment, updateImprovement, deleteImprovement,
   updateLease, updateProperty, lookupPropertyByAddress,
   createLease, getLease, deleteLease, getTenants, createTenant, deleteTenant, getUnits, createUnit,
+  updateUnit, deleteUnit,
   getDocuments, getDocumentUrl, deleteDocument, confirmScannedDocument, downloadRentRoll, downloadT12,
   getT12Manifest, RENT_ROLL_COLUMNS,
   getRentChanges, addRentChange, deleteRentChange, uploadLeaseDocument,
   getLeaseDocuments, addLeaseDocument, getLeaseDocumentViewUrl, deleteLeaseDocument, extractLeaseTerms,
   addScheduledIncrease, applyScheduledIncrease, deleteScheduledIncrease,
   addLeaseUtilityCharge, deleteLeaseUtilityCharge, getTurnover, getBankAccounts,
-  addPaymentAlias, deletePaymentAlias,
+  addPaymentAlias, deletePaymentAlias, deleteRentPayment,
 } from '../api/client';
 import type {
   Property, Lease, Loan, Expense, InsurancePolicy, TaxAssessment,
@@ -27,6 +28,7 @@ import { PROPERTY_TYPE_LABELS, EXPENSE_CATEGORY_LABELS, DOCUMENT_CATEGORY_LABELS
   RENT_PAYMENT_METHODS, RENT_PAYMENT_METHOD_LABELS, BANK_LINKED_METHODS } from '../types';
 import type { Document as DocType } from '../types';
 import { fmtDate as fmtDateSafe, monthKey, localMonthKey } from '../lib/date';
+import LegalPage from './LegalPage';
 
 const LEASE_DOC_CATEGORIES = ['LEASE', 'APPLICATION', 'IDENTITY', 'SCREENING', 'OTHER'] as const;
 
@@ -73,7 +75,7 @@ const money = (n: number) =>
   n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const pct = (n: number) => `${n > 0 ? '+' : ''}${n.toFixed(1)}%`;
 const fmtDate = (d?: string | null) => fmtDateSafe(d);
-const TABS = ['Overview', 'Tenants', 'Turnover', 'Loans', 'Expenses', 'Insurance', 'Maintenance', 'Tax', 'Documents'] as const;
+const TABS = ['Overview', 'Tenants', 'Turnover', 'Loans', 'Expenses', 'Insurance', 'Maintenance', 'Tax', 'Legal', 'Documents'] as const;
 type Tab = typeof TABS[number];
 
 export default function PropertyHubPage() {
@@ -236,7 +238,7 @@ export default function PropertyHubPage() {
 
       {/* Tab content */}
       <div className="px-6 py-5">
-        {activeTab === 'Overview' && <OverviewTab property={property} pnl={pnl} leases={activeLeases} loans={loans.filter(l => l.isActive)} />}
+        {activeTab === 'Overview' && <OverviewTab property={property} pnl={pnl} leases={activeLeases} loans={loans.filter(l => l.isActive)} onPropertyChange={setProperty} />}
         {activeTab === 'Tenants' && <TenantsTab propertyId={id!} leases={leases} setLeases={setLeases} propertyType={property.type} />}
         {activeTab === 'Turnover' && <TurnoverTab report={turnover} />}
         {activeTab === 'Loans' && <LoansTab propertyId={id!} loans={loans} setLoans={setLoans} />}
@@ -244,6 +246,7 @@ export default function PropertyHubPage() {
         {activeTab === 'Insurance' && <InsuranceTab propertyId={id!} policies={policies} setPolicies={setPolicies} />}
         {activeTab === 'Maintenance' && <MaintenanceTab propertyId={id!} items={improvements} setItems={setImprovements} />}
         {activeTab === 'Tax' && <TaxTab propertyId={id!} taxes={taxes} setTaxes={setTaxes} />}
+        {activeTab === 'Legal' && <LegalPage embedded propertyId={id!} />}
         {activeTab === 'Documents' && <DocumentsTab propertyId={id!} documents={documents} setDocuments={setDocuments} />}
       </div>
 
@@ -612,10 +615,47 @@ function nextDueDate(dueDay: number): Date {
   return new Date(today.getFullYear(), today.getMonth() + 1, Math.min(dueDay, daysNextMonth));
 }
 
-function OverviewTab({ property, pnl, leases, loans }: {
+function OverviewTab({ property, pnl, leases, loans, onPropertyChange }: {
   property: Property; pnl: PropertyPnL | null; leases: Lease[]; loans: Loan[];
+  onPropertyChange: (p: Property) => void;
 }) {
   const units = property.units ?? [];
+  // Units could be created (inside the new-lease modal) but never renamed or
+  // removed, so a typo in a label was permanent.
+  const [editUnit, setEditUnit] = useState<string | null>(null);
+  const [unitLabel, setUnitLabel] = useState('');
+  const [busyUnit, setBusyUnit] = useState<string | null>(null);
+
+  const refreshProperty = async () => onPropertyChange(await getProperty(property.id));
+
+  async function saveUnitLabel(unitId: string) {
+    const label = unitLabel.trim();
+    if (!label) return;
+    setBusyUnit(unitId);
+    try {
+      await updateUnit(unitId, { unitLabel: label });
+      setEditUnit(null);
+      await refreshProperty();
+    } catch (err: any) {
+      alert(err?.response?.data?.error ?? 'Could not rename that unit.');
+    } finally { setBusyUnit(null); }
+  }
+
+  async function removeUnit(unitId: string, label: string) {
+    const occupied = occupiedUnitIds.has(unitId);
+    const warning = occupied
+      ? '\n\nThis unit has a lease on it. Deleting it deletes that lease and its payments, notices and rent history too.'
+      : '';
+    if (!confirm(`Delete unit "${label}"?${warning}\n\nThis cannot be undone.`)) return;
+    setBusyUnit(unitId);
+    try {
+      await deleteUnit(unitId);
+      await refreshProperty();
+    } catch (err: any) {
+      alert(err?.response?.data?.error ?? 'Could not delete that unit.');
+    } finally { setBusyUnit(null); }
+  }
+
   const occupiedUnitIds = new Set(leases.map(l => l.unitId));
   const totalDebt = loans.reduce((s, l) => s + Number(l.currentBalance ?? 0), 0);
   const equity = Number(property.estimatedValue ?? 0) - totalDebt;
@@ -633,7 +673,7 @@ function OverviewTab({ property, pnl, leases, loans }: {
       {pnl && (
         <div>
           <p className="section-label">Performance (trailing 12 months)</p>
-          <div className="grid grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
             {[
               { label: 'Rental income', value: money(pnl.rentalIncome), color: 'text-white' },
               { label: 'Op. expenses',  value: money(pnl.operatingExpenses), color: 'text-gray-300' },
@@ -654,7 +694,7 @@ function OverviewTab({ property, pnl, leases, loans }: {
       {mortgages.length > 0 && (
         <div>
           <p className="section-label">Mortgage &amp; upcoming payments</p>
-          <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${Math.min(mortgages.length, 3)}, 1fr)` }}>
+          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
             {mortgages.map(loan => {
               const total = Number(loan.monthlyPayment ?? 0) + Number(loan.escrowAmount ?? 0);
               const due = loan.dueDay ? nextDueDate(loan.dueDay) : null;
@@ -733,20 +773,37 @@ function OverviewTab({ property, pnl, leases, loans }: {
       {units.length > 0 && (
         <div>
           <p className="section-label">{units.length} units</p>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {units.map(u => {
               const occupied = occupiedUnitIds.has(u.id);
               return (
-                <div key={u.id} className="card p-3">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <p className="text-sm font-medium text-white">{u.unitLabel}</p>
-                    <span className={`pill ${occupied ? 'pill-green' : 'pill-gray'}`}>
+                <div key={u.id} className="card p-3 group">
+                  <div className="flex items-center justify-between mb-1.5 gap-2">
+                    {editUnit === u.id ? (
+                      <input autoFocus value={unitLabel} onChange={e => setUnitLabel(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') saveUnitLabel(u.id); if (e.key === 'Escape') setEditUnit(null); }}
+                        onBlur={() => saveUnitLabel(u.id)}
+                        className="input-dark text-sm flex-1 min-w-0" />
+                    ) : (
+                      <p className="text-sm font-medium text-white truncate">{u.unitLabel}</p>
+                    )}
+                    <span className={`pill flex-shrink-0 ${occupied ? 'pill-green' : 'pill-gray'}`}>
                       {occupied ? 'Occupied' : 'Vacant'}
                     </span>
                   </div>
-                  <p className="text-xs text-gray-500">
-                    {[u.bedrooms ? `${u.bedrooms}bd` : null, u.bathrooms ? `${u.bathrooms}ba` : null, u.sqft ? `${u.sqft} sqft` : null].filter(Boolean).join(' · ') || 'No details'}
-                  </p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs text-gray-500 truncate">
+                      {[u.bedrooms ? `${u.bedrooms}bd` : null, u.bathrooms ? `${u.bathrooms}ba` : null, u.sqft ? `${u.sqft} sqft` : null].filter(Boolean).join(' · ') || 'No details'}
+                    </p>
+                    {editUnit !== u.id && (
+                      <div className="flex gap-2 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onClick={() => { setEditUnit(u.id); setUnitLabel(u.unitLabel); }} disabled={busyUnit === u.id}
+                          className="text-xs text-gray-500 hover:text-amber-400 disabled:opacity-40">Rename</button>
+                        <button onClick={() => removeUnit(u.id, u.unitLabel)} disabled={busyUnit === u.id}
+                          className="text-xs text-gray-600 hover:text-red-400 disabled:opacity-40">Delete</button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               );
             })}
@@ -915,6 +972,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   const [newTenantName, setNewTenantName] = useState('');
   const [deletingTenant, setDeletingTenant] = useState<string | null>(null);
   const [deletingLease, setDeletingLease] = useState<string | null>(null);
+  const [deletingPayment, setDeletingPayment] = useState<string | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [uploadingDoc, setUploadingDoc] = useState(false);
   const [docCategory, setDocCategory] = useState<string>('LEASE');
@@ -1049,6 +1107,34 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   async function removeAlias(leaseId: string, aliasId: string) {
     await deletePaymentAlias(leaseId, aliasId);
     setLeases(await getLeases({ propertyId }));
+  }
+
+  // Deleting a payment moves money: whatever it applied to arrears goes back on
+  // the balance, and the month it covered may fall overdue again. Both are
+  // server-side, so reload the lease rather than patching local state.
+  async function removePayment(leaseId: string, p: any) {
+    const applied = Number(p.appliedToArrears ?? 0);
+    const message = [
+      `Delete the ${money(Number(p.amount))} payment from ${fmtDateSafe(p.paidDate)}?`,
+      applied > 0 ? `\n${money(applied)} of it paid down the balance and will be added back.` : '',
+      '\nThis cannot be undone.',
+    ].filter(Boolean).join('\n');
+    if (!confirm(message)) return;
+
+    setDeletingPayment(p.id);
+    try {
+      await deleteRentPayment(p.id);
+      const [fresh, updatedLeases] = await Promise.all([
+        getRentPayments({ leaseId }),
+        getLeases({ propertyId }),
+      ]);
+      setPayments(prev => ({ ...prev, [leaseId]: fresh }));
+      setLeases(updatedLeases);
+    } catch (err: any) {
+      alert(err?.response?.data?.error ?? 'Could not delete that payment.');
+    } finally {
+      setDeletingPayment(null);
+    }
   }
 
   async function saveEditLease(leaseId: string) {
@@ -1490,7 +1576,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
 
                 {editLease === lease.id && (
                   <div className="px-4 py-3 space-y-3" style={{ background: 'rgba(255,255,255,0.03)', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                       <select value={editForm.unitId} onChange={e => setEditForm(f => ({ ...f, unitId: e.target.value }))} className="input-dark text-xs">
                         {/* The lease carries its own unit, so offer it even when
                             the units list hasn't caught up — a select with no
@@ -1587,7 +1673,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                     {/* Late fee — flat amount or percent of rent, with grace period */}
                     <div>
                       <label className="block text-xs text-gray-500 mb-1">Late fee (leave blank if none)</label>
-                      <div className="grid grid-cols-3 gap-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                         <input type="number" placeholder="Flat amount $" value={editForm.lateFeeAmount}
                           onChange={e => setEditForm(f => ({ ...f, lateFeeAmount: e.target.value, lateFeePercent: e.target.value ? '' : f.lateFeePercent }))}
                           className="input-dark text-xs" />
@@ -1663,7 +1749,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                           </div>
                         ))}
                       </div>
-                      <div className="grid grid-cols-4 gap-2">
+                      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
                         <select value={ucForm.category} onChange={e => setUcForm(f => ({ ...f, category: e.target.value }))} className="input-dark text-xs">
                           {UTILITY_CHARGE_CATEGORIES.map(c => (
                             <option key={c} value={c}>{CATEGORY_LABELS[c as keyof typeof CATEGORY_LABELS] ?? c}</option>
@@ -1712,7 +1798,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                         ))}
                       </div>
                       {/* Add a scheduled increase with live, chained calculator */}
-                      <div className="grid grid-cols-5 gap-2">
+                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">
                         <input type="date" value={siForm.effectiveDate} onChange={e => setSiForm(f => ({ ...f, effectiveDate: e.target.value }))} className="input-dark text-xs" title="Effective date" />
                         <input type="number" placeholder="New amount $" value={siForm.newAmount} onChange={e => setSiForm(f => ({ ...f, newAmount: e.target.value, percent: e.target.value ? '' : f.percent, percentMax: e.target.value ? '' : f.percentMax }))} className="input-dark text-xs" />
                         <input type="number" placeholder="% (or range min)" value={siForm.percent} onChange={e => setSiForm(f => ({ ...f, percent: e.target.value, newAmount: e.target.value ? '' : f.newAmount }))} className="input-dark text-xs" />
@@ -1897,29 +1983,39 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                       ) : payments[lease.id].length === 0 ? (
                         <p className="px-4 py-3 text-xs text-gray-500">No payments recorded yet</p>
                       ) : (
-                        <table className="w-full text-xs">
-                          <thead style={{ background: 'rgba(255,255,255,0.03)' }}>
-                            <tr className="text-left text-gray-500">
-                              <th className="px-4 py-2">Date</th>
-                              <th className="px-4 py-2">Amount</th>
-                              <th className="px-4 py-2">Method</th>
-                              <th className="px-4 py-2">Notes</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {payments[lease.id].map((p: any) => (
-                              <tr key={p.id} className="border-t border-white/5">
-                                <td className="px-4 py-2 text-gray-300">{fmtDate(p.paidDate)}</td>
-                                <td className="px-4 py-2 font-medium text-white">{money(Number(p.amount))}</td>
-                                <td className="px-4 py-2 text-gray-400">
-                                  {RENT_PAYMENT_METHOD_LABELS[p.method as RentPaymentMethod] ?? p.method}
-                                  {p.bankAccount && <span className="text-gray-600"> → {bankLabel(p.bankAccount as BankAccount)}</span>}
-                                </td>
-                                <td className="px-4 py-2 text-gray-500">{p.notes || '—'}</td>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs">
+                            <thead style={{ background: 'rgba(255,255,255,0.03)' }}>
+                              <tr className="text-left text-gray-500">
+                                <th className="px-4 py-2">Date</th>
+                                <th className="px-4 py-2">Amount</th>
+                                <th className="px-4 py-2">Method</th>
+                                <th className="px-4 py-2">Notes</th>
+                                <th className="px-4 py-2 w-8"></th>
                               </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                            </thead>
+                            <tbody>
+                              {payments[lease.id].map((p: any) => (
+                                <tr key={p.id} className="border-t border-white/5">
+                                  <td className="px-4 py-2 text-gray-300">{fmtDate(p.paidDate)}</td>
+                                  <td className="px-4 py-2 font-medium text-white">{money(Number(p.amount))}</td>
+                                  <td className="px-4 py-2 text-gray-400">
+                                    {RENT_PAYMENT_METHOD_LABELS[p.method as RentPaymentMethod] ?? p.method}
+                                    {p.bankAccount && <span className="text-gray-600"> → {bankLabel(p.bankAccount as BankAccount)}</span>}
+                                  </td>
+                                  <td className="px-4 py-2 text-gray-500">{p.notes || '—'}</td>
+                                  <td className="px-4 py-2 text-right">
+                                    <button onClick={() => removePayment(lease.id, p)} disabled={deletingPayment === p.id}
+                                      title="Delete this payment"
+                                      className="text-gray-600 hover:text-red-400 disabled:opacity-40">
+                                      {deletingPayment === p.id ? '…' : '✕'}
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -2144,7 +2240,7 @@ function LoansTab({ propertyId, loans, setLoans }: {
       </div>
 
       {showForm && (
-        <div className="card p-4 mb-4 grid grid-cols-4 gap-3">
+        <div className="card p-4 mb-4 grid grid-cols-2 lg:grid-cols-4 gap-3">
           <div className="col-span-4 text-xs font-medium text-gray-400 mb-1">New loan</div>
           <select value={form.loanType} onChange={e => setForm(f => ({ ...f, loanType: e.target.value }))} className="input-dark text-sm">
             {['MORTGAGE','HELOC','INSTALLMENT_PLAN','CREDIT_LINE','SELLER_FINANCING','DSCR','COMMERCIAL','HARD_MONEY','OTHER'].map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
@@ -2168,37 +2264,39 @@ function LoansTab({ propertyId, loans, setLoans }: {
         <div className="text-center py-12 text-gray-500 text-sm">No loans recorded</div>
       ) : (
         <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
-          <table className="w-full text-sm">
-            <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
-              <tr className="text-left text-gray-400 text-xs">
-                <th className="px-4 py-3">Lender</th>
-                <th className="px-4 py-3">Type</th>
-                <th className="px-4 py-3">Balance</th>
-                <th className="px-4 py-3">Payment/mo</th>
-                <th className="px-4 py-3">Rate</th>
-                <th className="px-4 py-3">Maturity</th>
-                <th className="px-4 py-3">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/5">
-              {sorted.map(loan => (
-                <tr key={loan.id} className="hover:bg-white/[0.02]">
-                  <td className="px-4 py-3">
-                    <Link to={`/loans/${loan.id}`} className="text-white font-medium hover:text-amber-400 transition-colors">{loan.lender}</Link>
-                    {loan.accountLast4 && <p className="text-xs text-gray-500">····{loan.accountLast4}</p>}
-                  </td>
-                  <td className="px-4 py-3 text-gray-400">{loan.loanType}</td>
-                  <td className="px-4 py-3 font-medium text-white">{loan.currentBalance ? money(Number(loan.currentBalance)) : '—'}</td>
-                  <td className="px-4 py-3 text-gray-300">{loan.monthlyPayment ? money(Number(loan.monthlyPayment)) : '—'}</td>
-                  <td className="px-4 py-3 text-gray-400">{loan.interestRate ? `${loan.interestRate}%` : '—'}</td>
-                  <td className="px-4 py-3 text-gray-400 text-xs">{loan.maturityDate ? fmtDate(loan.maturityDate) : '—'}</td>
-                  <td className="px-4 py-3">
-                    <span className={`pill ${loan.isActive ? 'pill-green' : 'pill-gray'}`}>{loan.isActive ? 'Active' : 'Paid off'}</span>
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
+                <tr className="text-left text-gray-400 text-xs">
+                  <th className="px-4 py-3">Lender</th>
+                  <th className="px-4 py-3">Type</th>
+                  <th className="px-4 py-3">Balance</th>
+                  <th className="px-4 py-3">Payment/mo</th>
+                  <th className="px-4 py-3">Rate</th>
+                  <th className="px-4 py-3">Maturity</th>
+                  <th className="px-4 py-3">Status</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {sorted.map(loan => (
+                  <tr key={loan.id} className="hover:bg-white/[0.02]">
+                    <td className="px-4 py-3">
+                      <Link to={`/loans/${loan.id}`} className="text-white font-medium hover:text-amber-400 transition-colors">{loan.lender}</Link>
+                      {loan.accountLast4 && <p className="text-xs text-gray-500">····{loan.accountLast4}</p>}
+                    </td>
+                    <td className="px-4 py-3 text-gray-400">{loan.loanType}</td>
+                    <td className="px-4 py-3 font-medium text-white">{loan.currentBalance ? money(Number(loan.currentBalance)) : '—'}</td>
+                    <td className="px-4 py-3 text-gray-300">{loan.monthlyPayment ? money(Number(loan.monthlyPayment)) : '—'}</td>
+                    <td className="px-4 py-3 text-gray-400">{loan.interestRate ? `${loan.interestRate}%` : '—'}</td>
+                    <td className="px-4 py-3 text-gray-400 text-xs">{loan.maturityDate ? fmtDate(loan.maturityDate) : '—'}</td>
+                    <td className="px-4 py-3">
+                      <span className={`pill ${loan.isActive ? 'pill-green' : 'pill-gray'}`}>{loan.isActive ? 'Active' : 'Paid off'}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>
@@ -2317,7 +2415,7 @@ function ExpensesTab({ propertyId, expenses, setExpenses }: {
       </div>
 
       {formMode !== 'closed' && (
-        <div className="card p-4 mb-4 grid grid-cols-4 gap-3">
+        <div className="card p-4 mb-4 grid grid-cols-2 lg:grid-cols-4 gap-3">
           <div className="col-span-4 text-xs font-medium text-gray-400 mb-1">{isEditing ? 'Edit expense' : 'New expense'}</div>
           <select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} className="input-dark text-sm col-span-2">
             {Object.entries(EXPENSE_CATEGORY_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
@@ -2349,101 +2447,107 @@ function ExpensesTab({ propertyId, expenses, setExpenses }: {
         <div className="text-center py-12 text-gray-500 text-sm">No expenses recorded</div>
       ) : view === 'vendor' ? (
         <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
-          <table className="w-full text-sm">
-            <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
-              <tr className="text-left text-gray-400 text-xs">
-                <th className="px-4 py-3">Vendor / Provider</th>
-                <th className="px-4 py-3">Type</th>
-                <th className="px-4 py-3">Bills</th>
-                <th className="px-4 py-3">Total</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/5">
-              {byVendor.map(v => (
-                <tr key={v.vendor} className="hover:bg-white/[0.02]">
-                  <td className="px-4 py-3 text-gray-200">{v.vendor}</td>
-                  <td className="px-4 py-3">{v.isUtility && <span className="text-xs bg-blue-900/40 text-blue-300 px-1.5 py-0.5 rounded">Utility</span>}</td>
-                  <td className="px-4 py-3 text-gray-400">{v.count}</td>
-                  <td className="px-4 py-3 font-medium text-white">{money(v.total)}</td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
+                <tr className="text-left text-gray-400 text-xs">
+                  <th className="px-4 py-3">Vendor / Provider</th>
+                  <th className="px-4 py-3">Type</th>
+                  <th className="px-4 py-3">Bills</th>
+                  <th className="px-4 py-3">Total</th>
                 </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr className="border-t border-white/10 font-semibold text-white">
-                <td className="px-4 py-3" colSpan={3}>Total</td>
-                <td className="px-4 py-3">{money(total)}</td>
-              </tr>
-            </tfoot>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {byVendor.map(v => (
+                  <tr key={v.vendor} className="hover:bg-white/[0.02]">
+                    <td className="px-4 py-3 text-gray-200">{v.vendor}</td>
+                    <td className="px-4 py-3">{v.isUtility && <span className="text-xs bg-blue-900/40 text-blue-300 px-1.5 py-0.5 rounded">Utility</span>}</td>
+                    <td className="px-4 py-3 text-gray-400">{v.count}</td>
+                    <td className="px-4 py-3 font-medium text-white">{money(v.total)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t border-white/10 font-semibold text-white">
+                  <td className="px-4 py-3" colSpan={3}>Total</td>
+                  <td className="px-4 py-3">{money(total)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
         </div>
       ) : view === 'month' ? (
         <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
-          <table className="w-full text-sm">
-            <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
-              <tr className="text-left text-gray-400 text-xs">
-                <th className="px-4 py-3">Month</th>
-                <th className="px-4 py-3">Utilities</th>
-                <th className="px-4 py-3">Other OpEx</th>
-                <th className="px-4 py-3">Total</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/5">
-              {byMonth.map(m => (
-                <tr key={m.month} className="hover:bg-white/[0.02]">
-                  <td className="px-4 py-3 text-gray-200">{format(new Date(`${m.month}-01T00:00:00`), 'MMM yyyy')}</td>
-                  <td className="px-4 py-3 text-gray-400">{m.utilityTotal > 0 ? money(m.utilityTotal) : '—'}</td>
-                  <td className="px-4 py-3 text-gray-400">{m.otherTotal > 0 ? money(m.otherTotal) : '—'}</td>
-                  <td className="px-4 py-3 font-medium text-white">{money(m.utilityTotal + m.otherTotal)}</td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
+                <tr className="text-left text-gray-400 text-xs">
+                  <th className="px-4 py-3">Month</th>
+                  <th className="px-4 py-3">Utilities</th>
+                  <th className="px-4 py-3">Other OpEx</th>
+                  <th className="px-4 py-3">Total</th>
                 </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr className="border-t border-white/10 font-semibold text-white">
-                <td className="px-4 py-3" colSpan={3}>Total</td>
-                <td className="px-4 py-3">{money(total)}</td>
-              </tr>
-            </tfoot>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {byMonth.map(m => (
+                  <tr key={m.month} className="hover:bg-white/[0.02]">
+                    <td className="px-4 py-3 text-gray-200">{format(new Date(`${m.month}-01T00:00:00`), 'MMM yyyy')}</td>
+                    <td className="px-4 py-3 text-gray-400">{m.utilityTotal > 0 ? money(m.utilityTotal) : '—'}</td>
+                    <td className="px-4 py-3 text-gray-400">{m.otherTotal > 0 ? money(m.otherTotal) : '—'}</td>
+                    <td className="px-4 py-3 font-medium text-white">{money(m.utilityTotal + m.otherTotal)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t border-white/10 font-semibold text-white">
+                  <td className="px-4 py-3" colSpan={3}>Total</td>
+                  <td className="px-4 py-3">{money(total)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
         </div>
       ) : (
         <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
-          <table className="w-full text-sm">
-            <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
-              <tr className="text-left text-gray-400 text-xs">
-                <th className="px-4 py-3">Date</th>
-                <th className="px-4 py-3">Category</th>
-                <th className="px-4 py-3">Vendor</th>
-                <th className="px-4 py-3">Description</th>
-                <th className="px-4 py-3">Amount</th>
-                <th className="px-4 py-3">Type</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/5">
-              {filtered.map(e => {
-                const isUtility = e.source === 'utility';
-                return (
-                <tr key={e.id}
-                  onClick={() => isUtility
-                    ? window.open(`/properties/${e.propertyId}/utilities/${e.utilityAccountId}`, '_self')
-                    : openEdit(e)}
-                  className="hover:bg-white/[0.02] cursor-pointer">
-                  <td className="px-4 py-3 text-gray-400 text-xs">{fmtDate(e.date)}</td>
-                  <td className="px-4 py-3 text-gray-300">{EXPENSE_CATEGORY_LABELS[e.category] ?? e.category}</td>
-                  <td className="px-4 py-3 text-gray-400">{e.vendor || '—'}</td>
-                  <td className="px-4 py-3 text-gray-400">{e.description || '—'}</td>
-                  <td className="px-4 py-3 font-medium text-white">{money(Number(e.amount))}</td>
-                  <td className="px-4 py-3">
-                    <div className="flex gap-1 flex-wrap">
-                      {isUtility && <span className="pill pill-blue" title="Synced from utility bills, not a manual entry — click to view the account">Utility</span>}
-                      <span className={`pill ${e.isCapEx ? 'pill-purple' : 'pill-gray'}`}>{e.isCapEx ? 'CapEx' : 'OpEx'}</span>
-                      {e.isPersonal && <span className="pill pill-amber">Personal</span>}
-                    </div>
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
+                <tr className="text-left text-gray-400 text-xs">
+                  <th className="px-4 py-3">Date</th>
+                  <th className="px-4 py-3">Category</th>
+                  <th className="px-4 py-3">Vendor</th>
+                  <th className="px-4 py-3">Description</th>
+                  <th className="px-4 py-3">Amount</th>
+                  <th className="px-4 py-3">Type</th>
                 </tr>
-                );
-              })}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {filtered.map(e => {
+                  const isUtility = e.source === 'utility';
+                  return (
+                  <tr key={e.id}
+                    onClick={() => isUtility
+                      ? window.open(`/properties/${e.propertyId}/utilities/${e.utilityAccountId}`, '_self')
+                      : openEdit(e)}
+                    className="hover:bg-white/[0.02] cursor-pointer">
+                    <td className="px-4 py-3 text-gray-400 text-xs">{fmtDate(e.date)}</td>
+                    <td className="px-4 py-3 text-gray-300">{EXPENSE_CATEGORY_LABELS[e.category] ?? e.category}</td>
+                    <td className="px-4 py-3 text-gray-400">{e.vendor || '—'}</td>
+                    <td className="px-4 py-3 text-gray-400">{e.description || '—'}</td>
+                    <td className="px-4 py-3 font-medium text-white">{money(Number(e.amount))}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex gap-1 flex-wrap">
+                        {isUtility && <span className="pill pill-blue" title="Synced from utility bills, not a manual entry — click to view the account">Utility</span>}
+                        <span className={`pill ${e.isCapEx ? 'pill-purple' : 'pill-gray'}`}>{e.isCapEx ? 'CapEx' : 'OpEx'}</span>
+                        {e.isPersonal && <span className="pill pill-amber">Personal</span>}
+                      </div>
+                    </td>
+                  </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
       <ScannedDocuments propertyId={propertyId} category="EXPENSE_RECEIPT" />
@@ -2535,7 +2639,7 @@ function InsuranceTab({ propertyId, policies, setPolicies }: {
       </div>
 
       {formMode !== 'closed' && (
-        <div className="card p-4 mb-4 grid grid-cols-4 gap-3">
+        <div className="card p-4 mb-4 grid grid-cols-2 lg:grid-cols-4 gap-3">
           <div className="col-span-4 text-xs font-medium text-gray-400 mb-1">{isEditing ? 'Edit policy' : 'New policy'}</div>
           {isLinked && (
             <p className="col-span-4 text-xs text-amber-400/80 bg-amber-500/5 border border-amber-500/20 rounded-lg px-3 py-2 -mt-1 mb-1">
@@ -2699,7 +2803,7 @@ function MaintenanceTab({ propertyId, items, setItems }: {
       </div>
 
       {formMode !== 'closed' && (
-        <div className="card p-4 mb-4 grid grid-cols-4 gap-3">
+        <div className="card p-4 mb-4 grid grid-cols-2 lg:grid-cols-4 gap-3">
           <div className="col-span-4 text-xs font-medium text-gray-400 mb-1">{isEditing ? 'Edit maintenance / improvement' : 'New maintenance / improvement'}</div>
           <input placeholder="Description *" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} className="input-dark text-sm col-span-2" />
           <select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} className="input-dark text-sm">
@@ -2825,7 +2929,7 @@ function TaxTab({ propertyId, taxes, setTaxes }: {
       </div>
 
       {formMode !== 'closed' && (
-        <div className="card p-4 mb-4 grid grid-cols-4 gap-3">
+        <div className="card p-4 mb-4 grid grid-cols-2 lg:grid-cols-4 gap-3">
           <div className="col-span-4 text-xs font-medium text-gray-400 mb-1">{isEditing ? 'Edit tax assessment' : 'New tax assessment'}</div>
           <input placeholder="Tax year *" value={form.taxYear} onChange={e => setForm(f => ({ ...f, taxYear: e.target.value }))} className="input-dark text-sm" />
           <input type="number" placeholder="Annual tax *" value={form.annualTaxAmount} onChange={e => setForm(f => ({ ...f, annualTaxAmount: e.target.value }))} className="input-dark text-sm" />

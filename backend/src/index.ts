@@ -108,6 +108,7 @@ app.use('/api/import', express.json({ limit: '100mb' }));
 // scans) can be large multi-page PDFs — allow well above the default cap.
 app.use('/api/leases', express.json({ limit: '50mb' }));
 app.use('/api/scanned-documents', express.json({ limit: '50mb' }));
+app.use('/api/legal', express.json({ limit: '50mb' }));
 app.use(express.json({ limit: '10mb' }));
 
 // ─── Health check ─────────────────────────────────────────

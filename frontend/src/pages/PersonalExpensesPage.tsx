@@ -144,20 +144,22 @@ export default function PersonalExpensesPage({ embedded }: { embedded?: boolean 
                     </span>
                   </button>
                   {isOpen && (
-                    <table className="w-full text-sm">
-                      <tbody className="divide-y divide-white/5">
-                        {rows.map(e => (
-                          <tr key={e.id}>
-                            <td className="px-4 py-2 text-gray-400 text-xs whitespace-nowrap">{fmtDate(e.date, 'MMM d, yyyy')}</td>
-                            <td className="px-4 py-2 text-gray-300 text-xs">{e.vendor || e.description || '—'}</td>
-                            <td className="px-4 py-2 text-right font-mono text-white">{money(Number(e.amount))}</td>
-                            <td className="px-4 py-2 text-right w-16">
-                              <button onClick={() => handleDelete(e.id)} className="text-xs text-red-500 hover:text-red-400">Del</button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <tbody className="divide-y divide-white/5">
+                          {rows.map(e => (
+                            <tr key={e.id}>
+                              <td className="px-4 py-2 text-gray-400 text-xs whitespace-nowrap">{fmtDate(e.date, 'MMM d, yyyy')}</td>
+                              <td className="px-4 py-2 text-gray-300 text-xs">{e.vendor || e.description || '—'}</td>
+                              <td className="px-4 py-2 text-right font-mono text-white">{money(Number(e.amount))}</td>
+                              <td className="px-4 py-2 text-right w-16">
+                                <button onClick={() => handleDelete(e.id)} className="text-xs text-red-500 hover:text-red-400">Del</button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   )}
                 </div>
               );

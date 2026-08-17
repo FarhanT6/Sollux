@@ -377,7 +377,7 @@ function EditModal({ loan, properties, onClose, onSave }: {
                 </select>
               </div>
               {form.rateType === 'VARIABLE' && (
-                <div className="col-span-2 grid grid-cols-3 gap-3 rounded-lg p-3" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                <div className="col-span-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 rounded-lg p-3" style={{ background: 'rgba(255,255,255,0.03)' }}>
                   <div>
                     <label className="block text-xs text-gray-500 mb-1">Index</label>
                     <select value={form.rateIndex} onChange={e => setForm(f => ({ ...f, rateIndex: e.target.value }))} className="input-dark w-full text-sm">
@@ -553,7 +553,7 @@ function PrepaymentCard({ loan, currentBalance }: { loan: Loan; currentBalance: 
       {calc.inPenaltyPeriod ? (
         <div className="space-y-4">
           {/* Current penalty amount */}
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             <div className="rounded-lg px-3 py-2.5" style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)' }}>
               <p className="text-xs text-gray-500 mb-1">Current penalty rate</p>
               <p className="text-lg font-semibold text-red-400">{calc.currentRate != null ? pct(calc.currentRate) : '—'}</p>
@@ -806,7 +806,7 @@ export default function LoanDetailPage() {
       )}
 
       {/* Stats */}
-      <div className="grid grid-cols-4 gap-3 mt-5">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-5">
         <div className="stat-card">
           <p className="text-xs text-gray-500 mb-1">Current balance</p>
           <p className={`text-xl font-semibold ${hasBalanceData ? 'text-red-400' : 'text-gray-500'}`}>
