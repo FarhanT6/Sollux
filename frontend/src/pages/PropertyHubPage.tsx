@@ -961,7 +961,15 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
       if (!confirm('Apply this increase now? It becomes the current rent and is logged to rent history.')) return;
     }
     await applyScheduledIncrease(leaseId, si.id, override);
-    setLeases(await getLeases({ propertyId }));
+    const updated = await getLeases({ propertyId });
+    setLeases(updated);
+    // The Apply button lives inside the edit form, whose rentAmount field still
+    // holds the pre-apply value. Without syncing it, a later "Save changes"
+    // would submit the stale rent and silently undo the increase.
+    const fresh = updated.find(l => l.id === leaseId);
+    if (fresh && editLease === leaseId) {
+      setEditForm(f => ({ ...f, rentAmount: String(fresh.rentAmount ?? ''), rentEffectiveDate: '' }));
+    }
     if (rentChanges[leaseId]) getRentChanges(leaseId).then(rc => setRentChanges(prev => ({ ...prev, [leaseId]: rc })));
   }
 
