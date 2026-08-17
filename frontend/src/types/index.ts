@@ -118,6 +118,7 @@ export interface Lease {
   notes?: string;
   arrearsBalance: number;
   arrearsCaughtUpThrough?: string;
+  rentDueDay?: number | null;
   nextIncreaseDate?: string | null;
   nextIncreaseAmount?: number | null;
   nextIncreasePercent?: number | null;

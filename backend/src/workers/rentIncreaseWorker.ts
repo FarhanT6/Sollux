@@ -54,6 +54,74 @@ export async function applyDueRentIncreases(now = new Date()): Promise<number> {
   return applied;
 }
 
+// Roll unpaid rent into arrears once its due date has passed.
+//
+// The rule: the CURRENT month's rent is not arrears until its due day passes
+// unpaid. So we only accrue periods whose due date is strictly in the past.
+//
+// Idempotency: arrearsCaughtUpThrough marks the last period already rolled in.
+// For a lease that has never been accrued (null), we seed it to the current
+// period WITHOUT accruing anything — existing arrearsBalance values were
+// entered by hand, and retroactively accruing every past month on top of them
+// would double-count. Accrual therefore starts from the next period onward.
+export async function accrueOverdueRent(now = new Date()): Promise<number> {
+  const leases = await db.lease.findMany({
+    where: { status: 'ACTIVE' },
+    include: { rentPayments: true },
+  });
+
+  const periodStart = (d: Date) => new Date(d.getFullYear(), d.getMonth(), 1);
+  const currentPeriod = periodStart(now);
+
+  let accrued = 0;
+  for (const lease of leases) {
+    // Seed a lease that has never been accrued; don't touch its balance.
+    if (!lease.arrearsCaughtUpThrough) {
+      await db.lease.update({ where: { id: lease.id }, data: { arrearsCaughtUpThrough: currentPeriod } });
+      continue;
+    }
+
+    const dueDay = lease.rentDueDay ?? 1;
+    const rent = Number(lease.rentAmount);
+    let cursor = periodStart(lease.arrearsCaughtUpThrough);
+    let shortfallTotal = 0;
+    let lastAccrued: Date | null = null;
+
+    // Walk forward from the period after the last accrued one.
+    for (;;) {
+      cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+      if (cursor > currentPeriod) break;
+
+      // Due date for this period — clamp to the month's last day.
+      const daysInMonth = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0).getDate();
+      const dueDate = new Date(cursor.getFullYear(), cursor.getMonth(), Math.min(dueDay, daysInMonth));
+      // Not yet overdue (this is the "current month before its due date" case).
+      if (dueDate >= now) break;
+
+      const paid = lease.rentPayments
+        .filter(p => periodStart(new Date(p.periodDate)).getTime() === cursor.getTime())
+        .reduce((s, p) => s + Number(p.amount), 0);
+      const shortfall = Math.max(0, Math.round((rent - paid) * 100) / 100);
+      if (shortfall > 0) shortfallTotal += shortfall;
+      lastAccrued = cursor;
+    }
+
+    if (lastAccrued) {
+      await db.lease.update({
+        where: { id: lease.id },
+        data: {
+          ...(shortfallTotal > 0 ? { arrearsBalance: { increment: shortfallTotal } } : {}),
+          arrearsCaughtUpThrough: lastAccrued,
+        },
+      });
+      if (shortfallTotal > 0) accrued++;
+    }
+  }
+
+  if (accrued > 0) console.log(`[Arrears] Rolled overdue rent into arrears on ${accrued} lease(s)`);
+  return accrued;
+}
+
 // A fixed-term lease that has passed its end date without being renewed
 // continues month-to-month by default (holdover). Flip those to
 // MONTH_TO_MONTH so rent roll / projections treat them correctly, keeping

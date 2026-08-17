@@ -23,6 +23,7 @@ const LeaseSchema = z.object({
   documentUrl: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
   arrearsBalance: z.number().min(0).optional(),
+  rentDueDay: z.number().int().min(1).max(31).optional().nullable(),
   tenantIds: z.array(z.string()).optional(),
   manualLikelihood: z.enum(['high', 'medium', 'low', 'none']).optional().nullable(),
   manualLikelihoodNote: z.string().optional().nullable(),

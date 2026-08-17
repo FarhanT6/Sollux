@@ -741,7 +741,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
     unitId: '', rentAmount: '', securityDeposit: '', startDate: '', endDate: '',
     leaseType: 'MONTH_TO_MONTH', status: 'ACTIVE', arrearsBalance: '', notes: '',
     rentEffectiveDate: '',
-    lateFeeAmount: '', lateFeePercent: '', lateFeeGraceDays: '', businessName: '',
+    lateFeeAmount: '', lateFeePercent: '', lateFeeGraceDays: '', businessName: '', rentDueDay: '',
   });
   // Inline "add scheduled increase" form (date + amount OR percent/range + note)
   const [siForm, setSiForm] = useState({ effectiveDate: '', newAmount: '', percent: '', percentMax: '', note: '' });
@@ -781,6 +781,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
       lateFeePercent: lease.lateFeePercent != null ? String(lease.lateFeePercent) : '',
       lateFeeGraceDays: lease.lateFeeGraceDays != null ? String(lease.lateFeeGraceDays) : '',
       businessName: lease.businessName ?? '',
+      rentDueDay: lease.rentDueDay != null ? String(lease.rentDueDay) : '',
     });
     setSiForm({ effectiveDate: '', newAmount: '', percent: '', percentMax: '', note: '' });
     setUcForm({ category: 'WATER', amount: '', note: '' });
@@ -820,6 +821,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
         lateFeePercent: editForm.lateFeePercent ? parseFloat(editForm.lateFeePercent) : null,
         lateFeeGraceDays: editForm.lateFeeGraceDays ? parseInt(editForm.lateFeeGraceDays) : null,
         businessName: editForm.businessName || null,
+        rentDueDay: editForm.rentDueDay ? parseInt(editForm.rentDueDay) : null,
       });
       const updated = await getLeases({ propertyId });
       setLeases(updated);
@@ -1100,6 +1102,30 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                         );
                       })()}
                       {arrears > 0 && <p className="text-xs text-red-400">{money(arrears)} arrears</p>}
+                      {(() => {
+                        // Current month's rent is due-but-not-arrears until the
+                        // due day passes; after that the worker rolls it in.
+                        if (lease.status !== 'ACTIVE') return null;
+                        const now = new Date();
+                        const periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+                        const paidThisPeriod = (lease.rentPayments ?? [])
+                          .filter(p => {
+                            const d = new Date(p.periodDate);
+                            return d.getFullYear() === periodStart.getFullYear() && d.getMonth() === periodStart.getMonth();
+                          })
+                          .reduce((s, p) => s + Number(p.amount), 0);
+                        const owed = Math.max(0, Number(lease.rentAmount) - paidThisPeriod);
+                        if (owed <= 0) return null;
+                        const dueDay = lease.rentDueDay ?? 1;
+                        const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+                        const dueDate = new Date(now.getFullYear(), now.getMonth(), Math.min(dueDay, daysInMonth));
+                        const overdue = now > dueDate;
+                        return (
+                          <p className={`text-xs ${overdue ? 'text-red-400' : 'text-gray-500'}`}>
+                            {money(owed)} {overdue ? 'overdue this month' : `due ${fmtDateSafe(dueDate.toISOString(), 'MMM d')}`}
+                          </p>
+                        );
+                      })()}
                       {Number(lease.securityDeposit ?? 0) > 0 && <p className="text-xs text-gray-500">{money(Number(lease.securityDeposit))} dep.</p>}
                       {lease.rentChanges && lease.rentChanges.length > 0 && (
                         <p className="text-xs text-gray-500">Last raised {fmtDate(lease.rentChanges[0].effectiveDate)}</p>
@@ -1157,7 +1183,17 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                         <label className="block text-xs text-gray-500 mb-0.5">Arrears balance</label>
                         <input type="number" placeholder="0" value={editForm.arrearsBalance} onChange={e => setEditForm(f => ({ ...f, arrearsBalance: e.target.value }))} className="input-dark text-xs w-full" />
                       </div>
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-0.5">Rent due day</label>
+                        <input type="number" min={1} max={31} placeholder="1" value={editForm.rentDueDay}
+                          onChange={e => setEditForm(f => ({ ...f, rentDueDay: e.target.value }))}
+                          className="input-dark text-xs w-full"
+                          title="Day of the month rent is due. This month's rent only becomes arrears after this day passes unpaid." />
+                      </div>
                     </div>
+                    <p className="text-xs text-gray-600 -mt-1">
+                      This month's rent isn't counted as arrears until day {editForm.rentDueDay || '1'} passes unpaid — then the unpaid amount rolls into the arrears balance.
+                    </p>
 
                     {/* When rent changed, capture the effective date for the history log */}
                     {parseFloat(editForm.rentAmount || '0') !== Number(lease.rentAmount) && (

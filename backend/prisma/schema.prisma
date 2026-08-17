@@ -479,6 +479,10 @@ model Lease {
   documentUrl          String?
   notes                String?
   arrearsBalance       Decimal     @default(0) @db.Decimal(10, 2)
+  // Day of month rent is due (1-31, default 1). Current-month rent is NOT
+  // counted as arrears until this day passes unpaid — see accrueOverdueRent.
+  rentDueDay           Int?
+  // Last period already rolled into arrearsBalance, so accrual is idempotent.
   arrearsCaughtUpThrough DateTime?
   manualLikelihood     String?     // 'high' | 'medium' | 'low' | 'none' — overrides the automated delinquency score
   manualLikelihoodNote String?
