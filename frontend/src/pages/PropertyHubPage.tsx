@@ -9,7 +9,7 @@ import {
   updateExpense, deleteExpense, updateInsurancePolicy, deleteInsurancePolicy,
   updateTaxAssessment, deleteTaxAssessment, updateImprovement, deleteImprovement,
   updateLease, updateProperty, lookupPropertyByAddress,
-  createLease, getTenants, createTenant, deleteTenant, getUnits, createUnit,
+  createLease, getLease, deleteLease, getTenants, createTenant, deleteTenant, getUnits, createUnit,
   getDocuments, getDocumentUrl, deleteDocument, confirmScannedDocument, downloadRentRoll, downloadT12,
   getT12Manifest, RENT_ROLL_COLUMNS,
   getRentChanges, addRentChange, deleteRentChange, uploadLeaseDocument,
@@ -775,6 +775,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   const [editTenantIds, setEditTenantIds] = useState<string[]>([]);
   const [newTenantName, setNewTenantName] = useState('');
   const [deletingTenant, setDeletingTenant] = useState<string | null>(null);
+  const [deletingLease, setDeletingLease] = useState<string | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [uploadingDoc, setUploadingDoc] = useState(false);
   const [docCategory, setDocCategory] = useState<string>('LEASE');
@@ -852,6 +853,47 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
       alert(err?.response?.data?.error ?? 'Could not delete that tenant.');
     } finally {
       setDeletingTenant(null);
+    }
+  }
+
+  // Deleting a lease cascades hard — payments, notices, rent history, scheduled
+  // increases and utility splits all go with it, and the payments feed Budget
+  // and the P&L. So spell out what is about to be lost, with real counts.
+  async function deleteLeaseRecord(lease: Lease) {
+    setDeletingLease(lease.id);
+    try {
+      // The list endpoint caps rentPayments at 6, so it can't tell us how much
+      // history this would take. Fetch the full lease for accurate counts.
+      const full = await getLease(lease.id);
+      const payments = full.rentPayments?.length ?? 0;
+      const notices  = full.rentNotices?.length ?? 0;
+      const changes  = full.rentChanges?.length ?? 0;
+      const names = (lease.leaseTenants ?? []).map(lt => lt.tenant.fullName).join(', ') || 'no tenants';
+      const plural = (n: number, one: string, many = one + 's') => `${n} ${n === 1 ? one : many}`;
+
+      const lost = [
+        payments && plural(payments, 'logged rent payment'),
+        notices  && plural(notices,  'notice'),
+        changes  && plural(changes,  'rent history entry', 'rent history entries'),
+      ].filter(Boolean) as string[];
+
+      const message = [
+        `Delete the lease for ${names} — Unit ${lease.unit?.unitLabel ?? '—'}, ${money(Number(lease.rentAmount))}/mo?`,
+        lost.length ? `\nThis also permanently deletes ${lost.join(', ')}.` : '',
+        payments ? 'Those payments will no longer count toward Budget or the P&L.' : '',
+        '\nThe tenants themselves are kept. This cannot be undone.',
+      ].filter(Boolean).join('\n');
+
+      if (!confirm(message)) return;
+
+      await deleteLease(lease.id);
+      if (editLease === lease.id) setEditLease(null);
+      if (expandLease === lease.id) setExpandLease(null);
+      setLeases(await getLeases({ propertyId }));
+    } catch (err: any) {
+      alert(err?.response?.data?.error ?? 'Could not delete that lease.');
+    } finally {
+      setDeletingLease(null);
     }
   }
 
@@ -1552,7 +1594,11 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                       </div>
                     </div>
 
-                    <div className="flex justify-end">
+                    <div className="flex items-center justify-between pt-1">
+                      <button onClick={() => deleteLeaseRecord(lease)} disabled={deletingLease === lease.id}
+                        className="text-xs text-red-400 hover:text-red-300 disabled:opacity-40">
+                        {deletingLease === lease.id ? 'Deleting…' : 'Delete lease'}
+                      </button>
                       <button onClick={() => saveEditLease(lease.id)} disabled={savingEdit} className="btn btn-primary text-xs">{savingEdit ? '…' : 'Save changes'}</button>
                     </div>
                   </div>
