@@ -15,16 +15,27 @@ import {
   getRentChanges, addRentChange, deleteRentChange, uploadLeaseDocument,
   getLeaseDocuments, addLeaseDocument, getLeaseDocumentViewUrl, deleteLeaseDocument,
   addScheduledIncrease, applyScheduledIncrease, deleteScheduledIncrease,
+  addLeaseUtilityCharge, deleteLeaseUtilityCharge,
 } from '../api/client';
 import type {
   Property, Lease, Loan, Expense, InsurancePolicy, TaxAssessment,
-  Improvement, PropertyPnL, Tenant, Unit, Document, DocumentCategory, RentChange, ScheduledRentIncrease,
+  Improvement, PropertyPnL, Tenant, Unit, Document, DocumentCategory, RentChange, ScheduledRentIncrease, LeaseUtilityCharge,
 } from '../types';
-import { PROPERTY_TYPE_LABELS, EXPENSE_CATEGORY_LABELS, DOCUMENT_CATEGORY_LABELS } from '../types';
+import { PROPERTY_TYPE_LABELS, EXPENSE_CATEGORY_LABELS, DOCUMENT_CATEGORY_LABELS, CATEGORY_LABELS } from '../types';
 import type { Document as DocType } from '../types';
 import { fmtDate as fmtDateSafe } from '../lib/date';
 
 const LEASE_DOC_CATEGORIES = ['LEASE', 'APPLICATION', 'IDENTITY', 'SCREENING', 'OTHER'] as const;
+
+const UTILITY_CHARGE_CATEGORIES = ['WATER', 'ELECTRIC', 'GAS', 'SEWER', 'TRASH', 'INTERNET', 'PHONE', 'SOLAR', 'OTHER'];
+
+// A lease's rentAmount is the TOTAL the tenant pays. Utility charges break out
+// the reimbursement portion, so base rent is the remainder.
+function rentBreakdown(lease: Lease) {
+  const total = Number(lease.rentAmount ?? 0);
+  const utilities = (lease.utilityCharges ?? []).reduce((s, c) => s + Number(c.amount), 0);
+  return { total, utilities, baseRent: Math.round((total - utilities) * 100) / 100 };
+}
 
 const money = (n: number) =>
   n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
@@ -732,6 +743,8 @@ function TenantsTab({ propertyId, leases, setLeases }: {
   });
   // Inline "add scheduled increase" form (date + amount OR percent/range + note)
   const [siForm, setSiForm] = useState({ effectiveDate: '', newAmount: '', percent: '', percentMax: '', note: '' });
+  // Inline "add utility contribution" form (which utility + how much of the payment)
+  const [ucForm, setUcForm] = useState({ category: 'WATER', amount: '', note: '' });
   const [editTenantIds, setEditTenantIds] = useState<string[]>([]);
   const [newTenantName, setNewTenantName] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
@@ -764,6 +777,7 @@ function TenantsTab({ propertyId, leases, setLeases }: {
       rentEffectiveDate: '',
     });
     setSiForm({ effectiveDate: '', newAmount: '', percent: '', percentMax: '', note: '' });
+    setUcForm({ category: 'WATER', amount: '', note: '' });
     setEditTenantIds((lease.leaseTenants ?? []).map(lt => lt.tenantId));
     setNewTenantName('');
     setDocCategory('LEASE');
@@ -880,6 +894,22 @@ function TenantsTab({ propertyId, leases, setLeases }: {
 
   async function removeSchedIncrease(leaseId: string, sid: string) {
     await deleteScheduledIncrease(leaseId, sid);
+    setLeases(await getLeases({ propertyId }));
+  }
+
+  async function addUtilCharge(leaseId: string) {
+    if (!ucForm.amount) return;
+    await addLeaseUtilityCharge(leaseId, {
+      category: ucForm.category,
+      amount: parseFloat(ucForm.amount),
+      note: ucForm.note || null,
+    });
+    setLeases(await getLeases({ propertyId }));
+    setUcForm({ category: 'WATER', amount: '', note: '' });
+  }
+
+  async function removeUtilCharge(leaseId: string, chargeId: string) {
+    await deleteLeaseUtilityCharge(leaseId, chargeId);
     setLeases(await getLeases({ propertyId }));
   }
 
@@ -1041,6 +1071,18 @@ function TenantsTab({ propertyId, leases, setLeases }: {
                     </div>
                     <div className="text-right flex-shrink-0">
                       <p className="text-sm font-semibold text-white">{money(Number(lease.rentAmount))}/mo</p>
+                      {(() => {
+                        const { utilities, baseRent } = rentBreakdown(lease);
+                        if (utilities <= 0) return null;
+                        const labels = (lease.utilityCharges ?? [])
+                          .map(uc => CATEGORY_LABELS[uc.category as keyof typeof CATEGORY_LABELS] ?? uc.category)
+                          .join(', ');
+                        return (
+                          <p className="text-xs text-gray-500" title={labels}>
+                            {money(baseRent)} rent + {money(utilities)} {labels.toLowerCase()}
+                          </p>
+                        );
+                      })()}
                       {arrears > 0 && <p className="text-xs text-red-400">{money(arrears)} arrears</p>}
                       {Number(lease.securityDeposit ?? 0) > 0 && <p className="text-xs text-gray-500">{money(Number(lease.securityDeposit))} dep.</p>}
                       {lease.rentChanges && lease.rentChanges.length > 0 && (
@@ -1134,6 +1176,50 @@ function TenantsTab({ propertyId, leases, setLeases }: {
                         <input value={newTenantName} onChange={e => setNewTenantName(e.target.value)} placeholder="…or new tenant name" className="input-dark text-xs" />
                         <button onClick={addCoTenant} disabled={!newTenantName.trim()} className="btn text-xs disabled:opacity-40">Add</button>
                       </div>
+                    </div>
+
+                    {/* Utility contributions — portion of the payment that isn't rent */}
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">
+                        Payments toward utilities (part of the {money(Number(lease.rentAmount))} total — leave empty if utilities are included in rent)
+                      </label>
+                      <div className="space-y-1 mb-2">
+                        {(lease.utilityCharges ?? []).length === 0 && <span className="text-xs text-gray-600">None — full amount is rent</span>}
+                        {(lease.utilityCharges ?? []).map(uc => (
+                          <div key={uc.id} className="flex items-center gap-2 text-xs group">
+                            <span className="px-1.5 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.08)' }}>
+                              {CATEGORY_LABELS[uc.category as keyof typeof CATEGORY_LABELS] ?? uc.category}
+                            </span>
+                            <span className="font-medium text-white">{money(Number(uc.amount))}/mo</span>
+                            {uc.note && <span className="text-gray-600">· {uc.note}</span>}
+                            <button onClick={() => removeUtilCharge(lease.id, uc.id)} className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 ml-auto">✕</button>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="grid grid-cols-4 gap-2">
+                        <select value={ucForm.category} onChange={e => setUcForm(f => ({ ...f, category: e.target.value }))} className="input-dark text-xs">
+                          {UTILITY_CHARGE_CATEGORIES.map(c => (
+                            <option key={c} value={c}>{CATEGORY_LABELS[c as keyof typeof CATEGORY_LABELS] ?? c}</option>
+                          ))}
+                        </select>
+                        <input type="number" placeholder="Amount $/mo" value={ucForm.amount} onChange={e => setUcForm(f => ({ ...f, amount: e.target.value }))} className="input-dark text-xs" />
+                        <input placeholder="Note" value={ucForm.note} onChange={e => setUcForm(f => ({ ...f, note: e.target.value }))} className="input-dark text-xs" />
+                        <button onClick={() => addUtilCharge(lease.id)} disabled={!ucForm.amount} className="btn text-xs disabled:opacity-40">Add utility payment</button>
+                      </div>
+                      {(() => {
+                        const { total, utilities, baseRent } = rentBreakdown(lease);
+                        const pendingAmt = ucForm.amount ? parseFloat(ucForm.amount) : 0;
+                        const projUtil = utilities + (Number.isNaN(pendingAmt) ? 0 : pendingAmt);
+                        return (
+                          <p className="text-xs text-gray-400 mt-1.5">
+                            Rent <span className="font-medium text-white">{money(round2(total - projUtil))}</span>
+                            {projUtil > 0 && <> + utilities <span className="font-medium text-white">{money(projUtil)}</span></>}
+                            {' = total '}<span className="font-medium text-amber-400">{money(total)}</span>
+                            {projUtil !== utilities && <span className="text-gray-600"> (incl. the amount you're adding)</span>}
+                            {baseRent < 0 && <span className="text-red-400"> — utilities exceed the total payment</span>}
+                          </p>
+                        );
+                      })()}
                     </div>
 
                     {/* Scheduled (future) rent increases — multiple, chained */}

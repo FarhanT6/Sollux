@@ -128,6 +128,18 @@ export interface Lease {
   rentNotices?: RentNotice[];
   rentChanges?: RentChange[];
   scheduledIncreases?: ScheduledRentIncrease[];
+  utilityCharges?: LeaseUtilityCharge[];
+}
+
+// Portion of the tenant's monthly payment that reimburses a utility.
+// rentAmount is the TOTAL they pay; base rent = rentAmount - sum(amount).
+export interface LeaseUtilityCharge {
+  id: string;
+  leaseId: string;
+  category: string;
+  amount: number;
+  note?: string | null;
+  createdAt: string;
 }
 
 export interface RentChange {
