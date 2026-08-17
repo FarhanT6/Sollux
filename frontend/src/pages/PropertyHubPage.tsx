@@ -23,7 +23,7 @@ import type {
 } from '../types';
 import { PROPERTY_TYPE_LABELS, EXPENSE_CATEGORY_LABELS, DOCUMENT_CATEGORY_LABELS, CATEGORY_LABELS } from '../types';
 import type { Document as DocType } from '../types';
-import { fmtDate as fmtDateSafe } from '../lib/date';
+import { fmtDate as fmtDateSafe, monthKey, localMonthKey } from '../lib/date';
 
 const LEASE_DOC_CATEGORIES = ['LEASE', 'APPLICATION', 'IDENTITY', 'SCREENING', 'OTHER'] as const;
 
@@ -1260,12 +1260,13 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                         // due day passes; after that the worker rolls it in.
                         if (lease.status !== 'ACTIVE') return null;
                         const now = new Date();
-                        const periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+                        // Compare period dates by their calendar month, not by
+                        // reading a midnight-UTC instant with local getters —
+                        // west of UTC that lands "2026-08-01" in July, so this
+                        // month's payment never matched and rent stayed overdue.
+                        const thisMonth = localMonthKey(now);
                         const paidThisPeriod = (lease.rentPayments ?? [])
-                          .filter(p => {
-                            const d = new Date(p.periodDate);
-                            return d.getFullYear() === periodStart.getFullYear() && d.getMonth() === periodStart.getMonth();
-                          })
+                          .filter(p => monthKey(p.periodDate) === thisMonth)
                           .reduce((s, p) => s + Number(p.amount), 0);
                         const owed = Math.max(0, Number(lease.rentAmount) - paidThisPeriod);
                         if (owed <= 0) return null;
