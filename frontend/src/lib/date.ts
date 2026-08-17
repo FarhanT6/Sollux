@@ -20,3 +20,19 @@ export function fmtDate(d?: string | Date | null, fmtStr = 'MMM d, yyyy'): strin
   const parsed = new Date(d);
   return isNaN(parsed.getTime()) ? '—' : format(parsed, fmtStr);
 }
+
+// "2026-08" for a DATE-ONLY value, for grouping or comparing by month.
+// Same hazard as fmtDate: reading a midnight-UTC value with local getMonth()
+// lands in the *previous* month for anyone west of UTC whenever the value is
+// the 1st, which is exactly how rent period dates are stored.
+export function monthKey(d?: string | Date | null): string | null {
+  if (!d) return null;
+  const iso = typeof d === 'string' ? d : d.toISOString();
+  const m = iso.match(/^(\d{4})-(\d{2})/);
+  return m ? `${m[1]}-${m[2]}` : null;
+}
+
+// "2026-08" for a local Date — the counterpart to monthKey for "right now".
+export function localMonthKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}

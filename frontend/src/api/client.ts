@@ -32,6 +32,7 @@ import type {
   ReconciliationProfile, ReconciliationStatement, ReconciliationLineItem,
   Document, DocumentClassification, DocumentMatch, DocumentCategory,
   IncomingTransaction, IncomingTransactionStatus, OutgoingTransaction, UtilityCandidate,
+  TurnoverReport,
 } from '../types';
 
 // Dashboard
@@ -533,3 +534,7 @@ export interface PlaidItem {
     }>;
   }>;
 }
+
+// Turnover — tenancy history, vacancy gaps and lost rent, derived from leases.
+export const getTurnover = (params?: { propertyId?: string }) =>
+  api.get<TurnoverReport>('/turnover', { params }).then(r => r.data);

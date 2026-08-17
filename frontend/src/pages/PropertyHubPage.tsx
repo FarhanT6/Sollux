@@ -9,21 +9,22 @@ import {
   updateExpense, deleteExpense, updateInsurancePolicy, deleteInsurancePolicy,
   updateTaxAssessment, deleteTaxAssessment, updateImprovement, deleteImprovement,
   updateLease, updateProperty, lookupPropertyByAddress,
-  createLease, getTenants, createTenant, deleteTenant, getUnits, createUnit,
+  createLease, getLease, deleteLease, getTenants, createTenant, deleteTenant, getUnits, createUnit,
   getDocuments, getDocumentUrl, deleteDocument, confirmScannedDocument, downloadRentRoll, downloadT12,
   getT12Manifest, RENT_ROLL_COLUMNS,
   getRentChanges, addRentChange, deleteRentChange, uploadLeaseDocument,
   getLeaseDocuments, addLeaseDocument, getLeaseDocumentViewUrl, deleteLeaseDocument, extractLeaseTerms,
   addScheduledIncrease, applyScheduledIncrease, deleteScheduledIncrease,
-  addLeaseUtilityCharge, deleteLeaseUtilityCharge,
+  addLeaseUtilityCharge, deleteLeaseUtilityCharge, getTurnover,
 } from '../api/client';
 import type {
   Property, Lease, Loan, Expense, InsurancePolicy, TaxAssessment,
   Improvement, PropertyPnL, Tenant, Unit, Document, DocumentCategory, PropertyType, RentChange, ScheduledRentIncrease, LeaseUtilityCharge,
+  TurnoverReport, UnitTurnover,
 } from '../types';
 import { PROPERTY_TYPE_LABELS, EXPENSE_CATEGORY_LABELS, DOCUMENT_CATEGORY_LABELS, CATEGORY_LABELS } from '../types';
 import type { Document as DocType } from '../types';
-import { fmtDate as fmtDateSafe } from '../lib/date';
+import { fmtDate as fmtDateSafe, monthKey, localMonthKey } from '../lib/date';
 
 const LEASE_DOC_CATEGORIES = ['LEASE', 'APPLICATION', 'IDENTITY', 'SCREENING', 'OTHER'] as const;
 
@@ -66,7 +67,7 @@ const money = (n: number) =>
   n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const pct = (n: number) => `${n > 0 ? '+' : ''}${n.toFixed(1)}%`;
 const fmtDate = (d?: string | null) => fmtDateSafe(d);
-const TABS = ['Overview', 'Tenants', 'Loans', 'Expenses', 'Insurance', 'Maintenance', 'Tax', 'Documents'] as const;
+const TABS = ['Overview', 'Tenants', 'Turnover', 'Loans', 'Expenses', 'Insurance', 'Maintenance', 'Tax', 'Documents'] as const;
 type Tab = typeof TABS[number];
 
 export default function PropertyHubPage() {
@@ -85,6 +86,7 @@ export default function PropertyHubPage() {
   const [taxes, setTaxes]       = useState<TaxAssessment[]>([]);
   const [improvements, setImprovements] = useState<Improvement[]>([]);
   const [documents, setDocuments] = useState<Document[]>([]);
+  const [turnover, setTurnover] = useState<TurnoverReport | null>(null);
   const [pnl, setPnl] = useState<PropertyPnL | null>(null);
   const [showEditProperty, setShowEditProperty] = useState(false);
   const [exportModal, setExportModal] = useState<'rentroll' | 't12' | null>(null);
@@ -113,6 +115,8 @@ export default function PropertyHubPage() {
       ]).then(([l, lo, p]) => { setLeases(l); setLoans(lo); setPnl(p); });
     } else if (activeTab === 'Tenants') {
       getLeases({ propertyId: id }).then(setLeases);
+    } else if (activeTab === 'Turnover') {
+      getTurnover({ propertyId: id }).then(setTurnover);
     } else if (activeTab === 'Loans') {
       getLoans({ propertyId: id }).then(setLoans);
     } else if (activeTab === 'Expenses') {
@@ -228,6 +232,7 @@ export default function PropertyHubPage() {
       <div className="px-6 py-5">
         {activeTab === 'Overview' && <OverviewTab property={property} pnl={pnl} leases={activeLeases} loans={loans.filter(l => l.isActive)} />}
         {activeTab === 'Tenants' && <TenantsTab propertyId={id!} leases={leases} setLeases={setLeases} propertyType={property.type} />}
+        {activeTab === 'Turnover' && <TurnoverTab report={turnover} />}
         {activeTab === 'Loans' && <LoansTab propertyId={id!} loans={loans} setLoans={setLoans} />}
         {activeTab === 'Expenses' && <ExpensesTab propertyId={id!} expenses={expenses} setExpenses={setExpenses} />}
         {activeTab === 'Insurance' && <InsuranceTab propertyId={id!} policies={policies} setPolicies={setPolicies} />}
@@ -746,6 +751,131 @@ function OverviewTab({ property, pnl, leases, loans }: {
   );
 }
 
+// ─── Turnover ──────────────────────────────────────────────────────────────────
+// Tenancy history per unit, the vacancy gap between consecutive tenants, and
+// what that gap cost. All of it derives from the lease timeline, so it works
+// over leases entered long before this view existed.
+
+function TurnoverTab({ report }: { report: TurnoverReport | null }) {
+  if (!report) return <div className="text-center py-12 text-gray-500 text-sm">Loading…</div>;
+
+  const { summary, units } = report;
+  if (units.length === 0) {
+    return <div className="text-center py-12 text-gray-500 text-sm">No lease history for this property yet</div>;
+  }
+
+  const days = (n: number) => `${n} day${n === 1 ? '' : 's'}`;
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+        <Stat label="Turnovers" value={String(summary.turnovers)}
+          sub={summary.avgVacancyDays != null ? `${summary.avgVacancyDays} days avg vacant` : undefined} />
+        <Stat label="Rent lost to vacancy" value={money(summary.totalRentLost)} tone={summary.totalRentLost > 0 ? 'red' : undefined}
+          sub={summary.totalDaysVacant > 0 ? `over ${days(summary.totalDaysVacant)}` : 'no vacancy recorded'} />
+        <Stat label="Avg tenancy" value={summary.avgTenancyMonths != null ? `${summary.avgTenancyMonths} mo` : '—'}
+          sub={summary.unitsTracked > 1 ? `across ${summary.unitsTracked} units` : undefined} />
+        <Stat label="Vacant now" value={String(summary.currentlyVacant)}
+          tone={summary.currentlyVacant > 0 ? 'red' : undefined}
+          sub={summary.currentlyVacant > 0 ? `${money(summary.ongoingRentLost)} lost so far` : 'fully occupied'} />
+      </div>
+
+      {units.map(u => <UnitTurnoverCard key={u.unitId} unit={u} />)}
+    </div>
+  );
+}
+
+function Stat({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: 'red' | 'green' }) {
+  const color = tone === 'red' ? 'text-red-400' : tone === 'green' ? 'text-emerald-400' : 'text-white';
+  return (
+    <div className="card px-4 py-3">
+      <p className="text-xs text-gray-500">{label}</p>
+      <p className={`text-lg font-semibold ${color}`}>{value}</p>
+      {sub && <p className="text-xs text-gray-600">{sub}</p>}
+    </div>
+  );
+}
+
+function UnitTurnoverCard({ unit }: { unit: UnitTurnover }) {
+  const names = (ns: string[]) => (ns.length ? ns.join(', ') : 'Unnamed tenant');
+  // Newest first reads better as a history — the current tenant is on top.
+  const tenancies = unit.tenancies.slice().reverse();
+  const turnoverFor = (leaseId: string) => unit.turnovers.find(t => t.incomingLeaseId === leaseId);
+
+  return (
+    <div className="card overflow-hidden">
+      <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+        <p className="text-sm font-semibold text-white">Unit {unit.unitLabel}</p>
+        <p className="text-xs text-gray-500">
+          {unit.tenancies.length} tenanc{unit.tenancies.length === 1 ? 'y' : 'ies'}
+          {unit.turnovers.length > 0 && ` · ${unit.turnovers.length} turnover${unit.turnovers.length === 1 ? '' : 's'}`}
+        </p>
+      </div>
+
+      {unit.currentVacancy && (
+        <div className="px-4 py-2.5 text-xs" style={{ background: 'rgba(239,68,68,0.08)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+          <span className="text-red-400 font-medium">Vacant {unit.currentVacancy.daysVacant} days</span>
+          <span className="text-gray-400">
+            {' '}since {fmtDateSafe(unit.currentVacancy.vacatedOn)} — {names(unit.currentVacancy.lastTenants)} moved out.
+            {' '}{money(unit.currentVacancy.lostSoFar)} lost at {money(unit.currentVacancy.lastRent)}/mo, and counting.
+          </span>
+        </div>
+      )}
+
+      <div className="px-4 py-3 space-y-0">
+        {tenancies.map((t, i) => {
+          const gap = turnoverFor(t.leaseId);
+          return (
+            <div key={t.leaseId}>
+              <div className="flex items-start gap-3 py-2">
+                <span className={`mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${t.isCurrent ? 'bg-emerald-400' : 'bg-gray-600'}`} />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm text-white">
+                    {names(t.tenants)}
+                    {t.businessName && <span className="text-gray-400"> · {t.businessName}</span>}
+                    {t.isCurrent && <span className="pill pill-green text-xs ml-2">Current</span>}
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    {fmtDateSafe(t.startDate)} – {t.isCurrent ? 'present' : (t.endDate ? fmtDateSafe(t.endDate) : 'no end date')}
+                    {t.months != null && ` · ${t.months} mo`}
+                  </p>
+                </div>
+                <p className="text-sm text-white flex-shrink-0">{money(t.rentAmount)}/mo</p>
+              </div>
+
+              {/* The gap that preceded this tenancy, drawn between the two it separates. */}
+              {gap && (
+                <div className="ml-[0.6rem] pl-4 py-2 text-xs" style={{ borderLeft: '2px dashed rgba(255,255,255,0.12)' }}>
+                  {gap.daysVacant > 0 ? (
+                    <span className="text-gray-400">
+                      <span className="text-amber-400 font-medium">{gap.daysVacant} days vacant</span>
+                      {' '}· {money(gap.rentLost)} lost rent
+                    </span>
+                  ) : (
+                    <span className="text-emerald-400">No vacancy — re-let immediately</span>
+                  )}
+                  {gap.rentChange !== 0 && (
+                    <span className={gap.rentChange > 0 ? 'text-emerald-400' : 'text-red-400'}>
+                      {' '}· rent {gap.rentChange > 0 ? 'up' : 'down'} {money(Math.abs(gap.rentChange))}
+                      {gap.rentChangePct != null && ` (${pct(gap.rentChangePct)})`}
+                    </span>
+                  )}
+                  {gap.daysVacant > 0 && gap.rentChange > 0 && (
+                    <span className="text-gray-600">
+                      {' '}· breaks even in {Math.ceil(gap.rentLost / gap.rentChange)} mo
+                    </span>
+                  )}
+                </div>
+              )}
+              {i < tenancies.length - 1 && !gap && <div className="ml-[0.6rem] h-2" style={{ borderLeft: '2px solid rgba(255,255,255,0.06)' }} />}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ─── Tenants ───────────────────────────────────────────────────────────────────
 
 function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
@@ -775,6 +905,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   const [editTenantIds, setEditTenantIds] = useState<string[]>([]);
   const [newTenantName, setNewTenantName] = useState('');
   const [deletingTenant, setDeletingTenant] = useState<string | null>(null);
+  const [deletingLease, setDeletingLease] = useState<string | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [uploadingDoc, setUploadingDoc] = useState(false);
   const [docCategory, setDocCategory] = useState<string>('LEASE');
@@ -852,6 +983,47 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
       alert(err?.response?.data?.error ?? 'Could not delete that tenant.');
     } finally {
       setDeletingTenant(null);
+    }
+  }
+
+  // Deleting a lease cascades hard — payments, notices, rent history, scheduled
+  // increases and utility splits all go with it, and the payments feed Budget
+  // and the P&L. So spell out what is about to be lost, with real counts.
+  async function deleteLeaseRecord(lease: Lease) {
+    setDeletingLease(lease.id);
+    try {
+      // The list endpoint caps rentPayments at 6, so it can't tell us how much
+      // history this would take. Fetch the full lease for accurate counts.
+      const full = await getLease(lease.id);
+      const payments = full.rentPayments?.length ?? 0;
+      const notices  = full.rentNotices?.length ?? 0;
+      const changes  = full.rentChanges?.length ?? 0;
+      const names = (lease.leaseTenants ?? []).map(lt => lt.tenant.fullName).join(', ') || 'no tenants';
+      const plural = (n: number, one: string, many = one + 's') => `${n} ${n === 1 ? one : many}`;
+
+      const lost = [
+        payments && plural(payments, 'logged rent payment'),
+        notices  && plural(notices,  'notice'),
+        changes  && plural(changes,  'rent history entry', 'rent history entries'),
+      ].filter(Boolean) as string[];
+
+      const message = [
+        `Delete the lease for ${names} — Unit ${lease.unit?.unitLabel ?? '—'}, ${money(Number(lease.rentAmount))}/mo?`,
+        lost.length ? `\nThis also permanently deletes ${lost.join(', ')}.` : '',
+        payments ? 'Those payments will no longer count toward Budget or the P&L.' : '',
+        '\nThe tenants themselves are kept. This cannot be undone.',
+      ].filter(Boolean).join('\n');
+
+      if (!confirm(message)) return;
+
+      await deleteLease(lease.id);
+      if (editLease === lease.id) setEditLease(null);
+      if (expandLease === lease.id) setExpandLease(null);
+      setLeases(await getLeases({ propertyId }));
+    } catch (err: any) {
+      alert(err?.response?.data?.error ?? 'Could not delete that lease.');
+    } finally {
+      setDeletingLease(null);
     }
   }
 
@@ -1218,12 +1390,13 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                         // due day passes; after that the worker rolls it in.
                         if (lease.status !== 'ACTIVE') return null;
                         const now = new Date();
-                        const periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+                        // Compare period dates by their calendar month, not by
+                        // reading a midnight-UTC instant with local getters —
+                        // west of UTC that lands "2026-08-01" in July, so this
+                        // month's payment never matched and rent stayed overdue.
+                        const thisMonth = localMonthKey(now);
                         const paidThisPeriod = (lease.rentPayments ?? [])
-                          .filter(p => {
-                            const d = new Date(p.periodDate);
-                            return d.getFullYear() === periodStart.getFullYear() && d.getMonth() === periodStart.getMonth();
-                          })
+                          .filter(p => monthKey(p.periodDate) === thisMonth)
                           .reduce((s, p) => s + Number(p.amount), 0);
                         const owed = Math.max(0, Number(lease.rentAmount) - paidThisPeriod);
                         if (owed <= 0) return null;
@@ -1552,7 +1725,11 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                       </div>
                     </div>
 
-                    <div className="flex justify-end">
+                    <div className="flex items-center justify-between pt-1">
+                      <button onClick={() => deleteLeaseRecord(lease)} disabled={deletingLease === lease.id}
+                        className="text-xs text-red-400 hover:text-red-300 disabled:opacity-40">
+                        {deletingLease === lease.id ? 'Deleting…' : 'Delete lease'}
+                      </button>
                       <button onClick={() => saveEditLease(lease.id)} disabled={savingEdit} className="btn btn-primary text-xs">{savingEdit ? '…' : 'Save changes'}</button>
                     </div>
                   </div>

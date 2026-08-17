@@ -850,3 +850,65 @@ export const OTHER_INCOME_LABELS: Record<OtherIncomeCategory, string> = {
   LAUNDRY:             'Laundry Income',
   OTHER:               'Other',
 };
+
+// ─── TURNOVER ────────────────────────────────────────────
+// Derived from the lease timeline of each unit — see backend/src/routes/turnover.ts.
+export interface Tenancy {
+  leaseId: string;
+  tenants: string[];
+  businessName: string | null;
+  startDate: string;
+  endDate: string | null;
+  rentAmount: number;
+  status: LeaseStatus;
+  leaseType: LeaseType;
+  isCurrent: boolean;
+  months: number | null;
+}
+
+export interface Turnover {
+  outgoingLeaseId: string;
+  incomingLeaseId: string;
+  outgoingTenants: string[];
+  incomingTenants: string[];
+  vacatedOn: string;
+  reoccupiedOn: string;
+  daysVacant: number;
+  rentLost: number;
+  previousRent: number;
+  newRent: number;
+  rentChange: number;
+  rentChangePct: number | null;
+}
+
+export interface UnitTurnover {
+  unitId: string;
+  unitLabel: string;
+  propertyId: string;
+  propertyAddress: string;
+  tenancies: Tenancy[];
+  turnovers: Turnover[];
+  currentVacancy: {
+    vacatedOn: string;
+    daysVacant: number;
+    lostSoFar: number;
+    lastRent: number;
+    lastTenants: string[];
+  } | null;
+}
+
+export interface TurnoverReport {
+  summary: {
+    turnovers: number;
+    avgVacancyDays: number | null;
+    longestVacancyDays: number | null;
+    totalDaysVacant: number;
+    totalRentLost: number;
+    avgTenancyMonths: number | null;
+    avgRentChange: number | null;
+    currentlyVacant: number;
+    ongoingRentLost: number;
+    unitsTracked: number;
+  };
+  units: UnitTurnover[];
+}
