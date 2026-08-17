@@ -539,7 +539,8 @@ model ScheduledRentIncrease {
   lease         Lease    @relation(fields: [leaseId], references: [id], onDelete: Cascade)
   effectiveDate DateTime
   newAmount     Decimal? @db.Decimal(10, 2)
-  percent       Float?
+  percent       Float?   // single percent, or the low end of a range
+  percentMax    Float?   // set for a range (percent..percentMax), e.g. 6%–10%
   note          String?
   applied       Boolean  @default(false)
   createdAt     DateTime @default(now())
