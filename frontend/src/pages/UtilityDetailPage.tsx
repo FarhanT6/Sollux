@@ -4,9 +4,12 @@ import {
   getUtility, syncUtility, deleteUtility, updateUtility, getStatementDownloadUrl,
   getPaymentPlan, createPaymentPlan, updatePaymentPlan, deletePaymentPlan,
   upsertUtilityLoan, deleteUtilityLoan, patchStatement, createStatement,
-  revealUtilityAccountNumber,
+  revealUtilityAccountNumber, createPayment, updatePayment, deletePayment,
+  getBankAccounts,
 } from '../api/client';
-import { CATEGORY_LABELS, CATEGORY_COLORS, LOAN_TYPE_LABELS } from '../types';
+import { CATEGORY_LABELS, CATEGORY_COLORS, LOAN_TYPE_LABELS,
+  UTILITY_PAYMENT_METHODS, PAYMENT_STATUS_LABELS } from '../types';
+import type { BankAccount } from '../types';
 import { Pill, Skeleton, EmptyState } from '../components/ui';
 import { format, isAfter } from 'date-fns';
 import { fmtDate, yearOf } from '../lib/date';
@@ -514,14 +517,98 @@ export default function UtilityDetailPage() {
   const [revealedAccountNumber, setRevealedAccountNumber] = useState<string | null>(null);
   const [revealingAccountNumber, setRevealingAccountNumber] = useState(false);
   const [togglingActive, setTogglingActive] = useState(false);
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
+  const [showPayForm, setShowPayForm] = useState(false);
+  const [editPaymentId, setEditPaymentId] = useState<string | null>(null);
+  const [savingPayment, setSavingPayment] = useState(false);
+  const [payForm, setPayForm] = useState({
+    amount: '', paymentDate: new Date().toISOString().slice(0, 10),
+    paymentMethod: 'ACH', status: 'PAID', statementId: '',
+    confirmationNumber: '', bankAccountId: '', notes: '',
+  });
 
   useEffect(() => {
     if (!accountId) return;
     Promise.all([
       getUtility(accountId).then(a => { setAccount(a); setLoan((a as any).loan ?? null); }),
       getPaymentPlan(accountId).then(setPlan),
+      getBankAccounts().then(bs => setBankAccounts(bs.filter(b => b.isActive))).catch(() => {}),
     ]).finally(() => setLoading(false));
   }, [accountId]);
+
+  function resetPayForm() {
+    setPayForm({
+      amount: '', paymentDate: new Date().toISOString().slice(0, 10),
+      paymentMethod: 'ACH', status: 'PAID', statementId: '',
+      confirmationNumber: '', bankAccountId: '', notes: '',
+    });
+  }
+
+  function openPaymentEdit(p: any) {
+    setPayForm({
+      amount: String(p.amount ?? ''),
+      paymentDate: (p.paymentDate ?? '').slice(0, 10),
+      paymentMethod: p.paymentMethod || 'ACH',
+      status: p.status || 'PAID',
+      statementId: p.statementId ?? '',
+      confirmationNumber: p.confirmationNumber ?? '',
+      bankAccountId: p.bankAccountId ?? '',
+      notes: p.notes ?? '',
+    });
+    setEditPaymentId(p.id);
+    setShowPayForm(false);
+  }
+
+  // Recording a payment can change a statement's paid state server-side, so
+  // reload the whole account rather than splicing the payment in locally.
+  async function reloadAccount() {
+    if (!accountId) return;
+    const fresh = await getUtility(accountId);
+    setAccount(fresh);
+    setLoan((fresh as any).loan ?? null);
+  }
+
+  async function savePayment() {
+    const amount = parseFloat(payForm.amount);
+    if (!payForm.amount || Number.isNaN(amount) || amount <= 0) {
+      alert('Enter an amount greater than zero.');
+      return;
+    }
+    setSavingPayment(true);
+    try {
+      const body = {
+        utilityAccountId: accountId,
+        amount,
+        paymentDate: payForm.paymentDate,
+        paymentMethod: payForm.paymentMethod || null,
+        status: payForm.status,
+        statementId: payForm.statementId || null,
+        confirmationNumber: payForm.confirmationNumber || null,
+        bankAccountId: payForm.bankAccountId || null,
+        notes: payForm.notes || null,
+      };
+      if (editPaymentId) await updatePayment(editPaymentId, body);
+      else await createPayment(body);
+      setEditPaymentId(null);
+      setShowPayForm(false);
+      resetPayForm();
+      await reloadAccount();
+    } catch (err: any) {
+      alert(err?.response?.data?.error ?? 'Could not save that payment.');
+    } finally { setSavingPayment(false); }
+  }
+
+  async function removePayment(p: any) {
+    const linked = p.statementId ? '\n\nThe statement it was paid against will show unpaid again.' : '';
+    if (!confirm(`Delete the ${fmtMoney(p.amount)} payment from ${fmtDate(p.paymentDate)}?${linked}\n\nThis cannot be undone.`)) return;
+    setSavingPayment(true);
+    try {
+      await deletePayment(p.id);
+      await reloadAccount();
+    } catch (err: any) {
+      alert(err?.response?.data?.error ?? 'Could not delete that payment.');
+    } finally { setSavingPayment(false); }
+  }
 
   async function handleMarkPaid(s: any) {
     const isPaid = s.amountPaid != null;
@@ -995,8 +1082,71 @@ export default function UtilityDetailPage() {
 
         {/* ── Payments ─────────────────────────────────────── */}
         {tab === 'payments' && (
+          <div className="mb-3 flex justify-end">
+            <button onClick={() => { setEditPaymentId(null); resetPayForm(); setShowPayForm(v => !v); }}
+              className="btn btn-primary text-xs">
+              {showPayForm ? 'Cancel' : '+ Log payment'}
+            </button>
+          </div>
+        )}
+
+        {tab === 'payments' && (showPayForm || editPaymentId) && (
+          <div className="rounded-xl px-5 py-4 mb-3" style={{ background: '#1e1e1e', border: '1px solid rgba(245,166,35,0.25)' }}>
+            <p className="text-xs font-medium text-gray-300 mb-2">
+              {editPaymentId ? 'Edit payment' : 'Log a payment toward this account'}
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+              <input type="number" value={payForm.amount} onChange={e => setPayForm(f => ({ ...f, amount: e.target.value }))}
+                placeholder="Amount *" className="input-dark text-xs" />
+              <input type="date" value={payForm.paymentDate} onChange={e => setPayForm(f => ({ ...f, paymentDate: e.target.value }))}
+                className="input-dark text-xs" />
+              <select value={payForm.paymentMethod} onChange={e => setPayForm(f => ({ ...f, paymentMethod: e.target.value }))}
+                className="input-dark text-xs">
+                {UTILITY_PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+              <select value={payForm.status} onChange={e => setPayForm(f => ({ ...f, status: e.target.value }))}
+                className="input-dark text-xs">
+                {['PAID', 'PENDING', 'PARTIAL', 'FAILED'].map(st => (
+                  <option key={st} value={st}>{PAYMENT_STATUS_LABELS[st]}</option>
+                ))}
+              </select>
+
+              {/* Linking to a statement is what marks that bill paid. */}
+              <select value={payForm.statementId} onChange={e => setPayForm(f => ({ ...f, statementId: e.target.value }))}
+                className="input-dark text-xs sm:col-span-2">
+                <option value="">— Not against a specific bill —</option>
+                {statements.slice(0, 36).map((st: any) => (
+                  <option key={st.id} value={st.id}>
+                    {fmtDate(st.statementDate, 'MMM yyyy')} — {fmtMoney(st.amountDue)} due
+                  </option>
+                ))}
+              </select>
+              <select value={payForm.bankAccountId} onChange={e => setPayForm(f => ({ ...f, bankAccountId: e.target.value }))}
+                className="input-dark text-xs">
+                <option value="">— Paid from which account? —</option>
+                {bankAccounts.map(b => (
+                  <option key={b.id} value={b.id}>{[b.name, b.last4 ? `••${b.last4}` : null].filter(Boolean).join(' ')}</option>
+                ))}
+              </select>
+              <input value={payForm.confirmationNumber} onChange={e => setPayForm(f => ({ ...f, confirmationNumber: e.target.value }))}
+                placeholder="Confirmation #" className="input-dark text-xs" />
+              <input value={payForm.notes} onChange={e => setPayForm(f => ({ ...f, notes: e.target.value }))}
+                placeholder="Notes" className="input-dark text-xs sm:col-span-2 lg:col-span-4" />
+            </div>
+            <div className="flex justify-end gap-3 mt-2">
+              <button onClick={() => { setEditPaymentId(null); setShowPayForm(false); }}
+                className="text-xs text-gray-500 hover:text-gray-300">Cancel</button>
+              <button onClick={savePayment} disabled={savingPayment || !payForm.amount}
+                className="btn btn-primary text-xs disabled:opacity-40">
+                {savingPayment ? '…' : editPaymentId ? 'Save changes' : 'Log payment'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {tab === 'payments' && (
           filteredPayments.length === 0
-            ? <EmptyState icon="💳" title="No payments" body={search || yearFilter !== 'all' ? 'No payments match your filter.' : 'No payment history found for this account.'} />
+            ? <EmptyState icon="💳" title="No payments" body={search || yearFilter !== 'all' ? 'No payments match your filter.' : 'Nothing recorded yet — use "Log payment" above.'} />
             : (
               <div className="space-y-2 pb-8">
                 {filteredPayments.map(p => (
@@ -1007,15 +1157,27 @@ export default function UtilityDetailPage() {
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm text-gray-300">{p.paymentMethod || 'Payment'}</p>
+                      {p.bankAccount && (
+                        <p className="text-xs text-gray-500">from {p.bankAccount.name}{p.bankAccount.last4 ? ` ••${p.bankAccount.last4}` : ''}</p>
+                      )}
+                      {p.statement && (
+                        <p className="text-xs text-gray-500">toward {fmtDate(p.statement.statementDate, 'MMM yyyy')} bill</p>
+                      )}
                       {p.confirmationNumber && (
                         <p className="font-mono text-xs text-gray-500 mt-0.5">Conf# {p.confirmationNumber}</p>
                       )}
+                      {p.notes && <p className="text-xs text-gray-600 mt-0.5">{p.notes}</p>}
                     </div>
                     <div className="text-right flex-shrink-0 w-24">
                       <p className="text-base font-semibold text-white">{fmtMoney(p.amount)}</p>
                     </div>
                     <div className="flex-shrink-0 w-20 text-right">
                       <Pill color={p.status === 'PAID' ? 'green' : p.status === 'PENDING' ? 'amber' : 'red'}>{p.status}</Pill>
+                    </div>
+                    <div className="flex-shrink-0 flex gap-2 text-xs">
+                      <button onClick={() => openPaymentEdit(p)} className="text-gray-500 hover:text-amber-400">Edit</button>
+                      <button onClick={() => removePayment(p)} disabled={savingPayment}
+                        className="text-gray-600 hover:text-red-400 disabled:opacity-40">✕</button>
                     </div>
                   </div>
                 ))}

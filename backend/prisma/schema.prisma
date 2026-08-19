@@ -257,9 +257,16 @@ model Payment {
   confirmationNumber String?
   paymentMethod      String?
   status             PaymentStatus  @default(PAID)
+  // Which of the owner's accounts the bill was paid from.
+  bankAccountId      String?
+  bankAccount        BankAccount?   @relation(fields: [bankAccountId], references: [id], onDelete: SetNull)
   notes              String?
   createdAt          DateTime       @default(now())
+  Lease              Lease?         @relation(fields: [leaseId], references: [id])
+  leaseId            String?
 
+  @@index([utilityAccountId, paymentDate])
+  @@index([bankAccountId])
   @@map("payments")
 }
 
@@ -532,6 +539,7 @@ model Lease {
   leaseTenants         LeaseTenant[]
   rentPayments         RentPayment[]
   legalFees            LegalFee[]
+  utilityPayments      Payment[]
   rentNotices          RentNotice[]
   rentChanges          RentChange[]
   scheduledIncreases   ScheduledRentIncrease[]
@@ -1216,6 +1224,7 @@ model BankAccount {
   outgoingTransactions OutgoingTransaction[]
   rentPayments         RentPayment[]
   LegalFee             LegalFee[]
+  Payment              Payment[]
 
   @@index([userId])
   @@index([plaidItemId])

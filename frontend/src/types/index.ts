@@ -791,6 +791,8 @@ export interface Payment {
   confirmationNumber?: string;
   paymentMethod?: string;
   status: PaymentStatus;
+  bankAccountId?: string | null;
+  bankAccount?: Pick<BankAccount, 'id' | 'name' | 'bank' | 'last4'> | null;
   notes?: string;
   createdAt: string;
   utilityAccount?: {
@@ -1099,3 +1101,13 @@ export interface TurnoverReport {
   };
   units: UnitTurnover[];
 }
+
+// How a utility bill was paid. Free-text in the database; these are the options
+// the UI offers so entries stay consistent enough to group.
+export const UTILITY_PAYMENT_METHODS = [
+  'ACH', 'Auto-pay', 'Card', 'Check', 'Cash', 'Online portal', 'Money order', 'Other',
+];
+
+export const PAYMENT_STATUS_LABELS: Record<string, string> = {
+  PAID: 'Paid', PENDING: 'Pending', PARTIAL: 'Partial', FAILED: 'Failed',
+};

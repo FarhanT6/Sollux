@@ -408,6 +408,10 @@ export const getStatementsSummary = (params?: { propertyId?: string; utilityAcco
 // Utility payments
 export const getPayments = (params: { utilityAccountId?: string; propertyId?: string }) =>
   api.get<Payment[]>('/payments', { params }).then(r => r.data);
+export const updatePayment = (id: string, data: any) =>
+  api.patch<Payment>(`/payments/${id}`, data).then(r => r.data);
+export const deletePayment = (id: string) =>
+  api.delete(`/payments/${id}`);
 export const createPayment = (data: any) =>
   api.post<Payment>('/payments', data).then(r => r.data);
 
