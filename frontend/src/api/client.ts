@@ -141,6 +141,8 @@ export const getRentPayments = (params?: { leaseId?: string; propertyId?: string
   api.get<RentPayment[]>('/rent-payments', { params }).then(r => r.data);
 export const createRentPayment = (data: any) =>
   api.post<RentPayment>('/rent-payments', data).then(r => r.data);
+export const updateRentPayment = (id: string, data: any) =>
+  api.patch<RentPayment>(`/rent-payments/${id}`, data).then(r => r.data);
 export const deleteRentPayment = (id: string) =>
   api.delete(`/rent-payments/${id}`);
 

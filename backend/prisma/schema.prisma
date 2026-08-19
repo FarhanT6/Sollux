@@ -636,6 +636,11 @@ model RentPayment {
   appliedToArrears Decimal           @default(0) @db.Decimal(10, 2)
   paidDate         DateTime
   method           RentPaymentMethod @default(OTHER)
+  // PENDING money is committed but not received: it must not count toward the
+  // month's rent or pay down arrears until it actually arrives.
+  status           RentPaymentStatus @default(RECEIVED)
+  // When a pending payment is expected to disburse.
+  expectedDate     DateTime?
   // Which of the owner's accounts the money landed in. Set for BANK_DEPOSIT,
   // and optionally for any other method the owner wants to attribute. Kept
   // nullable and SetNull so removing a bank account never destroys payments.
@@ -649,6 +654,11 @@ model RentPayment {
   @@map("rent_payments")
 }
 
+enum RentPaymentStatus {
+  PENDING
+  RECEIVED
+}
+
 enum RentPaymentMethod {
   CASH
   CHECK
@@ -660,6 +670,9 @@ enum RentPaymentMethod {
   PAYPAL
   CASH_APP
   APPLE_CASH
+  // Section 8, ERAP, county/charity programs. These are often approved long
+  // before the money lands, which is why RentPayment carries a status.
+  RENTAL_ASSISTANCE
   // Handed over / deposited directly into one of the owner's accounts. Which
   // account is recorded on RentPayment.bankAccountId.
   BANK_DEPOSIT
