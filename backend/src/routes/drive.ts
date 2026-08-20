@@ -351,11 +351,12 @@ router.post('/stream', attachDbUser, async (req, res) => {
 // this specific list of files), or both (import that folder AND the loose files).
 router.post('/import', attachDbUser, async (req, res, next) => {
   try {
-    const { tokenId, folderId, fileIds, folderName } = req.body as {
+    const { tokenId, folderId, fileIds, folderName, method } = req.body as {
       tokenId: string;
       folderId?: string;
       fileIds?: string[];
       folderName?: string;
+      method?: 'ai' | 'regex';
     };
     if (!tokenId) return res.status(400).json({ error: 'tokenId required' });
     if (!folderId && (!fileIds || fileIds.length === 0)) {
@@ -377,7 +378,10 @@ router.post('/import', attachDbUser, async (req, res, next) => {
     const { driveImportQueue } = await import('../workers/queues');
     await driveImportQueue.add(
       'import',
-      { jobId: job.id, tokenId, folderId, fileIds, userId: req.dbUserId! },
+      // Default to regex: this path bills the user's Anthropic key per PDF, and
+      // a bulk folder import is thousands of files. AI extraction has to be
+      // asked for, never assumed.
+      { jobId: job.id, tokenId, folderId, fileIds, userId: req.dbUserId!, method: method === 'ai' ? 'ai' : 'regex' },
       { attempts: 1 }
     );
 

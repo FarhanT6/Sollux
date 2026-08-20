@@ -12,6 +12,8 @@ interface DriveImportJobData {
   folderId?: string;
   fileIds?: string[];
   userId: string;
+  /** Omitted on jobs queued before this was threaded through — treated as regex. */
+  method?: 'ai' | 'regex';
 }
 
 const UTILITY_TYPE_TO_CATEGORY: Record<string, string> = {
@@ -132,7 +134,7 @@ const worker = new Worker<DriveImportJobData>(
   async (job: Job<DriveImportJobData>) => {
     console.log(`[DriveImportWorker] Received job ${job.id}`);
 
-    const { jobId, tokenId, folderId, fileIds, userId } = job.data;
+    const { jobId, tokenId, folderId, fileIds, userId, method } = job.data;
     console.log(`[DriveImportWorker] Starting job ${jobId} for user ${userId}`);
 
     const needsReview: any[] = [];
@@ -167,7 +169,9 @@ const worker = new Worker<DriveImportJobData>(
       for (const file of files) {
         try {
           const buffer = await downloadFile(drive, file.id);
-          const parsed = await parseBill(buffer, file.name, userId);
+          // parseBill defaults to AI; this path must pass the choice through or
+          // every bulk import silently bills per PDF regardless of what was picked.
+          const parsed = await parseBill(buffer, file.name, userId, method === 'ai' ? 'ai' : 'regex');
           const { extracted: ex, match } = parsed;
 
           let utilityAccountId = match.utilityAccountId;
