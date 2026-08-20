@@ -16,7 +16,7 @@ export type LeaseStatus = 'ACTIVE' | 'ENDED' | 'PENDING' | 'TERMINATED';
 export type RentPaymentMethod =
   | 'CASH' | 'CHECK' | 'ZELLE' | 'ACH' | 'MONEY_ORDER' | 'CARD'
   | 'VENMO' | 'PAYPAL' | 'CASH_APP' | 'APPLE_CASH' | 'BANK_DEPOSIT'
-  | 'RENTAL_ASSISTANCE' | 'OTHER';
+  | 'SECTION_8' | 'RENTAL_ASSISTANCE' | 'OTHER';
 
 // Committed but not yet disbursed vs. actually in hand. Pending money never
 // counts toward a month's rent or pays down arrears.
@@ -24,7 +24,7 @@ export type RentPaymentStatus = 'PENDING' | 'RECEIVED';
 
 // Ordered for the payment dropdown — most-used first, OTHER last.
 export const RENT_PAYMENT_METHODS: RentPaymentMethod[] = [
-  'ZELLE', 'CHECK', 'CASH', 'ACH', 'BANK_DEPOSIT', 'RENTAL_ASSISTANCE',
+  'ZELLE', 'CHECK', 'CASH', 'ACH', 'BANK_DEPOSIT', 'SECTION_8', 'RENTAL_ASSISTANCE',
   'VENMO', 'CASH_APP', 'PAYPAL', 'APPLE_CASH', 'MONEY_ORDER', 'CARD', 'OTHER',
 ];
 
@@ -32,7 +32,7 @@ export const RENT_PAYMENT_METHODS: RentPaymentMethod[] = [
 // recording which. Cash and the P2P apps sit in their own balances until they
 // are moved, so asking there would be noise.
 export const BANK_LINKED_METHODS: RentPaymentMethod[] = [
-  'BANK_DEPOSIT', 'CHECK', 'ACH', 'MONEY_ORDER', 'ZELLE', 'RENTAL_ASSISTANCE',
+  'BANK_DEPOSIT', 'CHECK', 'ACH', 'MONEY_ORDER', 'ZELLE', 'SECTION_8', 'RENTAL_ASSISTANCE',
 ];
 
 export const RENT_PAYMENT_METHOD_LABELS: Record<RentPaymentMethod, string> = {
@@ -41,6 +41,7 @@ export const RENT_PAYMENT_METHOD_LABELS: Record<RentPaymentMethod, string> = {
   CASH:         'Cash',
   ACH:          'ACH / bank transfer',
   BANK_DEPOSIT: 'Deposited into bank',
+  SECTION_8: 'Section 8 (housing authority)',
   RENTAL_ASSISTANCE: 'Rental assistance',
   VENMO:        'Venmo',
   CASH_APP:     'Cash App',

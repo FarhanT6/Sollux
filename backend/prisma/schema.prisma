@@ -678,8 +678,11 @@ enum RentPaymentMethod {
   PAYPAL
   CASH_APP
   APPLE_CASH
-  // Section 8, ERAP, county/charity programs. These are often approved long
-  // before the money lands, which is why RentPayment carries a status.
+  // Housing Choice Voucher — the housing authority's portion, paid directly
+  // to the landlord and separate from the tenant's share.
+  SECTION_8
+  // ERAP, county and charity programs. Often approved long before the money
+  // lands, which is why RentPayment carries a status.
   RENTAL_ASSISTANCE
   // Handed over / deposited directly into one of the owner's accounts. Which
   // account is recorded on RentPayment.bankAccountId.

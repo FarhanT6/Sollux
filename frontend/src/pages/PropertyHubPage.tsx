@@ -1984,7 +1984,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                       if (!BANK_LINKED_METHODS.includes(e.target.value as RentPaymentMethod)) setPayBankAccountId('');
                       // Assistance is usually recorded on approval, before the
                       // money moves — default it to pending, but leave it editable.
-                      if (e.target.value === 'RENTAL_ASSISTANCE') setPayStatus('PENDING');
+                      if (['RENTAL_ASSISTANCE', 'SECTION_8'].includes(e.target.value)) setPayStatus('PENDING');
                     }} className="input-dark text-xs">
                       {RENT_PAYMENT_METHODS.map(m => <option key={m} value={m}>{RENT_PAYMENT_METHOD_LABELS[m]}</option>)}
                     </select>

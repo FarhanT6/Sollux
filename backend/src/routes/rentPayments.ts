@@ -17,7 +17,7 @@ const RentPaymentSchema = z.object({
   paidDate: z.string().transform(s => new Date(s)),
   method: z.enum([
     'CASH','CHECK','ZELLE','ACH','MONEY_ORDER','CARD',
-    'VENMO','PAYPAL','CASH_APP','APPLE_CASH','BANK_DEPOSIT','RENTAL_ASSISTANCE','OTHER',
+    'VENMO','PAYPAL','CASH_APP','APPLE_CASH','BANK_DEPOSIT','SECTION_8','RENTAL_ASSISTANCE','OTHER',
   ]).default('OTHER'),
   // PENDING = approved/committed but not yet disbursed. Assistance programs
   // routinely sit here for weeks.
