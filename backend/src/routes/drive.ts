@@ -5,6 +5,7 @@ import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { getSignedDocumentUrl, downloadDocument, uploadDocument, buildStatementKey } from '../services/s3Service';
 import { parseBill } from '../services/pdfImportService';
+import { findOrCreateUtilityAccount } from '../services/utilityAccountResolver';
 
 const router = Router();
 // attachDbUser is applied per-route below, NOT via router.use — the /callback
@@ -227,7 +228,13 @@ router.post('/stream', attachDbUser, async (req, res) => {
 
     let autoImported = 0;
 
-    await Promise.all(files.map(async (file) => {
+    // Bounded concurrency. An unbounded Promise.all over a whole folder opens a
+    // Drive download, a model call and an S3 upload for every file at once —
+    // hundreds of bills means rate-limit rejections and every PDF buffer held
+    // in memory simultaneously. Small batches keep both in check.
+    const IMPORT_CONCURRENCY = 4;
+    for (let batchStart = 0; batchStart < files.length; batchStart += IMPORT_CONCURRENCY) {
+    await Promise.all(files.slice(batchStart, batchStart + IMPORT_CONCURRENCY).map(async (file) => {
       try {
         const buffer = await downloadDriveFile(drive, file.id);
         const parsed  = await parseBill(buffer, file.name, userId, method === 'regex' ? 'regex' : 'ai');
@@ -235,16 +242,15 @@ router.post('/stream', attachDbUser, async (req, res) => {
 
         let utilityAccountId = match.utilityAccountId;
 
-        // Auto-create account when property matched but no account yet
+        // Property matched but no account for this utility yet. Goes through
+        // the resolver rather than creating directly: these files are processed
+        // concurrently, and a bare create-per-file gives one account per bill.
         if (!utilityAccountId && match.method === 'property_exists_no_account' && match.propertyId) {
-          const acct = await db.utilityAccount.create({
-            data: {
-              propertyId:   match.propertyId,
-              providerName: ex.providerName || 'Unknown provider',
-              providerSlug: toSlug(ex.providerName || 'unknown'),
-              category:     (UTILITY_CATEGORY[ex.utilityType] || 'OTHER') as any,
-              accountNumber: ex.accountNumber ? ex.accountNumber.slice(-4) : null,
-            },
+          const acct = await findOrCreateUtilityAccount({
+            propertyId: match.propertyId,
+            providerName: ex.providerName,
+            category: UTILITY_CATEGORY[ex.utilityType] || 'OTHER',
+            accountNumber: ex.accountNumber,
           });
           utilityAccountId = acct.id;
         }
@@ -331,6 +337,7 @@ router.post('/stream', attachDbUser, async (req, res) => {
         send({ type: 'error', filename: file.name, message: err instanceof Error ? err.message : 'unknown error' });
       }
     }));
+    }
 
     // Send updated properties list for the review dropdowns
     const properties = await db.property.findMany({

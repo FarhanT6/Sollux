@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { createWorkerConnection } from './queues';
 import { db } from '../config/db';
 import { parseBill } from '../services/pdfImportService';
+import { findOrCreateUtilityAccount } from '../services/utilityAccountResolver';
 import { uploadDocument, buildStatementKey } from '../services/s3Service';
 
 interface DriveImportJobData {
@@ -180,14 +181,11 @@ const worker = new Worker<DriveImportJobData>(
           // Property matched but this utility doesn't have an account yet — create it
           // using the AI-detected type (electric/water/gas/etc.) and provider name.
           if (!utilityAccountId && match.method === 'property_exists_no_account' && match.propertyId) {
-            const acct = await db.utilityAccount.create({
-              data: {
-                propertyId: match.propertyId,
-                providerName: ex.providerName || 'Unknown provider',
-                providerSlug: toSlug(ex.providerName || 'unknown'),
-                category: (UTILITY_TYPE_TO_CATEGORY[ex.utilityType] || 'OTHER') as any,
-                accountNumber: ex.accountNumber ? ex.accountNumber.slice(-4) : null,
-              },
+            const acct = await findOrCreateUtilityAccount({
+              propertyId: match.propertyId,
+              providerName: ex.providerName,
+              category: UTILITY_TYPE_TO_CATEGORY[ex.utilityType] || 'OTHER',
+              accountNumber: ex.accountNumber,
             });
             utilityAccountId = acct.id;
             autoCreated = true;
