@@ -450,7 +450,8 @@ export const getDriveAccessToken = (tokenId: string) =>
   api.get<{ accessToken: string }>('/drive/access-token', { params: { tokenId } }).then(r => r.data);
 export const startDriveImport = (
   tokenId: string,
-  selection: { folderId?: string; fileIds?: string[]; folderName?: string }
+  // method defaults to free regex parsing server-side; 'ai' bills per PDF.
+  selection: { folderId?: string; fileIds?: string[]; folderName?: string; method?: 'ai' | 'regex' }
 ) =>
   api.post<{ jobId: string }>('/drive/import', { tokenId, ...selection }).then(r => r.data);
 export const getDriveImportJob = (jobId: string) =>

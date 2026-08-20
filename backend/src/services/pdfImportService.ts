@@ -100,14 +100,14 @@ Schema (use null for any field not present in the document):
   "serviceAddress": "string — the property/service address (NOT the mailing/remittance address)",
   "accountNumber": "string — account, customer, or reference number",
   "statementDate": "YYYY-MM-DD — date the bill was issued or generated",
-  "dueDate": "YYYY-MM-DD — payment due date",
+  "dueDate": "YYYY-MM-DD — the date payment for THIS bill is due. Bills often print several other dates: a next meter-read date, a service-period end, a solar/net-metering true-up date, an autopay draft date. None of those are the due date — use only a date explicitly labelled as when payment is due,
   "billingPeriodStart": "YYYY-MM-DD — start of billing period if shown",
   "billingPeriodEnd": "YYYY-MM-DD — end of billing period if shown",
-  "amountDue": number or null — total dollar amount currently owed (look for 'Amount Due', 'Total Due', 'Balance Due', 'Please Pay'),
-  "previousBalance": number or null — prior balance carried forward,
-  "paymentsReceived": number or null — payments or credits applied since last bill,
-  "currentCharges": number or null — new charges this period,
-  "lateFee": number or null — late fee, penalty, or overdue charge added this period (not the base amount due),
+  "amountDue": number or null — THIS period's charges only, including any late fee or penalty added this period, but EXCLUDING any balance carried forward from earlier bills. If the bill shows only one grand total and that total includes a prior balance, do NOT put the grand total here — put the prior balance in previousBalance and this period's charges here,
+  "previousBalance": number or null — how much from EARLIER bills is still unpaid, after applying any payments the bill shows. If the bill lists 'Previous Balance' then 'Payments Received' then 'Balance Forward', report the Balance Forward figure, not the Previous Balance. Never include this period's charges. Use null, not 0, when nothing is carried forward,
+  "paymentsReceived": number or null — payments or credits applied since last bill (enter as a positive number),
+  "currentCharges": number or null — same as amountDue: this period's charges only,
+  "lateFee": number or null — late fee, penalty, or overdue charge added THIS period. This is a component of amountDue, not the carried-forward balance,
   "usageValue": number or null — consumption quantity if applicable (kWh, CCF, gallons, etc.),
   "usageUnit": "string or null — kWh | CCF | therms | gallons | HCF | pickup | other",
   "ratePlan": "string or null — rate schedule, plan name, or tier",
@@ -122,7 +122,10 @@ Important extraction tips:
 - If this is a debt collection or management statement (not a direct utility bill), still fill in all fields you can find.
 - serviceAddress: if multiple addresses appear, pick the one labeled 'Service Address', 'Property Address', or that matches a street address format for a building (not a PO Box).
 - accountNumber: include dashes and spaces as they appear; do not normalize.
-- statementDate: if not explicit, infer from postmark, billing period end, or document date.`;
+- statementDate: if not explicit, infer from postmark, billing period end, or document date.
+- Bills printed in two columns often place the prior balance and this period's charges side by side. Read the labels, not the position: a figure next to 'Past Due' is previousBalance even when it sits where current charges usually appear.
+- Sanity-check yourself before answering: previousBalance + amountDue should equal the grand total the bill asks for, because previousBalance is already net of payments. If it does not, you have most likely put a carried-forward balance into amountDue. Re-read and split them.
+- Some bills show several totals (this period, total with past due, budget-billing amount, minimum payment). amountDue is always this period's charges alone.`;
 
 // ── Regex-based extraction (free, no API calls) ───────────────────────────────
 
