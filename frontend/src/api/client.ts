@@ -63,8 +63,10 @@ export const lookupPropertyByAddress = (params: { address: string; city: string;
   }>('/properties/lookup', { params }).then(r => r.data);
 
 // Units
-export const getUnits = (params?: { propertyId?: string }) =>
+export const getUnits = (params?: { propertyId?: string; history?: string }) =>
   api.get<Unit[]>('/units', { params }).then(r => r.data);
+export const getUnit = (id: string) =>
+  api.get<Unit>(`/units/${id}`).then(r => r.data);
 export const createUnit = (data: Partial<Unit>) =>
   api.post<Unit>('/units', data).then(r => r.data);
 export const updateUnit = (id: string, data: Partial<Unit>) =>

@@ -29,6 +29,7 @@ import { PROPERTY_TYPE_LABELS, EXPENSE_CATEGORY_LABELS, DOCUMENT_CATEGORY_LABELS
 import type { Document as DocType } from '../types';
 import { fmtDate as fmtDateSafe, monthKey, localMonthKey } from '../lib/date';
 import LegalPage from './LegalPage';
+import UnitsTab from '../components/UnitsTab';
 
 const LEASE_DOC_CATEGORIES = ['LEASE', 'APPLICATION', 'IDENTITY', 'SCREENING', 'OTHER'] as const;
 
@@ -75,7 +76,7 @@ const money = (n: number) =>
   n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const pct = (n: number) => `${n > 0 ? '+' : ''}${n.toFixed(1)}%`;
 const fmtDate = (d?: string | null) => fmtDateSafe(d);
-const TABS = ['Overview', 'Tenants', 'Turnover', 'Loans', 'Expenses', 'Insurance', 'Maintenance', 'Tax', 'Legal', 'Documents'] as const;
+const TABS = ['Overview', 'Units', 'Tenants', 'Turnover', 'Loans', 'Expenses', 'Insurance', 'Maintenance', 'Tax', 'Legal', 'Documents'] as const;
 type Tab = typeof TABS[number];
 
 export default function PropertyHubPage() {
@@ -239,6 +240,7 @@ export default function PropertyHubPage() {
       {/* Tab content */}
       <div className="px-6 py-5">
         {activeTab === 'Overview' && <OverviewTab property={property} pnl={pnl} leases={activeLeases} loans={loans.filter(l => l.isActive)} onPropertyChange={setProperty} />}
+        {activeTab === 'Units' && <UnitsTab propertyId={id!} />}
         {activeTab === 'Tenants' && <TenantsTab propertyId={id!} leases={leases} setLeases={setLeases} propertyType={property.type} />}
         {activeTab === 'Turnover' && <TurnoverTab report={turnover} />}
         {activeTab === 'Loans' && <LoansTab propertyId={id!} loans={loans} setLoans={setLoans} />}

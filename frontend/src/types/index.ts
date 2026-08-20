@@ -113,11 +113,14 @@ export interface Property {
 export interface Unit {
   id: string;
   propertyId: string;
+  property?: Pick<Property, 'id' | 'address' | 'nickname'>;
   unitLabel: string;
   bedrooms?: number;
   bathrooms?: number;
   sqft?: number;
   notes?: string;
+  // Active leases only by default; every tenancy the unit has had when
+  // fetched with history=true.
   leases?: Lease[];
 }
 

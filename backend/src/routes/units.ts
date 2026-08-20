@@ -15,18 +15,59 @@ const UnitSchema = z.object({
   notes: z.string().optional(),
 });
 
+// Unit labels are entered by hand ("2", "10", "Unit 488.5", "Main House"), so
+// plain string sorting puts 10 before 2. Compare leading numbers numerically
+// and fall back to text, which keeps a numbered building in the order a person
+// would walk it.
+const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
+
 router.get('/', async (req, res, next) => {
   try {
-    const { propertyId } = req.query;
+    const { propertyId, history } = req.query;
     const units = await db.unit.findMany({
       where: {
         property: { userId: req.dbUserId! },
         ...(propertyId ? { propertyId: propertyId as string } : {}),
       },
-      include: { leases: { where: { status: 'ACTIVE' }, include: { leaseTenants: { include: { tenant: true } } } } },
-      orderBy: [{ propertyId: 'asc' }, { unitLabel: 'asc' }],
+      include: history === 'true'
+        // Every tenancy the unit has ever had, newest first — the occupancy
+        // history. Without this the list only ever knows who is there now.
+        ? {
+            property: { select: { id: true, address: true, nickname: true } },
+            leases: {
+              include: {
+                leaseTenants: { include: { tenant: true } },
+                rentPayments: { where: { status: 'RECEIVED' }, select: { amount: true } },
+              },
+              orderBy: { startDate: 'desc' },
+            },
+          }
+        : { leases: { where: { status: 'ACTIVE' }, include: { leaseTenants: { include: { tenant: true } } } } },
+      orderBy: [{ propertyId: 'asc' }],
     });
+    units.sort((a, b) => collator.compare(a.unitLabel, b.unitLabel));
     res.json(units);
+  } catch (err) { next(err); }
+});
+
+// GET /api/units/:id — one unit with its full occupancy history.
+router.get('/:id', async (req, res, next) => {
+  try {
+    const unit = await db.unit.findFirst({
+      where: { id: req.params.id, property: { userId: req.dbUserId! } },
+      include: {
+        property: { select: { id: true, address: true, nickname: true } },
+        leases: {
+          include: {
+            leaseTenants: { include: { tenant: true } },
+            rentPayments: { orderBy: { paidDate: 'desc' } },
+          },
+          orderBy: { startDate: 'desc' },
+        },
+      },
+    });
+    if (!unit) return res.status(404).json({ error: 'Unit not found' });
+    res.json(unit);
   } catch (err) { next(err); }
 });
 
@@ -52,7 +93,10 @@ router.patch('/:id', async (req, res, next) => {
 
 router.delete('/:id', async (req, res, next) => {
   try {
-    const existing = await db.unit.findFirst({ where: { id: req.params.id, property: { userId: req.dbUserId! } } });
+    const existing = await db.unit.findFirst({
+      where: { id: req.params.id, property: { userId: req.dbUserId! } },
+      include: { _count: { select: { leases: true } } },
+    });
     if (!existing) return res.status(404).json({ error: 'Unit not found' });
     await db.unit.delete({ where: { id: req.params.id } });
     res.status(204).send();
