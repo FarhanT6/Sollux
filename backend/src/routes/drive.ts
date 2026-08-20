@@ -305,6 +305,15 @@ router.post('/stream', attachDbUser, async (req, res) => {
                 chargesExcludingFees: ex.currentCharges ?? existing.chargesExcludingFees,
                 penaltiesFees: ex.lateFee ?? existing.penaltiesFees,
                 pastDueCarried: pastDueAmt ?? existing.pastDueCarried,
+                // These were written on create but omitted on update, so a
+                // re-import silently dropped the billing period and usage it
+                // had just extracted. Every field the create branch sets must
+                // be set here too, or the two paths disagree.
+                billingPeriodStart: ex.billingPeriodStart ? new Date(ex.billingPeriodStart) : existing.billingPeriodStart,
+                billingPeriodEnd:   ex.billingPeriodEnd   ? new Date(ex.billingPeriodEnd)   : existing.billingPeriodEnd,
+                usageValue: ex.usageValue ?? existing.usageValue,
+                usageUnit:  ex.usageUnit  ?? existing.usageUnit,
+                ratePlan:   ex.ratePlan   ?? existing.ratePlan,
                 rawDataJson: rawData as Prisma.InputJsonValue,
                 ...(pdfS3Key ? { pdfS3Key } : {}),
               }});
