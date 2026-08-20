@@ -10,6 +10,15 @@ import { fmtDate } from '../lib/date';
 
 type Tab = 'utilities' | 'payments' | 'insights' | 'documents';
 
+// Surface what the API actually said. A generic "not found" hides the useful
+// part — an unrun migration, for instance, reports a missing column.
+function errorMessage(err: any): string {
+  return err?.response?.data?.error
+    ?? (err?.response?.status ? `Request failed (${err.response.status}).` : null)
+    ?? err?.message
+    ?? 'Unknown error.';
+}
+
 export default function PropertyDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [property, setProperty] = useState<Property | null>(null);
@@ -18,6 +27,8 @@ export default function PropertyDetailPage() {
   const [insights, setInsights] = useState<AIInsight[]>([]);
   const [tab, setTab] = useState<Tab>('utilities');
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [partialError, setPartialError] = useState<string | null>(null);
   const navigate = useNavigate();
   const [syncing, setSyncing] = useState<string | null>(null);
   const [showAddUtility, setShowAddUtility] = useState(false);
@@ -27,16 +38,34 @@ export default function PropertyDetailPage() {
 
   useEffect(() => {
     if (!id) return;
-    Promise.all([
+    // allSettled, not all: these four are independent, and a single rejection
+    // used to take the whole page down — property included — so the render fell
+    // through to "Property not found" and blamed the property for someone
+    // else's failure. Each result is now applied on its own.
+    Promise.allSettled([
       getProperty(id),
       getStatements({ propertyId: id }),
       getPayments({ propertyId: id }),
       getInsights({ propertyId: id }),
     ]).then(([p, s, pmt, ins]) => {
-      setProperty(p);
-      setStatements(s);
-      setPayments(pmt);
-      setInsights(ins.filter(i => !i.isDismissed));
+      if (p.status === 'fulfilled') setProperty(p.value);
+      else setLoadError(errorMessage(p.reason));
+      if (s.status === 'fulfilled') setStatements(s.value);
+      if (pmt.status === 'fulfilled') setPayments(pmt.value);
+      if (ins.status === 'fulfilled') setInsights(ins.value.filter(i => !i.isDismissed));
+
+      // The property loaded but something alongside it did not — say which,
+      // rather than showing a page with silently missing sections.
+      const partial = [
+        s.status === 'rejected' ? 'statements' : null,
+        pmt.status === 'rejected' ? 'payments' : null,
+        ins.status === 'rejected' ? 'insights' : null,
+      ].filter(Boolean) as string[];
+      if (p.status === 'fulfilled' && partial.length > 0) {
+        setPartialError(`Could not load ${partial.join(', ')}. ${errorMessage(
+          (s.status === 'rejected' && s.reason) || (pmt.status === 'rejected' && pmt.reason) || (ins as any).reason,
+        )}`);
+      }
     }).finally(() => setLoading(false));
   }, [id]);
 
@@ -82,7 +111,12 @@ export default function PropertyDetailPage() {
   }
 
   if (loading) return <div className="p-6"><Skeleton className="h-40 mb-4" /><Skeleton className="h-64" /></div>;
-  if (!property) return <div className="p-6 text-gray-400">Property not found</div>;
+  if (!property) return (
+    <div className="p-6 text-sm text-gray-400">
+      <p className="text-gray-300 font-medium mb-1">Couldn't load this property</p>
+      <p className="text-xs text-gray-500">{loadError ?? 'The property could not be found.'}</p>
+    </div>
+  );
 
   const TABS: { key: Tab; label: string }[] = [
     { key: 'utilities', label: 'Utilities' },
@@ -93,6 +127,12 @@ export default function PropertyDetailPage() {
 
   return (
     <div>
+      {partialError && (
+        <div className="mx-6 mt-4 rounded-lg px-3 py-2 text-xs text-amber-300"
+          style={{ background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.25)' }}>
+          {partialError}
+        </div>
+      )}
       <PageHeader
         title={property.nickname || property.address}
         subtitle={`${property.city}, ${property.state} · ${property.type.charAt(0) + property.type.slice(1).toLowerCase()}`}
