@@ -262,8 +262,6 @@ model Payment {
   bankAccount        BankAccount?   @relation(fields: [bankAccountId], references: [id], onDelete: SetNull)
   notes              String?
   createdAt          DateTime       @default(now())
-  Lease              Lease?         @relation(fields: [leaseId], references: [id])
-  leaseId            String?
 
   @@index([utilityAccountId, paymentDate])
   @@index([bankAccountId])
@@ -538,8 +536,6 @@ model Lease {
 
   leaseTenants         LeaseTenant[]
   rentPayments         RentPayment[]
-  legalFees            LegalFee[]
-  utilityPayments      Payment[]
   rentNotices          RentNotice[]
   rentChanges          RentChange[]
   scheduledIncreases   ScheduledRentIncrease[]
@@ -1187,8 +1183,6 @@ model LegalFee {
   bankAccount   BankAccount? @relation(fields: [bankAccountId], references: [id], onDelete: SetNull)
   notes         String?
   createdAt     DateTime     @default(now())
-  Lease         Lease?       @relation(fields: [leaseId], references: [id])
-  leaseId       String?
 
   @@index([legalMatterId, date])
   @@index([bankAccountId])
@@ -1226,8 +1220,8 @@ model BankAccount {
   incomingTransactions IncomingTransaction[]
   outgoingTransactions OutgoingTransaction[]
   rentPayments         RentPayment[]
-  LegalFee             LegalFee[]
-  Payment              Payment[]
+  legalFees            LegalFee[]
+  utilityPayments      Payment[]
 
   @@index([userId])
   @@index([plaidItemId])
