@@ -63,8 +63,10 @@ export const lookupPropertyByAddress = (params: { address: string; city: string;
   }>('/properties/lookup', { params }).then(r => r.data);
 
 // Units
-export const getUnits = (params?: { propertyId?: string }) =>
+export const getUnits = (params?: { propertyId?: string; history?: string }) =>
   api.get<Unit[]>('/units', { params }).then(r => r.data);
+export const getUnit = (id: string) =>
+  api.get<Unit>(`/units/${id}`).then(r => r.data);
 export const createUnit = (data: Partial<Unit>) =>
   api.post<Unit>('/units', data).then(r => r.data);
 export const updateUnit = (id: string, data: Partial<Unit>) =>
@@ -141,6 +143,8 @@ export const getRentPayments = (params?: { leaseId?: string; propertyId?: string
   api.get<RentPayment[]>('/rent-payments', { params }).then(r => r.data);
 export const createRentPayment = (data: any) =>
   api.post<RentPayment>('/rent-payments', data).then(r => r.data);
+export const updateRentPayment = (id: string, data: any) =>
+  api.patch<RentPayment>(`/rent-payments/${id}`, data).then(r => r.data);
 export const deleteRentPayment = (id: string) =>
   api.delete(`/rent-payments/${id}`);
 
@@ -406,6 +410,10 @@ export const getStatementsSummary = (params?: { propertyId?: string; utilityAcco
 // Utility payments
 export const getPayments = (params: { utilityAccountId?: string; propertyId?: string }) =>
   api.get<Payment[]>('/payments', { params }).then(r => r.data);
+export const updatePayment = (id: string, data: any) =>
+  api.patch<Payment>(`/payments/${id}`, data).then(r => r.data);
+export const deletePayment = (id: string) =>
+  api.delete(`/payments/${id}`);
 export const createPayment = (data: any) =>
   api.post<Payment>('/payments', data).then(r => r.data);
 

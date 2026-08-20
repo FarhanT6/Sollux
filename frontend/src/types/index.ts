@@ -15,11 +15,16 @@ export type LeaseType = 'FIXED_TERM' | 'MONTH_TO_MONTH';
 export type LeaseStatus = 'ACTIVE' | 'ENDED' | 'PENDING' | 'TERMINATED';
 export type RentPaymentMethod =
   | 'CASH' | 'CHECK' | 'ZELLE' | 'ACH' | 'MONEY_ORDER' | 'CARD'
-  | 'VENMO' | 'PAYPAL' | 'CASH_APP' | 'APPLE_CASH' | 'BANK_DEPOSIT' | 'OTHER';
+  | 'VENMO' | 'PAYPAL' | 'CASH_APP' | 'APPLE_CASH' | 'BANK_DEPOSIT'
+  | 'SECTION_8' | 'RENTAL_ASSISTANCE' | 'OTHER';
+
+// Committed but not yet disbursed vs. actually in hand. Pending money never
+// counts toward a month's rent or pays down arrears.
+export type RentPaymentStatus = 'PENDING' | 'RECEIVED';
 
 // Ordered for the payment dropdown — most-used first, OTHER last.
 export const RENT_PAYMENT_METHODS: RentPaymentMethod[] = [
-  'ZELLE', 'CHECK', 'CASH', 'ACH', 'BANK_DEPOSIT',
+  'ZELLE', 'CHECK', 'CASH', 'ACH', 'BANK_DEPOSIT', 'SECTION_8', 'RENTAL_ASSISTANCE',
   'VENMO', 'CASH_APP', 'PAYPAL', 'APPLE_CASH', 'MONEY_ORDER', 'CARD', 'OTHER',
 ];
 
@@ -27,7 +32,7 @@ export const RENT_PAYMENT_METHODS: RentPaymentMethod[] = [
 // recording which. Cash and the P2P apps sit in their own balances until they
 // are moved, so asking there would be noise.
 export const BANK_LINKED_METHODS: RentPaymentMethod[] = [
-  'BANK_DEPOSIT', 'CHECK', 'ACH', 'MONEY_ORDER', 'ZELLE',
+  'BANK_DEPOSIT', 'CHECK', 'ACH', 'MONEY_ORDER', 'ZELLE', 'SECTION_8', 'RENTAL_ASSISTANCE',
 ];
 
 export const RENT_PAYMENT_METHOD_LABELS: Record<RentPaymentMethod, string> = {
@@ -36,6 +41,8 @@ export const RENT_PAYMENT_METHOD_LABELS: Record<RentPaymentMethod, string> = {
   CASH:         'Cash',
   ACH:          'ACH / bank transfer',
   BANK_DEPOSIT: 'Deposited into bank',
+  SECTION_8: 'Section 8 (housing authority)',
+  RENTAL_ASSISTANCE: 'Rental assistance',
   VENMO:        'Venmo',
   CASH_APP:     'Cash App',
   PAYPAL:       'PayPal',
@@ -107,11 +114,14 @@ export interface Property {
 export interface Unit {
   id: string;
   propertyId: string;
+  property?: Pick<Property, 'id' | 'address' | 'nickname'>;
   unitLabel: string;
   bedrooms?: number;
   bathrooms?: number;
   sqft?: number;
   notes?: string;
+  // Active leases only by default; every tenancy the unit has had when
+  // fetched with history=true.
   leases?: Lease[];
 }
 
@@ -221,6 +231,8 @@ export interface RentPayment {
   appliedToArrears: number;
   paidDate: string;
   method: RentPaymentMethod;
+  status: RentPaymentStatus;
+  expectedDate?: string | null;
   bankAccountId?: string | null;
   bankAccount?: Pick<BankAccount, 'id' | 'name' | 'bank' | 'last4'> | null;
   notes?: string;
@@ -783,6 +795,8 @@ export interface Payment {
   confirmationNumber?: string;
   paymentMethod?: string;
   status: PaymentStatus;
+  bankAccountId?: string | null;
+  bankAccount?: Pick<BankAccount, 'id' | 'name' | 'bank' | 'last4'> | null;
   notes?: string;
   createdAt: string;
   utilityAccount?: {
@@ -1091,3 +1105,13 @@ export interface TurnoverReport {
   };
   units: UnitTurnover[];
 }
+
+// How a utility bill was paid. Free-text in the database; these are the options
+// the UI offers so entries stay consistent enough to group.
+export const UTILITY_PAYMENT_METHODS = [
+  'ACH', 'Auto-pay', 'Card', 'Check', 'Cash', 'Online portal', 'Money order', 'Other',
+];
+
+export const PAYMENT_STATUS_LABELS: Record<string, string> = {
+  PAID: 'Paid', PENDING: 'Pending', PARTIAL: 'Partial', FAILED: 'Failed',
+};

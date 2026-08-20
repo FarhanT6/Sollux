@@ -17,7 +17,7 @@ import {
   getLeaseDocuments, addLeaseDocument, getLeaseDocumentViewUrl, deleteLeaseDocument, extractLeaseTerms,
   addScheduledIncrease, applyScheduledIncrease, deleteScheduledIncrease,
   addLeaseUtilityCharge, deleteLeaseUtilityCharge, getTurnover, getBankAccounts,
-  addPaymentAlias, deletePaymentAlias, deleteRentPayment,
+  addPaymentAlias, deletePaymentAlias, deleteRentPayment, updateRentPayment,
 } from '../api/client';
 import type {
   Property, Lease, Loan, Expense, InsurancePolicy, TaxAssessment,
@@ -29,6 +29,7 @@ import { PROPERTY_TYPE_LABELS, EXPENSE_CATEGORY_LABELS, DOCUMENT_CATEGORY_LABELS
 import type { Document as DocType } from '../types';
 import { fmtDate as fmtDateSafe, monthKey, localMonthKey } from '../lib/date';
 import LegalPage from './LegalPage';
+import UnitsTab from '../components/UnitsTab';
 
 const LEASE_DOC_CATEGORIES = ['LEASE', 'APPLICATION', 'IDENTITY', 'SCREENING', 'OTHER'] as const;
 
@@ -75,7 +76,7 @@ const money = (n: number) =>
   n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const pct = (n: number) => `${n > 0 ? '+' : ''}${n.toFixed(1)}%`;
 const fmtDate = (d?: string | null) => fmtDateSafe(d);
-const TABS = ['Overview', 'Tenants', 'Turnover', 'Loans', 'Expenses', 'Insurance', 'Maintenance', 'Tax', 'Legal', 'Documents'] as const;
+const TABS = ['Overview', 'Units', 'Tenants', 'Turnover', 'Loans', 'Expenses', 'Insurance', 'Maintenance', 'Tax', 'Legal', 'Documents'] as const;
 type Tab = typeof TABS[number];
 
 export default function PropertyHubPage() {
@@ -239,6 +240,7 @@ export default function PropertyHubPage() {
       {/* Tab content */}
       <div className="px-6 py-5">
         {activeTab === 'Overview' && <OverviewTab property={property} pnl={pnl} leases={activeLeases} loans={loans.filter(l => l.isActive)} onPropertyChange={setProperty} />}
+        {activeTab === 'Units' && <UnitsTab propertyId={id!} />}
         {activeTab === 'Tenants' && <TenantsTab propertyId={id!} leases={leases} setLeases={setLeases} propertyType={property.type} />}
         {activeTab === 'Turnover' && <TurnoverTab report={turnover} />}
         {activeTab === 'Loans' && <LoansTab propertyId={id!} loans={loans} setLoans={setLoans} />}
@@ -952,6 +954,8 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   const [payMethod, setPayMethod] = useState('ZELLE');
   const [payNotes, setPayNotes]   = useState('');
   const [payBankAccountId, setPayBankAccountId] = useState('');
+  const [payStatus, setPayStatus] = useState('RECEIVED');
+  const [payExpectedDate, setPayExpectedDate] = useState('');
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
   const [saving, setSaving]       = useState(false);
   const [expandLease, setExpandLease] = useState<string | null>(null);
@@ -973,6 +977,9 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   const [deletingTenant, setDeletingTenant] = useState<string | null>(null);
   const [deletingLease, setDeletingLease] = useState<string | null>(null);
   const [deletingPayment, setDeletingPayment] = useState<string | null>(null);
+  const [editPayment, setEditPayment] = useState<string | null>(null);
+  const [savingPayment, setSavingPayment] = useState(false);
+  const [payEdit, setPayEdit] = useState({ paidDate: '', amount: '', method: 'ZELLE', status: 'RECEIVED', expectedDate: '', notes: '' });
   const [savingEdit, setSavingEdit] = useState(false);
   const [uploadingDoc, setUploadingDoc] = useState(false);
   const [docCategory, setDocCategory] = useState<string>('LEASE');
@@ -1107,6 +1114,65 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   async function removeAlias(leaseId: string, aliasId: string) {
     await deletePaymentAlias(leaseId, aliasId);
     setLeases(await getLeases({ propertyId }));
+  }
+
+  function openPaymentEdit(p: any) {
+    setPayEdit({
+      paidDate: (p.paidDate ?? '').slice(0, 10),
+      amount: String(p.amount ?? ''),
+      method: p.method ?? 'OTHER',
+      status: p.status ?? 'RECEIVED',
+      expectedDate: (p.expectedDate ?? '').slice(0, 10),
+      notes: p.notes ?? '',
+    });
+    setEditPayment(p.id);
+  }
+
+  // Editing an amount, date or status changes how much of the payment pays down
+  // arrears and whether the month reads as covered, and both are derived on the
+  // server — so reload the lease rather than patching local state.
+  async function refreshAfterPayment(leaseId: string) {
+    const [fresh, updated] = await Promise.all([
+      getRentPayments({ leaseId }),
+      getLeases({ propertyId }),
+    ]);
+    setPayments(prev => ({ ...prev, [leaseId]: fresh }));
+    setLeases(updated);
+  }
+
+  async function savePaymentEdit(leaseId: string, p: any) {
+    const amount = parseFloat(payEdit.amount);
+    if (!payEdit.amount || Number.isNaN(amount) || amount <= 0) {
+      alert('Enter an amount greater than zero.');
+      return;
+    }
+    setSavingPayment(true);
+    try {
+      await updateRentPayment(p.id, {
+        amount,
+        paidDate: payEdit.paidDate || undefined,
+        method: payEdit.method,
+        status: payEdit.status,
+        expectedDate: payEdit.status === 'PENDING' ? (payEdit.expectedDate || null) : null,
+        notes: payEdit.notes || null,
+      });
+      setEditPayment(null);
+      await refreshAfterPayment(leaseId);
+    } catch (err: any) {
+      alert(err?.response?.data?.error ?? 'Could not save that payment.');
+    } finally { setSavingPayment(false); }
+  }
+
+  // Pending money arriving: the server stamps today as the paid date and runs
+  // the arrears split that was skipped while it was only committed.
+  async function markReceived(leaseId: string, p: any) {
+    setSavingPayment(true);
+    try {
+      await updateRentPayment(p.id, { status: 'RECEIVED' });
+      await refreshAfterPayment(leaseId);
+    } catch (err: any) {
+      alert(err?.response?.data?.error ?? 'Could not update that payment.');
+    } finally { setSavingPayment(false); }
   }
 
   // Deleting a payment moves money: whatever it applied to arrears goes back on
@@ -1369,6 +1435,8 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
         amount: parseFloat(payAmount),
         paidDate: payDate,
         method: payMethod,
+        status: payStatus,
+        expectedDate: payStatus === 'PENDING' ? (payExpectedDate || null) : null,
         bankAccountId: payBankAccountId || undefined,
         notes: payNotes || undefined,
       });
@@ -1376,6 +1444,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
       setLeases(updated);
       setShowPayForm(null);
       setPayAmount(''); setPayNotes(''); setPayBankAccountId('');
+      setPayStatus('RECEIVED'); setPayExpectedDate('');
       // Refresh payment history for this lease if expanded
       if (payments[leaseId]) {
         getRentPayments({ leaseId }).then(p => setPayments(prev => ({ ...prev, [leaseId]: p })));
@@ -1506,8 +1575,15 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                         // west of UTC that lands "2026-08-01" in July, so this
                         // month's payment never matched and rent stayed overdue.
                         const thisMonth = localMonthKey(now);
-                        const paidThisPeriod = (lease.rentPayments ?? [])
-                          .filter(p => monthKey(p.periodDate) === thisMonth)
+                        const thisMonthPayments = (lease.rentPayments ?? [])
+                          .filter(p => monthKey(p.periodDate) === thisMonth);
+                        // Pending assistance is committed, not collected — it
+                        // must not make a month look covered.
+                        const paidThisPeriod = thisMonthPayments
+                          .filter(p => p.status !== 'PENDING')
+                          .reduce((s, p) => s + Number(p.amount), 0);
+                        const pendingThisPeriod = thisMonthPayments
+                          .filter(p => p.status === 'PENDING')
                           .reduce((s, p) => s + Number(p.amount), 0);
                         const owed = Math.max(0, Number(lease.rentAmount) - paidThisPeriod);
                         const monthName = format(now, 'MMMM');
@@ -1522,6 +1598,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                             <p className="text-xs text-emerald-400">
                               {monthName} paid
                               {over > 0 && <span className="text-gray-500"> · {money(over)} toward balance</span>}
+                              {pendingThisPeriod > 0 && <span className="text-sky-400"> · {money(pendingThisPeriod)} pending</span>}
                             </p>
                           );
                         }
@@ -1535,6 +1612,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                           <p className={`text-xs ${overdue ? 'text-red-400' : 'text-gray-500'}`}>
                             {money(owed)} {overdue ? `overdue for ${monthName}` : `due ${fmtDateSafe(dueDate.toISOString(), 'MMM d')}`}
                             {partial && <span className="text-gray-500"> · {money(paidThisPeriod)} paid</span>}
+                            {pendingThisPeriod > 0 && <span className="text-sky-400"> · {money(pendingThisPeriod)} pending</span>}
                           </p>
                         );
                       })()}
@@ -1904,6 +1982,9 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                       // lands in a bank — the field is hidden, so it would be
                       // submitted invisibly.
                       if (!BANK_LINKED_METHODS.includes(e.target.value as RentPaymentMethod)) setPayBankAccountId('');
+                      // Assistance is usually recorded on approval, before the
+                      // money moves — default it to pending, but leave it editable.
+                      if (['RENTAL_ASSISTANCE', 'SECTION_8'].includes(e.target.value)) setPayStatus('PENDING');
                     }} className="input-dark text-xs">
                       {RENT_PAYMENT_METHODS.map(m => <option key={m} value={m}>{RENT_PAYMENT_METHOD_LABELS[m]}</option>)}
                     </select>
@@ -1923,6 +2004,16 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                           ))}
                         </select>
                       )
+                    )}
+                    {/* Assistance is often approved well before it disburses,
+                        so it can be logged as pending and marked received later. */}
+                    <select value={payStatus} onChange={e => setPayStatus(e.target.value)} className="input-dark text-xs">
+                      <option value="RECEIVED">Received</option>
+                      <option value="PENDING">Pending</option>
+                    </select>
+                    {payStatus === 'PENDING' && (
+                      <input type="date" value={payExpectedDate} title="Expected to disburse"
+                        onChange={e => setPayExpectedDate(e.target.value)} className="input-dark text-xs w-36" />
                     )}
                     <input placeholder="Notes (optional)" value={payNotes} onChange={e => setPayNotes(e.target.value)} className="input-dark text-xs flex-1 min-w-32" />
                     <button onClick={() => logPayment(lease.id)} disabled={saving} className="btn btn-primary text-xs">{saving ? '…' : 'Log'}</button>
@@ -1995,21 +2086,76 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                               </tr>
                             </thead>
                             <tbody>
-                              {payments[lease.id].map((p: any) => (
-                                <tr key={p.id} className="border-t border-white/5">
-                                  <td className="px-4 py-2 text-gray-300">{fmtDate(p.paidDate)}</td>
-                                  <td className="px-4 py-2 font-medium text-white">{money(Number(p.amount))}</td>
+                              {payments[lease.id].map((p: any) => editPayment === p.id ? (
+                                <tr key={p.id} className="border-t border-white/5" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                                  <td className="px-4 py-2">
+                                    <input type="date" value={payEdit.paidDate}
+                                      onChange={e => setPayEdit(f => ({ ...f, paidDate: e.target.value }))}
+                                      className="input-dark text-xs w-32" />
+                                  </td>
+                                  <td className="px-4 py-2">
+                                    <input type="number" value={payEdit.amount}
+                                      onChange={e => setPayEdit(f => ({ ...f, amount: e.target.value }))}
+                                      className="input-dark text-xs w-24" />
+                                  </td>
+                                  <td className="px-4 py-2">
+                                    <div className="flex flex-wrap gap-1">
+                                      <select value={payEdit.method} onChange={e => setPayEdit(f => ({ ...f, method: e.target.value }))}
+                                        className="input-dark text-xs">
+                                        {RENT_PAYMENT_METHODS.map(m => <option key={m} value={m}>{RENT_PAYMENT_METHOD_LABELS[m]}</option>)}
+                                      </select>
+                                      <select value={payEdit.status} onChange={e => setPayEdit(f => ({ ...f, status: e.target.value }))}
+                                        className="input-dark text-xs">
+                                        <option value="RECEIVED">Received</option>
+                                        <option value="PENDING">Pending</option>
+                                      </select>
+                                      {payEdit.status === 'PENDING' && (
+                                        <input type="date" value={payEdit.expectedDate} title="Expected to disburse"
+                                          onChange={e => setPayEdit(f => ({ ...f, expectedDate: e.target.value }))}
+                                          className="input-dark text-xs w-32" />
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-2">
+                                    <input value={payEdit.notes} onChange={e => setPayEdit(f => ({ ...f, notes: e.target.value }))}
+                                      placeholder="Notes" className="input-dark text-xs w-full min-w-32" />
+                                  </td>
+                                  <td className="px-4 py-2 text-right whitespace-nowrap">
+                                    <button onClick={() => savePaymentEdit(lease.id, p)} disabled={savingPayment}
+                                      className="text-amber-400 hover:text-amber-300 disabled:opacity-40">{savingPayment ? '…' : 'Save'}</button>
+                                    <button onClick={() => setEditPayment(null)} className="text-gray-500 hover:text-gray-300 ml-2">Cancel</button>
+                                  </td>
+                                </tr>
+                              ) : (
+                                <tr key={p.id} className="border-t border-white/5 group">
+                                  <td className="px-4 py-2 text-gray-300 whitespace-nowrap">
+                                    {p.status === 'PENDING'
+                                      ? <span className="text-sky-400">Expected {p.expectedDate ? fmtDate(p.expectedDate) : '—'}</span>
+                                      : fmtDate(p.paidDate)}
+                                  </td>
+                                  <td className={`px-4 py-2 font-medium ${p.status === 'PENDING' ? 'text-sky-400' : 'text-white'}`}>
+                                    {money(Number(p.amount))}
+                                  </td>
                                   <td className="px-4 py-2 text-gray-400">
                                     {RENT_PAYMENT_METHOD_LABELS[p.method as RentPaymentMethod] ?? p.method}
+                                    {p.status === 'PENDING' && <span className="text-sky-400"> · pending</span>}
                                     {p.bankAccount && <span className="text-gray-600"> → {bankLabel(p.bankAccount as BankAccount)}</span>}
                                   </td>
                                   <td className="px-4 py-2 text-gray-500">{p.notes || '—'}</td>
-                                  <td className="px-4 py-2 text-right">
-                                    <button onClick={() => removePayment(lease.id, p)} disabled={deletingPayment === p.id}
-                                      title="Delete this payment"
-                                      className="text-gray-600 hover:text-red-400 disabled:opacity-40">
-                                      {deletingPayment === p.id ? '…' : '✕'}
-                                    </button>
+                                  <td className="px-4 py-2 text-right whitespace-nowrap">
+                                    {p.status === 'PENDING' && (
+                                      <button onClick={() => markReceived(lease.id, p)} disabled={savingPayment}
+                                        title="Mark this money as arrived"
+                                        className="text-emerald-400 hover:text-emerald-300 mr-2 disabled:opacity-40">Received</button>
+                                    )}
+                                    <span className="opacity-0 group-hover:opacity-100 transition-opacity">
+                                      <button onClick={() => openPaymentEdit(p)} className="text-gray-500 hover:text-amber-400">Edit</button>
+                                      <button onClick={() => removePayment(lease.id, p)} disabled={deletingPayment === p.id}
+                                        title="Delete this payment"
+                                        className="text-gray-600 hover:text-red-400 disabled:opacity-40 ml-2">
+                                        {deletingPayment === p.id ? '…' : '✕'}
+                                      </button>
+                                    </span>
                                   </td>
                                 </tr>
                               ))}

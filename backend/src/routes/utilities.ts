@@ -241,7 +241,13 @@ router.get('/:id', async (req, res, next) => {
       include: {
         property: { select: { id: true, address: true, nickname: true, city: true, state: true } },
         statements: { orderBy: { statementDate: 'desc' }, take: 84 },
-        payments: { orderBy: { paymentDate: 'desc' }, take: 200 },
+        payments: {
+          orderBy: { paymentDate: 'desc' }, take: 200,
+          include: {
+            statement: { select: { id: true, statementDate: true, amountDue: true } },
+            bankAccount: { select: { id: true, name: true, bank: true, last4: true } },
+          },
+        },
         loan: true,
       },
     });

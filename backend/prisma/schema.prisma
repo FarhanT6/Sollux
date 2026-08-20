@@ -257,9 +257,16 @@ model Payment {
   confirmationNumber String?
   paymentMethod      String?
   status             PaymentStatus  @default(PAID)
+  // Which of the owner's accounts the bill was paid from.
+  bankAccountId      String?
+  bankAccount        BankAccount?   @relation(fields: [bankAccountId], references: [id], onDelete: SetNull)
   notes              String?
   createdAt          DateTime       @default(now())
+  Lease              Lease?         @relation(fields: [leaseId], references: [id])
+  leaseId            String?
 
+  @@index([utilityAccountId, paymentDate])
+  @@index([bankAccountId])
   @@map("payments")
 }
 
@@ -532,6 +539,7 @@ model Lease {
   leaseTenants         LeaseTenant[]
   rentPayments         RentPayment[]
   legalFees            LegalFee[]
+  utilityPayments      Payment[]
   rentNotices          RentNotice[]
   rentChanges          RentChange[]
   scheduledIncreases   ScheduledRentIncrease[]
@@ -636,6 +644,11 @@ model RentPayment {
   appliedToArrears Decimal           @default(0) @db.Decimal(10, 2)
   paidDate         DateTime
   method           RentPaymentMethod @default(OTHER)
+  // PENDING money is committed but not received: it must not count toward the
+  // month's rent or pay down arrears until it actually arrives.
+  status           RentPaymentStatus @default(RECEIVED)
+  // When a pending payment is expected to disburse.
+  expectedDate     DateTime?
   // Which of the owner's accounts the money landed in. Set for BANK_DEPOSIT,
   // and optionally for any other method the owner wants to attribute. Kept
   // nullable and SetNull so removing a bank account never destroys payments.
@@ -649,6 +662,11 @@ model RentPayment {
   @@map("rent_payments")
 }
 
+enum RentPaymentStatus {
+  PENDING
+  RECEIVED
+}
+
 enum RentPaymentMethod {
   CASH
   CHECK
@@ -660,6 +678,12 @@ enum RentPaymentMethod {
   PAYPAL
   CASH_APP
   APPLE_CASH
+  // Housing Choice Voucher — the housing authority's portion, paid directly
+  // to the landlord and separate from the tenant's share.
+  SECTION_8
+  // ERAP, county and charity programs. Often approved long before the money
+  // lands, which is why RentPayment carries a status.
+  RENTAL_ASSISTANCE
   // Handed over / deposited directly into one of the owner's accounts. Which
   // account is recorded on RentPayment.bankAccountId.
   BANK_DEPOSIT
@@ -1203,6 +1227,7 @@ model BankAccount {
   outgoingTransactions OutgoingTransaction[]
   rentPayments         RentPayment[]
   LegalFee             LegalFee[]
+  Payment              Payment[]
 
   @@index([userId])
   @@index([plaidItemId])
