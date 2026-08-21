@@ -94,6 +94,17 @@ function documentMarkerFor(relPath: string): string | null {
   return null;
 }
 
+/**
+ * Will this extraction failure repeat for every remaining file?
+ *
+ * A bad API key or an exhausted credit balance fails identically on all 747
+ * PDFs. Stopping on the first one costs a second instead of an hour, and
+ * makes the cause obvious rather than burying it in a wall of per-file errors.
+ */
+function isFatalExtractionError(message: string): boolean {
+  return /authentication_error|invalid x-api-key|api key|permission_error|credit balance|401|403/i.test(message);
+}
+
 function categoryForFolder(folderName: string): string | null {
   const lower = folderName.toLowerCase();
   for (const [key, category] of Object.entries(CATEGORY_FOLDER_MAP)) {
@@ -217,7 +228,26 @@ async function main() {
 
   const skippedFolders = new Set<string>();
   let imported = 0, updated = 0, skipped = 0, errored = 0, personalImported = 0, personalSkipped = 0;
-  let docsImported = 0, docsSkipped = 0;
+  let docsImported = 0, docsSkipped = 0, extractionFailed = 0;
+
+  /**
+   * Record a file whose extraction failed, and stop the run outright if the
+   * cause will apply to every remaining file.
+   */
+  const failExtraction = (relPath: string, message: string) => {
+    extractionFailed++;
+    console.error(`  [extraction failed, not imported] ${relPath}: ${message}`);
+    if (!isFatalExtractionError(message)) return;
+    console.error('\n─────────────────────────────────────────────');
+    console.error('Stopping: this failure will repeat for every remaining file.');
+    if (method === 'ai') {
+      console.error('AI extraction needs a working ANTHROPIC_API_KEY in backend/.env.');
+      console.error('Fix the key, or re-run without --ai to use the free regex extractor.');
+    }
+    console.error(`Nothing was written${dryRun ? ' (dry run)' : ''}. ${extractionFailed} file(s) failed.`);
+    console.error('─────────────────────────────────────────────');
+    process.exit(1);
+  };
 
   for (const file of files) {
     const docCategory = documentMarkerFor(file.relPath);
@@ -262,7 +292,8 @@ async function main() {
     if (isPersonalFolder(file.categoryFolder)) {
       try {
         const buffer = fs.readFileSync(file.filePath);
-        const { extracted: ex } = await parseBill(buffer, file.filename, dbUserId, method);
+        const { extracted: ex, error: parseError } = await parseBill(buffer, file.filename, dbUserId, method);
+        if (parseError) { failExtraction(file.relPath, parseError); continue; }
         const filenameDate = parseDateFromFilename(file.filename);
         const date = ex.statementDate ? new Date(ex.statementDate) : (filenameDate ?? new Date());
         const amount = ex.amountDue ?? ex.currentCharges ?? 0;
@@ -305,7 +336,12 @@ async function main() {
 
     try {
       const buffer = fs.readFileSync(file.filePath);
-      const { extracted: ex } = await parseBill(buffer, file.filename, dbUserId, method);
+      const { extracted: ex, error: parseError } = await parseBill(buffer, file.filename, dbUserId, method);
+      // An extraction that threw returns an all-null result, not a bill. Writing
+      // that produces a statement row carrying nothing but a date guessed from
+      // the filename — worse than no row, because it looks like real data and
+      // blocks the month from being re-imported later.
+      if (parseError) { failExtraction(file.relPath, parseError); continue; }
 
       // Resolve the utility account explicitly by (property, category) — we
       // already know both from the folder structure, which is more reliable
@@ -422,6 +458,10 @@ async function main() {
   }
 
   console.log(`\nDone. Statements — imported ${imported}, updated ${updated}, skipped ${skipped}. Personal expenses — imported ${personalImported}, skipped (already existed) ${personalSkipped}. Documents — imported ${docsImported}, skipped (already existed) ${docsSkipped}. Errors ${errored}.`);
+  if (extractionFailed > 0) {
+    console.log(`\n⚠  ${extractionFailed} file(s) could not be extracted and were NOT imported.`);
+    console.log('   Re-run once the cause is fixed — nothing was written for them, so no month is blocked.');
+  }
   if (skippedFolders.size) {
     console.log(`Skipped folders (no category mapping — add them to CATEGORY_FOLDER_MAP if they should be included): ${[...skippedFolders].join(', ')}`);
   }
