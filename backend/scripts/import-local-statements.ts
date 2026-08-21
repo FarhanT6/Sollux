@@ -175,7 +175,16 @@ async function main() {
   const user = await db.user.findUnique({ where: { email } });
   if (!user) { console.error(`No user found with email ${email}`); process.exit(1); }
 
-  const properties = await db.property.findMany({ where: { userId: user.id } });
+  // Members of a shared account own nothing themselves — every property,
+  // document and expense hangs off the owner's id. This is the same
+  // resolution the API does (req.dbUserId = user.ownerUserId ?? user.id);
+  // without it, signing in as a member finds zero properties.
+  const dbUserId = user.ownerUserId ?? user.id;
+  if (user.ownerUserId) {
+    console.log(`${email} is a member of a shared account — using owner ${dbUserId}.`);
+  }
+
+  const properties = await db.property.findMany({ where: { userId: dbUserId } });
   const property = properties.find(p =>
     p.address.toLowerCase().includes(propertyQuery.toLowerCase()) ||
     (p.nickname || '').toLowerCase().includes(propertyQuery.toLowerCase())
@@ -207,7 +216,7 @@ async function main() {
       try {
         const title = file.filename.replace(/\.pdf$/i, '');
         const existingDoc = await db.document.findFirst({
-          where: { userId: user.id, propertyId: property.id, title },
+          where: { userId: dbUserId, propertyId: property.id, title },
         });
         if (existingDoc) {
           console.log(`  [doc, skip exists] ${file.relPath}`);
@@ -218,11 +227,11 @@ async function main() {
         console.log(`  [document, ${docCategory}] ${file.relPath}`);
         if (!dryRun) {
           const buffer = fs.readFileSync(file.filePath);
-          const key = `${user.id}/documents/${property.id}/${Date.now()}_${sanitizeFilename(file.filename)}`;
+          const key = `${dbUserId}/documents/${property.id}/${Date.now()}_${sanitizeFilename(file.filename)}`;
           const s3Url = await uploadDocument(key, buffer);
           await db.document.create({
             data: {
-              userId: user.id,
+              userId: dbUserId,
               propertyId: property.id,
               category: docCategory as any,
               title,
@@ -244,14 +253,14 @@ async function main() {
     if (isPersonalFolder(file.categoryFolder)) {
       try {
         const buffer = fs.readFileSync(file.filePath);
-        const { extracted: ex } = await parseBill(buffer, file.filename, user.id, method);
+        const { extracted: ex } = await parseBill(buffer, file.filename, dbUserId, method);
         const filenameDate = parseDateFromFilename(file.filename);
         const date = ex.statementDate ? new Date(ex.statementDate) : (filenameDate ?? new Date());
         const amount = ex.amountDue ?? ex.currentCharges ?? 0;
         const vendor = ex.providerName || file.categoryFolder;
 
         const existing = await db.expense.findFirst({
-          where: { userId: user.id, isPersonal: true, vendor, date, amount },
+          where: { userId: dbUserId, isPersonal: true, vendor, date, amount },
         });
         if (existing) {
           console.log(`  [skip, exists] ${file.categoryFolder}/${file.filename}`);
@@ -263,7 +272,7 @@ async function main() {
         if (!dryRun) {
           await db.expense.create({
             data: {
-              userId: user.id,
+              userId: dbUserId,
               propertyId: null,
               category: 'OTHER',
               amount,
@@ -287,7 +296,7 @@ async function main() {
 
     try {
       const buffer = fs.readFileSync(file.filePath);
-      const { extracted: ex } = await parseBill(buffer, file.filename, user.id, method);
+      const { extracted: ex } = await parseBill(buffer, file.filename, dbUserId, method);
 
       // Resolve the utility account explicitly by (property, category) — we
       // already know both from the folder structure, which is more reliable
@@ -345,7 +354,7 @@ async function main() {
 
       if (dryRun) { existing ? updated++ : imported++; continue; }
 
-      const s3Key = buildStatementKey(user.id, property.id, account.id, statementDate, sanitizeFilename(file.filename));
+      const s3Key = buildStatementKey(dbUserId, property.id, account.id, statementDate, sanitizeFilename(file.filename));
       const pdfS3Key = await uploadDocument(s3Key, buffer);
 
       const rawData: Record<string, unknown> = {
