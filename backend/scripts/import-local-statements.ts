@@ -172,6 +172,15 @@ async function main() {
     process.exit(1);
   }
 
+  // Checked before touching the database so a mistyped path fails in one
+  // readable line rather than as an ENOENT stack trace after the lookups.
+  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
+    console.error(`--dir "${dir}" is not a folder on this machine.`);
+    console.error('Point it at the folder holding your bills, organised as <root>/<Category>/[<Year>/]<file>.pdf.');
+    console.error('Tip: type --dir then drag the folder from Finder into the terminal to paste its real path.');
+    process.exit(1);
+  }
+
   const user = await db.user.findUnique({ where: { email } });
   if (!user) { console.error(`No user found with email ${email}`); process.exit(1); }
 
