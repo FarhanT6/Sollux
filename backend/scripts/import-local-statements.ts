@@ -47,6 +47,7 @@ import path from 'path';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { parseBill } from '../src/services/pdfImportService';
 import { uploadDocument, buildStatementKey } from '../src/services/s3Service';
+import { findOrCreateUtilityAccount } from '../src/services/utilityAccountResolver';
 
 const db = new PrismaClient();
 
@@ -292,37 +293,28 @@ async function main() {
       // already know both from the folder structure, which is more reliable
       // than the extractor's generic address-matching for docs (loan
       // statements, HOA notices) that don't mention the property address.
-      let account = await db.utilityAccount.findFirst({
-        where: {
+      // Resolve through the same helper the Drive import uses, so both paths
+      // dedupe identically: an exact provider slug, or a name that matches once
+      // punctuation is stripped ("SDGE" / "SDG&E" / "San Diego Gas & Electric"),
+      // but only within the same category — so a property's several credit
+      // cards, loans or policies stay separate accounts.
+      const providerName = ex.providerName || file.categoryFolder;
+      let account: { id: string } | null = null;
+      if (dryRun) {
+        account = await db.utilityAccount.findFirst({
+          where: { propertyId: property.id, category: category as any },
+          select: { id: true },
+        });
+        if (!account) console.log(`  [would create account] ${category} / ${providerName}`);
+      } else {
+        const resolved = await findOrCreateUtilityAccount({
           propertyId: property.id,
-          category: category as any,
-          ...(ex.providerName ? { providerName: { contains: ex.providerName, mode: 'insensitive' } } : {}),
-        },
-      });
-      // Categories that legitimately hold several distinct accounts per
-      // property (multiple credit cards, multiple loans, multiple policies)
-      // must NOT fall back to "any account in this category" when the
-      // provider name doesn't match — that silently merges unrelated
-      // accounts' statements together. Only single-account-per-property
-      // categories (WATER, ELECTRIC, etc.) get that fallback.
-      const MULTI_ACCOUNT_CATEGORIES = new Set(['LOAN', 'CREDIT_CARD', 'INSURANCE']);
-      if (!account && !MULTI_ACCOUNT_CATEGORIES.has(category)) {
-        account = await db.utilityAccount.findFirst({ where: { propertyId: property.id, category: category as any } });
-      }
-
-      if (!account) {
-        const providerName = ex.providerName || file.categoryFolder;
-        console.log(`  [create account] ${category} / ${providerName}`);
-        if (!dryRun) {
-          account = await db.utilityAccount.create({
-            data: {
-              propertyId: property.id,
-              providerName,
-              providerSlug: toSlug(providerName),
-              category: category as any,
-            },
-          });
-        }
+          providerName,
+          category,
+          accountNumber: ex.accountNumber,
+        });
+        if (resolved.created) console.log(`  [create account] ${category} / ${providerName}`);
+        account = { id: resolved.id };
       }
 
       const filenameDate = parseDateFromFilename(file.filename);

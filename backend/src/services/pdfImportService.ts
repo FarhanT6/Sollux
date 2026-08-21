@@ -8,6 +8,7 @@
 import fs from 'fs';
 import path from 'path';
 import Anthropic from '@anthropic-ai/sdk';
+import { providersLookAlike } from './providerMatch';
 import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';
 
@@ -896,10 +897,10 @@ export async function matchToAccount(
     if (addrMatches.length > 0) {
       // Also try to match provider name
       if (extracted.providerName) {
-        const normProvider = extracted.providerName.toLowerCase();
+        // Shared matcher rather than substring: an account stored as
+        // "San Diego Gas & Electric" has to match a bill saying "SDGE".
         const withProvider = addrMatches.filter(a =>
-          a.providerName.toLowerCase().includes(normProvider) ||
-          normProvider.includes(a.providerName.toLowerCase())
+          providersLookAlike(a.providerName, extracted.providerName!)
         );
         if (withProvider.length === 1) {
           const acct = withProvider[0];
@@ -953,10 +954,8 @@ export async function matchToAccount(
 
   // ── 3. Provider name only (single account for this provider) ──────────────
   if (extracted.providerName) {
-    const normProvider = extracted.providerName.toLowerCase();
     const providerMatches = accounts.filter(a =>
-      a.providerName.toLowerCase().includes(normProvider) ||
-      normProvider.includes(a.providerName.toLowerCase())
+      providersLookAlike(a.providerName, extracted.providerName!)
     );
     if (providerMatches.length === 1) {
       const acct = providerMatches[0];

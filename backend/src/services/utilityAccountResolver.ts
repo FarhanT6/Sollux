@@ -1,5 +1,6 @@
 import { db } from '../config/db';
 import { encryptOptional } from '../crypto/encrypt';
+import { providersLookAlike } from './providerMatch';
 
 /**
  * Find or create the utility account a bill belongs to.
@@ -42,18 +43,7 @@ export function toSlug(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60);
 }
 
-// Provider names vary between bills of the same provider ("SDGE", "SDG&E",
-// "San Diego Gas & Electric"). Comparing the letters alone catches most of it.
-function providerKey(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]/g, '');
-}
 
-function providersLookAlike(a: string, b: string): boolean {
-  const x = providerKey(a);
-  const y = providerKey(b);
-  if (!x || !y) return false;
-  return x === y || x.includes(y) || y.includes(x);
-}
 
 export interface ResolveAccountInput {
   propertyId: string;
