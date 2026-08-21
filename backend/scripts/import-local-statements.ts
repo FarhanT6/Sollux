@@ -44,12 +44,13 @@
 import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
-import { PrismaClient, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { parseBill } from '../src/services/pdfImportService';
 import { uploadDocument, buildStatementKey } from '../src/services/s3Service';
 import { findOrCreateUtilityAccount } from '../src/services/utilityAccountResolver';
-
-const db = new PrismaClient();
+// The shared client, not a second one: two pools against the same database
+// doubles the connections a bulk run holds open, and Neon counts them.
+import { db } from '../src/config/db';
 
 const CATEGORY_FOLDER_MAP: Record<string, string> = {
   water: 'WATER',
