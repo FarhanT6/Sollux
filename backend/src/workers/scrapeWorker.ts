@@ -4,7 +4,8 @@ import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';
 import { getScraperProvider } from '../scrapers/registry';
 import { uploadDocument, buildStatementKey } from '../services/s3Service';
-import { insightQueue, createWorkerConnection } from './queues';
+import { guardWorker } from './redisGuard';
+import { insightQueue, createWorkerConnection, workerTuning } from './queues';
 
 interface ScrapeJobData {
   utilityAccountId: string;
@@ -371,6 +372,7 @@ const worker = new Worker<ScrapeJobData>(
   {
     connection: createWorkerConnection(),
     concurrency: 3,
+    ...workerTuning,
   }
 );
 
@@ -382,6 +384,6 @@ worker.on('failed', (job, err) => {
   console.error(`[ScrapeWorker] Job ${job?.id} failed:`, err.message);
 });
 
-worker.on('error', (err) => console.error('[ScrapeWorker] Worker error:', err.message));
+guardWorker('ScrapeWorker', worker);
 
 export default worker;

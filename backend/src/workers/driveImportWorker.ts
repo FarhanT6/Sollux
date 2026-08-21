@@ -1,7 +1,8 @@
 import { Worker, Job } from 'bullmq';
 import { google, drive_v3 } from 'googleapis';
 import { Prisma } from '@prisma/client';
-import { createWorkerConnection } from './queues';
+import { guardWorker } from './redisGuard';
+import { createWorkerConnection, workerTuning } from './queues';
 import { db } from '../config/db';
 import { parseBill } from '../services/pdfImportService';
 import { findOrCreateUtilityAccount } from '../services/utilityAccountResolver';
@@ -287,11 +288,11 @@ const worker = new Worker<DriveImportJobData>(
       });
     }
   },
-  { connection: createWorkerConnection(), concurrency: 1 }
+  { connection: createWorkerConnection(), concurrency: 1, ...workerTuning }
 );
 
 worker.on('completed', job => console.log(`[DriveImportWorker] Job ${job.id} completed`));
 worker.on('failed', (job, err) => console.error(`[DriveImportWorker] Job ${job?.id} failed:`, err.message));
-worker.on('error', (err) => console.error('[DriveImportWorker] Worker error:', err.message));
+guardWorker('DriveImportWorker', worker);
 
 export default worker;
