@@ -1418,25 +1418,61 @@ export default function ImportPage() {
 
     setStage('importing');
 
-    try {
-      const items = ready.map(b => ({
-        filename:         b.filename,
-        fileData:         b.fileData,
-        extracted:        b.extracted,
-        match:            b.match,
-        utilityAccountId: b.match.utilityAccountId || null,
-        propertyId:       b.addToPropertyId || null,
-        newProperty:      b.newProperty,
-        newAccount:       b.newAccount,
-      }));
+    const toItem = (b: ParsedBill) => ({
+      filename:         b.filename,
+      fileData:         b.fileData,
+      extracted:        b.extracted,
+      match:            b.match,
+      utilityAccountId: b.match.utilityAccountId || null,
+      propertyId:       b.addToPropertyId || null,
+      newProperty:      b.newProperty,
+      newAccount:       b.newAccount,
+    });
 
-      const res = await api.post('/import/confirm', { items });
-      setResult(res.data);
-      setStage('done');
-    } catch (err) {
-      console.error(err);
-      setStage('review');
+    // Submit in batches rather than one request. Every item carries its PDF as
+    // base64 and the server uploads each to S3 before responding, so forty
+    // bills meant a ~10MB payload and forty round-trips inside one request —
+    // which times out, taking the whole batch with it and losing the manual
+    // assignments behind it.
+    //
+    // Batching means a failure costs one batch, the rest are already saved,
+    // and whatever did not land stays on screen to retry.
+    const CONFIRM_BATCH = 5;
+    const totals = { imported: 0, skipped: 0, errors: [] as string[] };
+    const failed: ParsedBill[] = [];
+
+    for (let i = 0; i < ready.length; i += CONFIRM_BATCH) {
+      const batch = ready.slice(i, i + CONFIRM_BATCH);
+      setProgress(`Filing ${Math.min(i + batch.length, ready.length)} / ${ready.length}...`);
+      try {
+        const res = await api.post('/import/confirm', { items: batch.map(toItem) });
+        totals.imported += res.data?.imported ?? 0;
+        totals.skipped  += res.data?.skipped ?? 0;
+        if (Array.isArray(res.data?.errors)) totals.errors.push(...res.data.errors);
+      } catch (err: any) {
+        console.error('confirm batch failed', err);
+        failed.push(...batch);
+        const detail = err?.response?.data?.error ?? err?.message ?? 'request failed';
+        totals.errors.push(`${batch.length} file(s) failed: ${detail}`);
+      }
     }
+
+    setProgress('');
+    setResult(totals);
+
+    if (failed.length > 0) {
+      // Keep the ones that did not land, with their assignments intact, so the
+      // work of assigning them is not thrown away.
+      const failedNames = new Set(failed.map(f => f.filename));
+      setBills(prev => prev.filter(b => failedNames.has(b.filename)));
+      setDriveNote(
+        `${totals.imported} filed. ${failed.length} could not be saved and are still listed below — press Confirm again to retry just those.`
+      );
+      setStage('review');
+      return;
+    }
+
+    setStage('done');
   };
 
   const reset = () => {
