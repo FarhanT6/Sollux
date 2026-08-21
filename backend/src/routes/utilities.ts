@@ -240,7 +240,12 @@ router.get('/:id', async (req, res, next) => {
       where: { id: req.params.id, property: { userId: req.dbUserId! } },
       include: {
         property: { select: { id: true, address: true, nickname: true, city: true, state: true } },
-        statements: { orderBy: { statementDate: 'desc' }, take: 84 },
+        // Was capped at 84 (seven years of monthly bills), which silently
+        // truncated a longer history — and the page's totals are computed from
+        // this array, so the stat cards were wrong too, not just the list.
+        // A decade of monthly bills is ~120 rows; this is a sanity guard, not
+        // a display limit.
+        statements: { orderBy: { statementDate: 'desc' }, take: 600 },
         payments: {
           orderBy: { paymentDate: 'desc' }, take: 200,
           include: {

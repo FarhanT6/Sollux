@@ -38,7 +38,9 @@ router.get('/', async (req, res, next) => {
     const statements = await db.statement.findMany({
       where,
       orderBy: { statementDate: 'desc' },
-      take: 100,
+      // A property with several accounts and years of history passes 100
+      // easily; the callers use this to compute property-level totals.
+      take: 1000,
       include: {
         utilityAccount: {
           select: { providerName: true, category: true, property: { select: { address: true, nickname: true } } },

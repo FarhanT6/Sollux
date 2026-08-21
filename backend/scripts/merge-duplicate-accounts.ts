@@ -20,12 +20,9 @@ const APPLY = process.argv.includes('--apply');
 const PROPERTY_ID = process.argv[process.argv.indexOf('--property') + 1];
 const ONLY_PROPERTY = process.argv.includes('--property') ? PROPERTY_ID : null;
 
-// Same rule the importer now uses, so this groups exactly what it would.
-const providerKey = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, '');
-const alike = (a: string, b: string) => {
-  const x = providerKey(a), y = providerKey(b);
-  return !!x && !!y && (x === y || x.includes(y) || y.includes(x));
-};
+// The importer's own matcher, so this consolidates exactly what it would
+// treat as one account — acronyms and abbreviations included.
+import { providersLookAlike as alike } from '../src/services/providerMatch';
 
 const monthKey = (d: Date) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 

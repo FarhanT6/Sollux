@@ -44,11 +44,13 @@
 import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
-import { PrismaClient, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { parseBill } from '../src/services/pdfImportService';
 import { uploadDocument, buildStatementKey } from '../src/services/s3Service';
-
-const db = new PrismaClient();
+import { findOrCreateUtilityAccount } from '../src/services/utilityAccountResolver';
+// The shared client, not a second one: two pools against the same database
+// doubles the connections a bulk run holds open, and Neon counts them.
+import { db } from '../src/config/db';
 
 const CATEGORY_FOLDER_MAP: Record<string, string> = {
   water: 'WATER',
@@ -91,6 +93,17 @@ function documentMarkerFor(relPath: string): string | null {
     if (pattern.test(relPath)) return category;
   }
   return null;
+}
+
+/**
+ * Will this extraction failure repeat for every remaining file?
+ *
+ * A bad API key or an exhausted credit balance fails identically on all 747
+ * PDFs. Stopping on the first one costs a second instead of an hour, and
+ * makes the cause obvious rather than burying it in a wall of per-file errors.
+ */
+function isFatalExtractionError(message: string): boolean {
+  return /authentication_error|invalid x-api-key|api key|permission_error|credit balance|401|403/i.test(message);
 }
 
 function categoryForFolder(folderName: string): string | null {
@@ -171,10 +184,28 @@ async function main() {
     process.exit(1);
   }
 
+  // Checked before touching the database so a mistyped path fails in one
+  // readable line rather than as an ENOENT stack trace after the lookups.
+  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
+    console.error(`--dir "${dir}" is not a folder on this machine.`);
+    console.error('Point it at the folder holding your bills, organised as <root>/<Category>/[<Year>/]<file>.pdf.');
+    console.error('Tip: type --dir then drag the folder from Finder into the terminal to paste its real path.');
+    process.exit(1);
+  }
+
   const user = await db.user.findUnique({ where: { email } });
   if (!user) { console.error(`No user found with email ${email}`); process.exit(1); }
 
-  const properties = await db.property.findMany({ where: { userId: user.id } });
+  // Members of a shared account own nothing themselves — every property,
+  // document and expense hangs off the owner's id. This is the same
+  // resolution the API does (req.dbUserId = user.ownerUserId ?? user.id);
+  // without it, signing in as a member finds zero properties.
+  const dbUserId = user.ownerUserId ?? user.id;
+  if (user.ownerUserId) {
+    console.log(`${email} is a member of a shared account — using owner ${dbUserId}.`);
+  }
+
+  const properties = await db.property.findMany({ where: { userId: dbUserId } });
   const property = properties.find(p =>
     p.address.toLowerCase().includes(propertyQuery.toLowerCase()) ||
     (p.nickname || '').toLowerCase().includes(propertyQuery.toLowerCase())
@@ -198,7 +229,26 @@ async function main() {
 
   const skippedFolders = new Set<string>();
   let imported = 0, updated = 0, skipped = 0, errored = 0, personalImported = 0, personalSkipped = 0;
-  let docsImported = 0, docsSkipped = 0;
+  let docsImported = 0, docsSkipped = 0, extractionFailed = 0;
+
+  /**
+   * Record a file whose extraction failed, and stop the run outright if the
+   * cause will apply to every remaining file.
+   */
+  const failExtraction = (relPath: string, message: string) => {
+    extractionFailed++;
+    console.error(`  [extraction failed, not imported] ${relPath}: ${message}`);
+    if (!isFatalExtractionError(message)) return;
+    console.error('\n─────────────────────────────────────────────');
+    console.error('Stopping: this failure will repeat for every remaining file.');
+    if (method === 'ai') {
+      console.error('AI extraction needs a working ANTHROPIC_API_KEY in backend/.env.');
+      console.error('Fix the key, or re-run without --ai to use the free regex extractor.');
+    }
+    console.error(`Nothing was written${dryRun ? ' (dry run)' : ''}. ${extractionFailed} file(s) failed.`);
+    console.error('─────────────────────────────────────────────');
+    process.exit(1);
+  };
 
   for (const file of files) {
     const docCategory = documentMarkerFor(file.relPath);
@@ -206,7 +256,7 @@ async function main() {
       try {
         const title = file.filename.replace(/\.pdf$/i, '');
         const existingDoc = await db.document.findFirst({
-          where: { userId: user.id, propertyId: property.id, title },
+          where: { userId: dbUserId, propertyId: property.id, title },
         });
         if (existingDoc) {
           console.log(`  [doc, skip exists] ${file.relPath}`);
@@ -217,11 +267,11 @@ async function main() {
         console.log(`  [document, ${docCategory}] ${file.relPath}`);
         if (!dryRun) {
           const buffer = fs.readFileSync(file.filePath);
-          const key = `${user.id}/documents/${property.id}/${Date.now()}_${sanitizeFilename(file.filename)}`;
+          const key = `${dbUserId}/documents/${property.id}/${Date.now()}_${sanitizeFilename(file.filename)}`;
           const s3Url = await uploadDocument(key, buffer);
           await db.document.create({
             data: {
-              userId: user.id,
+              userId: dbUserId,
               propertyId: property.id,
               category: docCategory as any,
               title,
@@ -243,14 +293,15 @@ async function main() {
     if (isPersonalFolder(file.categoryFolder)) {
       try {
         const buffer = fs.readFileSync(file.filePath);
-        const { extracted: ex } = await parseBill(buffer, file.filename, user.id, method);
+        const { extracted: ex, error: parseError } = await parseBill(buffer, file.filename, dbUserId, method);
+        if (parseError) { failExtraction(file.relPath, parseError); continue; }
         const filenameDate = parseDateFromFilename(file.filename);
         const date = ex.statementDate ? new Date(ex.statementDate) : (filenameDate ?? new Date());
         const amount = ex.amountDue ?? ex.currentCharges ?? 0;
         const vendor = ex.providerName || file.categoryFolder;
 
         const existing = await db.expense.findFirst({
-          where: { userId: user.id, isPersonal: true, vendor, date, amount },
+          where: { userId: dbUserId, isPersonal: true, vendor, date, amount },
         });
         if (existing) {
           console.log(`  [skip, exists] ${file.categoryFolder}/${file.filename}`);
@@ -262,7 +313,7 @@ async function main() {
         if (!dryRun) {
           await db.expense.create({
             data: {
-              userId: user.id,
+              userId: dbUserId,
               propertyId: null,
               category: 'OTHER',
               amount,
@@ -286,43 +337,39 @@ async function main() {
 
     try {
       const buffer = fs.readFileSync(file.filePath);
-      const { extracted: ex } = await parseBill(buffer, file.filename, user.id, method);
+      const { extracted: ex, error: parseError } = await parseBill(buffer, file.filename, dbUserId, method);
+      // An extraction that threw returns an all-null result, not a bill. Writing
+      // that produces a statement row carrying nothing but a date guessed from
+      // the filename — worse than no row, because it looks like real data and
+      // blocks the month from being re-imported later.
+      if (parseError) { failExtraction(file.relPath, parseError); continue; }
 
       // Resolve the utility account explicitly by (property, category) — we
       // already know both from the folder structure, which is more reliable
       // than the extractor's generic address-matching for docs (loan
       // statements, HOA notices) that don't mention the property address.
-      let account = await db.utilityAccount.findFirst({
-        where: {
+      // Resolve through the same helper the Drive import uses, so both paths
+      // dedupe identically: an exact provider slug, or a name that matches once
+      // punctuation is stripped ("SDGE" / "SDG&E" / "San Diego Gas & Electric"),
+      // but only within the same category — so a property's several credit
+      // cards, loans or policies stay separate accounts.
+      const providerName = ex.providerName || file.categoryFolder;
+      let account: { id: string } | null = null;
+      if (dryRun) {
+        account = await db.utilityAccount.findFirst({
+          where: { propertyId: property.id, category: category as any },
+          select: { id: true },
+        });
+        if (!account) console.log(`  [would create account] ${category} / ${providerName}`);
+      } else {
+        const resolved = await findOrCreateUtilityAccount({
           propertyId: property.id,
-          category: category as any,
-          ...(ex.providerName ? { providerName: { contains: ex.providerName, mode: 'insensitive' } } : {}),
-        },
-      });
-      // Categories that legitimately hold several distinct accounts per
-      // property (multiple credit cards, multiple loans, multiple policies)
-      // must NOT fall back to "any account in this category" when the
-      // provider name doesn't match — that silently merges unrelated
-      // accounts' statements together. Only single-account-per-property
-      // categories (WATER, ELECTRIC, etc.) get that fallback.
-      const MULTI_ACCOUNT_CATEGORIES = new Set(['LOAN', 'CREDIT_CARD', 'INSURANCE']);
-      if (!account && !MULTI_ACCOUNT_CATEGORIES.has(category)) {
-        account = await db.utilityAccount.findFirst({ where: { propertyId: property.id, category: category as any } });
-      }
-
-      if (!account) {
-        const providerName = ex.providerName || file.categoryFolder;
-        console.log(`  [create account] ${category} / ${providerName}`);
-        if (!dryRun) {
-          account = await db.utilityAccount.create({
-            data: {
-              propertyId: property.id,
-              providerName,
-              providerSlug: toSlug(providerName),
-              category: category as any,
-            },
-          });
-        }
+          providerName,
+          category,
+          accountNumber: ex.accountNumber,
+        });
+        if (resolved.created) console.log(`  [create account] ${category} / ${providerName}`);
+        account = { id: resolved.id };
       }
 
       const filenameDate = parseDateFromFilename(file.filename);
@@ -353,7 +400,7 @@ async function main() {
 
       if (dryRun) { existing ? updated++ : imported++; continue; }
 
-      const s3Key = buildStatementKey(user.id, property.id, account.id, statementDate, sanitizeFilename(file.filename));
+      const s3Key = buildStatementKey(dbUserId, property.id, account.id, statementDate, sanitizeFilename(file.filename));
       const pdfS3Key = await uploadDocument(s3Key, buffer);
 
       const rawData: Record<string, unknown> = {
@@ -412,6 +459,10 @@ async function main() {
   }
 
   console.log(`\nDone. Statements — imported ${imported}, updated ${updated}, skipped ${skipped}. Personal expenses — imported ${personalImported}, skipped (already existed) ${personalSkipped}. Documents — imported ${docsImported}, skipped (already existed) ${docsSkipped}. Errors ${errored}.`);
+  if (extractionFailed > 0) {
+    console.log(`\n⚠  ${extractionFailed} file(s) could not be extracted and were NOT imported.`);
+    console.log('   Re-run once the cause is fixed — nothing was written for them, so no month is blocked.');
+  }
   if (skippedFolders.size) {
     console.log(`Skipped folders (no category mapping — add them to CATEGORY_FOLDER_MAP if they should be included): ${[...skippedFolders].join(', ')}`);
   }
