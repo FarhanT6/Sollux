@@ -86,6 +86,10 @@ const CONFIDENCE_LABELS: Record<string, string> = {
   none:   'No match found',
 };
 
+// A pending selection is not a database id, so it is prefixed to keep the two
+// apart in the same <select>.
+const PENDING_PREFIX = 'pending:';
+
 const UTILITY_TYPE_TO_CATEGORY: Record<string, string> = {
   electric: 'ELECTRIC',
   gas:      'GAS',
@@ -739,6 +743,8 @@ function BillCard({
   onRemove,
   sameProviderBills,
   onApplyTo,
+  pendingAccounts,
+  onPickPending,
 }: {
   bill:               ParsedBill;
   properties:         PropertyWithAccounts[];
@@ -748,6 +754,9 @@ function BillCard({
   onRemove:           () => void;
   sameProviderBills:  ParsedBill[];
   onApplyTo:          (filenames: string[] | 'all') => void;
+  // Accounts other cards in this batch are about to create.
+  pendingAccounts:    { key: string; propertyId: string; propertyLabel: string; account: NewAccountPayload }[];
+  onPickPending:      (propertyId: string, account: NewAccountPayload) => void;
 }) {
   const { extracted: ex, match, error } = bill;
   const confColor = CONFIDENCE_COLORS[match.confidence];
@@ -758,6 +767,30 @@ function BillCard({
   const [selectedAcctId, setSelectedAcctId]           = useState(match.utilityAccountId || '');
   const [mode, setMode]                               = useState<CardMode>(defaultMode);
   const [applied, setApplied]                         = useState(false);
+
+  // "Apply to all" rewrites the assignment on the bill objects in the parent,
+  // but this card is keyed by filename, so React keeps the same instance and
+  // these useState initialisers never run again. Without this the data was
+  // updated while the card carried on showing its old unassigned state — which
+  // read as "apply to all did nothing".
+  const assignmentKey =
+    `${bill.match.utilityAccountId ?? ''}|${bill.addToPropertyId ?? ''}|` +
+    `${bill.newAccount?.providerName ?? ''}|${bill.newProperty?.address ?? ''}`;
+  useEffect(() => {
+    if (bill.match.utilityAccountId) {
+      setSelectedAcctId(bill.match.utilityAccountId);
+      setMode('select');
+      setApplied(true);
+    } else if (bill.addToPropertyId && bill.newAccount) {
+      setMode('add-existing');
+      setApplied(true);
+    } else if (bill.newProperty && bill.newAccount) {
+      setMode('new');
+      setApplied(true);
+    }
+    if (bill.newAccount) setAcctForm(bill.newAccount);
+    if (bill.newProperty) setPropForm(bill.newProperty);
+  }, [assignmentKey]);
   const [resolvedPropertyName, setResolvedPropertyName] = useState<string | null>(null);
   const [showApplyPanel, setShowApplyPanel]           = useState(false);
   const [selectedForApply, setSelectedForApply]       = useState<Set<string>>(new Set());
@@ -780,6 +813,18 @@ function BillCard({
   });
 
   const handleAcctSelect = (v: string) => {
+    if (v.startsWith(PENDING_PREFIX)) {
+      // Joining an account another card is creating: adopt its property and
+      // payload so both resolve to the same account server-side.
+      const pending = pendingAccounts.find(p => PENDING_PREFIX + p.key === v);
+      if (pending) {
+        setAcctForm(pending.account);
+        setMode('add-existing');
+        setApplied(true);
+        onPickPending(pending.propertyId, pending.account);
+      }
+      return;
+    }
     setSelectedAcctId(v);
     setMode('select');
     setApplied(false);
@@ -1050,6 +1095,19 @@ function BillCard({
                       ))}
                     </optgroup>
                   ))}
+                  {/* Accounts set up on another card in this batch do not exist
+                      in the database yet, so they are absent from `properties`.
+                      Offering them here is what lets the rest of a provider's
+                      bills join an account just created for the first one. */}
+                  {pendingAccounts.length > 0 && (
+                    <optgroup label="Being created in this batch">
+                      {pendingAccounts.map(p => (
+                        <option key={p.key} value={PENDING_PREFIX + p.key}>
+                          {p.account.providerName} ({p.account.category.toLowerCase()}) → {p.propertyLabel}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
                 {/* If the backend found a matching property with no account, surface it prominently */}
                 {match.method === 'property_exists_no_account' && match.propertyId && (
@@ -1279,6 +1337,27 @@ export default function ImportPage() {
       return applyAssignment(sourceBill, b);
     }));
   };
+
+  // Every distinct account the batch is about to create, so a card can join one
+  // instead of defining its own. Keyed the same way the backend dedupes on
+  // confirm, so picking one really does land on a single account.
+  const getPendingAccounts = (exclude: string) =>
+    Object.values(
+      bills.reduce((acc, b) => {
+        if (b.filename === exclude || !b.newAccount || !b.addToPropertyId) return acc;
+        const key = `${b.addToPropertyId}:${b.newAccount.providerName.toLowerCase().trim()}`;
+        if (!acc[key]) {
+          const prop = properties.find(p => p.id === b.addToPropertyId);
+          acc[key] = {
+            key,
+            propertyId: b.addToPropertyId,
+            propertyLabel: prop ? (prop.nickname || prop.address) : 'property',
+            account: b.newAccount,
+          };
+        }
+        return acc;
+      }, {} as Record<string, { key: string; propertyId: string; propertyLabel: string; account: NewAccountPayload }>)
+    );
 
   const getSameProviderBills = (bill: ParsedBill): ParsedBill[] => {
     const provider = bill.extracted.providerName?.toLowerCase().trim();
@@ -1512,6 +1591,8 @@ export default function ImportPage() {
                   onRemove={() => handleRemove(bill.filename)}
                   sameProviderBills={getSameProviderBills(bill)}
                   onApplyTo={targets => handleApplyTo(bill, targets)}
+                  pendingAccounts={getPendingAccounts(bill.filename)}
+                  onPickPending={(propId, acct) => handleAddToProperty(bill.filename, propId, acct)}
                 />
               ))}
             </div>
