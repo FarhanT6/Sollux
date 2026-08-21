@@ -232,6 +232,33 @@ async function main() {
   let docsImported = 0, docsSkipped = 0, extractionFailed = 0;
 
   /**
+   * Record a file that failed after extraction — an S3 upload or a database
+   * write — and stop if the cause is the environment rather than the file.
+   * A missing AWS key or a malformed ENCRYPTION_KEY fails on all 747 PDFs
+   * identically; printing that 747 times helps nobody.
+   */
+  const failFile = (filePath: string, err: unknown) => {
+    errored++;
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`  ERROR on ${filePath}: ${message}`);
+
+    let cause: string | null = null;
+    if (/Access Key Id|InvalidAccessKeyId|SignatureDoesNotMatch|credentials/i.test(message)) {
+      cause = 'AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY in backend/.env are not valid for the S3 bucket.';
+    } else if (/Invalid key length/i.test(message)) {
+      cause = 'ENCRYPTION_KEY in backend/.env is the wrong length — it must be 32 bytes of hex (openssl rand -hex 32).';
+    }
+    if (!cause) return;
+
+    console.error('\n─────────────────────────────────────────────');
+    console.error('Stopping: this will fail the same way on every remaining file.');
+    console.error(cause);
+    console.error(`${errored} file(s) failed. Fix it and re-run — imports are idempotent per billing month.`);
+    console.error('─────────────────────────────────────────────');
+    process.exit(1);
+  };
+
+  /**
    * Record a file whose extraction failed, and stop the run outright if the
    * cause will apply to every remaining file.
    */
@@ -284,8 +311,7 @@ async function main() {
         }
         docsImported++;
       } catch (err) {
-        errored++;
-        console.error(`  ERROR on ${file.filePath}:`, err instanceof Error ? err.message : err);
+        failFile(file.filePath, err);
       }
       continue;
     }
@@ -326,8 +352,7 @@ async function main() {
         }
         personalImported++;
       } catch (err) {
-        errored++;
-        console.error(`  ERROR on ${file.filePath}:`, err instanceof Error ? err.message : err);
+        failFile(file.filePath, err);
       }
       continue;
     }
@@ -353,23 +378,38 @@ async function main() {
       // punctuation is stripped ("SDGE" / "SDG&E" / "San Diego Gas & Electric"),
       // but only within the same category — so a property's several credit
       // cards, loans or policies stay separate accounts.
-      const providerName = ex.providerName || file.categoryFolder;
+      const categoryAccounts = await db.utilityAccount.findMany({
+        where: { propertyId: property.id, category: category as any },
+        select: { id: true, providerName: true },
+      });
+
       let account: { id: string } | null = null;
-      if (dryRun) {
-        account = await db.utilityAccount.findFirst({
-          where: { propertyId: property.id, category: category as any },
-          select: { id: true },
-        });
-        if (!account) console.log(`  [would create account] ${category} / ${providerName}`);
+
+      // When the extractor can't read a provider off the bill, the folder name
+      // is a poor substitute — "Electricity" is a category, not a company, and
+      // creating an account called that splits the property's real electric
+      // history in two. If the property has exactly one account in this
+      // category, that is unambiguously the one this bill belongs to: the
+      // folder already told us the category and --property told us the
+      // property, so there is nothing left to guess.
+      if (!ex.providerName && categoryAccounts.length === 1) {
+        account = { id: categoryAccounts[0].id };
+        console.log(`  [no provider on bill — using the one ${category} account: ${categoryAccounts[0].providerName}]`);
       } else {
-        const resolved = await findOrCreateUtilityAccount({
-          propertyId: property.id,
-          providerName,
-          category,
-          accountNumber: ex.accountNumber,
-        });
-        if (resolved.created) console.log(`  [create account] ${category} / ${providerName}`);
-        account = { id: resolved.id };
+        const providerName = ex.providerName || file.categoryFolder;
+        if (dryRun) {
+          account = categoryAccounts[0] ? { id: categoryAccounts[0].id } : null;
+          if (!account) console.log(`  [would create account] ${category} / ${providerName}`);
+        } else {
+          const resolved = await findOrCreateUtilityAccount({
+            propertyId: property.id,
+            providerName,
+            category,
+            accountNumber: ex.accountNumber,
+          });
+          if (resolved.created) console.log(`  [create account] ${category} / ${providerName}`);
+          account = { id: resolved.id };
+        }
       }
 
       const filenameDate = parseDateFromFilename(file.filename);
@@ -453,8 +493,7 @@ async function main() {
         imported++;
       }
     } catch (err) {
-      errored++;
-      console.error(`  ERROR on ${file.filePath}:`, err instanceof Error ? err.message : err);
+      failFile(file.filePath, err);
     }
   }
 

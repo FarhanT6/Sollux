@@ -7,7 +7,24 @@ const TAG_LENGTH = 16;
 function getKey(): Buffer {
   const key = process.env.ENCRYPTION_KEY;
   if (!key) throw new Error('ENCRYPTION_KEY env var is required');
-  return Buffer.from(key, 'hex');
+
+  // Buffer.from(x, 'hex') stops at the first character that isn't a hex digit
+  // and returns what it decoded up to that point — no error. A key that is
+  // the right length but carries a stray quote, space or base64 character
+  // therefore produces a short buffer, and the only symptom is createCipheriv
+  // reporting "Invalid key length" with nothing about the cause. Say it here
+  // instead, without ever putting the key itself in a message.
+  const buf = Buffer.from(key, 'hex');
+  if (buf.length !== 32) {
+    throw new Error(
+      `ENCRYPTION_KEY must be 32 bytes of hex (64 hex characters); ` +
+      `got ${key.length} character(s) decoding to ${buf.length} byte(s). ` +
+      (/^[0-9a-fA-F]*$/.test(key)
+        ? 'Generate one with: openssl rand -hex 32'
+        : 'It contains non-hex characters — check for quotes, spaces, or a value that is base64 rather than hex.')
+    );
+  }
+  return buf;
 }
 
 /**
