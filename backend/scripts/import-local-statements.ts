@@ -48,6 +48,7 @@ import { Prisma } from '@prisma/client';
 import { parseBill } from '../src/services/pdfImportService';
 import { uploadDocument, buildStatementKey } from '../src/services/s3Service';
 import { findOrCreateUtilityAccount } from '../src/services/utilityAccountResolver';
+import { providersLookAlike } from '../src/services/providerMatch';
 // The shared client, not a second one: two pools against the same database
 // doubles the connections a bulk run holds open, and Neon counts them.
 import { db } from '../src/config/db';
@@ -178,9 +179,13 @@ async function main() {
   // scoping a run down to just one folder/file while debugging (e.g.
   // --only "Credit Cards" to see exactly what that folder does in isolation).
   const onlyFolders = (getArg('only') || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+  // Force every bill in this run onto one provider, for a folder you know
+  // holds a single account's bills but whose PDFs the extractor reads
+  // inconsistently. Without it the extracted name decides.
+  const pinnedProvider = getArg('provider') || null;
 
   if (!dir || !email || !propertyQuery) {
-    console.error('Usage: npx tsx scripts/import-local-statements.ts --dir <path> --email <you@example.com> --property "<address or nickname>" [--dry-run] [--ai]');
+    console.error('Usage: npx tsx scripts/import-local-statements.ts --dir <path> --email <you@example.com> --property "<address or nickname>" [--provider "SDGE"] [--dry-run] [--ai]');
     process.exit(1);
   }
 
@@ -385,18 +390,27 @@ async function main() {
 
       let account: { id: string } | null = null;
 
-      // When the extractor can't read a provider off the bill, the folder name
-      // is a poor substitute — "Electricity" is a category, not a company, and
-      // creating an account called that splits the property's real electric
-      // history in two. If the property has exactly one account in this
-      // category, that is unambiguously the one this bill belongs to: the
-      // folder already told us the category and --property told us the
-      // property, so there is nothing left to guess.
-      if (!ex.providerName && categoryAccounts.length === 1) {
-        account = { id: categoryAccounts[0].id };
-        console.log(`  [no provider on bill — using the one ${category} account: ${categoryAccounts[0].providerName}]`);
+      // The extractor's provider name is a guess made from the text of one
+      // page, and on a utility bill it can land on something that isn't the
+      // utility at all — a payment-method line reading "Citi" produced an
+      // ELECTRIC account named Citi. The folder and --property are not
+      // guesses, so when they identify exactly one account, prefer it over
+      // whatever the page happened to say. A name that does match the existing
+      // account still goes through the resolver, so the account-number
+      // backfill it performs is not lost.
+      const soleAccount = categoryAccounts.length === 1 ? categoryAccounts[0] : null;
+      const providerAgrees =
+        soleAccount != null && ex.providerName != null &&
+        providersLookAlike(soleAccount.providerName, ex.providerName);
+
+      if (soleAccount && !providerAgrees && !pinnedProvider) {
+        account = { id: soleAccount.id };
+        console.log(
+          `  [using the one ${category} account: ${soleAccount.providerName}` +
+          (ex.providerName ? ` — bill read as "${ex.providerName}"` : ' — no provider on bill') + ']'
+        );
       } else {
-        const providerName = ex.providerName || file.categoryFolder;
+        const providerName = pinnedProvider || ex.providerName || file.categoryFolder;
         if (dryRun) {
           account = categoryAccounts[0] ? { id: categoryAccounts[0].id } : null;
           if (!account) console.log(`  [would create account] ${category} / ${providerName}`);

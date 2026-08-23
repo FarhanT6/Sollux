@@ -9,6 +9,7 @@
  *   npx tsx scripts/merge-duplicate-accounts.ts                 # dry run
  *   npx tsx scripts/merge-duplicate-accounts.ts --property <id> # one property
  *   npx tsx scripts/merge-duplicate-accounts.ts --apply         # actually merge
+ *   npx tsx scripts/merge-duplicate-accounts.ts --merge <from> <to> --apply
  *
  * Dry run by default. Nothing is written without --apply.
  */
@@ -19,6 +20,13 @@ const db = new PrismaClient();
 const APPLY = process.argv.includes('--apply');
 const PROPERTY_ID = process.argv[process.argv.indexOf('--property') + 1];
 const ONLY_PROPERTY = process.argv.includes('--property') ? PROPERTY_ID : null;
+// --merge <fromAccountId> <toAccountId>: fold one specific account into another.
+const MERGE_IDX = process.argv.indexOf('--merge');
+const MERGE_PAIR = MERGE_IDX >= 0 ? [process.argv[MERGE_IDX + 1], process.argv[MERGE_IDX + 2]] : null;
+if (MERGE_PAIR && (!MERGE_PAIR[0] || !MERGE_PAIR[1])) {
+  console.error('Usage: --merge <fromAccountId> <toAccountId>');
+  process.exit(1);
+}
 
 // The importer's own matcher, so this consolidates exactly what it would
 // treat as one account — acronyms and abbreviations included.
@@ -32,8 +40,97 @@ function richness(s: { amountDue: any; dueDate: any; pdfS3Key: any; usageValue: 
     + (s.pdfS3Key ? 2 : 0) + (s.usageValue != null ? 1 : 0) + (s.rawDataJson ? 1 : 0);
 }
 
+
+/**
+ * Move everything on `doomedId` onto `survivorId` and delete the empty shell.
+ * Returns how many statements moved and how many duplicate months were resolved.
+ */
+async function mergeInto(survivorId: string, doomedId: string) {
+  let moved = 0, dropped = 0;
+
+  const survivorStatements = await db.statement.findMany({
+    where: { utilityAccountId: survivorId },
+    select: { id: true, statementDate: true, amountDue: true, dueDate: true, pdfS3Key: true, usageValue: true, rawDataJson: true },
+  });
+  const byMonth = new Map(survivorStatements.map(s => [monthKey(s.statementDate), s]));
+
+  const moving = await db.statement.findMany({
+    where: { utilityAccountId: doomedId },
+    select: { id: true, statementDate: true, amountDue: true, dueDate: true, pdfS3Key: true, usageValue: true, rawDataJson: true },
+  });
+
+  for (const stmt of moving) {
+    const key = monthKey(stmt.statementDate);
+    const clash = byMonth.get(key);
+    if (!clash) {
+      await db.statement.update({ where: { id: stmt.id }, data: { utilityAccountId: survivorId } });
+      byMonth.set(key, stmt);
+      moved++;
+      continue;
+    }
+    // Same month on both. Keep whichever carries more, drop the other — these
+    // are the same bill imported twice, not two different bills.
+    if (richness(stmt) > richness(clash)) {
+      await db.statement.delete({ where: { id: clash.id } });
+      await db.statement.update({ where: { id: stmt.id }, data: { utilityAccountId: survivorId } });
+      byMonth.set(key, stmt);
+      moved++;
+    } else {
+      await db.statement.delete({ where: { id: stmt.id } });
+    }
+    dropped++;
+  }
+
+  await db.payment.updateMany({ where: { utilityAccountId: doomedId }, data: { utilityAccountId: survivorId } });
+  await db.aIInsight.updateMany({ where: { utilityAccountId: doomedId }, data: { utilityAccountId: survivorId } });
+  await db.outgoingTransaction.updateMany({ where: { utilityAccountId: doomedId }, data: { utilityAccountId: survivorId } });
+
+  // Carry over an account number the survivor lacks — without it the importer
+  // can never match this account by number again.
+  const [survivor, doomed] = await Promise.all([
+    db.utilityAccount.findUnique({ where: { id: survivorId }, select: { accountNumberEnc: true } }),
+    db.utilityAccount.findUnique({ where: { id: doomedId }, select: { accountNumberEnc: true } }),
+  ]);
+  if (doomed?.accountNumberEnc && !survivor?.accountNumberEnc) {
+    await db.utilityAccount.update({ where: { id: survivorId }, data: { accountNumberEnc: doomed.accountNumberEnc } });
+  }
+
+  await db.utilityAccount.delete({ where: { id: doomedId } });
+  return { moved, dropped };
+}
+
 (async () => {
   console.log(APPLY ? '── APPLYING MERGES ──\n' : '── DRY RUN (pass --apply to write) ──\n');
+
+  // Explicit mode: fold one named account into another, for a pair the name
+  // matcher will never cluster — an account created from a provider name the
+  // extractor misread ("Citi" off an SDG&E bill) looks nothing like the real
+  // one, so only a human can say they are the same account.
+  if (MERGE_PAIR) {
+    const [fromId, toId] = MERGE_PAIR;
+    const [from, to] = await Promise.all([
+      db.utilityAccount.findUnique({ where: { id: fromId }, select: { id: true, providerName: true, category: true, propertyId: true, _count: { select: { statements: true } } } }),
+      db.utilityAccount.findUnique({ where: { id: toId }, select: { id: true, providerName: true, category: true, propertyId: true, _count: { select: { statements: true } } } }),
+    ]);
+    if (!from || !to) {
+      console.error(`Account not found: ${!from ? fromId : toId}`);
+      process.exit(1);
+    }
+    if (from.propertyId !== to.propertyId) {
+      console.error('Refusing to merge accounts on different properties.');
+      process.exit(1);
+    }
+    console.log(`  merge  ${from.providerName} [${from.category}] (${from._count.statements} stmts)`);
+    console.log(`  into   ${to.providerName} [${to.category}] (${to._count.statements} stmts)`);
+    if (!APPLY) {
+      console.log('\nRe-run with --apply to perform the merge.');
+    } else {
+      const { moved, dropped } = await mergeInto(to.id, from.id);
+      console.log(`\nMerged. ${moved} statement(s) moved, ${dropped} duplicate month(s) resolved.`);
+    }
+    await db.$disconnect();
+    return;
+  }
 
   const properties = await db.property.findMany({
     where: ONLY_PROPERTY ? { id: ONLY_PROPERTY } : {},
@@ -92,55 +189,10 @@ function richness(s: { amountDue: any; dueDate: any; pdfS3Key: any; usageValue: 
 
         if (!APPLY) { accountsRemoved += doomed.length; continue; }
 
-        // Existing months on the survivor, so a duplicate month doesn't collide.
-        const survivorStatements = await db.statement.findMany({
-          where: { utilityAccountId: survivor.id },
-          select: { id: true, statementDate: true, amountDue: true, dueDate: true, pdfS3Key: true, usageValue: true, rawDataJson: true },
-        });
-        const byMonth = new Map(survivorStatements.map(s => [monthKey(s.statementDate), s]));
-
         for (const d of doomed) {
-          const moving = await db.statement.findMany({
-            where: { utilityAccountId: d.id },
-            select: { id: true, statementDate: true, amountDue: true, dueDate: true, pdfS3Key: true, usageValue: true, rawDataJson: true },
-          });
-
-          for (const stmt of moving) {
-            const key = monthKey(stmt.statementDate);
-            const clash = byMonth.get(key);
-            if (!clash) {
-              await db.statement.update({ where: { id: stmt.id }, data: { utilityAccountId: survivor.id } });
-              byMonth.set(key, stmt);
-              statementsMoved++;
-              continue;
-            }
-            // Same month on both. Keep whichever carries more, drop the other —
-            // these are the same bill imported twice, not two different bills.
-            if (richness(stmt) > richness(clash)) {
-              await db.statement.delete({ where: { id: clash.id } });
-              await db.statement.update({ where: { id: stmt.id }, data: { utilityAccountId: survivor.id } });
-              byMonth.set(key, stmt);
-              statementsMoved++;
-            } else {
-              await db.statement.delete({ where: { id: stmt.id } });
-            }
-            statementsDropped++;
-          }
-
-          await db.payment.updateMany({ where: { utilityAccountId: d.id }, data: { utilityAccountId: survivor.id } });
-          await db.aIInsight.updateMany({ where: { utilityAccountId: d.id }, data: { utilityAccountId: survivor.id } });
-          await db.outgoingTransaction.updateMany({ where: { utilityAccountId: d.id }, data: { utilityAccountId: survivor.id } });
-
-          // Carry over an account number the survivor lacks — without it the
-          // importer can never match this account by number again.
-          if (d.accountNumberEnc && !survivor.accountNumberEnc) {
-            await db.utilityAccount.update({
-              where: { id: survivor.id },
-              data: { accountNumberEnc: d.accountNumberEnc },
-            });
-          }
-
-          await db.utilityAccount.delete({ where: { id: d.id } });
+          const { moved, dropped } = await mergeInto(survivor.id, d.id);
+          statementsMoved += moved;
+          statementsDropped += dropped;
           accountsRemoved++;
         }
         console.log('');
