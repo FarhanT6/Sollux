@@ -18,6 +18,7 @@ interface ExtractedBill {
   previousBalance:    number | null;
   paymentsReceived:   number | null;
   currentCharges:     number | null;
+  lateFee:            number | null;
   usageValue:         number | null;
   usageUnit:          string | null;
   ratePlan:           string | null;
@@ -84,6 +85,10 @@ const CONFIDENCE_LABELS: Record<string, string> = {
   low:    'Possible match  -  verify',
   none:   'No match found',
 };
+
+// A pending selection is not a database id, so it is prefixed to keep the two
+// apart in the same <select>.
+const PENDING_PREFIX = 'pending:';
 
 const UTILITY_TYPE_TO_CATEGORY: Record<string, string> = {
   electric: 'ELECTRIC',
@@ -517,7 +522,7 @@ function NewPropertyForm({
             placeholder="123 Main St"
           />
         </div>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
           <div className="col-span-1">
             <label className={labelCls}>City *</label>
             <input
@@ -738,6 +743,8 @@ function BillCard({
   onRemove,
   sameProviderBills,
   onApplyTo,
+  pendingAccounts,
+  onPickPending,
 }: {
   bill:               ParsedBill;
   properties:         PropertyWithAccounts[];
@@ -747,6 +754,9 @@ function BillCard({
   onRemove:           () => void;
   sameProviderBills:  ParsedBill[];
   onApplyTo:          (filenames: string[] | 'all') => void;
+  // Accounts other cards in this batch are about to create.
+  pendingAccounts:    { key: string; propertyId: string; propertyLabel: string; account: NewAccountPayload }[];
+  onPickPending:      (propertyId: string, account: NewAccountPayload) => void;
 }) {
   const { extracted: ex, match, error } = bill;
   const confColor = CONFIDENCE_COLORS[match.confidence];
@@ -757,6 +767,30 @@ function BillCard({
   const [selectedAcctId, setSelectedAcctId]           = useState(match.utilityAccountId || '');
   const [mode, setMode]                               = useState<CardMode>(defaultMode);
   const [applied, setApplied]                         = useState(false);
+
+  // "Apply to all" rewrites the assignment on the bill objects in the parent,
+  // but this card is keyed by filename, so React keeps the same instance and
+  // these useState initialisers never run again. Without this the data was
+  // updated while the card carried on showing its old unassigned state — which
+  // read as "apply to all did nothing".
+  const assignmentKey =
+    `${bill.match.utilityAccountId ?? ''}|${bill.addToPropertyId ?? ''}|` +
+    `${bill.newAccount?.providerName ?? ''}|${bill.newProperty?.address ?? ''}`;
+  useEffect(() => {
+    if (bill.match.utilityAccountId) {
+      setSelectedAcctId(bill.match.utilityAccountId);
+      setMode('select');
+      setApplied(true);
+    } else if (bill.addToPropertyId && bill.newAccount) {
+      setMode('add-existing');
+      setApplied(true);
+    } else if (bill.newProperty && bill.newAccount) {
+      setMode('new');
+      setApplied(true);
+    }
+    if (bill.newAccount) setAcctForm(bill.newAccount);
+    if (bill.newProperty) setPropForm(bill.newProperty);
+  }, [assignmentKey]);
   const [resolvedPropertyName, setResolvedPropertyName] = useState<string | null>(null);
   const [showApplyPanel, setShowApplyPanel]           = useState(false);
   const [selectedForApply, setSelectedForApply]       = useState<Set<string>>(new Set());
@@ -779,6 +813,18 @@ function BillCard({
   });
 
   const handleAcctSelect = (v: string) => {
+    if (v.startsWith(PENDING_PREFIX)) {
+      // Joining an account another card is creating: adopt its property and
+      // payload so both resolve to the same account server-side.
+      const pending = pendingAccounts.find(p => PENDING_PREFIX + p.key === v);
+      if (pending) {
+        setAcctForm(pending.account);
+        setMode('add-existing');
+        setApplied(true);
+        onPickPending(pending.propertyId, pending.account);
+      }
+      return;
+    }
     setSelectedAcctId(v);
     setMode('select');
     setApplied(false);
@@ -872,6 +918,7 @@ function BillCard({
             ['Amount due',   fmt$(ex.amountDue)],
             ['Current chgs', fmt$(ex.currentCharges)],
             ['Prev balance', fmt$(ex.previousBalance)],
+            ['Late fee',     fmt$(ex.lateFee)],
             ['Payments',     fmt$(ex.paymentsReceived)],
             ['Usage',        ex.usageValue != null ? `${ex.usageValue} ${ex.usageUnit || ''}` : ' - '],
             ['Rate plan',    ex.ratePlan || ' - '],
@@ -1048,6 +1095,19 @@ function BillCard({
                       ))}
                     </optgroup>
                   ))}
+                  {/* Accounts set up on another card in this batch do not exist
+                      in the database yet, so they are absent from `properties`.
+                      Offering them here is what lets the rest of a provider's
+                      bills join an account just created for the first one. */}
+                  {pendingAccounts.length > 0 && (
+                    <optgroup label="Being created in this batch">
+                      {pendingAccounts.map(p => (
+                        <option key={p.key} value={PENDING_PREFIX + p.key}>
+                          {p.account.providerName} ({p.account.category.toLowerCase()}) → {p.propertyLabel}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
                 {/* If the backend found a matching property with no account, surface it prominently */}
                 {match.method === 'property_exists_no_account' && match.propertyId && (
@@ -1278,6 +1338,27 @@ export default function ImportPage() {
     }));
   };
 
+  // Every distinct account the batch is about to create, so a card can join one
+  // instead of defining its own. Keyed the same way the backend dedupes on
+  // confirm, so picking one really does land on a single account.
+  const getPendingAccounts = (exclude: string) =>
+    Object.values(
+      bills.reduce((acc, b) => {
+        if (b.filename === exclude || !b.newAccount || !b.addToPropertyId) return acc;
+        const key = `${b.addToPropertyId}:${b.newAccount.providerName.toLowerCase().trim()}`;
+        if (!acc[key]) {
+          const prop = properties.find(p => p.id === b.addToPropertyId);
+          acc[key] = {
+            key,
+            propertyId: b.addToPropertyId,
+            propertyLabel: prop ? (prop.nickname || prop.address) : 'property',
+            account: b.newAccount,
+          };
+        }
+        return acc;
+      }, {} as Record<string, { key: string; propertyId: string; propertyLabel: string; account: NewAccountPayload }>)
+    );
+
   const getSameProviderBills = (bill: ParsedBill): ParsedBill[] => {
     const provider = bill.extracted.providerName?.toLowerCase().trim();
     // Source must be confirmed by user first
@@ -1337,25 +1418,61 @@ export default function ImportPage() {
 
     setStage('importing');
 
-    try {
-      const items = ready.map(b => ({
-        filename:         b.filename,
-        fileData:         b.fileData,
-        extracted:        b.extracted,
-        match:            b.match,
-        utilityAccountId: b.match.utilityAccountId || null,
-        propertyId:       b.addToPropertyId || null,
-        newProperty:      b.newProperty,
-        newAccount:       b.newAccount,
-      }));
+    const toItem = (b: ParsedBill) => ({
+      filename:         b.filename,
+      fileData:         b.fileData,
+      extracted:        b.extracted,
+      match:            b.match,
+      utilityAccountId: b.match.utilityAccountId || null,
+      propertyId:       b.addToPropertyId || null,
+      newProperty:      b.newProperty,
+      newAccount:       b.newAccount,
+    });
 
-      const res = await api.post('/import/confirm', { items });
-      setResult(res.data);
-      setStage('done');
-    } catch (err) {
-      console.error(err);
-      setStage('review');
+    // Submit in batches rather than one request. Every item carries its PDF as
+    // base64 and the server uploads each to S3 before responding, so forty
+    // bills meant a ~10MB payload and forty round-trips inside one request —
+    // which times out, taking the whole batch with it and losing the manual
+    // assignments behind it.
+    //
+    // Batching means a failure costs one batch, the rest are already saved,
+    // and whatever did not land stays on screen to retry.
+    const CONFIRM_BATCH = 5;
+    const totals = { imported: 0, skipped: 0, errors: [] as string[] };
+    const failed: ParsedBill[] = [];
+
+    for (let i = 0; i < ready.length; i += CONFIRM_BATCH) {
+      const batch = ready.slice(i, i + CONFIRM_BATCH);
+      setProgress(`Filing ${Math.min(i + batch.length, ready.length)} / ${ready.length}...`);
+      try {
+        const res = await api.post('/import/confirm', { items: batch.map(toItem) });
+        totals.imported += res.data?.imported ?? 0;
+        totals.skipped  += res.data?.skipped ?? 0;
+        if (Array.isArray(res.data?.errors)) totals.errors.push(...res.data.errors);
+      } catch (err: any) {
+        console.error('confirm batch failed', err);
+        failed.push(...batch);
+        const detail = err?.response?.data?.error ?? err?.message ?? 'request failed';
+        totals.errors.push(`${batch.length} file(s) failed: ${detail}`);
+      }
     }
+
+    setProgress('');
+    setResult(totals);
+
+    if (failed.length > 0) {
+      // Keep the ones that did not land, with their assignments intact, so the
+      // work of assigning them is not thrown away.
+      const failedNames = new Set(failed.map(f => f.filename));
+      setBills(prev => prev.filter(b => failedNames.has(b.filename)));
+      setDriveNote(
+        `${totals.imported} filed. ${failed.length} could not be saved and are still listed below — press Confirm again to retry just those.`
+      );
+      setStage('review');
+      return;
+    }
+
+    setStage('done');
   };
 
   const reset = () => {
@@ -1510,6 +1627,8 @@ export default function ImportPage() {
                   onRemove={() => handleRemove(bill.filename)}
                   sameProviderBills={getSameProviderBills(bill)}
                   onApplyTo={targets => handleApplyTo(bill, targets)}
+                  pendingAccounts={getPendingAccounts(bill.filename)}
+                  onPickPending={(propId, acct) => handleAddToProperty(bill.filename, propId, acct)}
                 />
               ))}
             </div>

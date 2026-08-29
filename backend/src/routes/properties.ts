@@ -17,7 +17,7 @@ const PropertySchema = z.object({
   zip: z.string(), // many legacy/vacant-land properties have no zip on file; '' is valid
   country: z.string().optional(),
   region: z.string().optional().nullable(),
-  type: z.enum(['PRIMARY', 'RENTAL', 'INVESTMENT', 'COMMERCIAL', 'RESIDENTIAL_SINGLE', 'RESIDENTIAL_MULTI', 'LAND', 'GOLF_COURSE', 'OTHER']),
+  type: z.enum(['PRIMARY', 'RENTAL', 'INVESTMENT', 'COMMERCIAL', 'MIXED_USE', 'RESIDENTIAL_SINGLE', 'RESIDENTIAL_MULTI', 'LAND', 'GOLF_COURSE', 'OTHER']),
   status: z.enum(['ACTIVE', 'SOLD', 'UNDER_CONTRACT', 'INACTIVE']).optional(),
   acquisitionDate: z.string().transform(s => new Date(s)).optional().nullable(),
   acquisitionPrice: z.number().optional().nullable(),
@@ -42,6 +42,7 @@ router.get('/', async (req, res, next) => {
             id: true,
             providerName: true,
             category: true,
+            isActive: true,
             lastSyncStatus: true,
             lastSyncedAt: true,
             statements: {
@@ -120,7 +121,13 @@ router.get('/:id', async (req, res, next) => {
     });
 
     if (!property) return res.status(404).json({ error: 'Property not found' });
-    res.json(property);
+
+    // Never return encrypted credential fields
+    const utilityAccounts = property.utilityAccounts.map(({ accountNumberEnc, usernameEnc, passwordEnc, ...rest }) => ({
+      ...rest,
+      hasCredentials: !!usernameEnc,
+    }));
+    res.json({ ...property, utilityAccounts });
   } catch (err) {
     next(err);
   }

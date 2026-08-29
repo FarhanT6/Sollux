@@ -108,7 +108,7 @@ export default function PropertiesPage() {
 
       <div className="px-6 py-5">
         {/* Stats */}
-        <div className="grid grid-cols-4 gap-3 mb-5">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
           <StatCard label="Total properties" value={properties.length} />
           <StatCard label="Utility accounts" value={totalAccounts} />
           <StatCard label="Monthly spend" value={`$${monthlyTotal.toLocaleString('en-US', { minimumFractionDigits: 0 })}`} />
@@ -240,7 +240,7 @@ function SortablePropertyCard({ property, onEdit, onDelete }: { property: Proper
 }
 
 function PropertyCard({ property, onEdit, onDelete }: { property: Property; onEdit: () => void; onDelete: () => void }) {
-  const accounts = property.utilityAccounts || [];
+  const accounts = (property.utilityAccounts || []).filter(a => a.isActive !== false);
 
   // Same reconciliation logic as the detail page: if recent payments cover the open
   // balance, treat the account as paid even if the provider's API hasn't reflected it.
@@ -344,7 +344,7 @@ function PropertyCard({ property, onEdit, onDelete }: { property: Property; onEd
 
       {/* Bill grid */}
       <Link to={`/properties/${property.id}`} className="block p-4 hover:bg-white/2 transition-colors">
-        <div className="grid grid-cols-3 gap-1.5 mb-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5 mb-3">
           {accounts.slice(0, 6).map(account => {
             const latest = account.statements?.[0];
             const raw = latest?.rawDataJson as Record<string, unknown> | undefined;
@@ -444,7 +444,7 @@ function EditPropertyModal({ property, onClose, onSaved }: { property: Property;
             <label className="text-xs text-gray-400 block mb-1">Street address</label>
             <input className={fieldCls} value={form.address} onChange={e => setForm(f => ({ ...f, address: e.target.value }))} />
           </div>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             <div>
               <label className="text-xs text-gray-400 block mb-1">City</label>
               <input className={fieldCls} value={form.city} onChange={e => setForm(f => ({ ...f, city: e.target.value }))} />

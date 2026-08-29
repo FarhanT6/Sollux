@@ -8,6 +8,7 @@
 import fs from 'fs';
 import path from 'path';
 import Anthropic from '@anthropic-ai/sdk';
+import { providersLookAlike } from './providerMatch';
 import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';
 
@@ -59,6 +60,7 @@ export interface ExtractedBillData {
   previousBalance:    number | null;
   paymentsReceived:   number | null;
   currentCharges:     number | null;
+  lateFee:            number | null;
   usageValue:         number | null;
   usageUnit:          string | null;   // kWh, CCF, therms, gallons, etc.
   ratePlan:           string | null;
@@ -99,13 +101,14 @@ Schema (use null for any field not present in the document):
   "serviceAddress": "string — the property/service address (NOT the mailing/remittance address)",
   "accountNumber": "string — account, customer, or reference number",
   "statementDate": "YYYY-MM-DD — date the bill was issued or generated",
-  "dueDate": "YYYY-MM-DD — payment due date",
+  "dueDate": "YYYY-MM-DD — the date payment for THIS bill is due. Bills often print several other dates: a next meter-read date, a service-period end, a solar/net-metering true-up date, an autopay draft date. None of those are the due date — use only a date explicitly labelled as when payment is due,
   "billingPeriodStart": "YYYY-MM-DD — start of billing period if shown",
   "billingPeriodEnd": "YYYY-MM-DD — end of billing period if shown",
-  "amountDue": number or null — total dollar amount currently owed (look for 'Amount Due', 'Total Due', 'Balance Due', 'Please Pay'),
-  "previousBalance": number or null — prior balance carried forward,
-  "paymentsReceived": number or null — payments or credits applied since last bill,
-  "currentCharges": number or null — new charges this period,
+  "amountDue": number or null — THIS period's charges only, including any late fee or penalty added this period, but EXCLUDING any balance carried forward from earlier bills. If the bill shows only one grand total and that total includes a prior balance, do NOT put the grand total here — put the prior balance in previousBalance and this period's charges here,
+  "previousBalance": number or null — how much from EARLIER bills is still unpaid, after applying any payments the bill shows. If the bill lists 'Previous Balance' then 'Payments Received' then 'Balance Forward', report the Balance Forward figure, not the Previous Balance. Never include this period's charges. Use null, not 0, when nothing is carried forward,
+  "paymentsReceived": number or null — payments or credits applied since last bill (enter as a positive number),
+  "currentCharges": number or null — same as amountDue: this period's charges only,
+  "lateFee": number or null — late fee, penalty, or overdue charge added THIS period. This is a component of amountDue, not the carried-forward balance,
   "usageValue": number or null — consumption quantity if applicable (kWh, CCF, gallons, etc.),
   "usageUnit": "string or null — kWh | CCF | therms | gallons | HCF | pickup | other",
   "ratePlan": "string or null — rate schedule, plan name, or tier",
@@ -120,7 +123,10 @@ Important extraction tips:
 - If this is a debt collection or management statement (not a direct utility bill), still fill in all fields you can find.
 - serviceAddress: if multiple addresses appear, pick the one labeled 'Service Address', 'Property Address', or that matches a street address format for a building (not a PO Box).
 - accountNumber: include dashes and spaces as they appear; do not normalize.
-- statementDate: if not explicit, infer from postmark, billing period end, or document date.`;
+- statementDate: if not explicit, infer from postmark, billing period end, or document date.
+- Bills printed in two columns often place the prior balance and this period's charges side by side. Read the labels, not the position: a figure next to 'Past Due' is previousBalance even when it sits where current charges usually appear.
+- Sanity-check yourself before answering: previousBalance + amountDue should equal the grand total the bill asks for, because previousBalance is already net of payments. If it does not, you have most likely put a carried-forward balance into amountDue. Re-read and split them.
+- Some bills show several totals (this period, total with past due, budget-billing amount, minimum payment). amountDue is always this period's charges alone.`;
 
 // ── Regex-based extraction (free, no API calls) ───────────────────────────────
 
@@ -141,7 +147,7 @@ const MONTH_MAP: Record<string, string> = {
 
 function parseDate(s: string): string | null {
   // MM/DD/YYYY or M/D/YY
-  let m = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+  let m = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4}|\d{2})(?!\d)/);
   if (m) {
     const yr = m[3].length === 2 ? `20${m[3]}` : m[3];
     return `${yr}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}`;
@@ -179,7 +185,7 @@ function findDollarNear(text: string, labels: RegExp[]): number | null {
 }
 
 function findDateNear(text: string, labels: RegExp[]): string | null {
-  const suffix = '[\\s\\S]{0,60}?(\\d{1,2}[\\/\\-]\\d{1,2}[\\/\\-]\\d{2,4}|\\w{3,9}\\s+\\d{1,2},?\\s+\\d{4})';
+  const suffix = '[\\s\\S]{0,60}?(\\d{1,2}[\\/\\-]\\d{1,2}[\\/\\-](?:\\d{4}|\\d{2})(?!\\d)|\\w{3,9}\\s+\\d{1,2},?\\s+\\d{4})';
   for (const label of labels) {
     const m = text.match(new RegExp(label.source + suffix, label.flags));
     if (m) {
@@ -248,7 +254,7 @@ interface DateHit { date: string; position: number; context: string }
 /** Find every recognisable date pattern in the text. */
 function scanAllDates(text: string): DateHit[] {
   const patterns = [
-    /\b(\d{1,2}\/\d{1,2}\/\d{2,4})\b/g,
+    /\b(\d{1,2}\/\d{1,2}\/(?:\d{4}|\d{2}))(?!\d)\b/g,
     /\b(\d{4}-\d{2}-\d{2})\b/g,
     /\b((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4})\b/gi,
     /\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{4})\b/gi,
@@ -560,6 +566,15 @@ async function extractWithRegex(pdfBuffer: Buffer, filename: string): Promise<Ex
     /auto.?pay\s+(?:amount|payment)/i,
   ]);
 
+  // ── Late fee / penalty ────────────────────────────────────────────────────
+  const lateFee: number | null = findDollarNear(text, [
+    /late\s+fee/i,
+    /late\s+(?:payment\s+)?(?:charge|penalty)/i,
+    /penalty\s+(?:amount|charge)/i,
+    /overdue\s+charge/i,
+    /nsf\s+fee/i,
+  ]);
+
   // ── Current charges ───────────────────────────────────────────────────────
   let currentCharges: number | null = findDollarNear(text, [
     /current\s+charges?/i,
@@ -730,6 +745,7 @@ async function extractWithRegex(pdfBuffer: Buffer, filename: string): Promise<Ex
     previousBalance,
     paymentsReceived,
     currentCharges,
+    lateFee,
     usageValue,
     usageUnit,
     ratePlan,
@@ -881,10 +897,10 @@ export async function matchToAccount(
     if (addrMatches.length > 0) {
       // Also try to match provider name
       if (extracted.providerName) {
-        const normProvider = extracted.providerName.toLowerCase();
+        // Shared matcher rather than substring: an account stored as
+        // "San Diego Gas & Electric" has to match a bill saying "SDGE".
         const withProvider = addrMatches.filter(a =>
-          a.providerName.toLowerCase().includes(normProvider) ||
-          normProvider.includes(a.providerName.toLowerCase())
+          providersLookAlike(a.providerName, extracted.providerName!)
         );
         if (withProvider.length === 1) {
           const acct = withProvider[0];
@@ -938,10 +954,8 @@ export async function matchToAccount(
 
   // ── 3. Provider name only (single account for this provider) ──────────────
   if (extracted.providerName) {
-    const normProvider = extracted.providerName.toLowerCase();
     const providerMatches = accounts.filter(a =>
-      a.providerName.toLowerCase().includes(normProvider) ||
-      normProvider.includes(a.providerName.toLowerCase())
+      providersLookAlike(a.providerName, extracted.providerName!)
     );
     if (providerMatches.length === 1) {
       const acct = providerMatches[0];
@@ -1003,7 +1017,7 @@ export async function parseBill(
         providerName: null, serviceAddress: null, accountNumber: null,
         statementDate: null, dueDate: null, billingPeriodStart: null,
         billingPeriodEnd: null, amountDue: null, previousBalance: null,
-        paymentsReceived: null, currentCharges: null, usageValue: null,
+        paymentsReceived: null, currentCharges: null, lateFee: null, usageValue: null,
         usageUnit: null, ratePlan: null, isPaid: false,
         utilityType: 'other', chargeBreakdown: null, alerts: [],
       },

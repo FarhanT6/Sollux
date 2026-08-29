@@ -1,13 +1,18 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
-  getUtility, syncUtility, deleteUtility, getStatementDownloadUrl,
+  getUtility, syncUtility, deleteUtility, updateUtility, getStatementDownloadUrl,
   getPaymentPlan, createPaymentPlan, updatePaymentPlan, deletePaymentPlan,
-  upsertUtilityLoan, deleteUtilityLoan, patchStatement,
+  upsertUtilityLoan, deleteUtilityLoan, patchStatement, createStatement,
+  revealUtilityAccountNumber, createPayment, updatePayment, deletePayment,
+  getBankAccounts,
 } from '../api/client';
-import { CATEGORY_LABELS, CATEGORY_COLORS } from '../types';
+import { CATEGORY_LABELS, CATEGORY_COLORS, LOAN_TYPE_LABELS,
+  UTILITY_PAYMENT_METHODS, PAYMENT_STATUS_LABELS } from '../types';
+import type { BankAccount } from '../types';
 import { Pill, Skeleton, EmptyState } from '../components/ui';
 import { format, isAfter } from 'date-fns';
+import { fmtDate, yearOf } from '../lib/date';
 
 const CATEGORY_ICONS: Record<string, string> = {
   ELECTRIC: '⚡', GAS: '🔥', WATER: '💧', SEWER: '🚿',
@@ -21,13 +26,26 @@ function fmtMoney(v?: number | string | null) {
   return isNaN(n) ? '—' : `$${n.toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
 }
 
+// All statement figures come from the dedicated, editable columns
+// (amountDue, amountPaid, pastDueCarried, chargesExcludingFees,
+// penaltiesFees) — never from rawDataJson, which is a frozen import-time
+// snapshot that user edits can't change. Reading rawDataJson here is what
+// made edits appear to "not stick".
+
+// Open balance a statement is asking for: this period's charge plus any
+// prior balance carried into it.
+function openBalanceOf(s: any): number | null {
+  if (!s) return null;
+  if (s.amountDue == null && s.pastDueCarried == null) return null;
+  return Number(s.amountDue ?? 0) + Number(s.pastDueCarried ?? 0);
+}
+
 // Determine if a statement is paid, including reconciliation against payments that
 // may not yet have posted on the provider's API. Sums all payments dated on/after
 // the statement date; if the sum covers the open balance, treat as paid.
 function isStatementPaid(s: any, payments: any[] = []): boolean {
-  const raw = s.rawDataJson as any;
-  if (s.amountPaid != null || raw?.isPaid === true) return true;
-  const openBalance = (raw?.accountBalance ?? raw?.totalDue ?? s.balance ?? s.amountDue) as number | undefined;
+  if (s.amountPaid != null) return true;
+  const openBalance = openBalanceOf(s);
   if (openBalance == null) return false;
   if (openBalance <= 0.01) return true;
   const stmtDate = s.statementDate ? new Date(s.statementDate) : null;
@@ -38,30 +56,56 @@ function isStatementPaid(s: any, payments: any[] = []): boolean {
   return sumSinceStmt >= openBalance - 0.01;
 }
 
-// "Past due" / "Prev balance" on a statement is a frozen snapshot of what the
-// provider printed on that bill. Once the prior statement is marked paid in
-// Sollux, that snapshot is stale — suppress the past-due display for it.
-function isPriorStatementPaid(current: any, all: any[], payments: any[] = []): boolean {
-  const idx = all.findIndex(x => x.id === current.id);
-  if (idx === -1 || idx + 1 >= all.length) return false;
-  return isStatementPaid(all[idx + 1], payments);
+// Whether an arrears balance was ever cleared, looked up across the WHOLE
+// forward chain of later statements — not just the very next one. A past-due
+// amount routinely takes more than one billing cycle to clear (e.g. Dec's
+// balance still shows up on Jan's bill, but is gone by Feb's). Checking only
+// one statement ahead meant Dec would show "Overdue" forever the moment Jan
+// didn't fully clear it, even though Feb proves it eventually did.
+// `statements` must be sorted newest-first (as the API already returns it).
+function computeResolvedByFutureCheckpoint(statements: any[]): Set<string> {
+  const resolved = new Set<string>();
+  let sawZeroCheckpoint = false;
+  // Iterate newest -> oldest; sawZeroCheckpoint tracks whether any statement
+  // strictly newer than the current one carried in a zero balance (its
+  // pastDueCarried is 0/empty), proving the prior bill was cleared.
+  for (const s of statements) {
+    if (sawZeroCheckpoint) resolved.add(s.id);
+    const carriedIn = Number(s.pastDueCarried ?? 0);
+    if (carriedIn === 0) sawZeroCheckpoint = true;
+  }
+  return resolved;
 }
 
-function statementStatus(s: any, payments: any[] = [], newerStmt?: any, isLatest = false): { color: 'green' | 'amber' | 'red'; label: string } {
-  if (isStatementPaid(s, payments)) return { color: 'green', label: 'Paid' };
+function isEffectivelyPaid(s: any, payments: any[], resolvedByFuture: Set<string>): boolean {
+  return isStatementPaid(s, payments) || resolvedByFuture.has(s.id);
+}
+
+// Past due carried on a statement reflects an older unpaid balance. Once the
+// prior (chronologically older) statement is marked paid in Sollux, that
+// carried-forward figure is stale — suppress the past-due display for it.
+function isPriorStatementPaid(current: any, all: any[], payments: any[] = [], resolvedByFuture: Set<string> = new Set()): boolean {
+  const idx = all.findIndex(x => x.id === current.id);
+  if (idx === -1 || idx + 1 >= all.length) return false;
+  return isEffectivelyPaid(all[idx + 1], payments, resolvedByFuture);
+}
+
+function statementStatus(s: any, payments: any[] = [], newerStmt?: any, isLatest = false, resolvedByFuture: Set<string> = new Set()): { color: 'green' | 'amber' | 'red'; label: string } {
+  if (isEffectivelyPaid(s, payments, resolvedByFuture)) return { color: 'green', label: 'Paid' };
 
   if (!isLatest && newerStmt) {
-    const newerPrevBal = Number((newerStmt.rawDataJson as any)?.previousBalance ?? 0);
+    // The next bill's carried-in balance tells us whether this one was paid:
+    // 0 carried in = this bill was cleared before the next was issued.
+    const newerCarriedIn = Number(newerStmt.pastDueCarried ?? 0);
     const thisDue = Number(s.amountDue ?? 0);
-    if (newerPrevBal === 0) return { color: 'green', label: 'Paid' };
-    if (thisDue > 0 && newerPrevBal >= thisDue - 0.01) {
+    if (newerCarriedIn === 0) return { color: 'green', label: 'Paid' };
+    if (thisDue > 0 && newerCarriedIn >= thisDue - 0.01) {
       const pastDueDate = s.dueDate && isAfter(new Date(), new Date(s.dueDate));
       return pastDueDate ? { color: 'red', label: 'Overdue' } : { color: 'amber', label: 'Due' };
     }
     return { color: 'green', label: 'Paid' };
   }
 
-  if ((s.rawDataJson as any)?.isPastDue === true) return { color: 'red', label: 'Overdue' };
   if (s.dueDate && isAfter(new Date(), new Date(s.dueDate))) return { color: 'red', label: 'Overdue' };
   return { color: 'amber', label: 'Due' };
 }
@@ -138,13 +182,6 @@ function PaymentPlanModal({
 }
 
 // ── Loan Card ────────────────────────────────────────────────────────────────
-
-const LOAN_TYPE_LABELS: Record<string, string> = {
-  MORTGAGE: 'Mortgage', HELOC: 'HELOC', AUTO: 'Auto', PERSONAL: 'Personal',
-  STUDENT: 'Student', INSTALLMENT_PLAN: 'Installment Plan',
-  CREDIT_LINE: 'Credit Line', SELLER_FINANCING: 'Seller Financing',
-  DSCR: 'DSCR', COMMERCIAL: 'Commercial', HARD_MONEY: 'Hard Money', OTHER: 'Other',
-};
 
 function LoanModal({ accountId, existing, onClose, onSave }: {
   accountId: string; existing: any | null; onClose: () => void; onSave: (l: any) => void;
@@ -441,7 +478,7 @@ function PaymentPlanCard({
           {plan.startDate && (
             <div>
               <span className="text-gray-500">Started: </span>
-              <span className="text-gray-300">{format(new Date(plan.startDate), 'MMM d, yyyy')}</span>
+              <span className="text-gray-300">{fmtDate(plan.startDate, 'MMM d, yyyy')}</span>
             </div>
           )}
         </div>
@@ -476,14 +513,102 @@ export default function UtilityDetailPage() {
   const [loan, setLoan]           = useState<any>(null);
   const [showLoanModal, setShowLoanModal] = useState(false);
   const [markingPaid, setMarkingPaid] = useState<string | null>(null);
+  const [editingStatement, setEditingStatement] = useState<any | null>(null);
+  const [revealedAccountNumber, setRevealedAccountNumber] = useState<string | null>(null);
+  const [revealingAccountNumber, setRevealingAccountNumber] = useState(false);
+  const [togglingActive, setTogglingActive] = useState(false);
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
+  const [showPayForm, setShowPayForm] = useState(false);
+  const [editPaymentId, setEditPaymentId] = useState<string | null>(null);
+  const [savingPayment, setSavingPayment] = useState(false);
+  const [payForm, setPayForm] = useState({
+    amount: '', paymentDate: new Date().toISOString().slice(0, 10),
+    paymentMethod: 'ACH', status: 'PAID', statementId: '',
+    confirmationNumber: '', bankAccountId: '', notes: '',
+  });
 
   useEffect(() => {
     if (!accountId) return;
     Promise.all([
       getUtility(accountId).then(a => { setAccount(a); setLoan((a as any).loan ?? null); }),
       getPaymentPlan(accountId).then(setPlan),
+      getBankAccounts().then(bs => setBankAccounts(bs.filter(b => b.isActive))).catch(() => {}),
     ]).finally(() => setLoading(false));
   }, [accountId]);
+
+  function resetPayForm() {
+    setPayForm({
+      amount: '', paymentDate: new Date().toISOString().slice(0, 10),
+      paymentMethod: 'ACH', status: 'PAID', statementId: '',
+      confirmationNumber: '', bankAccountId: '', notes: '',
+    });
+  }
+
+  function openPaymentEdit(p: any) {
+    setPayForm({
+      amount: String(p.amount ?? ''),
+      paymentDate: (p.paymentDate ?? '').slice(0, 10),
+      paymentMethod: p.paymentMethod || 'ACH',
+      status: p.status || 'PAID',
+      statementId: p.statementId ?? '',
+      confirmationNumber: p.confirmationNumber ?? '',
+      bankAccountId: p.bankAccountId ?? '',
+      notes: p.notes ?? '',
+    });
+    setEditPaymentId(p.id);
+    setShowPayForm(false);
+  }
+
+  // Recording a payment can change a statement's paid state server-side, so
+  // reload the whole account rather than splicing the payment in locally.
+  async function reloadAccount() {
+    if (!accountId) return;
+    const fresh = await getUtility(accountId);
+    setAccount(fresh);
+    setLoan((fresh as any).loan ?? null);
+  }
+
+  async function savePayment() {
+    const amount = parseFloat(payForm.amount);
+    if (!payForm.amount || Number.isNaN(amount) || amount <= 0) {
+      alert('Enter an amount greater than zero.');
+      return;
+    }
+    setSavingPayment(true);
+    try {
+      const body = {
+        utilityAccountId: accountId,
+        amount,
+        paymentDate: payForm.paymentDate,
+        paymentMethod: payForm.paymentMethod || null,
+        status: payForm.status,
+        statementId: payForm.statementId || null,
+        confirmationNumber: payForm.confirmationNumber || null,
+        bankAccountId: payForm.bankAccountId || null,
+        notes: payForm.notes || null,
+      };
+      if (editPaymentId) await updatePayment(editPaymentId, body);
+      else await createPayment(body);
+      setEditPaymentId(null);
+      setShowPayForm(false);
+      resetPayForm();
+      await reloadAccount();
+    } catch (err: any) {
+      alert(err?.response?.data?.error ?? 'Could not save that payment.');
+    } finally { setSavingPayment(false); }
+  }
+
+  async function removePayment(p: any) {
+    const linked = p.statementId ? '\n\nThe statement it was paid against will show unpaid again.' : '';
+    if (!confirm(`Delete the ${fmtMoney(p.amount)} payment from ${fmtDate(p.paymentDate)}?${linked}\n\nThis cannot be undone.`)) return;
+    setSavingPayment(true);
+    try {
+      await deletePayment(p.id);
+      await reloadAccount();
+    } catch (err: any) {
+      alert(err?.response?.data?.error ?? 'Could not delete that payment.');
+    } finally { setSavingPayment(false); }
+  }
 
   async function handleMarkPaid(s: any) {
     const isPaid = s.amountPaid != null;
@@ -495,6 +620,18 @@ export default function UtilityDetailPage() {
         statements: (prev.statements ?? []).map((r: any) => r.id === s.id ? { ...r, amountPaid: updated.amountPaid } : r),
       } : prev);
     } catch { } finally { setMarkingPaid(null); }
+  }
+
+  async function toggleAccountNumber() {
+    if (!accountId) return;
+    if (revealedAccountNumber != null) { setRevealedAccountNumber(null); return; }
+    setRevealingAccountNumber(true);
+    try {
+      const { accountNumber } = await revealUtilityAccountNumber(accountId);
+      setRevealedAccountNumber(accountNumber ?? '');
+    } finally {
+      setRevealingAccountNumber(false);
+    }
   }
 
   async function handleSync() {
@@ -515,6 +652,17 @@ export default function UtilityDetailPage() {
     } catch { setSyncing(false); }
   }
 
+  async function toggleActive() {
+    if (!accountId) return;
+    setTogglingActive(true);
+    try {
+      const updated = await updateUtility(accountId, { isActive: account.isActive === false });
+      setAccount((prev: any) => prev ? { ...prev, isActive: updated.isActive, syncEnabled: updated.syncEnabled } : prev);
+    } finally {
+      setTogglingActive(false);
+    }
+  }
+
   async function handleDelete() {
     if (!accountId) return;
     const confirmed = window.confirm(
@@ -532,9 +680,12 @@ export default function UtilityDetailPage() {
 
   const statements: any[] = useMemo(() => account?.statements || [], [account]);
   const payments: any[] = useMemo(() => account?.payments || [], [account]);
+  // Computed from the FULL statement history (not the filtered/searched
+  // view) so status stays correct regardless of year filter or search.
+  const resolvedByFuture = useMemo(() => computeResolvedByFutureCheckpoint(statements), [statements]);
 
   const stmtYears = useMemo(() => {
-    const years = new Set(statements.map(s => new Date(s.statementDate).getFullYear().toString()));
+    const years = new Set(statements.map(s => String(yearOf(s.statementDate))));
     return Array.from(years).sort((a, b) => Number(b) - Number(a));
   }, [statements]);
 
@@ -566,29 +717,20 @@ export default function UtilityDetailPage() {
     return true;
   }), [payments, yearFilter, search]);
 
-  // Fees/penalties aggregated across all statements
+  // Fees/penalties aggregated across all statements — sourced from the
+  // editable penaltiesFees column so it matches what Edit shows and writes.
   const feesData = useMemo(() => statements.map(s => {
-    const raw = s.rawDataJson as Record<string, unknown> | undefined;
-    if (!raw) return null;
-    const penalties  = raw.penalties  != null ? Number(raw.penalties)  : null;
-    const adjustments= raw.adjustments != null ? Number(raw.adjustments): null;
-    const taxCharge  = raw.taxCharge  != null ? Number(raw.taxCharge)  : null;
-    const afterDue   = raw.afterDueDateAmt != null ? Number(raw.afterDueDateAmt) : null;
-    if ([penalties, adjustments, taxCharge, afterDue].every(v => v == null || v === 0)) return null;
-    return {
-      id: s.id, date: s.statementDate,
-      penalties, adjustments, taxCharge, afterDue,
-      total: (penalties || 0) + (adjustments || 0) + (taxCharge || 0) + (afterDue || 0),
-    };
+    const penalties = s.penaltiesFees != null ? Number(s.penaltiesFees) : null;
+    if (penalties == null || penalties === 0) return null;
+    return { id: s.id, date: s.statementDate, penalties, total: penalties };
   }).filter(Boolean), [statements]);
 
   const totalFees = feesData.reduce((s, r: any) => s + (r?.total || 0), 0);
-  const totalPenalties = feesData.reduce((s, r: any) => s + (r?.penalties || 0), 0);
-  const totalTax = feesData.reduce((s, r: any) => s + (r?.taxCharge || 0), 0);
+  const totalPenalties = totalFees;
 
   const currentYear = new Date().getFullYear();
   const ytdTotal = statements
-    .filter(s => new Date(s.statementDate).getFullYear() === currentYear)
+    .filter(s => yearOf(s.statementDate) === currentYear)
     .reduce((sum, s) => sum + Number(s.amountDue ?? 0), 0);
   const latestAmt = statements[0]?.amountDue != null ? Number(statements[0].amountDue) : null;
   const prevAmt = statements[1]?.amountDue != null ? Number(statements[1].amountDue) : null;
@@ -596,21 +738,25 @@ export default function UtilityDetailPage() {
     ? ((latestAmt - prevAmt) / prevAmt) * 100 : null;
   const totalPaid = payments.reduce((s, p) => s + Number(p.amount), 0);
 
-  // Past due from latest statement
-  const latestRaw = statements[0]?.rawDataJson as Record<string, unknown> | undefined;
-  // The prior statement's payment status can make this snapshot stale — see
-  // isPriorStatementPaid for why we don't trust rawDataJson.pastDue blindly.
-  const priorToLatestPaid = statements[0] ? isPriorStatementPaid(statements[0], statements, payments) : false;
-  const latestPastDue = (latestRaw?.pastDue != null && !priorToLatestPaid) ? Number(latestRaw.pastDue) : null;
-  const rawTotalDue = (latestRaw?.accountBalance ?? latestRaw?.totalDue) as number | undefined;
+  // Past due from latest statement — all from the dedicated, editable columns
+  // so edits show up here immediately.
+  const latestStmt = statements[0];
+  // If the prior (older) statement is paid, the balance carried into this one
+  // is stale — suppress it. See isPriorStatementPaid.
+  const priorToLatestPaid = latestStmt ? isPriorStatementPaid(latestStmt, statements, payments) : false;
+  const latestPastDue = (!priorToLatestPaid && latestStmt?.pastDueCarried != null)
+    ? Number(latestStmt.pastDueCarried)
+    : null;
+  const latestChargesExclFees = latestStmt?.chargesExcludingFees != null ? Number(latestStmt.chargesExcludingFees) : null;
+  const latestOwed = openBalanceOf(latestStmt);
   // Reconcile the displayed current balance against recent payments. If the user paid
   // a bill but the provider's API hasn't reflected it yet, we still want $0 here.
-  const isLatestPaid = statements[0] ? isStatementPaid(statements[0], payments) : false;
+  const isLatestPaid = latestStmt ? isStatementPaid(latestStmt, payments) : false;
   const latestTotalDue = isLatestPaid
     ? 0
-    : (priorToLatestPaid && rawTotalDue != null && latestRaw?.currentCharges != null)
-      ? Number(latestRaw.currentCharges)
-      : rawTotalDue;
+    : (priorToLatestPaid && latestChargesExclFees != null)
+      ? latestChargesExclFees
+      : latestOwed;
 
   if (loading) return <div className="p-6 space-y-4"><Skeleton className="h-24" /><Skeleton className="h-64" /></div>;
   if (!account) return <div className="p-6 text-gray-400">Account not found</div>;
@@ -651,14 +797,41 @@ export default function UtilityDetailPage() {
             </div>
             <h1 className="text-base font-semibold text-white">{account.providerName}</h1>
             <span className="text-xs text-gray-500">{(CATEGORY_LABELS as Record<string, string>)[account.category]}</span>
+            {account.isActive === false && (
+              <span className="text-xs px-1.5 py-0.5 rounded-full text-gray-400 border border-white/10 bg-white/5">Inactive</span>
+            )}
             {account.accountNumber && (
-              <span className="font-mono text-xs text-gray-600">{account.accountNumber}</span>
+              <span className="flex items-center gap-1">
+                <span className="font-mono text-xs text-gray-600">
+                  {revealedAccountNumber != null ? revealedAccountNumber : account.accountNumber}
+                </span>
+                <button
+                  onClick={toggleAccountNumber}
+                  disabled={revealingAccountNumber}
+                  title={revealedAccountNumber != null ? 'Hide account number' : 'Show full account number'}
+                  className="text-gray-500 hover:text-gray-300 transition-colors disabled:opacity-40"
+                >
+                  {revealingAccountNumber ? '…' : revealedAccountNumber != null ? '🙈' : '👁'}
+                </button>
+              </span>
             )}
           </div>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={handleSync} disabled={syncing || deleting} className="btn btn-primary text-xs">
             {syncing ? 'Syncing…' : 'Sync ↻'}
+          </button>
+          <button
+            onClick={toggleActive}
+            disabled={togglingActive}
+            title={account.isActive === false ? 'Reactivate this account' : 'Mark inactive — keeps all history, pauses syncing'}
+            className={`text-xs px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40 ${
+              account.isActive === false
+                ? 'text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10'
+                : 'text-gray-400 hover:text-white hover:bg-white/10'
+            }`}
+          >
+            {togglingActive ? '…' : account.isActive === false ? 'Reactivate' : 'Deactivate'}
           </button>
           <button
             onClick={handleDelete}
@@ -671,7 +844,7 @@ export default function UtilityDetailPage() {
       </div>
 
       {/* Stats bar */}
-      <div className="px-6 py-4 grid grid-cols-5 gap-3"
+      <div className="px-6 py-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3"
         style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
         {[
           {
@@ -766,9 +939,21 @@ export default function UtilityDetailPage() {
                 <option value="all">All years</option>
                 {years.map(y => <option key={y} value={y}>{y}</option>)}
               </select>
+              {tab === 'statements' && (
+                <button onClick={() => setEditingStatement({})} className="btn text-xs">+ Add statement</button>
+              )}
             </div>
           )}
         </div>
+
+        {editingStatement !== null && accountId && (
+          <StatementModal
+            accountId={accountId}
+            statement={editingStatement}
+            onClose={() => setEditingStatement(null)}
+            onSaved={() => { setEditingStatement(null); getUtility(accountId).then(a => { setAccount(a); setLoan((a as any).loan ?? null); }); }}
+          />
+        )}
 
         {/* ── Statements ───────────────────────────────────── */}
         {tab === 'statements' && (
@@ -779,15 +964,13 @@ export default function UtilityDetailPage() {
                 {filteredStatements.map((s, idx) => {
                   // filteredStatements sorted DESC; [idx-1] is more recent; idx===0 is latest
                   const isLatest = idx === 0 && yearFilter === 'all' && !search;
-                  const { color: sc, label: sl } = statementStatus(s, payments, filteredStatements[idx - 1], isLatest);
-                  const raw = s.rawDataJson as Record<string, unknown> | undefined;
-                  const pastDue     = raw?.pastDue      != null ? Number(raw.pastDue)      : null;
-                  const totalDue    = (raw?.accountBalance ?? raw?.totalDue) != null
-                                      ? Number(raw?.accountBalance ?? raw?.totalDue) : null;
-                  const prevBal     = raw?.previousBalance != null ? Number(raw.previousBalance) : null;
-                  const currentBill = raw?.currentBill   != null ? Number(raw.currentBill)   : null;
-                  const isPaid = s.amountPaid != null || (s.rawDataJson as any)?.isPaid === true;
-                  const priorPaid = isPriorStatementPaid(s, statements, payments);
+                  const { color: sc, label: sl } = statementStatus(s, payments, filteredStatements[idx - 1], isLatest, resolvedByFuture);
+                  // Everything from the dedicated, editable columns — no
+                  // rawDataJson fallback, so edits always show up.
+                  const pastDue  = s.pastDueCarried != null ? Number(s.pastDueCarried) : null;
+                  const totalDue = openBalanceOf(s);
+                  const isPaid = isEffectivelyPaid(s, payments, resolvedByFuture);
+                  const priorPaid = isPriorStatementPaid(s, statements, payments, resolvedByFuture);
                   return (
                     <div key={s.id} className="rounded-xl px-5 py-4 flex items-center gap-4"
                       style={{
@@ -796,7 +979,7 @@ export default function UtilityDetailPage() {
                       }}>
                       {/* Month */}
                       <div className="w-20 flex-shrink-0">
-                        <p className="text-sm font-semibold text-white">{format(new Date(s.statementDate), 'MMM yyyy')}</p>
+                        <p className="text-sm font-semibold text-white">{fmtDate(s.statementDate, 'MMM yyyy')}</p>
                         {isLatest && <p className="text-xs text-amber-500 mt-0.5">Latest</p>}
                       </div>
 
@@ -804,16 +987,13 @@ export default function UtilityDetailPage() {
                       <div className="flex-1 min-w-0">
                         <p className="text-xs text-gray-500">
                           {s.billingPeriodStart && s.billingPeriodEnd
-                            ? `${format(new Date(s.billingPeriodStart), 'MMM d')} – ${format(new Date(s.billingPeriodEnd), 'MMM d, yyyy')}`
+                            ? `${fmtDate(s.billingPeriodStart, 'MMM d')} – ${fmtDate(s.billingPeriodEnd, 'MMM d, yyyy')}`
                             : 'Billing period —'}
                         </p>
                         {pastDue != null && pastDue > 0 && !priorPaid && (
                           <p className="text-xs text-red-400 mt-0.5">⚠ Past due: {fmtMoney(pastDue)}</p>
                         )}
-                        {prevBal != null && prevBal > 0 && !priorPaid && (
-                          <p className="text-xs text-gray-500 mt-0.5">Prev balance: {fmtMoney(prevBal)}</p>
-                        )}
-                        {((pastDue ?? 0) > 0 || (prevBal ?? 0) > 0) && priorPaid && (
+                        {(pastDue ?? 0) > 0 && priorPaid && (
                           <p className="text-xs text-green-500 mt-0.5">✓ Prior balance paid</p>
                         )}
                         {s.usageValue && (
@@ -824,7 +1004,7 @@ export default function UtilityDetailPage() {
                       {/* Due date */}
                       <div className="text-right flex-shrink-0 w-24">
                         {s.dueDate && (
-                          <p className="text-xs text-gray-500">Due {format(new Date(s.dueDate), 'MMM d')}</p>
+                          <p className="text-xs text-gray-500">Due {fmtDate(s.dueDate, 'MMM d')}</p>
                         )}
                       </div>
 
@@ -836,7 +1016,9 @@ export default function UtilityDetailPage() {
                        *    show "Bill: $X" so the per-period charge is still visible. */}
                       <div className="text-right flex-shrink-0 w-28">
                         {(() => {
-                          const isFullyPaid = (totalDue === 0 && s.amountPaid != null) || raw?.isPaid === true || (totalDue === 0 && Number(s.amountDue ?? 0) > 0);
+                          // A paid statement shows the bill amount (what was billed);
+                          // an unpaid one shows the open balance owed.
+                          const isFullyPaid = isPaid || (totalDue === 0 && Number(s.amountDue ?? 0) > 0);
                           const amt = Number(s.amountDue ?? 0);
                           const owed = totalDue ?? amt;
                           const primary = isFullyPaid ? amt : owed;
@@ -882,6 +1064,14 @@ export default function UtilityDetailPage() {
                             📄 PDF
                           </button>
                         )}
+                        <button
+                          onClick={() => setEditingStatement(s)}
+                          title="Edit statement"
+                          className="text-xs px-2 py-1 rounded transition-colors text-gray-500 hover:text-white"
+                          style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
+                        >
+                          Edit
+                        </button>
                       </div>
                     </div>
                   );
@@ -892,27 +1082,102 @@ export default function UtilityDetailPage() {
 
         {/* ── Payments ─────────────────────────────────────── */}
         {tab === 'payments' && (
+          <div className="mb-3 flex justify-end">
+            <button onClick={() => { setEditPaymentId(null); resetPayForm(); setShowPayForm(v => !v); }}
+              className="btn btn-primary text-xs">
+              {showPayForm ? 'Cancel' : '+ Log payment'}
+            </button>
+          </div>
+        )}
+
+        {tab === 'payments' && (showPayForm || editPaymentId) && (
+          <div className="rounded-xl px-5 py-4 mb-3" style={{ background: '#1e1e1e', border: '1px solid rgba(245,166,35,0.25)' }}>
+            <p className="text-xs font-medium text-gray-300 mb-2">
+              {editPaymentId ? 'Edit payment' : 'Log a payment toward this account'}
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+              <input type="number" value={payForm.amount} onChange={e => setPayForm(f => ({ ...f, amount: e.target.value }))}
+                placeholder="Amount *" className="input-dark text-xs" />
+              <input type="date" value={payForm.paymentDate} onChange={e => setPayForm(f => ({ ...f, paymentDate: e.target.value }))}
+                className="input-dark text-xs" />
+              <select value={payForm.paymentMethod} onChange={e => setPayForm(f => ({ ...f, paymentMethod: e.target.value }))}
+                className="input-dark text-xs">
+                {UTILITY_PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+              <select value={payForm.status} onChange={e => setPayForm(f => ({ ...f, status: e.target.value }))}
+                className="input-dark text-xs">
+                {['PAID', 'PENDING', 'PARTIAL', 'FAILED'].map(st => (
+                  <option key={st} value={st}>{PAYMENT_STATUS_LABELS[st]}</option>
+                ))}
+              </select>
+
+              {/* Linking to a statement is what marks that bill paid. */}
+              <select value={payForm.statementId} onChange={e => setPayForm(f => ({ ...f, statementId: e.target.value }))}
+                className="input-dark text-xs sm:col-span-2">
+                <option value="">— Not against a specific bill —</option>
+                {statements.slice(0, 36).map((st: any) => (
+                  <option key={st.id} value={st.id}>
+                    {fmtDate(st.statementDate, 'MMM yyyy')} — {fmtMoney(st.amountDue)} due
+                  </option>
+                ))}
+              </select>
+              <select value={payForm.bankAccountId} onChange={e => setPayForm(f => ({ ...f, bankAccountId: e.target.value }))}
+                className="input-dark text-xs">
+                <option value="">— Paid from which account? —</option>
+                {bankAccounts.map(b => (
+                  <option key={b.id} value={b.id}>{[b.name, b.last4 ? `••${b.last4}` : null].filter(Boolean).join(' ')}</option>
+                ))}
+              </select>
+              <input value={payForm.confirmationNumber} onChange={e => setPayForm(f => ({ ...f, confirmationNumber: e.target.value }))}
+                placeholder="Confirmation #" className="input-dark text-xs" />
+              <input value={payForm.notes} onChange={e => setPayForm(f => ({ ...f, notes: e.target.value }))}
+                placeholder="Notes" className="input-dark text-xs sm:col-span-2 lg:col-span-4" />
+            </div>
+            <div className="flex justify-end gap-3 mt-2">
+              <button onClick={() => { setEditPaymentId(null); setShowPayForm(false); }}
+                className="text-xs text-gray-500 hover:text-gray-300">Cancel</button>
+              <button onClick={savePayment} disabled={savingPayment || !payForm.amount}
+                className="btn btn-primary text-xs disabled:opacity-40">
+                {savingPayment ? '…' : editPaymentId ? 'Save changes' : 'Log payment'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {tab === 'payments' && (
           filteredPayments.length === 0
-            ? <EmptyState icon="💳" title="No payments" body={search || yearFilter !== 'all' ? 'No payments match your filter.' : 'No payment history found for this account.'} />
+            ? <EmptyState icon="💳" title="No payments" body={search || yearFilter !== 'all' ? 'No payments match your filter.' : 'Nothing recorded yet — use "Log payment" above.'} />
             : (
               <div className="space-y-2 pb-8">
                 {filteredPayments.map(p => (
                   <div key={p.id} className="rounded-xl px-5 py-4 flex items-center gap-4"
                     style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.06)' }}>
                     <div className="w-28 flex-shrink-0">
-                      <p className="text-sm font-semibold text-white">{format(new Date(p.paymentDate), 'MMM d, yyyy')}</p>
+                      <p className="text-sm font-semibold text-white">{fmtDate(p.paymentDate, 'MMM d, yyyy')}</p>
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm text-gray-300">{p.paymentMethod || 'Payment'}</p>
+                      {p.bankAccount && (
+                        <p className="text-xs text-gray-500">from {p.bankAccount.name}{p.bankAccount.last4 ? ` ••${p.bankAccount.last4}` : ''}</p>
+                      )}
+                      {p.statement && (
+                        <p className="text-xs text-gray-500">toward {fmtDate(p.statement.statementDate, 'MMM yyyy')} bill</p>
+                      )}
                       {p.confirmationNumber && (
                         <p className="font-mono text-xs text-gray-500 mt-0.5">Conf# {p.confirmationNumber}</p>
                       )}
+                      {p.notes && <p className="text-xs text-gray-600 mt-0.5">{p.notes}</p>}
                     </div>
                     <div className="text-right flex-shrink-0 w-24">
                       <p className="text-base font-semibold text-white">{fmtMoney(p.amount)}</p>
                     </div>
                     <div className="flex-shrink-0 w-20 text-right">
                       <Pill color={p.status === 'PAID' ? 'green' : p.status === 'PENDING' ? 'amber' : 'red'}>{p.status}</Pill>
+                    </div>
+                    <div className="flex-shrink-0 flex gap-2 text-xs">
+                      <button onClick={() => openPaymentEdit(p)} className="text-gray-500 hover:text-amber-400">Edit</button>
+                      <button onClick={() => removePayment(p)} disabled={savingPayment}
+                        className="text-gray-600 hover:text-red-400 disabled:opacity-40">✕</button>
                     </div>
                   </div>
                 ))}
@@ -927,11 +1192,10 @@ export default function UtilityDetailPage() {
             : (
               <div className="space-y-4 pb-8">
                 {/* Summary cards */}
-                <div className="grid grid-cols-3 gap-3 mb-2">
+                <div className="grid grid-cols-2 gap-3 mb-2">
                   {[
-                    { label: 'Total penalties', value: fmtMoney(totalPenalties), color: totalPenalties > 0 ? 'text-red-400' : 'text-gray-400' },
-                    { label: 'Total taxes/fees', value: fmtMoney(totalTax), color: 'text-orange-400' },
-                    { label: 'All charges total', value: fmtMoney(totalFees), color: 'text-amber-400' },
+                    { label: 'Total penalties / fees', value: fmtMoney(totalPenalties), color: totalPenalties > 0 ? 'text-red-400' : 'text-gray-400' },
+                    { label: 'Across', value: `${feesData.length} bills`, color: 'text-amber-400' },
                   ].map(({ label, value, color: c }) => (
                     <div key={label} className="rounded-xl px-4 py-3" style={{ background: '#161616', border: '1px solid rgba(255,255,255,0.06)' }}>
                       <p className="text-xs text-gray-500 mb-1">{label}</p>
@@ -945,27 +1209,140 @@ export default function UtilityDetailPage() {
                   <div key={r.id} className="rounded-xl px-5 py-4"
                     style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.06)' }}>
                     <div className="flex items-center justify-between mb-3">
-                      <p className="text-sm font-semibold text-white">{format(new Date(r.date), 'MMMM yyyy')}</p>
+                      <p className="text-sm font-semibold text-white">{fmtDate(r.date, 'MMMM yyyy')}</p>
                       <p className="text-sm font-semibold text-orange-400">{fmtMoney(r.total)}</p>
                     </div>
                     <div className="grid grid-cols-2 gap-x-8 gap-y-1.5">
-                      {[
-                        ['Penalties',       r.penalties,  'text-red-400'],
-                        ['Late fee (after due)', r.afterDue, 'text-red-300'],
-                        ['Tax / surcharge', r.taxCharge,  'text-orange-300'],
-                        ['Adjustments',     r.adjustments,'text-gray-300'],
-                      ].filter(([, v]) => v != null && Number(v) !== 0).map(([label, value, c]) => (
-                        <div key={String(label)} className="flex items-center justify-between">
-                          <span className="text-xs text-gray-500">{label}</span>
-                          <span className={`text-xs font-medium ${c}`}>{fmtMoney(Number(value))}</span>
-                        </div>
-                      ))}
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-gray-500">Penalties / fees</span>
+                        <span className="text-xs font-medium text-red-400">{fmtMoney(Number(r.penalties))}</span>
+                      </div>
                     </div>
                   </div>
                 ))}
               </div>
             )
         )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Add / edit statement (manual entry) ─────────────────────────────────────
+
+function StatementModal({ accountId, statement, onClose, onSaved }: {
+  accountId: string; statement: any; onClose: () => void; onSaved: () => void;
+}) {
+  const isEdit = !!statement?.id;
+  const [statementDate, setStatementDate] = useState(statement?.statementDate?.slice(0, 10) ?? new Date().toISOString().slice(0, 10));
+  const [dueDate, setDueDate] = useState(statement?.dueDate?.slice(0, 10) ?? '');
+  const [amountDue, setAmountDue] = useState(statement?.amountDue != null ? String(statement.amountDue) : '');
+  const [amountPaid, setAmountPaid] = useState(statement?.amountPaid != null ? String(statement.amountPaid) : '');
+  const [chargesExcludingFees, setChargesExcludingFees] = useState(statement?.chargesExcludingFees != null ? String(statement.chargesExcludingFees) : '');
+  const [penaltiesFees, setPenaltiesFees] = useState(statement?.penaltiesFees != null ? String(statement.penaltiesFees) : '');
+  const [pastDueCarried, setPastDueCarried] = useState(statement?.pastDueCarried != null ? String(statement.pastDueCarried) : '');
+  const [notes, setNotes] = useState(statement?.notes ?? '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const num = (v: string) => v.trim() === '' ? null : parseFloat(v);
+
+  async function handleSave() {
+    setSaving(true);
+    setError('');
+    try {
+      if (isEdit) {
+        await patchStatement(statement.id, {
+          statementDate, dueDate: dueDate || null,
+          amountDue: num(amountDue), amountPaid: num(amountPaid),
+          chargesExcludingFees: num(chargesExcludingFees),
+          penaltiesFees: num(penaltiesFees), pastDueCarried: num(pastDueCarried),
+          notes: notes || null,
+        });
+      } else {
+        await createStatement({
+          utilityAccountId: accountId, statementDate, dueDate: dueDate || null,
+          amountDue: num(amountDue), amountPaid: num(amountPaid),
+          chargesExcludingFees: num(chargesExcludingFees),
+          penaltiesFees: num(penaltiesFees), pastDueCarried: num(pastDueCarried),
+          notes: notes || null,
+        });
+      }
+      onSaved();
+    } catch (err: any) {
+      setError(err?.response?.data?.error || 'Failed to save statement');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const fieldCls = 'w-full rounded-lg px-3 py-2 text-sm text-white bg-white/5 border border-white/10 focus:border-amber-500/50 outline-none';
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+      <div className="w-full max-w-sm rounded-2xl p-6 space-y-3" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.08)' }} onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-white">{isEdit ? 'Edit statement' : 'Add statement'}</h3>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-lg leading-none">×</button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Statement date</label>
+            <input type="date" className={fieldCls} value={statementDate} onChange={e => setStatementDate(e.target.value)} />
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Due date</label>
+            <input type="date" className={fieldCls} value={dueDate} onChange={e => setDueDate(e.target.value)} />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Total due <span className="text-gray-500">(this period, w/ fees)</span></label>
+            <input type="number" step="0.01" className={fieldCls} value={amountDue} onChange={e => setAmountDue(e.target.value)} placeholder="0.00" />
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Paid</label>
+            <input type="number" step="0.01" className={fieldCls} value={amountPaid} onChange={e => setAmountPaid(e.target.value)} placeholder="0.00" />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Due w/o penalties &amp; fees</label>
+            <input type="number" step="0.01" className={fieldCls} value={chargesExcludingFees} onChange={e => setChargesExcludingFees(e.target.value)} placeholder="0.00" />
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Penalties / fees</label>
+            <input type="number" step="0.01" className={fieldCls} value={penaltiesFees} onChange={e => setPenaltiesFees(e.target.value)} placeholder="0.00" />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Past due <span className="text-gray-500">(prior periods)</span></label>
+            <input type="number" step="0.01" className={fieldCls} value={pastDueCarried} onChange={e => setPastDueCarried(e.target.value)} placeholder="0.00" />
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Total due w/ past due</label>
+            <div className={`${fieldCls} flex items-center text-gray-300`}>
+              {num(amountDue) != null || num(pastDueCarried) != null
+                ? `$${((num(amountDue) ?? 0) + (num(pastDueCarried) ?? 0)).toFixed(2)}`
+                : '—'}
+            </div>
+          </div>
+        </div>
+        <div>
+          <label className="text-xs text-gray-400 block mb-1">Comments</label>
+          <input className={fieldCls} value={notes} onChange={e => setNotes(e.target.value)} placeholder="e.g. Waste container swap, lock replacement" />
+        </div>
+
+        {error && <p className="text-xs text-red-400">{error}</p>}
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button onClick={onClose} className="btn text-xs">Cancel</button>
+          <button onClick={handleSave} disabled={saving} className="btn btn-primary text-xs disabled:opacity-50">
+            {saving ? 'Saving…' : isEdit ? 'Save' : 'Add statement'}
+          </button>
+        </div>
       </div>
     </div>
   );

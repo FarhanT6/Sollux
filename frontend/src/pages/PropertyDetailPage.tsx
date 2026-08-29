@@ -1,13 +1,23 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { getProperty, getStatements, getPayments, getInsights, syncUtility, updateUtility, deleteUtility, updateProperty, deleteProperty, markInsightRead, dismissInsight, getStatementDownloadUrl } from '../api/client';
+import { getProperty, getStatements, getPayments, getInsights, syncUtility, updateUtility, deleteUtility, updateProperty, deleteProperty, markInsightRead, dismissInsight, getStatementDownloadUrl, revealUtilityAccountNumber, getUtilityUsername, getUtilityPassword } from '../api/client';
 import type { Property, Statement, Payment, AIInsight, UtilityAccount } from '../types';
-import { CATEGORY_LABELS, CATEGORY_COLORS } from '../types';
+import { CATEGORY_LABELS, CATEGORY_COLORS, INSURANCE_TYPE_LABELS, LOAN_TYPE_LABELS } from '../types';
 import { PageHeader, StatCard, InsightCard, Skeleton, EmptyState, Pill } from '../components/ui';
 import { format } from 'date-fns';
 import AddUtilityModal from '../components/utility/AddUtilityModal';
+import { fmtDate } from '../lib/date';
 
 type Tab = 'utilities' | 'payments' | 'insights' | 'documents';
+
+// Surface what the API actually said. A generic "not found" hides the useful
+// part — an unrun migration, for instance, reports a missing column.
+function errorMessage(err: any): string {
+  return err?.response?.data?.error
+    ?? (err?.response?.status ? `Request failed (${err.response.status}).` : null)
+    ?? err?.message
+    ?? 'Unknown error.';
+}
 
 export default function PropertyDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -17,35 +27,59 @@ export default function PropertyDetailPage() {
   const [insights, setInsights] = useState<AIInsight[]>([]);
   const [tab, setTab] = useState<Tab>('utilities');
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [partialError, setPartialError] = useState<string | null>(null);
   const navigate = useNavigate();
   const [syncing, setSyncing] = useState<string | null>(null);
   const [showAddUtility, setShowAddUtility] = useState(false);
   const [showEditProperty, setShowEditProperty] = useState(false);
   const [showDeleteProperty, setShowDeleteProperty] = useState(false);
+  const [showInactive, setShowInactive] = useState(false);
 
   useEffect(() => {
     if (!id) return;
-    Promise.all([
+    // allSettled, not all: these four are independent, and a single rejection
+    // used to take the whole page down — property included — so the render fell
+    // through to "Property not found" and blamed the property for someone
+    // else's failure. Each result is now applied on its own.
+    Promise.allSettled([
       getProperty(id),
       getStatements({ propertyId: id }),
       getPayments({ propertyId: id }),
       getInsights({ propertyId: id }),
     ]).then(([p, s, pmt, ins]) => {
-      setProperty(p);
-      setStatements(s);
-      setPayments(pmt);
-      setInsights(ins.filter(i => !i.isDismissed));
+      if (p.status === 'fulfilled') setProperty(p.value);
+      else setLoadError(errorMessage(p.reason));
+      if (s.status === 'fulfilled') setStatements(s.value);
+      if (pmt.status === 'fulfilled') setPayments(pmt.value);
+      if (ins.status === 'fulfilled') setInsights(ins.value.filter(i => !i.isDismissed));
+
+      // The property loaded but something alongside it did not — say which,
+      // rather than showing a page with silently missing sections.
+      const partial = [
+        s.status === 'rejected' ? 'statements' : null,
+        pmt.status === 'rejected' ? 'payments' : null,
+        ins.status === 'rejected' ? 'insights' : null,
+      ].filter(Boolean) as string[];
+      if (p.status === 'fulfilled' && partial.length > 0) {
+        setPartialError(`Could not load ${partial.join(', ')}. ${errorMessage(
+          (s.status === 'rejected' && s.reason) || (pmt.status === 'rejected' && pmt.reason) || (ins as any).reason,
+        )}`);
+      }
     }).finally(() => setLoading(false));
   }, [id]);
 
   const accounts = property?.utilityAccounts || [];
-  const monthlyTotal = accounts.reduce((s, a) => {
+  const activeAccounts = accounts.filter(a => a.isActive !== false);
+  const inactiveAccounts = accounts.filter(a => a.isActive === false);
+  const monthlyTotal = activeAccounts.reduce((s, a) => {
     const stmt = a.statements?.[0];
-    const raw = stmt?.rawDataJson as Record<string, unknown> | undefined;
-    const bal = (raw?.accountBalance ?? raw?.totalDue ?? (stmt as any)?.balance ?? stmt?.amountDue) as number | undefined;
-    return s + Number(bal ?? 0);
+    if (!stmt) return s;
+    // Open balance from the editable columns: this period's charge + carried past due.
+    const bal = Number(stmt.amountDue ?? 0) + Number((stmt as any).pastDueCarried ?? 0);
+    return s + bal;
   }, 0);
-  const lastSynced = accounts.map(a => a.lastSyncedAt).filter(Boolean).sort().pop();
+  const lastSynced = activeAccounts.map(a => a.lastSyncedAt).filter(Boolean).sort().pop();
 
   async function handleSync(accountId: string) {
     setSyncing(accountId);
@@ -77,7 +111,12 @@ export default function PropertyDetailPage() {
   }
 
   if (loading) return <div className="p-6"><Skeleton className="h-40 mb-4" /><Skeleton className="h-64" /></div>;
-  if (!property) return <div className="p-6 text-gray-400">Property not found</div>;
+  if (!property) return (
+    <div className="p-6 text-sm text-gray-400">
+      <p className="text-gray-300 font-medium mb-1">Couldn't load this property</p>
+      <p className="text-xs text-gray-500">{loadError ?? 'The property could not be found.'}</p>
+    </div>
+  );
 
   const TABS: { key: Tab; label: string }[] = [
     { key: 'utilities', label: 'Utilities' },
@@ -88,6 +127,12 @@ export default function PropertyDetailPage() {
 
   return (
     <div>
+      {partialError && (
+        <div className="mx-6 mt-4 rounded-lg px-3 py-2 text-xs text-amber-300"
+          style={{ background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.25)' }}>
+          {partialError}
+        </div>
+      )}
       <PageHeader
         title={property.nickname || property.address}
         subtitle={`${property.city}, ${property.state} · ${property.type.charAt(0) + property.type.slice(1).toLowerCase()}`}
@@ -116,9 +161,9 @@ export default function PropertyDetailPage() {
 
       {/* Property hero stats */}
       <div className="px-6 py-4 border-b border-white/8">
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <StatCard label="Monthly total" value={`$${monthlyTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} />
-          <StatCard label="Last synced" value={lastSynced ? format(new Date(lastSynced), 'h:mm a') : 'Never'} sub={lastSynced ? format(new Date(lastSynced), 'MMM d') : ''} />
+          <StatCard label="Last synced" value={lastSynced ? format(new Date(lastSynced), 'h:mm a') : 'Never'} sub={lastSynced ? fmtDate(lastSynced, 'MMM d') : ''} />
           <StatCard label="Utility accounts" value={accounts.length} sub="All connected" subColor="green" />
           <StatCard label="AI insights" value={insights.filter(i => !i.isRead).length} sub={insights.filter(i => !i.isRead).length > 0 ? 'Unread' : 'All clear'} subColor={insights.filter(i => !i.isRead).length > 0 ? 'red' : 'neutral'} />
         </div>
@@ -153,9 +198,11 @@ export default function PropertyDetailPage() {
             </div>
             {accounts.length === 0 ? (
               <EmptyState icon="⚡" title="No utility accounts" body="Add a utility account to start tracking bills for this property." />
+            ) : activeAccounts.length === 0 ? (
+              <p className="text-sm text-gray-500 py-4">No active utility accounts.</p>
             ) : (
               <div className="grid grid-cols-2 gap-3">
-                {accounts.map(account => (
+                {activeAccounts.map(account => (
                   <UtilityAccountCardWithHistory
                     key={account.id}
                     account={account}
@@ -168,6 +215,33 @@ export default function PropertyDetailPage() {
                 ))}
               </div>
             )}
+
+            {inactiveAccounts.length > 0 && (
+              <div className="mt-6">
+                <button
+                  onClick={() => setShowInactive(v => !v)}
+                  className="text-xs text-gray-500 hover:text-gray-300 transition-colors flex items-center gap-1 mb-3"
+                >
+                  <span>{showInactive ? '▾' : '▸'}</span>
+                  Inactive utility accounts ({inactiveAccounts.length})
+                </button>
+                {showInactive && (
+                  <div className="grid grid-cols-2 gap-3">
+                    {inactiveAccounts.map(account => (
+                      <UtilityAccountCardWithHistory
+                        key={account.id}
+                        account={account}
+                        payments={payments.filter(p => p.utilityAccountId === account.id)}
+                        propertyId={id!}
+                        syncing={syncing === account.id}
+                        onSync={() => handleSync(account.id)}
+                        onRefresh={() => getProperty(id!).then(setProperty)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </>
         )}
 
@@ -178,28 +252,30 @@ export default function PropertyDetailPage() {
             {payments.length === 0 ? (
               <EmptyState icon="💳" title="No payments yet" body="Payment history will appear here once accounts are synced." />
             ) : (
-              <table className="table-base">
-                <thead>
-                  <tr>
-                    <th>Utility</th>
-                    <th>Amount</th>
-                    <th>Date</th>
-                    <th>Confirmation #</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {payments.map(p => (
-                    <tr key={p.id}>
-                      <td className="font-medium">{p.utilityAccount?.providerName}</td>
-                      <td className="font-semibold">${Number(p.amount).toFixed(2)}</td>
-                      <td className="text-gray-500">{format(new Date(p.paymentDate), 'MMM d, yyyy')}</td>
-                      <td><span className="font-mono text-xs text-gray-400">{p.confirmationNumber || '—'}</span></td>
-                      <td><Pill color="green">Paid</Pill></td>
+              <div className="overflow-x-auto">
+                <table className="table-base">
+                  <thead>
+                    <tr>
+                      <th>Utility</th>
+                      <th>Amount</th>
+                      <th>Date</th>
+                      <th>Confirmation #</th>
+                      <th>Status</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {payments.map(p => (
+                      <tr key={p.id}>
+                        <td className="font-medium">{p.utilityAccount?.providerName}</td>
+                        <td className="font-semibold">${Number(p.amount).toFixed(2)}</td>
+                        <td className="text-gray-500">{fmtDate(p.paymentDate, 'MMM d, yyyy')}</td>
+                        <td><span className="font-mono text-xs text-gray-400">{p.confirmationNumber || '—'}</span></td>
+                        <td><Pill color="green">Paid</Pill></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </>
         )}
@@ -259,7 +335,7 @@ export default function PropertyDetailPage() {
                         <p className="section-label mb-0">{acct?.providerName || 'Unknown account'}</p>
                         <span className="text-xs text-gray-600">{stmts.length} statement{stmts.length !== 1 ? 's' : ''}</span>
                       </div>
-                      <div className="grid grid-cols-3 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                         {stmts.map(stmt => (
                           <div
                             key={stmt.id}
@@ -281,11 +357,11 @@ export default function PropertyDetailPage() {
                               }
                             </div>
                             <p className="text-xs font-medium text-gray-200 truncate">
-                              {format(new Date(stmt.statementDate), 'MMM d, yyyy')}
+                              {fmtDate(stmt.statementDate, 'MMM d, yyyy')}
                             </p>
                             <p className="text-xs text-gray-400 mt-0.5">
                               {stmt.amountDue ? `$${Number(stmt.amountDue).toFixed(2)}` : 'No amount'}
-                              {stmt.dueDate ? ` · Due ${format(new Date(stmt.dueDate), 'MMM d')}` : ''}
+                              {stmt.dueDate ? ` · Due ${fmtDate(stmt.dueDate, 'MMM d')}` : ''}
                             </p>
                             <p className="text-xs mt-1" style={{ color: stmt.pdfS3Key ? '#ef4444' : '#6b7280' }}>
                               {stmt.pdfS3Key ? '📄 PDF' : 'No PDF'}
@@ -323,7 +399,7 @@ export default function PropertyDetailPage() {
   );
 }
 
-const UTILITY_CATEGORIES = ['ELECTRIC','GAS','WATER','SEWER','TRASH','SOLAR','INTERNET','PHONE','INSURANCE','HOA','TAXES','OTHER'];
+const UTILITY_CATEGORIES = ['ELECTRIC','GAS','WATER','SEWER','TRASH','SOLAR','INTERNET','PHONE','INSURANCE','HOA','TAXES','LOAN','CREDIT_CARD','OTHER'];
 
 function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccount; onClose: () => void; onSaved: () => void }) {
   const [form, setForm] = useState({
@@ -333,9 +409,52 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
     username:      '',
     password:      '',
     notes:         (account as any).notes || '',
+    loginUrl:      account.loginUrl || '',
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [revealedAccountNumber, setRevealedAccountNumber] = useState<string | null>(null);
+  const [revealingAccountNumber, setRevealingAccountNumber] = useState(false);
+  const [insuranceType, setInsuranceType] = useState('PROPERTY');
+  const [insuranceTypeTouched, setInsuranceTypeTouched] = useState(false);
+  const [loanType, setLoanType] = useState('OTHER');
+  const [loanTypeTouched, setLoanTypeTouched] = useState(false);
+  const [revealedPassword, setRevealedPassword] = useState<string | null>(null);
+  const [revealingPassword, setRevealingPassword] = useState(false);
+  const [fetchedUsername, setFetchedUsername] = useState<string | null>(null);
+
+  // Username is low-sensitivity (just a login/email) so it's always shown,
+  // fetched once on open and prefilled into the editable field. Password
+  // stays hidden until explicitly revealed below.
+  useEffect(() => {
+    if (!account.hasCredentials) return;
+    getUtilityUsername(account.id).then(({ username }) => {
+      setFetchedUsername(username ?? '');
+      setForm(f => ({ ...f, username: username ?? '' }));
+    }).catch(() => {});
+  }, [account.id]);
+
+  async function toggleAccountNumber() {
+    if (revealedAccountNumber != null) { setRevealedAccountNumber(null); return; }
+    setRevealingAccountNumber(true);
+    try {
+      const { accountNumber } = await revealUtilityAccountNumber(account.id);
+      setRevealedAccountNumber(accountNumber ?? '');
+    } finally {
+      setRevealingAccountNumber(false);
+    }
+  }
+
+  async function togglePassword() {
+    if (revealedPassword != null) { setRevealedPassword(null); return; }
+    setRevealingPassword(true);
+    try {
+      const { password } = await getUtilityPassword(account.id);
+      setRevealedPassword(password ?? '');
+    } finally {
+      setRevealingPassword(false);
+    }
+  }
 
   const fieldCls = 'w-full rounded-lg px-3 py-2 text-sm text-white bg-white/5 border border-white/10 focus:border-amber-500/50 outline-none';
 
@@ -346,9 +465,15 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
       if (form.providerName.trim()  !== account.providerName) patch.providerName = form.providerName.trim();
       if (form.category             !== account.category)     patch.category     = form.category;
       if (form.accountNumber.trim()) patch.accountNumber = form.accountNumber.trim();
-      if (form.username.trim())      patch.username      = form.username.trim();
+      if (form.username.trim() !== (fetchedUsername ?? '')) patch.username = form.username.trim();
       if (form.password.trim())      patch.password      = form.password.trim();
       if (form.notes.trim()         !== ((account as any).notes || '')) patch.notes = form.notes.trim();
+      if (form.loginUrl.trim()      !== (account.loginUrl || ''))       patch.loginUrl = form.loginUrl.trim();
+      // Only send insuranceType/loanType if the user actually touched the
+      // dropdown — otherwise we'd silently overwrite an existing policy's/
+      // loan's type with the form's default every time they save.
+      if (form.category === 'INSURANCE' && insuranceTypeTouched) patch.insuranceType = insuranceType;
+      if ((form.category === 'LOAN' || form.category === 'CREDIT_CARD') && loanTypeTouched) patch.loanType = loanType;
       if (Object.keys(patch).length === 0) { onClose(); return; }
       await updateUtility(account.id, patch);
       onSaved();
@@ -377,26 +502,101 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
             <div>
               <label className="text-xs text-gray-400 block mb-1">Category</label>
               <select className={fieldCls} value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value as any }))}>
-                {UTILITY_CATEGORIES.map(c => <option key={c} value={c}>{c.charAt(0) + c.slice(1).toLowerCase()}</option>)}
+                {UTILITY_CATEGORIES.map(c => <option key={c} value={c}>{CATEGORY_LABELS[c as keyof typeof CATEGORY_LABELS]}</option>)}
               </select>
             </div>
           </div>
+          {form.category === 'INSURANCE' && (
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Insurance type</label>
+              <select
+                className={fieldCls}
+                value={insuranceType}
+                onChange={e => { setInsuranceType(e.target.value); setInsuranceTypeTouched(true); }}
+              >
+                {Object.entries(INSURANCE_TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </div>
+          )}
+          {(form.category === 'LOAN' || form.category === 'CREDIT_CARD') && (
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Loan type</label>
+              <select
+                className={fieldCls}
+                value={loanType}
+                onChange={e => { setLoanType(e.target.value); setLoanTypeTouched(true); }}
+              >
+                {Object.entries(LOAN_TYPE_LABELS).filter(([v]) => v !== 'MORTGAGE').map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </div>
+          )}
           <div>
             <label className="text-xs text-gray-400 block mb-1">
-              Account number
+              {form.category === 'INSURANCE' ? 'Account number (policy number)' : 'Account number'}
               {account.providerSlug === 'wm' && <span className="text-gray-600 ml-1">(e.g. 8-92846-35002)</span>}
             </label>
-            <input className={fieldCls} placeholder={account.accountNumber || 'Full account number'} value={form.accountNumber} onChange={e => setForm(f => ({ ...f, accountNumber: e.target.value }))} />
+            {account.accountNumber && (
+              <div className="flex items-center gap-1.5 mb-1.5">
+                <span className="font-mono text-xs text-gray-400">
+                  Current: {revealedAccountNumber != null ? revealedAccountNumber : account.accountNumber}
+                </span>
+                <button
+                  type="button"
+                  onClick={toggleAccountNumber}
+                  disabled={revealingAccountNumber}
+                  title={revealedAccountNumber != null ? 'Hide account number' : 'Show full account number'}
+                  className="text-gray-500 hover:text-gray-300 transition-colors disabled:opacity-40"
+                >
+                  {revealingAccountNumber ? '…' : revealedAccountNumber != null ? '🙈' : '👁'}
+                </button>
+              </div>
+            )}
+            <input className={fieldCls} placeholder="Enter a new account number to replace it" value={form.accountNumber} onChange={e => setForm(f => ({ ...f, accountNumber: e.target.value }))} />
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs text-gray-400 block mb-1">Username / Email</label>
-              <input className={fieldCls} placeholder="New login" value={form.username} onChange={e => setForm(f => ({ ...f, username: e.target.value }))} />
+          <div>
+            <p className="text-xs mb-1.5">
+              {account.hasCredentials
+                ? <span className="text-emerald-500">✓ Login credentials are saved</span>
+                : <span className="text-amber-400">No login credentials saved yet</span>}
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Username / Email</label>
+                <input
+                  className={fieldCls} placeholder="Your login email or username" value={form.username}
+                  onChange={e => setForm(f => ({ ...f, username: e.target.value }))}
+                  autoComplete="off" name="utility-username" type="text"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Password</label>
+                {account.hasCredentials && (
+                  <div className="flex items-center gap-1.5 mb-1.5">
+                    <span className="font-mono text-xs text-gray-400 truncate">
+                      {revealedPassword != null ? revealedPassword : '••••••••'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={togglePassword}
+                      disabled={revealingPassword}
+                      title={revealedPassword != null ? 'Hide password' : 'Show current password'}
+                      className="text-gray-500 hover:text-gray-300 transition-colors disabled:opacity-40 flex-shrink-0"
+                    >
+                      {revealingPassword ? '…' : revealedPassword != null ? '🙈' : '👁'}
+                    </button>
+                  </div>
+                )}
+                <input
+                  type="password" className={fieldCls} placeholder="New password" value={form.password}
+                  onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
+                  autoComplete="new-password" name="utility-password"
+                />
+              </div>
             </div>
-            <div>
-              <label className="text-xs text-gray-400 block mb-1">Password</label>
-              <input type="password" className={fieldCls} placeholder="New password" value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} />
-            </div>
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Pay/login link</label>
+            <input className={fieldCls} placeholder="https://provider.com/login" value={form.loginUrl} onChange={e => setForm(f => ({ ...f, loginUrl: e.target.value }))} />
           </div>
           <div>
             <label className="text-xs text-gray-400 block mb-1">Notes (optional)</label>
@@ -493,7 +693,7 @@ function EditPropertyModal({ property, onClose, onSaved }: { property: Property;
             <label className="text-xs text-gray-400 block mb-1">Street address</label>
             <input className={fieldCls} value={form.address} onChange={e => setForm(f => ({ ...f, address: e.target.value }))} />
           </div>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             <div>
               <label className="text-xs text-gray-400 block mb-1">City</label>
               <input className={fieldCls} value={form.city} onChange={e => setForm(f => ({ ...f, city: e.target.value }))} />
@@ -584,27 +784,50 @@ function UtilityAccountCardWithHistory({
 }: { account: UtilityAccount; payments: Payment[]; syncing: boolean; onSync: () => void; onRefresh: () => void; propertyId: string }) {
   const [editing,  setEditing]  = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [togglingActive, setTogglingActive] = useState(false);
   const navigate = useNavigate();
+
+  async function handleToggleActive() {
+    setTogglingActive(true);
+    try {
+      await updateUtility(account.id, { isActive: account.isActive === false });
+      onRefresh();
+    } finally {
+      setTogglingActive(false);
+    }
+  }
 
   return (
     <div>
       {editing  && <EditUtilityModal   account={account} onClose={() => setEditing(false)}  onSaved={onRefresh} />}
       {deleting && <DeleteUtilityModal account={account} onClose={() => setDeleting(false)} onDeleted={onRefresh} />}
-      <UtilityAccountCard account={account} payments={payments} syncing={syncing} onSync={onSync} onEdit={() => setEditing(true)} onDelete={() => setDeleting(true)} />
-      <button
-        onClick={() => navigate(`/properties/${propertyId}/utilities/${account.id}`)}
-        className="mt-1.5 ml-1 text-xs text-gray-500 hover:text-[#F5A623] transition-colors flex items-center gap-1"
-      >
-        <span>›</span>
-        View statements &amp; payments
-      </button>
+      <UtilityAccountCard
+        account={account} payments={payments} syncing={syncing} onSync={onSync}
+        onEdit={() => setEditing(true)} onDelete={() => setDeleting(true)}
+        onToggleActive={handleToggleActive} togglingActive={togglingActive}
+        onOpenDetail={() => navigate(`/properties/${propertyId}/utilities/${account.id}`)}
+      />
     </div>
   );
 }
 
 function UtilityAccountCard({
-  account, payments, syncing, onSync, onEdit, onDelete
-}: { account: UtilityAccount; payments: Payment[]; syncing: boolean; onSync: () => void; onEdit: () => void; onDelete: () => void }) {
+  account, payments, syncing, onSync, onEdit, onDelete, onToggleActive, togglingActive, onOpenDetail
+}: { account: UtilityAccount; payments: Payment[]; syncing: boolean; onSync: () => void; onEdit: () => void; onDelete: () => void; onToggleActive: () => void; togglingActive: boolean; onOpenDetail: () => void }) {
+  const [revealedAccountNumber, setRevealedAccountNumber] = useState<string | null>(null);
+  const [revealingAccountNumber, setRevealingAccountNumber] = useState(false);
+
+  async function toggleAccountNumber() {
+    if (revealedAccountNumber != null) { setRevealedAccountNumber(null); return; }
+    setRevealingAccountNumber(true);
+    try {
+      const { accountNumber } = await revealUtilityAccountNumber(account.id);
+      setRevealedAccountNumber(accountNumber ?? '');
+    } finally {
+      setRevealingAccountNumber(false);
+    }
+  }
+
   const latest = account.statements?.[0];
   const dueDate = latest?.dueDate ? new Date(latest.dueDate) : null;
   const color = CATEGORY_COLORS[account.category] || '#888';
@@ -612,8 +835,10 @@ function UtilityAccountCard({
   // Reconcile balance against recent payments so a payment that hasn't yet posted
   // to the provider's API still shows up correctly. If the latest payment is after
   // the latest statement AND covers the open balance, treat the bill as paid.
-  const raw = latest?.rawDataJson as Record<string, unknown> | undefined;
-  const openBalance = (raw?.accountBalance ?? raw?.totalDue ?? (latest as any)?.balance ?? latest?.amountDue) as number | undefined;
+  // Open balance from the editable columns: current charge + any carried past due.
+  const openBalance = latest
+    ? Number(latest.amountDue ?? 0) + Number((latest as any).pastDueCarried ?? 0)
+    : undefined;
   const stmtDate = latest?.statementDate ? new Date(latest.statementDate) : null;
   const recentPmt = payments
     .filter(p => stmtDate ? new Date(p.paymentDate) >= stmtDate : true)
@@ -622,16 +847,19 @@ function UtilityAccountCard({
     .filter(p => stmtDate ? new Date(p.paymentDate) >= stmtDate : false)
     .reduce((s, p) => s + Number(p.amount ?? 0), 0);
   const isPaidViaPayment = !!recentPmt && openBalance != null && recentPaidSum >= openBalance - 0.01;
-  const isPaidViaStatement = (latest?.amountPaid != null && Number(latest.amountPaid) > 0) || raw?.isPaid === true;
+  const isPaidViaStatement = latest?.amountPaid != null && Number(latest.amountPaid) > 0;
   const isPaid = isPaidViaPayment || isPaidViaStatement;
 
   const now = new Date();
   const isPastDue = !isPaid && dueDate != null && dueDate < now;
   const isDueSoon = !isPaid && !isPastDue && dueDate != null && dueDate <= new Date(Date.now() + 7 * 86400000);
 
-  // Status pill: paid > past due > due soon > sync status.
-  // Bill state takes priority over sync state because the user cares about whether they owe money.
-  const statusLabel = isPaid ? 'Paid'
+  // Status pill: inactive overrides everything else — an account you've
+  // deactivated isn't "past due" or "syncing", it's just parked.
+  // Otherwise: paid > past due > due soon > sync status, since bill state
+  // takes priority over sync state (the user cares about whether they owe money).
+  const statusLabel = account.isActive === false ? 'Inactive'
+    : isPaid ? 'Paid'
     : isPastDue ? 'Past due'
     : isDueSoon ? 'Due soon'
     : account.lastSyncStatus === 'SUCCESS' ? 'Synced'
@@ -639,60 +867,112 @@ function UtilityAccountCard({
     : account.lastSyncStatus === 'PENDING' ? 'Syncing…'
     : 'Not synced';
 
-  const pillColor: any = isPaid ? 'green'
+  const pillColor: any = account.isActive === false ? 'gray'
+    : isPaid ? 'green'
     : isPastDue ? 'red'
     : isDueSoon ? 'amber'
     : account.lastSyncStatus === 'SUCCESS' ? 'green'
     : account.lastSyncStatus === 'FAILED' ? 'red' : 'gray';
 
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [menuOpen]);
+
   return (
-    <div className="card p-4">
+    <div className={`card p-4 flex flex-col ${account.isActive === false ? 'bg-white/[0.01] border-white/5' : ''}`}>
       <div className="flex items-start justify-between mb-3">
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 min-w-0">
           <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: color }} />
-          <div>
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <p className="text-sm font-semibold text-white">{account.providerName}</p>
-              <button
-                onClick={onEdit}
-                title="Edit account"
-                className="px-1.5 py-0.5 rounded text-xs text-gray-400 hover:text-white hover:bg-white/10 transition-colors leading-none border border-white/10 hover:border-white/20"
-              >
-                Edit
-              </button>
-              <button
-                onClick={onDelete}
-                title="Delete account"
-                className="px-1.5 py-0.5 rounded text-xs text-red-500/60 hover:text-red-400 hover:bg-red-500/10 transition-colors leading-none border border-red-500/20 hover:border-red-500/40"
-              >
-                Delete
-              </button>
-            </div>
-            <p className="text-xs font-mono text-gray-400">{account.accountNumber || 'No account #'}</p>
+          <div className="min-w-0">
+            <button
+              onClick={onOpenDetail}
+              title="View statements & payments"
+              className="text-sm font-semibold text-white truncate hover:text-[#F5A623] transition-colors text-left"
+            >
+              {account.providerName}
+            </button>
+            {account.accountNumber ? (
+              <p className="text-xs font-mono text-gray-400 flex items-center gap-1">
+                {revealedAccountNumber != null ? revealedAccountNumber : account.accountNumber}
+                <button
+                  onClick={toggleAccountNumber}
+                  disabled={revealingAccountNumber}
+                  title={revealedAccountNumber != null ? 'Hide account number' : 'Show full account number'}
+                  className="text-gray-500 hover:text-gray-300 transition-colors disabled:opacity-40"
+                >
+                  {revealingAccountNumber ? '…' : revealedAccountNumber != null ? '🙈' : '👁'}
+                </button>
+              </p>
+            ) : (
+              <p className="text-xs font-mono text-gray-400">No account #</p>
+            )}
           </div>
         </div>
-        <Pill color={pillColor}>{statusLabel}</Pill>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <Pill color={pillColor}>{statusLabel}</Pill>
+          <div ref={menuRef} className="relative">
+            <button
+              onClick={() => setMenuOpen(v => !v)}
+              title="Account options"
+              className="w-6 h-6 rounded-lg flex items-center justify-center text-gray-500 hover:text-gray-300 hover:bg-white/10 transition-colors"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/>
+              </svg>
+            </button>
+            {menuOpen && (
+              <div className="absolute right-0 top-7 z-20 w-40 rounded-xl overflow-hidden shadow-xl" style={{ background: '#252525', border: '1px solid rgba(255,255,255,0.1)' }}>
+                <button
+                  onClick={() => { setMenuOpen(false); onEdit(); }}
+                  className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-white/8 transition-colors"
+                >
+                  Edit
+                </button>
+                <button
+                  onClick={() => { setMenuOpen(false); onToggleActive(); }}
+                  disabled={togglingActive}
+                  className={`w-full text-left px-3 py-2 text-xs transition-colors disabled:opacity-40 ${
+                    account.isActive === false ? 'text-emerald-400 hover:bg-emerald-500/10' : 'text-gray-300 hover:bg-white/8'
+                  }`}
+                >
+                  {togglingActive ? '…' : account.isActive === false ? 'Reactivate' : 'Deactivate'}
+                </button>
+                <button
+                  onClick={() => { setMenuOpen(false); onDelete(); }}
+                  className="w-full text-left px-3 py-2 text-xs text-red-400 hover:bg-red-500/10 transition-colors"
+                >
+                  Delete
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
+      <div className="flex-1 flex flex-col">
       <div className="flex items-end justify-between">
         <div className="flex-1 min-w-0">
           {(() => {
-            const raw = latest?.rawDataJson as Record<string, unknown> | undefined;
-            // accountBalance / totalDue = total amount owed (current + past due).
-            // balance is the DB-level field; fall back to amountDue if nothing else is available.
-            const accountBalance = (raw?.accountBalance ?? raw?.totalDue ?? (latest as any)?.balance) as number | undefined;
-            const pastDue = raw?.pastDue as number | undefined;
             const fmt = (n: number) => `$${Number(n).toFixed(2)}`;
 
-            // Total balance = full amount owed including any past due
-            // Current charge = this billing period only (amountDue)
-            // Past due = amount from prior unpaid periods (due immediately)
-            const totalBalance = accountBalance ?? latest?.amountDue;
-            const currentCharge = latest?.amountDue;
-            const pastDueAmt = pastDue && pastDue > 0 ? pastDue
-              : (totalBalance != null && currentCharge != null && totalBalance - currentCharge > 0.01)
-                ? Math.round((totalBalance - currentCharge) * 100) / 100
-                : undefined;
+            // All from the editable columns:
+            //   Current charge = this billing period only (amountDue)
+            //   Past due       = balance carried from prior periods (pastDueCarried)
+            //   Total balance  = current + past due
+            const currentCharge = latest?.amountDue != null ? Number(latest.amountDue) : undefined;
+            const pastDue = (latest as any)?.pastDueCarried != null ? Number((latest as any).pastDueCarried) : undefined;
+            const totalBalance = latest
+              ? Number(latest.amountDue ?? 0) + Number((latest as any).pastDueCarried ?? 0)
+              : undefined;
+            const pastDueAmt = pastDue && pastDue > 0 ? pastDue : undefined;
 
             if (!latest) {
               return (
@@ -716,7 +996,7 @@ function UtilityAccountCard({
                 {isPaid && recentPmt && !isPaidViaStatement && (
                   <div className="mt-1 flex items-center gap-1.5">
                     <span className="text-xs text-emerald-400">
-                      Paid {fmt(Number(recentPmt.amount))} on {format(new Date(recentPmt.paymentDate), 'MMM d')}
+                      Paid {fmt(Number(recentPmt.amount))} on {fmtDate(recentPmt.paymentDate, 'MMM d')}
                     </span>
                   </div>
                 )}
@@ -748,44 +1028,60 @@ function UtilityAccountCard({
             );
           })()}
         </div>
-        <button
-          onClick={onSync}
-          disabled={syncing}
-          className="btn text-xs ml-3 flex-shrink-0"
-        >
-          {syncing ? 'Syncing…' : 'Sync ↻'}
-        </button>
+        <div className="flex items-center gap-2 ml-3 flex-shrink-0">
+          {account.loginUrl && (
+            <a
+              href={account.loginUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={`Pay on ${account.providerName}'s site`}
+              className="btn text-xs"
+            >
+              Pay ↗
+            </a>
+          )}
+          <button
+            onClick={onSync}
+            disabled={syncing}
+            className="btn text-xs"
+          >
+            {syncing ? 'Syncing…' : 'Sync ↻'}
+          </button>
+        </div>
       </div>
 
-      {/* No credentials banner */}
-      {account.lastSyncStatus === 'FAILED' && account.lastSyncError?.startsWith('No credentials') && (
-        <div className="mt-3 px-3 py-2 rounded-lg text-xs space-y-1"
-          style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.25)' }}>
-          <p className="font-medium text-indigo-400">Credentials required to sync</p>
-          <p className="text-gray-400">
-            Click <span className="text-gray-200">Edit</span> and add the username and password you use to log in to the{' '}
-            <span className="text-gray-200">{account.providerName}</span> portal.
-          </p>
-        </div>
-      )}
+      <div className="mt-auto">
+        {/* No credentials banner */}
+        {account.lastSyncStatus === 'FAILED' && account.lastSyncError?.startsWith('No credentials') && (
+          <div className="mt-3 px-3 py-2 rounded-lg text-xs space-y-1"
+            style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.25)' }}>
+            <p className="font-medium text-indigo-400">Credentials required to sync</p>
+            <p className="text-gray-400">
+              Click <span className="text-gray-200">Edit</span> and add the username and password you use to log in to the{' '}
+              <span className="text-gray-200">{account.providerName}</span> portal.
+            </p>
+          </div>
+        )}
 
-      {/* MFA required banner */}
-      {account.lastSyncStatus === 'FAILED' && account.lastSyncError?.startsWith('MFA_REQUIRED') && (
-        <div className="mt-3 px-3 py-2 rounded-lg text-xs space-y-1"
-          style={{ background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.25)' }}>
-          <p className="font-medium text-amber-400">Phone verification required</p>
-          <p className="text-gray-400">
-            Log in to <span className="text-gray-200">{account.providerName}</span> manually in your browser,
-            complete the verification code step, then click Sync — Sollux will reuse the trusted session automatically.
-          </p>
-        </div>
-      )}
+        {/* MFA required banner */}
+        {account.lastSyncStatus === 'FAILED' && account.lastSyncError?.startsWith('MFA_REQUIRED') && (
+          <div className="mt-3 px-3 py-2 rounded-lg text-xs space-y-1"
+            style={{ background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.25)' }}>
+            <p className="font-medium text-amber-400">Phone verification required</p>
+            <p className="text-gray-400">
+              Log in to <span className="text-gray-200">{account.providerName}</span> manually in your browser,
+              complete the verification code step, then click Sync — Sollux will reuse the trusted session automatically.
+            </p>
+          </div>
+        )}
 
-      {account.lastSyncedAt && account.lastSyncStatus !== 'FAILED' && (
-        <p className="text-xs text-gray-300 mt-2">
-          Last synced {format(new Date(account.lastSyncedAt), 'MMM d \'at\' h:mm a')}
-        </p>
-      )}
+        {account.lastSyncedAt && account.lastSyncStatus !== 'FAILED' && (
+          <p className="text-xs text-gray-300 mt-2">
+            Last synced {format(new Date(account.lastSyncedAt), 'MMM d \'at\' h:mm a')}
+          </p>
+        )}
+      </div>
+      </div>
     </div>
   );
 }

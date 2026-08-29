@@ -1,9 +1,10 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { getLoan, getLoanAmortization, updateLoan, getProperties } from '../api/client';
+import { getLoan, getLoanAmortization, updateLoan, getProperties, extendLoan } from '../api/client';
 import type { Loan, Property, LoanType, PrepaymentPenalty, PrepaymentPenaltyTier } from '../types';
 import { format, addMonths } from 'date-fns';
+import { fmtDate } from '../lib/date';
 
 const money = (n: number | null | undefined) =>
   n == null ? '—' : n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
@@ -34,6 +35,7 @@ interface AmortizationResponse {
     negativeAmortization: boolean;
     isInterestOnly: boolean;
     schedule: { paymentNumber: number; date: string; paymentAmount: number; principal: number; interest: number; balance: number }[];
+    historicalSchedule: { paymentNumber: number; date: string; paymentAmount: number; principal: number; interest: number; balance: number }[];
     payoffDate: string | null;
     monthsRemaining: number | null;
     totalInterestRemaining: number;
@@ -193,6 +195,10 @@ function EditModal({ loan, properties, onClose, onSave }: {
     accountNumber: loan.accountNumber ?? '',
     originalAmount: loan.originalAmount != null ? String(loan.originalAmount) : '',
     interestRate: loan.interestRate != null ? String(loan.interestRate) : '',
+    rateType: loan.rateType ?? 'FIXED',
+    rateIndex: loan.rateIndex ?? 'PRIME',
+    rateMargin: loan.rateMargin != null ? String(loan.rateMargin) : '',
+    rateAdjustmentMonths: loan.rateAdjustmentMonths != null ? String(loan.rateAdjustmentMonths) : '12',
     monthlyPayment: loan.monthlyPayment != null ? String(loan.monthlyPayment) : '',
     balloonPaymentAmount: loan.balloonPaymentAmount != null ? String(loan.balloonPaymentAmount) : '',
     escrowAmount: loan.escrowAmount != null ? String(loan.escrowAmount) : '',
@@ -276,6 +282,10 @@ function EditModal({ loan, properties, onClose, onSave }: {
         accountNumber: form.accountNumber || null,
         originalAmount: form.originalAmount ? parseFloat(form.originalAmount) : null,
         interestRate: form.interestRate ? parseFloat(form.interestRate) : null,
+        rateType: form.rateType,
+        rateIndex: form.rateType === 'VARIABLE' ? form.rateIndex : null,
+        rateMargin: form.rateType === 'VARIABLE' && form.rateMargin ? parseFloat(form.rateMargin) : null,
+        rateAdjustmentMonths: form.rateType === 'VARIABLE' && form.rateAdjustmentMonths ? parseInt(form.rateAdjustmentMonths, 10) : null,
         monthlyPayment: form.monthlyPayment ? parseFloat(form.monthlyPayment) : null,
         balloonPaymentAmount: form.balloonPaymentAmount ? parseFloat(form.balloonPaymentAmount) : null,
         escrowAmount: form.escrowAmount ? parseFloat(form.escrowAmount) : null,
@@ -345,8 +355,39 @@ function EditModal({ loan, properties, onClose, onSave }: {
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Interest rate (%)</label>
-                <input type="number" step="0.001" value={form.interestRate} onChange={f('interestRate')} className="input-dark w-full text-sm" placeholder="10.0" />
+                <input type="number" step="0.001" value={form.interestRate} onChange={f('interestRate')} className="input-dark w-full text-sm" placeholder="10.0"
+                  disabled={form.rateType === 'VARIABLE'} title={form.rateType === 'VARIABLE' ? 'Auto-calculated from the index rate + margin below — not editable directly while variable' : undefined} />
               </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Rate type</label>
+                <select value={form.rateType} onChange={e => setForm(f => ({ ...f, rateType: e.target.value as 'FIXED' | 'VARIABLE' }))} className="input-dark w-full text-sm">
+                  <option value="FIXED">Fixed</option>
+                  <option value="VARIABLE">Variable (indexed)</option>
+                </select>
+              </div>
+              {form.rateType === 'VARIABLE' && (
+                <div className="col-span-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 rounded-lg p-3" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Index</label>
+                    <select value={form.rateIndex} onChange={e => setForm(f => ({ ...f, rateIndex: e.target.value }))} className="input-dark w-full text-sm">
+                      <option value="PRIME">Prime</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Margin (%)</label>
+                    <input type="number" step="0.001" value={form.rateMargin} onChange={f('rateMargin')} className="input-dark w-full text-sm" placeholder="-1.0" />
+                    <p className="text-xs text-gray-600 mt-1">e.g. -1.0 = 1% below index</p>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Resets every (months)</label>
+                    <input type="number" min={1} value={form.rateAdjustmentMonths} onChange={f('rateAdjustmentMonths')} className="input-dark w-full text-sm" placeholder="12" />
+                  </div>
+                  <p className="col-span-3 text-xs text-gray-500">
+                    Interest rate is recalculated automatically as {form.rateIndex} + margin on each reset anniversary — log {form.rateIndex} rate changes under Settings.
+                    {loan.nextRateAdjustment && <> Next reset: <span className="text-gray-300">{fmtDate(loan.nextRateAdjustment, 'MMM d, yyyy')}</span>.</>}
+                  </p>
+                </div>
+              )}
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="text-xs text-gray-500">Monthly payment (P&amp;I)</label>
@@ -501,7 +542,7 @@ function PrepaymentCard({ loan, currentBalance }: { loan: Loan; currentBalance: 
       {calc.inPenaltyPeriod ? (
         <div className="space-y-4">
           {/* Current penalty amount */}
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             <div className="rounded-lg px-3 py-2.5" style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)' }}>
               <p className="text-xs text-gray-500 mb-1">Current penalty rate</p>
               <p className="text-lg font-semibold text-red-400">{calc.currentRate != null ? pct(calc.currentRate) : '—'}</p>
@@ -625,8 +666,10 @@ export default function LoanDetailPage() {
   const [properties, setProperties] = useState<Property[]>([]);
   const [loading, setLoading] = useState(true);
   const [showFullSchedule, setShowFullSchedule] = useState(false);
+  const [scheduleView, setScheduleView] = useState<'remaining' | 'past'>('remaining');
   const [chartFullRange, setChartFullRange] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
+  const [showExtend, setShowExtend] = useState(false);
 
   const reload = () => {
     if (!id) return Promise.resolve();
@@ -689,7 +732,7 @@ export default function LoanDetailPage() {
             {LOAN_TYPE_LABELS[loan.loanType] ?? loan.loanType}
             {loan.paymentType === 'INTEREST_ONLY' && (
               <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded" style={{ background: 'rgba(245,166,35,0.12)', color: '#F5A623' }}>
-                Interest only{loan.paymentStructureChangedAt ? ` since ${format(new Date(loan.paymentStructureChangedAt), 'MMM yyyy')}` : ''}
+                Interest only{loan.paymentStructureChangedAt ? ` since ${fmtDate(loan.paymentStructureChangedAt, 'MMM yyyy')}` : ''}
               </span>
             )}
             {loan.accountNumber ? (
@@ -710,20 +753,32 @@ export default function LoanDetailPage() {
         <div className="flex items-center gap-2">
           {loan.isPersonal && <span className="pill pill-purple">Personal</span>}
           {!loan.isActive && <span className="pill pill-gray">Closed</span>}
+          {loan.maturityDate && (
+            <button onClick={() => setShowExtend(true)} className="btn text-sm">Extend</button>
+          )}
           <button onClick={() => setShowEdit(true)} className="btn text-sm">Edit</button>
         </div>
       </div>
+
+      {loan.maturityDate && (
+        <p className="text-xs text-gray-500 mt-1">
+          Maturity: <span className="text-gray-300">{fmtDate(loan.maturityDate, 'MMM d, yyyy')}</span>
+          {loan.loanExtensions && loan.loanExtensions.length > 0 && (
+            <span> &middot; extended {loan.loanExtensions.length} time{loan.loanExtensions.length > 1 ? 's' : ''}</span>
+          )}
+        </p>
+      )}
 
       {amortization.negativeAmortization && (
         <div className="mt-4 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-4 py-2.5">
           The payment on file doesn't cover the monthly interest — unpaid interest is capitalizing into the balance instead of paying it down.
           {reachesBalloonPayoff && lastScheduleRow ? (
             <> Balance grows to <span className="font-medium">{money(peakBalanceRow?.balance ?? 0)}</span> by{' '}
-            <span className="font-medium">{format(new Date(peakBalanceRow?.date ?? lastScheduleRow.date), 'MMM yyyy')}</span>, then the{' '}
+            <span className="font-medium">{fmtDate(peakBalanceRow?.date ?? lastScheduleRow.date, 'MMM yyyy')}</span>, then the{' '}
             <span className="font-medium">{money(lastScheduleRow.paymentAmount)}</span> balloon payment due{' '}
-            <span className="font-medium">{format(new Date(lastScheduleRow.date), 'MMM yyyy')}</span> pays it off.</>
+            <span className="font-medium">{fmtDate(lastScheduleRow.date, 'MMM yyyy')}</span> pays it off.</>
           ) : amortization.scheduleEndsAt && (
-            <> Projected through <span className="font-medium">{format(new Date(amortization.scheduleEndsAt), 'MMM yyyy')}</span>, that adds up to{' '}
+            <> Projected through <span className="font-medium">{fmtDate(amortization.scheduleEndsAt, 'MMM yyyy')}</span>, that adds up to{' '}
             <span className="font-medium">{moneyPrecise(amortization.totalDeferredInterest)}</span> of deferred interest added to the balance.</>
           )}
         </div>
@@ -731,16 +786,16 @@ export default function LoanDetailPage() {
 
       {amortization.isInterestOnly && (
         <div className="mt-4 text-xs text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-lg px-4 py-2.5">
-          Payments aren't reducing principal — this loan is interest-only{loan.paymentStructureChangedAt ? ` as of ${format(new Date(loan.paymentStructureChangedAt), 'MMMM yyyy')}` : ''}.
+          Payments aren't reducing principal — this loan is interest-only{loan.paymentStructureChangedAt ? ` as of ${fmtDate(loan.paymentStructureChangedAt, 'MMMM yyyy')}` : ''}.
           {amortization.scheduleEndsAt && (
             <> Balance projected to stay flat at <span className="font-medium">{money(balance.balance)}</span> through{' '}
-            <span className="font-medium">{format(new Date(amortization.scheduleEndsAt), 'MMM yyyy')}</span>.</>
+            <span className="font-medium">{fmtDate(amortization.scheduleEndsAt, 'MMM yyyy')}</span>.</>
           )}
         </div>
       )}
 
       {/* Stats */}
-      <div className="grid grid-cols-4 gap-3 mt-5">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-5">
         <div className="stat-card">
           <p className="text-xs text-gray-500 mb-1">Current balance</p>
           <p className={`text-xl font-semibold ${hasBalanceData ? 'text-red-400' : 'text-gray-500'}`}>
@@ -771,11 +826,11 @@ export default function LoanDetailPage() {
               <p className="text-xl font-semibold text-red-400">Growing</p>
               {reachesBalloonPayoff && lastScheduleRow ? (
                 <p className="text-xs text-gray-600 mt-1">
-                  Balloon due {format(new Date(lastScheduleRow.date), 'MMM yyyy')}: {money(lastScheduleRow.paymentAmount)}
+                  Balloon due {fmtDate(lastScheduleRow.date, 'MMM yyyy')}: {money(lastScheduleRow.paymentAmount)}
                 </p>
               ) : amortization.scheduleEndsAt && (
                 <p className="text-xs text-gray-600 mt-1">
-                  {money(peakBalanceRow?.balance ?? 0)} by {format(new Date(amortization.scheduleEndsAt), 'MMM yyyy')}
+                  {money(peakBalanceRow?.balance ?? 0)} by {fmtDate(amortization.scheduleEndsAt, 'MMM yyyy')}
                 </p>
               )}
             </>
@@ -784,23 +839,32 @@ export default function LoanDetailPage() {
               <p className="text-xl font-semibold text-amber-400">Flat</p>
               {amortization.scheduleEndsAt && (
                 <p className="text-xs text-gray-600 mt-1">
-                  Interest-only through {format(new Date(amortization.scheduleEndsAt), 'MMM yyyy')}
+                  Interest-only through {fmtDate(amortization.scheduleEndsAt, 'MMM yyyy')}
                 </p>
               )}
             </>
           ) : (
             <>
               <p className={`text-xl font-semibold ${amortization.payoffDate ? 'text-green-400' : 'text-gray-500'}`}>
-                {amortization.payoffDate ? format(new Date(amortization.payoffDate), 'MMM yyyy') : '—'}
+                {amortization.payoffDate ? fmtDate(amortization.payoffDate, 'MMM yyyy') : '—'}
               </p>
               {amortization.monthsRemaining && <p className="text-xs text-gray-600 mt-1">{amortization.monthsRemaining} payments left</p>}
             </>
           )}
         </div>
         <div className="stat-card">
-          <p className="text-xs text-gray-500 mb-1">Interest rate</p>
+          <p className="text-xs text-gray-500 mb-1">
+            Interest rate{loan.rateType === 'VARIABLE' && <span className="ml-1 text-amber-400">(variable)</span>}
+          </p>
           <p className="text-xl font-semibold text-white">{loan.interestRate != null ? `${loan.interestRate}%` : '—'}</p>
-          <p className="text-xs text-gray-600 mt-1">{money(amortization.totalInterestRemaining)} interest remaining</p>
+          {loan.rateType === 'VARIABLE' ? (
+            <p className="text-xs text-gray-600 mt-1">
+              {loan.rateIndex} {loan.rateMargin != null && Number(loan.rateMargin) >= 0 ? '+' : ''}{loan.rateMargin}%
+              {loan.nextRateAdjustment && <> · resets {fmtDate(loan.nextRateAdjustment, 'MMM yyyy')}</>}
+            </p>
+          ) : (
+            <p className="text-xs text-gray-600 mt-1">{money(amortization.totalInterestRemaining)} interest remaining</p>
+          )}
         </div>
       </div>
 
@@ -843,6 +907,27 @@ export default function LoanDetailPage() {
       {/* Prepayment penalty */}
       <PrepaymentCard loan={loan} currentBalance={currentBalance} />
 
+      {/* Extension history */}
+      {loan.loanExtensions && loan.loanExtensions.length > 0 && (
+        <div className="card p-4 mb-6">
+          <p className="text-sm font-medium text-white mb-3">Extension history</p>
+          <div className="space-y-2">
+            {loan.loanExtensions.map(ext => (
+              <div key={ext.id} className="flex items-center justify-between text-xs border-b border-white/5 pb-2 last:border-0 last:pb-0">
+                <div className="text-gray-400">
+                  <span className="text-white font-medium">+{ext.months} month{ext.months !== 1 ? 's' : ''}</span>
+                  {ext.previousMaturityDate && (
+                    <> — {fmtDate(ext.previousMaturityDate, 'MMM yyyy')} &rarr; {fmtDate(ext.newMaturityDate, 'MMM yyyy')}</>
+                  )}
+                  {ext.notes && <span className="text-gray-500"> · {ext.notes}</span>}
+                </div>
+                <span className="text-gray-600">{fmtDate(ext.extendedAt, 'MMM d, yyyy')}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Balance over time chart */}
       {chartData.length > 1 && (
         <div className="card p-4 mb-6">
@@ -863,11 +948,11 @@ export default function LoanDetailPage() {
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false} />
-              <XAxis dataKey="date" tickFormatter={d => format(new Date(d), 'MMM yy')} stroke="#6b7280" fontSize={11} tickLine={false} axisLine={false} minTickGap={40} />
+              <XAxis dataKey="date" tickFormatter={d => fmtDate(d, 'MMM yy')} stroke="#6b7280" fontSize={11} tickLine={false} axisLine={false} minTickGap={40} />
               <YAxis tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} stroke="#6b7280" fontSize={11} tickLine={false} axisLine={false} width={48} />
               <Tooltip
                 contentStyle={{ background: '#242424', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 12 }}
-                labelFormatter={d => format(new Date(d), 'MMM d, yyyy')}
+                labelFormatter={d => fmtDate(d, 'MMM d, yyyy')}
                 formatter={(v: number) => [moneyPrecise(v), 'Balance']}
               />
               <Area type="monotone" dataKey="balance" stroke="#f87171" strokeWidth={2} fill="url(#balanceFill)" dot={false} />
@@ -880,14 +965,30 @@ export default function LoanDetailPage() {
       {amortization.isAmortizing && amortization.schedule.length > 0 && (
         <div className="card p-4 mb-6">
           <div className="flex items-center justify-between mb-3">
-            <p className="text-sm font-medium text-white">
-              {amortization.negativeAmortization ? 'Projected balance schedule (negative amortization)'
-                : amortization.isInterestOnly ? 'Projected interest-only schedule'
-                : 'Remaining amortization schedule'}
-            </p>
-            {amortization.schedule.length > 12 && (
+            <div className="flex items-center gap-3">
+              <p className="text-sm font-medium text-white">
+                {scheduleView === 'past'
+                  ? 'Past months (calculated from origination — not actual payment records)'
+                  : amortization.negativeAmortization ? 'Projected balance schedule (negative amortization)'
+                  : amortization.isInterestOnly ? 'Projected interest-only schedule'
+                  : 'Remaining amortization schedule'}
+              </p>
+              {amortization.historicalSchedule.length > 0 && (
+                <div className="flex rounded-lg overflow-hidden border border-white/10 text-xs flex-shrink-0">
+                  <button
+                    onClick={() => setScheduleView('remaining')}
+                    className={`px-2.5 py-1 ${scheduleView === 'remaining' ? 'bg-amber-500/20 text-amber-400' : 'text-gray-500 hover:text-gray-300'}`}
+                  >Remaining</button>
+                  <button
+                    onClick={() => setScheduleView('past')}
+                    className={`px-2.5 py-1 ${scheduleView === 'past' ? 'bg-amber-500/20 text-amber-400' : 'text-gray-500 hover:text-gray-300'}`}
+                  >Past</button>
+                </div>
+              )}
+            </div>
+            {(scheduleView === 'past' ? amortization.historicalSchedule : amortization.schedule).length > 12 && (
               <button onClick={() => setShowFullSchedule(v => !v)} className="text-xs text-amber-400 hover:text-amber-300">
-                {showFullSchedule ? 'Show less' : `Show all ${amortization.schedule.length}`}
+                {showFullSchedule ? 'Show less' : `Show all ${(scheduleView === 'past' ? amortization.historicalSchedule : amortization.schedule).length}`}
               </button>
             )}
           </div>
@@ -904,18 +1005,22 @@ export default function LoanDetailPage() {
                 </tr>
               </thead>
               <tbody>
-                {(showFullSchedule ? amortization.schedule : amortization.schedule.slice(0, 12)).map(row => (
-                  <tr key={row.paymentNumber}>
-                    <td className="text-gray-600">{row.paymentNumber}</td>
-                    <td>{format(new Date(row.date), 'MMM yyyy')}</td>
-                    <td className="text-right font-mono">{moneyPrecise(row.paymentAmount)}</td>
-                    <td className={`text-right font-mono ${row.principal < 0 ? 'text-red-400' : 'text-green-400'}`}>
-                      {row.principal < 0 ? `+${moneyPrecise(-row.principal)}` : moneyPrecise(row.principal)}
-                    </td>
-                    <td className="text-right font-mono text-gray-400">{moneyPrecise(row.interest)}</td>
-                    <td className="text-right font-mono">{moneyPrecise(row.balance)}</td>
-                  </tr>
-                ))}
+                {(() => {
+                  const rows = scheduleView === 'past' ? amortization.historicalSchedule : amortization.schedule;
+                  const visible = showFullSchedule ? rows : (scheduleView === 'past' ? rows.slice(-12) : rows.slice(0, 12));
+                  return visible.map(row => (
+                    <tr key={row.paymentNumber}>
+                      <td className="text-gray-600">{row.paymentNumber}</td>
+                      <td>{fmtDate(row.date, 'MMM yyyy')}</td>
+                      <td className="text-right font-mono">{moneyPrecise(row.paymentAmount)}</td>
+                      <td className={`text-right font-mono ${row.principal < 0 ? 'text-red-400' : 'text-green-400'}`}>
+                        {row.principal < 0 ? `+${moneyPrecise(-row.principal)}` : moneyPrecise(row.principal)}
+                      </td>
+                      <td className="text-right font-mono text-gray-400">{moneyPrecise(row.interest)}</td>
+                      <td className="text-right font-mono">{moneyPrecise(row.balance)}</td>
+                    </tr>
+                  ));
+                })()}
               </tbody>
             </table>
           </div>
@@ -942,7 +1047,7 @@ export default function LoanDetailPage() {
               <tbody>
                 {loan.loanPayments.map(p => (
                   <tr key={p.id}>
-                    <td>{format(new Date(p.date), 'MMM d, yyyy')}</td>
+                    <td>{fmtDate(p.date, 'MMM d, yyyy')}</td>
                     <td className="text-right font-mono">{moneyPrecise(p.amount)}</td>
                     <td className="text-right font-mono text-green-400">{p.principal != null ? moneyPrecise(p.principal) : '—'}</td>
                     <td className="text-right font-mono text-gray-400">{p.interest != null ? moneyPrecise(p.interest) : '—'}</td>
@@ -968,6 +1073,87 @@ export default function LoanDetailPage() {
           onSave={updated => { setLoan(updated); reload(); }}
         />
       )}
+
+      {/* Extend modal */}
+      {showExtend && loan.maturityDate && (
+        <ExtendLoanModal
+          loan={loan}
+          onClose={() => setShowExtend(false)}
+          onSave={async () => { setShowExtend(false); await reload(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function ExtendLoanModal({ loan, onClose, onSave }: {
+  loan: Loan; onClose: () => void; onSave: () => void;
+}) {
+  const [months, setMonths] = useState('12');
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const currentMaturity = loan.maturityDate ? new Date(loan.maturityDate) : null;
+  const monthsNum = parseInt(months, 10);
+  const previewDate = currentMaturity && monthsNum > 0
+    ? new Date(currentMaturity.getFullYear(), currentMaturity.getMonth() + monthsNum, currentMaturity.getDate())
+    : null;
+
+  async function handleSave() {
+    if (!monthsNum || monthsNum <= 0) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await extendLoan(loan.id, { months: monthsNum, notes: notes || undefined });
+      onSave();
+    } catch {
+      setError('Failed to extend loan. Please try again.');
+    } finally { setSaving(false); }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="w-full max-w-md rounded-2xl p-6" style={{ background: '#1a1a1a', border: '1px solid rgba(255,255,255,0.1)' }}>
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-lg font-semibold text-white">Extend loan</h3>
+          <button onClick={onClose} className="text-gray-500 hover:text-white text-xl leading-none">×</button>
+        </div>
+
+        {error && <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-3">{error}</div>}
+
+        <p className="text-xs text-gray-500 mb-3">
+          Current maturity: <span className="text-gray-300">{currentMaturity ? format(currentMaturity, 'MMM d, yyyy') : '—'}</span>
+        </p>
+
+        <label className="block text-xs text-gray-500 mb-1">Extend by</label>
+        <div className="flex gap-2 mb-3">
+          {[12, 24, 36, 60].map(m => (
+            <button key={m} type="button" onClick={() => setMonths(String(m))}
+              className={`text-xs px-3 py-1.5 rounded-lg border ${months === String(m) ? 'border-amber-500 text-amber-400' : 'border-white/10 text-gray-400 hover:text-gray-200'}`}>
+              {m % 12 === 0 ? `${m / 12}yr` : `${m}mo`}
+            </button>
+          ))}
+          <input type="number" min={1} value={months} onChange={e => setMonths(e.target.value)}
+            className="input-dark text-xs w-20 text-center" placeholder="Months" />
+        </div>
+
+        {previewDate && (
+          <p className="text-xs text-gray-500 mb-3">
+            New maturity: <span className="text-emerald-400 font-medium">{format(previewDate, 'MMM d, yyyy')}</span>
+          </p>
+        )}
+
+        <label className="block text-xs text-gray-500 mb-1">Notes (optional)</label>
+        <input value={notes} onChange={e => setNotes(e.target.value)} className="input-dark w-full text-sm mb-4" placeholder="e.g. exercised lender's 2-year extension option" />
+
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="btn text-sm">Cancel</button>
+          <button onClick={handleSave} disabled={saving || !monthsNum} className="btn-primary text-sm disabled:opacity-50">
+            {saving ? 'Extending…' : 'Extend loan'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

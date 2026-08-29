@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { getNotice, deleteNotice } from '../api/client';
 import type { RentNotice } from '../types';
+import { fmtDate as fmtDateSafe } from '../lib/date';
 
 const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 });
-const fmtDate = (d: string | Date) => new Date(d).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
+const fmtDate = (d: string | Date) => fmtDateSafe(d, 'MMMM d, yyyy');
 
 function U({ children }: { children: React.ReactNode }) {
   return <span style={{ textDecoration: 'underline' }}>{children}</span>;
@@ -85,18 +86,20 @@ export default function NoticeDetailPage() {
           of the premises at <U>&nbsp;&nbsp;{propertyAddress}&nbsp;&nbsp;</U>, there is now due, unpaid, and delinquent rent of:
         </p>
 
-        <table style={{ marginBottom: '1rem' }}>
-          <tbody>
-            {lineItems.map((item, i) => (
-              <tr key={i}>
-                <td style={{ paddingRight: '4px', textAlign: 'right' }}>$</td>
-                <td style={{ paddingRight: '4px' }}><U>&nbsp;&nbsp;{money(item.amount).replace('$', '').trim()}&nbsp;&nbsp;</U></td>
-                <td style={{ paddingRight: '4px' }}>Due</td>
-                <td><U>&nbsp;&nbsp;{fmtDate(item.dueDate)}&nbsp;&nbsp;</U></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="overflow-x-auto">
+          <table style={{ marginBottom: '1rem' }}>
+            <tbody>
+              {lineItems.map((item, i) => (
+                <tr key={i}>
+                  <td style={{ paddingRight: '4px', textAlign: 'right' }}>$</td>
+                  <td style={{ paddingRight: '4px' }}><U>&nbsp;&nbsp;{money(item.amount).replace('$', '').trim()}&nbsp;&nbsp;</U></td>
+                  <td style={{ paddingRight: '4px' }}>Due</td>
+                  <td><U>&nbsp;&nbsp;{fmtDate(item.dueDate)}&nbsp;&nbsp;</U></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
 
         <p style={{ marginBottom: '1rem' }}>
           TOTAL AMOUNT DUE: <U>&nbsp;&nbsp;{money(Number(notice.totalDue))}&nbsp;&nbsp;</U>

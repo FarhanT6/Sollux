@@ -8,6 +8,97 @@ const money = (n: number | string | undefined) => n == null ? '—' : Number(n).
 
 const LOAN_TYPES: LoanType[] = ['MORTGAGE','HELOC','AUTO','PERSONAL','STUDENT','INSTALLMENT_PLAN','CREDIT_LINE','SELLER_FINANCING','DSCR','COMMERCIAL','HARD_MONEY','OTHER'];
 
+// Real-estate-secured debt (and personal loans, which usually ride along
+// with the same lenders) vs. consumer-style installment debt — kept
+// separate since they behave very differently in a portfolio's debt
+// picture. Every LoanType lands in exactly one of these two groups.
+const MORTGAGE_PERSONAL_TYPES: LoanType[] = ['MORTGAGE', 'HELOC', 'SELLER_FINANCING', 'DSCR', 'COMMERCIAL', 'HARD_MONEY', 'PERSONAL'];
+const CONSUMER_LOAN_TYPES: LoanType[] = ['AUTO', 'STUDENT', 'INSTALLMENT_PLAN', 'CREDIT_LINE', 'OTHER'];
+
+function LoanTable({ title, loans, setLoans }: {
+  title: string; loans: Loan[]; setLoans: (updater: (prev: Loan[]) => Loan[]) => void;
+}) {
+  if (loans.length === 0) return null;
+  // Excludes isPersonal loans, same as the page-level summary tiles — a
+  // group subtotal that included them while the portfolio total didn't
+  // would show a bigger group number than the total it's part of.
+  const activeLoans = loans.filter(l => l.isActive && !l.isPersonal);
+  const balanceTotal = activeLoans.reduce((s, l) => s + Number(l.currentBalance ?? 0), 0);
+  const monthlyTotal = activeLoans.reduce((s, l) => s + Number(l.monthlyPayment ?? 0) + Number(l.escrowAmount ?? 0), 0);
+
+  return (
+    <div className="mb-6">
+      <div className="flex items-center justify-between mb-2">
+        <p className="section-label mb-0">{title} · {loans.length}</p>
+        <p className="text-xs text-gray-500">{money(balanceTotal)} balance · {money(monthlyTotal)}/mo</p>
+      </div>
+      <div className="rounded-xl overflow-x-auto" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
+        <table className="w-full text-sm">
+          <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
+            <tr className="text-left text-gray-400 text-xs">
+              <th className="px-4 py-3">Lender</th>
+              <th className="px-4 py-3">Property</th>
+              <th className="px-4 py-3">Type</th>
+              <th className="px-4 py-3 text-right">Original</th>
+              <th className="px-4 py-3 text-right">Balance</th>
+              <th className="px-4 py-3 text-right">Monthly</th>
+              <th className="px-4 py-3 text-right">Rate</th>
+              <th className="px-4 py-3 text-right">Interest remaining</th>
+              <th className="px-4 py-3 text-right">Interest paid</th>
+              <th className="px-4 py-3">Maturity</th>
+              <th className="px-4 py-3">Flags</th>
+              <th className="px-4 py-3"></th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/5">
+            {loans.map(loan => (
+              <tr key={loan.id} className={`hover:bg-white/[0.02] ${!loan.isActive ? 'opacity-40' : ''}`}>
+                <td className="px-4 py-3 font-medium text-xs whitespace-nowrap">
+                  <Link to={`/loans/${loan.id}`} className="text-white hover:text-amber-400">
+                    {loan.lender}
+                  </Link>
+                  {loan.accountLast4 && <span className="text-gray-500 ml-1">···{loan.accountLast4}</span>}
+                </td>
+                <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">{loan.property?.nickname || loan.property?.address || <span className="text-gray-600">Unattached</span>}</td>
+                <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">{loan.loanType.replace('_', ' ')}</td>
+                <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(loan.originalAmount ?? undefined)}</td>
+                <td className="px-4 py-3 text-right text-red-400 text-xs font-medium">{money(loan.currentBalance ?? undefined)}</td>
+                <td className="px-4 py-3 text-right text-gray-300 text-xs" title={loan.escrowAmount ? `${money(loan.monthlyPayment)} P&I + ${money(loan.escrowAmount)} escrow` : undefined}>
+                  {money(loan.monthlyPayment != null || loan.escrowAmount != null ? Number(loan.monthlyPayment ?? 0) + Number(loan.escrowAmount ?? 0) : undefined)}
+                </td>
+                <td className="px-4 py-3 text-right text-gray-400 text-xs">{loan.interestRate != null ? `${loan.interestRate}%` : '—'}</td>
+                <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(loan.totalInterestLifetime ?? undefined)}</td>
+                <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(loan.interestPaidToDate ?? undefined)}</td>
+                <td className="px-4 py-3 whitespace-nowrap">
+                  <MaturityBadge maturityDate={loan.maturityDate} />
+                </td>
+                <td className="px-4 py-3">
+                  <div className="flex gap-1">
+                    {loan.isPersonal && <span className="text-xs bg-purple-900/40 text-purple-300 px-1.5 py-0.5 rounded">Personal</span>}
+                    {!loan.isActive && <span className="text-xs bg-gray-800 text-gray-500 px-1.5 py-0.5 rounded">Closed</span>}
+                  </div>
+                </td>
+                <td className="px-4 py-3 text-right whitespace-nowrap">
+                  <button
+                    onClick={async () => { const u = await updateLoan(loan.id, { isActive: !loan.isActive }); setLoans(prev => prev.map(l => l.id === loan.id ? { ...l, isActive: u.isActive } : l)); }}
+                    className="text-xs text-gray-500 hover:text-gray-300 mr-2"
+                  >
+                    {loan.isActive ? 'Close' : 'Reopen'}
+                  </button>
+                  <button
+                    onClick={async () => { if (confirm('Delete?')) { await deleteLoan(loan.id); setLoans(prev => prev.filter(l => l.id !== loan.id)); } }}
+                    className="text-xs text-red-500 hover:text-red-400"
+                  >Del</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function MaturityBadge({ maturityDate }: { maturityDate?: string }) {
   if (!maturityDate) return null;
   const days = Math.round((new Date(maturityDate).getTime() - Date.now()) / 86400000);
@@ -23,6 +114,8 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
   const [properties, setProperties] = useState<Property[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [propertyFilter, setPropertyFilter] = useState('');
+  const [sortBy, setSortBy] = useState<'lender' | 'balance' | 'maturity' | 'rate'>('lender');
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
     propertyId: '', loanType: 'MORTGAGE' as LoanType,
@@ -68,11 +161,27 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
   }
 
   const searchLower = search.toLowerCase();
-  const displayedLoans = !searchLower ? loans : loans.filter(l =>
-    l.lender.toLowerCase().includes(searchLower) ||
-    (l.property?.nickname || '').toLowerCase().includes(searchLower) ||
-    (l.property?.address || '').toLowerCase().includes(searchLower)
-  );
+  const displayedLoans = loans
+    .filter(l => !searchLower ||
+      l.lender.toLowerCase().includes(searchLower) ||
+      (l.property?.nickname || '').toLowerCase().includes(searchLower) ||
+      (l.property?.address || '').toLowerCase().includes(searchLower)
+    )
+    .filter(l => !propertyFilter || l.propertyId === propertyFilter)
+    .sort((a, b) => {
+      // Closed/inactive loans always sink to the bottom, regardless of sort.
+      if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
+      switch (sortBy) {
+        case 'balance':  return Number(b.currentBalance ?? 0) - Number(a.currentBalance ?? 0);
+        case 'maturity': {
+          const am = a.maturityDate ? new Date(a.maturityDate).getTime() : Infinity;
+          const bm = b.maturityDate ? new Date(b.maturityDate).getTime() : Infinity;
+          return am - bm;
+        }
+        case 'rate': return Number(b.interestRate ?? 0) - Number(a.interestRate ?? 0);
+        default:     return a.lender.localeCompare(b.lender);
+      }
+    });
 
   const activeLoans = loans.filter(l => l.isActive && !l.isPersonal);
   const totalDebt = activeLoans.reduce((s, l) => s + Number(l.currentBalance ?? 0), 0);
@@ -95,7 +204,7 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
       ) : (
         <div className="mb-4">
           {/* Summary stats */}
-          <div className="grid grid-cols-3 gap-3 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
             <div className="rounded-xl px-4 py-3" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
               <p className="text-xs text-gray-400 mb-0.5">Total balance</p>
               <p className="text-base font-semibold text-red-400">{money(totalDebt)}</p>
@@ -127,6 +236,18 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
                 />
                 {search && <button onClick={() => setSearch('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 text-xs leading-none">×</button>}
               </div>
+              <select value={propertyFilter} onChange={e => setPropertyFilter(e.target.value)}
+                className="text-xs px-2.5 py-1.5 rounded-lg bg-white/5 border border-white/10 text-white outline-none">
+                <option value="">All properties</option>
+                {properties.map(p => <option key={p.id} value={p.id}>{p.nickname || p.address}</option>)}
+              </select>
+              <select value={sortBy} onChange={e => setSortBy(e.target.value as typeof sortBy)}
+                className="text-xs px-2.5 py-1.5 rounded-lg bg-white/5 border border-white/10 text-white outline-none">
+                <option value="lender">Sort: Lender</option>
+                <option value="balance">Sort: Balance (high–low)</option>
+                <option value="maturity">Sort: Maturity (soonest first)</option>
+                <option value="rate">Sort: Rate (high–low)</option>
+              </select>
             </div>
             <button onClick={() => setShowForm(v => !v)} className="btn text-xs">
               {showForm ? 'Cancel' : '+ Add loan'}
@@ -137,7 +258,7 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
 
       {showForm && (
         <form onSubmit={handleCreate} className="rounded-xl p-5 mb-5" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
-          <div className="grid grid-cols-3 gap-4 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
             <div>
               <label className="text-xs text-gray-400 block mb-1">Property</label>
               <select value={form.propertyId} onChange={e => setForm(f => ({ ...f, propertyId: e.target.value }))} className="input-dark w-full">
@@ -209,69 +330,21 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
       {loading ? (
         <div className="text-gray-500 text-sm">Loading…</div>
       ) : (
-        <div className="rounded-xl overflow-x-auto" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
-          <table className="w-full text-sm">
-            <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
-              <tr className="text-left text-gray-400 text-xs">
-                <th className="px-4 py-3">Lender</th>
-                <th className="px-4 py-3">Property</th>
-                <th className="px-4 py-3">Type</th>
-                <th className="px-4 py-3 text-right">Original</th>
-                <th className="px-4 py-3 text-right">Balance</th>
-                <th className="px-4 py-3 text-right">Monthly</th>
-                <th className="px-4 py-3 text-right">Rate</th>
-                <th className="px-4 py-3 text-right">Total interest</th>
-                <th className="px-4 py-3 text-right">Interest paid</th>
-                <th className="px-4 py-3">Maturity</th>
-                <th className="px-4 py-3">Flags</th>
-                <th className="px-4 py-3"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/5">
-              {displayedLoans.map(loan => (
-                <tr key={loan.id} className={`hover:bg-white/[0.02] ${!loan.isActive ? 'opacity-40' : ''}`}>
-                  <td className="px-4 py-3 font-medium text-xs whitespace-nowrap">
-                    <Link to={`/loans/${loan.id}`} className="text-white hover:text-amber-400">
-                      {loan.lender}
-                    </Link>
-                    {loan.accountLast4 && <span className="text-gray-500 ml-1">···{loan.accountLast4}</span>}
-                  </td>
-                  <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">{loan.property?.nickname || loan.property?.address || <span className="text-gray-600">Unattached</span>}</td>
-                  <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">{loan.loanType.replace('_', ' ')}</td>
-                  <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(loan.originalAmount ?? undefined)}</td>
-                  <td className="px-4 py-3 text-right text-red-400 text-xs font-medium">{money(loan.currentBalance ?? undefined)}</td>
-                  <td className="px-4 py-3 text-right text-gray-300 text-xs" title={loan.escrowAmount ? `${money(loan.monthlyPayment)} P&I + ${money(loan.escrowAmount)} escrow` : undefined}>
-                    {money(loan.monthlyPayment != null || loan.escrowAmount != null ? Number(loan.monthlyPayment ?? 0) + Number(loan.escrowAmount ?? 0) : undefined)}
-                  </td>
-                  <td className="px-4 py-3 text-right text-gray-400 text-xs">{loan.interestRate != null ? `${loan.interestRate}%` : '—'}</td>
-                  <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(loan.totalInterestLifetime ?? undefined)}</td>
-                  <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(loan.interestPaidToDate ?? undefined)}</td>
-                  <td className="px-4 py-3 whitespace-nowrap">
-                    <MaturityBadge maturityDate={loan.maturityDate} />
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex gap-1">
-                      {loan.isPersonal && <span className="text-xs bg-purple-900/40 text-purple-300 px-1.5 py-0.5 rounded">Personal</span>}
-                      {!loan.isActive && <span className="text-xs bg-gray-800 text-gray-500 px-1.5 py-0.5 rounded">Closed</span>}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-right whitespace-nowrap">
-                    <button
-                      onClick={async () => { const u = await updateLoan(loan.id, { isActive: !loan.isActive }); setLoans(prev => prev.map(l => l.id === loan.id ? { ...l, isActive: u.isActive } : l)); }}
-                      className="text-xs text-gray-500 hover:text-gray-300 mr-2"
-                    >
-                      {loan.isActive ? 'Close' : 'Reopen'}
-                    </button>
-                    <button
-                      onClick={async () => { if (confirm('Delete?')) { await deleteLoan(loan.id); setLoans(prev => prev.filter(l => l.id !== loan.id)); } }}
-                      className="text-xs text-red-500 hover:text-red-400"
-                    >Del</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <>
+          <LoanTable
+            title="Mortgages & Personal"
+            loans={displayedLoans.filter(l => MORTGAGE_PERSONAL_TYPES.includes(l.loanType))}
+            setLoans={setLoans}
+          />
+          <LoanTable
+            title="Auto, Student & Solar Loans"
+            loans={displayedLoans.filter(l => CONSUMER_LOAN_TYPES.includes(l.loanType))}
+            setLoans={setLoans}
+          />
+          {displayedLoans.length === 0 && (
+            <div className="text-center py-12 text-gray-500 text-sm">No loans found</div>
+          )}
+        </>
       )}
     </div>
   );

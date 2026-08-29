@@ -4,14 +4,28 @@ import PnLPage from './PnLPage';
 import BudgetPage from './BudgetPage';
 import LoansPage from './LoansPage';
 import ExpensesPage from './ExpensesPage';
+import PersonalExpensesPage from './PersonalExpensesPage';
+import ReconciliationPage from './ReconciliationPage';
+import IncomingPaymentsPage from './IncomingPaymentsPage';
+import OutgoingPaymentsPage from './OutgoingPaymentsPage';
+import FeesSummaryPage from './FeesSummaryPage';
+import PaymentsPage from './PaymentsPage';
+import DocumentsPage from './DocumentsPage';
 
-type Tab = 'pnl' | 'budget' | 'loans' | 'expenses';
+type Tab = 'pnl' | 'budget' | 'loans' | 'expenses' | 'personal' | 'reconciliation' | 'incoming' | 'outgoing' | 'fees' | 'utility-payments' | 'bills';
 
 const TABS: { key: Tab; label: string }[] = [
-  { key: 'pnl',      label: 'P&L'      },
-  { key: 'budget',   label: 'Budget'   },
-  { key: 'loans',    label: 'Loans'    },
-  { key: 'expenses', label: 'Expenses' },
+  { key: 'pnl',            label: 'P&L'            },
+  { key: 'budget',         label: 'Budget'         },
+  { key: 'loans',          label: 'Loans'          },
+  { key: 'expenses',       label: 'Expenses'       },
+  { key: 'personal',       label: 'Personal Expenses' },
+  { key: 'reconciliation', label: 'Reconciliation' },
+  { key: 'incoming',       label: 'Incoming Payments' },
+  { key: 'outgoing',       label: 'Expense Payments' },
+  { key: 'fees',           label: 'Fees Summary' },
+  { key: 'utility-payments', label: 'Utility Payments' },
+  { key: 'bills',          label: 'Bill Archive'   },
 ];
 
 export default function FinancesPage() {
@@ -23,10 +37,17 @@ export default function FinancesPage() {
   }
 
   const subtitles: Record<Tab, string> = {
-    pnl:      'Net operating income and cash flow by property',
-    budget:   'Monthly cash position, rent collection, and delinquency',
-    loans:    'Mortgages, HELOCs, and installment plans',
-    expenses: 'Operating and capital expenditures across all properties',
+    pnl:            'Net operating income and cash flow by property',
+    budget:         'Monthly cash position, rent collection, and delinquency',
+    loans:          'Mortgages, HELOCs, and installment plans',
+    expenses:       'Operating and capital expenditures across all properties',
+    personal:       'Auto loans, insurance, credit cards, and other non-property spending',
+    reconciliation: 'Monthly statements from managers/collectors who net rent, fees, and loan payments together',
+    incoming:       'Transfers, checks and deposits into watched bank accounts, matched to tenants',
+    outgoing:       'Hardware-store purchases and utility bill payments matched to properties',
+    fees:           'Any line item, broken down by utility and rolled up by property — month, year, or overall',
+    'utility-payments': 'Payments made against utility accounts, grouped by provider',
+    bills:          'Every statement across all properties, searchable, with PDFs',
   };
 
   return (
@@ -54,6 +75,13 @@ export default function FinancesPage() {
         {tab === 'budget'   && <BudgetPage embedded />}
         {tab === 'loans'    && <LoansPage embedded />}
         {tab === 'expenses' && <ExpensesPage embedded />}
+        {tab === 'personal' && <PersonalExpensesPage embedded />}
+        {tab === 'reconciliation' && <ReconciliationPage embedded />}
+        {tab === 'incoming' && <IncomingPaymentsPage embedded />}
+        {tab === 'outgoing' && <OutgoingPaymentsPage embedded />}
+        {tab === 'fees' && <FeesSummaryPage embedded />}
+        {tab === 'utility-payments' && <PaymentsPage embedded />}
+        {tab === 'bills' && <DocumentsPage embedded />}
       </div>
     </div>
   );

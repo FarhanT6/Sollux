@@ -3,10 +3,11 @@ import { getStatements, getStatementDownloadUrl } from '../api/client';
 import type { Statement } from '../types';
 import { PageHeader, EmptyState, Skeleton } from '../components/ui';
 import { format } from 'date-fns';
+import { fmtDate } from '../lib/date';
 
 const inputClass = 'rounded-lg px-3 py-1.5 text-sm text-gray-300 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-amber-500/50 bg-white/6 border border-white/8';
 
-export default function DocumentsPage() {
+export default function DocumentsPage({ embedded }: { embedded?: boolean } = {}) {
   const [statements, setStatements] = useState<Statement[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -64,11 +65,13 @@ export default function DocumentsPage() {
 
   return (
     <div>
-      <PageHeader
-        title="Document vault"
-        subtitle={`${statements.length} statements · ${pdfCount} with PDF · ${properties.length} properties`}
-      />
-      <div className="px-6 py-5">
+      {!embedded && (
+        <PageHeader
+          title="Document vault"
+          subtitle={`${statements.length} statements · ${pdfCount} with PDF · ${properties.length} properties`}
+        />
+      )}
+      <div className={embedded ? '' : 'px-6 py-5'}>
         {/* Filter bar */}
         <div className="flex gap-3 mb-6">
           <input
@@ -91,7 +94,7 @@ export default function DocumentsPage() {
         </div>
 
         {loading ? (
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {Array(9).fill(0).map((_, i) => <Skeleton key={i} className="h-28" />)}
           </div>
         ) : filtered.length === 0 ? (
@@ -104,7 +107,7 @@ export default function DocumentsPage() {
                   <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{propName}</p>
                   <span className="text-xs text-gray-600">{stmts.length} statement{stmts.length !== 1 ? 's' : ''}</span>
                 </div>
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {stmts.map(stmt => (
                     <div
                       key={stmt.id}
@@ -121,7 +124,7 @@ export default function DocumentsPage() {
                         {stmt.utilityAccount?.providerName}
                       </p>
                       <p className="text-xs text-gray-400 mt-0.5">
-                        {format(new Date(stmt.statementDate), 'MMM d, yyyy')}
+                        {fmtDate(stmt.statementDate, 'MMM d, yyyy')}
                         {stmt.amountDue ? ` · $${Number(stmt.amountDue).toFixed(2)}` : ''}
                       </p>
                       <p className="text-xs mt-1" style={{ color: stmt.pdfS3Key ? '#ef4444' : '#6b7280' }}>

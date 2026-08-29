@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { getExpenses, createExpense, updateExpense, deleteExpense, getProperties } from '../api/client';
 import type { Expense, Property, ExpenseCategory } from '../types';
 import { EXPENSE_CATEGORY_LABELS } from '../types';
 import { format } from 'date-fns';
+import { fmtDate } from '../lib/date';
 
 const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 
@@ -59,10 +61,10 @@ export default function ExpensesPage({ embedded }: { embedded?: boolean } = {}) 
 
   async function handleCreate(ev: React.FormEvent) {
     ev.preventDefault();
-    if (!form.propertyId || !form.amount) return;
+    if ((!form.propertyId && !form.isPersonal) || !form.amount) return;
     setSaving(true);
     try {
-      await createExpense({ ...form, amount: parseFloat(form.amount) });
+      await createExpense({ ...form, propertyId: form.propertyId || undefined, amount: parseFloat(form.amount) });
       await loadExpenses();
       setShowForm(false);
       setForm(f => ({ ...f, amount: '', vendor: '', description: '' }));
@@ -140,11 +142,13 @@ export default function ExpensesPage({ embedded }: { embedded?: boolean } = {}) 
 
       {showForm && (
         <form onSubmit={handleCreate} className="rounded-xl p-5 mb-5" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
-          <div className="grid grid-cols-3 gap-4 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
             <div>
-              <label className="text-xs text-gray-400 block mb-1">Property *</label>
-              <select value={form.propertyId} onChange={e => setForm(f => ({ ...f, propertyId: e.target.value }))} className="input-dark w-full" required>
-                <option value="">Select…</option>
+              <label className="text-xs text-gray-400 block mb-1">
+                Property {form.isPersonal ? '(optional)' : '*'}
+              </label>
+              <select value={form.propertyId} onChange={e => setForm(f => ({ ...f, propertyId: e.target.value }))} className="input-dark w-full" required={!form.isPersonal}>
+                <option value="">{form.isPersonal ? 'None — purely personal' : 'Select…'}</option>
                 {properties.map(p => <option key={p.id} value={p.id}>{p.nickname || p.address}</option>)}
               </select>
             </div>
@@ -178,7 +182,7 @@ export default function ExpensesPage({ embedded }: { embedded?: boolean } = {}) 
             </label>
             <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
               <input type="checkbox" checked={form.isPersonal} onChange={e => setForm(f => ({ ...f, isPersonal: e.target.checked }))} />
-              Personal (exclude from P&L)
+              Personal (excluded from P&L — property optional)
             </label>
           </div>
           <button type="submit" disabled={saving} className="btn-primary text-sm">{saving ? 'Saving…' : 'Log Expense'}</button>
@@ -191,50 +195,67 @@ export default function ExpensesPage({ embedded }: { embedded?: boolean } = {}) 
         <div className="text-center py-16 text-gray-500">No expenses found</div>
       ) : (
         <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
-          <table className="w-full text-sm">
-            <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
-              <tr className="text-left text-gray-400">
-                <th className="px-4 py-3">Date</th>
-                <th className="px-4 py-3">Property</th>
-                <th className="px-4 py-3">Category</th>
-                <th className="px-4 py-3">Vendor</th>
-                <th className="px-4 py-3">Amount</th>
-                <th className="px-4 py-3">Flags</th>
-                <th className="px-4 py-3"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/5">
-              {filtered.map(e => (
-                <tr key={e.id} className={`hover:bg-white/[0.02] ${e.isPersonal ? 'opacity-50' : ''}`}>
-                  <td className="px-4 py-3 text-gray-400 text-xs">{format(new Date(e.date), 'MMM d, yyyy')}</td>
-                  <td className="px-4 py-3 text-gray-300 text-xs">{e.property?.nickname || e.property?.address || '—'}</td>
-                  <td className="px-4 py-3">
-                    <span className="text-xs bg-white/5 text-gray-300 px-2 py-0.5 rounded">
-                      {EXPENSE_CATEGORY_LABELS[e.category]}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-gray-400 text-xs">{e.vendor || e.description || '—'}</td>
-                  <td className="px-4 py-3 font-medium text-white">{money(Number(e.amount))}</td>
-                  <td className="px-4 py-3">
-                    <div className="flex gap-1.5">
-                      {e.isCapEx && <span className="text-xs bg-blue-900/40 text-blue-300 px-1.5 py-0.5 rounded">CapEx</span>}
-                      {e.isPersonal && <span className="text-xs bg-purple-900/40 text-purple-300 px-1.5 py-0.5 rounded">Personal</span>}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <button
-                      onClick={() => togglePersonal(e)}
-                      className="text-xs text-gray-500 hover:text-gray-300 mr-3"
-                      title={e.isPersonal ? 'Mark as property expense' : 'Mark as personal'}
-                    >
-                      {e.isPersonal ? 'Unmk personal' : 'Mk personal'}
-                    </button>
-                    <button onClick={async () => { if (confirm('Delete?')) { await deleteExpense(e.id); setExpenses(prev => prev.filter(x => x.id !== e.id)); } }} className="text-xs text-red-500 hover:text-red-400">Del</button>
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
+                <tr className="text-left text-gray-400">
+                  <th className="px-4 py-3">Date</th>
+                  <th className="px-4 py-3">Property</th>
+                  <th className="px-4 py-3">Category</th>
+                  <th className="px-4 py-3">Vendor</th>
+                  <th className="px-4 py-3">Amount</th>
+                  <th className="px-4 py-3">Flags</th>
+                  <th className="px-4 py-3"></th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {filtered.map(e => (
+                  <tr key={e.id} className={`hover:bg-white/[0.02] ${e.isPersonal ? 'opacity-50' : ''}`}>
+                    <td className="px-4 py-3 text-gray-400 text-xs">{fmtDate(e.date, 'MMM d, yyyy')}</td>
+                    <td className="px-4 py-3 text-gray-300 text-xs">
+                      {e.propertyId ? (
+                        <Link to={`/portfolio/${e.propertyId}?tab=Expenses`} className="hover:text-amber-400 transition-colors">
+                          {e.property?.nickname || e.property?.address || '—'}
+                        </Link>
+                      ) : (
+                        <span className="text-gray-500 italic">Personal</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="text-xs bg-white/5 text-gray-300 px-2 py-0.5 rounded">
+                        {EXPENSE_CATEGORY_LABELS[e.category]}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-gray-400 text-xs">{e.vendor || e.description || '—'}</td>
+                    <td className="px-4 py-3 font-medium text-white">{money(Number(e.amount))}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex gap-1.5">
+                        {e.source === 'utility' && <span className="text-xs bg-blue-900/40 text-blue-300 px-1.5 py-0.5 rounded">Utility</span>}
+                        {e.isCapEx && <span className="text-xs bg-blue-900/40 text-blue-300 px-1.5 py-0.5 rounded">CapEx</span>}
+                        {e.isPersonal && <span className="text-xs bg-purple-900/40 text-purple-300 px-1.5 py-0.5 rounded">Personal</span>}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      {e.source === 'utility' ? (
+                        <Link to={`/properties/${e.propertyId}/utilities/${e.utilityAccountId}`} className="text-xs text-amber-400 hover:text-amber-300">View bill</Link>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => togglePersonal(e)}
+                            className="text-xs text-gray-500 hover:text-gray-300 mr-3"
+                            title={e.isPersonal ? 'Mark as property expense' : 'Mark as personal'}
+                          >
+                            {e.isPersonal ? 'Unmk personal' : 'Mk personal'}
+                          </button>
+                          <button onClick={async () => { if (confirm('Delete?')) { await deleteExpense(e.id); setExpenses(prev => prev.filter(x => x.id !== e.id)); } }} className="text-xs text-red-500 hover:text-red-400">Del</button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>

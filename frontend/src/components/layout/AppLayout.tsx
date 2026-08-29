@@ -19,12 +19,16 @@ const NAV = [
     icon: <Ico><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></Ico>,
   },
   {
-    to: '/properties', label: 'Properties',
+    to: '/properties', label: 'Utilities',
     icon: <Ico><path d="M3 21h18"/><path d="M6 21V7l6-4 6 4v14"/><path d="M9 21v-9h6v9"/></Ico>,
   },
   {
     to: '/import', label: 'Import',
     icon: <Ico><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></Ico>,
+  },
+  {
+    to: '/scan', label: 'Scan',
+    icon: <Ico><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 3v18"/><path d="M4 12h4"/></Ico>,
   },
   {
     to: '/finances', label: 'Finances',
@@ -33,6 +37,10 @@ const NAV = [
   {
     to: '/portfolio', label: 'Portfolio',
     icon: <Ico><path d="M3 21h18"/><path d="M9 21V7H5l7-5 7 5v14"/><rect x="9" y="13" width="2" height="4"/><rect x="13" y="13" width="2" height="4"/></Ico>,
+  },
+  {
+    to: '/legal', label: 'Legal',
+    icon: <Ico><path d="M12 3v18"/><path d="M5 7h14"/><path d="M6 7l-3 6h6z"/><path d="M18 7l-3 6h6z"/></Ico>,
   },
   {
     to: '/insights', label: 'Insights',
@@ -121,7 +129,7 @@ export default function AppLayout() {
         </div>
       </aside>
 
-      <main className="flex-1 overflow-y-auto" style={{ background: '#1e1e1e' }}>
+      <main className={`flex-1 overflow-y-auto ${!sidebarOpen ? 'pt-12' : ''}`} style={{ background: '#1e1e1e' }}>
         <Outlet />
       </main>
     </div>

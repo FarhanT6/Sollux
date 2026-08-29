@@ -33,7 +33,7 @@ function MonthlyChart({ data }: { data: MonthlyPnL[] }) {
   const ticks = [0, maxVal * 0.25, maxVal * 0.5, maxVal * 0.75, maxVal];
 
   return (
-    <div className="card p-4 mb-5">
+    <div className="card p-4 mb-5 max-w-3xl">
       <p className="text-xs text-gray-500 mb-3 flex items-center gap-4">
         <span className="flex items-center gap-1.5"><span style={{ width: 10, height: 10, borderRadius: 2, background: '#10b981', display: 'inline-block' }} />Income</span>
         <span className="flex items-center gap-1.5"><span style={{ width: 10, height: 10, borderRadius: 2, background: '#ef4444', display: 'inline-block' }} />Expenses</span>
@@ -217,7 +217,7 @@ export default function PnLPage({ embedded }: { embedded?: boolean } = {}) {
 
           {/* Totals */}
           {totals && (
-            <div className="grid grid-cols-4 gap-4 mb-6">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
               {[
                 { label: 'Rental income', value: totals.rentalIncome, color: '#10b981' },
                 { label: 'Operating expenses', value: totals.operatingExpenses + totals.insuranceExpense + totals.propertyTaxExpense, color: '#ef4444' },
@@ -234,92 +234,94 @@ export default function PnLPage({ embedded }: { embedded?: boolean } = {}) {
 
           {/* By property table */}
           <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
-            <table className="w-full text-sm">
-              <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
-                <tr className="text-left text-gray-400 text-xs">
-                  <th className="px-4 py-3">Property</th>
-                  <th className="px-4 py-3 text-right">Income</th>
-                  <th className="px-4 py-3 text-right">OpEx</th>
-                  <th className="px-4 py-3 text-right">Insurance</th>
-                  <th className="px-4 py-3 text-right">Tax</th>
-                  <th className="px-4 py-3 text-right">NOI</th>
-                  <th className="px-4 py-3 text-right">Debt svc</th>
-                  <th className="px-4 py-3 text-right">Cash flow</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/5">
-                {Object.entries(groupedByProp).map(([groupName, rows]) => {
-                  const agg = rows.reduce((acc, r) => ({
-                    rentalIncome: acc.rentalIncome + r.rentalIncome,
-                    operatingExpenses: acc.operatingExpenses + r.operatingExpenses,
-                    insuranceExpense: acc.insuranceExpense + r.insuranceExpense,
-                    propertyTaxExpense: acc.propertyTaxExpense + r.propertyTaxExpense,
-                    noi: acc.noi + r.noi,
-                    debtService: acc.debtService + r.debtService,
-                    cashFlow: acc.cashFlow + r.cashFlow,
-                  }), { rentalIncome: 0, operatingExpenses: 0, insuranceExpense: 0, propertyTaxExpense: 0, noi: 0, debtService: 0, cashFlow: 0 });
-                  return (
-                    <Fragment key={groupName}>
-                      <tr style={{ background: 'rgba(245,166,35,0.06)' }}>
-                        <td colSpan={8} className="px-4 py-2">
-                          <span className="text-xs font-semibold text-amber-400 uppercase tracking-wide">{groupName} · {rows.length} parcels</span>
-                        </td>
-                      </tr>
-                      {rows.map(p => (
-                        <tr key={p.propertyId} className="hover:bg-white/[0.02]">
-                          <td className="px-4 py-3 pl-7 text-white font-medium text-xs">
-                            <Link to={`/portfolio/${p.propertyId}`} className="hover:text-amber-400">{p.propertyName}</Link>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
+                  <tr className="text-left text-gray-400 text-xs">
+                    <th className="px-4 py-3">Property</th>
+                    <th className="px-4 py-3 text-right">Income</th>
+                    <th className="px-4 py-3 text-right">OpEx</th>
+                    <th className="px-4 py-3 text-right">Insurance</th>
+                    <th className="px-4 py-3 text-right">Tax</th>
+                    <th className="px-4 py-3 text-right">NOI</th>
+                    <th className="px-4 py-3 text-right">Debt svc</th>
+                    <th className="px-4 py-3 text-right">Cash flow</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {Object.entries(groupedByProp).map(([groupName, rows]) => {
+                    const agg = rows.reduce((acc, r) => ({
+                      rentalIncome: acc.rentalIncome + r.rentalIncome,
+                      operatingExpenses: acc.operatingExpenses + r.operatingExpenses,
+                      insuranceExpense: acc.insuranceExpense + r.insuranceExpense,
+                      propertyTaxExpense: acc.propertyTaxExpense + r.propertyTaxExpense,
+                      noi: acc.noi + r.noi,
+                      debtService: acc.debtService + r.debtService,
+                      cashFlow: acc.cashFlow + r.cashFlow,
+                    }), { rentalIncome: 0, operatingExpenses: 0, insuranceExpense: 0, propertyTaxExpense: 0, noi: 0, debtService: 0, cashFlow: 0 });
+                    return (
+                      <Fragment key={groupName}>
+                        <tr style={{ background: 'rgba(245,166,35,0.06)' }}>
+                          <td colSpan={8} className="px-4 py-2">
+                            <span className="text-xs font-semibold text-amber-400 uppercase tracking-wide">{groupName} · {rows.length} parcels</span>
                           </td>
-                          <td className="px-4 py-3 text-right text-gray-300 text-xs">{money(p.rentalIncome)}</td>
-                          <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(p.operatingExpenses)}</td>
-                          <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(p.insuranceExpense)}</td>
-                          <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(p.propertyTaxExpense)}</td>
-                          <td className="px-4 py-3 text-right font-medium text-xs" style={{ color: p.noi >= 0 ? '#F5A623' : '#ef4444' }}>{money(p.noi)}</td>
-                          <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(p.debtService)}</td>
-                          <td className="px-4 py-3 text-right font-semibold text-xs" style={{ color: p.cashFlow >= 0 ? '#10b981' : '#ef4444' }}>{money(p.cashFlow)}</td>
                         </tr>
-                      ))}
-                      <tr style={{ background: 'rgba(255,255,255,0.02)' }}>
-                        <td className="px-4 py-2 pl-7 text-xs text-gray-500 italic">Subtotal</td>
-                        <td className="px-4 py-2 text-right text-gray-400 text-xs">{money(agg.rentalIncome)}</td>
-                        <td className="px-4 py-2 text-right text-gray-400 text-xs">{money(agg.operatingExpenses)}</td>
-                        <td className="px-4 py-2 text-right text-gray-400 text-xs">{money(agg.insuranceExpense)}</td>
-                        <td className="px-4 py-2 text-right text-gray-400 text-xs">{money(agg.propertyTaxExpense)}</td>
-                        <td className="px-4 py-2 text-right text-xs" style={{ color: agg.noi >= 0 ? '#F5A623' : '#ef4444' }}>{money(agg.noi)}</td>
-                        <td className="px-4 py-2 text-right text-gray-400 text-xs">{money(agg.debtService)}</td>
-                        <td className="px-4 py-2 text-right font-medium text-xs" style={{ color: agg.cashFlow >= 0 ? '#10b981' : '#ef4444' }}>{money(agg.cashFlow)}</td>
-                      </tr>
-                    </Fragment>
-                  );
-                })}
-                {ungroupedByProp.map(p => (
-                  <tr key={p.propertyId} className="hover:bg-white/[0.02]">
-                    <td className="px-4 py-3 text-white font-medium text-xs">
-                      <Link to={`/portfolio/${p.propertyId}`} className="hover:text-amber-400">{p.propertyName}</Link>
-                    </td>
-                    <td className="px-4 py-3 text-right text-gray-300 text-xs">{money(p.rentalIncome)}</td>
-                    <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(p.operatingExpenses)}</td>
-                    <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(p.insuranceExpense)}</td>
-                    <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(p.propertyTaxExpense)}</td>
-                    <td className="px-4 py-3 text-right font-medium text-xs" style={{ color: p.noi >= 0 ? '#F5A623' : '#ef4444' }}>{money(p.noi)}</td>
-                    <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(p.debtService)}</td>
-                    <td className="px-4 py-3 text-right font-semibold text-xs" style={{ color: p.cashFlow >= 0 ? '#10b981' : '#ef4444' }}>{money(p.cashFlow)}</td>
-                  </tr>
-                ))}
-                {totals && (
-                  <tr style={{ background: 'rgba(245,166,35,0.06)' }}>
-                    <td className="px-4 py-3 font-semibold text-white text-xs">Total</td>
-                    <td className="px-4 py-3 text-right font-semibold text-white text-xs">{money(totals.rentalIncome)}</td>
-                    <td className="px-4 py-3 text-right font-semibold text-white text-xs">{money(totals.operatingExpenses)}</td>
-                    <td className="px-4 py-3 text-right font-semibold text-white text-xs">{money(totals.insuranceExpense)}</td>
-                    <td className="px-4 py-3 text-right font-semibold text-white text-xs">{money(totals.propertyTaxExpense)}</td>
-                    <td className="px-4 py-3 text-right font-semibold text-xs" style={{ color: '#F5A623' }}>{money(totals.noi)}</td>
-                    <td className="px-4 py-3 text-right font-semibold text-white text-xs">{money(totals.debtService)}</td>
-                    <td className="px-4 py-3 text-right font-semibold text-xs" style={{ color: totals.cashFlow >= 0 ? '#10b981' : '#ef4444' }}>{money(totals.cashFlow)}</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+                        {rows.map(p => (
+                          <tr key={p.propertyId} className="hover:bg-white/[0.02]">
+                            <td className="px-4 py-3 pl-7 text-white font-medium text-xs">
+                              <Link to={`/portfolio/${p.propertyId}`} className="hover:text-amber-400">{p.propertyName}</Link>
+                            </td>
+                            <td className="px-4 py-3 text-right text-gray-300 text-xs">{money(p.rentalIncome)}</td>
+                            <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(p.operatingExpenses)}</td>
+                            <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(p.insuranceExpense)}</td>
+                            <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(p.propertyTaxExpense)}</td>
+                            <td className="px-4 py-3 text-right font-medium text-xs" style={{ color: p.noi >= 0 ? '#F5A623' : '#ef4444' }}>{money(p.noi)}</td>
+                            <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(p.debtService)}</td>
+                            <td className="px-4 py-3 text-right font-semibold text-xs" style={{ color: p.cashFlow >= 0 ? '#10b981' : '#ef4444' }}>{money(p.cashFlow)}</td>
+                          </tr>
+                        ))}
+                        <tr style={{ background: 'rgba(255,255,255,0.02)' }}>
+                          <td className="px-4 py-2 pl-7 text-xs text-gray-500 italic">Subtotal</td>
+                          <td className="px-4 py-2 text-right text-gray-400 text-xs">{money(agg.rentalIncome)}</td>
+                          <td className="px-4 py-2 text-right text-gray-400 text-xs">{money(agg.operatingExpenses)}</td>
+                          <td className="px-4 py-2 text-right text-gray-400 text-xs">{money(agg.insuranceExpense)}</td>
+                          <td className="px-4 py-2 text-right text-gray-400 text-xs">{money(agg.propertyTaxExpense)}</td>
+                          <td className="px-4 py-2 text-right text-xs" style={{ color: agg.noi >= 0 ? '#F5A623' : '#ef4444' }}>{money(agg.noi)}</td>
+                          <td className="px-4 py-2 text-right text-gray-400 text-xs">{money(agg.debtService)}</td>
+                          <td className="px-4 py-2 text-right font-medium text-xs" style={{ color: agg.cashFlow >= 0 ? '#10b981' : '#ef4444' }}>{money(agg.cashFlow)}</td>
+                        </tr>
+                      </Fragment>
+                    );
+                  })}
+                  {ungroupedByProp.map(p => (
+                    <tr key={p.propertyId} className="hover:bg-white/[0.02]">
+                      <td className="px-4 py-3 text-white font-medium text-xs">
+                        <Link to={`/portfolio/${p.propertyId}`} className="hover:text-amber-400">{p.propertyName}</Link>
+                      </td>
+                      <td className="px-4 py-3 text-right text-gray-300 text-xs">{money(p.rentalIncome)}</td>
+                      <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(p.operatingExpenses)}</td>
+                      <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(p.insuranceExpense)}</td>
+                      <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(p.propertyTaxExpense)}</td>
+                      <td className="px-4 py-3 text-right font-medium text-xs" style={{ color: p.noi >= 0 ? '#F5A623' : '#ef4444' }}>{money(p.noi)}</td>
+                      <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(p.debtService)}</td>
+                      <td className="px-4 py-3 text-right font-semibold text-xs" style={{ color: p.cashFlow >= 0 ? '#10b981' : '#ef4444' }}>{money(p.cashFlow)}</td>
+                    </tr>
+                  ))}
+                  {totals && (
+                    <tr style={{ background: 'rgba(245,166,35,0.06)' }}>
+                      <td className="px-4 py-3 font-semibold text-white text-xs">Total</td>
+                      <td className="px-4 py-3 text-right font-semibold text-white text-xs">{money(totals.rentalIncome)}</td>
+                      <td className="px-4 py-3 text-right font-semibold text-white text-xs">{money(totals.operatingExpenses)}</td>
+                      <td className="px-4 py-3 text-right font-semibold text-white text-xs">{money(totals.insuranceExpense)}</td>
+                      <td className="px-4 py-3 text-right font-semibold text-white text-xs">{money(totals.propertyTaxExpense)}</td>
+                      <td className="px-4 py-3 text-right font-semibold text-xs" style={{ color: '#F5A623' }}>{money(totals.noi)}</td>
+                      <td className="px-4 py-3 text-right font-semibold text-white text-xs">{money(totals.debtService)}</td>
+                      <td className="px-4 py-3 text-right font-semibold text-xs" style={{ color: totals.cashFlow >= 0 ? '#10b981' : '#ef4444' }}>{money(totals.cashFlow)}</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </>
       ) : (
@@ -327,30 +329,32 @@ export default function PnLPage({ embedded }: { embedded?: boolean } = {}) {
         <>
         <MonthlyChart data={monthly} />
         <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
-          <table className="w-full text-sm">
-            <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
-              <tr className="text-left text-gray-400 text-xs">
-                <th className="px-4 py-3">Month</th>
-                <th className="px-4 py-3 text-right">Income</th>
-                <th className="px-4 py-3 text-right">OpEx</th>
-                <th className="px-4 py-3 text-right">NOI</th>
-                <th className="px-4 py-3 text-right">Debt svc</th>
-                <th className="px-4 py-3 text-right">Cash flow</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/5">
-              {monthly.map(m => (
-                <tr key={m.month} className="hover:bg-white/[0.02]">
-                  <td className="px-4 py-3 text-white text-xs">{m.label} {year}</td>
-                  <td className="px-4 py-3 text-right text-gray-300 text-xs">{money(m.rentalIncome)}</td>
-                  <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(m.operatingExpenses + m.insuranceExpense + m.propertyTaxExpense)}</td>
-                  <td className="px-4 py-3 text-right font-medium text-xs" style={{ color: m.noi >= 0 ? '#F5A623' : '#ef4444' }}>{money(m.noi)}</td>
-                  <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(m.debtService)}</td>
-                  <td className="px-4 py-3 text-right font-semibold text-xs" style={{ color: m.cashFlow >= 0 ? '#10b981' : '#ef4444' }}>{money(m.cashFlow)}</td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
+                <tr className="text-left text-gray-400 text-xs">
+                  <th className="px-4 py-3">Month</th>
+                  <th className="px-4 py-3 text-right">Income</th>
+                  <th className="px-4 py-3 text-right">OpEx</th>
+                  <th className="px-4 py-3 text-right">NOI</th>
+                  <th className="px-4 py-3 text-right">Debt svc</th>
+                  <th className="px-4 py-3 text-right">Cash flow</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {monthly.map(m => (
+                  <tr key={m.month} className="hover:bg-white/[0.02]">
+                    <td className="px-4 py-3 text-white text-xs">{m.label} {year}</td>
+                    <td className="px-4 py-3 text-right text-gray-300 text-xs">{money(m.rentalIncome)}</td>
+                    <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(m.operatingExpenses + m.insuranceExpense + m.propertyTaxExpense)}</td>
+                    <td className="px-4 py-3 text-right font-medium text-xs" style={{ color: m.noi >= 0 ? '#F5A623' : '#ef4444' }}>{money(m.noi)}</td>
+                    <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(m.debtService)}</td>
+                    <td className="px-4 py-3 text-right font-semibold text-xs" style={{ color: m.cashFlow >= 0 ? '#10b981' : '#ef4444' }}>{money(m.cashFlow)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
         </>
       )}

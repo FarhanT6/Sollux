@@ -25,10 +25,14 @@ api.interceptors.response.use(
 export default api;
 
 import type {
-  Property, UtilityAccount, Statement, Payment, AIInsight, DashboardSummary,
-  Unit, Tenant, LeaseTenant, Lease, RentPayment, RentNotice, Expense, Loan, LoanPayment,
+  Property, UtilityAccount, Statement, StatementSummaryRow, Payment, AIInsight, DashboardSummary,
+  Unit, Tenant, LeaseTenant, Lease, RentPayment, RentNotice, RentChange, ScheduledRentIncrease, LeaseUtilityCharge, Expense, Loan, LoanPayment,
   InsurancePolicy, TaxAssessment, Improvement, LegalMatter, PropertyPnL, MonthlyPnL,
-  BankAccount, OtherIncome, BudgetSummary, DelinquencyTenant,
+  BankAccount, OtherIncome, BudgetSummary, DelinquencyTenant, BudgetForecast, IndexRate,
+  ReconciliationProfile, ReconciliationStatement, ReconciliationLineItem,
+  Document, DocumentClassification, DocumentMatch, DocumentCategory,
+  IncomingTransaction, IncomingTransactionStatus, OutgoingTransaction, UtilityCandidate,
+  TurnoverReport, LeasePaymentAlias, LegalEvent, LegalFee, LegalSummary,
 } from '../types';
 
 // Dashboard
@@ -59,8 +63,10 @@ export const lookupPropertyByAddress = (params: { address: string; city: string;
   }>('/properties/lookup', { params }).then(r => r.data);
 
 // Units
-export const getUnits = (params?: { propertyId?: string }) =>
+export const getUnits = (params?: { propertyId?: string; history?: string }) =>
   api.get<Unit[]>('/units', { params }).then(r => r.data);
+export const getUnit = (id: string) =>
+  api.get<Unit>(`/units/${id}`).then(r => r.data);
 export const createUnit = (data: Partial<Unit>) =>
   api.post<Unit>('/units', data).then(r => r.data);
 export const updateUnit = (id: string, data: Partial<Unit>) =>
@@ -95,12 +101,50 @@ export const uploadLeaseDocument = (id: string, fileData: string, filename: stri
   api.post<Lease>(`/leases/${id}/document`, { fileData, filename }).then(r => r.data);
 export const getLeaseDocumentUrl = (id: string) =>
   api.get<{ url: string; expiresIn: number }>(`/leases/${id}/document`).then(r => r.data);
+export const getRentChanges = (leaseId: string) =>
+  api.get<RentChange[]>(`/leases/${leaseId}/rent-changes`).then(r => r.data);
+export const addRentChange = (leaseId: string, data: { effectiveDate: string; previousAmount?: number | null; newAmount: number; note?: string | null }) =>
+  api.post<RentChange>(`/leases/${leaseId}/rent-changes`, data).then(r => r.data);
+export const deleteRentChange = (leaseId: string, changeId: string) =>
+  api.delete(`/leases/${leaseId}/rent-changes/${changeId}`);
+export const getLeaseDocuments = (leaseId: string) =>
+  api.get<Document[]>(`/leases/${leaseId}/documents`).then(r => r.data);
+export const addLeaseDocument = (leaseId: string, data: { fileData: string; filename?: string; category: string; title?: string; notes?: string }) =>
+  api.post<Document>(`/leases/${leaseId}/documents`, data).then(r => r.data);
+export const getLeaseDocumentViewUrl = (leaseId: string, docId: string) =>
+  api.get<{ url: string }>(`/leases/${leaseId}/documents/${docId}/url`).then(r => r.data);
+export interface ExtractedLeaseTerms {
+  startDate: string | null; endDate: string | null; rentAmount: number | null;
+  securityDeposit: number | null; leaseType: 'FIXED_TERM' | 'MONTH_TO_MONTH' | null;
+  rentDueDay: number | null; lateFeeAmount: number | null; lateFeePercent: number | null;
+  lateFeeGraceDays: number | null; tenantNames: string[]; businessName: string | null; notes: string | null;
+}
+export const extractLeaseTerms = (leaseId: string, fileData: string, filename: string) =>
+  api.post<ExtractedLeaseTerms>(`/leases/${leaseId}/extract-terms`, { fileData, filename }).then(r => r.data);
+export const deleteLeaseDocument = (leaseId: string, docId: string) =>
+  api.delete(`/leases/${leaseId}/documents/${docId}`);
+export const addScheduledIncrease = (leaseId: string, data: { effectiveDate: string; newAmount?: number | null; percent?: number | null; percentMax?: number | null; note?: string | null }) =>
+  api.post<ScheduledRentIncrease>(`/leases/${leaseId}/scheduled-increases`, data).then(r => r.data);
+export const applyScheduledIncrease = (leaseId: string, sid: string, override?: { percent?: number; amount?: number }) =>
+  api.post<ScheduledRentIncrease>(`/leases/${leaseId}/scheduled-increases/${sid}/apply`, override || {}).then(r => r.data);
+export const deleteScheduledIncrease = (leaseId: string, sid: string) =>
+  api.delete(`/leases/${leaseId}/scheduled-increases/${sid}`);
+export const addPaymentAlias = (leaseId: string, data: { name: string; note?: string }) =>
+  api.post<LeasePaymentAlias>(`/leases/${leaseId}/payment-aliases`, data).then(r => r.data);
+export const deletePaymentAlias = (leaseId: string, aliasId: string) =>
+  api.delete(`/leases/${leaseId}/payment-aliases/${aliasId}`);
+export const addLeaseUtilityCharge = (leaseId: string, data: { category: string; amount: number; note?: string | null }) =>
+  api.post<LeaseUtilityCharge>(`/leases/${leaseId}/utility-charges`, data).then(r => r.data);
+export const deleteLeaseUtilityCharge = (leaseId: string, chargeId: string) =>
+  api.delete(`/leases/${leaseId}/utility-charges/${chargeId}`);
 
 // Rent payments
 export const getRentPayments = (params?: { leaseId?: string; propertyId?: string }) =>
   api.get<RentPayment[]>('/rent-payments', { params }).then(r => r.data);
 export const createRentPayment = (data: any) =>
   api.post<RentPayment>('/rent-payments', data).then(r => r.data);
+export const updateRentPayment = (id: string, data: any) =>
+  api.patch<RentPayment>(`/rent-payments/${id}`, data).then(r => r.data);
 export const deleteRentPayment = (id: string) =>
   api.delete(`/rent-payments/${id}`);
 
@@ -145,6 +189,108 @@ export const createLoanPayment = (loanId: string, data: Partial<LoanPayment>) =>
   api.post<LoanPayment>(`/loans/${loanId}/payments`, data).then(r => r.data);
 export const deleteLoanPayment = (loanId: string, paymentId: string) =>
   api.delete(`/loans/${loanId}/payments/${paymentId}`);
+export const extendLoan = (id: string, data: { months: number; notes?: string }) =>
+  api.post<Loan>(`/loans/${id}/extend`, data).then(r => r.data);
+
+// Reconciliation (e.g. a property manager who nets rent, a management fee,
+// and unrelated loan payments together in one monthly statement)
+export const getReconciliationProfiles = () =>
+  api.get<ReconciliationProfile[]>('/reconciliation/profiles').then(r => r.data);
+export const createReconciliationProfile = (data: Partial<ReconciliationProfile>) =>
+  api.post<ReconciliationProfile>('/reconciliation/profiles', data).then(r => r.data);
+export const updateReconciliationProfile = (id: string, data: Partial<ReconciliationProfile>) =>
+  api.patch<ReconciliationProfile>(`/reconciliation/profiles/${id}`, data).then(r => r.data);
+export const deleteReconciliationProfile = (id: string) =>
+  api.delete(`/reconciliation/profiles/${id}`);
+export const getReconciliationStatements = (profileId?: string) =>
+  api.get<ReconciliationStatement[]>('/reconciliation/statements', { params: profileId ? { profileId } : undefined }).then(r => r.data);
+export const createReconciliationStatement = (data: {
+  profileId: string; statementDate: string; lineItems: ReconciliationLineItem[]; notes?: string;
+}) => api.post<ReconciliationStatement>('/reconciliation/statements', data).then(r => r.data);
+export const uploadReconciliationDocument = (statementId: string, fileData: string, filename: string) =>
+  api.post<ReconciliationStatement>(`/reconciliation/statements/${statementId}/document`, { fileData, filename }).then(r => r.data);
+export const applyReconciliationStatement = (id: string) =>
+  api.post<ReconciliationStatement>(`/reconciliation/statements/${id}/apply`).then(r => r.data);
+export const deleteReconciliationStatement = (id: string) =>
+  api.delete(`/reconciliation/statements/${id}`);
+
+// Shared ("family") account access
+export interface AccountMember { id: string; email: string; fullName: string; phone?: string | null; createdAt?: string }
+export interface AccountInvite { id: string; email?: string | null; phone?: string | null; createdAt: string }
+export interface AccountInfo {
+  owner: AccountMember | null;
+  members: AccountMember[];
+  pendingInvites: AccountInvite[];
+  me: { id: string; email: string; fullName: string } | null;
+  isOwner: boolean;
+}
+export const getAccount = () => api.get<AccountInfo>('/account').then(r => r.data);
+export const inviteAccountMember = (data: { email?: string; phone?: string }) =>
+  api.post<{ linked: boolean }>('/account/invites', data).then(r => r.data);
+export const cancelAccountInvite = (id: string) => api.delete(`/account/invites/${id}`);
+export const removeAccountMember = (id: string) => api.delete(`/account/members/${id}`);
+
+// Scanned/digitized documents (phone scans, printer imports — auto-sorted mail)
+export const getDocuments = (params?: { propertyId?: string; category?: DocumentCategory }) =>
+  api.get<Document[]>('/scanned-documents', { params }).then(r => r.data);
+export const analyzeScannedDocument = (fileData: string) =>
+  api.post<{
+    classified: DocumentClassification;
+    match: DocumentMatch;
+    properties: { id: string; address: string; nickname?: string }[];
+  }>('/scanned-documents/analyze', { fileData }).then(r => r.data);
+export const confirmScannedDocument = (data: {
+  fileData: string; filename?: string; propertyId?: string | null;
+  category: DocumentCategory; title: string; pageCount: number; notes?: string;
+}) => api.post<Document>('/scanned-documents', data).then(r => r.data);
+export const getDocumentUrl = (id: string) =>
+  api.get<{ url: string }>(`/scanned-documents/${id}/url`).then(r => r.data.url);
+
+// Reports (Rent Roll / T-12 xlsx exports, generated from real Sollux data)
+export const RENT_ROLL_COLUMNS: { key: string; label: string }[] = [
+  { key: 'bdba', label: 'BD/BA' },
+  { key: 'status', label: 'Status' },
+  { key: 'moveIn', label: 'Move-in Date' },
+  { key: 'periodStart', label: 'Period Start' },
+  { key: 'periodEnd', label: 'Period End' },
+  { key: 'agreementType', label: 'Agreement Type' },
+  { key: 'rent', label: 'Monthly Rent ($)' },
+  { key: 'deposit', label: 'Deposits Held ($)' },
+];
+
+async function downloadReport(path: string, filename: string) {
+  const res = await api.get(path, { responseType: 'blob' });
+  const url = URL.createObjectURL(res.data as Blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+export const downloadRentRoll = (propertyId: string, propertyName: string, columns?: string[]) =>
+  downloadReport(
+    `/reports/rent-roll/${propertyId}${columns ? `?columns=${encodeURIComponent(columns.join(','))}` : ''}`,
+    `Rent Roll - ${propertyName}.xlsx`,
+  );
+export const downloadT12 = (propertyId: string, propertyName: string, rows?: string[]) =>
+  downloadReport(
+    `/reports/t12/${propertyId}${rows ? `?rows=${encodeURIComponent(rows.join(','))}` : ''}`,
+    `T12 - ${propertyName}.xlsx`,
+  );
+export const getT12Manifest = (propertyId: string) =>
+  api.get<{ incomeRows: string[]; expenseRows: string[] }>(`/reports/t12/${propertyId}/manifest`).then(r => r.data);
+export const deleteDocument = (id: string) =>
+  api.delete(`/scanned-documents/${id}`);
+
+// Index rates (e.g. WSJ Prime Rate history, for variable-rate loans)
+export const getIndexRates = (indexName?: string) =>
+  api.get<IndexRate[]>('/index-rates', { params: indexName ? { indexName } : undefined }).then(r => r.data);
+export const createIndexRate = (data: { indexName?: string; rate: number; effectiveDate: string; notes?: string }) =>
+  api.post<IndexRate>('/index-rates', data).then(r => r.data);
+export const deleteIndexRate = (id: string) =>
+  api.delete(`/index-rates/${id}`);
 
 // Insurance
 export const getInsurancePolicies = (params?: { propertyId?: string }) =>
@@ -177,7 +323,7 @@ export const deleteImprovement = (id: string) =>
   api.delete(`/improvements/${id}`);
 
 // Legal
-export const getLegalMatters = (params?: { propertyId?: string; status?: string }) =>
+export const getLegalMatters = (params?: { propertyId?: string; status?: string; matterType?: string; open?: string }) =>
   api.get<LegalMatter[]>('/legal', { params }).then(r => r.data);
 export const createLegalMatter = (data: Partial<LegalMatter>) =>
   api.post<LegalMatter>('/legal', data).then(r => r.data);
@@ -185,6 +331,33 @@ export const updateLegalMatter = (id: string, data: Partial<LegalMatter>) =>
   api.patch<LegalMatter>(`/legal/${id}`, data).then(r => r.data);
 export const deleteLegalMatter = (id: string) =>
   api.delete(`/legal/${id}`);
+export const getLegalMatter = (id: string) =>
+  api.get<LegalMatter>(`/legal/${id}`).then(r => r.data);
+export const getLegalSummary = () =>
+  api.get<LegalSummary>('/legal/summary').then(r => r.data);
+// Timeline
+export const addLegalEvent = (matterId: string, data: Partial<LegalEvent>) =>
+  api.post<LegalEvent>(`/legal/${matterId}/events`, data).then(r => r.data);
+export const updateLegalEvent = (matterId: string, eventId: string, data: Partial<LegalEvent>) =>
+  api.patch<LegalEvent>(`/legal/${matterId}/events/${eventId}`, data).then(r => r.data);
+export const deleteLegalEvent = (matterId: string, eventId: string) =>
+  api.delete(`/legal/${matterId}/events/${eventId}`);
+// Fees and payments
+export const addLegalFee = (matterId: string, data: Partial<LegalFee>) =>
+  api.post<LegalFee>(`/legal/${matterId}/fees`, data).then(r => r.data);
+export const updateLegalFee = (matterId: string, feeId: string, data: Partial<LegalFee>) =>
+  api.patch<LegalFee>(`/legal/${matterId}/fees/${feeId}`, data).then(r => r.data);
+export const deleteLegalFee = (matterId: string, feeId: string) =>
+  api.delete(`/legal/${matterId}/fees/${feeId}`);
+// Documents
+export const getLegalDocuments = (matterId: string) =>
+  api.get<Document[]>(`/legal/${matterId}/documents`).then(r => r.data);
+export const addLegalDocument = (matterId: string, data: { fileData: string; filename?: string; category: string; title?: string; notes?: string }) =>
+  api.post<Document>(`/legal/${matterId}/documents`, data).then(r => r.data);
+export const getLegalDocumentUrl = (matterId: string, docId: string) =>
+  api.get<{ url: string }>(`/legal/${matterId}/documents/${docId}/url`).then(r => r.data);
+export const deleteLegalDocument = (matterId: string, docId: string) =>
+  api.delete(`/legal/${matterId}/documents/${docId}`);
 
 // P&L
 export const getPortfolioPnL = (params?: { start?: string; end?: string }) =>
@@ -199,7 +372,7 @@ export const getUtilities = (propertyId?: string) =>
   api.get<UtilityAccount[]>('/utilities', { params: { propertyId } }).then(r => r.data);
 export const getUtility = (id: string) =>
   api.get<UtilityAccount & { statements: any[]; payments: any[] }>(`/utilities/${id}`).then(r => r.data);
-export const createUtility = (data: Partial<UtilityAccount> & { username?: string; password?: string }) =>
+export const createUtility = (data: Partial<UtilityAccount> & { username?: string; password?: string; insuranceType?: string; loanType?: string }) =>
   api.post<UtilityAccount>('/utilities', data).then(r => r.data);
 export const updateUtility = (id: string, data: any) =>
   api.patch<UtilityAccount>(`/utilities/${id}`, data).then(r => r.data);
@@ -207,6 +380,12 @@ export const deleteUtility = (id: string) =>
   api.delete(`/utilities/${id}`);
 export const syncUtility = (id: string) =>
   api.post<{ jobId: string }>(`/utilities/${id}/sync`).then(r => r.data);
+export const revealUtilityAccountNumber = (id: string) =>
+  api.get<{ accountNumber: string | null }>(`/utilities/${id}/account-number`).then(r => r.data);
+export const getUtilityUsername = (id: string) =>
+  api.get<{ username: string | null }>(`/utilities/${id}/username`).then(r => r.data);
+export const getUtilityPassword = (id: string) =>
+  api.get<{ password: string | null }>(`/utilities/${id}/password`).then(r => r.data);
 
 // Statements
 export const getStatements = (params: { utilityAccountId?: string; propertyId?: string }) =>
@@ -215,12 +394,26 @@ export const getStatementDownloadUrl = (id: string) =>
   api.get<{ url: string }>(`/statements/${id}/download`).then(r => r.data);
 export const deleteStatement = (id: string) =>
   api.delete<{ success: boolean }>(`/statements/${id}`).then(r => r.data);
-export const patchStatement = (id: string, data: { amountPaid?: number | null }) =>
-  api.patch(`/statements/${id}`, data).then(r => r.data);
+export const patchStatement = (id: string, data: {
+  amountPaid?: number | null; statementDate?: string; dueDate?: string | null;
+  amountDue?: number | null; chargesExcludingFees?: number | null;
+  penaltiesFees?: number | null; pastDueCarried?: number | null; notes?: string | null;
+}) => api.patch<Statement>(`/statements/${id}`, data).then(r => r.data);
+export const createStatement = (data: {
+  utilityAccountId: string; statementDate: string; dueDate?: string | null;
+  amountDue?: number | null; amountPaid?: number | null; chargesExcludingFees?: number | null;
+  penaltiesFees?: number | null; pastDueCarried?: number | null; notes?: string | null;
+}) => api.post<Statement>('/statements', data).then(r => r.data);
+export const getStatementsSummary = (params?: { propertyId?: string; utilityAccountId?: string }) =>
+  api.get<StatementSummaryRow[]>('/statements/summary', { params }).then(r => r.data);
 
 // Utility payments
 export const getPayments = (params: { utilityAccountId?: string; propertyId?: string }) =>
   api.get<Payment[]>('/payments', { params }).then(r => r.data);
+export const updatePayment = (id: string, data: any) =>
+  api.patch<Payment>(`/payments/${id}`, data).then(r => r.data);
+export const deletePayment = (id: string) =>
+  api.delete(`/payments/${id}`);
 export const createPayment = (data: any) =>
   api.post<Payment>('/payments', data).then(r => r.data);
 
@@ -257,7 +450,8 @@ export const getDriveAccessToken = (tokenId: string) =>
   api.get<{ accessToken: string }>('/drive/access-token', { params: { tokenId } }).then(r => r.data);
 export const startDriveImport = (
   tokenId: string,
-  selection: { folderId?: string; fileIds?: string[]; folderName?: string }
+  // method defaults to free regex parsing server-side; 'ai' bills per PDF.
+  selection: { folderId?: string; fileIds?: string[]; folderName?: string; method?: 'ai' | 'regex' }
 ) =>
   api.post<{ jobId: string }>('/drive/import', { tokenId, ...selection }).then(r => r.data);
 export const getDriveImportJob = (jobId: string) =>
@@ -309,6 +503,8 @@ export const getBudgetMonthly = (year: number, month: number, includePersonal = 
   api.get<BudgetSummary>('/budget/monthly', { params: { year, month, includePersonal } }).then(r => r.data);
 export const getBudgetDelinquency = () =>
   api.get<{ tenants: DelinquencyTenant[]; totalArrears: number; totalExpectedCollection: number }>('/budget/delinquency').then(r => r.data);
+export const getBudgetForecast = (months = 6) =>
+  api.get<BudgetForecast>('/budget/forecast', { params: { months } }).then(r => r.data);
 
 // AI portfolio query
 export const queryPortfolio = (query: string) =>
@@ -326,6 +522,33 @@ export const deletePlaidItem = (id: string) =>
 export const syncPlaidBalances = () =>
   api.post<{ synced: number; failed: number }>('/plaid/sync').then(r => r.data);
 
+// Incoming P2P transactions (rent via Zelle/Venmo/PayPal/Cash App)
+export const getIncomingTransactions = (status?: IncomingTransactionStatus) =>
+  api.get<IncomingTransaction[]>('/transactions', { params: status ? { status } : undefined }).then(r => r.data);
+export const syncIncomingTransactions = () =>
+  api.post<{ itemsSynced: number; added: number; errors: string[] }>('/transactions/sync').then(r => r.data);
+export const matchIncomingTransaction = (id: string, leaseId: string | null) =>
+  api.patch<IncomingTransaction>(`/transactions/${id}`, { leaseId }).then(r => r.data);
+export const applyIncomingTransaction = (id: string) =>
+  api.post<IncomingTransaction>(`/transactions/${id}/apply`).then(r => r.data);
+export const ignoreIncomingTransaction = (id: string) =>
+  api.post<IncomingTransaction>(`/transactions/${id}/ignore`).then(r => r.data);
+
+// Outgoing transactions (hardware-store expenses, utility bill payments)
+export const getOutgoingTransactions = (status?: IncomingTransactionStatus) =>
+  api.get<OutgoingTransaction[]>('/expense-transactions', { params: status ? { status } : undefined }).then(r => r.data);
+export const syncOutgoingTransactions = () =>
+  api.post<{ itemsSynced: number; added: number; errors: string[] }>('/expense-transactions/sync').then(r => r.data);
+export const matchOutgoingTransaction = (id: string, data: {
+  propertyId?: string | null; category?: string | null; utilityAccountId?: string | null; statementId?: string | null;
+}) => api.patch<OutgoingTransaction>(`/expense-transactions/${id}`, data).then(r => r.data);
+export const getUtilityCandidates = (id: string) =>
+  api.get<UtilityCandidate[]>(`/expense-transactions/${id}/utility-candidates`).then(r => r.data);
+export const applyOutgoingTransaction = (id: string) =>
+  api.post<OutgoingTransaction>(`/expense-transactions/${id}/apply`).then(r => r.data);
+export const ignoreOutgoingTransaction = (id: string) =>
+  api.post<OutgoingTransaction>(`/expense-transactions/${id}/ignore`).then(r => r.data);
+
 export interface PlaidItem {
   id: string;
   institutionName: string;
@@ -339,6 +562,9 @@ export interface PlaidItem {
     ownerLabel: string | null;
     accountType: string;
     isActive: boolean;
+    watchForRentPayments?: boolean;
+    watchForExpenses?: boolean;
+    plaidAccountId?: string | null;
     balances: Array<{
       balance: number;
       available: number | null;
@@ -348,3 +574,7 @@ export interface PlaidItem {
     }>;
   }>;
 }
+
+// Turnover — tenancy history, vacancy gaps and lost rent, derived from leases.
+export const getTurnover = (params?: { propertyId?: string }) =>
+  api.get<TurnoverReport>('/turnover', { params }).then(r => r.data);

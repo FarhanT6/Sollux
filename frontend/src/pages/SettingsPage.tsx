@@ -24,11 +24,19 @@ import api, {
   updateBankAccount,
   deleteBankAccount,
   recordBankBalance,
+  getIndexRates,
+  createIndexRate,
+  deleteIndexRate,
 } from '../api/client';
 import type { PlaidItem } from '../api/client';
-import type { BankAccount } from '../types';
+import type { BankAccount, IndexRate } from '../types';
+import { format } from 'date-fns';
+import { fmtDate as fmtDateSafe } from '../lib/date';
+import { getAccount, inviteAccountMember, cancelAccountInvite, removeAccountMember,
+  getNotificationPreferences, updateNotificationPreferences } from '../api/client';
+import type { AccountInfo } from '../api/client';
 
-type SettingsTab = 'account' | 'notifications' | 'banking';
+type SettingsTab = 'account' | 'notifications' | 'banking' | 'rates';
 
 export default function SettingsPage() {
   const { user } = useUser();
@@ -68,12 +76,13 @@ export default function SettingsPage() {
         subtitle={
           tab === 'notifications' ? 'Configure how and when Sollux alerts you'
           : tab === 'banking'     ? 'Connect bank accounts for automatic daily balance snapshots'
+          : tab === 'rates'       ? 'Reference rate history for variable-rate loans (e.g. WSJ Prime Rate)'
           : 'Manage your account and subscription'
         }
       />
 
       <div className="flex border-b px-6" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
-        {(['account', 'notifications', 'banking'] as SettingsTab[]).map(t => (
+        {(['account', 'notifications', 'banking', 'rates'] as SettingsTab[]).map(t => (
           <button
             key={t}
             onClick={() => setSearchParams({ tab: t }, { replace: true })}
@@ -91,62 +100,9 @@ export default function SettingsPage() {
       {tab === 'banking' ? (
         <BankingTab />
       ) : tab === 'notifications' ? (
-        <div className="px-6 py-5 max-w-2xl">
-          <div className="card p-5 mb-4">
-            <h2 className="text-sm font-semibold text-white mb-4">Alert channels</h2>
-            {[
-              { label: 'Email notifications', desc: 'Receive alerts and reminders to your email', id: 'email' },
-              { label: 'SMS notifications', desc: 'Receive alerts via text message (Pro plan)', id: 'sms' },
-              { label: 'Browser push', desc: 'Receive in-browser push notifications', id: 'push' },
-            ].map(item => (
-              <div key={item.id} className="flex items-center justify-between py-3 border-b border-white/8 last:border-0">
-                <div>
-                  <p className="text-sm font-medium text-gray-100">{item.label}</p>
-                  <p className="text-xs text-gray-400">{item.desc}</p>
-                </div>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input type="checkbox" defaultChecked={item.id === 'email'} className="sr-only peer" />
-                  <div className="w-9 h-5 bg-white/10 peer-checked:bg-gold-500 rounded-full transition-colors" />
-                  <div className="absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-4" />
-                </label>
-              </div>
-            ))}
-          </div>
-
-          <div className="card p-5 mb-4">
-            <h2 className="text-sm font-semibold text-white mb-4">Alert types</h2>
-            {[
-              { label: 'Bill due reminders', desc: 'Alert when a bill is due within N days', id: 'due' },
-              { label: 'Anomaly detection', desc: 'Alert when a bill is significantly above average', id: 'anomaly' },
-              { label: 'Payment confirmations', desc: 'Alert when a payment is recorded', id: 'payment' },
-              { label: 'Sync failures', desc: 'Alert when an account fails to sync', id: 'sync' },
-            ].map(item => (
-              <div key={item.id} className="flex items-center justify-between py-3 border-b border-white/8 last:border-0">
-                <div>
-                  <p className="text-sm font-medium text-gray-100">{item.label}</p>
-                  <p className="text-xs text-gray-400">{item.desc}</p>
-                </div>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input type="checkbox" defaultChecked className="sr-only peer" />
-                  <div className="w-9 h-5 bg-white/10 peer-checked:bg-gold-500 rounded-full transition-colors" />
-                  <div className="absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-4" />
-                </label>
-              </div>
-            ))}
-          </div>
-
-          <div className="card p-5">
-            <h2 className="text-sm font-semibold text-white mb-4">Reminder timing</h2>
-            <div className="flex items-center gap-3">
-              <p className="text-sm text-gray-400">Send reminders</p>
-              <select className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-gray-200">
-                <option value="3">3 days before due</option>
-                <option value="5">5 days before due</option>
-                <option value="7">7 days before due</option>
-              </select>
-            </div>
-          </div>
-        </div>
+        <NotificationsTab />
+      ) : tab === 'rates' ? (
+        <RatesTab />
       ) : (
       <div className="px-6 py-5 max-w-2xl">
 
@@ -167,6 +123,8 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
+
+        <SharedAccessCard />
 
         <div className="card p-5 mb-4">
           <h2 className="text-sm font-semibold text-white mb-4">Subscription</h2>
@@ -285,13 +243,118 @@ export default function SettingsPage() {
   );
 }
 
+// ── Rates Tab ────────────────────────────────────────────────────────────────
+
+function RatesTab() {
+  const [rates, setRates]     = useState<IndexRate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [rate, setRate]       = useState('');
+  const [effectiveDate, setEffectiveDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [notes, setNotes]     = useState('');
+  const [saving, setSaving]   = useState(false);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    getIndexRates('PRIME').then(setRates).finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function handleAdd() {
+    if (!rate || !effectiveDate) return;
+    setSaving(true);
+    try {
+      await createIndexRate({ indexName: 'PRIME', rate: parseFloat(rate), effectiveDate, notes: notes || undefined });
+      setRate(''); setNotes('');
+      load();
+    } finally { setSaving(false); }
+  }
+
+  async function handleDelete(id: string) {
+    if (!confirm('Delete this rate entry?')) return;
+    await deleteIndexRate(id);
+    setRates(prev => prev.filter(r => r.id !== id));
+  }
+
+  const current = rates[0];
+
+  return (
+    <div className="px-6 py-5 max-w-2xl">
+      <div className="card p-5 mb-4">
+        <h2 className="text-sm font-semibold text-white mb-1">WSJ Prime Rate</h2>
+        <p className="text-xs text-gray-500 mb-4">
+          Sollux has no live market data feed — log Prime rate changes here as they happen (or whenever you notice one),
+          and every variable-rate loan indexed to Prime recalculates its interest rate automatically on its own reset anniversary.
+        </p>
+        {current && (
+          <div className="rounded-lg px-3 py-2.5 mb-4" style={{ background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.2)' }}>
+            <p className="text-xs text-gray-400">Current Prime</p>
+            <p className="text-lg font-semibold text-amber-400">{current.rate}%</p>
+            <p className="text-xs text-gray-500">as of {fmtDateSafe(current.effectiveDate, 'MMM d, yyyy')}</p>
+          </div>
+        )}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-3">
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">New rate (%)</label>
+            <input type="number" step="0.001" value={rate} onChange={e => setRate(e.target.value)} className="input-dark w-full text-sm" placeholder="8.50" />
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Effective date</label>
+            <input type="date" value={effectiveDate} onChange={e => setEffectiveDate(e.target.value)} className="input-dark w-full text-sm" />
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Notes (optional)</label>
+            <input value={notes} onChange={e => setNotes(e.target.value)} className="input-dark w-full text-sm" placeholder="Fed cut" />
+          </div>
+        </div>
+        <button onClick={handleAdd} disabled={saving || !rate || !effectiveDate} className="btn-primary text-sm px-4 py-2 disabled:opacity-50">
+          {saving ? 'Saving…' : '+ Log rate change'}
+        </button>
+      </div>
+
+      <div className="card p-5">
+        <h2 className="text-sm font-semibold text-white mb-3">History</h2>
+        {loading ? (
+          <p className="text-sm text-gray-500">Loading…</p>
+        ) : rates.length === 0 ? (
+          <p className="text-sm text-gray-500">No Prime rate logged yet — add one above to activate any variable-rate loans.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-gray-500 text-xs uppercase tracking-wider border-b border-white/5">
+                  <th className="text-left pb-2">Effective</th>
+                  <th className="text-right pb-2">Rate</th>
+                  <th className="text-left pb-2 pl-3">Notes</th>
+                  <th className="pb-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {rates.map(r => (
+                  <tr key={r.id} className="border-b border-white/5">
+                    <td className="py-2 text-gray-300">{fmtDateSafe(r.effectiveDate, 'MMM d, yyyy')}</td>
+                    <td className="py-2 text-right text-white font-medium">{r.rate}%</td>
+                    <td className="py-2 pl-3 text-gray-500">{r.notes || '—'}</td>
+                    <td className="py-2 text-right">
+                      <button onClick={() => handleDelete(r.id)} className="text-xs text-red-500 hover:text-red-400">Del</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Banking Tab ───────────────────────────────────────────────────────────────
 
 const money = (n: number | null | undefined) =>
   n == null ? '—' : Number(n).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 
-const fmtDate = (d: string | null | undefined) =>
-  d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+const fmtDate = (d: string | null | undefined) => fmtDateSafe(d);
 
 const ACCOUNT_TYPE_LABELS: Record<string, string> = {
   CHECKING: 'Checking', SAVINGS: 'Savings', CREDIT_CARD: 'Credit card', CASH_POOL: 'Cash / Wallet',
@@ -307,12 +370,13 @@ const MANUAL_PRESETS = [
 
 // ── Sortable Plaid institution card ──────────────────────────────────────────
 function SortablePlaidCard({
-  item, balVisible, disp, onDisconnect,
+  item, balVisible, disp, onDisconnect, onToggleWatch,
 }: {
   item: PlaidItem;
   balVisible: boolean;
   disp: (n: number | null | undefined) => string;
   onDisconnect: (id: string, name: string) => void;
+  onToggleWatch: () => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.id });
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 };
@@ -368,6 +432,26 @@ function SortablePlaidCard({
                     <span className="text-xs text-gray-600">· Auto-synced {fmtDate(bal.asOfDate)}</span>
                   )}
                 </div>
+                {acct.accountType !== 'CREDIT_CARD' && (
+                  <div className="mt-1.5 space-y-1">
+                    <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={!!acct.watchForRentPayments}
+                        onChange={async e => { await updateBankAccount(acct.id, { watchForRentPayments: e.target.checked }); onToggleWatch(); }}
+                      />
+                      Watch for rent payments (Zelle/Venmo/PayPal/Cash App)
+                    </label>
+                    <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={!!acct.watchForExpenses}
+                        onChange={async e => { await updateBankAccount(acct.id, { watchForExpenses: e.target.checked }); onToggleWatch(); }}
+                      />
+                      Watch for expenses (hardware stores, utility payments)
+                    </label>
+                  </div>
+                )}
               </div>
               <div className="text-right">
                 <p className={`text-sm font-semibold ${acct.accountType === 'CREDIT_CARD' ? 'text-red-400' : 'text-white'}`}>
@@ -615,7 +699,7 @@ function BankingTab() {
 
           {/* 3 buckets */}
           {buckets.length > 0 && (
-            <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${buckets.length}, 1fr)` }}>
+            <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
               {buckets.map(b => (
                 <div key={b.label} className="card p-3">
                   <p className="text-xs text-gray-500 mb-1">{b.label}</p>
@@ -643,7 +727,7 @@ function BankingTab() {
               <SortableContext items={sortedItems.map(i => i.id)} strategy={verticalListSortingStrategy}>
                 <div className="space-y-3 mb-4">
                   {sortedItems.map(item => (
-                    <SortablePlaidCard key={item.id} item={item} balVisible={balVisible} disp={disp} onDisconnect={handleDisconnect} />
+                    <SortablePlaidCard key={item.id} item={item} balVisible={balVisible} disp={disp} onDisconnect={handleDisconnect} onToggleWatch={loadAll} />
                   ))}
                 </div>
               </SortableContext>
@@ -759,5 +843,225 @@ function PlaidConnectButton({ onSuccess }: { onSuccess: () => void }) {
     >
       {loading ? 'Connecting…' : '+ Connect bank'}
     </button>
+  );
+}
+
+// ─── Shared ("family") account access ────────────────────────────────────────
+// Members sign in with their own credentials but see and edit the owner's
+// data — every API route resolves to the owner's account for them.
+function SharedAccessCard() {
+  const [info, setInfo] = useState<AccountInfo | null>(null);
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const load = () => getAccount().then(setInfo).catch(() => {});
+  useEffect(() => { load(); }, []);
+
+  async function add() {
+    if (!email.trim() && !phone.trim()) return;
+    setBusy(true); setErr('');
+    try {
+      await inviteAccountMember({ email: email.trim() || undefined, phone: phone.trim() || undefined });
+      setEmail(''); setPhone('');
+      await load();
+    } catch (e: any) {
+      setErr(e?.response?.data?.error || 'Could not add that person.');
+    } finally { setBusy(false); }
+  }
+
+  if (!info) return null;
+
+  return (
+    <div className="card p-5 mb-4">
+      <h2 className="text-sm font-semibold text-white mb-1">Shared access</h2>
+      <p className="text-xs text-gray-400 mb-4">
+        {info.isOwner
+          ? 'People you add sign in with their own login but see and edit this same account — all properties, tenants, and finances.'
+          : `You have shared access to ${info.owner?.fullName || info.owner?.email || 'another'}'s account. Only the owner can manage members.`}
+      </p>
+
+      <div className="space-y-2 mb-4">
+        <div className="flex items-center justify-between py-2 border-b border-white/8">
+          <div>
+            <p className="text-sm text-gray-100">{info.owner?.fullName || info.owner?.email}</p>
+            <p className="text-xs text-gray-500">{info.owner?.email}</p>
+          </div>
+          <span className="pill pill-amber">Owner</span>
+        </div>
+        {info.members.map(m => (
+          <div key={m.id} className="flex items-center justify-between py-2 border-b border-white/8 last:border-0">
+            <div>
+              <p className="text-sm text-gray-100">{m.fullName || m.email}</p>
+              <p className="text-xs text-gray-500">{m.email}{m.phone ? ` · ${m.phone}` : ''}</p>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="pill pill-green">Full access</span>
+              {info.isOwner && (
+                <button onClick={async () => { if (confirm(`Remove ${m.fullName || m.email}'s access?`)) { await removeAccountMember(m.id); load(); } }}
+                  className="text-xs text-red-400 hover:text-red-300">Remove</button>
+              )}
+            </div>
+          </div>
+        ))}
+        {info.pendingInvites.map(inv => (
+          <div key={inv.id} className="flex items-center justify-between py-2 border-b border-white/8 last:border-0">
+            <div>
+              <p className="text-sm text-gray-300">{inv.email || inv.phone}</p>
+              <p className="text-xs text-gray-500">Access starts when they sign up with this {inv.email ? 'email' : 'phone number'}</p>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="pill pill-gray">Pending</span>
+              {info.isOwner && (
+                <button onClick={async () => { await cancelAccountInvite(inv.id); load(); }}
+                  className="text-xs text-red-400 hover:text-red-300">Cancel</button>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {info.isOwner && (
+        <>
+          <div className="flex gap-2 flex-wrap items-center">
+            <input value={email} onChange={e => setEmail(e.target.value)} placeholder="their@email.com"
+              className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-gray-200 flex-1 min-w-48" />
+            <span className="text-xs text-gray-600">or</span>
+            <input value={phone} onChange={e => setPhone(e.target.value)} placeholder="760-672-7717"
+              className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-gray-200 w-40" />
+            <button onClick={add} disabled={busy || (!email.trim() && !phone.trim())}
+              className="btn btn-primary text-xs disabled:opacity-40">{busy ? 'Adding…' : 'Add person'}</button>
+          </div>
+          {err && <p className="text-xs text-red-400 mt-2">{err}</p>}
+          <p className="text-xs text-gray-600 mt-2">
+            They sign up at Sollux with that email or phone — access links automatically on their first sign-in.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Notification preferences. Every control here used to be a `defaultChecked`
+// toggle with no handler — the page looked configurable but saved nothing,
+// even though /api/notifications/preferences was fully implemented. Each
+// channel × event pair is one NotificationPreference row.
+const NOTIF_CHANNELS = [
+  { id: 'EMAIL', label: 'Email notifications', desc: 'Receive alerts and reminders to your email' },
+  { id: 'SMS',   label: 'SMS notifications',   desc: 'Receive alerts via text message (Pro plan)' },
+  { id: 'PUSH',  label: 'Browser push',        desc: 'Receive in-browser push notifications' },
+] as const;
+
+const NOTIF_EVENTS = [
+  { id: 'BILL_DUE',       label: 'Bill due reminders',    desc: 'Alert when a bill is due within N days' },
+  { id: 'ANOMALY',        label: 'Anomaly detection',     desc: 'Alert when a bill is significantly above average' },
+  { id: 'PAYMENT',        label: 'Payment confirmations', desc: 'Alert when a payment is recorded' },
+  { id: 'SYNC_FAILURE',   label: 'Sync failures',         desc: 'Alert when an account fails to sync' },
+] as const;
+
+interface NotifPref { channel: string; eventType: string; isEnabled: boolean; thresholdDays: number }
+
+function NotificationsTab() {
+  const [prefs, setPrefs] = useState<NotifPref[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState<string | null>(null);
+
+  useEffect(() => {
+    getNotificationPreferences().then(setPrefs).finally(() => setLoading(false));
+  }, []);
+
+  const find = (channel: string, eventType: string) =>
+    prefs.find(p => p.channel === channel && p.eventType === eventType);
+
+  // A channel is on when any event is enabled for it; toggling it sets every
+  // event at once, which is what the single row implies.
+  const channelOn = (channel: string) => NOTIF_EVENTS.some(e => find(channel, e.id)?.isEnabled);
+  // An event row reflects email, the channel that always exists.
+  const eventOn = (eventType: string) => find('EMAIL', eventType)?.isEnabled ?? false;
+  const thresholdDays = find('EMAIL', 'BILL_DUE')?.thresholdDays ?? 5;
+
+  async function save(channel: string, eventType: string, patch: { isEnabled?: boolean; thresholdDays?: number }) {
+    const current = find(channel, eventType);
+    const body = {
+      channel, eventType,
+      isEnabled: patch.isEnabled ?? current?.isEnabled ?? false,
+      thresholdDays: patch.thresholdDays ?? current?.thresholdDays ?? 5,
+    };
+    // Optimistic — a toggle that waits on a round trip feels broken.
+    setPrefs(prev => {
+      const rest = prev.filter(p => !(p.channel === channel && p.eventType === eventType));
+      return [...rest, body];
+    });
+    setSaving(`${channel}:${eventType}`);
+    try {
+      await updateNotificationPreferences(body);
+    } catch {
+      setPrefs(await getNotificationPreferences());
+      alert('Could not save that preference.');
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  const toggleChannel = (channel: string, on: boolean) =>
+    Promise.all(NOTIF_EVENTS.map(e => save(channel, e.id, { isEnabled: on })));
+
+  const toggleEvent = (eventType: string, on: boolean) => save('EMAIL', eventType, { isEnabled: on });
+
+  if (loading) return <div className="px-6 py-5 text-sm text-gray-500">Loading…</div>;
+
+  return (
+    <div className="px-6 py-5 max-w-2xl">
+      <div className="card p-5 mb-4">
+        <h2 className="text-sm font-semibold text-white mb-4">Alert channels</h2>
+        {NOTIF_CHANNELS.map(item => (
+          <Toggle key={item.id} label={item.label} desc={item.desc}
+            checked={channelOn(item.id)} busy={saving?.startsWith(item.id + ':')}
+            onChange={on => toggleChannel(item.id, on)} />
+        ))}
+      </div>
+
+      <div className="card p-5 mb-4">
+        <h2 className="text-sm font-semibold text-white mb-4">Alert types</h2>
+        {NOTIF_EVENTS.map(item => (
+          <Toggle key={item.id} label={item.label} desc={item.desc}
+            checked={eventOn(item.id)} busy={saving === `EMAIL:${item.id}`}
+            onChange={on => toggleEvent(item.id, on)} />
+        ))}
+      </div>
+
+      <div className="card p-5">
+        <h2 className="text-sm font-semibold text-white mb-4">Reminder timing</h2>
+        <div className="flex items-center gap-3">
+          <p className="text-sm text-gray-400">Send reminders</p>
+          <select value={String(thresholdDays)}
+            onChange={e => save('EMAIL', 'BILL_DUE', { thresholdDays: Number(e.target.value) })}
+            className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-gray-200">
+            <option value="3">3 days before due</option>
+            <option value="5">5 days before due</option>
+            <option value="7">7 days before due</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Toggle({ label, desc, checked, busy, onChange }: {
+  label: string; desc: string; checked: boolean; busy?: boolean; onChange: (on: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between py-3 border-b border-white/8 last:border-0">
+      <div>
+        <p className="text-sm font-medium text-gray-100">{label}</p>
+        <p className="text-xs text-gray-400">{desc}</p>
+      </div>
+      <label className={`relative inline-flex items-center cursor-pointer ${busy ? 'opacity-60' : ''}`}>
+        <input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} className="sr-only peer" />
+        <div className="w-9 h-5 bg-white/10 peer-checked:bg-gold-500 rounded-full transition-colors" />
+        <div className="absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-4" />
+      </label>
+    </div>
   );
 }

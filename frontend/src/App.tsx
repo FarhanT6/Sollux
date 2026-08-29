@@ -12,7 +12,9 @@ import FinancesPage from './pages/FinancesPage';
 import TenantsHubPage from './pages/TenantsHubPage';
 import PortfolioPage from './pages/PortfolioPage';
 import PropertyHubPage from './pages/PropertyHubPage';
+import LegalPage from './pages/LegalPage';
 import ImportPage from './pages/ImportPage';
+import ScanPage from './pages/ScanPage';
 // Still used for deep-link detail pages
 import LoanDetailPage from './pages/LoanDetailPage';
 import NoticeDetailPage from './pages/NoticeDetailPage';
@@ -62,12 +64,19 @@ export default function App() {
           <Route path="tenants/:id" element={<TenantDetailPage />} />
           <Route path="notices/:id" element={<NoticeDetailPage />} />
 
+          {/* Lives as a Finances tab; keep the direct URL working for links. */}
+          <Route path="incoming-payments" element={<Navigate to="/finances?tab=incoming" replace />} />
+
+          {/* Legal */}
+          <Route path="legal" element={<LegalPage />} />
+
           {/* Standalone pages */}
           <Route path="insights" element={<InsightsPage />} />
           <Route path="settings" element={<SettingsPage />} />
 
           {/* Import */}
           <Route path="import" element={<ImportPage />} />
+        <Route path="scan" element={<ScanPage />} />
 
           {/* Legacy redirects — preserve old bookmarks and back-nav */}
           <Route path="rent-roll"     element={<Navigate to="/tenants" replace />} />
@@ -77,7 +86,7 @@ export default function App() {
           <Route path="loans"         element={<Navigate to="/finances?tab=loans" replace />} />
           <Route path="expenses"      element={<Navigate to="/finances?tab=expenses" replace />} />
           <Route path="payments"      element={<Navigate to="/properties" replace />} />
-          <Route path="documents"     element={<Navigate to="/properties" replace />} />
+          <Route path="documents"     element={<Navigate to="/scan?tab=library" replace />} />
           <Route path="notifications" element={<Navigate to="/settings?tab=notifications" replace />} />
 
           <Route path="*" element={<Navigate to="/dashboard" replace />} />

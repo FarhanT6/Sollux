@@ -1,8 +1,8 @@
-import { useState } from 'react';
-import { createUtility } from '../../api/client';
+import { useState, useEffect } from 'react';
+import { createUtility, getUtilities, upsertUtilityLoan } from '../../api/client';
 import { Modal, Field, Input, Select } from '../ui';
 import type { UtilityCategory } from '../../types';
-import { CATEGORY_LABELS } from '../../types';
+import { CATEGORY_LABELS, LOAN_TYPE_LABELS, INSURANCE_TYPE_LABELS } from '../../types';
 
 const PROVIDER_SLUGS: Record<string, string> = {
   'SDGE': 'sdge',
@@ -24,7 +24,22 @@ const PROVIDER_SLUGS: Record<string, string> = {
   'Service Finance (Solar)': 'service-finance',
   'Bamboo Insurance': 'bamboo-insurance',
   'Safeco Insurance': 'safeco',
-  'Other': 'gmail-fallback',
+};
+
+// Which category each preset provider belongs under, so the picker only
+// shows providers relevant to the category you've selected instead of
+// dumping every electric/insurance/loan servicer into one flat wall of tiles.
+const PROVIDER_CATEGORIES: Record<string, UtilityCategory> = {
+  'SDGE': 'ELECTRIC', 'IID': 'ELECTRIC', 'FPL': 'ELECTRIC',
+  'SoCal Gas': 'GAS',
+  'Brevard County Water': 'WATER', 'Vista Irrigation District': 'WATER',
+  'City of Oceanside': 'WATER', 'City of Imperial': 'WATER',
+  'City of El Centro': 'WATER', 'City of Brawley': 'WATER',
+  'WM': 'TRASH', 'Republic Services': 'TRASH',
+  'Cox': 'INTERNET', 'Spectrum': 'INTERNET',
+  'T-Mobile': 'PHONE', 'AT&T': 'PHONE',
+  'Service Finance (Solar)': 'SOLAR',
+  'Bamboo Insurance': 'INSURANCE', 'Safeco Insurance': 'INSURANCE',
 };
 
 // Providers with a live scraper (vs gmail-fallback only)
@@ -51,14 +66,69 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
     notes: '',
     useGmail: false,
   });
+  const [selectedTile, setSelectedTile] = useState('');
+  const [otherName, setOtherName] = useState('');
+  const [customProviders, setCustomProviders] = useState<Record<string, { slug: string; category: string }>>({});
+  const [isLoan, setIsLoan] = useState(false);
+  const [loanType, setLoanType] = useState('OTHER');
+  const [insuranceType, setInsuranceType] = useState('PROPERTY');
+
+  // Providers added via "Other" on any property don't live in the static
+  // PROVIDER_SLUGS list, so without this they'd vanish from the picker the
+  // next time you go to add a utility — pull in every distinct provider
+  // name/slug/category the user has already used and merge them in as extra
+  // tiles, grouped under whichever category they were actually added under.
+  useEffect(() => {
+    getUtilities().then(accounts => {
+      const extra: Record<string, { slug: string; category: string }> = {};
+      for (const a of accounts) {
+        if (!PROVIDER_SLUGS[a.providerName] && !extra[a.providerName]) {
+          extra[a.providerName] = { slug: a.providerSlug, category: a.category };
+        }
+      }
+      setCustomProviders(extra);
+    }).catch(() => {});
+  }, []);
+
+  const allProviders: Record<string, string> = {
+    ...Object.fromEntries(Object.entries(customProviders).map(([name, p]) => [name, p.slug])),
+    ...PROVIDER_SLUGS,
+  };
+  // Only show providers that belong to the currently-selected category, so
+  // picking "Electric" doesn't surface loan servicers, insurance carriers,
+  // and other unrelated custom providers in the same wall of tiles.
+  const providersForCategory = Object.keys(allProviders).filter(name => {
+    if (customProviders[name]) return customProviders[name].category === form.category;
+    return PROVIDER_CATEGORIES[name] === form.category;
+  });
 
   function set(key: string, value: string | boolean) {
     setForm(prev => ({ ...prev, [key]: value }));
   }
 
+  function selectCategory(category: string) {
+    // Clear the provider selection too — a tile picked under the old
+    // category rarely still makes sense once the category changes.
+    setSelectedTile('');
+    setOtherName('');
+    setForm(prev => ({ ...prev, category: category as UtilityCategory, providerName: '', providerSlug: '' }));
+  }
+
   function selectProvider(name: string) {
-    set('providerName', name);
-    set('providerSlug', PROVIDER_SLUGS[name] || 'gmail-fallback');
+    setSelectedTile(name);
+    if (name === 'Other') {
+      set('providerName', otherName);
+      set('providerSlug', 'gmail-fallback');
+    } else {
+      set('providerName', name);
+      set('providerSlug', allProviders[name] || 'gmail-fallback');
+    }
+  }
+
+  function handleOtherNameChange(value: string) {
+    setOtherName(value);
+    set('providerName', value);
+    set('providerSlug', 'gmail-fallback');
   }
 
   async function handleSubmit() {
@@ -67,7 +137,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
     setLoading(true);
     setError('');
     try {
-      await createUtility({
+      const account = await createUtility({
         propertyId,
         providerName: form.providerName,
         providerSlug: form.useGmail ? 'gmail-fallback' : form.providerSlug,
@@ -77,7 +147,15 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
         password: form.useGmail ? undefined : form.password,
         loginUrl: form.loginUrl || undefined,
         notes: form.notes || undefined,
+        insuranceType: form.category === 'INSURANCE' ? insuranceType : undefined,
+        loanType: (form.category === 'LOAN' || form.category === 'CREDIT_CARD') ? loanType : undefined,
       });
+      // LOAN/CREDIT_CARD categories auto-link on the backend; the checkbox
+      // below only applies to other categories that also happen to be a loan (e.g. a
+      // solar financing account still categorized as SOLAR).
+      if (isLoan && form.category !== 'LOAN' && form.category !== 'CREDIT_CARD') {
+        await upsertUtilityLoan(account.id, { lender: form.providerName, loanType });
+      }
       onSuccess();
       onClose();
     } catch (err: any) {
@@ -111,7 +189,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
             <Select
               id="category"
               value={form.category}
-              onChange={e => set('category', e.target.value)}
+              onChange={e => selectCategory(e.target.value)}
             >
               {(Object.keys(CATEGORY_LABELS) as UtilityCategory[]).map(c => (
                 <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>
@@ -119,17 +197,17 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
             </Select>
           </Field>
 
-          <Field label="Provider" required>
-            <div className="grid grid-cols-3 gap-1.5 max-h-52 overflow-y-auto pr-1">
-              {Object.keys(PROVIDER_SLUGS).map(name => {
-                const slug = PROVIDER_SLUGS[name];
+          <Field label="Provider" required hint={providersForCategory.length === 0 ? `No saved providers under ${CATEGORY_LABELS[form.category]} yet — pick "Other" below to add one.` : undefined}>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5 max-h-52 overflow-y-auto pr-1">
+              {providersForCategory.map(name => {
+                const slug = allProviders[name];
                 const hasLiveScraper = SCRAPER_SUPPORTED.has(slug);
                 return (
                   <button
                     key={name}
                     onClick={() => selectProvider(name)}
                     className={`text-xs px-2 py-2 rounded-lg border text-left transition-colors relative ${
-                      form.providerName === name
+                      selectedTile === name
                         ? 'bg-amber-500/10 border-amber-500/30 text-amber-400 font-medium'
                         : 'bg-white/5 border-white/10 text-gray-300 hover:border-white/20'
                     }`}
@@ -141,8 +219,30 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
                   </button>
                 );
               })}
+              <button
+                onClick={() => selectProvider('Other')}
+                className={`text-xs px-2 py-2 rounded-lg border text-left transition-colors ${
+                  selectedTile === 'Other'
+                    ? 'bg-amber-500/10 border-amber-500/30 text-amber-400 font-medium'
+                    : 'bg-white/5 border-white/10 text-gray-300 hover:border-white/20'
+                }`}
+              >
+                Other
+              </button>
             </div>
           </Field>
+
+          {selectedTile === 'Other' && (
+            <Field label="Utility/service name" htmlFor="other-name" required>
+              <Input
+                id="other-name"
+                autoFocus
+                value={otherName}
+                onChange={e => handleOtherNameChange(e.target.value)}
+                placeholder="e.g. Keystone HOA"
+              />
+            </Field>
+          )}
 
           {form.providerName && (
             <p className="text-xs text-gray-400 mt-1">
@@ -156,6 +256,59 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
             <p className="text-xs font-medium text-amber-300">{form.providerName}</p>
             <p className="text-xs text-amber-400">Your credentials are encrypted with AES-256 before storage and never logged.</p>
           </div>
+
+          {form.category === 'INSURANCE' && (
+            <div className="mb-4 p-3 bg-white/5 rounded-lg">
+              <p className="text-xs text-gray-400 mb-2">
+                🔗 This will also appear under <span className="text-gray-300 font-medium">Portfolio → Insurance</span> for this property — add the premium amount and dates there. Deactivating this account later marks that policy inactive too.
+              </p>
+              <label className="text-xs text-gray-400 block mb-1">Insurance type</label>
+              <Select value={insuranceType} onChange={e => setInsuranceType(e.target.value)}>
+                {Object.entries(INSURANCE_TYPE_LABELS).map(([v, l]) => (
+                  <option key={v} value={v}>{l}</option>
+                ))}
+              </Select>
+            </div>
+          )}
+
+          {(form.category === 'LOAN' || form.category === 'CREDIT_CARD') ? (
+            <div className="mb-4 p-3 bg-white/5 rounded-lg">
+              <p className="text-xs text-gray-400 mb-2">
+                🔗 This will also appear under <span className="text-gray-300 font-medium">Portfolio → Loans</span> for this property — if a loan with this lender name already exists there unlinked, it'll link to it instead of creating a duplicate. Add the balance/rate/payment there.
+              </p>
+              <label className="text-xs text-gray-400 block mb-1">Loan type</label>
+              <Select value={loanType} onChange={e => setLoanType(e.target.value)}>
+                {Object.entries(LOAN_TYPE_LABELS).filter(([v]) => v !== 'MORTGAGE').map(([v, l]) => (
+                  <option key={v} value={v}>{l}</option>
+                ))}
+              </Select>
+            </div>
+          ) : (
+            /* Loan link on a non-LOAN/CREDIT_CARD category — e.g. a solar financing account still categorized as SOLAR */
+            <div className="mb-4 p-3 bg-white/5 rounded-lg">
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={isLoan}
+                  onChange={e => setIsLoan(e.target.checked)}
+                  className="mt-0.5"
+                />
+                <span className="text-xs text-gray-300">
+                  <span className="font-medium">This is also a loan</span> (auto, student, solar financing, etc.) — 🔗 links it under <span className="text-gray-300 font-medium">Portfolio → Loans</span> too. Add the balance/rate/payment there.
+                </span>
+              </label>
+              {isLoan && (
+                <div className="mt-2">
+                  <label className="text-xs text-gray-400 block mb-1">Loan type</label>
+                  <Select value={loanType} onChange={e => setLoanType(e.target.value)}>
+                    {Object.entries(LOAN_TYPE_LABELS).filter(([v]) => v !== 'MORTGAGE').map(([v, l]) => (
+                      <option key={v} value={v}>{l}</option>
+                    ))}
+                  </Select>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Gmail option */}
           <div className="mb-4 p-3 bg-white/5 rounded-lg flex items-start gap-2">
@@ -173,7 +326,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
 
           {!form.useGmail && (
             <>
-              <Field label="Username / Email" htmlFor="username" required>
+              <Field label="Username / Email" htmlFor="username">
                 <Input
                   id="username"
                   type="text"
@@ -183,7 +336,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
                   placeholder="Your login email or username"
                 />
               </Field>
-              <Field label="Password" htmlFor="password" required>
+              <Field label="Password" htmlFor="password">
                 <Input
                   id="password"
                   type="password"
@@ -197,11 +350,13 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
           )}
 
           <Field
-            label="Account number"
+            label={form.category === 'INSURANCE' ? 'Account number (policy number)' : 'Account number'}
             htmlFor="acct"
             required
             hint={
-              form.providerSlug === 'wm'
+              form.category === 'INSURANCE'
+                ? 'Your policy number — also saved as the policy number on the linked Portfolio → Insurance entry'
+                : form.providerSlug === 'wm'
                 ? 'Enter full WM account number, e.g. 8-92846-35002 — used to match this property when one login has multiple service addresses'
                 : 'Found on your bill or provider portal — used to match this property when one login covers multiple accounts'
             }
@@ -210,7 +365,16 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
               id="acct"
               value={form.accountNumber}
               onChange={e => set('accountNumber', e.target.value)}
-              placeholder={form.providerSlug === 'wm' ? 'e.g. 8-92846-35002' : 'Full account number from your bill'}
+              placeholder={form.category === 'INSURANCE' ? 'Policy number' : form.providerSlug === 'wm' ? 'e.g. 8-92846-35002' : 'Full account number from your bill'}
+            />
+          </Field>
+
+          <Field label="Pay/login link (optional)" htmlFor="login-url">
+            <Input
+              id="login-url"
+              value={form.loginUrl}
+              onChange={e => set('loginUrl', e.target.value)}
+              placeholder="https://provider.com/login"
             />
           </Field>
 

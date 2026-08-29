@@ -8,6 +8,130 @@ import { scrapeQueue } from '../workers/queues';
 const router = Router();
 router.use(attachDbUser);
 
+// Keeps an INSURANCE-category utility account's linked InsurancePolicy (shown
+// under Portfolio → Insurance) in sync: carrier name, policy number (from the
+// utility account's "Account number" field — that's the policy number for an
+// insurance account), policy type, and active status flow from the utility
+// account here; premium/dates/documents stay editable only on the policy
+// itself. Called after every utility create/update so adding, renaming, or
+// (de)activating an insurance account under Utilities is reflected on the
+// Portfolio side without the user re-entering it there.
+async function syncInsurancePolicyForUtility(
+  account: { id: string; propertyId: string; providerName: string; category: string; isActive: boolean },
+  opts: { policyNumber?: string; policyType?: string } = {},
+) {
+  if (account.category !== 'INSURANCE') {
+    // No longer an insurance account — unlink any existing policy but keep
+    // it (and its real premium/date data) intact for manual management.
+    await db.insurancePolicy.updateMany({
+      where: { utilityAccountId: account.id },
+      data: { utilityAccountId: null },
+    });
+    return;
+  }
+
+  const existing = await db.insurancePolicy.findUnique({ where: { utilityAccountId: account.id } });
+  if (existing) {
+    await db.insurancePolicy.update({
+      where: { id: existing.id },
+      data: {
+        carrier: account.providerName,
+        isActive: account.isActive,
+        ...(opts.policyNumber !== undefined && { policyNumber: opts.policyNumber }),
+        ...(opts.policyType !== undefined && { policyType: opts.policyType as any }),
+      },
+    });
+  } else {
+    await db.insurancePolicy.create({
+      data: {
+        propertyId: account.propertyId,
+        utilityAccountId: account.id,
+        carrier: account.providerName,
+        policyNumber: opts.policyNumber || null,
+        policyType: (opts.policyType as any) || 'PROPERTY',
+        premiumAmount: 0,
+        isActive: account.isActive,
+      },
+    });
+  }
+}
+
+// Keeps a linked Loan (created via the "Link a loan" flow — see
+// PUT /:id/loan below, the "This is also a loan" option on other
+// categories, or automatically via the LOAN category below) in sync with
+// its utility account's active status, the same way insurance policies
+// stay in sync.
+async function syncLoanActiveForUtility(account: { id: string; isActive: boolean }) {
+  await db.loan.updateMany({
+    where: { utilityAccountId: account.id },
+    data: { isActive: account.isActive },
+  });
+}
+
+// Auto-links a LOAN- or CREDIT_CARD-category utility account (auto loan,
+// student loan, credit card, etc.) to a Portfolio → Loans entry, the same
+// way INSURANCE auto-links to a policy. If an unlinked Loan on this
+// property already has a matching lender name (e.g. it was entered
+// manually under Portfolio first), link to that one instead of creating a
+// duplicate; otherwise create a new one. Switching category away from
+// LOAN/CREDIT_CARD unlinks (not deletes) any existing link.
+async function syncLoanForUtility(
+  account: { id: string; propertyId: string; providerName: string; category: string; isActive: boolean },
+  userId: string,
+  opts: { loanType?: string } = {},
+) {
+  if (account.category !== 'LOAN' && account.category !== 'CREDIT_CARD') {
+    await db.loan.updateMany({
+      where: { utilityAccountId: account.id },
+      data: { utilityAccountId: null },
+    });
+    return;
+  }
+
+  const existing = await db.loan.findUnique({ where: { utilityAccountId: account.id } });
+  if (existing) {
+    await db.loan.update({
+      where: { id: existing.id },
+      data: {
+        lender: account.providerName,
+        isActive: account.isActive,
+        ...(opts.loanType !== undefined && { loanType: opts.loanType as any }),
+      },
+    });
+    return;
+  }
+
+  // Look for an unlinked loan on this property with a matching lender name
+  // (e.g. added directly under Portfolio → Loans before this utility
+  // account existed) and link to it instead of creating a duplicate.
+  const candidate = await db.loan.findFirst({
+    where: {
+      propertyId: account.propertyId,
+      utilityAccountId: null,
+      lender: { equals: account.providerName, mode: 'insensitive' },
+    },
+  });
+  if (candidate) {
+    await db.loan.update({
+      where: { id: candidate.id },
+      data: { utilityAccountId: account.id, isActive: account.isActive },
+    });
+    return;
+  }
+
+  await db.loan.create({
+    data: {
+      userId,
+      propertyId: account.propertyId,
+      utilityAccountId: account.id,
+      lender: account.providerName,
+      loanType: (opts.loanType as any) || (account.category === 'CREDIT_CARD' ? 'CREDIT_LINE' : 'OTHER'),
+      isActive: account.isActive,
+      isPersonal: false,
+    },
+  });
+}
+
 const UtilitySchema = z.object({
   propertyId: z.string(),
   providerName: z.string().min(1),
@@ -15,10 +139,18 @@ const UtilitySchema = z.object({
   accountNumber: z.string().optional(),
   username: z.string().optional(),
   password: z.string().optional(),
-  loginUrl: z.string().url().optional(),
+  loginUrl: z.union([z.string().url(), z.literal('')]).optional().transform(v => v === '' ? null : v),
   category: z.enum(['ELECTRIC', 'GAS', 'WATER', 'SEWER', 'TRASH', 'SOLAR',
-    'INTERNET', 'PHONE', 'INSURANCE', 'HOA', 'TAXES', 'OTHER']),
+    'INTERNET', 'PHONE', 'INSURANCE', 'HOA', 'TAXES', 'LOAN', 'CREDIT_CARD', 'OTHER']),
   notes: z.string().optional(),
+  isActive: z.boolean().optional(),
+  // Only relevant when category is INSURANCE — passed through to the linked
+  // InsurancePolicy's policyType, not stored on the utility account itself.
+  insuranceType: z.enum(['PROPERTY', 'LIABILITY', 'FLOOD', 'UMBRELLA', 'OTHER']).optional(),
+  // Only relevant when category is LOAN — passed through to the linked
+  // Loan's loanType, not stored on the utility account itself.
+  loanType: z.enum(['MORTGAGE', 'HELOC', 'AUTO', 'PERSONAL', 'STUDENT', 'INSTALLMENT_PLAN',
+    'CREDIT_LINE', 'SELLER_FINANCING', 'DSCR', 'COMMERCIAL', 'HARD_MONEY', 'OTHER']).optional(),
 });
 
 // GET /api/utilities?propertyId=xxx
@@ -66,7 +198,7 @@ router.get('/', async (req, res, next) => {
 // POST /api/utilities — add new account (encrypts credentials)
 router.post('/', async (req, res, next) => {
   try {
-    const { propertyId, username, password, accountNumber, ...rest } = UtilitySchema.parse(req.body);
+    const { propertyId, username, password, accountNumber, insuranceType, loanType, ...rest } = UtilitySchema.parse(req.body);
 
     // Verify property belongs to user
     const property = await db.property.findFirst({
@@ -85,6 +217,9 @@ router.post('/', async (req, res, next) => {
         passwordEnc: encryptOptional(password),
       },
     });
+
+    await syncInsurancePolicyForUtility(account, { policyNumber: accountNumber, policyType: insuranceType });
+    await syncLoanForUtility(account, req.dbUserId!, { loanType });
 
     // Queue an initial scrape, but never let that failure undo the request.
     // The account is already created; if Redis is unreachable or over quota,
@@ -113,16 +248,67 @@ router.get('/:id', async (req, res, next) => {
       where: { id: req.params.id, property: { userId: req.dbUserId! } },
       include: {
         property: { select: { id: true, address: true, nickname: true, city: true, state: true } },
-        // Deep enough for a full history — 84 silently truncated an account
-        // holding 105 statements, and every total computed from it was wrong.
+        // Was capped at 84 (seven years of monthly bills), which silently
+        // truncated a longer history — and the page's totals are computed from
+        // this array, so the stat cards were wrong too, not just the list.
+        // A decade of monthly bills is ~120 rows; this is a sanity guard, not
+        // a display limit.
         statements: { orderBy: { statementDate: 'desc' }, take: 600 },
-        payments: { orderBy: { paymentDate: 'desc' }, take: 200 },
+        payments: {
+          orderBy: { paymentDate: 'desc' }, take: 200,
+          include: {
+            statement: { select: { id: true, statementDate: true, amountDue: true } },
+            bankAccount: { select: { id: true, name: true, bank: true, last4: true } },
+          },
+        },
         loan: true,
       },
     });
     if (!account) return res.status(404).json({ error: 'Not found' });
     const { accountNumberEnc, usernameEnc, passwordEnc, ...rest } = account;
     res.json({ ...rest, hasCredentials: !!usernameEnc });
+  } catch (err) { next(err); }
+});
+
+// GET /api/utilities/:id/account-number — decrypt and reveal the full
+// account number on explicit user request (not included in normal list/
+// detail responses, which only carry the masked "****1234" display value).
+router.get('/:id/account-number', async (req, res, next) => {
+  try {
+    const account = await db.utilityAccount.findFirst({
+      where: { id: req.params.id, property: { userId: req.dbUserId! } },
+      select: { accountNumberEnc: true },
+    });
+    if (!account) return res.status(404).json({ error: 'Not found' });
+    res.json({ accountNumber: decryptOptional(account.accountNumberEnc) });
+  } catch (err) { next(err); }
+});
+
+// GET /api/utilities/:id/username — decrypted login username, fetched by the
+// Edit form on open so it's always visible there (lower-sensitivity than the
+// password, so no explicit reveal click needed).
+router.get('/:id/username', async (req, res, next) => {
+  try {
+    const account = await db.utilityAccount.findFirst({
+      where: { id: req.params.id, property: { userId: req.dbUserId! } },
+      select: { usernameEnc: true },
+    });
+    if (!account) return res.status(404).json({ error: 'Not found' });
+    res.json({ username: decryptOptional(account.usernameEnc) });
+  } catch (err) { next(err); }
+});
+
+// GET /api/utilities/:id/password — decrypt and reveal the login password on
+// explicit user request only (never included in normal responses or
+// auto-fetched, unlike the username above).
+router.get('/:id/password', async (req, res, next) => {
+  try {
+    const account = await db.utilityAccount.findFirst({
+      where: { id: req.params.id, property: { userId: req.dbUserId! } },
+      select: { passwordEnc: true },
+    });
+    if (!account) return res.status(404).json({ error: 'Not found' });
+    res.json({ password: decryptOptional(account.passwordEnc) });
   } catch (err) { next(err); }
 });
 
@@ -163,7 +349,7 @@ router.post('/:id/sync', async (req, res, next) => {
 // PATCH /api/utilities/:id
 router.patch('/:id', async (req, res, next) => {
   try {
-    const { username, password, accountNumber, ...rest } = UtilitySchema.partial().parse(req.body);
+    const { username, password, accountNumber, insuranceType, loanType, ...rest } = UtilitySchema.partial().parse(req.body);
 
     const existing = await db.utilityAccount.findFirst({
       where: { id: req.params.id, property: { userId: req.dbUserId! } },
@@ -180,8 +366,16 @@ router.patch('/:id', async (req, res, next) => {
         }),
         ...(username !== undefined && { usernameEnc: encryptOptional(username) }),
         ...(password !== undefined && { passwordEnc: encryptOptional(password) }),
+        // Deactivating pauses the auto-scraper too (no point syncing an account
+        // you've marked as no longer in use); reactivating resumes it.
+        ...(rest.isActive === false && { syncEnabled: false }),
+        ...(rest.isActive === true && { syncEnabled: true }),
       },
     });
+
+    await syncInsurancePolicyForUtility(updated, { policyNumber: accountNumber, policyType: insuranceType });
+    await syncLoanForUtility(updated, req.dbUserId!, { loanType });
+    await syncLoanActiveForUtility(updated);
 
     const { accountNumberEnc, usernameEnc, passwordEnc, ...sanitized } = updated;
     res.json(sanitized);

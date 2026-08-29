@@ -7,10 +7,10 @@ import {
   getImprovements,
 } from '../api/client';
 import type { Tenant, Lease, LeaseTenant, RentPayment, Improvement } from '../types';
+import { fmtDate } from '../lib/date';
 
 const money = (n?: number | string | null) =>
   n == null ? '—' : Number(n).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
-const fmtDate = (d?: string | null) => d ? format(new Date(d), 'MMM d, yyyy') : '—';
 
 // Formats a 10 (or 11 with US country code) digit phone number as (***) ***-****.
 // Falls back to the raw value for anything else (extensions, international, partial entry).
@@ -243,13 +243,13 @@ function LeaseCard({ lease, maintenance, onChanged }: {
       </div>
 
       {!editing ? (
-        <div className="grid grid-cols-3 gap-3 mt-3 text-sm">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-3 text-sm">
           <div><p className="text-xs text-gray-500">Rent</p><p className="text-white font-medium">{money(lease.rentAmount)}/mo</p></div>
           <div><p className="text-xs text-gray-500">Security deposit</p><p className="text-gray-300">{money(lease.securityDeposit)}</p></div>
           <div><p className="text-xs text-gray-500">Arrears</p><p className={arrears > 0 ? 'text-red-400 font-medium' : 'text-gray-300'}>{money(arrears)}</p></div>
         </div>
       ) : (
-        <div className="grid grid-cols-3 gap-3 mt-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-3">
           <input type="number" placeholder="Rent/mo" value={form.rentAmount} onChange={e => setForm(f => ({ ...f, rentAmount: e.target.value }))} className="input-dark text-sm" />
           <input type="number" placeholder="Security deposit" value={form.securityDeposit} onChange={e => setForm(f => ({ ...f, securityDeposit: e.target.value }))} className="input-dark text-sm" />
           <select value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value as any }))} className="input-dark text-sm">
@@ -285,23 +285,25 @@ function LeaseCard({ lease, maintenance, onChanged }: {
       {lease.rentPayments && lease.rentPayments.length > 0 && (
         <details className="mt-3">
           <summary className="text-xs text-gray-500 hover:text-gray-300 cursor-pointer">Payment history ({lease.rentPayments.length})</summary>
-          <table className="w-full text-xs mt-2">
-            <thead>
-              <tr className="text-left text-gray-500">
-                <th className="py-1 pr-4">Date</th><th className="py-1 pr-4">Amount</th><th className="py-1 pr-4">Method</th><th className="py-1">Notes</th>
-              </tr>
-            </thead>
-            <tbody>
-              {lease.rentPayments.map(p => (
-                <tr key={p.id} className="border-t border-white/5">
-                  <td className="py-1.5 pr-4 text-gray-300">{fmtDate(p.paidDate)}</td>
-                  <td className="py-1.5 pr-4 text-white font-medium">{money(p.amount)}</td>
-                  <td className="py-1.5 pr-4 text-gray-400">{p.method}</td>
-                  <td className="py-1.5 text-gray-500">{p.notes || '—'}</td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs mt-2">
+              <thead>
+                <tr className="text-left text-gray-500">
+                  <th className="py-1 pr-4">Date</th><th className="py-1 pr-4">Amount</th><th className="py-1 pr-4">Method</th><th className="py-1">Notes</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {lease.rentPayments.map(p => (
+                  <tr key={p.id} className="border-t border-white/5">
+                    <td className="py-1.5 pr-4 text-gray-300">{fmtDate(p.paidDate)}</td>
+                    <td className="py-1.5 pr-4 text-white font-medium">{money(p.amount)}</td>
+                    <td className="py-1.5 pr-4 text-gray-400">{p.method}</td>
+                    <td className="py-1.5 text-gray-500">{p.notes || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </details>
       )}
 

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { getLeases, createRentPayment, getProperties, getUnits } from '../api/client';
 import type { Lease, Property, Unit } from '../types';
 import { format } from 'date-fns';
+import { fmtDate } from '../lib/date';
 
 const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 
@@ -112,90 +113,92 @@ export default function RentRollPage({ embedded }: { embedded?: boolean } = {}) 
         <div className="text-center py-16 text-gray-500">No leases found</div>
       ) : (
         <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
-          <table className="w-full text-sm">
-            <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
-              <tr className="text-left text-gray-400">
-                <th className="px-4 py-3">Property / Unit</th>
-                <th className="px-4 py-3">Tenant(s)</th>
-                <th className="px-4 py-3">Rent</th>
-                <th className="px-4 py-3">Arrears</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Lease end</th>
-                <th className="px-4 py-3"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/5">
-              {filtered.map(lease => {
-                const tenants = lease.leaseTenants?.map(lt => lt.tenant.fullName).join(', ') || '—';
-                const prop = lease.unit?.property;
-                const arrears = Number(lease.arrearsBalance);
-                return (
-                  <tr key={lease.id} className="hover:bg-white/[0.02]">
-                    <td className="px-4 py-3">
-                      <div className="font-medium text-white">{prop?.nickname || prop?.address || '—'}</div>
-                      <div className="text-xs text-gray-500">{lease.unit?.unitLabel}</div>
-                    </td>
-                    <td className="px-4 py-3 text-gray-300">{tenants}</td>
-                    <td className="px-4 py-3 text-white font-medium">{money(Number(lease.rentAmount))}</td>
-                    <td className="px-4 py-3">
-                      {arrears > 0 ? (
-                        <span className="text-red-400 font-medium">{money(arrears)}</span>
-                      ) : (
-                        <span className="text-gray-600">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${
-                        lease.status === 'ACTIVE' ? 'bg-green-900/50 text-green-300'
-                        : lease.status === 'PENDING' ? 'bg-amber-900/50 text-amber-300'
-                        : 'bg-gray-800 text-gray-400'
-                      }`}>{lease.status}</span>
-                    </td>
-                    <td className="px-4 py-3 text-gray-400 text-xs">
-                      {lease.endDate ? format(new Date(lease.endDate), 'MMM d, yyyy') : 'M-to-M'}
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      {showPayForm === lease.id ? (
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="number"
-                            placeholder="Amount"
-                            value={payAmount}
-                            onChange={e => setPayAmount(e.target.value)}
-                            className="input-dark text-xs w-24"
-                          />
-                          <input
-                            type="date"
-                            value={payDate}
-                            onChange={e => setPayDate(e.target.value)}
-                            className="input-dark text-xs w-32"
-                          />
-                          <select value={payMethod} onChange={e => setPayMethod(e.target.value)} className="input-dark text-xs w-24">
-                            <option value="ZELLE">Zelle</option>
-                            <option value="CHECK">Check</option>
-                            <option value="CASH">Cash</option>
-                            <option value="ACH">ACH</option>
-                            <option value="OTHER">Other</option>
-                          </select>
-                          <button onClick={() => logPayment(lease.id)} disabled={saving} className="btn-primary text-xs px-3 py-1.5">
-                            {saving ? '…' : 'Log'}
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
+                <tr className="text-left text-gray-400">
+                  <th className="px-4 py-3">Property / Unit</th>
+                  <th className="px-4 py-3">Tenant(s)</th>
+                  <th className="px-4 py-3">Rent</th>
+                  <th className="px-4 py-3">Arrears</th>
+                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3">Lease end</th>
+                  <th className="px-4 py-3"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {filtered.map(lease => {
+                  const tenants = lease.leaseTenants?.map(lt => lt.tenant.fullName).join(', ') || '—';
+                  const prop = lease.unit?.property;
+                  const arrears = Number(lease.arrearsBalance);
+                  return (
+                    <tr key={lease.id} className="hover:bg-white/[0.02]">
+                      <td className="px-4 py-3">
+                        <div className="font-medium text-white">{prop?.nickname || prop?.address || '—'}</div>
+                        <div className="text-xs text-gray-500">{lease.unit?.unitLabel}</div>
+                      </td>
+                      <td className="px-4 py-3 text-gray-300">{tenants}</td>
+                      <td className="px-4 py-3 text-white font-medium">{money(Number(lease.rentAmount))}</td>
+                      <td className="px-4 py-3">
+                        {arrears > 0 ? (
+                          <span className="text-red-400 font-medium">{money(arrears)}</span>
+                        ) : (
+                          <span className="text-gray-600">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${
+                          lease.status === 'ACTIVE' ? 'bg-green-900/50 text-green-300'
+                          : lease.status === 'PENDING' ? 'bg-amber-900/50 text-amber-300'
+                          : 'bg-gray-800 text-gray-400'
+                        }`}>{lease.status}</span>
+                      </td>
+                      <td className="px-4 py-3 text-gray-400 text-xs">
+                        {lease.endDate ? fmtDate(lease.endDate, 'MMM d, yyyy') : 'M-to-M'}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        {showPayForm === lease.id ? (
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              placeholder="Amount"
+                              value={payAmount}
+                              onChange={e => setPayAmount(e.target.value)}
+                              className="input-dark text-xs w-24"
+                            />
+                            <input
+                              type="date"
+                              value={payDate}
+                              onChange={e => setPayDate(e.target.value)}
+                              className="input-dark text-xs w-32"
+                            />
+                            <select value={payMethod} onChange={e => setPayMethod(e.target.value)} className="input-dark text-xs w-24">
+                              <option value="ZELLE">Zelle</option>
+                              <option value="CHECK">Check</option>
+                              <option value="CASH">Cash</option>
+                              <option value="ACH">ACH</option>
+                              <option value="OTHER">Other</option>
+                            </select>
+                            <button onClick={() => logPayment(lease.id)} disabled={saving} className="btn-primary text-xs px-3 py-1.5">
+                              {saving ? '…' : 'Log'}
+                            </button>
+                            <button onClick={() => setShowPayForm(null)} className="text-xs text-gray-500 hover:text-gray-300">✕</button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setShowPayForm(lease.id)}
+                            className="text-xs text-amber-400 hover:text-amber-300"
+                          >
+                            Log payment
                           </button>
-                          <button onClick={() => setShowPayForm(null)} className="text-xs text-gray-500 hover:text-gray-300">✕</button>
-                        </div>
-                      ) : (
-                        <button
-                          onClick={() => setShowPayForm(lease.id)}
-                          className="text-xs text-amber-400 hover:text-amber-300"
-                        >
-                          Log payment
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>

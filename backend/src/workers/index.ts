@@ -7,6 +7,7 @@ import { scrapeQueue, insightQueue } from './queues';
 import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';
 import { runDailyBalanceSnapshot } from './balanceSnapshotWorker';
+import { applyDueRentIncreases, rolloverExpiredLeases, accrueOverdueRent } from './rentIncreaseWorker';
 
 console.log('🔧 Sollux Workers started');
 
@@ -66,6 +67,15 @@ async function scheduleAllInsights() {
 
 // Run scrapes every 6 hours
 setInterval(scheduleAllScrapes, 6 * 60 * 60 * 1000);
+
+// Apply any due scheduled rent increases — on startup, then once a day.
+async function runLeaseMaintenance() {
+  await applyDueRentIncreases().catch(err => console.warn('[RentIncrease] run failed:', err));
+  await rolloverExpiredLeases().catch(err => console.warn('[LeaseRollover] run failed:', err));
+  await accrueOverdueRent().catch(err => console.warn('[Arrears] run failed:', err));
+}
+runLeaseMaintenance();
+setInterval(runLeaseMaintenance, 24 * 60 * 60 * 1000);
 
 // Run Plaid balance snapshots every night at 11:55 PM
 (function scheduleDailyBalanceSnapshot() {

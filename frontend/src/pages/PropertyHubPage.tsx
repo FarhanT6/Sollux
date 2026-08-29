@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { format } from 'date-fns';
 import {
@@ -9,19 +9,74 @@ import {
   updateExpense, deleteExpense, updateInsurancePolicy, deleteInsurancePolicy,
   updateTaxAssessment, deleteTaxAssessment, updateImprovement, deleteImprovement,
   updateLease, updateProperty, lookupPropertyByAddress,
-  createLease, getTenants, createTenant, getUnits, createUnit,
+  createLease, getLease, deleteLease, getTenants, createTenant, deleteTenant, getUnits, createUnit,
+  updateUnit, deleteUnit,
+  getDocuments, getDocumentUrl, deleteDocument, confirmScannedDocument, downloadRentRoll, downloadT12,
+  getT12Manifest, RENT_ROLL_COLUMNS,
+  getRentChanges, addRentChange, deleteRentChange, uploadLeaseDocument,
+  getLeaseDocuments, addLeaseDocument, getLeaseDocumentViewUrl, deleteLeaseDocument, extractLeaseTerms,
+  addScheduledIncrease, applyScheduledIncrease, deleteScheduledIncrease,
+  addLeaseUtilityCharge, deleteLeaseUtilityCharge, getTurnover, getBankAccounts,
+  addPaymentAlias, deletePaymentAlias, deleteRentPayment, updateRentPayment,
 } from '../api/client';
 import type {
   Property, Lease, Loan, Expense, InsurancePolicy, TaxAssessment,
-  Improvement, PropertyPnL, Tenant, Unit,
+  Improvement, PropertyPnL, Tenant, Unit, Document, DocumentCategory, PropertyType, RentChange, ScheduledRentIncrease, LeaseUtilityCharge,
+  TurnoverReport, UnitTurnover, BankAccount, RentPaymentMethod,
 } from '../types';
-import { PROPERTY_TYPE_LABELS, EXPENSE_CATEGORY_LABELS } from '../types';
+import { PROPERTY_TYPE_LABELS, EXPENSE_CATEGORY_LABELS, DOCUMENT_CATEGORY_LABELS, CATEGORY_LABELS,
+  RENT_PAYMENT_METHODS, RENT_PAYMENT_METHOD_LABELS, BANK_LINKED_METHODS } from '../types';
+import type { Document as DocType } from '../types';
+import { fmtDate as fmtDateSafe, monthKey, localMonthKey } from '../lib/date';
+import LegalPage from './LegalPage';
+import UnitsTab from '../components/UnitsTab';
+
+const LEASE_DOC_CATEGORIES = ['LEASE', 'APPLICATION', 'IDENTITY', 'SCREENING', 'OTHER'] as const;
+
+const UTILITY_CHARGE_CATEGORIES = ['WATER', 'ELECTRIC', 'GAS', 'SEWER', 'TRASH', 'INTERNET', 'PHONE', 'SOLAR', 'OTHER'];
+
+// Lease term status: expired / expiring soon / active, from the end date.
+// A fixed-term lease past its end date continues month-to-month (holdover)
+// until a new one is signed — the worker flips leaseType, and we surface it
+// here so it's visible either way.
+function leaseTermStatus(lease: Lease): { label: string; pill: 'green' | 'amber' | 'red' | 'gray'; detail: string } | null {
+  if (lease.status !== 'ACTIVE') return null;
+  if (!lease.endDate) return { label: 'Month-to-month', pill: 'gray', detail: 'No fixed end date' };
+
+  const end = new Date(lease.endDate);
+  const now = new Date();
+  const days = Math.ceil((end.getTime() - now.getTime()) / 86400000);
+
+  if (days < 0) {
+    return {
+      label: 'Holdover',
+      pill: 'red',
+      detail: `Lease ended ${Math.abs(days)} day${Math.abs(days) === 1 ? '' : 's'} ago — continuing month-to-month until a new lease is signed`,
+    };
+  }
+  if (days <= 60) {
+    return { label: `Expires in ${days}d`, pill: 'amber', detail: `Lease ends ${fmtDateSafe(lease.endDate)}` };
+  }
+  return { label: 'Active term', pill: 'green', detail: `Lease ends ${fmtDateSafe(lease.endDate)}` };
+}
+
+// A lease's rentAmount is the TOTAL the tenant pays. Utility charges break out
+// the reimbursement portion, so base rent is the remainder.
+function rentBreakdown(lease: Lease) {
+  const total = Number(lease.rentAmount ?? 0);
+  const utilities = (lease.utilityCharges ?? []).reduce((s, c) => s + Number(c.amount), 0);
+  return { total, utilities, baseRent: Math.round((total - utilities) * 100) / 100 };
+}
+
+// "Chase Checking ••4821" — bank and last4 are both optional in the schema.
+const bankLabel = (b: BankAccount) =>
+  [b.name, b.last4 ? `••${b.last4}` : null].filter(Boolean).join(' ');
 
 const money = (n: number) =>
   n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const pct = (n: number) => `${n > 0 ? '+' : ''}${n.toFixed(1)}%`;
-const fmtDate = (d?: string | null) => d ? format(new Date(d), 'MMM d, yyyy') : '—';
-const TABS = ['Overview', 'Tenants', 'Loans', 'Expenses', 'Insurance', 'Maintenance', 'Tax'] as const;
+const fmtDate = (d?: string | null) => fmtDateSafe(d);
+const TABS = ['Overview', 'Units', 'Tenants', 'Turnover', 'Loans', 'Expenses', 'Insurance', 'Maintenance', 'Tax', 'Legal', 'Documents'] as const;
 type Tab = typeof TABS[number];
 
 export default function PropertyHubPage() {
@@ -39,8 +94,11 @@ export default function PropertyHubPage() {
   const [policies, setPolicies] = useState<InsurancePolicy[]>([]);
   const [taxes, setTaxes]       = useState<TaxAssessment[]>([]);
   const [improvements, setImprovements] = useState<Improvement[]>([]);
+  const [documents, setDocuments] = useState<Document[]>([]);
+  const [turnover, setTurnover] = useState<TurnoverReport | null>(null);
   const [pnl, setPnl] = useState<PropertyPnL | null>(null);
   const [showEditProperty, setShowEditProperty] = useState(false);
+  const [exportModal, setExportModal] = useState<'rentroll' | 't12' | null>(null);
 
   const loaded = useRef<Set<Tab>>(new Set());
 
@@ -66,6 +124,8 @@ export default function PropertyHubPage() {
       ]).then(([l, lo, p]) => { setLeases(l); setLoans(lo); setPnl(p); });
     } else if (activeTab === 'Tenants') {
       getLeases({ propertyId: id }).then(setLeases);
+    } else if (activeTab === 'Turnover') {
+      getTurnover({ propertyId: id }).then(setTurnover);
     } else if (activeTab === 'Loans') {
       getLoans({ propertyId: id }).then(setLoans);
     } else if (activeTab === 'Expenses') {
@@ -76,6 +136,8 @@ export default function PropertyHubPage() {
       getTaxAssessments({ propertyId: id }).then(setTaxes);
     } else if (activeTab === 'Maintenance') {
       getImprovements({ propertyId: id }).then(setImprovements);
+    } else if (activeTab === 'Documents') {
+      getDocuments({ propertyId: id }).then(setDocuments);
     }
   }, [id, activeTab]);
 
@@ -128,6 +190,16 @@ export default function PropertyHubPage() {
                   {occ}% occupied
                 </span>
               )}
+              <button
+                onClick={() => setExportModal('rentroll')}
+                className="btn text-xs ml-1"
+                title="Export a Rent Roll workbook (unit, lease, and rent data)"
+              >Rent Roll</button>
+              <button
+                onClick={() => setExportModal('t12')}
+                className="btn text-xs"
+                title="Export a trailing-12-month operating statement"
+              >T-12</button>
               <button onClick={() => setShowEditProperty(true)} className="btn text-xs ml-1">Edit</button>
             </div>
           </div>
@@ -139,7 +211,7 @@ export default function PropertyHubPage() {
               { label: 'Arrears', value: money(totalArrears), color: totalArrears > 0 ? 'text-red-400' : 'text-gray-600' },
               { label: 'Est. value', value: property.estimatedValue ? money(Number(property.estimatedValue)) : '—', color: 'text-white' },
               { label: 'Equity', value: equity > 0 ? money(equity) : '—', color: 'text-emerald-400' },
-              { label: 'Acquired', value: property.acquisitionDate ? format(new Date(property.acquisitionDate), 'MMM yyyy') : '—', color: 'text-gray-400' },
+              { label: 'Acquired', value: property.acquisitionDate ? fmtDateSafe(property.acquisitionDate, 'MMM yyyy') : '—', color: 'text-gray-400' },
               { label: 'Purchase price', value: property.acquisitionPrice ? money(Number(property.acquisitionPrice)) : '—', color: 'text-gray-400' },
             ].map(s => (
               <div key={s.label}>
@@ -167,18 +239,137 @@ export default function PropertyHubPage() {
 
       {/* Tab content */}
       <div className="px-6 py-5">
-        {activeTab === 'Overview' && <OverviewTab property={property} pnl={pnl} leases={activeLeases} loans={loans.filter(l => l.isActive)} />}
-        {activeTab === 'Tenants' && <TenantsTab propertyId={id!} leases={leases} setLeases={setLeases} />}
+        {activeTab === 'Overview' && <OverviewTab property={property} pnl={pnl} leases={activeLeases} loans={loans.filter(l => l.isActive)} onPropertyChange={setProperty} />}
+        {activeTab === 'Units' && <UnitsTab propertyId={id!} />}
+        {activeTab === 'Tenants' && <TenantsTab propertyId={id!} leases={leases} setLeases={setLeases} propertyType={property.type} />}
+        {activeTab === 'Turnover' && <TurnoverTab report={turnover} />}
         {activeTab === 'Loans' && <LoansTab propertyId={id!} loans={loans} setLoans={setLoans} />}
         {activeTab === 'Expenses' && <ExpensesTab propertyId={id!} expenses={expenses} setExpenses={setExpenses} />}
         {activeTab === 'Insurance' && <InsuranceTab propertyId={id!} policies={policies} setPolicies={setPolicies} />}
         {activeTab === 'Maintenance' && <MaintenanceTab propertyId={id!} items={improvements} setItems={setImprovements} />}
         {activeTab === 'Tax' && <TaxTab propertyId={id!} taxes={taxes} setTaxes={setTaxes} />}
+        {activeTab === 'Legal' && <LegalPage embedded propertyId={id!} />}
+        {activeTab === 'Documents' && <DocumentsTab propertyId={id!} documents={documents} setDocuments={setDocuments} />}
       </div>
 
       {showEditProperty && (
         <PropertyEditModal property={property} onClose={() => setShowEditProperty(false)} onSave={setProperty} />
       )}
+      {exportModal && (
+        <ReportExportModal
+          kind={exportModal}
+          propertyId={property.id}
+          propertyName={property.nickname || property.address}
+          onClose={() => setExportModal(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Report export modal (choose columns/rows before downloading) ───────────
+
+function ReportExportModal({ kind, propertyId, propertyName, onClose }: {
+  kind: 'rentroll' | 't12'; propertyId: string; propertyName: string; onClose: () => void;
+}) {
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [manifestLoaded, setManifestLoaded] = useState(kind === 'rentroll');
+  const [downloading, setDownloading] = useState(false);
+
+  const rentRollOptions = RENT_ROLL_COLUMNS;
+  const [t12IncomeRows, setT12IncomeRows] = useState<string[]>([]);
+  const [t12ExpenseRows, setT12ExpenseRows] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (kind === 'rentroll') {
+      setSelected(new Set(rentRollOptions.map(c => c.key)));
+      return;
+    }
+    getT12Manifest(propertyId).then(m => {
+      setT12IncomeRows(m.incomeRows);
+      setT12ExpenseRows(m.expenseRows);
+      setSelected(new Set([...m.incomeRows, ...m.expenseRows]));
+      setManifestLoaded(true);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind, propertyId]);
+
+  function toggle(key: string) {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }
+
+  async function handleExport() {
+    setDownloading(true);
+    try {
+      if (kind === 'rentroll') {
+        await downloadRentRoll(propertyId, propertyName, [...selected]);
+      } else {
+        // Income rows (Rents Collected, GROSS INCOME, NET INCOME) are always part of
+        // the statement's structure — only expense line items are actually optional.
+        const rows = t12ExpenseRows.filter(r => selected.has(r));
+        await downloadT12(propertyId, propertyName, rows);
+      }
+      onClose();
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="w-full max-w-md rounded-2xl p-6 max-h-[85vh] overflow-y-auto" style={{ background: '#1a1a1a', border: '1px solid rgba(255,255,255,0.1)' }}>
+        <div className="flex justify-between items-center mb-1">
+          <h3 className="text-lg font-semibold text-white">{kind === 'rentroll' ? 'Export Rent Roll' : 'Export T-12'}</h3>
+          <button onClick={onClose} className="text-gray-500 hover:text-white text-xl leading-none">×</button>
+        </div>
+        <p className="text-xs text-gray-500 mb-4">Choose what to include.</p>
+
+        {!manifestLoaded ? (
+          <p className="text-sm text-gray-500 py-6 text-center">Loading…</p>
+        ) : kind === 'rentroll' ? (
+          <div className="space-y-1.5 mb-5">
+            {rentRollOptions.map(c => (
+              <label key={c.key} className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer px-1 py-1 hover:bg-white/5 rounded">
+                <input type="checkbox" checked={selected.has(c.key)} onChange={() => toggle(c.key)} />
+                {c.label}
+              </label>
+            ))}
+          </div>
+        ) : (
+          <div className="mb-5">
+            <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">Income (always included)</p>
+            <div className="space-y-1 mb-3">
+              {t12IncomeRows.map(label => (
+                <p key={label} className="text-sm text-gray-500 px-1 py-1">{label}</p>
+              ))}
+            </div>
+            <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">Expenses</p>
+            {t12ExpenseRows.length === 0 ? (
+              <p className="text-xs text-gray-600 px-1">No expense data in the trailing 12 months.</p>
+            ) : (
+              <div className="space-y-1">
+                {t12ExpenseRows.map(label => (
+                  <label key={label} className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer px-1 py-1 hover:bg-white/5 rounded">
+                    <input type="checkbox" checked={selected.has(label)} onChange={() => toggle(label)} />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="btn-ghost px-4 py-2 text-sm">Cancel</button>
+          <button disabled={downloading || !manifestLoaded} onClick={handleExport} className="btn-primary px-4 py-2 text-sm disabled:opacity-50">
+            {downloading ? 'Exporting…' : 'Export'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -426,10 +617,47 @@ function nextDueDate(dueDay: number): Date {
   return new Date(today.getFullYear(), today.getMonth() + 1, Math.min(dueDay, daysNextMonth));
 }
 
-function OverviewTab({ property, pnl, leases, loans }: {
+function OverviewTab({ property, pnl, leases, loans, onPropertyChange }: {
   property: Property; pnl: PropertyPnL | null; leases: Lease[]; loans: Loan[];
+  onPropertyChange: (p: Property) => void;
 }) {
   const units = property.units ?? [];
+  // Units could be created (inside the new-lease modal) but never renamed or
+  // removed, so a typo in a label was permanent.
+  const [editUnit, setEditUnit] = useState<string | null>(null);
+  const [unitLabel, setUnitLabel] = useState('');
+  const [busyUnit, setBusyUnit] = useState<string | null>(null);
+
+  const refreshProperty = async () => onPropertyChange(await getProperty(property.id));
+
+  async function saveUnitLabel(unitId: string) {
+    const label = unitLabel.trim();
+    if (!label) return;
+    setBusyUnit(unitId);
+    try {
+      await updateUnit(unitId, { unitLabel: label });
+      setEditUnit(null);
+      await refreshProperty();
+    } catch (err: any) {
+      alert(err?.response?.data?.error ?? 'Could not rename that unit.');
+    } finally { setBusyUnit(null); }
+  }
+
+  async function removeUnit(unitId: string, label: string) {
+    const occupied = occupiedUnitIds.has(unitId);
+    const warning = occupied
+      ? '\n\nThis unit has a lease on it. Deleting it deletes that lease and its payments, notices and rent history too.'
+      : '';
+    if (!confirm(`Delete unit "${label}"?${warning}\n\nThis cannot be undone.`)) return;
+    setBusyUnit(unitId);
+    try {
+      await deleteUnit(unitId);
+      await refreshProperty();
+    } catch (err: any) {
+      alert(err?.response?.data?.error ?? 'Could not delete that unit.');
+    } finally { setBusyUnit(null); }
+  }
+
   const occupiedUnitIds = new Set(leases.map(l => l.unitId));
   const totalDebt = loans.reduce((s, l) => s + Number(l.currentBalance ?? 0), 0);
   const equity = Number(property.estimatedValue ?? 0) - totalDebt;
@@ -447,7 +675,7 @@ function OverviewTab({ property, pnl, leases, loans }: {
       {pnl && (
         <div>
           <p className="section-label">Performance (trailing 12 months)</p>
-          <div className="grid grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
             {[
               { label: 'Rental income', value: money(pnl.rentalIncome), color: 'text-white' },
               { label: 'Op. expenses',  value: money(pnl.operatingExpenses), color: 'text-gray-300' },
@@ -468,7 +696,7 @@ function OverviewTab({ property, pnl, leases, loans }: {
       {mortgages.length > 0 && (
         <div>
           <p className="section-label">Mortgage &amp; upcoming payments</p>
-          <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${Math.min(mortgages.length, 3)}, 1fr)` }}>
+          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
             {mortgages.map(loan => {
               const total = Number(loan.monthlyPayment ?? 0) + Number(loan.escrowAmount ?? 0);
               const due = loan.dueDay ? nextDueDate(loan.dueDay) : null;
@@ -547,20 +775,37 @@ function OverviewTab({ property, pnl, leases, loans }: {
       {units.length > 0 && (
         <div>
           <p className="section-label">{units.length} units</p>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {units.map(u => {
               const occupied = occupiedUnitIds.has(u.id);
               return (
-                <div key={u.id} className="card p-3">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <p className="text-sm font-medium text-white">{u.unitLabel}</p>
-                    <span className={`pill ${occupied ? 'pill-green' : 'pill-gray'}`}>
+                <div key={u.id} className="card p-3 group">
+                  <div className="flex items-center justify-between mb-1.5 gap-2">
+                    {editUnit === u.id ? (
+                      <input autoFocus value={unitLabel} onChange={e => setUnitLabel(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') saveUnitLabel(u.id); if (e.key === 'Escape') setEditUnit(null); }}
+                        onBlur={() => saveUnitLabel(u.id)}
+                        className="input-dark text-sm flex-1 min-w-0" />
+                    ) : (
+                      <p className="text-sm font-medium text-white truncate">{u.unitLabel}</p>
+                    )}
+                    <span className={`pill flex-shrink-0 ${occupied ? 'pill-green' : 'pill-gray'}`}>
                       {occupied ? 'Occupied' : 'Vacant'}
                     </span>
                   </div>
-                  <p className="text-xs text-gray-500">
-                    {[u.bedrooms ? `${u.bedrooms}bd` : null, u.bathrooms ? `${u.bathrooms}ba` : null, u.sqft ? `${u.sqft} sqft` : null].filter(Boolean).join(' · ') || 'No details'}
-                  </p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs text-gray-500 truncate">
+                      {[u.bedrooms ? `${u.bedrooms}bd` : null, u.bathrooms ? `${u.bathrooms}ba` : null, u.sqft ? `${u.sqft} sqft` : null].filter(Boolean).join(' · ') || 'No details'}
+                    </p>
+                    {editUnit !== u.id && (
+                      <div className="flex gap-2 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onClick={() => { setEditUnit(u.id); setUnitLabel(u.unitLabel); }} disabled={busyUnit === u.id}
+                          className="text-xs text-gray-500 hover:text-amber-400 disabled:opacity-40">Rename</button>
+                        <button onClick={() => removeUnit(u.id, u.unitLabel)} disabled={busyUnit === u.id}
+                          className="text-xs text-gray-600 hover:text-red-400 disabled:opacity-40">Delete</button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               );
             })}
@@ -571,54 +816,607 @@ function OverviewTab({ property, pnl, leases, loans }: {
   );
 }
 
+// ─── Turnover ──────────────────────────────────────────────────────────────────
+// Tenancy history per unit, the vacancy gap between consecutive tenants, and
+// what that gap cost. All of it derives from the lease timeline, so it works
+// over leases entered long before this view existed.
+
+function TurnoverTab({ report }: { report: TurnoverReport | null }) {
+  if (!report) return <div className="text-center py-12 text-gray-500 text-sm">Loading…</div>;
+
+  const { summary, units } = report;
+  if (units.length === 0) {
+    return <div className="text-center py-12 text-gray-500 text-sm">No lease history for this property yet</div>;
+  }
+
+  const days = (n: number) => `${n} day${n === 1 ? '' : 's'}`;
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+        <Stat label="Turnovers" value={String(summary.turnovers)}
+          sub={summary.avgVacancyDays != null ? `${summary.avgVacancyDays} days avg vacant` : undefined} />
+        <Stat label="Rent lost to vacancy" value={money(summary.totalRentLost)} tone={summary.totalRentLost > 0 ? 'red' : undefined}
+          sub={summary.totalDaysVacant > 0 ? `over ${days(summary.totalDaysVacant)}` : 'no vacancy recorded'} />
+        <Stat label="Avg tenancy" value={summary.avgTenancyMonths != null ? `${summary.avgTenancyMonths} mo` : '—'}
+          sub={summary.unitsTracked > 1 ? `across ${summary.unitsTracked} units` : undefined} />
+        <Stat label="Vacant now" value={String(summary.currentlyVacant)}
+          tone={summary.currentlyVacant > 0 ? 'red' : undefined}
+          sub={summary.currentlyVacant > 0 ? `${money(summary.ongoingRentLost)} lost so far` : 'fully occupied'} />
+      </div>
+
+      {units.map(u => <UnitTurnoverCard key={u.unitId} unit={u} />)}
+    </div>
+  );
+}
+
+function Stat({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: 'red' | 'green' }) {
+  const color = tone === 'red' ? 'text-red-400' : tone === 'green' ? 'text-emerald-400' : 'text-white';
+  return (
+    <div className="card px-4 py-3">
+      <p className="text-xs text-gray-500">{label}</p>
+      <p className={`text-lg font-semibold ${color}`}>{value}</p>
+      {sub && <p className="text-xs text-gray-600">{sub}</p>}
+    </div>
+  );
+}
+
+function UnitTurnoverCard({ unit }: { unit: UnitTurnover }) {
+  const names = (ns: string[]) => (ns.length ? ns.join(', ') : 'Unnamed tenant');
+  // Newest first reads better as a history — the current tenant is on top.
+  const tenancies = unit.tenancies.slice().reverse();
+  const turnoverFor = (leaseId: string) => unit.turnovers.find(t => t.incomingLeaseId === leaseId);
+
+  return (
+    <div className="card overflow-hidden">
+      <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+        <p className="text-sm font-semibold text-white">Unit {unit.unitLabel}</p>
+        <p className="text-xs text-gray-500">
+          {unit.tenancies.length} tenanc{unit.tenancies.length === 1 ? 'y' : 'ies'}
+          {unit.turnovers.length > 0 && ` · ${unit.turnovers.length} turnover${unit.turnovers.length === 1 ? '' : 's'}`}
+        </p>
+      </div>
+
+      {unit.currentVacancy && (
+        <div className="px-4 py-2.5 text-xs" style={{ background: 'rgba(239,68,68,0.08)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+          <span className="text-red-400 font-medium">Vacant {unit.currentVacancy.daysVacant} days</span>
+          <span className="text-gray-400">
+            {' '}since {fmtDateSafe(unit.currentVacancy.vacatedOn)} — {names(unit.currentVacancy.lastTenants)} moved out.
+            {' '}{money(unit.currentVacancy.lostSoFar)} lost at {money(unit.currentVacancy.lastRent)}/mo, and counting.
+          </span>
+        </div>
+      )}
+
+      <div className="px-4 py-3 space-y-0">
+        {tenancies.map((t, i) => {
+          const gap = turnoverFor(t.leaseId);
+          return (
+            <div key={t.leaseId}>
+              <div className="flex items-start gap-3 py-2">
+                <span className={`mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${t.isCurrent ? 'bg-emerald-400' : 'bg-gray-600'}`} />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm text-white">
+                    {names(t.tenants)}
+                    {t.businessName && <span className="text-gray-400"> · {t.businessName}</span>}
+                    {t.isCurrent && <span className="pill pill-green text-xs ml-2">Current</span>}
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    {fmtDateSafe(t.startDate)} – {t.isCurrent ? 'present' : (t.endDate ? fmtDateSafe(t.endDate) : 'no end date')}
+                    {t.months != null && ` · ${t.months} mo`}
+                  </p>
+                </div>
+                <p className="text-sm text-white flex-shrink-0">{money(t.rentAmount)}/mo</p>
+              </div>
+
+              {/* The gap that preceded this tenancy, drawn between the two it separates. */}
+              {gap && (
+                <div className="ml-[0.6rem] pl-4 py-2 text-xs" style={{ borderLeft: '2px dashed rgba(255,255,255,0.12)' }}>
+                  {gap.daysVacant > 0 ? (
+                    <span className="text-gray-400">
+                      <span className="text-amber-400 font-medium">{gap.daysVacant} days vacant</span>
+                      {' '}· {money(gap.rentLost)} lost rent
+                    </span>
+                  ) : (
+                    <span className="text-emerald-400">No vacancy — re-let immediately</span>
+                  )}
+                  {gap.rentChange !== 0 && (
+                    <span className={gap.rentChange > 0 ? 'text-emerald-400' : 'text-red-400'}>
+                      {' '}· rent {gap.rentChange > 0 ? 'up' : 'down'} {money(Math.abs(gap.rentChange))}
+                      {gap.rentChangePct != null && ` (${pct(gap.rentChangePct)})`}
+                    </span>
+                  )}
+                  {gap.daysVacant > 0 && gap.rentChange > 0 && (
+                    <span className="text-gray-600">
+                      {' '}· breaks even in {Math.ceil(gap.rentLost / gap.rentChange)} mo
+                    </span>
+                  )}
+                </div>
+              )}
+              {i < tenancies.length - 1 && !gap && <div className="ml-[0.6rem] h-2" style={{ borderLeft: '2px solid rgba(255,255,255,0.06)' }} />}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ─── Tenants ───────────────────────────────────────────────────────────────────
 
-function TenantsTab({ propertyId, leases, setLeases }: {
-  propertyId: string; leases: Lease[]; setLeases: (l: Lease[]) => void;
+function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
+  propertyId: string; leases: Lease[]; setLeases: (l: Lease[]) => void; propertyType?: PropertyType;
 }) {
+  const isCommercial = propertyType === 'COMMERCIAL';
   const [filterStatus, setFilterStatus] = useState('ACTIVE');
   const [showPayForm, setShowPayForm] = useState<string | null>(null);
   const [payAmount, setPayAmount] = useState('');
   const [payDate, setPayDate]     = useState(() => new Date().toISOString().slice(0, 10));
   const [payMethod, setPayMethod] = useState('ZELLE');
   const [payNotes, setPayNotes]   = useState('');
+  const [payBankAccountId, setPayBankAccountId] = useState('');
+  const [payStatus, setPayStatus] = useState('RECEIVED');
+  const [payExpectedDate, setPayExpectedDate] = useState('');
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
   const [saving, setSaving]       = useState(false);
   const [expandLease, setExpandLease] = useState<string | null>(null);
   const [payments, setPayments] = useState<Record<string, any[]>>({});
   const [editLease, setEditLease] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ rentAmount: '', securityDeposit: '', startDate: '', endDate: '', leaseType: 'MONTH_TO_MONTH', status: 'ACTIVE', notes: '' });
+  const [editForm, setEditForm] = useState({
+    unitId: '', rentAmount: '', securityDeposit: '', startDate: '', endDate: '',
+    leaseType: 'MONTH_TO_MONTH', status: 'ACTIVE', arrearsBalance: '', notes: '',
+    rentEffectiveDate: '',
+    lateFeeAmount: '', lateFeePercent: '', lateFeeGraceDays: '', businessName: '', rentDueDay: '',
+  });
+  // Inline "add scheduled increase" form (date + amount OR percent/range + note)
+  const [siForm, setSiForm] = useState({ effectiveDate: '', newAmount: '', percent: '', percentMax: '', note: '' });
+  // Inline "add utility contribution" form (which utility + how much of the payment)
+  const [ucForm, setUcForm] = useState({ category: 'WATER', amount: '', note: '' });
+  const [aliasForm, setAliasForm] = useState({ name: '', note: '' });
+  const [editTenantIds, setEditTenantIds] = useState<string[]>([]);
+  const [newTenantName, setNewTenantName] = useState('');
+  const [deletingTenant, setDeletingTenant] = useState<string | null>(null);
+  const [deletingLease, setDeletingLease] = useState<string | null>(null);
+  const [deletingPayment, setDeletingPayment] = useState<string | null>(null);
+  const [editPayment, setEditPayment] = useState<string | null>(null);
+  const [savingPayment, setSavingPayment] = useState(false);
+  const [payEdit, setPayEdit] = useState({ paidDate: '', amount: '', method: 'ZELLE', status: 'RECEIVED', expectedDate: '', notes: '' });
   const [savingEdit, setSavingEdit] = useState(false);
+  const [uploadingDoc, setUploadingDoc] = useState(false);
+  const [docCategory, setDocCategory] = useState<string>('LEASE');
+  const [leaseDocs, setLeaseDocs] = useState<Record<string, DocType[]>>({});
+  // AI-suggested lease terms from an uploaded lease agreement (user confirms)
+  const [suggested, setSuggested] = useState<{ leaseId: string; terms: any } | null>(null);
+  const [extracting, setExtracting] = useState(false);
   const [showNewLease, setShowNewLease] = useState(false);
+  const [units, setUnits] = useState<Unit[]>([]);
+  const [allTenants, setAllTenants] = useState<Tenant[]>([]);
+  const [rentChanges, setRentChanges] = useState<Record<string, RentChange[]>>({});
+  // Inline "add past rent change" mini-form state, keyed by lease id
+  const [rcForm, setRcForm] = useState<{ leaseId: string; effectiveDate: string; newAmount: string; note: string } | null>(null);
+
+  useEffect(() => {
+    getUnits({ propertyId }).then(setUnits);
+    getTenants().then(setAllTenants);
+    // Only the accounts actually available to attribute a deposit to.
+    getBankAccounts().then(bs => setBankAccounts(bs.filter(b => b.isActive)));
+  }, [propertyId]);
 
   function openEditLease(lease: Lease) {
     setEditForm({
+      unitId: lease.unitId,
       rentAmount: String(lease.rentAmount ?? ''),
       securityDeposit: String(lease.securityDeposit ?? ''),
       startDate: lease.startDate?.slice(0, 10) ?? '',
       endDate: lease.endDate?.slice(0, 10) ?? '',
       leaseType: lease.leaseType,
       status: lease.status,
+      arrearsBalance: String(lease.arrearsBalance ?? ''),
       notes: lease.notes ?? '',
+      rentEffectiveDate: '',
+      lateFeeAmount: lease.lateFeeAmount != null ? String(lease.lateFeeAmount) : '',
+      lateFeePercent: lease.lateFeePercent != null ? String(lease.lateFeePercent) : '',
+      lateFeeGraceDays: lease.lateFeeGraceDays != null ? String(lease.lateFeeGraceDays) : '',
+      businessName: lease.businessName ?? '',
+      rentDueDay: lease.rentDueDay != null ? String(lease.rentDueDay) : '',
     });
+    setSiForm({ effectiveDate: '', newAmount: '', percent: '', percentMax: '', note: '' });
+    setUcForm({ category: 'WATER', amount: '', note: '' });
+    setEditTenantIds((lease.leaseTenants ?? []).map(lt => lt.tenantId));
+    setNewTenantName('');
+    setDocCategory('LEASE');
     setEditLease(lease.id);
+    if (!leaseDocs[lease.id]) getLeaseDocuments(lease.id).then(d => setLeaseDocs(prev => ({ ...prev, [lease.id]: d })));
+  }
+
+  async function addCoTenant() {
+    const name = newTenantName.trim();
+    if (!name) return;
+    const created = await createTenant({ fullName: name });
+    setAllTenants(prev => [...prev, created]);
+    setEditTenantIds(prev => [...prev, created.id]);
+    setNewTenantName('');
+  }
+
+  // Permanently delete the tenant record itself — not the same as taking them
+  // off this lease. The LeaseTenant links cascade, so the tenant disappears
+  // from every lease they were on (here and on other properties), which is why
+  // we re-fetch leases afterwards rather than just patching local state.
+  async function deleteTenantRecord(tenantId: string) {
+    const fromLease = leases.flatMap(l => l.leaseTenants ?? []).find(lt => lt.tenantId === tenantId)?.tenant;
+    const name = (fromLease ?? allTenants.find(x => x.id === tenantId))?.fullName ?? 'this tenant';
+    const onLeases = leases.filter(l => (l.leaseTenants ?? []).some(lt => lt.tenantId === tenantId)).length;
+    const warning = onLeases > 0
+      ? `\n\nThey are on ${onLeases} lease${onLeases === 1 ? '' : 's'} at this property and will be removed from ${onLeases === 1 ? 'it' : 'them'}. The lease${onLeases === 1 ? '' : 's'}, rent history, and payments are kept.`
+      : '';
+    if (!confirm(`Permanently delete ${name}?${warning}\n\nThis cannot be undone. To just take them off this lease instead, use the ✕ on their name.`)) return;
+    setDeletingTenant(tenantId);
+    try {
+      await deleteTenant(tenantId);
+      setAllTenants(prev => prev.filter(x => x.id !== tenantId));
+      setEditTenantIds(prev => prev.filter(x => x !== tenantId));
+      setLeases(await getLeases({ propertyId }));
+    } catch (err: any) {
+      alert(err?.response?.data?.error ?? 'Could not delete that tenant.');
+    } finally {
+      setDeletingTenant(null);
+    }
+  }
+
+  // Deleting a lease cascades hard — payments, notices, rent history, scheduled
+  // increases and utility splits all go with it, and the payments feed Budget
+  // and the P&L. So spell out what is about to be lost, with real counts.
+  async function deleteLeaseRecord(lease: Lease) {
+    setDeletingLease(lease.id);
+    try {
+      // The list endpoint caps rentPayments at 6, so it can't tell us how much
+      // history this would take. Fetch the full lease for accurate counts.
+      const full = await getLease(lease.id);
+      const payments = full.rentPayments?.length ?? 0;
+      const notices  = full.rentNotices?.length ?? 0;
+      const changes  = full.rentChanges?.length ?? 0;
+      const names = (lease.leaseTenants ?? []).map(lt => lt.tenant.fullName).join(', ') || 'no tenants';
+      const plural = (n: number, one: string, many = one + 's') => `${n} ${n === 1 ? one : many}`;
+
+      const lost = [
+        payments && plural(payments, 'logged rent payment'),
+        notices  && plural(notices,  'notice'),
+        changes  && plural(changes,  'rent history entry', 'rent history entries'),
+      ].filter(Boolean) as string[];
+
+      const message = [
+        `Delete the lease for ${names} — Unit ${lease.unit?.unitLabel ?? '—'}, ${money(Number(lease.rentAmount))}/mo?`,
+        lost.length ? `\nThis also permanently deletes ${lost.join(', ')}.` : '',
+        payments ? 'Those payments will no longer count toward Budget or the P&L.' : '',
+        '\nThe tenants themselves are kept. This cannot be undone.',
+      ].filter(Boolean).join('\n');
+
+      if (!confirm(message)) return;
+
+      await deleteLease(lease.id);
+      if (editLease === lease.id) setEditLease(null);
+      if (expandLease === lease.id) setExpandLease(null);
+      setLeases(await getLeases({ propertyId }));
+    } catch (err: any) {
+      alert(err?.response?.data?.error ?? 'Could not delete that lease.');
+    } finally {
+      setDeletingLease(null);
+    }
+  }
+
+  async function addAlias(leaseId: string) {
+    const name = aliasForm.name.trim();
+    if (!name) return;
+    await addPaymentAlias(leaseId, { name, note: aliasForm.note.trim() || undefined });
+    setAliasForm({ name: '', note: '' });
+    setLeases(await getLeases({ propertyId }));
+  }
+
+  async function removeAlias(leaseId: string, aliasId: string) {
+    await deletePaymentAlias(leaseId, aliasId);
+    setLeases(await getLeases({ propertyId }));
+  }
+
+  function openPaymentEdit(p: any) {
+    setPayEdit({
+      paidDate: (p.paidDate ?? '').slice(0, 10),
+      amount: String(p.amount ?? ''),
+      method: p.method ?? 'OTHER',
+      status: p.status ?? 'RECEIVED',
+      expectedDate: (p.expectedDate ?? '').slice(0, 10),
+      notes: p.notes ?? '',
+    });
+    setEditPayment(p.id);
+  }
+
+  // Editing an amount, date or status changes how much of the payment pays down
+  // arrears and whether the month reads as covered, and both are derived on the
+  // server — so reload the lease rather than patching local state.
+  async function refreshAfterPayment(leaseId: string) {
+    const [fresh, updated] = await Promise.all([
+      getRentPayments({ leaseId }),
+      getLeases({ propertyId }),
+    ]);
+    setPayments(prev => ({ ...prev, [leaseId]: fresh }));
+    setLeases(updated);
+  }
+
+  async function savePaymentEdit(leaseId: string, p: any) {
+    const amount = parseFloat(payEdit.amount);
+    if (!payEdit.amount || Number.isNaN(amount) || amount <= 0) {
+      alert('Enter an amount greater than zero.');
+      return;
+    }
+    setSavingPayment(true);
+    try {
+      await updateRentPayment(p.id, {
+        amount,
+        paidDate: payEdit.paidDate || undefined,
+        method: payEdit.method,
+        status: payEdit.status,
+        expectedDate: payEdit.status === 'PENDING' ? (payEdit.expectedDate || null) : null,
+        notes: payEdit.notes || null,
+      });
+      setEditPayment(null);
+      await refreshAfterPayment(leaseId);
+    } catch (err: any) {
+      alert(err?.response?.data?.error ?? 'Could not save that payment.');
+    } finally { setSavingPayment(false); }
+  }
+
+  // Pending money arriving: the server stamps today as the paid date and runs
+  // the arrears split that was skipped while it was only committed.
+  async function markReceived(leaseId: string, p: any) {
+    setSavingPayment(true);
+    try {
+      await updateRentPayment(p.id, { status: 'RECEIVED' });
+      await refreshAfterPayment(leaseId);
+    } catch (err: any) {
+      alert(err?.response?.data?.error ?? 'Could not update that payment.');
+    } finally { setSavingPayment(false); }
+  }
+
+  // Deleting a payment moves money: whatever it applied to arrears goes back on
+  // the balance, and the month it covered may fall overdue again. Both are
+  // server-side, so reload the lease rather than patching local state.
+  async function removePayment(leaseId: string, p: any) {
+    const applied = Number(p.appliedToArrears ?? 0);
+    const message = [
+      `Delete the ${money(Number(p.amount))} payment from ${fmtDateSafe(p.paidDate)}?`,
+      applied > 0 ? `\n${money(applied)} of it paid down the balance and will be added back.` : '',
+      '\nThis cannot be undone.',
+    ].filter(Boolean).join('\n');
+    if (!confirm(message)) return;
+
+    setDeletingPayment(p.id);
+    try {
+      await deleteRentPayment(p.id);
+      const [fresh, updatedLeases] = await Promise.all([
+        getRentPayments({ leaseId }),
+        getLeases({ propertyId }),
+      ]);
+      setPayments(prev => ({ ...prev, [leaseId]: fresh }));
+      setLeases(updatedLeases);
+    } catch (err: any) {
+      alert(err?.response?.data?.error ?? 'Could not delete that payment.');
+    } finally {
+      setDeletingPayment(null);
+    }
   }
 
   async function saveEditLease(leaseId: string) {
+    const rentChanged = parseFloat(editForm.rentAmount || '0') !== Number(leases.find(l => l.id === leaseId)?.rentAmount ?? 0);
     setSavingEdit(true);
     try {
       await updateLease(leaseId, {
+        unitId: editForm.unitId || undefined,
         rentAmount: parseFloat(editForm.rentAmount) || undefined,
         securityDeposit: editForm.securityDeposit ? parseFloat(editForm.securityDeposit) : null,
         startDate: editForm.startDate || undefined,
         endDate: editForm.endDate || null,
         leaseType: editForm.leaseType,
         status: editForm.status,
+        arrearsBalance: editForm.arrearsBalance !== '' ? parseFloat(editForm.arrearsBalance) : undefined,
         notes: editForm.notes || undefined,
+        tenantIds: editTenantIds,
+        rentEffectiveDate: rentChanged && editForm.rentEffectiveDate ? editForm.rentEffectiveDate : undefined,
+        lateFeeAmount: editForm.lateFeeAmount ? parseFloat(editForm.lateFeeAmount) : null,
+        lateFeePercent: editForm.lateFeePercent ? parseFloat(editForm.lateFeePercent) : null,
+        lateFeeGraceDays: editForm.lateFeeGraceDays ? parseInt(editForm.lateFeeGraceDays) : null,
+        businessName: editForm.businessName || null,
+        rentDueDay: editForm.rentDueDay ? parseInt(editForm.rentDueDay) : null,
       });
       const updated = await getLeases({ propertyId });
       setLeases(updated);
+      // Refresh rent-change history if this lease's history is open
+      if (rentChanges[leaseId]) getRentChanges(leaseId).then(rc => setRentChanges(prev => ({ ...prev, [leaseId]: rc })));
       setEditLease(null);
     } finally { setSavingEdit(false); }
+  }
+
+  async function handleLeaseDocUpload(leaseId: string, file: File) {
+    setUploadingDoc(true);
+    try {
+      const reader = new FileReader();
+      const base64: string = await new Promise((resolve, reject) => {
+        reader.onload = () => resolve((reader.result as string).split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      // Categorized attachment (application / ID / screening / lease / other)
+      await addLeaseDocument(leaseId, { fileData: base64, filename: file.name, category: docCategory });
+      // Keep the lease's primary documentUrl in sync when it's the lease agreement,
+      // so existing lease-agreement views still resolve. Best-effort — a hiccup
+      // here must not fail the upload the user just made.
+      if (docCategory === 'LEASE') {
+        try {
+          await uploadLeaseDocument(leaseId, base64, file.name);
+          setLeases(await getLeases({ propertyId }));
+        } catch { /* legacy sync is optional; the categorized doc is saved */ }
+      }
+      const docs = await getLeaseDocuments(leaseId);
+      setLeaseDocs(prev => ({ ...prev, [leaseId]: docs }));
+
+      // For a lease agreement, offer to read the term dates out of the PDF.
+      if (docCategory === 'LEASE') {
+        setExtracting(true);
+        try {
+          const terms = await extractLeaseTerms(leaseId, base64, file.name);
+          if (terms.startDate || terms.endDate || terms.rentAmount) {
+            setSuggested({ leaseId, terms });
+          }
+        } catch { /* extraction is a convenience; the upload already succeeded */ }
+        finally { setExtracting(false); }
+      }
+    } catch (err: any) {
+      const msg = err?.response?.status === 413
+        ? 'That file is too large to upload. Try a smaller PDF or compress it.'
+        : (err?.response?.data?.error || 'Upload failed. Please try again.');
+      alert(msg);
+    } finally { setUploadingDoc(false); }
+  }
+
+  // Copy AI-read lease terms into the edit form. Only fills fields the
+  // document actually stated; nothing is saved until "Save changes".
+  function applySuggestedTerms() {
+    if (!suggested) return;
+    const t = suggested.terms;
+    setEditForm(f => ({
+      ...f,
+      startDate: t.startDate || f.startDate,
+      endDate: t.endDate ?? f.endDate,
+      rentAmount: t.rentAmount != null ? String(t.rentAmount) : f.rentAmount,
+      securityDeposit: t.securityDeposit != null ? String(t.securityDeposit) : f.securityDeposit,
+      leaseType: t.leaseType || f.leaseType,
+      rentDueDay: t.rentDueDay != null ? String(t.rentDueDay) : f.rentDueDay,
+      lateFeeAmount: t.lateFeeAmount != null ? String(t.lateFeeAmount) : f.lateFeeAmount,
+      lateFeePercent: t.lateFeePercent != null ? String(t.lateFeePercent) : f.lateFeePercent,
+      lateFeeGraceDays: t.lateFeeGraceDays != null ? String(t.lateFeeGraceDays) : f.lateFeeGraceDays,
+      businessName: t.businessName || f.businessName,
+    }));
+    setSuggested(null);
+  }
+
+  async function viewLeaseDoc(leaseId: string, docId: string) {
+    try {
+      const { url } = await getLeaseDocumentViewUrl(leaseId, docId);
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch { alert('Could not open document.'); }
+  }
+
+  async function removeLeaseDoc(leaseId: string, docId: string) {
+    if (!confirm('Remove this document?')) return;
+    await deleteLeaseDocument(leaseId, docId);
+    setLeaseDocs(prev => ({ ...prev, [leaseId]: (prev[leaseId] ?? []).filter(d => d.id !== docId) }));
+  }
+
+  async function addSchedIncrease(leaseId: string) {
+    if (!siForm.effectiveDate || (!siForm.newAmount && !siForm.percent)) return;
+    await addScheduledIncrease(leaseId, {
+      effectiveDate: siForm.effectiveDate,
+      newAmount: siForm.newAmount ? parseFloat(siForm.newAmount) : null,
+      percent: siForm.percent ? parseFloat(siForm.percent) : null,
+      percentMax: siForm.percentMax ? parseFloat(siForm.percentMax) : null,
+      note: siForm.note || null,
+    });
+    setLeases(await getLeases({ propertyId }));
+    setSiForm({ effectiveDate: '', newAmount: '', percent: '', percentMax: '', note: '' });
+  }
+
+  async function applySchedIncrease(leaseId: string, si: ScheduledRentIncrease) {
+    let override: { percent?: number; amount?: number } | undefined;
+    // For a range, ask which percent within it is actually being applied.
+    if (si.percentMax != null && si.percent != null) {
+      const ans = prompt(`This is a range (${si.percent}%–${si.percentMax}%). What percent are you applying?`, String(si.percent));
+      if (ans == null) return;
+      const p = parseFloat(ans);
+      if (Number.isNaN(p)) return;
+      override = { percent: p };
+    } else {
+      if (!confirm('Apply this increase now? It becomes the current rent and is logged to rent history.')) return;
+    }
+    await applyScheduledIncrease(leaseId, si.id, override);
+    const updated = await getLeases({ propertyId });
+    setLeases(updated);
+    // The Apply button lives inside the edit form, whose rentAmount field still
+    // holds the pre-apply value. Without syncing it, a later "Save changes"
+    // would submit the stale rent and silently undo the increase.
+    const fresh = updated.find(l => l.id === leaseId);
+    if (fresh && editLease === leaseId) {
+      setEditForm(f => ({ ...f, rentAmount: String(fresh.rentAmount ?? ''), rentEffectiveDate: '' }));
+    }
+    if (rentChanges[leaseId]) getRentChanges(leaseId).then(rc => setRentChanges(prev => ({ ...prev, [leaseId]: rc })));
+  }
+
+  async function removeSchedIncrease(leaseId: string, sid: string) {
+    await deleteScheduledIncrease(leaseId, sid);
+    setLeases(await getLeases({ propertyId }));
+  }
+
+  async function addUtilCharge(leaseId: string) {
+    if (!ucForm.amount) return;
+    await addLeaseUtilityCharge(leaseId, {
+      category: ucForm.category,
+      amount: parseFloat(ucForm.amount),
+      note: ucForm.note || null,
+    });
+    setLeases(await getLeases({ propertyId }));
+    setUcForm({ category: 'WATER', amount: '', note: '' });
+  }
+
+  async function removeUtilCharge(leaseId: string, chargeId: string) {
+    await deleteLeaseUtilityCharge(leaseId, chargeId);
+    setLeases(await getLeases({ propertyId }));
+  }
+
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  // Resulting amount off a given base: explicit amount wins, else base + percent.
+  function targetFrom(base: number, amount?: number | null, percent?: number | null): number | null {
+    if (amount != null && !Number.isNaN(amount)) return amount;
+    if (percent != null && !Number.isNaN(percent)) return round2(base * (1 + percent / 100));
+    return null;
+  }
+  // Chain scheduled increases in date order so each compounds off the prior
+  // one's result, starting from the lease's current rent. Returns, per
+  // increase, the base it applies to and the resulting low/high amounts
+  // (high differs from low only for a percent range).
+  function chainProjections(currentRent: number, incs: ScheduledRentIncrease[]) {
+    const sorted = [...incs].sort((a, b) => new Date(a.effectiveDate).getTime() - new Date(b.effectiveDate).getTime());
+    let running = currentRent;
+    return sorted.map(si => {
+      const base = running;
+      const low = targetFrom(base, si.newAmount != null ? Number(si.newAmount) : null, si.percent != null ? Number(si.percent) : null) ?? base;
+      const high = si.percentMax != null ? round2(base * (1 + Number(si.percentMax) / 100)) : low;
+      running = low; // subsequent increases compound off the low/primary result
+      return { si, base, low, high };
+    });
+  }
+  // Base rent a NEW increase (in the add form) would apply to: current rent
+  // compounded through all existing increases dated on/before the new date.
+  function baseForNew(currentRent: number, incs: ScheduledRentIncrease[], newDate: string): number {
+    const chain = chainProjections(currentRent, incs);
+    if (!newDate) return chain.length ? chain[chain.length - 1].low : currentRent;
+    let base = currentRent;
+    for (const row of chain) {
+      if (new Date(row.si.effectiveDate).getTime() <= new Date(newDate).getTime()) base = row.low;
+    }
+    return base;
+  }
+
+  async function addManualRentChange() {
+    if (!rcForm || !rcForm.newAmount || !rcForm.effectiveDate) return;
+    await addRentChange(rcForm.leaseId, {
+      effectiveDate: rcForm.effectiveDate,
+      newAmount: parseFloat(rcForm.newAmount),
+      note: rcForm.note || undefined,
+    });
+    const rc = await getRentChanges(rcForm.leaseId);
+    setRentChanges(prev => ({ ...prev, [rcForm.leaseId]: rc }));
+    setRcForm(null);
+  }
+
+  async function removeRentChange(leaseId: string, changeId: string) {
+    await deleteRentChange(leaseId, changeId);
+    setRentChanges(prev => ({ ...prev, [leaseId]: (prev[leaseId] ?? []).filter(c => c.id !== changeId) }));
   }
 
   const filtered = leases
@@ -637,12 +1435,16 @@ function TenantsTab({ propertyId, leases, setLeases }: {
         amount: parseFloat(payAmount),
         paidDate: payDate,
         method: payMethod,
+        status: payStatus,
+        expectedDate: payStatus === 'PENDING' ? (payExpectedDate || null) : null,
+        bankAccountId: payBankAccountId || undefined,
         notes: payNotes || undefined,
       });
       const updated = await getLeases({ propertyId });
       setLeases(updated);
       setShowPayForm(null);
-      setPayAmount(''); setPayNotes('');
+      setPayAmount(''); setPayNotes(''); setPayBankAccountId('');
+      setPayStatus('RECEIVED'); setPayExpectedDate('');
       // Refresh payment history for this lease if expanded
       if (payments[leaseId]) {
         getRentPayments({ leaseId }).then(p => setPayments(prev => ({ ...prev, [leaseId]: p })));
@@ -656,6 +1458,10 @@ function TenantsTab({ propertyId, leases, setLeases }: {
     if (!payments[leaseId]) {
       const p = await getRentPayments({ leaseId });
       setPayments(prev => ({ ...prev, [leaseId]: p }));
+    }
+    if (!rentChanges[leaseId]) {
+      const rc = await getRentChanges(leaseId);
+      setRentChanges(prev => ({ ...prev, [leaseId]: rc }));
     }
   }
 
@@ -686,7 +1492,18 @@ function TenantsTab({ propertyId, leases, setLeases }: {
         <NewLeaseModal
           propertyId={propertyId}
           onClose={() => setShowNewLease(false)}
-          onCreated={async () => { setLeases(await getLeases({ propertyId })); setShowNewLease(false); }}
+          onCreated={async () => {
+            // The modal can create units and tenants of its own, so refresh
+            // those lists too — otherwise the edit form can't resolve the new
+            // unit or tenant names and renders a blank select / "…" chips.
+            const [freshLeases, freshUnits, freshTenants] = await Promise.all([
+              getLeases({ propertyId }), getUnits({ propertyId }), getTenants(),
+            ]);
+            setLeases(freshLeases);
+            setUnits(freshUnits);
+            setAllTenants(freshTenants);
+            setShowNewLease(false);
+          }}
         />
       )}
 
@@ -717,15 +1534,104 @@ function TenantsTab({ propertyId, leases, setLeases }: {
                         <span className={`pill text-xs ${lease.status === 'ACTIVE' ? 'pill-green' : lease.status === 'PENDING' ? 'pill-amber' : 'pill-gray'}`}>
                           {lease.status}
                         </span>
+                        {(() => {
+                          const term = leaseTermStatus(lease);
+                          if (!term || term.pill === 'green') return null;
+                          return <span className={`pill text-xs pill-${term.pill}`} title={term.detail}>{term.label}</span>;
+                        })()}
                       </div>
+                      {lease.businessName && (
+                        <p className="text-xs text-gray-400">{lease.businessName}</p>
+                      )}
                       <p className="text-xs text-gray-500">
                         Unit {lease.unit?.unitLabel} · {lease.leaseType === 'FIXED_TERM' ? `${fmtDate(lease.startDate)} – ${fmtDate(lease.endDate)}` : `Month-to-month from ${fmtDate(lease.startDate)}`}
+                        {lease.leaseType === 'MONTH_TO_MONTH' && lease.endDate && new Date(lease.endDate) < new Date() && (
+                          <span className="text-gray-600"> · holdover since {fmtDate(lease.endDate)}</span>
+                        )}
                       </p>
                     </div>
                     <div className="text-right flex-shrink-0">
                       <p className="text-sm font-semibold text-white">{money(Number(lease.rentAmount))}/mo</p>
+                      {(() => {
+                        const { utilities, baseRent } = rentBreakdown(lease);
+                        if (utilities <= 0) return null;
+                        const labels = (lease.utilityCharges ?? [])
+                          .map(uc => CATEGORY_LABELS[uc.category as keyof typeof CATEGORY_LABELS] ?? uc.category)
+                          .join(', ');
+                        return (
+                          <p className="text-xs text-gray-500" title={labels}>
+                            {money(baseRent)} rent + {money(utilities)} {labels.toLowerCase()}
+                          </p>
+                        );
+                      })()}
                       {arrears > 0 && <p className="text-xs text-red-400">{money(arrears)} arrears</p>}
+                      {(() => {
+                        // Current month's rent is due-but-not-arrears until the
+                        // due day passes; after that the worker rolls it in.
+                        if (lease.status !== 'ACTIVE') return null;
+                        const now = new Date();
+                        // Compare period dates by their calendar month, not by
+                        // reading a midnight-UTC instant with local getters —
+                        // west of UTC that lands "2026-08-01" in July, so this
+                        // month's payment never matched and rent stayed overdue.
+                        const thisMonth = localMonthKey(now);
+                        const thisMonthPayments = (lease.rentPayments ?? [])
+                          .filter(p => monthKey(p.periodDate) === thisMonth);
+                        // Pending assistance is committed, not collected — it
+                        // must not make a month look covered.
+                        const paidThisPeriod = thisMonthPayments
+                          .filter(p => p.status !== 'PENDING')
+                          .reduce((s, p) => s + Number(p.amount), 0);
+                        const pendingThisPeriod = thisMonthPayments
+                          .filter(p => p.status === 'PENDING')
+                          .reduce((s, p) => s + Number(p.amount), 0);
+                        const owed = Math.max(0, Number(lease.rentAmount) - paidThisPeriod);
+                        const monthName = format(now, 'MMMM');
+
+                        // Always say where the month stands. Hiding the line
+                        // once rent was covered made a paid tenant and a broken
+                        // calculation look identical — there was no way to tell
+                        // "collected" from "not working".
+                        if (owed <= 0) {
+                          const over = paidThisPeriod - Number(lease.rentAmount);
+                          return (
+                            <p className="text-xs text-emerald-400">
+                              {monthName} paid
+                              {over > 0 && <span className="text-gray-500"> · {money(over)} toward balance</span>}
+                              {pendingThisPeriod > 0 && <span className="text-sky-400"> · {money(pendingThisPeriod)} pending</span>}
+                            </p>
+                          );
+                        }
+
+                        const dueDay = lease.rentDueDay ?? 1;
+                        const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+                        const dueDate = new Date(now.getFullYear(), now.getMonth(), Math.min(dueDay, daysInMonth));
+                        const overdue = now > dueDate;
+                        const partial = paidThisPeriod > 0;
+                        return (
+                          <p className={`text-xs ${overdue ? 'text-red-400' : 'text-gray-500'}`}>
+                            {money(owed)} {overdue ? `overdue for ${monthName}` : `due ${fmtDateSafe(dueDate.toISOString(), 'MMM d')}`}
+                            {partial && <span className="text-gray-500"> · {money(paidThisPeriod)} paid</span>}
+                            {pendingThisPeriod > 0 && <span className="text-sky-400"> · {money(pendingThisPeriod)} pending</span>}
+                          </p>
+                        );
+                      })()}
                       {Number(lease.securityDeposit ?? 0) > 0 && <p className="text-xs text-gray-500">{money(Number(lease.securityDeposit))} dep.</p>}
+                      {lease.rentChanges && lease.rentChanges.length > 0 && (
+                        <p className="text-xs text-gray-500">Last raised {fmtDate(lease.rentChanges[0].effectiveDate)}</p>
+                      )}
+                      {(() => {
+                        const chain = chainProjections(Number(lease.rentAmount), lease.scheduledIncreases ?? []);
+                        if (chain.length === 0) return null;
+                        const { si, low, high } = chain[0];
+                        const detail = `→ ${money(low)}${high !== low ? `–${money(high)}` : ''}`;
+                        const more = chain.length - 1;
+                        return (
+                          <p className="text-xs text-amber-400" title={si.note || ''}>
+                            ↑ Next {fmtDate(si.effectiveDate)} {detail}{more > 0 ? ` +${more} more` : ''}
+                          </p>
+                        );
+                      })()}
                     </div>
                   </div>
                   <div className="flex gap-3 mt-2.5">
@@ -747,20 +1653,320 @@ function TenantsTab({ propertyId, leases, setLeases }: {
                 </div>
 
                 {editLease === lease.id && (
-                  <div className="px-4 py-3 grid grid-cols-3 gap-2" style={{ background: 'rgba(255,255,255,0.03)', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                    <input type="number" placeholder="Rent/mo" value={editForm.rentAmount} onChange={e => setEditForm(f => ({ ...f, rentAmount: e.target.value }))} className="input-dark text-xs" />
-                    <input type="number" placeholder="Security deposit" value={editForm.securityDeposit} onChange={e => setEditForm(f => ({ ...f, securityDeposit: e.target.value }))} className="input-dark text-xs" />
-                    <select value={editForm.status} onChange={e => setEditForm(f => ({ ...f, status: e.target.value }))} className="input-dark text-xs">
-                      {['ACTIVE', 'ENDED', 'PENDING', 'TERMINATED'].map(s => <option key={s} value={s}>{s}</option>)}
-                    </select>
-                    <input type="date" value={editForm.startDate} onChange={e => setEditForm(f => ({ ...f, startDate: e.target.value }))} className="input-dark text-xs" />
-                    <input type="date" value={editForm.endDate} onChange={e => setEditForm(f => ({ ...f, endDate: e.target.value }))} className="input-dark text-xs" placeholder="End date" />
-                    <select value={editForm.leaseType} onChange={e => setEditForm(f => ({ ...f, leaseType: e.target.value }))} className="input-dark text-xs">
-                      <option value="MONTH_TO_MONTH">Month-to-month</option>
-                      <option value="FIXED_TERM">Fixed term</option>
-                    </select>
-                    <input placeholder="Notes" value={editForm.notes} onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))} className="input-dark text-xs col-span-3" />
-                    <div className="col-span-3 flex justify-end">
+                  <div className="px-4 py-3 space-y-3" style={{ background: 'rgba(255,255,255,0.03)', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                      <select value={editForm.unitId} onChange={e => setEditForm(f => ({ ...f, unitId: e.target.value }))} className="input-dark text-xs">
+                        {/* The lease carries its own unit, so offer it even when
+                            the units list hasn't caught up — a select with no
+                            matching option renders blank. */}
+                        {!units.some(u => u.id === lease.unitId) && lease.unit && (
+                          <option value={lease.unitId}>{lease.unit.unitLabel}</option>
+                        )}
+                        {units.map(u => <option key={u.id} value={u.id}>{u.unitLabel}</option>)}
+                      </select>
+                      <input type="number" placeholder="Rent/mo" value={editForm.rentAmount} onChange={e => setEditForm(f => ({ ...f, rentAmount: e.target.value }))} className="input-dark text-xs" />
+                      <input type="number" placeholder="Security deposit" value={editForm.securityDeposit} onChange={e => setEditForm(f => ({ ...f, securityDeposit: e.target.value }))} className="input-dark text-xs" />
+                      <select value={editForm.status} onChange={e => setEditForm(f => ({ ...f, status: e.target.value }))} className="input-dark text-xs">
+                        {['ACTIVE', 'ENDED', 'PENDING', 'TERMINATED'].map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                      <input type="date" value={editForm.startDate} onChange={e => setEditForm(f => ({ ...f, startDate: e.target.value }))} className="input-dark text-xs" />
+                      <input type="date" value={editForm.endDate} onChange={e => setEditForm(f => ({ ...f, endDate: e.target.value }))} className="input-dark text-xs" placeholder="End date" />
+                      <select value={editForm.leaseType} onChange={e => setEditForm(f => ({ ...f, leaseType: e.target.value }))} className="input-dark text-xs">
+                        <option value="MONTH_TO_MONTH">Month-to-month</option>
+                        <option value="FIXED_TERM">Fixed term</option>
+                      </select>
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-0.5">Arrears balance</label>
+                        <input type="number" placeholder="0" value={editForm.arrearsBalance} onChange={e => setEditForm(f => ({ ...f, arrearsBalance: e.target.value }))} className="input-dark text-xs w-full" />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-0.5">Rent due day</label>
+                        <input type="number" min={1} max={31} placeholder="1" value={editForm.rentDueDay}
+                          onChange={e => setEditForm(f => ({ ...f, rentDueDay: e.target.value }))}
+                          className="input-dark text-xs w-full"
+                          title="Day of the month rent is due. This month's rent only becomes arrears after this day passes unpaid." />
+                      </div>
+                    </div>
+                    <p className="text-xs text-gray-600 -mt-1">
+                      This month's rent isn't counted as arrears until day {editForm.rentDueDay || '1'} passes unpaid — then the unpaid amount rolls into the arrears balance.
+                    </p>
+
+                    {/* When rent changed, capture the effective date for the history log */}
+                    {parseFloat(editForm.rentAmount || '0') !== Number(lease.rentAmount) && (
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <label className="text-xs text-gray-400">This rent change took effect on</label>
+                        <input type="date" value={editForm.rentEffectiveDate} onChange={e => setEditForm(f => ({ ...f, rentEffectiveDate: e.target.value }))} className="input-dark text-xs" />
+                        <span className="text-xs text-gray-500">→ logged to rent history (defaults to today)</span>
+                      </div>
+                    )}
+
+                    {/* Co-tenants */}
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">Tenants on this lease</label>
+                      <div className="flex flex-wrap gap-1.5 mb-1">
+                        {editTenantIds.length === 0 && <span className="text-xs text-gray-600">No tenants</span>}
+                        {editTenantIds.map((tid, i) => {
+                          // Prefer the tenant record the lease already carries —
+                          // allTenants is fetched on mount and may not include
+                          // someone created since, which rendered a bare "…".
+                          const t = (lease.leaseTenants ?? []).find(lt => lt.tenantId === tid)?.tenant
+                            ?? allTenants.find(x => x.id === tid);
+                          return (
+                            <span key={tid} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.08)' }}>
+                              {i === 0 && <span className="text-amber-400" title="Primary">★</span>}
+                              {t?.fullName ?? '…'}
+                              <button onClick={() => setEditTenantIds(prev => prev.filter(x => x !== tid))}
+                                title="Remove from this lease (saved with Save changes)"
+                                className="text-gray-500 hover:text-red-400">✕</button>
+                              <button onClick={() => deleteTenantRecord(tid)} disabled={deletingTenant === tid}
+                                title="Delete this tenant permanently"
+                                className="text-gray-600 hover:text-red-500 disabled:opacity-40">
+                                {deletingTenant === tid ? '…' : '🗑'}
+                              </button>
+                            </span>
+                          );
+                        })}
+                      </div>
+                      <p className="text-xs text-gray-600 mb-2">✕ takes them off this lease · 🗑 deletes the tenant everywhere</p>
+                      <div className="flex gap-2 flex-wrap items-center">
+                        <select value="" onChange={e => { if (e.target.value) setEditTenantIds(prev => prev.includes(e.target.value) ? prev : [...prev, e.target.value]); }} className="input-dark text-xs">
+                          <option value="">+ Add existing tenant…</option>
+                          {allTenants.filter(t => !editTenantIds.includes(t.id)).map(t => <option key={t.id} value={t.id}>{t.fullName}</option>)}
+                        </select>
+                        <input value={newTenantName} onChange={e => setNewTenantName(e.target.value)} placeholder="…or new tenant name" className="input-dark text-xs" />
+                        <button onClick={addCoTenant} disabled={!newTenantName.trim()} className="btn text-xs disabled:opacity-40">Add</button>
+                      </div>
+                    </div>
+
+                    {/* Commercial: business/entity on the lease */}
+                    {isCommercial && (
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1">Business name (commercial lease)</label>
+                        <input placeholder="e.g. Acme Coffee LLC" value={editForm.businessName}
+                          onChange={e => setEditForm(f => ({ ...f, businessName: e.target.value }))}
+                          className="input-dark text-xs w-full" />
+                      </div>
+                    )}
+
+                    {/* Late fee — flat amount or percent of rent, with grace period */}
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">Late fee (leave blank if none)</label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                        <input type="number" placeholder="Flat amount $" value={editForm.lateFeeAmount}
+                          onChange={e => setEditForm(f => ({ ...f, lateFeeAmount: e.target.value, lateFeePercent: e.target.value ? '' : f.lateFeePercent }))}
+                          className="input-dark text-xs" />
+                        <input type="number" placeholder="% of rent" value={editForm.lateFeePercent}
+                          onChange={e => setEditForm(f => ({ ...f, lateFeePercent: e.target.value, lateFeeAmount: e.target.value ? '' : f.lateFeeAmount }))}
+                          className="input-dark text-xs" />
+                        <input type="number" placeholder="Grace days" value={editForm.lateFeeGraceDays}
+                          onChange={e => setEditForm(f => ({ ...f, lateFeeGraceDays: e.target.value }))}
+                          className="input-dark text-xs" title="Days after the due date before the fee applies" />
+                      </div>
+                      {(() => {
+                        const rentNow = parseFloat(editForm.rentAmount || '0') || Number(lease.rentAmount);
+                        const fee = editForm.lateFeePercent
+                          ? round2(rentNow * parseFloat(editForm.lateFeePercent) / 100)
+                          : editForm.lateFeeAmount ? parseFloat(editForm.lateFeeAmount) : null;
+                        if (fee == null || Number.isNaN(fee)) return null;
+                        return (
+                          <p className="text-xs text-gray-400 mt-1.5">
+                            Late fee: <span className="font-medium text-white">{money(fee)}</span>
+                            {editForm.lateFeePercent && <span className="text-gray-600"> ({editForm.lateFeePercent}% of {money(rentNow)})</span>}
+                            {editForm.lateFeeGraceDays && <span className="text-gray-600"> · after {editForm.lateFeeGraceDays} day grace</span>}
+                          </p>
+                        );
+                      })()}
+                    </div>
+
+                    {/* Expected payer names — drives Plaid auto-logging */}
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">
+                        Expected payer names — rent from these names is logged automatically
+                      </label>
+                      <div className="flex flex-wrap gap-1.5 mb-2">
+                        {(lease.paymentAliases ?? []).length === 0 && (
+                          <span className="text-xs text-gray-600">None — only the tenants' own names are recognised</span>
+                        )}
+                        {(lease.paymentAliases ?? []).map(a => (
+                          <span key={a.id} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.08)' }}>
+                            {a.name}
+                            {a.note && <span className="text-gray-500">({a.note})</span>}
+                            <button onClick={() => removeAlias(lease.id, a.id)} className="text-gray-500 hover:text-red-400">✕</button>
+                          </span>
+                        ))}
+                      </div>
+                      <div className="flex gap-2 flex-wrap items-center">
+                        <input value={aliasForm.name} onChange={e => setAliasForm(f => ({ ...f, name: e.target.value }))}
+                          placeholder="Name on the transfer, e.g. Jose Contreras" className="input-dark text-xs w-56" />
+                        <input value={aliasForm.note} onChange={e => setAliasForm(f => ({ ...f, note: e.target.value }))}
+                          placeholder="Who they are (optional)" className="input-dark text-xs w-44" />
+                        <button onClick={() => addAlias(lease.id)} disabled={!aliasForm.name.trim()} className="btn text-xs disabled:opacity-40">Add name</button>
+                      </div>
+                      <p className="text-xs text-gray-600 mt-1">
+                        Rent often arrives from a spouse, a relative or an employer. A bank transfer naming
+                        someone listed here is matched to this lease and logged without asking; anything else
+                        waits for you in <Link to="/incoming-payments" className="text-amber-400 hover:text-amber-300">Payments</Link>.
+                      </p>
+                    </div>
+
+                    {/* Utility contributions — portion of the payment that isn't rent */}
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">
+                        Payments toward utilities (part of the {money(Number(lease.rentAmount))} total — leave empty if utilities are included in rent)
+                      </label>
+                      <div className="space-y-1 mb-2">
+                        {(lease.utilityCharges ?? []).length === 0 && <span className="text-xs text-gray-600">None — full amount is rent</span>}
+                        {(lease.utilityCharges ?? []).map(uc => (
+                          <div key={uc.id} className="flex items-center gap-2 text-xs group">
+                            <span className="px-1.5 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.08)' }}>
+                              {CATEGORY_LABELS[uc.category as keyof typeof CATEGORY_LABELS] ?? uc.category}
+                            </span>
+                            <span className="font-medium text-white">{money(Number(uc.amount))}/mo</span>
+                            {uc.note && <span className="text-gray-600">· {uc.note}</span>}
+                            <button onClick={() => removeUtilCharge(lease.id, uc.id)} className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 ml-auto">✕</button>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+                        <select value={ucForm.category} onChange={e => setUcForm(f => ({ ...f, category: e.target.value }))} className="input-dark text-xs">
+                          {UTILITY_CHARGE_CATEGORIES.map(c => (
+                            <option key={c} value={c}>{CATEGORY_LABELS[c as keyof typeof CATEGORY_LABELS] ?? c}</option>
+                          ))}
+                        </select>
+                        <input type="number" placeholder="Amount $/mo" value={ucForm.amount} onChange={e => setUcForm(f => ({ ...f, amount: e.target.value }))} className="input-dark text-xs" />
+                        <input placeholder="Note" value={ucForm.note} onChange={e => setUcForm(f => ({ ...f, note: e.target.value }))} className="input-dark text-xs" />
+                        <button onClick={() => addUtilCharge(lease.id)} disabled={!ucForm.amount} className="btn text-xs disabled:opacity-40">Add utility payment</button>
+                      </div>
+                      {(() => {
+                        const { total, utilities, baseRent } = rentBreakdown(lease);
+                        const pendingAmt = ucForm.amount ? parseFloat(ucForm.amount) : 0;
+                        const projUtil = utilities + (Number.isNaN(pendingAmt) ? 0 : pendingAmt);
+                        return (
+                          <p className="text-xs text-gray-400 mt-1.5">
+                            Rent <span className="font-medium text-white">{money(round2(total - projUtil))}</span>
+                            {projUtil > 0 && <> + utilities <span className="font-medium text-white">{money(projUtil)}</span></>}
+                            {' = total '}<span className="font-medium text-amber-400">{money(total)}</span>
+                            {projUtil !== utilities && <span className="text-gray-600"> (incl. the amount you're adding)</span>}
+                            {baseRent < 0 && <span className="text-red-400"> — utilities exceed the total payment</span>}
+                          </p>
+                        );
+                      })()}
+                    </div>
+
+                    {/* Scheduled (future) rent increases — multiple, chained */}
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">Scheduled rent increases (planned — each builds on the previous)</label>
+                      <div className="space-y-1 mb-2">
+                        {(lease.scheduledIncreases ?? []).length === 0 && <span className="text-xs text-gray-600">None scheduled</span>}
+                        {chainProjections(Number(lease.rentAmount), lease.scheduledIncreases ?? []).map(({ si, base, low, high }) => (
+                          <div key={si.id} className="flex items-center gap-2 text-xs group flex-wrap">
+                            <span className="text-gray-500 w-24">{fmtDate(si.effectiveDate)}</span>
+                            <span className="text-gray-300">
+                              {si.percent != null && (
+                                <span className="text-amber-400">+{si.percent}{si.percentMax != null ? `–${si.percentMax}` : ''}%</span>
+                              )}
+                              {' → '}
+                              <span className="font-medium text-white">{money(low)}{high !== low ? `–${money(high)}` : ''}</span>
+                              <span className="text-gray-600"> (from {money(base)})</span>
+                            </span>
+                            {si.note && <span className="text-gray-600">· {si.note}</span>}
+                            <button onClick={() => applySchedIncrease(lease.id, si)} className="text-emerald-400 hover:text-emerald-300 ml-auto">Apply now</button>
+                            <button onClick={() => removeSchedIncrease(lease.id, si.id)} className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400">✕</button>
+                          </div>
+                        ))}
+                      </div>
+                      {/* Add a scheduled increase with live, chained calculator */}
+                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">
+                        <input type="date" value={siForm.effectiveDate} onChange={e => setSiForm(f => ({ ...f, effectiveDate: e.target.value }))} className="input-dark text-xs" title="Effective date" />
+                        <input type="number" placeholder="New amount $" value={siForm.newAmount} onChange={e => setSiForm(f => ({ ...f, newAmount: e.target.value, percent: e.target.value ? '' : f.percent, percentMax: e.target.value ? '' : f.percentMax }))} className="input-dark text-xs" />
+                        <input type="number" placeholder="% (or range min)" value={siForm.percent} onChange={e => setSiForm(f => ({ ...f, percent: e.target.value, newAmount: e.target.value ? '' : f.newAmount }))} className="input-dark text-xs" />
+                        <input type="number" placeholder="% max (range)" value={siForm.percentMax} onChange={e => setSiForm(f => ({ ...f, percentMax: e.target.value, newAmount: e.target.value ? '' : f.newAmount }))} className="input-dark text-xs" title="Optional — set for a range like 6%–10%" />
+                        <input placeholder="Note" value={siForm.note} onChange={e => setSiForm(f => ({ ...f, note: e.target.value }))} className="input-dark text-xs" />
+                      </div>
+                      <div className="flex items-center gap-3 mt-1.5">
+                        {(() => {
+                          const base = baseForNew(Number(lease.rentAmount), lease.scheduledIncreases ?? [], siForm.effectiveDate);
+                          const low = targetFrom(base, siForm.newAmount ? parseFloat(siForm.newAmount) : null, siForm.percent ? parseFloat(siForm.percent) : null);
+                          const high = siForm.percentMax ? round2(base * (1 + parseFloat(siForm.percentMax) / 100)) : low;
+                          return low != null ? (
+                            <span className="text-xs text-gray-400">
+                              New rent: <span className="font-medium text-white">{money(low)}{high != null && high !== low ? `–${money(high)}` : ''}</span>
+                              <span className="text-gray-600"> (from {money(base)}{siForm.percent ? ` + ${siForm.percent}${siForm.percentMax ? `–${siForm.percentMax}` : ''}%` : ''})</span>
+                            </span>
+                          ) : <span className="text-xs text-gray-600">Enter an amount, a %, or a % range</span>;
+                        })()}
+                        <button onClick={() => addSchedIncrease(lease.id)} disabled={!siForm.effectiveDate || (!siForm.newAmount && !siForm.percent)} className="btn text-xs disabled:opacity-40 ml-auto">Add increase</button>
+                      </div>
+                    </div>
+
+                    <input placeholder="Notes" value={editForm.notes} onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))} className="input-dark text-xs w-full" />
+
+                    {/* Documents — lease agreement, application, ID, screening, etc. */}
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">Documents</label>
+                      <div className="flex items-center gap-2 flex-wrap mb-2">
+                        <select value={docCategory} onChange={e => setDocCategory(e.target.value)} className="input-dark text-xs">
+                          {LEASE_DOC_CATEGORIES.map(c => <option key={c} value={c}>{DOCUMENT_CATEGORY_LABELS[c]}</option>)}
+                        </select>
+                        <label className="text-xs text-amber-400 hover:text-amber-300 cursor-pointer">
+                          {uploadingDoc ? 'Uploading…' : extracting ? 'Reading lease…' : '+ Import file'}
+                          <input type="file" accept="application/pdf,image/*" className="hidden" disabled={uploadingDoc || extracting}
+                            onChange={e => { const f = e.target.files?.[0]; if (f) handleLeaseDocUpload(lease.id, f); e.target.value = ''; }} />
+                        </label>
+                        {docCategory === 'LEASE' && <span className="text-xs text-gray-600">dates are read from the agreement automatically</span>}
+                      </div>
+
+                      {/* AI-read lease terms — review before applying */}
+                      {suggested?.leaseId === lease.id && (
+                        <div className="rounded-lg p-3 mb-2" style={{ background: 'rgba(245,166,35,0.06)', border: '1px solid rgba(245,166,35,0.25)' }}>
+                          <p className="text-xs font-medium text-amber-400 mb-1.5">Found these terms in the lease agreement</p>
+                          <div className="grid grid-cols-2 gap-x-6 gap-y-0.5 mb-2">
+                            {[
+                              ['Start', suggested.terms.startDate ? fmtDate(suggested.terms.startDate) : null],
+                              ['End', suggested.terms.endDate ? fmtDate(suggested.terms.endDate) : null],
+                              ['Rent', suggested.terms.rentAmount != null ? money(suggested.terms.rentAmount) : null],
+                              ['Deposit', suggested.terms.securityDeposit != null ? money(suggested.terms.securityDeposit) : null],
+                              ['Type', suggested.terms.leaseType === 'FIXED_TERM' ? 'Fixed term' : suggested.terms.leaseType === 'MONTH_TO_MONTH' ? 'Month-to-month' : null],
+                              ['Rent due day', suggested.terms.rentDueDay != null ? String(suggested.terms.rentDueDay) : null],
+                              ['Late fee', suggested.terms.lateFeePercent != null ? `${suggested.terms.lateFeePercent}%` : suggested.terms.lateFeeAmount != null ? money(suggested.terms.lateFeeAmount) : null],
+                              ['Grace days', suggested.terms.lateFeeGraceDays != null ? String(suggested.terms.lateFeeGraceDays) : null],
+                              ['Business', suggested.terms.businessName],
+                            ].filter(([, v]) => v).map(([label, v]) => (
+                              <div key={String(label)} className="flex justify-between text-xs">
+                                <span className="text-gray-500">{label}</span>
+                                <span className="text-gray-200">{v}</span>
+                              </div>
+                            ))}
+                          </div>
+                          {suggested.terms.notes && <p className="text-xs text-gray-500 mb-2">{suggested.terms.notes}</p>}
+                          <div className="flex gap-2">
+                            <button onClick={applySuggestedTerms} className="btn btn-primary text-xs">Fill these in</button>
+                            <button onClick={() => setSuggested(null)} className="text-xs text-gray-500 hover:text-gray-300">Ignore</button>
+                            <span className="text-xs text-gray-600 self-center">Review, then Save changes</span>
+                          </div>
+                        </div>
+                      )}
+                      <div className="space-y-1">
+                        {(leaseDocs[lease.id] ?? []).length === 0 ? (
+                          <span className="text-xs text-gray-600">No documents attached</span>
+                        ) : (
+                          (leaseDocs[lease.id] ?? []).map(d => (
+                            <div key={d.id} className="flex items-center gap-2 text-xs group">
+                              <span className="px-1.5 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.08)' }}>{DOCUMENT_CATEGORY_LABELS[d.category]}</span>
+                              <button onClick={() => viewLeaseDoc(lease.id, d.id)} className="text-gray-300 hover:text-amber-400 truncate max-w-[200px]">{d.title}</button>
+                              <span className="text-gray-600">{fmtDate(d.createdAt)}</span>
+                              <button onClick={() => removeLeaseDoc(lease.id, d.id)} className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 ml-auto">✕</button>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-1">
+                      <button onClick={() => deleteLeaseRecord(lease)} disabled={deletingLease === lease.id}
+                        className="text-xs text-red-400 hover:text-red-300 disabled:opacity-40">
+                        {deletingLease === lease.id ? 'Deleting…' : 'Delete lease'}
+                      </button>
                       <button onClick={() => saveEditLease(lease.id)} disabled={savingEdit} className="btn btn-primary text-xs">{savingEdit ? '…' : 'Save changes'}</button>
                     </div>
                   </div>
@@ -770,9 +1976,45 @@ function TenantsTab({ propertyId, leases, setLeases }: {
                   <div className="px-4 py-3 flex gap-2 flex-wrap" style={{ background: 'rgba(255,255,255,0.03)', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                     <input type="number" placeholder="Amount" value={payAmount} onChange={e => setPayAmount(e.target.value)} className="input-dark text-xs w-28" />
                     <input type="date"   value={payDate}   onChange={e => setPayDate(e.target.value)}   className="input-dark text-xs w-36" />
-                    <select value={payMethod} onChange={e => setPayMethod(e.target.value)} className="input-dark text-xs">
-                      {['ZELLE','CHECK','CASH','ACH','MONEY_ORDER','OTHER'].map(m => <option key={m} value={m}>{m}</option>)}
+                    <select value={payMethod} onChange={e => {
+                      setPayMethod(e.target.value);
+                      // Drop a stale account if the new method isn't one that
+                      // lands in a bank — the field is hidden, so it would be
+                      // submitted invisibly.
+                      if (!BANK_LINKED_METHODS.includes(e.target.value as RentPaymentMethod)) setPayBankAccountId('');
+                      // Assistance is usually recorded on approval, before the
+                      // money moves — default it to pending, but leave it editable.
+                      if (['RENTAL_ASSISTANCE', 'SECTION_8'].includes(e.target.value)) setPayStatus('PENDING');
+                    }} className="input-dark text-xs">
+                      {RENT_PAYMENT_METHODS.map(m => <option key={m} value={m}>{RENT_PAYMENT_METHOD_LABELS[m]}</option>)}
                     </select>
+                    {/* Which account received it — only meaningful once the
+                        money landed somewhere of the owner's, so this stays out
+                        of the way for cash and P2P apps. */}
+                    {BANK_LINKED_METHODS.includes(payMethod as RentPaymentMethod) && (
+                      bankAccounts.length === 0 ? (
+                        <span className="text-xs text-gray-500 self-center">
+                          No bank accounts yet — <Link to="/settings" className="text-amber-400 hover:text-amber-300">link one</Link>
+                        </span>
+                      ) : (
+                        <select value={payBankAccountId} onChange={e => setPayBankAccountId(e.target.value)} className="input-dark text-xs">
+                          <option value="">{payMethod === 'BANK_DEPOSIT' ? '— Which account? —' : '— Into which account? (optional) —'}</option>
+                          {bankAccounts.map(b => (
+                            <option key={b.id} value={b.id}>{bankLabel(b)}</option>
+                          ))}
+                        </select>
+                      )
+                    )}
+                    {/* Assistance is often approved well before it disburses,
+                        so it can be logged as pending and marked received later. */}
+                    <select value={payStatus} onChange={e => setPayStatus(e.target.value)} className="input-dark text-xs">
+                      <option value="RECEIVED">Received</option>
+                      <option value="PENDING">Pending</option>
+                    </select>
+                    {payStatus === 'PENDING' && (
+                      <input type="date" value={payExpectedDate} title="Expected to disburse"
+                        onChange={e => setPayExpectedDate(e.target.value)} className="input-dark text-xs w-36" />
+                    )}
                     <input placeholder="Notes (optional)" value={payNotes} onChange={e => setPayNotes(e.target.value)} className="input-dark text-xs flex-1 min-w-32" />
                     <button onClick={() => logPayment(lease.id)} disabled={saving} className="btn btn-primary text-xs">{saving ? '…' : 'Log'}</button>
                     <button onClick={() => setShowPayForm(null)} className="text-xs text-gray-500 hover:text-gray-300">✕</button>
@@ -781,32 +2023,147 @@ function TenantsTab({ propertyId, leases, setLeases }: {
 
                 {isExpanded && (
                   <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                    {!payments[lease.id] ? (
-                      <p className="px-4 py-3 text-xs text-gray-500">Loading…</p>
-                    ) : payments[lease.id].length === 0 ? (
-                      <p className="px-4 py-3 text-xs text-gray-500">No payments recorded yet</p>
-                    ) : (
-                      <table className="w-full text-xs">
-                        <thead style={{ background: 'rgba(255,255,255,0.03)' }}>
-                          <tr className="text-left text-gray-500">
-                            <th className="px-4 py-2">Date</th>
-                            <th className="px-4 py-2">Amount</th>
-                            <th className="px-4 py-2">Method</th>
-                            <th className="px-4 py-2">Notes</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {payments[lease.id].map((p: any) => (
-                            <tr key={p.id} className="border-t border-white/5">
-                              <td className="px-4 py-2 text-gray-300">{fmtDate(p.paidDate)}</td>
-                              <td className="px-4 py-2 font-medium text-white">{money(Number(p.amount))}</td>
-                              <td className="px-4 py-2 text-gray-400">{p.method}</td>
-                              <td className="px-4 py-2 text-gray-500">{p.notes || '—'}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
+                    {/* Rent change history */}
+                    <div className="px-4 py-3">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <p className="text-xs font-medium text-gray-300">Rent history</p>
+                        <button
+                          onClick={() => setRcForm({ leaseId: lease.id, effectiveDate: new Date().toISOString().slice(0, 10), newAmount: String(lease.rentAmount ?? ''), note: '' })}
+                          className="text-xs text-amber-400 hover:text-amber-300">+ Add past change</button>
+                      </div>
+                      {(rentChanges[lease.id]?.length ?? 0) === 0 ? (
+                        <p className="text-xs text-gray-500">Current rent {money(Number(lease.rentAmount))}/mo · no recorded increases yet</p>
+                      ) : (
+                        <div className="space-y-1">
+                          {rentChanges[lease.id].map(rc => {
+                            const prev = rc.previousAmount != null ? Number(rc.previousAmount) : null;
+                            const pctChange = prev && prev > 0 ? ((Number(rc.newAmount) - prev) / prev) * 100 : null;
+                            return (
+                              <div key={rc.id} className="flex items-center gap-2 text-xs group">
+                                <span className="text-gray-500 w-24">{fmtDate(rc.effectiveDate)}</span>
+                                <span className="text-gray-300">
+                                  {prev != null ? `${money(prev)} → ` : ''}<span className="font-medium text-white">{money(Number(rc.newAmount))}</span>
+                                </span>
+                                {/* Rent is income: an increase is good (green), a decrease is not. */}
+                                {pctChange != null && (
+                                  <span className={pctChange >= 0 ? 'text-emerald-400' : 'text-red-400'}>{pct(pctChange)}</span>
+                                )}
+                                {rc.note && <span className="text-gray-600">· {rc.note}</span>}
+                                <button onClick={() => removeRentChange(lease.id, rc.id)} className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 ml-auto">✕</button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {rcForm?.leaseId === lease.id && (
+                        <div className="flex gap-2 flex-wrap items-center mt-2">
+                          <input type="date" value={rcForm.effectiveDate} onChange={e => setRcForm(f => f && ({ ...f, effectiveDate: e.target.value }))} className="input-dark text-xs" />
+                          <input type="number" placeholder="New rent $" value={rcForm.newAmount} onChange={e => setRcForm(f => f && ({ ...f, newAmount: e.target.value }))} className="input-dark text-xs w-28" />
+                          <input placeholder="Note (optional)" value={rcForm.note} onChange={e => setRcForm(f => f && ({ ...f, note: e.target.value }))} className="input-dark text-xs flex-1 min-w-32" />
+                          <button onClick={addManualRentChange} className="btn btn-primary text-xs">Add</button>
+                          <button onClick={() => setRcForm(null)} className="text-xs text-gray-500 hover:text-gray-300">✕</button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Payment history */}
+                    <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                      <p className="px-4 pt-3 pb-1 text-xs font-medium text-gray-300">Payment history</p>
+                      {!payments[lease.id] ? (
+                        <p className="px-4 py-3 text-xs text-gray-500">Loading…</p>
+                      ) : payments[lease.id].length === 0 ? (
+                        <p className="px-4 py-3 text-xs text-gray-500">No payments recorded yet</p>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs">
+                            <thead style={{ background: 'rgba(255,255,255,0.03)' }}>
+                              <tr className="text-left text-gray-500">
+                                <th className="px-4 py-2">Date</th>
+                                <th className="px-4 py-2">Amount</th>
+                                <th className="px-4 py-2">Method</th>
+                                <th className="px-4 py-2">Notes</th>
+                                <th className="px-4 py-2 w-8"></th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {payments[lease.id].map((p: any) => editPayment === p.id ? (
+                                <tr key={p.id} className="border-t border-white/5" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                                  <td className="px-4 py-2">
+                                    <input type="date" value={payEdit.paidDate}
+                                      onChange={e => setPayEdit(f => ({ ...f, paidDate: e.target.value }))}
+                                      className="input-dark text-xs w-32" />
+                                  </td>
+                                  <td className="px-4 py-2">
+                                    <input type="number" value={payEdit.amount}
+                                      onChange={e => setPayEdit(f => ({ ...f, amount: e.target.value }))}
+                                      className="input-dark text-xs w-24" />
+                                  </td>
+                                  <td className="px-4 py-2">
+                                    <div className="flex flex-wrap gap-1">
+                                      <select value={payEdit.method} onChange={e => setPayEdit(f => ({ ...f, method: e.target.value }))}
+                                        className="input-dark text-xs">
+                                        {RENT_PAYMENT_METHODS.map(m => <option key={m} value={m}>{RENT_PAYMENT_METHOD_LABELS[m]}</option>)}
+                                      </select>
+                                      <select value={payEdit.status} onChange={e => setPayEdit(f => ({ ...f, status: e.target.value }))}
+                                        className="input-dark text-xs">
+                                        <option value="RECEIVED">Received</option>
+                                        <option value="PENDING">Pending</option>
+                                      </select>
+                                      {payEdit.status === 'PENDING' && (
+                                        <input type="date" value={payEdit.expectedDate} title="Expected to disburse"
+                                          onChange={e => setPayEdit(f => ({ ...f, expectedDate: e.target.value }))}
+                                          className="input-dark text-xs w-32" />
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-2">
+                                    <input value={payEdit.notes} onChange={e => setPayEdit(f => ({ ...f, notes: e.target.value }))}
+                                      placeholder="Notes" className="input-dark text-xs w-full min-w-32" />
+                                  </td>
+                                  <td className="px-4 py-2 text-right whitespace-nowrap">
+                                    <button onClick={() => savePaymentEdit(lease.id, p)} disabled={savingPayment}
+                                      className="text-amber-400 hover:text-amber-300 disabled:opacity-40">{savingPayment ? '…' : 'Save'}</button>
+                                    <button onClick={() => setEditPayment(null)} className="text-gray-500 hover:text-gray-300 ml-2">Cancel</button>
+                                  </td>
+                                </tr>
+                              ) : (
+                                <tr key={p.id} className="border-t border-white/5 group">
+                                  <td className="px-4 py-2 text-gray-300 whitespace-nowrap">
+                                    {p.status === 'PENDING'
+                                      ? <span className="text-sky-400">Expected {p.expectedDate ? fmtDate(p.expectedDate) : '—'}</span>
+                                      : fmtDate(p.paidDate)}
+                                  </td>
+                                  <td className={`px-4 py-2 font-medium ${p.status === 'PENDING' ? 'text-sky-400' : 'text-white'}`}>
+                                    {money(Number(p.amount))}
+                                  </td>
+                                  <td className="px-4 py-2 text-gray-400">
+                                    {RENT_PAYMENT_METHOD_LABELS[p.method as RentPaymentMethod] ?? p.method}
+                                    {p.status === 'PENDING' && <span className="text-sky-400"> · pending</span>}
+                                    {p.bankAccount && <span className="text-gray-600"> → {bankLabel(p.bankAccount as BankAccount)}</span>}
+                                  </td>
+                                  <td className="px-4 py-2 text-gray-500">{p.notes || '—'}</td>
+                                  <td className="px-4 py-2 text-right whitespace-nowrap">
+                                    {p.status === 'PENDING' && (
+                                      <button onClick={() => markReceived(lease.id, p)} disabled={savingPayment}
+                                        title="Mark this money as arrived"
+                                        className="text-emerald-400 hover:text-emerald-300 mr-2 disabled:opacity-40">Received</button>
+                                    )}
+                                    <span className="opacity-0 group-hover:opacity-100 transition-opacity">
+                                      <button onClick={() => openPaymentEdit(p)} className="text-gray-500 hover:text-amber-400">Edit</button>
+                                      <button onClick={() => removePayment(lease.id, p)} disabled={deletingPayment === p.id}
+                                        title="Delete this payment"
+                                        className="text-gray-600 hover:text-red-400 disabled:opacity-40 ml-2">
+                                        {deletingPayment === p.id ? '…' : '✕'}
+                                      </button>
+                                    </span>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
@@ -1029,7 +2386,7 @@ function LoansTab({ propertyId, loans, setLoans }: {
       </div>
 
       {showForm && (
-        <div className="card p-4 mb-4 grid grid-cols-4 gap-3">
+        <div className="card p-4 mb-4 grid grid-cols-2 lg:grid-cols-4 gap-3">
           <div className="col-span-4 text-xs font-medium text-gray-400 mb-1">New loan</div>
           <select value={form.loanType} onChange={e => setForm(f => ({ ...f, loanType: e.target.value }))} className="input-dark text-sm">
             {['MORTGAGE','HELOC','INSTALLMENT_PLAN','CREDIT_LINE','SELLER_FINANCING','DSCR','COMMERCIAL','HARD_MONEY','OTHER'].map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
@@ -1053,37 +2410,39 @@ function LoansTab({ propertyId, loans, setLoans }: {
         <div className="text-center py-12 text-gray-500 text-sm">No loans recorded</div>
       ) : (
         <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
-          <table className="w-full text-sm">
-            <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
-              <tr className="text-left text-gray-400 text-xs">
-                <th className="px-4 py-3">Lender</th>
-                <th className="px-4 py-3">Type</th>
-                <th className="px-4 py-3">Balance</th>
-                <th className="px-4 py-3">Payment/mo</th>
-                <th className="px-4 py-3">Rate</th>
-                <th className="px-4 py-3">Maturity</th>
-                <th className="px-4 py-3">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/5">
-              {sorted.map(loan => (
-                <tr key={loan.id} className="hover:bg-white/[0.02]">
-                  <td className="px-4 py-3">
-                    <Link to={`/loans/${loan.id}`} className="text-white font-medium hover:text-amber-400 transition-colors">{loan.lender}</Link>
-                    {loan.accountLast4 && <p className="text-xs text-gray-500">····{loan.accountLast4}</p>}
-                  </td>
-                  <td className="px-4 py-3 text-gray-400">{loan.loanType}</td>
-                  <td className="px-4 py-3 font-medium text-white">{loan.currentBalance ? money(Number(loan.currentBalance)) : '—'}</td>
-                  <td className="px-4 py-3 text-gray-300">{loan.monthlyPayment ? money(Number(loan.monthlyPayment)) : '—'}</td>
-                  <td className="px-4 py-3 text-gray-400">{loan.interestRate ? `${loan.interestRate}%` : '—'}</td>
-                  <td className="px-4 py-3 text-gray-400 text-xs">{loan.maturityDate ? fmtDate(loan.maturityDate) : '—'}</td>
-                  <td className="px-4 py-3">
-                    <span className={`pill ${loan.isActive ? 'pill-green' : 'pill-gray'}`}>{loan.isActive ? 'Active' : 'Paid off'}</span>
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
+                <tr className="text-left text-gray-400 text-xs">
+                  <th className="px-4 py-3">Lender</th>
+                  <th className="px-4 py-3">Type</th>
+                  <th className="px-4 py-3">Balance</th>
+                  <th className="px-4 py-3">Payment/mo</th>
+                  <th className="px-4 py-3">Rate</th>
+                  <th className="px-4 py-3">Maturity</th>
+                  <th className="px-4 py-3">Status</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {sorted.map(loan => (
+                  <tr key={loan.id} className="hover:bg-white/[0.02]">
+                    <td className="px-4 py-3">
+                      <Link to={`/loans/${loan.id}`} className="text-white font-medium hover:text-amber-400 transition-colors">{loan.lender}</Link>
+                      {loan.accountLast4 && <p className="text-xs text-gray-500">····{loan.accountLast4}</p>}
+                    </td>
+                    <td className="px-4 py-3 text-gray-400">{loan.loanType}</td>
+                    <td className="px-4 py-3 font-medium text-white">{loan.currentBalance ? money(Number(loan.currentBalance)) : '—'}</td>
+                    <td className="px-4 py-3 text-gray-300">{loan.monthlyPayment ? money(Number(loan.monthlyPayment)) : '—'}</td>
+                    <td className="px-4 py-3 text-gray-400">{loan.interestRate ? `${loan.interestRate}%` : '—'}</td>
+                    <td className="px-4 py-3 text-gray-400 text-xs">{loan.maturityDate ? fmtDate(loan.maturityDate) : '—'}</td>
+                    <td className="px-4 py-3">
+                      <span className={`pill ${loan.isActive ? 'pill-green' : 'pill-gray'}`}>{loan.isActive ? 'Active' : 'Paid off'}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>
@@ -1101,10 +2460,35 @@ function ExpensesTab({ propertyId, expenses, setExpenses }: {
   const [form, setForm] = useState(EMPTY_EXPENSE_FORM);
   const [saving, setSaving] = useState(false);
   const [filterCat, setFilterCat] = useState('');
+  const [view, setView] = useState<'list' | 'vendor' | 'month'>('list');
 
   const filtered = [...expenses]
     .filter(e => !filterCat || e.category === filterCat)
     .sort((a, b) => b.date.localeCompare(a.date));
+
+  const byVendor = useMemo(() => {
+    const map = new Map<string, { vendor: string; count: number; total: number; isUtility: boolean }>();
+    for (const e of filtered) {
+      const key = e.vendor || '—';
+      const cur = map.get(key) ?? { vendor: key, count: 0, total: 0, isUtility: e.source === 'utility' };
+      cur.count += 1;
+      cur.total += Number(e.amount);
+      map.set(key, cur);
+    }
+    return [...map.values()].sort((a, b) => b.total - a.total);
+  }, [filtered]);
+
+  const byMonth = useMemo(() => {
+    const map = new Map<string, { month: string; utilityTotal: number; otherTotal: number }>();
+    for (const e of filtered) {
+      const key = e.date.slice(0, 7); // YYYY-MM
+      const cur = map.get(key) ?? { month: key, utilityTotal: 0, otherTotal: 0 };
+      if (e.source === 'utility') cur.utilityTotal += Number(e.amount);
+      else cur.otherTotal += Number(e.amount);
+      map.set(key, cur);
+    }
+    return [...map.values()].sort((a, b) => b.month.localeCompare(a.month));
+  }, [filtered]);
 
   function openNew() {
     setForm(EMPTY_EXPENSE_FORM);
@@ -1157,19 +2541,27 @@ function ExpensesTab({ propertyId, expenses, setExpenses }: {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex gap-2 items-center">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+        <div className="flex gap-2 items-center flex-wrap">
           <select value={filterCat} onChange={e => setFilterCat(e.target.value)} className="input-dark text-sm">
             <option value="">All categories</option>
             {Object.entries(EXPENSE_CATEGORY_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
+          <div className="flex gap-1">
+            {([['list', 'List'], ['vendor', 'By Vendor'], ['month', 'By Month']] as const).map(([key, label]) => (
+              <button key={key} onClick={() => setView(key)}
+                className={`text-xs px-2.5 py-1.5 rounded-lg border ${view === key ? 'border-amber-500 text-amber-400' : 'border-white/10 text-gray-400 hover:text-gray-200'}`}>
+                {label}
+              </button>
+            ))}
+          </div>
           <span className="text-xs text-gray-500">Total: <span className="text-white font-medium">{money(total)}</span></span>
         </div>
         <button onClick={() => formMode === 'closed' ? openNew() : setFormMode('closed')} className="btn text-xs">+ Add expense</button>
       </div>
 
       {formMode !== 'closed' && (
-        <div className="card p-4 mb-4 grid grid-cols-4 gap-3">
+        <div className="card p-4 mb-4 grid grid-cols-2 lg:grid-cols-4 gap-3">
           <div className="col-span-4 text-xs font-medium text-gray-400 mb-1">{isEditing ? 'Edit expense' : 'New expense'}</div>
           <select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} className="input-dark text-sm col-span-2">
             {Object.entries(EXPENSE_CATEGORY_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
@@ -1199,39 +2591,112 @@ function ExpensesTab({ propertyId, expenses, setExpenses }: {
 
       {filtered.length === 0 ? (
         <div className="text-center py-12 text-gray-500 text-sm">No expenses recorded</div>
+      ) : view === 'vendor' ? (
+        <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
+                <tr className="text-left text-gray-400 text-xs">
+                  <th className="px-4 py-3">Vendor / Provider</th>
+                  <th className="px-4 py-3">Type</th>
+                  <th className="px-4 py-3">Bills</th>
+                  <th className="px-4 py-3">Total</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {byVendor.map(v => (
+                  <tr key={v.vendor} className="hover:bg-white/[0.02]">
+                    <td className="px-4 py-3 text-gray-200">{v.vendor}</td>
+                    <td className="px-4 py-3">{v.isUtility && <span className="text-xs bg-blue-900/40 text-blue-300 px-1.5 py-0.5 rounded">Utility</span>}</td>
+                    <td className="px-4 py-3 text-gray-400">{v.count}</td>
+                    <td className="px-4 py-3 font-medium text-white">{money(v.total)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t border-white/10 font-semibold text-white">
+                  <td className="px-4 py-3" colSpan={3}>Total</td>
+                  <td className="px-4 py-3">{money(total)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      ) : view === 'month' ? (
+        <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
+                <tr className="text-left text-gray-400 text-xs">
+                  <th className="px-4 py-3">Month</th>
+                  <th className="px-4 py-3">Utilities</th>
+                  <th className="px-4 py-3">Other OpEx</th>
+                  <th className="px-4 py-3">Total</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {byMonth.map(m => (
+                  <tr key={m.month} className="hover:bg-white/[0.02]">
+                    <td className="px-4 py-3 text-gray-200">{format(new Date(`${m.month}-01T00:00:00`), 'MMM yyyy')}</td>
+                    <td className="px-4 py-3 text-gray-400">{m.utilityTotal > 0 ? money(m.utilityTotal) : '—'}</td>
+                    <td className="px-4 py-3 text-gray-400">{m.otherTotal > 0 ? money(m.otherTotal) : '—'}</td>
+                    <td className="px-4 py-3 font-medium text-white">{money(m.utilityTotal + m.otherTotal)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t border-white/10 font-semibold text-white">
+                  <td className="px-4 py-3" colSpan={3}>Total</td>
+                  <td className="px-4 py-3">{money(total)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
       ) : (
         <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
-          <table className="w-full text-sm">
-            <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
-              <tr className="text-left text-gray-400 text-xs">
-                <th className="px-4 py-3">Date</th>
-                <th className="px-4 py-3">Category</th>
-                <th className="px-4 py-3">Vendor</th>
-                <th className="px-4 py-3">Description</th>
-                <th className="px-4 py-3">Amount</th>
-                <th className="px-4 py-3">Type</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/5">
-              {filtered.map(e => (
-                <tr key={e.id} onClick={() => openEdit(e)} className="hover:bg-white/[0.02] cursor-pointer">
-                  <td className="px-4 py-3 text-gray-400 text-xs">{fmtDate(e.date)}</td>
-                  <td className="px-4 py-3 text-gray-300">{EXPENSE_CATEGORY_LABELS[e.category] ?? e.category}</td>
-                  <td className="px-4 py-3 text-gray-400">{e.vendor || '—'}</td>
-                  <td className="px-4 py-3 text-gray-400">{e.description || '—'}</td>
-                  <td className="px-4 py-3 font-medium text-white">{money(Number(e.amount))}</td>
-                  <td className="px-4 py-3">
-                    <div className="flex gap-1 flex-wrap">
-                      <span className={`pill ${e.isCapEx ? 'pill-purple' : 'pill-gray'}`}>{e.isCapEx ? 'CapEx' : 'OpEx'}</span>
-                      {e.isPersonal && <span className="pill pill-amber">Personal</span>}
-                    </div>
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead style={{ background: 'rgba(255,255,255,0.04)' }}>
+                <tr className="text-left text-gray-400 text-xs">
+                  <th className="px-4 py-3">Date</th>
+                  <th className="px-4 py-3">Category</th>
+                  <th className="px-4 py-3">Vendor</th>
+                  <th className="px-4 py-3">Description</th>
+                  <th className="px-4 py-3">Amount</th>
+                  <th className="px-4 py-3">Type</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {filtered.map(e => {
+                  const isUtility = e.source === 'utility';
+                  return (
+                  <tr key={e.id}
+                    onClick={() => isUtility
+                      ? window.open(`/properties/${e.propertyId}/utilities/${e.utilityAccountId}`, '_self')
+                      : openEdit(e)}
+                    className="hover:bg-white/[0.02] cursor-pointer">
+                    <td className="px-4 py-3 text-gray-400 text-xs">{fmtDate(e.date)}</td>
+                    <td className="px-4 py-3 text-gray-300">{EXPENSE_CATEGORY_LABELS[e.category] ?? e.category}</td>
+                    <td className="px-4 py-3 text-gray-400">{e.vendor || '—'}</td>
+                    <td className="px-4 py-3 text-gray-400">{e.description || '—'}</td>
+                    <td className="px-4 py-3 font-medium text-white">{money(Number(e.amount))}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex gap-1 flex-wrap">
+                        {isUtility && <span className="pill pill-blue" title="Synced from utility bills, not a manual entry — click to view the account">Utility</span>}
+                        <span className={`pill ${e.isCapEx ? 'pill-purple' : 'pill-gray'}`}>{e.isCapEx ? 'CapEx' : 'OpEx'}</span>
+                        {e.isPersonal && <span className="pill pill-amber">Personal</span>}
+                      </div>
+                    </td>
+                  </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
+      <ScannedDocuments propertyId={propertyId} category="EXPENSE_RECEIPT" />
     </div>
   );
 }
@@ -1310,6 +2775,7 @@ function InsuranceTab({ propertyId, policies, setPolicies }: {
   };
 
   const isEditing = formMode !== 'new' && formMode !== 'closed';
+  const isLinked = isEditing && !!(formMode as InsurancePolicy).utilityAccountId;
 
   return (
     <div>
@@ -1319,9 +2785,18 @@ function InsuranceTab({ propertyId, policies, setPolicies }: {
       </div>
 
       {formMode !== 'closed' && (
-        <div className="card p-4 mb-4 grid grid-cols-4 gap-3">
+        <div className="card p-4 mb-4 grid grid-cols-2 lg:grid-cols-4 gap-3">
           <div className="col-span-4 text-xs font-medium text-gray-400 mb-1">{isEditing ? 'Edit policy' : 'New policy'}</div>
-          <input placeholder="Carrier *" value={form.carrier} onChange={e => setForm(f => ({ ...f, carrier: e.target.value }))} className="input-dark text-sm col-span-2" />
+          {isLinked && (
+            <p className="col-span-4 text-xs text-amber-400/80 bg-amber-500/5 border border-amber-500/20 rounded-lg px-3 py-2 -mt-1 mb-1">
+              🔗 This policy is linked to a utility account. Carrier name and active status are controlled from Utilities — edit them there. Premium, dates, and notes are still yours to manage here.
+            </p>
+          )}
+          <input
+            placeholder="Carrier *" value={form.carrier} disabled={isLinked}
+            onChange={e => setForm(f => ({ ...f, carrier: e.target.value }))}
+            className="input-dark text-sm col-span-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          />
           <input placeholder="Policy number" value={form.policyNumber} onChange={e => setForm(f => ({ ...f, policyNumber: e.target.value }))} className="input-dark text-sm" />
           <select value={form.policyType} onChange={e => setForm(f => ({ ...f, policyType: e.target.value }))} className="input-dark text-sm">
             {['PROPERTY','LIABILITY','FLOOD','UMBRELLA','OTHER'].map(t => <option key={t} value={t}>{t}</option>)}
@@ -1335,8 +2810,8 @@ function InsuranceTab({ propertyId, policies, setPolicies }: {
           <input type="date" placeholder="Effective" value={form.effectiveDate} onChange={e => setForm(f => ({ ...f, effectiveDate: e.target.value }))} className="input-dark text-sm" />
           <input type="date" placeholder="Expiration" value={form.expirationDate} onChange={e => setForm(f => ({ ...f, expirationDate: e.target.value }))} className="input-dark text-sm" />
           <input placeholder="Notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="input-dark text-sm col-span-2" />
-          <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
-            <input type="checkbox" checked={form.isActive} onChange={e => setForm(f => ({ ...f, isActive: e.target.checked }))} />
+          <label className={`flex items-center gap-2 text-xs text-gray-400 ${isLinked ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
+            <input type="checkbox" checked={form.isActive} disabled={isLinked} onChange={e => setForm(f => ({ ...f, isActive: e.target.checked }))} />
             Active
           </label>
           <div className="col-span-4 flex gap-2 justify-end">
@@ -1358,7 +2833,14 @@ function InsuranceTab({ propertyId, policies, setPolicies }: {
               <div key={p.id} onClick={() => openEdit(p)} className="card p-4 cursor-pointer hover:bg-white/[0.02]">
                 <div className="flex items-start justify-between">
                   <div>
-                    <p className="text-sm font-semibold text-white">{p.carrier}</p>
+                    <p className="text-sm font-semibold text-white flex items-center gap-1.5">
+                      {p.carrier}
+                      {p.utilityAccountId && (
+                        <span className="text-xs px-1.5 py-0.5 rounded-full text-amber-400 border border-amber-500/20 bg-amber-500/10" title="Synced from a utility account — carrier name and active status are managed there">
+                          🔗 Linked
+                        </span>
+                      )}
+                    </p>
                     <p className="text-xs text-gray-500">{p.policyType} · {p.policyNumber || 'No policy #'}</p>
                   </div>
                   <div className="text-right">
@@ -1380,6 +2862,7 @@ function InsuranceTab({ propertyId, policies, setPolicies }: {
           })}
         </div>
       )}
+      <ScannedDocuments propertyId={propertyId} category="INSURANCE" />
     </div>
   );
 }
@@ -1466,7 +2949,7 @@ function MaintenanceTab({ propertyId, items, setItems }: {
       </div>
 
       {formMode !== 'closed' && (
-        <div className="card p-4 mb-4 grid grid-cols-4 gap-3">
+        <div className="card p-4 mb-4 grid grid-cols-2 lg:grid-cols-4 gap-3">
           <div className="col-span-4 text-xs font-medium text-gray-400 mb-1">{isEditing ? 'Edit maintenance / improvement' : 'New maintenance / improvement'}</div>
           <input placeholder="Description *" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} className="input-dark text-sm col-span-2" />
           <select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} className="input-dark text-sm">
@@ -1592,7 +3075,7 @@ function TaxTab({ propertyId, taxes, setTaxes }: {
       </div>
 
       {formMode !== 'closed' && (
-        <div className="card p-4 mb-4 grid grid-cols-4 gap-3">
+        <div className="card p-4 mb-4 grid grid-cols-2 lg:grid-cols-4 gap-3">
           <div className="col-span-4 text-xs font-medium text-gray-400 mb-1">{isEditing ? 'Edit tax assessment' : 'New tax assessment'}</div>
           <input placeholder="Tax year *" value={form.taxYear} onChange={e => setForm(f => ({ ...f, taxYear: e.target.value }))} className="input-dark text-sm" />
           <input type="number" placeholder="Annual tax *" value={form.annualTaxAmount} onChange={e => setForm(f => ({ ...f, annualTaxAmount: e.target.value }))} className="input-dark text-sm" />
@@ -1633,6 +3116,148 @@ function TaxTab({ propertyId, taxes, setTaxes }: {
                   {t.notes && <p className="text-xs text-gray-600 mt-1">{t.notes}</p>}
                 </div>
                 <p className="text-base font-semibold text-white flex-shrink-0 ml-4">{money(Number(t.annualTaxAmount))}/yr</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <ScannedDocuments propertyId={propertyId} category="TAX" />
+    </div>
+  );
+}
+
+// ─── Scanned documents (from the Scan page) ──────────────────────────────────
+
+function ScannedDocuments({ propertyId, category }: { propertyId: string; category: DocumentCategory }) {
+  const [docs, setDocs] = useState<Document[] | null>(null);
+
+  useEffect(() => {
+    getDocuments({ propertyId, category }).then(setDocs);
+  }, [propertyId, category]);
+
+  async function view(doc: Document) {
+    const url = await getDocumentUrl(doc.id);
+    window.open(url, '_blank');
+  }
+  async function remove(doc: Document) {
+    if (!confirm('Delete this scanned document?')) return;
+    await deleteDocument(doc.id);
+    setDocs(prev => (prev ?? []).filter(d => d.id !== doc.id));
+  }
+
+  if (!docs || docs.length === 0) return null;
+
+  return (
+    <div className="mt-6">
+      <p className="text-xs text-gray-500 uppercase tracking-wide mb-2">Scanned documents</p>
+      <div className="space-y-2">
+        {docs.map(d => (
+          <div key={d.id} className="card p-3 flex items-center justify-between">
+            <div>
+              <p className="text-sm text-white">{d.title}</p>
+              <p className="text-xs text-gray-500">{fmtDate(d.createdAt)} · {d.pageCount} page{d.pageCount !== 1 ? 's' : ''}</p>
+            </div>
+            <div className="flex gap-3 flex-shrink-0">
+              <button onClick={() => view(d)} className="text-xs text-amber-400 hover:text-amber-300">View</button>
+              <button onClick={() => remove(d)} className="text-xs text-red-500 hover:text-red-400">Delete</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const PROPERTY_DOC_CATEGORIES: DocumentCategory[] = [
+  'INSURANCE', 'MAINTENANCE', 'TAX', 'EXPENSE_RECEIPT', 'UTILITY', 'LEGAL', 'HOA', 'LEASE', 'OTHER',
+];
+
+function DocumentsTab({ propertyId, documents, setDocuments }: {
+  propertyId: string; documents: Document[]; setDocuments: (d: Document[]) => void;
+}) {
+  const [importCategory, setImportCategory] = useState<DocumentCategory>('INSURANCE');
+  const [importing, setImporting] = useState(false);
+  const [filterCategory, setFilterCategory] = useState<string>('');
+
+  async function view(doc: Document) {
+    const url = await getDocumentUrl(doc.id);
+    window.open(url, '_blank');
+  }
+  async function remove(doc: Document) {
+    if (!confirm('Delete this document?')) return;
+    await deleteDocument(doc.id);
+    setDocuments(documents.filter(d => d.id !== doc.id));
+  }
+
+  async function handleImport(file: File) {
+    setImporting(true);
+    try {
+      const base64: string = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve((reader.result as string).split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const created = await confirmScannedDocument({
+        fileData: base64,
+        filename: file.name,
+        propertyId,
+        category: importCategory,
+        title: file.name,
+        pageCount: 1,
+      });
+      setDocuments([created, ...documents]);
+    } catch (err: any) {
+      const msg = err?.response?.status === 413
+        ? 'That file is too large to upload. Try a smaller PDF or compress it.'
+        : (err?.response?.data?.error || 'Upload failed. Please try again.');
+      alert(msg);
+    } finally { setImporting(false); }
+  }
+
+  const sorted = [...documents]
+    .filter(d => !filterCategory || d.category === filterCategory)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+  return (
+    <div>
+      {/* Import bar */}
+      <div className="card p-3 mb-4 flex items-center gap-2 flex-wrap">
+        <span className="text-xs text-gray-400">Import a document:</span>
+        <select value={importCategory} onChange={e => setImportCategory(e.target.value as DocumentCategory)} className="input-dark text-xs">
+          {PROPERTY_DOC_CATEGORIES.map(c => <option key={c} value={c}>{DOCUMENT_CATEGORY_LABELS[c]}</option>)}
+        </select>
+        <label className="btn btn-primary text-xs cursor-pointer">
+          {importing ? 'Uploading…' : '+ Import file'}
+          <input type="file" accept="application/pdf,image/*" className="hidden" disabled={importing}
+            onChange={e => { const f = e.target.files?.[0]; if (f) handleImport(f); e.target.value = ''; }} />
+        </label>
+        <span className="text-xs text-gray-600">or scan from the <Link to="/scan" className="text-amber-400 hover:text-amber-300">Scan</Link> page</span>
+        <select value={filterCategory} onChange={e => setFilterCategory(e.target.value)} className="input-dark text-xs ml-auto">
+          <option value="">All categories</option>
+          {PROPERTY_DOC_CATEGORIES.map(c => <option key={c} value={c}>{DOCUMENT_CATEGORY_LABELS[c]}</option>)}
+        </select>
+      </div>
+
+      {sorted.length === 0 ? (
+        <div className="text-center py-12 text-gray-500 text-sm">
+          {filterCategory ? `No ${DOCUMENT_CATEGORY_LABELS[filterCategory as DocumentCategory]} documents.` : 'No documents yet — import one above.'}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {sorted.map(d => (
+            <div key={d.id} className="card p-3 flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2 mb-0.5">
+                  <p className="text-sm font-semibold text-white">{d.title}</p>
+                  <span className="pill pill-gray">{DOCUMENT_CATEGORY_LABELS[d.category]}</span>
+                </div>
+                <p className="text-xs text-gray-500">{fmtDate(d.createdAt)} · {d.pageCount} page{d.pageCount !== 1 ? 's' : ''}</p>
+                {d.notes && <p className="text-xs text-gray-600 mt-1">{d.notes}</p>}
+              </div>
+              <div className="flex gap-3 flex-shrink-0">
+                <button onClick={() => view(d)} className="text-xs text-amber-400 hover:text-amber-300">View</button>
+                <button onClick={() => remove(d)} className="text-xs text-red-500 hover:text-red-400">Delete</button>
               </div>
             </div>
           ))}

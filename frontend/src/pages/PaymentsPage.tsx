@@ -4,6 +4,7 @@ import { getPayments } from '../api/client';
 import type { Payment } from '../types/index';
 import { PageHeader, Pill, EmptyState, Skeleton } from '../components/ui';
 import { format } from 'date-fns';
+import { fmtDate } from '../lib/date';
 
 const CATEGORY_ICONS: Record<string, string> = {
   ELECTRIC: '⚡', GAS: '🔥', WATER: '💧', SEWER: '🚿',
@@ -62,7 +63,7 @@ function groupPayments(payments: Payment[]): PropertyGroup[] {
   return result;
 }
 
-export default function PaymentsPage() {
+export default function PaymentsPage({ embedded }: { embedded?: boolean } = {}) {
   const [payments, setPayments] = useState<Payment[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<'all' | 'paid' | 'pending' | 'failed'>('all');
@@ -80,12 +81,14 @@ export default function PaymentsPage() {
 
   return (
     <div>
-      <PageHeader
-        title="Payment history"
-        subtitle={`${filtered.length} payment${filtered.length !== 1 ? 's' : ''} · $${total.toLocaleString('en-US', { minimumFractionDigits: 2 })} total`}
-      />
+      {!embedded && (
+        <PageHeader
+          title="Payment history"
+          subtitle={`${filtered.length} payment${filtered.length !== 1 ? 's' : ''} · $${total.toLocaleString('en-US', { minimumFractionDigits: 2 })} total`}
+        />
+      )}
 
-      <div className="px-6 py-5">
+      <div className={embedded ? '' : 'px-6 py-5'}>
         {/* Filter tabs */}
         <div className="flex gap-2 mb-5">
           {(['all', 'paid', 'pending', 'failed'] as const).map(f => (
@@ -176,7 +179,7 @@ export default function PaymentsPage() {
                               {/* Date */}
                               <div className="w-28 flex-shrink-0">
                                 <p className="text-sm text-gray-300">
-                                  {format(new Date(p.paymentDate), 'MMM d, yyyy')}
+                                  {fmtDate(p.paymentDate, 'MMM d, yyyy')}
                                 </p>
                               </div>
 

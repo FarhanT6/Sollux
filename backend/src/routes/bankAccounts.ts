@@ -21,6 +21,9 @@ function serialize(a: any) {
     isActive: a.isActive,
     sortOrder: a.sortOrder,
     notes: a.notes,
+    watchForRentPayments: a.watchForRentPayments,
+    watchForExpenses: a.watchForExpenses,
+    plaidAccountId: a.plaidAccountId,
     balance: toNum(latest?.balance),
     creditLimit: latest?.creditLimit != null ? toNum(latest.creditLimit) : undefined,
     asOfDate: latest?.asOfDate ?? undefined,
@@ -61,10 +64,10 @@ router.patch('/:id', async (req, res, next) => {
   try {
     const acct = await db.bankAccount.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
     if (!acct) return res.status(404).json({ error: 'Not found' });
-    const { name, last4, bank, accountType, isActive, sortOrder, notes } = req.body;
+    const { name, last4, bank, accountType, isActive, sortOrder, notes, watchForRentPayments, watchForExpenses } = req.body;
     const updated = await db.bankAccount.update({
       where: { id: acct.id },
-      data: { name, last4, bank, accountType, isActive, sortOrder, notes },
+      data: { name, last4, bank, accountType, isActive, sortOrder, notes, watchForRentPayments, watchForExpenses },
       include: { balances: { orderBy: { asOfDate: 'desc' }, take: 1 } },
     });
     res.json(serialize(updated));

@@ -1,15 +1,16 @@
 import { Fragment, useEffect, useMemo, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  getBudgetMonthly, getBudgetDelinquency,
+  getBudgetMonthly, getBudgetDelinquency, getBudgetForecast,
   getBankAccounts, createBankAccount, updateBankAccount, deleteBankAccount, recordBankBalance,
   createOtherIncome, deleteOtherIncome, updateLease,
+  createRentPayment, createLoanPayment,
 } from '../api/client';
 import type {
   BudgetSummary, BankAccount, DelinquencyTenant, OtherIncome,
-  BankAccountType, OtherIncomeCategory,
+  BankAccountType, OtherIncomeCategory, BudgetForecast,
 } from '../types';
-import { OTHER_INCOME_LABELS } from '../types';
+import { OTHER_INCOME_LABELS, RENT_PAYMENT_METHODS, RENT_PAYMENT_METHOD_LABELS } from '../types';
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
@@ -57,8 +58,10 @@ export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
   const [budget,       setBudget]       = useState<BudgetSummary | null>(null);
   const [delinquency,  setDelinquency]  = useState<{ tenants: DelinquencyTenant[]; totalArrears: number; totalExpectedCollection: number } | null>(null);
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
+  const [forecast,     setForecast]     = useState<BudgetForecast | null>(null);
+  const [forecastLoading, setForecastLoading] = useState(false);
   const [loading,      setLoading]      = useState(true);
-  const [activeTab,       setActiveTab]       = useState<'overview' | 'delinquency' | 'banks' | 'income'>('overview');
+  const [activeTab,       setActiveTab]       = useState<'overview' | 'delinquency' | 'banks' | 'income' | 'forecast'>('overview');
   const [includePersonal, setIncludePersonal] = useState(false);
 
   // Modals / forms
@@ -82,6 +85,12 @@ export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
   }, [year, month, includePersonal]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (activeTab !== 'forecast' || forecast) return;
+    setForecastLoading(true);
+    getBudgetForecast(6).then(setForecast).catch(console.error).finally(() => setForecastLoading(false));
+  }, [activeTab, forecast]);
 
   const cashOnHand = budget?.cashSummary.totalCashOnHand ?? 0;
   const net        = budget?.summary.realisticNet ?? 0;
@@ -115,6 +124,7 @@ export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
           </div>
           <span className="text-xs text-gray-400">Include personal expenses</span>
         </label>
+        <Link to="/finances?tab=personal" className="text-xs text-amber-500 hover:text-amber-400">Manage →</Link>
       </div>
       {/* KPI row */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
@@ -141,14 +151,14 @@ export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
 
       {/* Tabs */}
       <div className="flex gap-1 mb-5 border-b border-white/10">
-        {(['overview','delinquency','banks','income'] as const).map(t => (
+        {(['overview','delinquency','banks','income','forecast'] as const).map(t => (
           <button key={t} onClick={() => setActiveTab(t)}
             className={`px-4 py-2 text-sm font-medium capitalize transition-colors ${
               activeTab === t
                 ? 'text-white border-b-2 border-gold-500 -mb-px'
                 : 'text-gray-400 hover:text-gray-200'
             }`}>
-            {t === 'delinquency' ? 'Delinquency' : t === 'banks' ? 'Banks & Cash' : t === 'income' ? 'Other Income' : 'Overview'}
+            {t === 'delinquency' ? 'Delinquency' : t === 'banks' ? 'Banks & Cash' : t === 'income' ? 'Other Income' : t === 'forecast' ? 'Forecast' : 'Overview'}
           </button>
         ))}
       </div>
@@ -158,7 +168,7 @@ export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
       ) : (
         <>
           {activeTab === 'overview' && budget && (
-            <OverviewTab budget={budget} />
+            <OverviewTab budget={budget} onChanged={load} />
           )}
           {activeTab === 'delinquency' && delinquency && (
             <DelinquencyTab data={delinquency} onChanged={load} />
@@ -178,6 +188,11 @@ export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
               onAdd={() => setShowAddIncome(true)}
               onDelete={async id => { await deleteOtherIncome(id); load(); }}
             />
+          )}
+          {activeTab === 'forecast' && (
+            forecastLoading || !forecast
+              ? <div className="flex items-center justify-center h-64 text-gray-500">Loading…</div>
+              : <ForecastTab data={forecast} />
           )}
         </>
       )}
@@ -209,14 +224,16 @@ export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
 
 // ─── Overview Tab ─────────────────────────────────────────
 
-function OverviewTab({ budget }: { budget: BudgetSummary }) {
-  const { rent, mortgages } = budget;
+function OverviewTab({ budget, onChanged }: { budget: BudgetSummary; onChanged: () => void }) {
+  const { rent, mortgages, utilities } = budget;
+  const [logMortgage, setLogMortgage] = useState<import('../types').BudgetMortgageRow | null>(null);
+
   return (
     <div className="space-y-6">
       {/* Rent collection by property */}
       <Section title="Rent Collection" badge={`${fmt(rent.collected)} / ${fmt(rent.expected)}`}>
         <ProgressBar value={rent.collected} total={rent.expected} color="emerald" />
-        <RentCollectionTable rows={rent.rows} outstanding={rent.outstanding} expected={rent.expected} collected={rent.collected} />
+        <RentCollectionTable rows={rent.rows} outstanding={rent.outstanding} expected={rent.expected} collected={rent.collected} onChanged={onChanged} />
       </Section>
 
       {/* Mortgages */}
@@ -231,15 +248,75 @@ function OverviewTab({ budget }: { budget: BudgetSummary }) {
                 <th className="text-right pb-2">Monthly</th>
                 <th className="text-right pb-2">Paid</th>
                 <th className="text-left pb-2 pl-3">Status</th>
+                <th className="text-right pb-2"></th>
               </tr>
             </thead>
             <tbody>
               {mortgages.rows.map(row => (
                 <tr key={row.loanId} className="border-b border-white/5 hover:bg-white/2">
-                  <td className="py-2 text-white">{row.lender}</td>
+                  <td className="py-2 text-white">
+                    <Link to={`/loans/${row.loanId}`} className="hover:text-amber-400">{row.lender}</Link>
+                  </td>
                   <td className="py-2 text-gray-400">{row.property}</td>
                   <td className="py-2 text-right text-gray-300">{fmt(row.monthlyPayment)}</td>
                   <td className="py-2 text-right text-emerald-500">{row.paid > 0 ? fmt(row.paid) : '—'}</td>
+                  <td className="py-2 pl-3">
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${
+                      row.status === 'paid'
+                        ? 'bg-emerald-900/40 text-emerald-500'
+                        : 'bg-red-900/50 text-red-500'
+                    }`}>{row.status}</span>
+                  </td>
+                  <td className="py-2 text-right">
+                    {row.status !== 'paid' && (
+                      <button onClick={() => setLogMortgage(row)} className="text-xs text-amber-400 hover:text-amber-300">Log payment</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="text-sm font-semibold text-white border-t border-white/10">
+                <td colSpan={2} className="pt-2">Total</td>
+                <td className="pt-2 text-right">{fmt(mortgages.total)}</td>
+                <td className="pt-2 text-right text-emerald-500">{fmt(mortgages.paid)}</td>
+                <td className="pt-2 pl-3 text-red-500">{mortgages.unpaid > 0 ? `${fmt(mortgages.unpaid)} left` : '✓'}</td>
+                <td />
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </Section>
+
+      {logMortgage && (
+        <LogMortgagePaymentModal
+          row={logMortgage}
+          onClose={() => setLogMortgage(null)}
+          onSaved={() => { setLogMortgage(null); onChanged(); }}
+        />
+      )}
+
+      {/* Utility bills */}
+      <Section title="Utility Bills" badge={`${fmt(utilities.paid)} paid of ${fmt(utilities.total)}`}>
+        <ProgressBar value={utilities.paid} total={utilities.total} color="blue" />
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-gray-500 text-xs uppercase tracking-wider border-b border-white/5">
+                <th className="text-left pb-2">Provider</th>
+                <th className="text-left pb-2">Property</th>
+                <th className="text-right pb-2">Due</th>
+                <th className="text-right pb-2">Paid</th>
+                <th className="text-left pb-2 pl-3">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {utilities.rows.map(row => (
+                <tr key={row.statementId} className="border-b border-white/5 hover:bg-white/2">
+                  <td className="py-2 text-white">{row.provider}</td>
+                  <td className="py-2 text-gray-400">{row.property}</td>
+                  <td className="py-2 text-right text-gray-300">{fmt(row.amountDue)}</td>
+                  <td className="py-2 text-right text-emerald-500">{row.amountPaid > 0 ? fmt(row.amountPaid) : '—'}</td>
                   <td className="py-2 pl-3">
                     <span className={`text-xs px-2 py-0.5 rounded-full ${
                       row.status === 'paid'
@@ -253,12 +330,15 @@ function OverviewTab({ budget }: { budget: BudgetSummary }) {
             <tfoot>
               <tr className="text-sm font-semibold text-white border-t border-white/10">
                 <td colSpan={2} className="pt-2">Total</td>
-                <td className="pt-2 text-right">{fmt(mortgages.total)}</td>
-                <td className="pt-2 text-right text-emerald-500">{fmt(mortgages.paid)}</td>
-                <td className="pt-2 pl-3 text-red-500">{mortgages.unpaid > 0 ? `${fmt(mortgages.unpaid)} left` : '✓'}</td>
+                <td className="pt-2 text-right">{fmt(utilities.total)}</td>
+                <td className="pt-2 text-right text-emerald-500">{fmt(utilities.paid)}</td>
+                <td className="pt-2 pl-3 text-red-500">{utilities.unpaid > 0 ? `${fmt(utilities.unpaid)} left` : '✓'}</td>
               </tr>
             </tfoot>
           </table>
+          {utilities.rows.length === 0 && (
+            <p className="text-center text-gray-500 py-8">No utility bills due or issued this month.</p>
+          )}
         </div>
       </Section>
 
@@ -269,6 +349,7 @@ function OverviewTab({ budget }: { budget: BudgetSummary }) {
           <SummaryLine label="Other income"   value={fmt(budget.otherIncome.total)} color="emerald" />
           <SummaryLine label="Total income"   value={fmt(budget.summary.totalIncome)} color="emerald" bold />
           <SummaryLine label="Mortgages"      value={fmt(budget.mortgages.total)} color="red" />
+          <SummaryLine label="Utility bills"  value={fmt(budget.utilities.total)} color="red" />
           <SummaryLine label="Other expenses" value={fmt(budget.expenses.total)} color="red" />
           <SummaryLine label="Total expenses" value={fmt(budget.summary.totalExpenses)} color="red" bold />
           <div className="col-span-2 md:col-span-3 border-t border-white/10 pt-3 grid grid-cols-2 gap-4">
@@ -286,12 +367,14 @@ function OverviewTab({ budget }: { budget: BudgetSummary }) {
 const RENT_STATUS_FILTERS = ['all', 'paid', 'partial', 'unpaid'] as const;
 type RentStatusFilter = typeof RENT_STATUS_FILTERS[number];
 
-function RentCollectionTable({ rows, outstanding, expected, collected }: {
+function RentCollectionTable({ rows, outstanding, expected, collected, onChanged }: {
   rows: import('../types').BudgetRentRow[];
   outstanding: number; expected: number; collected: number;
+  onChanged: () => void;
 }) {
   const [propertyFilter, setPropertyFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState<RentStatusFilter>('all');
+  const [logRent, setLogRent] = useState<import('../types').BudgetRentRow | null>(null);
 
   const properties = useMemo(() => {
     const seen = new Map<string, string>();
@@ -354,6 +437,7 @@ function RentCollectionTable({ rows, outstanding, expected, collected }: {
               <th className="text-right pb-2">Remaining</th>
               <th className="text-right pb-2">Arrears</th>
               <th className="text-left pb-2 pl-3">Status</th>
+              <th className="text-right pb-2"></th>
             </tr>
           </thead>
           <tbody>
@@ -378,6 +462,11 @@ function RentCollectionTable({ rows, outstanding, expected, collected }: {
                     {row.status}
                   </span>
                 </td>
+                <td className="py-2 text-right">
+                  {row.status !== 'paid' && (
+                    <button onClick={() => setLogRent(row)} className="text-xs text-amber-400 hover:text-amber-300">Log payment</button>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -389,6 +478,7 @@ function RentCollectionTable({ rows, outstanding, expected, collected }: {
               <td className="pt-2 text-right text-amber-500">{(filtered ? totalRemaining : outstanding) > 0 ? fmt(filtered ? totalRemaining : outstanding) : '—'}</td>
               <td className="pt-2 text-right text-red-500">{fmt(totalArrears)}</td>
               <td />
+              <td />
             </tr>
           </tfoot>
         </table>
@@ -396,6 +486,14 @@ function RentCollectionTable({ rows, outstanding, expected, collected }: {
           <p className="text-center text-gray-500 py-8">No tenants match the current filters.</p>
         )}
       </div>
+
+      {logRent && (
+        <LogRentPaymentModal
+          row={logRent}
+          onClose={() => setLogRent(null)}
+          onSaved={() => { setLogRent(null); onChanged(); }}
+        />
+      )}
     </div>
   );
 }
@@ -625,36 +723,97 @@ function OtherIncomeTab({ rows, total, onAdd, onDelete }: {
         <button onClick={onAdd} className="btn-primary text-sm px-4 py-2">+ Add Income</button>
       </div>
 
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="text-gray-500 text-xs uppercase tracking-wider border-b border-white/5">
-            <th className="text-left pb-2">Date</th>
-            <th className="text-left pb-2">Category</th>
-            <th className="text-left pb-2">Description</th>
-            <th className="text-left pb-2">Method</th>
-            <th className="text-right pb-2">Amount</th>
-            <th className="text-right pb-2"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(r => (
-            <tr key={r.id} className="border-b border-white/5 hover:bg-white/2">
-              <td className="py-2 text-gray-400">{new Date(r.receivedDate).toLocaleDateString()}</td>
-              <td className="py-2 text-gray-300">{OTHER_INCOME_LABELS[r.category]}</td>
-              <td className="py-2 text-gray-400">{r.description || '—'}</td>
-              <td className="py-2 text-gray-500">{r.method || '—'}</td>
-              <td className="py-2 text-right text-emerald-500 font-semibold">{fmt(r.amount)}</td>
-              <td className="py-2 text-right">
-                <button onClick={() => { if (confirm('Delete?')) onDelete(r.id); }}
-                  className="text-red-500 hover:text-red-300 text-xs">✕</button>
-              </td>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-gray-500 text-xs uppercase tracking-wider border-b border-white/5">
+              <th className="text-left pb-2">Date</th>
+              <th className="text-left pb-2">Category</th>
+              <th className="text-left pb-2">Description</th>
+              <th className="text-left pb-2">Method</th>
+              <th className="text-right pb-2">Amount</th>
+              <th className="text-right pb-2"></th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map(r => (
+              <tr key={r.id} className="border-b border-white/5 hover:bg-white/2">
+                <td className="py-2 text-gray-400">{new Date(r.receivedDate).toLocaleDateString()}</td>
+                <td className="py-2 text-gray-300">{OTHER_INCOME_LABELS[r.category]}</td>
+                <td className="py-2 text-gray-400">{r.description || '—'}</td>
+                <td className="py-2 text-gray-500">{r.method || '—'}</td>
+                <td className="py-2 text-right text-emerald-500 font-semibold">{fmt(r.amount)}</td>
+                <td className="py-2 text-right">
+                  <button onClick={() => { if (confirm('Delete?')) onDelete(r.id); }}
+                    className="text-red-500 hover:text-red-300 text-xs">✕</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       {rows.length === 0 && (
         <p className="text-center text-gray-500 py-12">No other income recorded for this month.</p>
       )}
+    </div>
+  );
+}
+
+// ─── Forecast Tab ───────────────────────────────────────────
+
+function ForecastTab({ data }: { data: BudgetForecast }) {
+  const { months, baseline } = data;
+  const maxAbsNet = Math.max(1, ...months.map(m => Math.abs(m.netCashFlow)));
+
+  return (
+    <div className="space-y-6">
+      <div className="rounded-xl border border-white/10 bg-white/3 p-4">
+        <p className="text-xs text-gray-500">
+          Projected from recurring baselines — <span className="text-gray-300">{fmt(baseline.rentBaseline)}/mo</span> rent across{' '}
+          {baseline.activeLeaseCount} active lease{baseline.activeLeaseCount === 1 ? '' : 's'},{' '}
+          <span className="text-gray-300">{fmt(baseline.mortgageBaseline)}/mo</span> across {baseline.activeLoanCount} active loan{baseline.activeLoanCount === 1 ? '' : 's'}, and{' '}
+          <span className="text-gray-300">{fmt(baseline.utilityBaseline)}/mo</span> utilities (trailing average across {baseline.utilityAccountsWithData} account{baseline.utilityAccountsWithData === 1 ? '' : 's'} with bill history).
+          Not a guess at one-off income or expenses — assumes nothing changes.
+        </p>
+      </div>
+
+      <Section title="Next 6 Months">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-gray-500 text-xs uppercase tracking-wider border-b border-white/5">
+                <th className="text-left pb-2">Month</th>
+                <th className="text-right pb-2">Rent</th>
+                <th className="text-right pb-2">Mortgages</th>
+                <th className="text-right pb-2">Utilities</th>
+                <th className="text-right pb-2">Net cash flow</th>
+                <th className="text-left pb-2 pl-3">Trend</th>
+              </tr>
+            </thead>
+            <tbody>
+              {months.map(m => (
+                <tr key={m.month} className="border-b border-white/5 hover:bg-white/2">
+                  <td className="py-2 text-white font-medium">{m.label}</td>
+                  <td className="py-2 text-right text-emerald-500">{fmt(m.rentalIncome)}</td>
+                  <td className="py-2 text-right text-red-500">{fmt(m.mortgages)}</td>
+                  <td className="py-2 text-right text-red-500">{fmt(m.utilities)}</td>
+                  <td className={`py-2 text-right font-semibold ${m.netCashFlow >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                    {fmt(m.netCashFlow, { sign: true })}
+                  </td>
+                  <td className="py-2 pl-3">
+                    <div className="w-24 h-2 bg-white/10 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${m.netCashFlow >= 0 ? 'bg-emerald-500' : 'bg-red-500'}`}
+                        style={{ width: `${(Math.abs(m.netCashFlow) / maxAbsNet) * 100}%` }}
+                      />
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Section>
     </div>
   );
 }
@@ -719,6 +878,96 @@ function ScoreBar({ score }: { score: number }) {
 }
 
 // ─── Modals ───────────────────────────────────────────────
+
+function LogRentPaymentModal({ row, onClose, onSaved }: {
+  row: import('../types').BudgetRentRow; onClose: () => void; onSaved: () => void;
+}) {
+  const [amount, setAmount] = useState(String(row.remaining > 0 ? row.remaining : row.expected));
+  const [paidDate, setPaidDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [method, setMethod] = useState('ZELLE');
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    if (!amount) return;
+    setSaving(true);
+    try {
+      const now = new Date();
+      await createRentPayment({
+        leaseId: row.leaseId,
+        periodDate: new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1)).toISOString(),
+        amount: parseFloat(amount),
+        paidDate,
+        method,
+        notes: notes || undefined,
+      });
+      onSaved();
+    } finally { setSaving(false); }
+  }
+
+  return (
+    <ModalShell title={`Log payment — ${row.tenant}`} onClose={onClose}>
+      <p className="text-xs text-gray-500 mb-3">{row.unit} · {row.property}</p>
+      <label className="field-label">Amount *</label>
+      <input type="number" value={amount} onChange={e => setAmount(e.target.value)} className="field-input mb-3 w-full" />
+      <label className="field-label">Paid date</label>
+      <input type="date" value={paidDate} onChange={e => setPaidDate(e.target.value)} className="field-input mb-3 w-full" />
+      <label className="field-label">Method</label>
+      <select value={method} onChange={e => setMethod(e.target.value)} className="field-input mb-3 w-full">
+        {RENT_PAYMENT_METHODS.map(m => <option key={m} value={m}>{RENT_PAYMENT_METHOD_LABELS[m]}</option>)}
+      </select>
+      <label className="field-label">Notes</label>
+      <input value={notes} onChange={e => setNotes(e.target.value)} className="field-input mb-4 w-full" />
+      <div className="flex justify-end gap-2">
+        <button onClick={onClose} className="btn-ghost px-4 py-2 text-sm">Cancel</button>
+        <button disabled={!amount || saving} onClick={handleSave} className="btn-primary px-4 py-2 text-sm disabled:opacity-50">
+          {saving ? 'Saving…' : 'Log payment'}
+        </button>
+      </div>
+    </ModalShell>
+  );
+}
+
+function LogMortgagePaymentModal({ row, onClose, onSaved }: {
+  row: import('../types').BudgetMortgageRow; onClose: () => void; onSaved: () => void;
+}) {
+  const [amount, setAmount] = useState(String(row.monthlyPayment));
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    if (!amount) return;
+    setSaving(true);
+    try {
+      await createLoanPayment(row.loanId, {
+        date,
+        amount: parseFloat(amount),
+        status: 'PAID',
+        notes: notes || undefined,
+      });
+      onSaved();
+    } finally { setSaving(false); }
+  }
+
+  return (
+    <ModalShell title={`Log payment — ${row.lender}`} onClose={onClose}>
+      <p className="text-xs text-gray-500 mb-3">{row.property}</p>
+      <label className="field-label">Amount *</label>
+      <input type="number" value={amount} onChange={e => setAmount(e.target.value)} className="field-input mb-3 w-full" />
+      <label className="field-label">Paid date</label>
+      <input type="date" value={date} onChange={e => setDate(e.target.value)} className="field-input mb-3 w-full" />
+      <label className="field-label">Notes</label>
+      <input value={notes} onChange={e => setNotes(e.target.value)} className="field-input mb-4 w-full" />
+      <div className="flex justify-end gap-2">
+        <button onClick={onClose} className="btn-ghost px-4 py-2 text-sm">Cancel</button>
+        <button disabled={!amount || saving} onClick={handleSave} className="btn-primary px-4 py-2 text-sm disabled:opacity-50">
+          {saving ? 'Saving…' : 'Log payment'}
+        </button>
+      </div>
+    </ModalShell>
+  );
+}
 
 function AddBankModal({ onClose, onSave }: { onClose: () => void; onSave: (data: any) => Promise<void> }) {
   const [form, setForm] = useState({ name: '', last4: '', bank: '', accountType: 'CHECKING' as BankAccountType, notes: '' });
