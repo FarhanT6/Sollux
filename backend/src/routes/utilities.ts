@@ -86,11 +86,19 @@ router.post('/', async (req, res, next) => {
       },
     });
 
-    // Queue initial scrape
-    await scrapeQueue.add('scrape', { utilityAccountId: account.id }, {
-      attempts: 3,
-      backoff: { type: 'exponential', delay: 120000 },
-    });
+    // Queue an initial scrape, but never let that failure undo the request.
+    // The account is already created; if Redis is unreachable or over quota,
+    // enqueueing throws and the client sees "Internal server error" for an
+    // account that exists — so retrying creates a duplicate. A missed initial
+    // sync is recoverable from the Sync button; a phantom failure is not.
+    try {
+      await scrapeQueue.add('scrape', { utilityAccountId: account.id }, {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 120000 },
+      });
+    } catch (err) {
+      console.error('[Utilities] Account created but initial scrape could not be queued:', err instanceof Error ? err.message : err);
+    }
 
     res.status(201).json(account);
   } catch (err) {
@@ -105,7 +113,9 @@ router.get('/:id', async (req, res, next) => {
       where: { id: req.params.id, property: { userId: req.dbUserId! } },
       include: {
         property: { select: { id: true, address: true, nickname: true, city: true, state: true } },
-        statements: { orderBy: { statementDate: 'desc' }, take: 84 },
+        // Deep enough for a full history — 84 silently truncated an account
+        // holding 105 statements, and every total computed from it was wrong.
+        statements: { orderBy: { statementDate: 'desc' }, take: 600 },
         payments: { orderBy: { paymentDate: 'desc' }, take: 200 },
         loan: true,
       },
