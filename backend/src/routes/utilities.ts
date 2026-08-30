@@ -206,6 +206,29 @@ router.post('/', async (req, res, next) => {
     });
     if (!property) return res.status(403).json({ error: 'Property not found' });
 
+    // A property can legitimately hold two accounts with the same provider and
+    // category — two water meters, a second trash bin — so the guard is the
+    // account number, not the provider. Same provider, same category, same
+    // number is the same account, and creating it again is a double submit
+    // (or a client retrying a request that failed after the write landed).
+    if (accountNumber) {
+      const duplicate = await db.utilityAccount.findFirst({
+        where: {
+          propertyId,
+          providerSlug: rest.providerSlug,
+          category: rest.category,
+          accountNumber: `****${accountNumber.slice(-4)}`,
+        },
+        select: { id: true, providerName: true },
+      });
+      if (duplicate) {
+        return res.status(409).json({
+          error: `${duplicate.providerName} with that account number is already connected to this property.`,
+          existingId: duplicate.id,
+        });
+      }
+    }
+
     const account = await db.utilityAccount.create({
       data: {
         propertyId,
