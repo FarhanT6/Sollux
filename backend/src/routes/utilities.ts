@@ -221,11 +221,19 @@ router.post('/', async (req, res, next) => {
     await syncInsurancePolicyForUtility(account, { policyNumber: accountNumber, policyType: insuranceType });
     await syncLoanForUtility(account, req.dbUserId!, { loanType });
 
-    // Queue initial scrape
-    await scrapeQueue.add('scrape', { utilityAccountId: account.id }, {
-      attempts: 3,
-      backoff: { type: 'exponential', delay: 120000 },
-    });
+    // Queue an initial scrape, but never let that failure undo the request.
+    // The account is already created; if Redis is unreachable or over quota,
+    // enqueueing throws and the client sees "Internal server error" for an
+    // account that exists — so retrying creates a duplicate. A missed initial
+    // sync is recoverable from the Sync button; a phantom failure is not.
+    try {
+      await scrapeQueue.add('scrape', { utilityAccountId: account.id }, {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 120000 },
+      });
+    } catch (err) {
+      console.error('[Utilities] Account created but initial scrape could not be queued:', err instanceof Error ? err.message : err);
+    }
 
     res.status(201).json(account);
   } catch (err) {

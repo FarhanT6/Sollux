@@ -15,6 +15,17 @@ const PRISMA_STATUS: Record<string, { status: number; error: string }> = {
   P2022: { status: 500, error: 'A database column is missing — a migration has not been applied.' },
 };
 
+/**
+ * Redis is unavailable or refusing commands.
+ *
+ * Reported separately from a generic 500 because the distinction matters to
+ * the caller: the write itself usually succeeded and only the queued follow-up
+ * work is lost, so retrying the whole request can duplicate what it created.
+ */
+function isRedisOutage(message: string): boolean {
+  return /max requests limit|ECONNREFUSED.*6379|Connection is closed|Stream isn't writeable|NOAUTH|WRONGPASS|Redis/i.test(message);
+}
+
 export function errorHandler(
   err: Error,
   req: Request,
@@ -53,6 +64,12 @@ export function errorHandler(
       error: 'Database error',
       code: code ?? null,
       message: err.message.split('\n').filter(Boolean).slice(-3).join(' ').slice(0, 500),
+    });
+  }
+
+  if (isRedisOutage(err.message)) {
+    return res.status(503).json({
+      error: 'Background job queue is unavailable — the change may have saved, but syncing is paused.',
     });
   }
 

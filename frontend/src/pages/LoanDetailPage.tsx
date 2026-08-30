@@ -250,6 +250,10 @@ function EditModal({ loan, properties, onClose, onSave }: {
     }
 
     // Standard amortizing payment over the full origination-to-maturity term.
+    // Sensitive to those two dates being exactly right — a maturity date
+    // even one month off from the true term shifts the result by several
+    // dollars, since it changes the number of payments the formula spreads
+    // the balance across.
     const P = parseFloat(form.originalAmount);
     const origin = form.originationDate ? new Date(form.originationDate) : null;
     const maturity = form.maturityDate ? new Date(form.maturityDate) : null;
@@ -265,21 +269,6 @@ function EditModal({ loan, properties, onClose, onSave }: {
 
   const f = (field: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setForm(prev => ({ ...prev, [field]: e.target.value }));
-
-  // Switching to Interest Only should immediately reflect the interest-only
-  // payment, not leave whatever number was on file from a P&I calculation —
-  // that stale-looking number was the bug: the dropdown changed but nothing
-  // recalculated until Auto-calc was clicked again.
-  function handlePaymentTypeChange(e: React.ChangeEvent<HTMLSelectElement>) {
-    const value = e.target.value;
-    setForm(prev => {
-      if (value !== 'INTEREST_ONLY') return { ...prev, paymentType: value };
-      const r = parseFloat(prev.interestRate) / 12 / 100;
-      const balance = parseFloat(prev.currentBalance) || parseFloat(prev.originalAmount);
-      if (isNaN(r) || isNaN(balance) || balance <= 0) return { ...prev, paymentType: value };
-      return { ...prev, paymentType: value, monthlyPayment: String(Math.round(balance * r * 100) / 100) };
-    });
-  }
 
   async function handleSave() {
     if (!form.lender) return;
@@ -344,7 +333,7 @@ function EditModal({ loan, properties, onClose, onSave }: {
             </div>
             <div>
               <label className="block text-xs text-gray-500 mb-1">Payment structure</label>
-              <select value={form.paymentType} onChange={handlePaymentTypeChange} className="input-dark w-full text-sm">
+              <select value={form.paymentType} onChange={f('paymentType')} className="input-dark w-full text-sm">
                 <option value="PRINCIPAL_AND_INTEREST">P+I (Principal & Interest)</option>
                 <option value="INTEREST_ONLY">Interest only</option>
               </select>
@@ -408,7 +397,7 @@ function EditModal({ loan, properties, onClose, onSave }: {
                     className="text-xs text-amber-400 hover:text-amber-300 transition-colors"
                     title={form.paymentType === 'INTEREST_ONLY'
                       ? 'Calculate from current balance & interest rate'
-                      : 'Calculate from original amount, interest rate, origination & maturity dates'}
+                      : 'Calculate from original amount, interest rate & the FULL origination→maturity term — double-check both dates are exact, a 1-month-off maturity date shifts this by several dollars'}
                   >
                     ⟳ Auto-calc
                   </button>
