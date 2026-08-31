@@ -175,7 +175,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
         loginUrl: normalizeUrlInput(form.loginUrl),
         notes: form.notes || undefined,
         unitId: servesUnitId || undefined,
-        serviceLabel: !servesUnitId && serviceLabel ? serviceLabel : undefined,
+        serviceLabel: serviceLabel || undefined,
         billingCadence: billingCadence as any,
         termMonths: billingCadence === 'TERM' && termMonths ? parseInt(termMonths, 10) : undefined,
         expectedAmount: expectedAmount ? parseFloat(expectedAmount) : undefined,
@@ -289,26 +289,33 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
             <p className="text-xs text-amber-400">Your credentials are encrypted with AES-256 before storage and never logged.</p>
           </div>
 
-          {units.length > 0 && (
-            <div className="mb-4 p-3 bg-white/5 rounded-lg">
-              <label className="text-xs text-gray-400 block mb-1">What does this meter serve?</label>
-              <Select value={servesUnitId} onChange={e => setServesUnitId(e.target.value)}>
-                <option value="">Shared / whole property</option>
-                {units.map(u => (
-                  <option key={u.id} value={u.id}>{u.unitLabel}</option>
-                ))}
-              </Select>
-              {!servesUnitId && (
-                <div className="mt-2">
-                  <Input value={serviceLabel} onChange={e => setServiceLabel(e.target.value)}
-                    placeholder="e.g. House meter, Laundry room, Irrigation" />
-                </div>
-              )}
-              <p className="text-xs text-gray-500 mt-2">
-                Several meters for one utility look identical on the account list without this.
-              </p>
-            </div>
-          )}
+          <div className="mb-4 p-3 bg-white/5 rounded-lg">
+            <label className="text-xs text-gray-400 block mb-1">
+              Nickname <span className="text-gray-600">(optional)</span>
+            </label>
+            <Input value={serviceLabel} onChange={e => setServiceLabel(e.target.value)}
+              placeholder="e.g. House, Unit 3, Laundry room, Irrigation" />
+            <p className="text-xs text-gray-500 mt-1">
+              Shown on the account card. Two meters for the same provider are otherwise
+              told apart only by account number.
+            </p>
+            {units.length > 0 && (
+              <div className="mt-3">
+                <label className="text-xs text-gray-400 block mb-1">
+                  Serves unit <span className="text-gray-600">(optional)</span>
+                </label>
+                <Select value={servesUnitId} onChange={e => setServesUnitId(e.target.value)}>
+                  <option value="">Shared / whole property</option>
+                  {units.map(u => (
+                    <option key={u.id} value={u.id}>{u.unitLabel}</option>
+                  ))}
+                </Select>
+                <p className="text-xs text-gray-500 mt-1">
+                  Links this meter to a unit, so a unit's page can show what it costs to run.
+                </p>
+              </div>
+            )}
+          </div>
 
           <div className="mb-4 p-3 bg-white/5 rounded-lg">
             <label className="text-xs text-gray-400 block mb-1">How often does this bill?</label>
