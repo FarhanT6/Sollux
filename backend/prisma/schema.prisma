@@ -155,6 +155,19 @@ model UtilityAccount {
   loginUrl         String?
   category         UtilityCategory
   notes            String?
+  // How often this account actually bills. Most utilities are monthly, but an
+  // insurance policy may bill once a term, and a policy paid up front bills
+  // once and never again. Anything that reasons about a month's cost has to
+  // know this: an annual premium of $2,040 is $170 a month, not $2,040, and a
+  // once-a-term account with no bill this month is not a missing bill.
+  billingCadence   BillingCadence  @default(MONTHLY)
+  // Length of the term for a cadence of TERM — a 6-month policy is 6. Ignored
+  // for the fixed cadences.
+  termMonths       Int?
+  // What a normal bill on this account looks like, for cadences that don't
+  // produce one every month. Lets a monthly figure be derived before any
+  // statement has been imported, and gives anomaly detection a baseline.
+  expectedAmount   Decimal?        @db.Decimal(10, 2)
   syncEnabled      Boolean         @default(true)
   isActive         Boolean         @default(true)
   lastSyncedAt     DateTime?
@@ -172,6 +185,22 @@ model UtilityAccount {
   outgoingTransactions OutgoingTransaction[]
 
   @@map("utility_accounts")
+}
+
+/// How often an account bills. Drives the monthly-equivalent cost of a bill
+/// that does not arrive monthly.
+enum BillingCadence {
+  MONTHLY
+  QUARTERLY
+  SEMI_ANNUAL
+  ANNUAL
+  /// Bills once per term of termMonths — the shape most insurance policies take.
+  TERM
+  /// Paid once, never recurring (a policy settled up front, a one-off permit).
+  ONE_TIME
+  /// Bills on no schedule worth modelling; treated as monthly for totals only
+  /// when a statement actually exists.
+  IRREGULAR
 }
 
 enum UtilityCategory {
@@ -231,6 +260,12 @@ model Statement {
   pdfS3Key             String?
   pdfUrl               String?
   rawDataJson          Json?
+  // A deposit or down payment taken at the start of a term, not a period's
+  // charge. Kept as its own row so the PDF and the amount are on file, but
+  // excluded from monthly totals and from per-month averages — otherwise the
+  // month a policy starts looks like a cost spike and every average built on
+  // it is wrong.
+  isDownPayment        Boolean         @default(false)
   sourceType           StatementSource @default(SCRAPER)
   createdAt            DateTime        @default(now())
 

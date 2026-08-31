@@ -16,8 +16,22 @@ router.use(attachDbUser);
 // itself. Called after every utility create/update so adding, renaming, or
 // (de)activating an insurance account under Utilities is reflected on the
 // Portfolio side without the user re-entering it there.
+// A policy's premium frequency and the account's billing cadence describe the
+// same fact from two sides, so keep them agreed rather than letting a user set
+// "annual" in one place and "monthly" in the other. Only the three cadences
+// the policy can express map across; TERM/ONE_TIME/IRREGULAR have no
+// equivalent and leave the policy's own value alone.
+const CADENCE_TO_PREMIUM_FREQUENCY: Record<string, 'MONTHLY' | 'ANNUAL' | 'SEMI_ANNUAL'> = {
+  MONTHLY: 'MONTHLY',
+  ANNUAL: 'ANNUAL',
+  SEMI_ANNUAL: 'SEMI_ANNUAL',
+};
+
 async function syncInsurancePolicyForUtility(
-  account: { id: string; propertyId: string; providerName: string; category: string; isActive: boolean },
+  account: {
+    id: string; propertyId: string; providerName: string; category: string; isActive: boolean;
+    billingCadence?: string | null; expectedAmount?: any;
+  },
   opts: { policyNumber?: string; policyType?: string } = {},
 ) {
   if (account.category !== 'INSURANCE') {
@@ -30,6 +44,10 @@ async function syncInsurancePolicyForUtility(
     return;
   }
 
+  const frequency = account.billingCadence
+    ? CADENCE_TO_PREMIUM_FREQUENCY[account.billingCadence]
+    : undefined;
+
   const existing = await db.insurancePolicy.findUnique({ where: { utilityAccountId: account.id } });
   if (existing) {
     await db.insurancePolicy.update({
@@ -39,6 +57,12 @@ async function syncInsurancePolicyForUtility(
         isActive: account.isActive,
         ...(opts.policyNumber !== undefined && { policyNumber: opts.policyNumber }),
         ...(opts.policyType !== undefined && { policyType: opts.policyType as any }),
+        ...(frequency && { premiumFrequency: frequency }),
+        // Only fill a premium the policy doesn't have. A figure entered on the
+        // policy itself is the more considered one and must not be overwritten.
+        ...(account.expectedAmount != null && Number(existing.premiumAmount) === 0 && {
+          premiumAmount: account.expectedAmount,
+        }),
       },
     });
   } else {
@@ -49,7 +73,8 @@ async function syncInsurancePolicyForUtility(
         carrier: account.providerName,
         policyNumber: opts.policyNumber || null,
         policyType: (opts.policyType as any) || 'PROPERTY',
-        premiumAmount: 0,
+        premiumAmount: account.expectedAmount ?? 0,
+        ...(frequency && { premiumFrequency: frequency }),
         isActive: account.isActive,
       },
     });
@@ -144,6 +169,11 @@ const UtilitySchema = z.object({
     'INTERNET', 'PHONE', 'INSURANCE', 'HOA', 'TAXES', 'LOAN', 'CREDIT_CARD', 'OTHER']),
   notes: z.string().optional(),
   isActive: z.boolean().optional(),
+  // How often this account bills, and what one bill looks like. Needed for
+  // anything that costs a month: an annual premium is not a monthly expense.
+  billingCadence: z.enum(['MONTHLY','QUARTERLY','SEMI_ANNUAL','ANNUAL','TERM','ONE_TIME','IRREGULAR']).optional(),
+  termMonths: z.number().int().positive().max(600).optional(),
+  expectedAmount: z.number().nonnegative().optional(),
   // Only relevant when category is INSURANCE — passed through to the linked
   // InsurancePolicy's policyType, not stored on the utility account itself.
   insuranceType: z.enum(['PROPERTY', 'LIABILITY', 'FLOOD', 'UMBRELLA', 'OTHER']).optional(),
