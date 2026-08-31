@@ -419,6 +419,10 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
     password:      '',
     notes:         (account as any).notes || '',
     loginUrl:      account.loginUrl || '',
+    // What this account is, in your words — "House", "Unit 3", "Laundry".
+    // Two meters for one provider are otherwise distinguishable only by
+    // account number, which is not how anyone thinks about them.
+    serviceLabel:  account.serviceLabel || '',
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -478,6 +482,8 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
       if (form.password.trim())      patch.password      = form.password.trim();
       if (form.notes.trim()         !== ((account as any).notes || '')) patch.notes = form.notes.trim();
       if (form.loginUrl.trim()      !== (account.loginUrl || ''))       patch.loginUrl = form.loginUrl.trim();
+      // Sent even when cleared, so a nickname can be removed as well as set.
+      if (form.serviceLabel.trim()  !== (account.serviceLabel || ''))    patch.serviceLabel = form.serviceLabel.trim();
       // Only send insuranceType/loanType if the user actually touched the
       // dropdown — otherwise we'd silently overwrite an existing policy's/
       // loan's type with the form's default every time they save.
@@ -513,6 +519,17 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
               <select className={fieldCls} value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value as any }))}>
                 {UTILITY_CATEGORIES.map(c => <option key={c} value={c}>{CATEGORY_LABELS[c as keyof typeof CATEGORY_LABELS]}</option>)}
               </select>
+            </div>
+            <div className="col-span-2">
+              <label className="text-xs text-gray-400 block mb-1">
+                Nickname <span className="text-gray-600">(optional)</span>
+              </label>
+              <input className={fieldCls} value={form.serviceLabel}
+                placeholder="e.g. House, Unit 3, Laundry room"
+                onChange={e => setForm(f => ({ ...f, serviceLabel: e.target.value }))} />
+              <p className="text-xs text-gray-500 mt-1">
+                Shown on the account card, so several meters for one provider can be told apart.
+              </p>
             </div>
           </div>
           {form.category === 'INSURANCE' && (
@@ -908,6 +925,14 @@ function UtilityAccountCard({
             >
               {account.providerName}
             </button>
+            {/* Which meter this is. On a property with several meters for one
+                utility, the provider name and a masked number are identical
+                between them — this is the only thing that tells them apart. */}
+            {(account.serviceLabel || account.unit?.unitLabel) && (
+              <p className="text-xs text-[#F5A623]/80 truncate">
+                {account.serviceLabel || account.unit?.unitLabel}
+              </p>
+            )}
             {account.accountNumber ? (
               <p className="text-xs font-mono text-gray-400 flex items-center gap-1">
                 {revealedAccountNumber != null ? revealedAccountNumber : account.accountNumber}
