@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { createUtility, getUtilities, upsertUtilityLoan } from '../../api/client';
+import { createUtility, getUtilities, getUnits, upsertUtilityLoan } from '../../api/client';
 import { Modal, Field, Input, Select } from '../ui';
-import type { UtilityCategory } from '../../types';
+import type { UtilityCategory, Unit } from '../../types';
 import { CATEGORY_LABELS, LOAN_TYPE_LABELS, INSURANCE_TYPE_LABELS } from '../../types';
 import { describeApiError, normalizeUrlInput } from '../../lib/apiError';
 import { CADENCE_LABELS, describeCadenceAmount, type Cadence } from '../../lib/cadence';
@@ -79,6 +79,12 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
   const [billingCadence, setBillingCadence] = useState('MONTHLY');
   const [termMonths, setTermMonths] = useState('12');
   const [expectedAmount, setExpectedAmount] = useState('');
+  // Which unit this meter serves. A multi-unit property can carry several
+  // meters for one utility, and "IID ****8110" vs "IID ****5855" says nothing
+  // about which is which.
+  const [units, setUnits] = useState<Unit[]>([]);
+  const [servesUnitId, setServesUnitId] = useState('');
+  const [serviceLabel, setServiceLabel] = useState('');
 
   // Providers added via "Other" on any property don't live in the static
   // PROVIDER_SLUGS list, so without this they'd vanish from the picker the
@@ -96,6 +102,11 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
       setCustomProviders(extra);
     }).catch(() => {});
   }, []);
+
+  // The unit picker is only worth showing on a property that has units.
+  useEffect(() => {
+    getUnits({ propertyId }).then(setUnits).catch(() => {});
+  }, [propertyId]);
 
   const allProviders: Record<string, string> = {
     ...Object.fromEntries(Object.entries(customProviders).map(([name, p]) => [name, p.slug])),
@@ -163,6 +174,8 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
         password: form.useGmail ? undefined : form.password,
         loginUrl: normalizeUrlInput(form.loginUrl),
         notes: form.notes || undefined,
+        unitId: servesUnitId || undefined,
+        serviceLabel: !servesUnitId && serviceLabel ? serviceLabel : undefined,
         billingCadence: billingCadence as any,
         termMonths: billingCadence === 'TERM' && termMonths ? parseInt(termMonths, 10) : undefined,
         expectedAmount: expectedAmount ? parseFloat(expectedAmount) : undefined,
@@ -275,6 +288,27 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
             <p className="text-xs font-medium text-amber-300">{form.providerName}</p>
             <p className="text-xs text-amber-400">Your credentials are encrypted with AES-256 before storage and never logged.</p>
           </div>
+
+          {units.length > 0 && (
+            <div className="mb-4 p-3 bg-white/5 rounded-lg">
+              <label className="text-xs text-gray-400 block mb-1">What does this meter serve?</label>
+              <Select value={servesUnitId} onChange={e => setServesUnitId(e.target.value)}>
+                <option value="">Shared / whole property</option>
+                {units.map(u => (
+                  <option key={u.id} value={u.id}>{u.unitLabel}</option>
+                ))}
+              </Select>
+              {!servesUnitId && (
+                <div className="mt-2">
+                  <Input value={serviceLabel} onChange={e => setServiceLabel(e.target.value)}
+                    placeholder="e.g. House meter, Laundry room, Irrigation" />
+                </div>
+              )}
+              <p className="text-xs text-gray-500 mt-2">
+                Several meters for one utility look identical on the account list without this.
+              </p>
+            </div>
+          )}
 
           <div className="mb-4 p-3 bg-white/5 rounded-lg">
             <label className="text-xs text-gray-400 block mb-1">How often does this bill?</label>

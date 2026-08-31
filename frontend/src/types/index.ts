@@ -731,6 +731,12 @@ export interface UtilityAccount {
   accountNumber?: string;
   loginUrl?: string;
   category: UtilityCategory;
+  // Which unit this meter serves, if it serves one. serviceLabel covers the
+  // rest — "House meter", "Laundry room" — so several meters for one utility
+  // on the same property can be told apart.
+  unitId?: string | null;
+  unit?: { id: string; unitLabel: string } | null;
+  serviceLabel?: string | null;
   notes?: string;
   // How often this account bills, and what one bill looks like. A bill that
   // doesn't arrive monthly must not be counted at full value in one month.

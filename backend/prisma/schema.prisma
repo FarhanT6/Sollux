@@ -154,6 +154,16 @@ model UtilityAccount {
   passwordEnc      String?
   loginUrl         String?
   category         UtilityCategory
+  // Which unit this meter serves. A multi-unit property can carry several
+  // meters for one utility — "IID ****8110" and "IID ****5855" are
+  // indistinguishable without this. Null means it does not serve a single
+  // unit; serviceLabel then says what it does serve.
+  unitId           String?
+  unit             Unit?           @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  // What this meter serves when it isn't one unit: "House meter", "Laundry
+  // room", "Common area", "Irrigation". Free text because the list is
+  // open-ended and varies by property.
+  serviceLabel     String?
   notes            String?
   // How often this account actually bills. Most utilities are monthly, but an
   // insurance policy may bill once a term, and a policy paid up front bills
@@ -494,7 +504,8 @@ model Unit {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  leases Lease[]
+  leases          Lease[]
+  utilityAccounts UtilityAccount[]
 
   @@unique([propertyId, unitLabel])
   @@map("units")

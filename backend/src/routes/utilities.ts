@@ -157,6 +157,21 @@ async function syncLoanForUtility(
   });
 }
 
+/**
+ * A meter can only serve a unit of the property it belongs to. Without this a
+ * unit id from another property would be accepted and the meter would show up
+ * labelled with a unit that isn't there.
+ */
+async function assertUnitBelongsToProperty(unitId: string | null | undefined, propertyId: string) {
+  if (!unitId) return;
+  const unit = await db.unit.findFirst({ where: { id: unitId, propertyId }, select: { id: true } });
+  if (!unit) {
+    const err: any = new Error('That unit belongs to a different property.');
+    err.status = 400;
+    throw err;
+  }
+}
+
 const UtilitySchema = z.object({
   propertyId: z.string(),
   providerName: z.string().min(1),
@@ -169,6 +184,10 @@ const UtilitySchema = z.object({
     'INTERNET', 'PHONE', 'INSURANCE', 'HOA', 'TAXES', 'LOAN', 'CREDIT_CARD', 'OTHER']),
   notes: z.string().optional(),
   isActive: z.boolean().optional(),
+  // Which unit this meter serves. Empty string clears the link — a plain
+  // `undefined` can't, and a meter does get reassigned.
+  unitId: z.string().nullable().optional().transform(v => v === '' ? null : v),
+  serviceLabel: z.string().optional().transform(v => v === '' ? null : v),
   // How often this account bills, and what one bill looks like. Needed for
   // anything that costs a month: an annual premium is not a monthly expense.
   billingCadence: z.enum(['MONTHLY','QUARTERLY','SEMI_ANNUAL','ANNUAL','TERM','ONE_TIME','IRREGULAR']).optional(),
@@ -210,6 +229,7 @@ router.get('/', async (req, res, next) => {
       include: {
         statements: { orderBy: { statementDate: 'desc' }, take: 1 },
         payments: { orderBy: { paymentDate: 'desc' }, take: 1 },
+        unit: { select: { id: true, unitLabel: true } },
       },
       orderBy: { createdAt: 'asc' },
     });
@@ -235,6 +255,8 @@ router.post('/', async (req, res, next) => {
       where: { id: propertyId, userId: req.dbUserId! },
     });
     if (!property) return res.status(403).json({ error: 'Property not found' });
+
+    await assertUnitBelongsToProperty(rest.unitId, propertyId);
 
     // A property can legitimately hold two accounts with the same provider and
     // category — two water meters, a second trash bin — so the guard is the
@@ -301,6 +323,7 @@ router.get('/:id', async (req, res, next) => {
       where: { id: req.params.id, property: { userId: req.dbUserId! } },
       include: {
         property: { select: { id: true, address: true, nickname: true, city: true, state: true } },
+        unit: { select: { id: true, unitLabel: true } },
         // Was capped at 84 (seven years of monthly bills), which silently
         // truncated a longer history — and the page's totals are computed from
         // this array, so the stat cards were wrong too, not just the list.
@@ -408,6 +431,8 @@ router.patch('/:id', async (req, res, next) => {
       where: { id: req.params.id, property: { userId: req.dbUserId! } },
     });
     if (!existing) return res.status(404).json({ error: 'Utility account not found' });
+
+    await assertUnitBelongsToProperty(rest.unitId, existing.propertyId);
 
     const updated = await db.utilityAccount.update({
       where: { id: req.params.id },

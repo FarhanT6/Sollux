@@ -908,6 +908,14 @@ function UtilityAccountCard({
             >
               {account.providerName}
             </button>
+            {/* Which meter this is. On a property with several meters for one
+                utility, the provider name and a masked number are identical
+                between them — this is the only thing that tells them apart. */}
+            {(account.unit?.unitLabel || account.serviceLabel) && (
+              <p className="text-xs text-[#F5A623]/80 truncate">
+                {account.unit?.unitLabel ?? account.serviceLabel}
+              </p>
+            )}
             {account.accountNumber ? (
               <p className="text-xs font-mono text-gray-400 flex items-center gap-1">
                 {revealedAccountNumber != null ? revealedAccountNumber : account.accountNumber}
