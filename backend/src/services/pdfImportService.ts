@@ -758,8 +758,37 @@ async function extractWithRegex(pdfBuffer: Buffer, filename: string): Promise<Ex
 
 // ── Claude AI extraction ───────────────────────────────────────────────────────
 
+/**
+ * Why this buffer cannot be sent to the API as a PDF, or null if it can.
+ *
+ * The API answers an unusable file with "The PDF specified was not valid",
+ * which says nothing about which of several very different causes applied —
+ * an empty download, an HTML error page saved under a .pdf name, a Drive
+ * shortcut rather than the file itself, or a password-protected bill. Checking
+ * locally names the cause and costs nothing.
+ */
+function pdfRejectionReason(buffer: Buffer): string | null {
+  if (buffer.length === 0) return 'the file downloaded as 0 bytes';
+  // Every PDF begins with %PDF- (allowing for junk bytes some producers emit
+  // before the header, which readers tolerate).
+  const head = buffer.subarray(0, 1024).toString('latin1');
+  if (!head.includes('%PDF-')) {
+    return head.trimStart().startsWith('<')
+      ? 'the download returned a web page, not a PDF — the Drive link may point at a shortcut or a file you cannot read'
+      : 'the file is not a PDF';
+  }
+  // An encrypted PDF is structurally valid but the API will not open it.
+  // /Encrypt appears in the trailer, so check the tail rather than the head.
+  const tail = buffer.subarray(Math.max(0, buffer.length - 4096)).toString('latin1');
+  if (/\/Encrypt\b/.test(tail)) return 'the PDF is password-protected';
+  return null;
+}
+
 async function extractWithClaude(pdfBuffer: Buffer, filename: string): Promise<ExtractedBillData> {
   const anthropic = getAnthropic();
+
+  const rejection = pdfRejectionReason(pdfBuffer);
+  if (rejection) throw new Error(`Cannot read ${filename}: ${rejection}.`);
 
   // Send every PDF as a native document — Claude reads the actual layout,
   // not a text dump that loses column relationships.
@@ -1004,9 +1033,25 @@ export async function parseBill(
   method: 'ai' | 'regex' = 'ai',
 ): Promise<ParsedBill> {
   try {
-    const extracted = method === 'regex'
-      ? await extractWithRegex(buffer, filename)
-      : await extractWithClaude(buffer, filename);
+    let extracted: ExtractedBillData;
+    if (method === 'regex') {
+      extracted = await extractWithRegex(buffer, filename);
+    } else {
+      try {
+        extracted = await extractWithClaude(buffer, filename);
+      } catch (aiErr) {
+        // A PDF the API refuses to open can often still be read locally: the
+        // regex extractor runs on the text layer and does not care about
+        // encryption flags or producer quirks. Losing the bill entirely is a
+        // worse outcome than extracting it less accurately, so fall back
+        // rather than fail. Errors that are about credentials or quota are
+        // rethrown — retrying those as regex would silently mask a broken key.
+        const message = aiErr instanceof Error ? aiErr.message : String(aiErr);
+        if (!/not valid|Cannot read |could not be processed|unsupported/i.test(message)) throw aiErr;
+        console.warn(`[PDFImport] ${filename}: AI extraction unavailable (${message}) — falling back to text extraction.`);
+        extracted = await extractWithRegex(buffer, filename);
+      }
+    }
     const match     = await matchToAccount(extracted, userId);
     return { filename, extracted, match };
   } catch (err) {
