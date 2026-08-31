@@ -7,6 +7,7 @@ import { PageHeader, StatCard, InsightCard, Skeleton, EmptyState, Pill } from '.
 import { format } from 'date-fns';
 import AddUtilityModal from '../components/utility/AddUtilityModal';
 import { fmtDate } from '../lib/date';
+import { monthlyEquivalent } from '../lib/cadence';
 
 type Tab = 'utilities' | 'payments' | 'insights' | 'documents';
 
@@ -73,11 +74,19 @@ export default function PropertyDetailPage() {
   const activeAccounts = accounts.filter(a => a.isActive !== false);
   const inactiveAccounts = accounts.filter(a => a.isActive === false);
   const monthlyTotal = activeAccounts.reduce((s, a) => {
-    const stmt = a.statements?.[0];
-    if (!stmt) return s;
+    // Skip a deposit: it is not a period's charge, so counting it here makes
+    // the month a policy starts look like a spike.
+    const stmt = (a.statements ?? []).find(st => !st.isDownPayment);
+    if (!stmt) {
+      // No bill yet — an account that bills once a term still has a monthly
+      // cost if we know what a bill looks like.
+      return s + monthlyEquivalent(a);
+    }
     // Open balance from the editable columns: this period's charge + carried past due.
     const bal = Number(stmt.amountDue ?? 0) + Number((stmt as any).pastDueCarried ?? 0);
-    return s + bal;
+    // Spread it over the months the bill covers — an annual premium is not a
+    // month's cost.
+    return s + monthlyEquivalent(a, bal);
   }, 0);
   const lastSynced = activeAccounts.map(a => a.lastSyncedAt).filter(Boolean).sort().pop();
 
