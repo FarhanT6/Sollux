@@ -3,6 +3,7 @@ import { createUtility, getUtilities, upsertUtilityLoan } from '../../api/client
 import { Modal, Field, Input, Select } from '../ui';
 import type { UtilityCategory } from '../../types';
 import { CATEGORY_LABELS, LOAN_TYPE_LABELS, INSURANCE_TYPE_LABELS } from '../../types';
+import { describeApiError, normalizeUrlInput } from '../../lib/apiError';
 
 const PROVIDER_SLUGS: Record<string, string> = {
   'SDGE': 'sdge',
@@ -145,7 +146,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
         accountNumber: form.accountNumber || undefined,
         username: form.useGmail ? undefined : form.username,
         password: form.useGmail ? undefined : form.password,
-        loginUrl: form.loginUrl || undefined,
+        loginUrl: normalizeUrlInput(form.loginUrl),
         notes: form.notes || undefined,
         insuranceType: form.category === 'INSURANCE' ? insuranceType : undefined,
         loanType: (form.category === 'LOAN' || form.category === 'CREDIT_CARD') ? loanType : undefined,
@@ -159,7 +160,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
       onSuccess();
       onClose();
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to add utility account');
+      setError(describeApiError(err, 'Failed to add utility account'));
     } finally {
       setLoading(false);
     }
