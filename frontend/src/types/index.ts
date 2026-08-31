@@ -732,6 +732,11 @@ export interface UtilityAccount {
   loginUrl?: string;
   category: UtilityCategory;
   notes?: string;
+  // How often this account bills, and what one bill looks like. A bill that
+  // doesn't arrive monthly must not be counted at full value in one month.
+  billingCadence?: BillingCadence;
+  termMonths?: number | null;
+  expectedAmount?: number | string | null;
   syncEnabled: boolean;
   hasCredentials?: boolean;
   isActive: boolean;
@@ -743,10 +748,17 @@ export interface UtilityAccount {
   payments?: Payment[];
 }
 
+export type BillingCadence =
+  | 'MONTHLY' | 'QUARTERLY' | 'SEMI_ANNUAL' | 'ANNUAL'
+  | 'TERM' | 'ONE_TIME' | 'IRREGULAR';
+
 export interface Statement {
   id: string;
   utilityAccountId: string;
   statementDate: string;
+  // A deposit taken at the start of a term rather than a period's charge —
+  // on file, but excluded from monthly totals and averages.
+  isDownPayment?: boolean;
   dueDate?: string;
   billingPeriodStart?: string;
   billingPeriodEnd?: string;

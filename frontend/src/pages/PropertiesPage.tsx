@@ -13,6 +13,7 @@ import type { Property } from '../types';
 import { PageHeader, StatCard, Skeleton, EmptyState } from '../components/ui';
 import { PROPERTY_TYPE_LABELS } from '../types';
 import AddPropertyModal from '../components/property/AddPropertyModal';
+import { monthlyEquivalent } from '../lib/cadence';
 
 const TYPE_COLORS: Record<string, string> = {
   PRIMARY: 'bg-amber-500/10', RENTAL: 'bg-emerald-500/10',
@@ -85,12 +86,16 @@ export default function PropertiesPage() {
 
   const monthlyTotal = properties.reduce((sum, p) =>
     sum + (p.utilityAccounts || []).reduce((s, a) => {
-      const stmt = a.statements?.[0];
-      const raw = stmt?.rawDataJson as Record<string, unknown> | undefined;
+      // A deposit is not a period's charge — see monthlyEquivalent.
+      const stmt = (a.statements ?? []).find(st => !st.isDownPayment);
+      if (!stmt) return s + monthlyEquivalent(a);
+      const raw = stmt.rawDataJson as Record<string, unknown> | undefined;
       // accountBalance = total owed (set by scraper); totalDue = same field under alternate name;
       // balance = DB-level field populated by scrapeWorker; fall back to amountDue.
-      const bal = (raw?.accountBalance ?? raw?.totalDue ?? stmt?.balance ?? stmt?.amountDue) as number | undefined;
-      return s + Number(bal ?? 0);
+      const bal = (raw?.accountBalance ?? raw?.totalDue ?? stmt.balance ?? stmt.amountDue) as number | undefined;
+      // Divided by the months the bill covers: an annual premium counted whole
+      // made this figure wrong in every month of the year.
+      return s + monthlyEquivalent(a, Number(bal ?? 0));
     }, 0), 0);
 
   const totalAccounts = properties.reduce((s, p) => s + (p.utilityAccounts?.length ?? 0), 0);

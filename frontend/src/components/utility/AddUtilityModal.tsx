@@ -3,6 +3,8 @@ import { createUtility, getUtilities, upsertUtilityLoan } from '../../api/client
 import { Modal, Field, Input, Select } from '../ui';
 import type { UtilityCategory } from '../../types';
 import { CATEGORY_LABELS, LOAN_TYPE_LABELS, INSURANCE_TYPE_LABELS } from '../../types';
+import { describeApiError, normalizeUrlInput } from '../../lib/apiError';
+import { CADENCE_LABELS, describeCadenceAmount, type Cadence } from '../../lib/cadence';
 
 const PROVIDER_SLUGS: Record<string, string> = {
   'SDGE': 'sdge',
@@ -72,6 +74,11 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
   const [isLoan, setIsLoan] = useState(false);
   const [loanType, setLoanType] = useState('OTHER');
   const [insuranceType, setInsuranceType] = useState('PROPERTY');
+  // How this account bills. Defaults differ by category because the common
+  // case does: a utility bills monthly, a policy usually once a term.
+  const [billingCadence, setBillingCadence] = useState('MONTHLY');
+  const [termMonths, setTermMonths] = useState('12');
+  const [expectedAmount, setExpectedAmount] = useState('');
 
   // Providers added via "Other" on any property don't live in the static
   // PROVIDER_SLUGS list, so without this they'd vanish from the picker the
@@ -102,6 +109,12 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
     return PROVIDER_CATEGORIES[name] === form.category;
   });
 
+  const monthlyPreview = describeCadenceAmount(
+    billingCadence as Cadence,
+    parseFloat(expectedAmount) || 0,
+    parseInt(termMonths, 10) || null,
+  );
+
   function set(key: string, value: string | boolean) {
     setForm(prev => ({ ...prev, [key]: value }));
   }
@@ -111,6 +124,9 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
     // category rarely still makes sense once the category changes.
     setSelectedTile('');
     setOtherName('');
+    // An insurance account that bills monthly is the exception, not the rule,
+    // so start it on a term. Switching back to a utility restores monthly.
+    setBillingCadence(category === 'INSURANCE' ? 'TERM' : 'MONTHLY');
     setForm(prev => ({ ...prev, category: category as UtilityCategory, providerName: '', providerSlug: '' }));
   }
 
@@ -145,8 +161,11 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
         accountNumber: form.accountNumber || undefined,
         username: form.useGmail ? undefined : form.username,
         password: form.useGmail ? undefined : form.password,
-        loginUrl: form.loginUrl || undefined,
+        loginUrl: normalizeUrlInput(form.loginUrl),
         notes: form.notes || undefined,
+        billingCadence: billingCadence as any,
+        termMonths: billingCadence === 'TERM' && termMonths ? parseInt(termMonths, 10) : undefined,
+        expectedAmount: expectedAmount ? parseFloat(expectedAmount) : undefined,
         insuranceType: form.category === 'INSURANCE' ? insuranceType : undefined,
         loanType: (form.category === 'LOAN' || form.category === 'CREDIT_CARD') ? loanType : undefined,
       });
@@ -159,7 +178,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
       onSuccess();
       onClose();
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to add utility account');
+      setError(describeApiError(err, 'Failed to add utility account'));
     } finally {
       setLoading(false);
     }
@@ -255,6 +274,38 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
           <div className="mb-4 p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
             <p className="text-xs font-medium text-amber-300">{form.providerName}</p>
             <p className="text-xs text-amber-400">Your credentials are encrypted with AES-256 before storage and never logged.</p>
+          </div>
+
+          <div className="mb-4 p-3 bg-white/5 rounded-lg">
+            <label className="text-xs text-gray-400 block mb-1">How often does this bill?</label>
+            <Select value={billingCadence} onChange={e => setBillingCadence(e.target.value)}>
+              {Object.entries(CADENCE_LABELS).map(([v, l]) => (
+                <option key={v} value={v}>{l}</option>
+              ))}
+            </Select>
+            {billingCadence === 'TERM' && (
+              <div className="mt-2">
+                <label className="text-xs text-gray-400 block mb-1">Term length (months)</label>
+                <Input type="number" min="1" value={termMonths}
+                  onChange={e => setTermMonths(e.target.value)} placeholder="12" />
+              </div>
+            )}
+            {billingCadence !== 'MONTHLY' && (
+              <div className="mt-2">
+                <label className="text-xs text-gray-400 block mb-1">
+                  Expected amount per bill <span className="text-gray-600">(optional)</span>
+                </label>
+                <Input type="number" step="0.01" min="0" value={expectedAmount}
+                  onChange={e => setExpectedAmount(e.target.value)} placeholder="e.g. 2040.00" />
+                {monthlyPreview && (
+                  <p className="text-xs text-gray-500 mt-1">{monthlyPreview}</p>
+                )}
+              </div>
+            )}
+            <p className="text-xs text-gray-500 mt-2">
+              Used to spread the cost across months. A bill that doesn't arrive monthly
+              would otherwise land in one month's total at full value.
+            </p>
           </div>
 
           {form.category === 'INSURANCE' && (
