@@ -999,6 +999,31 @@ export default function UtilityDetailPage() {
                         {s.usageValue && (
                           <p className="text-xs text-gray-600 mt-0.5">{s.usageValue} {s.usageUnit}</p>
                         )}
+                        {/* What made up the total. Extraction has always captured
+                            this, but nothing displayed it, so a water bill that
+                            splits water from sewer showed only the sum. */}
+                        {(() => {
+                          const breakdown = (s.rawDataJson as any)?.chargeBreakdown as Record<string, number> | undefined;
+                          if (!breakdown || Object.keys(breakdown).length === 0) return null;
+                          return (
+                            <details className="mt-1">
+                              <summary className="text-xs text-gray-600 cursor-pointer hover:text-gray-400 select-none">
+                                {Object.keys(breakdown).length} charge{Object.keys(breakdown).length === 1 ? '' : 's'}
+                              </summary>
+                              <div className="mt-1 space-y-0.5">
+                                {Object.entries(breakdown).map(([label, amount]) => (
+                                  <div key={label} className="flex justify-between gap-4 text-xs max-w-xs">
+                                    <span className="text-gray-500 truncate">{label}</span>
+                                    {/* A credit is a negative line and reads as one. */}
+                                    <span className={Number(amount) < 0 ? 'text-green-500' : 'text-gray-400'}>
+                                      {fmtMoney(Number(amount))}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            </details>
+                          );
+                        })()}
                       </div>
 
                       {/* Due date */}
