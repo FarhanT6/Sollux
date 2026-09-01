@@ -21,7 +21,10 @@ router.get('/accounts', async (req: Request, res: Response) => {
       where: { userId: req.dbUserId! },
       include: {
         utilityAccounts: {
-          select: { id: true, providerName: true, category: true },
+          // serviceLabel and the masked number travel with the account so the
+          // picker can tell two meters for one provider apart — the provider
+          // name and category are identical between them.
+          select: { id: true, providerName: true, category: true, serviceLabel: true, accountNumber: true },
           orderBy: { providerName: 'asc' },
         },
       },
@@ -74,7 +77,10 @@ router.post('/analyze', async (req: Request, res: Response) => {
       where: { userId },
       include: {
         utilityAccounts: {
-          select: { id: true, providerName: true, category: true },
+          // serviceLabel and the masked number travel with the account so the
+          // picker can tell two meters for one provider apart — the provider
+          // name and category are identical between them.
+          select: { id: true, providerName: true, category: true, serviceLabel: true, accountNumber: true },
           orderBy: { providerName: 'asc' },
         },
       },
@@ -302,8 +308,12 @@ router.post('/confirm', async (req: Request, res: Response) => {
         // "already exists" collisions when importing multiple undated statements at once.
         let existing = null;
         if (hasReliableDate) {
-          const monthStart = new Date(statementDate.getFullYear(), statementDate.getMonth(), 1);
-          const monthEnd   = new Date(statementDate.getFullYear(), statementDate.getMonth() + 1, 0, 23, 59, 59);
+          // UTC boundaries: statement dates are stored at midnight UTC, so a
+          // local-time window is offset by the server's zone and straddles the
+          // month edge — it can miss the month's own bill and match the next
+          // month's, reporting "already exists" for a bill that isn't there.
+          const monthStart = new Date(Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth(), 1));
+          const monthEnd   = new Date(Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth() + 1, 0, 23, 59, 59));
           existing = await db.statement.findFirst({
             where: { utilityAccountId, statementDate: { gte: monthStart, lte: monthEnd } },
           });
@@ -323,6 +333,18 @@ router.post('/confirm', async (req: Request, res: Response) => {
           pdfS3Key = await uploadDocument(key, buf);
         }
 
+        // A bill settled in full reports amountDue 0 while still charging for
+        // the period, so taking amountDue alone recorded $0.00 for a $328.03
+        // bill — every paid month looked empty and the import looked like it
+        // had done nothing. The period's charge is currentCharges; amountDue
+        // is only the fallback. Matches scripts/import-local-statements.ts so
+        // both import paths produce the same numbers.
+        const periodCharge = ex.currentCharges ?? ex.amountDue ?? null;
+        const totalDue = (ex.currentCharges != null || ex.previousBalance != null)
+          ? (ex.currentCharges ?? 0) + (ex.previousBalance ?? 0)
+          : ex.amountDue ?? null;
+        const paidAmount = ex.paymentsReceived ?? (ex.isPaid ? totalDue : null);
+
         if (existing) {
           // Overwrite with better data from the new extraction
           await db.statement.update({
@@ -332,8 +354,9 @@ router.post('/confirm', async (req: Request, res: Response) => {
               dueDate:            ex.dueDate ? new Date(ex.dueDate) : existing.dueDate,
               billingPeriodStart,
               billingPeriodEnd,
-              amountDue:      ex.amountDue      ?? existing.amountDue,
-              balance:        ex.amountDue      ?? existing.balance,
+              amountDue:      periodCharge      ?? existing.amountDue,
+              balance:        totalDue          ?? existing.balance,
+              amountPaid:     paidAmount        ?? existing.amountPaid,
               chargesExcludingFees: ex.currentCharges ?? existing.chargesExcludingFees,
               penaltiesFees:  ex.lateFee         ?? existing.penaltiesFees,
               pastDueCarried: ex.previousBalance ?? existing.pastDueCarried,
@@ -353,9 +376,9 @@ router.post('/confirm', async (req: Request, res: Response) => {
               dueDate:            ex.dueDate ? new Date(ex.dueDate) : null,
               billingPeriodStart,
               billingPeriodEnd,
-              amountDue:      ex.amountDue      ?? null,
-              balance:        ex.amountDue      ?? null,
-              amountPaid:     ex.isPaid ? (ex.amountDue ?? null) : null,
+              amountDue:      periodCharge      ?? null,
+              balance:        totalDue          ?? null,
+              amountPaid:     paidAmount        ?? null,
               chargesExcludingFees: ex.currentCharges ?? null,
               penaltiesFees:  ex.lateFee         ?? null,
               pastDueCarried: ex.previousBalance ?? null,

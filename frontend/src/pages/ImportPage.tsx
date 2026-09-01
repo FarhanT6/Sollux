@@ -65,7 +65,13 @@ interface ParsedBill {
   addToPropertyId?: string | null;
 }
 
-interface SlimAccount { id: string; providerName: string; category: string; }
+interface SlimAccount {
+  id: string; providerName: string; category: string;
+  // Two accounts for one provider on one property are otherwise identical in
+  // the picker; these are what tells them apart.
+  serviceLabel?: string | null;
+  accountNumber?: string | null;
+}
 interface PropertyWithAccounts extends Omit<Property, 'utilityAccounts'> {
   utilityAccounts: SlimAccount[];
 }
@@ -1090,7 +1096,7 @@ function BillCard({
                     <optgroup key={prop.id} label={prop.nickname || prop.address}>
                       {prop.utilityAccounts.map(acct => (
                         <option key={acct.id} value={acct.id}>
-                          {acct.providerName} ({acct.category.toLowerCase()})
+                          {describeAccount(acct)}
                         </option>
                       ))}
                     </optgroup>
@@ -1182,6 +1188,24 @@ function isBillReady(bill: ParsedBill): boolean {
 async function refreshAccounts(): Promise<PropertyWithAccounts[]> {
   const res = await api.get('/import/accounts');
   return (res.data as { properties: PropertyWithAccounts[] }).properties;
+}
+
+/**
+ * How an account reads in the picker.
+ *
+ * A property can hold two accounts with the same provider and category — two
+ * IID meters, two City of El Centro accounts — and "IID (electric)" twice
+ * gives no way to choose. The nickname says which meter it is; the masked
+ * number is the fallback when there is no nickname yet.
+ */
+function describeAccount(acct: {
+  providerName: string; category: string;
+  serviceLabel?: string | null; accountNumber?: string | null;
+}): string {
+  const base = `${acct.providerName} (${acct.category.toLowerCase()})`;
+  if (acct.serviceLabel) return `${base} — ${acct.serviceLabel}`;
+  if (acct.accountNumber) return `${base} — ${acct.accountNumber}`;
+  return base;
 }
 
 export default function ImportPage() {
