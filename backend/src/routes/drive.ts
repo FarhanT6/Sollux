@@ -351,7 +351,7 @@ router.post('/stream', attachDbUser, async (req, res) => {
     // Send updated properties list for the review dropdowns
     const properties = await db.property.findMany({
       where: { userId },
-      include: { utilityAccounts: { select: { id: true, providerName: true, category: true }, orderBy: { providerName: 'asc' } } },
+      include: { utilityAccounts: { select: { id: true, providerName: true, category: true, serviceLabel: true, accountNumber: true }, orderBy: { providerName: 'asc' } } },
       orderBy: { address: 'asc' },
     });
     send({ type: 'done', autoImported, properties });
