@@ -7,12 +7,14 @@
  * right data and their own PDFs, so moving them preserves everything.
  *
  * Usage, from backend/:
- *   # Everything the audit flagged for one service address:
- *   npx tsx scripts/move-statements.ts --from <accountId> --to <accountId> \
- *     --address "488 H ST"
+ *   # Everything the audit flagged for one service address. The destination is
+ *   # named rather than passed as an id, so nothing has to be copied between
+ *   # commands:
+ *   npx tsx scripts/move-statements.ts --from ACCOUNT_ID \
+ *     --to-property "De Anza" --to-provider IID --address "488 H ST"
  *
- *   # Or a specific list of ids:
- *   npx tsx scripts/move-statements.ts --to <accountId> --ids id1,id2,id3
+ *   # Or by id, or a specific list of statements:
+ *   npx tsx scripts/move-statements.ts --to ACCOUNT_ID --ids id1,id2,id3
  *
  *   Add --apply to write. Dry run by default.
  *
@@ -28,24 +30,82 @@ const getArg = (name: string) => {
   return i >= 0 ? args[i + 1] : undefined;
 };
 const FROM = getArg('from');
-const TO = getArg('to');
+// Either the destination account's id, or the property and provider to find
+// it by — copying a cuid between two terminal commands is its own source of
+// mistakes, and shell metacharacters in a pasted placeholder fail obscurely.
+const TO_ARG = getArg('to');
+const TO_PROPERTY = getArg('to-property');
+const TO_PROVIDER = getArg('to-provider');
 const ADDRESS = getArg('address');
 const IDS = (getArg('ids') || '').split(',').map(s => s.trim()).filter(Boolean);
 const APPLY = args.includes('--apply');
 
 const monthKey = (d: Date) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 
-(async () => {
-  if (!TO || (!IDS.length && !(FROM && ADDRESS))) {
-    console.error('Usage: --to <accountId> [--from <accountId> --address "488 H ST" | --ids id1,id2] [--apply]');
+/** Resolve the destination from a property name plus provider. */
+async function findTargetAccount() {
+  if (TO_ARG) {
+    return db.utilityAccount.findUnique({
+      where: { id: TO_ARG },
+      select: { id: true, providerName: true, serviceLabel: true, category: true, property: { select: { address: true, nickname: true } } },
+    });
+  }
+
+  const properties = await db.property.findMany({
+    where: {
+      OR: [
+        { address: { contains: TO_PROPERTY!, mode: 'insensitive' } },
+        { nickname: { contains: TO_PROPERTY!, mode: 'insensitive' } },
+      ],
+    },
+    select: { id: true, address: true, nickname: true },
+  });
+  if (properties.length === 0) {
+    console.error(`No property matches "${TO_PROPERTY}".`);
+    process.exit(1);
+  }
+  if (properties.length > 1) {
+    console.error(`"${TO_PROPERTY}" matches ${properties.length} properties:`);
+    properties.forEach(p => console.error(`  ${p.nickname || p.address}`));
+    console.error('Narrow it down.');
     process.exit(1);
   }
 
-  const target = await db.utilityAccount.findUnique({
-    where: { id: TO },
-    select: { id: true, providerName: true, category: true, property: { select: { address: true, nickname: true } } },
+  const accounts = await db.utilityAccount.findMany({
+    where: {
+      propertyId: properties[0].id,
+      ...(TO_PROVIDER ? { providerName: { contains: TO_PROVIDER, mode: 'insensitive' } } : {}),
+    },
+    select: { id: true, providerName: true, serviceLabel: true, category: true, property: { select: { address: true, nickname: true } } },
   });
-  if (!target) { console.error(`No account with id ${TO}`); process.exit(1); }
+  if (accounts.length === 0) {
+    console.error(`No ${TO_PROVIDER ?? ''} account on ${properties[0].nickname || properties[0].address}. Create it first.`);
+    process.exit(1);
+  }
+  if (accounts.length > 1) {
+    // Several meters for one provider is exactly the situation this script
+    // exists to clean up, so refuse rather than pick.
+    console.error(`${accounts.length} matching accounts on ${properties[0].nickname || properties[0].address}:`);
+    accounts.forEach(a => console.error(`  ${a.providerName}${a.serviceLabel ? ` — ${a.serviceLabel}` : ''} [${a.category}]  id ${a.id}`));
+    console.error('Pass one with --to <id>.');
+    process.exit(1);
+  }
+  return accounts[0];
+}
+
+(async () => {
+  const haveDestination = TO_ARG || TO_PROPERTY;
+  if (!haveDestination || (!IDS.length && !(FROM && ADDRESS))) {
+    console.error('Usage:');
+    console.error('  --to-property "De Anza" --to-provider IID --from <accountId> --address "488 H ST"');
+    console.error('  --to <accountId> --ids id1,id2');
+    console.error('Add --apply to write. Dry run by default.');
+    process.exit(1);
+  }
+
+  const target = await findTargetAccount();
+  if (!target) { console.error(`No account with id ${TO_ARG}`); process.exit(1); }
+  const TO = target.id;
 
   // Select by explicit ids, or by what the bill says its service address was.
   let candidates = await db.statement.findMany({
@@ -76,8 +136,9 @@ const monthKey = (d: Date) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 
   const occupied = new Set(existing.map(s => monthKey(s.statementDate)));
 
   console.log(APPLY ? '── APPLYING ──\n' : '── DRY RUN (pass --apply to write) ──\n');
-  console.log(`Destination: ${target.providerName} [${target.category}] at ` +
-    `${target.property.nickname || target.property.address}\n`);
+  console.log(`Destination: ${target.providerName}${target.serviceLabel ? ` — ${target.serviceLabel}` : ''} ` +
+    `[${target.category}] at ${target.property.nickname || target.property.address}`);
+  console.log(`            id ${TO}\n`);
 
   let moved = 0, blocked = 0;
   for (const s of candidates) {
