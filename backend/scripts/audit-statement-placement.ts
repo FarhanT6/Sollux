@@ -98,9 +98,28 @@ const digits = (s: string) => s.replace(/\D/g, '');
 
       if (problems.length) {
         console.log(`\n${property.nickname || property.address} · ${account.providerName} [${account.category}]`);
+        // Print what is being compared against. Without it a reader cannot
+        // tell whether the bills are misfiled or the property is simply
+        // recorded under a different address — and every bill for a property
+        // whose address field says something else flags, which looks alarming
+        // and means nothing.
+        console.log(`  property address on file: "${property.address}"`);
         console.log(`  account ${account.id}${storedNumber ? `  stored acct #${storedNumber}` : '  no acct# stored'}`);
         console.log(`  ${problems.length} of ${statements.length} statement(s) disagree with this property:`);
         problems.forEach(p => console.log(p));
+
+        // When every statement names the same address, the property record is
+        // the likelier culprit: forty bills agreeing with each other and
+        // disagreeing with one field is evidence about the field.
+        const addresses = new Set(
+          statements
+            .map(s => (s.rawDataJson as Record<string, unknown> | null)?.serviceAddress)
+            .filter((a): a is string => typeof a === 'string')
+        );
+        if (problems.length === statements.length && addresses.size === 1) {
+          console.log(`  → every bill here says "${[...addresses][0]}". If that is this property,`);
+          console.log('    correct its address rather than moving the statements.');
+        }
       }
     }
   }
