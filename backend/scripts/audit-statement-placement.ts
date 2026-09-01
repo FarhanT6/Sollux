@@ -111,14 +111,24 @@ const digits = (s: string) => s.replace(/\D/g, '');
         // When every statement names the same address, the property record is
         // the likelier culprit: forty bills agreeing with each other and
         // disagreeing with one field is evidence about the field.
-        const addresses = new Set(
-          statements
-            .map(s => (s.rawDataJson as Record<string, unknown> | null)?.serviceAddress)
-            .filter((a): a is string => typeof a === 'string')
-        );
-        if (problems.length === statements.length && addresses.size === 1) {
-          console.log(`  → every bill here says "${[...addresses][0]}". If that is this property,`);
-          console.log('    correct its address rather than moving the statements.');
+        const billAddresses = statements
+          .map(s => (s.rawDataJson as Record<string, unknown> | null)?.serviceAddress)
+          .filter((a): a is string => typeof a === 'string');
+        // Compare on the normalised key, not the raw string: "488 H ST BRAWLEY
+        // CA" and "488 H ST, BRAWLEY CA" are one address, and treating them as
+        // two suppressed this hint exactly where it was needed.
+        const distinct = new Set(billAddresses.map(addressKey));
+        if (problems.length === statements.length && distinct.size === 1 && billAddresses.length > 0) {
+          console.log(`  → every bill here says "${billAddresses[0]}".`);
+          if (!/\d/.test(property.address)) {
+            // No street number in the property's address at all — it holds a
+            // name, not an address, so nothing will ever match it.
+            console.log(`    "${property.address}" is a name, not a street address, so no bill can`);
+            console.log('    match this property. Set its address and future imports will match.');
+          } else {
+            console.log('    If that is this property, correct its address rather than moving');
+            console.log('    the statements.');
+          }
         }
       }
     }
