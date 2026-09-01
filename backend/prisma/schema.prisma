@@ -26,6 +26,12 @@ model User {
   // Owners have this null. One level only — a member cannot own members.
   ownerUserId      String?
   owner            User?            @relation("AccountMembers", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  // What counts as operating cost. A late fee and an arrears installment are
+  // real money leaving the account, but neither is the cost of running the
+  // property this month — so both are excluded by default and can be folded
+  // back in for anyone who would rather see total cash out.
+  includePenaltiesInOperating   Boolean @default(false)
+  includePaymentPlanInOperating Boolean @default(false)
   members          User[]           @relation("AccountMembers")
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
@@ -262,6 +268,10 @@ model Statement {
   // it's amountDue + pastDueCarried, computed wherever it's displayed.
   chargesExcludingFees Decimal?        @db.Decimal(10, 2)
   penaltiesFees        Decimal?        @db.Decimal(10, 2)
+  // An installment on an arrears payment plan charged within this bill. It is
+  // repayment of an old debt, not what the property cost to run this month, so
+  // it is held separately and left out of operating cost by default.
+  paymentPlanAmount    Decimal?        @db.Decimal(10, 2)
   pastDueCarried       Decimal?        @db.Decimal(10, 2)
   notes                String?
   usageValue           Decimal?        @db.Decimal(10, 3)

@@ -765,6 +765,9 @@ export interface Statement {
   // A deposit taken at the start of a term rather than a period's charge —
   // on file, but excluded from monthly totals and averages.
   isDownPayment?: boolean;
+  // An arrears installment charged inside this bill: repayment of old debt,
+  // not this period's service. Excluded from operating cost by default.
+  paymentPlanAmount?: number | string | null;
   dueDate?: string;
   billingPeriodStart?: string;
   billingPeriodEnd?: string;

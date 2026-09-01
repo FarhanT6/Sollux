@@ -60,6 +60,9 @@ export interface ExtractedBillData {
   previousBalance:    number | null;
   paymentsReceived:   number | null;
   currentCharges:     number | null;
+  // An arrears installment charged inside this bill, itemised by some
+  // providers as its own line ("Payment Plan" on a City of Brawley bill).
+  paymentPlanAmount:  number | null;
   lateFee:            number | null;
   usageValue:         number | null;
   usageUnit:          string | null;   // kWh, CCF, therms, gallons, etc.
@@ -114,6 +117,7 @@ Schema (use null for any field not present in the document):
   "ratePlan": "string or null — rate schedule, plan name, or tier",
   "isPaid": boolean — true ONLY if balance is $0.00 or document shows 'Paid in Full' / paid stamp,
   "utilityType": "electric | gas | water | sewer | trash | solar | internet | phone | other",
+  "paymentPlanAmount": number or null — an installment on an arrears or payment-plan arrangement charged within this bill, when the bill itemises one (a line reading "Payment Plan", "Installment", "Arrears Payment" or similar). This is repayment of an older debt carried inside a current bill, not this period's service, so report it separately as well as leaving it in the total,
   "chargeBreakdown": { "line item name": dollar_amount, ... } or null — every individual charge the bill itemises, using the bill's own wording as the key ({"Water": 118.53, "Sewer": 121.50} for a bill splitting the two). Include credits and discounts as negative values. This is how a total is explained later, so itemise whenever the bill does,
   "alerts": ["string", ...] — notable flags: past due, late fees, NSF, payment plan, high usage, leak, outage credit, SCRA, debt collection notice, legal action warning, etc.
 }
@@ -744,6 +748,10 @@ async function extractWithRegex(pdfBuffer: Buffer, filename: string): Promise<Ex
     billingPeriodEnd,
     amountDue,
     previousBalance,
+    // The regex extractor reads the breakdown; a line named for a payment plan
+    // is the installment. AI extraction reports it directly.
+    paymentPlanAmount: Object.entries(chargeBreakdown)
+      .find(([label]) => /payment\s*plan|installment|arrears/i.test(label))?.[1] ?? null,
     paymentsReceived,
     currentCharges,
     lateFee,
@@ -1085,7 +1093,8 @@ export async function parseBill(
         providerName: null, serviceAddress: null, accountNumber: null,
         statementDate: null, dueDate: null, billingPeriodStart: null,
         billingPeriodEnd: null, amountDue: null, previousBalance: null,
-        paymentsReceived: null, currentCharges: null, lateFee: null, usageValue: null,
+        paymentsReceived: null, currentCharges: null, paymentPlanAmount: null,
+        lateFee: null, usageValue: null,
         usageUnit: null, ratePlan: null, isPaid: false,
         utilityType: 'other', chargeBreakdown: null, alerts: [],
       },

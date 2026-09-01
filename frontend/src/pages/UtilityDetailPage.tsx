@@ -5,7 +5,7 @@ import {
   getPaymentPlan, createPaymentPlan, updatePaymentPlan, deletePaymentPlan,
   upsertUtilityLoan, deleteUtilityLoan, patchStatement, createStatement,
   revealUtilityAccountNumber, createPayment, updatePayment, deletePayment,
-  getBankAccounts,
+  getBankAccounts, getCostSettings, updateCostSettings,
 } from '../api/client';
 import { CATEGORY_LABELS, CATEGORY_COLORS, LOAN_TYPE_LABELS,
   UTILITY_PAYMENT_METHODS, PAYMENT_STATUS_LABELS } from '../types';
@@ -13,6 +13,7 @@ import type { BankAccount } from '../types';
 import { Pill, Skeleton, EmptyState } from '../components/ui';
 import { format, isAfter } from 'date-fns';
 import { fmtDate, yearOf } from '../lib/date';
+import { operatingCost } from '../lib/operatingCost';
 
 const CATEGORY_ICONS: Record<string, string> = {
   ELECTRIC: '⚡', GAS: '🔥', WATER: '💧', SEWER: '🚿',
@@ -728,10 +729,29 @@ export default function UtilityDetailPage() {
   const totalFees = feesData.reduce((s, r: any) => s + (r?.total || 0), 0);
   const totalPenalties = totalFees;
 
+  // Whether penalties and arrears installments count as operating cost is an
+  // account setting, since it changes reported figures everywhere.
+  const [costOptions, setCostOptions] = useState<{ includePenalties: boolean; includePaymentPlan: boolean }>(
+    { includePenalties: false, includePaymentPlan: false }
+  );
+  useEffect(() => {
+    getCostSettings()
+      .then(s => setCostOptions({
+        includePenalties: !!s.includePenaltiesInOperating,
+        includePaymentPlan: !!s.includePaymentPlanInOperating,
+      }))
+      .catch(() => {});
+  }, []);
+
   const currentYear = new Date().getFullYear();
-  const ytdTotal = statements
-    .filter(s => yearOf(s.statementDate) === currentYear)
-    .reduce((sum, s) => sum + Number(s.amountDue ?? 0), 0);
+  const thisYear = statements.filter(s => yearOf(s.statementDate) === currentYear);
+  // Two figures, because they answer different questions: what the property
+  // cost to run, and what had to be paid. An arrears installment and a late
+  // fee are cash out but not operating cost — see lib/operatingCost.ts.
+  const ytdOperating = thisYear.reduce((sum, s) => sum + operatingCost(s, costOptions), 0);
+  const ytdBilled = thisYear.reduce((sum, s) => sum + Number(s.amountDue ?? 0), 0);
+  const ytdExcluded = ytdBilled - ytdOperating;
+  const ytdTotal = ytdOperating;
   const latestAmt = statements[0]?.amountDue != null ? Number(statements[0].amountDue) : null;
   const prevAmt = statements[1]?.amountDue != null ? Number(statements[1].amountDue) : null;
   const momPct = latestAmt != null && prevAmt != null && prevAmt !== 0
@@ -861,7 +881,15 @@ export default function UtilityDetailPage() {
             value: momPct != null ? `${momPct > 0 ? '↑' : '↓'} ${Math.abs(momPct).toFixed(1)}%` : '—',
             color: momPct != null ? (momPct > 0 ? 'text-red-400' : 'text-emerald-400') : 'text-white',
           },
-          { label: `YTD ${currentYear}`, value: fmtMoney(ytdTotal || null) },
+          {
+            label: `YTD ${currentYear} operating`,
+            value: fmtMoney(ytdTotal || null),
+            sub: ytdExcluded > 0
+              ? <span className="text-gray-500" title="Penalties and arrears installments are not operating cost">
+                  {fmtMoney(ytdBilled)} billed
+                </span>
+              : undefined,
+          },
           { label: 'Total paid', value: fmtMoney(totalPaid || null), sub: `${payments.length} payments` },
           {
             label: 'Total fees & penalties',
@@ -1227,6 +1255,38 @@ export default function UtilityDetailPage() {
                       <p className={`text-lg font-semibold ${c}`}>{value}</p>
                     </div>
                   ))}
+                </div>
+
+                {/* What counts as operating cost. Both are cash out; neither is
+                    the cost of running the property, so both are excluded by
+                    default and can be folded back in here. */}
+                <div className="rounded-xl px-4 py-3 space-y-2"
+                  style={{ background: '#161616', border: '1px solid rgba(255,255,255,0.06)' }}>
+                  <p className="text-xs text-gray-400">Count towards operating cost</p>
+                  {([
+                    ['includePenalties', 'includePenaltiesInOperating', 'Penalties and late fees'],
+                    ['includePaymentPlan', 'includePaymentPlanInOperating', 'Payment plan installments (arrears repayment)'],
+                  ] as const).map(([key, apiKey, label]) => (
+                    <label key={key} className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={costOptions[key]}
+                        onChange={async e => {
+                          const next = { ...costOptions, [key]: e.target.checked };
+                          setCostOptions(next);
+                          // Persisted per account: this changes reported
+                          // figures, so it must not differ between browsers.
+                          try { await updateCostSettings({ [apiKey]: e.target.checked }); }
+                          catch { setCostOptions(costOptions); }
+                        }}
+                      />
+                      {label}
+                    </label>
+                  ))}
+                  <p className="text-xs text-gray-600">
+                    Off by default — both are money paid, but neither is what the property
+                    cost to run this month.
+                  </p>
                 </div>
 
                 {/* Per-statement breakdown */}
