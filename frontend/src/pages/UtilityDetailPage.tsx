@@ -12,7 +12,7 @@ import { CATEGORY_LABELS, CATEGORY_COLORS, LOAN_TYPE_LABELS,
 import type { BankAccount } from '../types';
 import { Pill, Skeleton, EmptyState } from '../components/ui';
 import { format, isAfter } from 'date-fns';
-import { fmtDate, yearOf } from '../lib/date';
+import { monthKey, fmtDate, yearOf } from '../lib/date';
 import { operatingCost } from '../lib/operatingCost';
 import ChargeAnalyticsPanel from '../components/utility/ChargeAnalyticsPanel';
 
@@ -1009,7 +1009,16 @@ export default function UtilityDetailPage() {
                       }}>
                       {/* Month */}
                       <div className="w-20 flex-shrink-0">
-                        <p className="text-sm font-semibold text-white">{fmtDate(s.statementDate, 'MMM yyyy')}</p>
+                        {/* Labelled by the period billed, not the day the bill
+                            was issued. An IID bill issued 1 June covers late
+                            April to late May — calling that row "Jun 2026"
+                            makes May look absent and double-counts June. */}
+                        <p className="text-sm font-semibold text-white">
+                          {fmtDate(s.billingPeriodEnd || s.statementDate, 'MMM yyyy')}
+                        </p>
+                        {s.billingPeriodEnd && monthKey(s.billingPeriodEnd) !== monthKey(s.statementDate) && (
+                          <p className="text-xs text-gray-600">billed {fmtDate(s.statementDate, 'MMM d')}</p>
+                        )}
                         {isLatest && <p className="text-xs text-amber-500 mt-0.5">Latest</p>}
                       </div>
 
