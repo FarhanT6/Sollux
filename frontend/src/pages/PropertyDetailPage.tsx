@@ -1,13 +1,13 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { getProperty, getStatements, getPayments, getInsights, syncUtility, updateUtility, deleteUtility, updateProperty, deleteProperty, markInsightRead, dismissInsight, getStatementDownloadUrl, revealUtilityAccountNumber, getUtilityUsername, getUtilityPassword } from '../api/client';
+import { getProperty, getStatements, getPayments, getInsights, syncUtility, updateUtility, deleteUtility, updateProperty, deleteProperty, markInsightRead, dismissInsight, getStatementDownloadUrl, revealUtilityAccountNumber, getUtilityUsername, getUtilityPassword, getCostSettings } from '../api/client';
 import type { Property, Statement, Payment, AIInsight, UtilityAccount } from '../types';
 import { CATEGORY_LABELS, CATEGORY_COLORS, INSURANCE_TYPE_LABELS, LOAN_TYPE_LABELS } from '../types';
-import { PageHeader, StatCard, InsightCard, Skeleton, EmptyState, Pill } from '../components/ui';
+import { PageHeader, StatCard, InsightCard, Skeleton, EmptyState, Pill, Modal } from '../components/ui';
 import { format } from 'date-fns';
 import AddUtilityModal from '../components/utility/AddUtilityModal';
 import { fmtDate } from '../lib/date';
-import { monthlyEquivalent } from '../lib/cadence';
+import { computeMonthlySpend } from '../lib/monthlySpend';
 
 type Tab = 'utilities' | 'payments' | 'insights' | 'documents';
 
@@ -70,24 +70,27 @@ export default function PropertyDetailPage() {
     }).finally(() => setLoading(false));
   }, [id]);
 
+  const [costOptions, setCostOptions] = useState({ includePenalties: false, includePaymentPlan: false });
+  useEffect(() => {
+    getCostSettings()
+      .then(cs => setCostOptions({
+        includePenalties: !!cs.includePenaltiesInOperating,
+        includePaymentPlan: !!cs.includePaymentPlanInOperating,
+      }))
+      .catch(() => {});
+  }, []);
+
   const accounts = property?.utilityAccounts || [];
   const activeAccounts = accounts.filter(a => a.isActive !== false);
   const inactiveAccounts = accounts.filter(a => a.isActive === false);
-  const monthlyTotal = activeAccounts.reduce((s, a) => {
-    // Skip a deposit: it is not a period's charge, so counting it here makes
-    // the month a policy starts look like a spike.
-    const stmt = (a.statements ?? []).find(st => !st.isDownPayment);
-    if (!stmt) {
-      // No bill yet — an account that bills once a term still has a monthly
-      // cost if we know what a bill looks like.
-      return s + monthlyEquivalent(a);
-    }
-    // Open balance from the editable columns: this period's charge + carried past due.
-    const bal = Number(stmt.amountDue ?? 0) + Number((stmt as any).pastDueCarried ?? 0);
-    // Spread it over the months the bill covers — an annual premium is not a
-    // month's cost.
-    return s + monthlyEquivalent(a, bal);
-  }, 0);
+  // Two figures rather than one, and both explainable — see lib/monthlySpend.ts
+  // for why the previous single number belonged to no particular month.
+  const spend = useMemo(
+    () => computeMonthlySpend(activeAccounts as any, costOptions),
+    [activeAccounts, costOptions],
+  );
+  const [showBreakdown, setShowBreakdown] = useState(false);
+
   const lastSynced = activeAccounts.map(a => a.lastSyncedAt).filter(Boolean).sort().pop();
 
   async function handleSync(accountId: string) {
@@ -168,10 +171,82 @@ export default function PropertyDetailPage() {
         }
       />
 
+      {showBreakdown && (
+        <Modal title="How the monthly total is calculated" onClose={() => setShowBreakdown(false)}
+          footer={<button className="btn text-xs" onClick={() => setShowBreakdown(false)}>Close</button>}>
+          <div className="space-y-5">
+            <div>
+              <div className="flex items-baseline justify-between mb-2">
+                <p className="text-xs text-gray-400">
+                  {spend.currentMonthKey
+                    ? `${fmtDate(spend.currentMonthKey + '-01', 'MMMM yyyy')} — the most recent month with bills`
+                    : 'No bills yet'}
+                </p>
+                <p className="text-sm font-semibold text-white">
+                  ${spend.current.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </p>
+              </div>
+              {spend.currentLines.map(line => (
+                <div key={line.accountId} className="flex items-baseline justify-between py-1 text-xs border-t border-white/5">
+                  <span className="text-gray-300">{line.label}</span>
+                  <span className="flex items-baseline gap-3">
+                    <span className="text-gray-600">{line.basis}</span>
+                    <span className={line.amount > 0 ? 'text-gray-200' : 'text-gray-600'}>
+                      ${line.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </span>
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            <div>
+              <div className="flex items-baseline justify-between mb-2">
+                <p className="text-xs text-gray-400">
+                  Average across {spend.averageMonths} month{spend.averageMonths === 1 ? '' : 's'} of bills
+                </p>
+                <p className="text-sm font-semibold text-white">
+                  ${spend.average.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </p>
+              </div>
+              {spend.averageLines.map(line => (
+                <div key={line.accountId} className="flex items-baseline justify-between py-1 text-xs border-t border-white/5">
+                  <span className="text-gray-300">{line.label}</span>
+                  <span className="flex items-baseline gap-3">
+                    <span className="text-gray-600">{line.basis}</span>
+                    <span className="text-gray-200">
+                      ${line.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </span>
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            <p className="text-xs text-gray-500 leading-relaxed">
+              Amounts are what each bill charged for its period. Past due carried from
+              earlier months is excluded — it is money owed, not this month's cost.
+              {(!costOptions.includePenalties || !costOptions.includePaymentPlan) &&
+                ' Penalties and arrears installments are excluded too; change that on an account\u2019s Fees tab.'}
+              {' '}A bill that does not arrive monthly is spread over the months it covers.
+            </p>
+          </div>
+        </Modal>
+      )}
+
       {/* Property hero stats */}
       <div className="px-6 py-4 border-b border-white/8">
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <StatCard label="Monthly total" value={`$${monthlyTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} />
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+          <button onClick={() => setShowBreakdown(true)} className="text-left" title="See how this is calculated">
+            <StatCard
+              label={spend.currentMonthKey ? `Monthly total · ${fmtDate(spend.currentMonthKey + '-01', 'MMM yyyy')}` : 'Monthly total'}
+              value={`$${spend.current.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+              sub="View breakdown"
+            />
+          </button>
+          <StatCard
+            label="Average monthly"
+            value={`$${spend.average.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+            sub={`across ${spend.averageMonths} month${spend.averageMonths === 1 ? '' : 's'}`}
+          />
           <StatCard label="Last synced" value={lastSynced ? format(new Date(lastSynced), 'h:mm a') : 'Never'} sub={lastSynced ? fmtDate(lastSynced, 'MMM d') : ''} />
           <StatCard label="Utility accounts" value={accounts.length} sub="All connected" subColor="green" />
           <StatCard label="AI insights" value={insights.filter(i => !i.isRead).length} sub={insights.filter(i => !i.isRead).length > 0 ? 'Unread' : 'All clear'} subColor={insights.filter(i => !i.isRead).length > 0 ? 'red' : 'neutral'} />
