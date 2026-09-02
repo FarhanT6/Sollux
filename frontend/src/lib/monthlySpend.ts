@@ -171,3 +171,67 @@ export function computeMonthlySpend(
       .sort((a, b) => b.amount - a.amount),
   };
 }
+
+export interface SpendProperty {
+  id: string;
+  address: string;
+  nickname?: string | null;
+  utilityAccounts?: SpendAccount[];
+}
+
+export interface PortfolioSpendLine {
+  propertyId: string;
+  label: string;
+  current: number;
+  average: number;
+  /** Which month `current` came from — properties bill on their own cycles. */
+  monthKey: string | null;
+  accountCount: number;
+}
+
+export interface PortfolioSpend {
+  current: number;
+  average: number;
+  /** How many properties contributed anything, for an honest denominator. */
+  propertiesWithData: number;
+  lines: PortfolioSpendLine[];
+}
+
+/**
+ * The same two figures across every property.
+ *
+ * Summed from each property's own computation rather than pooling all
+ * statements: properties bill on different cycles, and a portfolio total that
+ * picked one month for everyone would drop whichever properties happen to bill
+ * later. Each property contributes its own most recent month, which is what
+ * "what does the portfolio cost right now" actually means.
+ */
+export function computePortfolioSpend(
+  properties: SpendProperty[],
+  opts: OperatingCostOptions = {},
+  months = 12,
+): PortfolioSpend {
+  const lines: PortfolioSpendLine[] = [];
+
+  for (const p of properties) {
+    const accounts = p.utilityAccounts ?? [];
+    if (accounts.length === 0) continue;
+
+    const spend = computeMonthlySpend(accounts, opts, months);
+    lines.push({
+      propertyId: p.id,
+      label: p.nickname || p.address,
+      current: spend.current,
+      average: spend.average,
+      monthKey: spend.currentMonthKey,
+      accountCount: accounts.length,
+    });
+  }
+
+  return {
+    current: lines.reduce((s, l) => s + l.current, 0),
+    average: lines.reduce((s, l) => s + l.average, 0),
+    propertiesWithData: lines.filter(l => l.current > 0 || l.average > 0).length,
+    lines: lines.sort((a, b) => b.average - a.average),
+  };
+}
