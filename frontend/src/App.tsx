@@ -7,6 +7,7 @@ import PropertiesPage from './pages/PropertiesPage';
 import PropertyDetailPage from './pages/PropertyDetailPage';
 import UtilityDetailPage from './pages/UtilityDetailPage';
 import InsightsPage from './pages/InsightsPage';
+import PaymentPrioritiesPage from './pages/PaymentPrioritiesPage';
 import SettingsPage from './pages/SettingsPage';
 import FinancesPage from './pages/FinancesPage';
 import TenantsHubPage from './pages/TenantsHubPage';
@@ -71,6 +72,7 @@ export default function App() {
           <Route path="legal" element={<LegalPage />} />
 
           {/* Standalone pages */}
+          <Route path="payments" element={<PaymentPrioritiesPage />} />
           <Route path="insights" element={<InsightsPage />} />
           <Route path="settings" element={<SettingsPage />} />
 

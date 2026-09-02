@@ -303,20 +303,49 @@ router.post('/confirm', async (req: Request, res: Response) => {
           continue;
         }
 
-        // Same-month dedup only when we have a reliable date (extracted or from filename).
-        // Without one, all statements default to today — skipping dedup prevents false
-        // "already exists" collisions when importing multiple undated statements at once.
+        // What makes two statements the same bill is the period they cover, not
+        // the calendar month they were issued in. A cycle that drifts — IID
+        // billed on 1 Jul and again on 31 Jul — puts two distinct bills in one
+        // month, and a month-based key treated the second as a duplicate of
+        // the first and overwrote it. That is why months whose bill arrived on
+        // the 1st or 2nd of the next month appeared to be missing entirely.
+        //
+        // So: match on the billing period when the bill states one, and fall
+        // back to the issue month only when it does not.
         let existing = null;
         if (hasReliableDate) {
-          // UTC boundaries: statement dates are stored at midnight UTC, so a
-          // local-time window is offset by the server's zone and straddles the
-          // month edge — it can miss the month's own bill and match the next
-          // month's, reporting "already exists" for a bill that isn't there.
-          const monthStart = new Date(Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth(), 1));
-          const monthEnd   = new Date(Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth() + 1, 0, 23, 59, 59));
-          existing = await db.statement.findFirst({
-            where: { utilityAccountId, statementDate: { gte: monthStart, lte: monthEnd } },
-          });
+          if (ex.billingPeriodStart) {
+            // Periods shift by a day or two between cycles, so an exact match
+            // is too strict: treat periods starting within a week of each
+            // other as the same bill.
+            const start = new Date(ex.billingPeriodStart);
+            const window = 7 * 24 * 60 * 60 * 1000;
+            existing = await db.statement.findFirst({
+              where: {
+                utilityAccountId,
+                billingPeriodStart: {
+                  gte: new Date(start.getTime() - window),
+                  lte: new Date(start.getTime() + window),
+                },
+              },
+            });
+          }
+          if (!existing && !ex.billingPeriodStart) {
+            // No stated period. UTC boundaries: statement dates are stored at
+            // midnight UTC, so a local-time window is offset by the server's
+            // zone and straddles the month edge.
+            const monthStart = new Date(Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth(), 1));
+            const monthEnd   = new Date(Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth() + 1, 0, 23, 59, 59));
+            existing = await db.statement.findFirst({
+              where: {
+                utilityAccountId,
+                statementDate: { gte: monthStart, lte: monthEnd },
+                // Do not collide with a statement that has a period of its own:
+                // that one is identified by its period, not by its month.
+                billingPeriodStart: null,
+              },
+            });
+          }
         }
 
         // Upload PDF to S3
@@ -347,6 +376,8 @@ router.post('/confirm', async (req: Request, res: Response) => {
         // Kept as its own column: an arrears installment inside a current bill
         // is repayment, not this month's service (see operatingCost.ts).
         const planAmount = ex.paymentPlanAmount ?? null;
+        const aging = ex.agingBuckets ?? null;
+        const penaltyOn = ex.penaltyDate ? new Date(ex.penaltyDate) : null;
 
         if (existing) {
           // Overwrite with better data from the new extraction
@@ -363,6 +394,9 @@ router.post('/confirm', async (req: Request, res: Response) => {
               chargesExcludingFees: ex.currentCharges ?? existing.chargesExcludingFees,
               penaltiesFees:  ex.lateFee         ?? existing.penaltiesFees,
               paymentPlanAmount: planAmount       ?? existing.paymentPlanAmount,
+              penaltyDate:       penaltyOn         ?? existing.penaltyDate,
+              amountAfterDueDate: ex.amountAfterDueDate ?? existing.amountAfterDueDate,
+              ...(aging ? { agingBuckets: aging as any } : {}),
               pastDueCarried: ex.previousBalance ?? existing.pastDueCarried,
               usageValue:  ex.usageValue ?? existing.usageValue,
               usageUnit:   ex.usageUnit  ?? existing.usageUnit,
@@ -386,6 +420,9 @@ router.post('/confirm', async (req: Request, res: Response) => {
               chargesExcludingFees: ex.currentCharges ?? null,
               penaltiesFees:  ex.lateFee         ?? null,
               paymentPlanAmount: planAmount       ?? null,
+              penaltyDate:       penaltyOn         ?? null,
+              amountAfterDueDate: ex.amountAfterDueDate ?? null,
+              ...(aging ? { agingBuckets: aging as any } : {}),
               pastDueCarried: ex.previousBalance ?? null,
               usageValue:  ex.usageValue ?? null,
               usageUnit:   ex.usageUnit  ?? null,

@@ -17,6 +17,8 @@ import driveRouter from './routes/drive';
 import notificationsRouter from './routes/notifications';
 import authRouter from './routes/auth';
 import settingsRouter from './routes/settings';
+import prioritiesRouter from './routes/priorities';
+import analyticsRouter from './routes/analytics';
 import stripeRouter from './routes/stripe';
 import importRouter from './routes/import';
 import unitsRouter from './routes/units';
@@ -118,6 +120,8 @@ app.get('/health', (_, res) => res.json({ status: 'ok', version: '1.0.0' }));
 // ─── Public routes ────────────────────────────────────────
 app.use('/api/auth', authRouter);
 app.use('/api/settings', settingsRouter);
+app.use('/api/priorities', prioritiesRouter);
+app.use('/api/analytics', analyticsRouter);
 app.use('/api/stripe', stripeRouter);
 
 // ─── Protected routes ─────────────────────────────────────

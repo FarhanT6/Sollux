@@ -6,6 +6,21 @@ import { monthKey as rawMonthKey } from './date';
 const monthKey = (d: string | Date): string => rawMonthKey(d) ?? '';
 
 /**
+ * Which month a bill's cost belongs to.
+ *
+ * The issue date is the wrong answer. An IID bill issued 30 December covers
+ * 28 October to 25 November — that is November's electricity, and filing it
+ * under December both misstates December and leaves November looking empty.
+ * A drifting cycle also puts two bills in one calendar month, so issue month
+ * is not even unique.
+ *
+ * The period's end is what the bill was for. Only when a bill states no period
+ * does the issue date stand in.
+ */
+const billingMonth = (s: { statementDate: string; billingPeriodEnd?: string | null }): string =>
+  monthKey(s.billingPeriodEnd || s.statementDate);
+
+/**
  * What a property costs per month, and where the figure comes from.
  *
  * The previous total summed each account's *latest* statement plus its carried
@@ -32,6 +47,8 @@ export interface SpendAccount extends CadenceAccount {
 export interface SpendStatement {
   id: string;
   statementDate: string;
+  billingPeriodStart?: string | null;
+  billingPeriodEnd?: string | null;
   amountDue?: number | string | null;
   penaltiesFees?: number | string | null;
   paymentPlanAmount?: number | string | null;
@@ -83,7 +100,7 @@ export function computeMonthlySpend(
   let currentMonthKey: string | null = null;
   for (const a of active) {
     for (const s of billing(a)) {
-      const key = monthKey(s.statementDate);
+      const key = billingMonth(s);
       if (!currentMonthKey || key > currentMonthKey) currentMonthKey = key;
     }
   }
@@ -92,7 +109,7 @@ export function computeMonthlySpend(
   for (const a of active) {
     const statements = billing(a);
     const inMonth = currentMonthKey
-      ? statements.find(s => monthKey(s.statementDate) === currentMonthKey)
+      ? statements.find(s => billingMonth(s) === currentMonthKey)
       : undefined;
 
     if (inMonth) {
@@ -118,7 +135,7 @@ export function computeMonthlySpend(
         label: accountLabel(a),
         category: a.category,
         amount: spread,
-        basis: statements[0] ? `spread from ${monthKey(statements[0].statementDate)}` : 'expected amount',
+        basis: statements[0] ? `spread from ${billingMonth(statements[0])}` : 'expected amount',
       });
     } else {
       currentLines.push({
@@ -139,12 +156,12 @@ export function computeMonthlySpend(
   const averageLines: SpendLine[] = [];
 
   for (const a of active) {
-    const inWindow = billing(a).filter(s => monthKey(s.statementDate) >= cutoffKey);
+    const inWindow = billing(a).filter(s => billingMonth(s) >= cutoffKey);
     if (inWindow.length === 0) continue;
 
     let total = 0;
     for (const s of inWindow) {
-      monthsSeen.add(monthKey(s.statementDate));
+      monthsSeen.add(billingMonth(s));
       total += operatingCost(s, opts);
     }
     averageLines.push({
@@ -169,5 +186,69 @@ export function computeMonthlySpend(
     averageLines: averageLines
       .map(l => ({ ...l, amount: l.amount / averageMonths }))
       .sort((a, b) => b.amount - a.amount),
+  };
+}
+
+export interface SpendProperty {
+  id: string;
+  address: string;
+  nickname?: string | null;
+  utilityAccounts?: SpendAccount[];
+}
+
+export interface PortfolioSpendLine {
+  propertyId: string;
+  label: string;
+  current: number;
+  average: number;
+  /** Which month `current` came from — properties bill on their own cycles. */
+  monthKey: string | null;
+  accountCount: number;
+}
+
+export interface PortfolioSpend {
+  current: number;
+  average: number;
+  /** How many properties contributed anything, for an honest denominator. */
+  propertiesWithData: number;
+  lines: PortfolioSpendLine[];
+}
+
+/**
+ * The same two figures across every property.
+ *
+ * Summed from each property's own computation rather than pooling all
+ * statements: properties bill on different cycles, and a portfolio total that
+ * picked one month for everyone would drop whichever properties happen to bill
+ * later. Each property contributes its own most recent month, which is what
+ * "what does the portfolio cost right now" actually means.
+ */
+export function computePortfolioSpend(
+  properties: SpendProperty[],
+  opts: OperatingCostOptions = {},
+  months = 12,
+): PortfolioSpend {
+  const lines: PortfolioSpendLine[] = [];
+
+  for (const p of properties) {
+    const accounts = p.utilityAccounts ?? [];
+    if (accounts.length === 0) continue;
+
+    const spend = computeMonthlySpend(accounts, opts, months);
+    lines.push({
+      propertyId: p.id,
+      label: p.nickname || p.address,
+      current: spend.current,
+      average: spend.average,
+      monthKey: spend.currentMonthKey,
+      accountCount: accounts.length,
+    });
+  }
+
+  return {
+    current: lines.reduce((s, l) => s + l.current, 0),
+    average: lines.reduce((s, l) => s + l.average, 0),
+    propertiesWithData: lines.filter(l => l.current > 0 || l.average > 0).length,
+    lines: lines.sort((a, b) => b.average - a.average),
   };
 }

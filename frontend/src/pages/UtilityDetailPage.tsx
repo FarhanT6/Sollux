@@ -14,6 +14,7 @@ import { Pill, Skeleton, EmptyState } from '../components/ui';
 import { format, isAfter } from 'date-fns';
 import { fmtDate, yearOf } from '../lib/date';
 import { operatingCost } from '../lib/operatingCost';
+import ChargeAnalyticsPanel from '../components/utility/ChargeAnalyticsPanel';
 
 const CATEGORY_ICONS: Record<string, string> = {
   ELECTRIC: '⚡', GAS: '🔥', WATER: '💧', SEWER: '🚿',
@@ -111,7 +112,7 @@ function statementStatus(s: any, payments: any[] = [], newerStmt?: any, isLatest
   return { color: 'amber', label: 'Due' };
 }
 
-type Tab = 'statements' | 'payments' | 'fees';
+type Tab = 'statements' | 'payments' | 'fees' | 'charges';
 
 // ── Payment Plan Modal ────────────────────────────────────────────────────────
 function PaymentPlanModal({
@@ -943,6 +944,7 @@ export default function UtilityDetailPage() {
               ['statements', `Statements (${statements.length})`],
               ['payments',   `Payments (${payments.length})`],
               ['fees',       `Fees & Penalties${feesData.length > 0 ? ` (${feesData.length})` : ''}`],
+              ['charges',    'Charge breakdown'],
             ] as [Tab, string][]).map(([t, label]) => (
               <button key={t} onClick={() => { setTab(t); setYearFilter('all'); setSearch(''); }}
                 className={`px-4 py-1.5 rounded-lg text-xs font-medium transition-colors ${
@@ -953,7 +955,7 @@ export default function UtilityDetailPage() {
               </button>
             ))}
           </div>
-          {tab !== 'fees' && (
+          {tab !== 'fees' && tab !== 'charges' && (
             <div className="flex items-center gap-2">
               <input type="text"
                 placeholder={tab === 'statements' ? 'Search by month, amount…' : 'Search by date, confirmation…'}
@@ -1237,6 +1239,9 @@ export default function UtilityDetailPage() {
               </div>
             )
         )}
+
+        {/* ── Charge breakdown ─────────────────────────────── */}
+        {tab === 'charges' && <ChargeAnalyticsPanel accountId={account.id} />}
 
         {/* ── Fees & Penalties ─────────────────────────────── */}
         {tab === 'fees' && (

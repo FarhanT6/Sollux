@@ -8,12 +8,13 @@ import {
   arrayMove, SortableContext, rectSortingStrategy, useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { getProperties, updateProperty, deleteProperty } from '../api/client';
+import { getProperties, updateProperty, deleteProperty, getCostSettings } from '../api/client';
 import type { Property } from '../types';
-import { PageHeader, StatCard, Skeleton, EmptyState } from '../components/ui';
+import { PageHeader, StatCard, Skeleton, EmptyState, Modal } from '../components/ui';
 import { PROPERTY_TYPE_LABELS } from '../types';
 import AddPropertyModal from '../components/property/AddPropertyModal';
-import { monthlyEquivalent } from '../lib/cadence';
+import { computePortfolioSpend } from '../lib/monthlySpend';
+import { fmtDate } from '../lib/date';
 
 const TYPE_COLORS: Record<string, string> = {
   PRIMARY: 'bg-amber-500/10', RENTAL: 'bg-emerald-500/10',
@@ -39,6 +40,15 @@ export default function PropertiesPage() {
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [showAddProperty, setShowAddProperty] = useState(false);
+  const [costOptions, setCostOptions] = useState({ includePenalties: false, includePaymentPlan: false });
+  useEffect(() => {
+    getCostSettings()
+      .then(cs => setCostOptions({
+        includePenalties: !!cs.includePenaltiesInOperating,
+        includePaymentPlan: !!cs.includePaymentPlanInOperating,
+      }))
+      .catch(() => {});
+  }, []);
   const [editingProperty, setEditingProperty]   = useState<Property | null>(null);
   const [deletingProperty, setDeletingProperty] = useState<Property | null>(null);
 
@@ -84,19 +94,14 @@ export default function PropertiesPage() {
     localStorage.setItem('sollux_prop_order', JSON.stringify(newOrder));
   }
 
-  const monthlyTotal = properties.reduce((sum, p) =>
-    sum + (p.utilityAccounts || []).reduce((s, a) => {
-      // A deposit is not a period's charge — see monthlyEquivalent.
-      const stmt = (a.statements ?? []).find(st => !st.isDownPayment);
-      if (!stmt) return s + monthlyEquivalent(a);
-      const raw = stmt.rawDataJson as Record<string, unknown> | undefined;
-      // accountBalance = total owed (set by scraper); totalDue = same field under alternate name;
-      // balance = DB-level field populated by scrapeWorker; fall back to amountDue.
-      const bal = (raw?.accountBalance ?? raw?.totalDue ?? stmt.balance ?? stmt.amountDue) as number | undefined;
-      // Divided by the months the bill covers: an annual premium counted whole
-      // made this figure wrong in every month of the year.
-      return s + monthlyEquivalent(a, Number(bal ?? 0));
-    }, 0), 0);
+  // Each property contributes its own most recent billed month — properties
+  // bill on different cycles, and picking one month for the whole portfolio
+  // would drop whichever of them happen to bill later.
+  const spend = useMemo(
+    () => computePortfolioSpend(properties as any, costOptions),
+    [properties, costOptions],
+  );
+  const [showBreakdown, setShowBreakdown] = useState(false);
 
   const totalAccounts = properties.reduce((s, p) => s + (p.utilityAccounts?.length ?? 0), 0);
   const alertCount = properties.reduce((s, p) => s + (p._count?.insights ?? 0), 0);
@@ -111,12 +116,79 @@ export default function PropertiesPage() {
         }
       />
 
+      {showBreakdown && (
+        <Modal title="Monthly spend by property" onClose={() => setShowBreakdown(false)}
+          footer={<button className="btn text-xs" onClick={() => setShowBreakdown(false)}>Close</button>}>
+          <div className="space-y-4">
+            <div className="flex items-baseline justify-between text-xs text-gray-400">
+              <span>Property</span>
+              <span className="flex gap-6">
+                <span className="w-24 text-right">Latest month</span>
+                <span className="w-24 text-right">Average</span>
+              </span>
+            </div>
+
+            {spend.lines.map(line => (
+              <div key={line.propertyId} className="flex items-baseline justify-between text-xs border-t border-white/5 pt-2">
+                <span className="min-w-0">
+                  <Link to={`/properties/${line.propertyId}`} className="text-gray-200 hover:text-[#F5A623] truncate block">
+                    {line.label}
+                  </Link>
+                  <span className="text-gray-600">
+                    {line.accountCount} account{line.accountCount === 1 ? '' : 's'}
+                    {line.monthKey ? ` · ${fmtDate(line.monthKey + '-01', 'MMM yyyy')}` : ' · no bills'}
+                  </span>
+                </span>
+                <span className="flex gap-6 flex-shrink-0">
+                  <span className={`w-24 text-right ${line.current > 0 ? 'text-gray-200' : 'text-gray-600'}`}>
+                    ${line.current.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                  </span>
+                  <span className="w-24 text-right text-gray-200">
+                    ${line.average.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                  </span>
+                </span>
+              </div>
+            ))}
+
+            <div className="flex items-baseline justify-between text-xs border-t border-white/15 pt-2 font-semibold">
+              <span className="text-white">Total</span>
+              <span className="flex gap-6">
+                <span className="w-24 text-right text-white">
+                  ${spend.current.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                </span>
+                <span className="w-24 text-right text-white">
+                  ${spend.average.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                </span>
+              </span>
+            </div>
+
+            <p className="text-xs text-gray-500 leading-relaxed">
+              Each property contributes its own most recent billed month, since properties
+              bill on different cycles. Past due carried from earlier months is excluded — it
+              is money owed, not this month's cost. A bill that does not arrive monthly is
+              spread across the months it covers. Click a property to see its own breakdown.
+            </p>
+          </div>
+        </Modal>
+      )}
+
       <div className="px-6 py-5">
         {/* Stats */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
           <StatCard label="Total properties" value={properties.length} />
           <StatCard label="Utility accounts" value={totalAccounts} />
-          <StatCard label="Monthly spend" value={`$${monthlyTotal.toLocaleString('en-US', { minimumFractionDigits: 0 })}`} />
+          <button onClick={() => setShowBreakdown(true)} className="text-left" title="See how this is calculated">
+            <StatCard
+              label="Monthly spend"
+              value={`$${spend.current.toLocaleString('en-US', { maximumFractionDigits: 0 })}`}
+              sub="View breakdown"
+            />
+          </button>
+          <StatCard
+            label="Average monthly"
+            value={`$${spend.average.toLocaleString('en-US', { maximumFractionDigits: 0 })}`}
+            sub={`${spend.propertiesWithData} propert${spend.propertiesWithData === 1 ? 'y' : 'ies'} with bills`}
+          />
           <StatCard label="Active alerts" value={alertCount} subColor={alertCount > 0 ? 'red' : 'neutral'} />
         </div>
 

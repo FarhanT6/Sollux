@@ -184,6 +184,16 @@ model UtilityAccount {
   // produce one every month. Lets a monthly figure be derived before any
   // statement has been imported, and gives anomaly detection a baseline.
   expectedAmount   Decimal?        @db.Decimal(10, 2)
+  // Rules you know that the statements do not say. Learned fee behaviour comes
+  // from billing history, but a shutoff threshold appears only on a
+  // disconnection notice, if at all — so it is recorded by hand. Anything set
+  // here overrides what history infers, because you know the policy and the
+  // history is only evidence of it.
+  graceDays        Int?            // days after the due date before a fee applies
+  lateFeeFixed     Decimal?        @db.Decimal(10, 2)
+  lateFeePercent   Decimal?        @db.Decimal(5, 2)
+  shutoffAfterDays Int?            // days past due before service is cut
+  paymentRuleNotes String?
   syncEnabled      Boolean         @default(true)
   isActive         Boolean         @default(true)
   lastSyncedAt     DateTime?
@@ -280,6 +290,17 @@ model Statement {
   pdfS3Key             String?
   pdfUrl               String?
   rawDataJson          Json?
+  // When a penalty lands if the bill goes unpaid, and what the bill becomes
+  // then. Providers print both — a City of Brawley bill carries "Penalty Date
+  // 9/16/2026" and "AMOUNT DUE AFTER 09/15/2026 $507.54" — and they are the
+  // difference between predicting a late fee and guessing at one.
+  // Aging as the provider reports it: { current, days30, days60, days90plus }.
+  // Republic prints these buckets; they are a far better read of how deep
+  // arrears run than a single past-due figure, and they can be checked against
+  // the unpaid statements Sollux holds.
+  agingBuckets         Json?
+  penaltyDate          DateTime?
+  amountAfterDueDate   Decimal?        @db.Decimal(10, 2)
   // A deposit or down payment taken at the start of a term, not a period's
   // charge. Kept as its own row so the PDF and the amount are on file, but
   // excluded from monthly totals and from per-month averages — otherwise the
