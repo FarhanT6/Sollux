@@ -509,6 +509,40 @@ async function extractWithRegex(pdfBuffer: Buffer, filename: string): Promise<Ex
     }
   }
 
+  // Some bills print the period as a bare pair of dates in a meter-reading row,
+  // with nothing between them for the patterns above to key on. IID prints:
+  //
+  //   IID-2B6B-200425  05/29/2025 06/26/2025  29  8,275
+  //
+  // — meter, from, to, days, kWh. Every pattern above needs a "to"/"through"/
+  // dash separator, so IID's period was never extracted in text mode at all,
+  // and the importer fell back to inferring the period from the issue month.
+  // That is worse than it sounds: a cycle issued on the 1st and again on the
+  // 31st then infers the *same* month for both bills, making two distinct
+  // statements indistinguishable.
+  //
+  // A bare pair of dates is too weak a shape to trust on its own, so this
+  // requires the day count printed after them to agree with the span they
+  // describe. That is what makes it a billing period rather than two dates
+  // that happen to sit next to a number.
+  if (!billingPeriodStart || !billingPeriodEnd) {
+    const bare = /(\d{1,2}\/\d{1,2}\/\d{2,4})\s+(\d{1,2}\/\d{1,2}\/\d{2,4})\s+(\d{1,3})\b/g;
+    for (const m of text.matchAll(bare)) {
+      const start = parseDate(m[1]);
+      const end   = parseDate(m[2]);
+      const days  = Number(m[3]);
+      if (!start || !end || !days) continue;
+      const span = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 86400000);
+      // Providers count the days inclusively or exclusively depending on the
+      // provider, hence the tolerance rather than an exact equality.
+      if (span > 0 && Math.abs(span - days) <= 2) {
+        billingPeriodStart = start;
+        billingPeriodEnd   = end;
+        break;
+      }
+    }
+  }
+
   // ── Amount due ────────────────────────────────────────────────────────────
   const amountDueLabels: RegExp[] = [
     // Generic
