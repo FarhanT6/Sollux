@@ -39,6 +39,10 @@ const NAV = [
     icon: <Ico><path d="M3 21h18"/><path d="M9 21V7H5l7-5 7 5v14"/><rect x="9" y="13" width="2" height="4"/><rect x="13" y="13" width="2" height="4"/></Ico>,
   },
   {
+    to: '/payments', label: 'Payments',
+    icon: <Ico><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></Ico>,
+  },
+  {
     to: '/legal', label: 'Legal',
     icon: <Ico><path d="M12 3v18"/><path d="M5 7h14"/><path d="M6 7l-3 6h6z"/><path d="M18 7l-3 6h6z"/></Ico>,
   },

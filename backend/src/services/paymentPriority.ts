@@ -47,8 +47,13 @@ export interface AccountPriority {
   billsSeen: number;
   averageFee: number;
   totalFeesPaid: number;
-  /** The fee this specific bill will incur, when the statement says so. */
+  /** The fee this specific bill will incur, when the statement or your rule says so. */
   knownNextFee: number | null;
+  /** Where the penalty expectation came from, so the UI never overstates it. */
+  feeSource: 'your_rule' | 'stated_on_bill' | 'history' | 'none';
+  /** From your own rule: when service is cut, and how long that is away. */
+  shutoffDate: string | null;
+  daysUntilShutoff: number | null;
   /** Typical days between the due date and a fee appearing, from history. */
   typicalGraceDays: number | null;
 
@@ -163,9 +168,18 @@ export async function getPaymentPriorities(userId: string, propertyId?: string):
 
     const fees = analyseFees(statements);
 
-    // Prefer what the bill states over anything inferred.
-    let penaltyDate: Date | null = latest.penaltyDate ?? null;
+    // Precedence: your own rule, then what the bill states, then history. You
+    // know the policy; the bill reports this instance of it; history is only
+    // evidence. Nothing inferred should ever override something known.
+    let penaltyDate: Date | null = null;
     let penaltyDateIsEstimate = false;
+
+    if (account.graceDays != null && latest.dueDate) {
+      penaltyDate = new Date(latest.dueDate.getTime() + account.graceDays * DAY);
+    } else if (latest.penaltyDate) {
+      penaltyDate = latest.penaltyDate;
+    }
+
     if (!penaltyDate && latest.dueDate) {
       // No stated penalty date. If this provider has charged fees before, the
       // due date is the best available proxy; the grace observed in history
@@ -177,9 +191,27 @@ export async function getPaymentPriorities(userId: string, propertyId?: string):
       penaltyDateIsEstimate = true;
     }
 
-    const knownNextFee = latest.amountAfterDueDate != null
-      ? Math.max(0, num(latest.amountAfterDueDate) - currentCharges - pastDue)
-      : null;
+    // Your rule first: a fixed fee, a percentage of the balance, or both.
+    let knownNextFee: number | null = null;
+    let feeSource: AccountPriority['feeSource'] = 'none';
+    if (account.lateFeeFixed != null || account.lateFeePercent != null) {
+      knownNextFee = num(account.lateFeeFixed)
+        + (num(account.lateFeePercent) / 100) * (currentCharges + pastDue);
+      feeSource = 'your_rule';
+    } else if (latest.amountAfterDueDate != null) {
+      knownNextFee = Math.max(0, num(latest.amountAfterDueDate) - currentCharges - pastDue);
+      feeSource = 'stated_on_bill';
+    } else if (fees.feeBehaviour !== 'never_charged' && fees.feeBehaviour !== 'unknown') {
+      feeSource = 'history';
+    }
+
+    // Shutoff is never inferred: it appears on a disconnection notice, not a
+    // bill, so it is reported only when you have recorded the threshold.
+    let shutoffDate: Date | null = null;
+    if (account.shutoffAfterDays != null && latest.dueDate && balanceToCurrent > 0) {
+      shutoffDate = new Date(latest.dueDate.getTime() + account.shutoffAfterDays * DAY);
+    }
+    const daysUntilShutoff = shutoffDate ? daysBetween(shutoffDate, now) : null;
 
     const daysUntilPenalty = penaltyDate ? daysBetween(penaltyDate, now) : null;
 
@@ -203,13 +235,29 @@ export async function getPaymentPriorities(userId: string, propertyId?: string):
         : 0.4;
       urgencyScore = expectedFee * proximity;
 
+      // Losing service is categorically worse than a fee, so an account
+      // approaching shutoff sorts above every fee-driven one regardless of
+      // amounts. Scaled by nearness rather than made a flat override, so two
+      // accounts facing shutoff still order sensibly between themselves.
+      if (daysUntilShutoff != null) {
+        urgencyScore += daysUntilShutoff < 0 ? 100000
+          : daysUntilShutoff <= 7 ? 50000
+          : daysUntilShutoff <= 30 ? 10000
+          : 1000;
+        reasons.unshift(daysUntilShutoff < 0
+          ? `Past your recorded shutoff threshold by ${Math.abs(daysUntilShutoff)} day(s)`
+          : `Service is cut in ${daysUntilShutoff} day(s) by your recorded rule`);
+      }
+
       if (daysUntilPenalty != null && daysUntilPenalty < 0) {
         reasons.push(`Past the penalty date by ${Math.abs(daysUntilPenalty)} day(s)`);
       } else if (daysUntilPenalty != null) {
         reasons.push(`${daysUntilPenalty} day(s) until a penalty applies${penaltyDateIsEstimate ? ' (estimated)' : ''}`);
       }
       if (knownNextFee != null && knownNextFee > 0) {
-        reasons.push(`The bill states a late amount ${knownNextFee.toFixed(2)} higher`);
+        reasons.push(feeSource === 'your_rule'
+          ? `Your rule for this account: a late fee of ${knownNextFee.toFixed(2)}`
+          : `The bill states a late amount ${knownNextFee.toFixed(2)} higher`);
       } else if (fees.feeBehaviour === 'charges_every_time') {
         reasons.push(`Charged a fee on ${fees.billsWithFees} of ${fees.billsSeen} bills, averaging ${fees.averageFee.toFixed(2)}`);
       } else if (fees.feeBehaviour === 'never_charged') {
@@ -240,6 +288,9 @@ export async function getPaymentPriorities(userId: string, propertyId?: string):
       daysUntilPenalty,
       ...fees,
       knownNextFee,
+      feeSource,
+      shutoffDate: shutoffDate?.toISOString() ?? null,
+      daysUntilShutoff,
       urgencyScore,
       reasons,
     });

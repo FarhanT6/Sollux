@@ -184,6 +184,16 @@ model UtilityAccount {
   // produce one every month. Lets a monthly figure be derived before any
   // statement has been imported, and gives anomaly detection a baseline.
   expectedAmount   Decimal?        @db.Decimal(10, 2)
+  // Rules you know that the statements do not say. Learned fee behaviour comes
+  // from billing history, but a shutoff threshold appears only on a
+  // disconnection notice, if at all — so it is recorded by hand. Anything set
+  // here overrides what history infers, because you know the policy and the
+  // history is only evidence of it.
+  graceDays        Int?            // days after the due date before a fee applies
+  lateFeeFixed     Decimal?        @db.Decimal(10, 2)
+  lateFeePercent   Decimal?        @db.Decimal(5, 2)
+  shutoffAfterDays Int?            // days past due before service is cut
+  paymentRuleNotes String?
   syncEnabled      Boolean         @default(true)
   isActive         Boolean         @default(true)
   lastSyncedAt     DateTime?

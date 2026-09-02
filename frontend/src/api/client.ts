@@ -590,3 +590,46 @@ export const getCostSettings = () =>
   api.get<CostSettings>('/settings').then(r => r.data);
 export const updateCostSettings = (data: Partial<CostSettings>) =>
   api.patch<CostSettings>('/settings', data).then(r => r.data);
+
+// ── Payment priorities ───────────────────────────────────
+// What to pay first, and what lateness has cost. Separate from the utility
+// endpoints deliberately: those report cost, these report exposure.
+export interface AccountPriority {
+  accountId: string;
+  propertyId: string;
+  propertyName: string;
+  providerName: string;
+  serviceLabel: string | null;
+  category: string;
+  balanceToCurrent: number;
+  currentCharges: number;
+  pastDue: number;
+  dueDate: string | null;
+  penaltyDate: string | null;
+  penaltyDateIsEstimate: boolean;
+  daysUntilPenalty: number | null;
+  feeBehaviour: 'charges_every_time' | 'charges_sometimes' | 'never_charged' | 'unknown';
+  billsWithFees: number;
+  billsSeen: number;
+  averageFee: number;
+  totalFeesPaid: number;
+  knownNextFee: number | null;
+  feeSource: 'your_rule' | 'stated_on_bill' | 'history' | 'none';
+  shutoffDate: string | null;
+  daysUntilShutoff: number | null;
+  typicalGraceDays: number | null;
+  urgencyScore: number;
+  reasons: string[];
+}
+
+export interface FeeSummary {
+  totalFeesPaid: number;
+  billsWithFees: number;
+  byProvider: { providerName: string; propertyName: string; accountId: string; total: number; count: number }[];
+  byMonth: { month: string; total: number }[];
+}
+
+export const getPaymentPriorities = (propertyId?: string) =>
+  api.get<AccountPriority[]>('/priorities', { params: propertyId ? { propertyId } : {} }).then(r => r.data);
+export const getFeeSummary = (months?: number) =>
+  api.get<FeeSummary>('/priorities/fees', { params: months ? { months } : {} }).then(r => r.data);
