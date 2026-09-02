@@ -448,7 +448,14 @@ async function main() {
             },
           },
         });
-      } else {
+      }
+      if (!existing) {
+        // Fall back to the issue month against a row that has no period of its
+        // own — either because this bill states none either, or because an
+        // older import recorded this same bill before periods were extracted.
+        // In the second case that row is this bill, and matching it backfills
+        // the period rather than creating a duplicate. Rows that already carry
+        // a period are excluded: they are identified by the period.
         const monthStart = new Date(Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth(), 1));
         const monthEnd = new Date(Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth() + 1, 0, 23, 59, 59));
         existing = await db.statement.findFirst({
@@ -482,6 +489,15 @@ async function main() {
           where: { id: existing.id },
           data: {
             statementDate,
+            // Written on update, not only on create. An older import recorded
+            // these bills before periods were extracted, so the whole point of
+            // re-importing them is to fill the period in — leaving it out here
+            // meant the row matched and then stayed exactly as it was.
+            billingPeriodStart: ex.billingPeriodStart ? new Date(ex.billingPeriodStart) : existing.billingPeriodStart,
+            billingPeriodEnd: ex.billingPeriodEnd ? new Date(ex.billingPeriodEnd) : existing.billingPeriodEnd,
+            usageValue: ex.usageValue ?? existing.usageValue,
+            usageUnit: ex.usageUnit ?? existing.usageUnit,
+            ratePlan: ex.ratePlan ?? existing.ratePlan,
             amountDue: amountDueCurrent ?? existing.amountDue,
             balance: totalDue ?? amountDueCurrent ?? existing.balance,
             amountPaid: amountPaidValue ?? existing.amountPaid,
