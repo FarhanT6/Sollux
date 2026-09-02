@@ -18,9 +18,49 @@
  * columns, which are relations, and what each maps to in the database.
  */
 import 'dotenv/config';
+import fs from 'fs';
+import path from 'path';
 import { PrismaClient, Prisma } from '@prisma/client';
 
 const db = new PrismaClient();
+
+/**
+ * Migrations on disk that the database has not recorded.
+ *
+ * Checked separately from the column comparison below, and first, because the
+ * column comparison is only as current as the generated client: it reads the
+ * expected shape from Prisma.dmmf, so a client generated before the latest
+ * schema change does not know the new columns exist and cannot report them
+ * missing. That failure mode is silent and reports success — the worst kind.
+ * The migration folders are on disk regardless of when the client was built.
+ */
+async function checkPendingMigrations(): Promise<number> {
+  const dir = path.join(__dirname, '..', 'prisma', 'migrations');
+  if (!fs.existsSync(dir)) return 0;
+
+  const onDisk = fs.readdirSync(dir)
+    .filter(name => fs.statSync(path.join(dir, name)).isDirectory())
+    .sort();
+
+  let applied: Set<string>;
+  try {
+    const rows = await db.$queryRaw<{ migration_name: string; finished_at: Date | null }[]>`
+      SELECT migration_name, finished_at FROM "_prisma_migrations"
+    `;
+    applied = new Set(rows.filter(r => r.finished_at != null).map(r => r.migration_name));
+  } catch {
+    console.log('⚠  No _prisma_migrations table — this database has never had migrations applied.');
+    return onDisk.length;
+  }
+
+  const pending = onDisk.filter(name => !applied.has(name));
+  if (pending.length) {
+    console.log(`✗ ${pending.length} migration(s) on disk are not applied to this database:`);
+    pending.forEach(name => console.log(`    ${name}`));
+    console.log('  Run: npx prisma migrate deploy');
+  }
+  return pending.length;
+}
 
 (async () => {
   const url = process.env.DATABASE_URL ?? '';
@@ -44,7 +84,8 @@ const db = new PrismaClient();
     actual.get(r.table_name)!.add(r.column_name);
   }
 
-  let problems = 0;
+  let problems = await checkPendingMigrations();
+  if (problems > 0) console.log('');
 
   for (const model of Prisma.dmmf.datamodel.models) {
     const table = model.dbName ?? model.name;
@@ -97,8 +138,12 @@ const db = new PrismaClient();
     }
   }
 
+  // Say what was actually verified. "Matches the schema" overstates it when
+  // the client the comparison came from may itself be out of date.
   console.log(problems === 0
-    ? '✓ Database matches the Prisma schema — P2022 is not schema drift.'
+    ? `✓ ${Prisma.dmmf.datamodel.models.length} model(s) checked against the database, no migrations pending.\n` +
+      '  (Run `npx prisma generate` first if you have just pulled a schema change —\n' +
+      '   this compares against the generated client, not schema.prisma.)'
     : `\n${problems} problem(s) — this is what P2022 is reporting.`);
 
   await db.$disconnect();

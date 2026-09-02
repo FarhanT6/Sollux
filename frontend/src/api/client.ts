@@ -578,3 +578,15 @@ export interface PlaidItem {
 // Turnover — tenancy history, vacancy gaps and lost rent, derived from leases.
 export const getTurnover = (params?: { propertyId?: string }) =>
   api.get<TurnoverReport>('/turnover', { params }).then(r => r.data);
+
+// ── Cost settings ────────────────────────────────────────
+// What counts as operating cost. Stored on the account, not the browser, so
+// the figures agree wherever they are computed.
+export interface CostSettings {
+  includePenaltiesInOperating: boolean;
+  includePaymentPlanInOperating: boolean;
+}
+export const getCostSettings = () =>
+  api.get<CostSettings>('/settings').then(r => r.data);
+export const updateCostSettings = (data: Partial<CostSettings>) =>
+  api.patch<CostSettings>('/settings', data).then(r => r.data);

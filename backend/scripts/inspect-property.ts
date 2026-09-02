@@ -41,7 +41,18 @@ const day = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : '—');
   });
 
   if (properties.length === 0) {
-    console.log(`No property matches "${QUERY}".`);
+    // List what does exist. A miss is usually a property filed under a
+    // different name, not a missing one, and guessing at the query from the
+    // outside costs more round trips than printing the list.
+    console.log(`No property matches "${QUERY}". Properties on file:\n`);
+    const all = await db.property.findMany({
+      select: { id: true, address: true, nickname: true, city: true, state: true },
+      orderBy: { address: 'asc' },
+    });
+    for (const p of all) {
+      console.log(`  ${p.nickname ? `${p.nickname} — ` : ''}${p.address}, ${p.city} ${p.state}`);
+    }
+    console.log(`\n${all.length} propert${all.length === 1 ? 'y' : 'ies'}.`);
     await db.$disconnect();
     return;
   }

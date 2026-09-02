@@ -42,6 +42,24 @@ function monthsOverlap(range: DateRange, from?: Date | null, to?: Date | null): 
   return ms / (1000 * 60 * 60 * 24 * 30.4375);
 }
 
+
+/**
+ * Insurance is recorded twice by design: as a UtilityAccount, which carries the
+ * bills actually received, and as an InsurancePolicy, which carries coverage
+ * and the agreed premium. Both are wanted — one is what happened, the other is
+ * what was contracted — but only one may reach the P&L, or every insured
+ * property overstates its costs by the premium.
+ *
+ * Statements win where they exist: a bill is what was actually charged, while
+ * a premium is a plan that a mid-term endorsement or instalment fee can
+ * diverge from. So a policy linked to a utility account is skipped here and
+ * its cost comes from that account's statements; a policy with no linked
+ * account still contributes its premium, since nothing else would report it.
+ */
+function isCoveredByStatements(policy: { utilityAccountId?: string | null }): boolean {
+  return policy.utilityAccountId != null;
+}
+
 export async function getPropertyPnL(propertyId: string, range: DateRange, userId: string): Promise<PropertyPnL> {
   const property = await db.property.findFirstOrThrow({ where: { id: propertyId, userId } });
 
@@ -56,6 +74,9 @@ export async function getPropertyPnL(propertyId: string, range: DateRange, userI
     db.taxAssessment.findMany({ where: { propertyId } }),
     db.loan.findMany({ where: { propertyId, isPersonal: false, isActive: true }, include: { loanPayments: true } }),
     db.statement.findMany({
+      // The account's category decides which expense line a statement belongs
+      // to, and whether a linked policy's premium would double-count it.
+      include: { utilityAccount: { select: { category: true, insurancePolicy: { select: { id: true } } } } },
       where: {
         amountDue: { not: null },
         utilityAccount: { propertyId },
@@ -69,7 +90,16 @@ export async function getPropertyPnL(propertyId: string, range: DateRange, userI
 
   const rentalIncome = rentPayments.reduce((s, p) => s + toNum(p.amount), 0);
 
-  const utilityExpense = utilityStatements.reduce((s, st) => s + toNum(st.amountDue), 0);
+  // Insurance bills are utility statements too, but they belong on the
+  // insurance line, not with water and power.
+  const isInsuranceStatement = (st: { utilityAccount: { category: string } }) =>
+    st.utilityAccount.category === 'INSURANCE';
+  const utilityExpense = utilityStatements
+    .filter(st => !isInsuranceStatement(st))
+    .reduce((s, st) => s + toNum(st.amountDue), 0);
+  const insuranceFromStatements = utilityStatements
+    .filter(isInsuranceStatement)
+    .reduce((s, st) => s + toNum(st.amountDue), 0);
 
   const operatingExpenses = utilityExpense + expenses
     .filter(e => e.category !== 'INSURANCE' && e.category !== 'PROPERTY_TAX' && e.category !== 'MORTGAGE_DEBT_SERVICE' && e.category !== 'CAPITAL_IMPROVEMENT')
@@ -82,12 +112,14 @@ export async function getPropertyPnL(propertyId: string, range: DateRange, userI
   const looseInsurance = expenses.filter(e => e.category === 'INSURANCE').reduce((s, e) => s + toNum(e.amount), 0);
   const looseTax = expenses.filter(e => e.category === 'PROPERTY_TAX').reduce((s, e) => s + toNum(e.amount), 0);
 
-  const insuranceExpense = looseInsurance + policies.reduce((s, pol) => {
-    const monthly = pol.premiumFrequency === 'MONTHLY' ? toNum(pol.premiumAmount)
-      : pol.premiumFrequency === 'SEMI_ANNUAL' ? toNum(pol.premiumAmount) / 6
-      : toNum(pol.premiumAmount) / 12;
-    return s + monthly * monthsOverlap(range, pol.effectiveDate, pol.expirationDate);
-  }, 0);
+  const insuranceExpense = looseInsurance + insuranceFromStatements + policies
+    .filter(pol => !isCoveredByStatements(pol))
+    .reduce((s, pol) => {
+      const monthly = pol.premiumFrequency === 'MONTHLY' ? toNum(pol.premiumAmount)
+        : pol.premiumFrequency === 'SEMI_ANNUAL' ? toNum(pol.premiumAmount) / 6
+        : toNum(pol.premiumAmount) / 12;
+      return s + monthly * monthsOverlap(range, pol.effectiveDate, pol.expirationDate);
+    }, 0);
 
   const propertyTaxExpense = looseTax + taxAssessments.reduce((s, t) => {
     return s + (toNum(t.annualTaxAmount) / 12) * monthsOverlap(range);
@@ -134,6 +166,8 @@ export async function getMonthlyPnL(year: number, userId: string, propertyId?: s
     db.taxAssessment.findMany({ where: propertyFilter }),
     db.loanPayment.findMany({ where: { date: { gte: yearStart, lt: yearEnd }, ...loanFilter } }),
     db.statement.findMany({
+      // Same as above: the category decides which expense line this belongs on.
+      include: { utilityAccount: { select: { category: true } } },
       where: {
         amountDue: { not: null },
         utilityAccount: utilityAccountFilter,
@@ -157,19 +191,25 @@ export async function getMonthlyPnL(year: number, userId: string, propertyId?: s
       return d >= start && d < end;
     });
 
-    const operatingExpenses = monthUtilities.reduce((s, st) => s + toNum(st.amountDue), 0) + monthExpenses
+    const monthInsuranceStatements = monthUtilities.filter(st => st.utilityAccount.category === 'INSURANCE');
+    const insuranceFromStatements = monthInsuranceStatements.reduce((s, st) => s + toNum(st.amountDue), 0);
+    const operatingExpenses = monthUtilities
+      .filter(st => st.utilityAccount.category !== 'INSURANCE')
+      .reduce((s, st) => s + toNum(st.amountDue), 0) + monthExpenses
       .filter(e => e.category !== 'INSURANCE' && e.category !== 'PROPERTY_TAX' && e.category !== 'MORTGAGE_DEBT_SERVICE' && e.category !== 'CAPITAL_IMPROVEMENT')
       .reduce((s, e) => s + toNum(e.amount), 0);
     const loggedDebtService = monthExpenses.filter(e => e.category === 'MORTGAGE_DEBT_SERVICE').reduce((s, e) => s + toNum(e.amount), 0);
     const looseInsurance = monthExpenses.filter(e => e.category === 'INSURANCE').reduce((s, e) => s + toNum(e.amount), 0);
     const looseTax = monthExpenses.filter(e => e.category === 'PROPERTY_TAX').reduce((s, e) => s + toNum(e.amount), 0);
 
-    const insuranceExpense = looseInsurance + policies.reduce((s, pol) => {
-      const monthly = pol.premiumFrequency === 'MONTHLY' ? toNum(pol.premiumAmount)
-        : pol.premiumFrequency === 'SEMI_ANNUAL' ? toNum(pol.premiumAmount) / 6
-        : toNum(pol.premiumAmount) / 12;
-      return s + monthly * monthsOverlap(range, pol.effectiveDate, pol.expirationDate);
-    }, 0);
+    const insuranceExpense = looseInsurance + insuranceFromStatements + policies
+      .filter(pol => !isCoveredByStatements(pol))
+      .reduce((s, pol) => {
+        const monthly = pol.premiumFrequency === 'MONTHLY' ? toNum(pol.premiumAmount)
+          : pol.premiumFrequency === 'SEMI_ANNUAL' ? toNum(pol.premiumAmount) / 6
+          : toNum(pol.premiumAmount) / 12;
+        return s + monthly * monthsOverlap(range, pol.effectiveDate, pol.expirationDate);
+      }, 0);
 
     const propertyTaxExpense = looseTax + taxAssessments.reduce((s, t) => s + (toNum(t.annualTaxAmount) / 12) * monthsOverlap(range), 0);
     const noi = rentalIncome - operatingExpenses - insuranceExpense - propertyTaxExpense;

@@ -60,6 +60,9 @@ export interface ExtractedBillData {
   previousBalance:    number | null;
   paymentsReceived:   number | null;
   currentCharges:     number | null;
+  // An arrears installment charged inside this bill, itemised by some
+  // providers as its own line ("Payment Plan" on a City of Brawley bill).
+  paymentPlanAmount:  number | null;
   lateFee:            number | null;
   usageValue:         number | null;
   usageUnit:          string | null;   // kWh, CCF, therms, gallons, etc.
@@ -107,14 +110,15 @@ Schema (use null for any field not present in the document):
   "amountDue": number or null — THIS period's charges only, including any late fee or penalty added this period, but EXCLUDING any balance carried forward from earlier bills. If the bill shows only one grand total and that total includes a prior balance, do NOT put the grand total here — put the prior balance in previousBalance and this period's charges here,
   "previousBalance": number or null — how much from EARLIER bills is still unpaid, after applying any payments the bill shows. If the bill lists 'Previous Balance' then 'Payments Received' then 'Balance Forward', report the Balance Forward figure, not the Previous Balance. Never include this period's charges. Use null, not 0, when nothing is carried forward,
   "paymentsReceived": number or null — payments or credits applied since last bill (enter as a positive number),
-  "currentCharges": number or null — same as amountDue: this period's charges only,
+  "currentCharges": number or null — what this period BILLED, before any payment or credit is applied. This is the figure to report even when the bill was settled and shows nothing owing: a bill listing Billed $240.03, Payments/Adjustments -$240.03, Due $0.00 has currentCharges 240.03, amountDue 0. Recording only the zero loses what the period actually cost,
   "lateFee": number or null — late fee, penalty, or overdue charge added THIS period. This is a component of amountDue, not the carried-forward balance,
   "usageValue": number or null — consumption quantity if applicable (kWh, CCF, gallons, etc.),
   "usageUnit": "string or null — kWh | CCF | therms | gallons | HCF | pickup | other",
   "ratePlan": "string or null — rate schedule, plan name, or tier",
   "isPaid": boolean — true ONLY if balance is $0.00 or document shows 'Paid in Full' / paid stamp,
   "utilityType": "electric | gas | water | sewer | trash | solar | internet | phone | other",
-  "chargeBreakdown": { "line item name": dollar_amount, ... } or null — all individual charges listed,
+  "paymentPlanAmount": number or null — an installment on an arrears or payment-plan arrangement charged within this bill, when the bill itemises one (a line reading "Payment Plan", "Installment", "Arrears Payment" or similar). This is repayment of an older debt carried inside a current bill, not this period's service, so report it separately as well as leaving it in the total,
+  "chargeBreakdown": { "line item name": dollar_amount, ... } or null — every individual charge the bill itemises, using the bill's own wording as the key ({"Water": 118.53, "Sewer": 121.50} for a bill splitting the two). Include credits and discounts as negative values. This is how a total is explained later, so itemise whenever the bill does,
   "alerts": ["string", ...] — notable flags: past due, late fees, NSF, payment plan, high usage, leak, outage credit, SCRA, debt collection notice, legal action warning, etc.
 }
 
@@ -125,6 +129,7 @@ Important extraction tips:
 - accountNumber: include dashes and spaces as they appear; do not normalize.
 - statementDate: if not explicit, infer from postmark, billing period end, or document date.
 - Bills printed in two columns often place the prior balance and this period's charges side by side. Read the labels, not the position: a figure next to 'Past Due' is previousBalance even when it sits where current charges usually appear.
+- Credits are negative, and the sign matters. A bill reading "Total Account Balance -$91.67" or "Your account has a credit balance of $91.67" is money the provider owes you, not money you owe: report amountDue as the negative figure, never its absolute value. Likewise a California Climate Credit or any line that reduces the bill belongs in chargeBreakdown as a negative number. A credit reported as positive turns a refund into a payment demand.
 - Sanity-check yourself before answering: previousBalance + amountDue should equal the grand total the bill asks for, because previousBalance is already net of payments. If it does not, you have most likely put a carried-forward balance into amountDue. Re-read and split them.
 - Some bills show several totals (this period, total with past due, budget-billing amount, minimum payment). amountDue is always this period's charges alone.`;
 
@@ -743,6 +748,10 @@ async function extractWithRegex(pdfBuffer: Buffer, filename: string): Promise<Ex
     billingPeriodEnd,
     amountDue,
     previousBalance,
+    // The regex extractor reads the breakdown; a line named for a payment plan
+    // is the installment. AI extraction reports it directly.
+    paymentPlanAmount: Object.entries(chargeBreakdown)
+      .find(([label]) => /payment\s*plan|installment|arrears/i.test(label))?.[1] ?? null,
     paymentsReceived,
     currentCharges,
     lateFee,
@@ -896,11 +905,13 @@ export async function matchToAccount(
       if (!acct.accountNumberEnc) continue;
       try {
         const stored = normalizeAcct(decrypt(acct.accountNumberEnc));
-        if (
-          stored === normExtracted ||
-          stored.includes(normExtracted) ||
-          normExtracted.includes(stored)
-        ) {
+        // Substring either way, because bills print the number with varying
+        // prefixes and check digits — but only when the shorter side is long
+        // enough to identify an account. Without the floor a short stored
+        // value matches half the portfolio.
+        const shorter = stored.length <= normExtracted.length ? stored : normExtracted;
+        const longer = shorter === stored ? normExtracted : stored;
+        if (stored === normExtracted || (shorter.length >= 6 && longer.includes(shorter))) {
           return {
             confidence: 'high',
             method: 'account_number',
@@ -979,6 +990,21 @@ export async function matchToAccount(
         providerName: extracted.providerName,
       };
     }
+
+    // The bill names a service address and none of the properties are it.
+    // That is positive evidence this bill belongs somewhere else, so stop
+    // here rather than falling through to the provider-only rule below.
+    //
+    // Falling through is what moved a whole account's history: with one IID
+    // account on file, an IID bill for a different property matched it as
+    // "the only IID account", and importing overwrote that account's
+    // statements month by month. A wrong guess here silently destroys data,
+    // so an unrecognised address must ask rather than assume.
+    return {
+      ...noMatch,
+      method: 'address_not_recognised',
+      providerName: extracted.providerName,
+    };
   }
 
   // ── 3. Provider name only (single account for this provider) ──────────────
@@ -988,10 +1014,15 @@ export async function matchToAccount(
     );
     if (providerMatches.length === 1) {
       const acct = providerMatches[0];
+      // Suggest the property, but leave the account unset. "You have exactly
+      // one account with this provider" is not evidence the bill belongs to
+      // it — it is equally consistent with a second property you have not
+      // added an account for yet. The reviewer confirms; the importer does
+      // not decide.
       return {
         confidence: 'low',
         method: 'provider_only',
-        utilityAccountId: acct.id,
+        utilityAccountId: null,
         propertyId: acct.propertyId,
         propertyName: acct.property.nickname || acct.property.address,
         providerName: acct.providerName,
@@ -1062,7 +1093,8 @@ export async function parseBill(
         providerName: null, serviceAddress: null, accountNumber: null,
         statementDate: null, dueDate: null, billingPeriodStart: null,
         billingPeriodEnd: null, amountDue: null, previousBalance: null,
-        paymentsReceived: null, currentCharges: null, lateFee: null, usageValue: null,
+        paymentsReceived: null, currentCharges: null, paymentPlanAmount: null,
+        lateFee: null, usageValue: null,
         usageUnit: null, ratePlan: null, isPaid: false,
         utilityType: 'other', chargeBreakdown: null, alerts: [],
       },

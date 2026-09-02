@@ -344,6 +344,9 @@ router.post('/confirm', async (req: Request, res: Response) => {
           ? (ex.currentCharges ?? 0) + (ex.previousBalance ?? 0)
           : ex.amountDue ?? null;
         const paidAmount = ex.paymentsReceived ?? (ex.isPaid ? totalDue : null);
+        // Kept as its own column: an arrears installment inside a current bill
+        // is repayment, not this month's service (see operatingCost.ts).
+        const planAmount = ex.paymentPlanAmount ?? null;
 
         if (existing) {
           // Overwrite with better data from the new extraction
@@ -359,6 +362,7 @@ router.post('/confirm', async (req: Request, res: Response) => {
               amountPaid:     paidAmount        ?? existing.amountPaid,
               chargesExcludingFees: ex.currentCharges ?? existing.chargesExcludingFees,
               penaltiesFees:  ex.lateFee         ?? existing.penaltiesFees,
+              paymentPlanAmount: planAmount       ?? existing.paymentPlanAmount,
               pastDueCarried: ex.previousBalance ?? existing.pastDueCarried,
               usageValue:  ex.usageValue ?? existing.usageValue,
               usageUnit:   ex.usageUnit  ?? existing.usageUnit,
@@ -381,6 +385,7 @@ router.post('/confirm', async (req: Request, res: Response) => {
               amountPaid:     paidAmount        ?? null,
               chargesExcludingFees: ex.currentCharges ?? null,
               penaltiesFees:  ex.lateFee         ?? null,
+              paymentPlanAmount: planAmount       ?? null,
               pastDueCarried: ex.previousBalance ?? null,
               usageValue:  ex.usageValue ?? null,
               usageUnit:   ex.usageUnit  ?? null,
