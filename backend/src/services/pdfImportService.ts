@@ -66,6 +66,8 @@ export interface ExtractedBillData {
   // When a late penalty applies, and what the bill becomes then.
   penaltyDate:        string | null;
   amountAfterDueDate: number | null;
+  // How the provider ages the balance, when it prints buckets.
+  agingBuckets:       { current?: number; days30?: number; days60?: number; days90plus?: number } | null;
   lateFee:            number | null;
   usageValue:         number | null;
   usageUnit:          string | null;   // kWh, CCF, therms, gallons, etc.
@@ -123,6 +125,7 @@ Schema (use null for any field not present in the document):
   "paymentPlanAmount": number or null — an installment on an arrears or payment-plan arrangement charged within this bill, when the bill itemises one (a line reading "Payment Plan", "Installment", "Arrears Payment" or similar). This is repayment of an older debt carried inside a current bill, not this period's service, so report it separately as well as leaving it in the total,
   "penaltyDate": "YYYY-MM-DD" or null — the date a penalty or late fee applies if the bill is unpaid, when the bill states one ("Penalty Date", "Late after", "Penalty applies after"). This is often a day or two later than the due date; report what the bill says, not the due date,
   "amountAfterDueDate": number or null — what the bill says is payable if paid after the due date ("Amount due after 09/15/2026", "After Due Date Pay"). The difference between this and the amount due is the late fee this provider will charge,
+  "agingBuckets": object or null — when the bill prints an aging table (commonly "Past Due | 30 Days | 60 Days | 90+ Days"), report it as {"current": n, "days30": n, "days60": n, "days90plus": n}, omitting any bucket the bill does not show. Report each bucket's own figure, not a running total,
   "chargeBreakdown": { "line item name": dollar_amount, ... } or null — every individual charge the bill itemises, using the bill's own wording as the key ({"Water": 118.53, "Sewer": 121.50} for a bill splitting the two). Include credits and discounts as negative values. This is how a total is explained later, so itemise whenever the bill does,
   "alerts": ["string", ...] — notable flags: past due, late fees, NSF, payment plan, high usage, leak, outage credit, SCRA, debt collection notice, legal action warning, etc.
 }
@@ -760,6 +763,9 @@ async function extractWithRegex(pdfBuffer: Buffer, filename: string): Promise<Ex
     // is the installment. AI extraction reports it directly.
     // Regex side: a "penalty date" or "after due date" figure when the bill
     // prints one in a recognisable form.
+    // The regex side does not attempt the aging table: it is a positional
+    // layout, and a wrong bucket is worse than no bucket. AI extraction reads it.
+    agingBuckets: null,
     penaltyDate: (() => {
       const m = text.match(/penalty\s*date[^\d]{0,20}(\d{1,2}\/\d{1,2}\/\d{2,4})/i);
       if (!m) return null;
@@ -1114,7 +1120,7 @@ export async function parseBill(
         statementDate: null, dueDate: null, billingPeriodStart: null,
         billingPeriodEnd: null, amountDue: null, previousBalance: null,
         paymentsReceived: null, currentCharges: null, paymentPlanAmount: null,
-        penaltyDate: null, amountAfterDueDate: null,
+        penaltyDate: null, amountAfterDueDate: null, agingBuckets: null,
         lateFee: null, usageValue: null,
         usageUnit: null, ratePlan: null, isPaid: false,
         utilityType: 'other', chargeBreakdown: null, alerts: [],
