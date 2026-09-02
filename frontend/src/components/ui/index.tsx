@@ -167,15 +167,25 @@ interface ModalProps {
 
 export function Modal({ title, onClose, children, footer }: ModalProps) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.6)' }}>
-      <div className="rounded-xl shadow-2xl w-full max-w-lg mx-4" style={{ background: '#2a2a2a', border: '1px solid rgba(255,255,255,0.1)' }}>
-        <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+    // Padded rather than flush to the viewport edges, so a tall modal always
+    // shows it has more above and below.
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.6)' }}>
+      {/* A form taller than the window used to be clipped with nothing to
+          scroll — the only way to reach the bottom was to zoom the browser
+          out. Cap the height and scroll the body, keeping the title and the
+          buttons in view: the save button is the one control a long form must
+          never hide. */}
+      <div
+        className="rounded-xl shadow-2xl w-full max-w-lg flex flex-col max-h-full"
+        style={{ background: '#2a2a2a', border: '1px solid rgba(255,255,255,0.1)' }}
+      >
+        <div className="flex items-center justify-between px-5 py-4 flex-shrink-0" style={{ borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
           <h2 className="text-sm font-semibold text-white">{title}</h2>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-lg leading-none">✕</button>
         </div>
-        <div className="px-5 py-4">{children}</div>
+        <div className="px-5 py-4 overflow-y-auto flex-1 min-h-0">{children}</div>
         {footer && (
-          <div className="px-5 py-3 flex items-center justify-end gap-2" style={{ borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+          <div className="px-5 py-3 flex items-center justify-end gap-2 flex-shrink-0" style={{ borderTop: '1px solid rgba(255,255,255,0.08)' }}>
             {footer}
           </div>
         )}

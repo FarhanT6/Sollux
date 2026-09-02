@@ -1047,8 +1047,36 @@ model InsurancePolicy {
   carrier          String
   policyNumber     String?
   policyType       InsuranceType    @default(PROPERTY)
+  // premiumAmount is what one bill asks for at premiumFrequency. A policy
+  // quoted as a year's total but paid monthly has the installment here and
+  // the year's figure in termPremium — reporting the annual total as if it
+  // were a monthly payment overstates cost twelvefold, and the reverse
+  // understates it.
   premiumAmount    Decimal          @db.Decimal(10, 2)
   premiumFrequency PremiumFrequency @default(ANNUAL)
+  // The whole term's premium, when the policy is written as a term total and
+  // billed in installments. Null when premiumAmount already is the total.
+  termPremium      Decimal?         @db.Decimal(10, 2)
+  // Coverage, as printed on the declarations page. All optional: a liability
+  // policy has no dwelling limit, a flood policy no loss-of-use.
+  dwellingLimit         Decimal? @db.Decimal(12, 2)
+  otherStructuresLimit  Decimal? @db.Decimal(12, 2)
+  personalPropertyLimit Decimal? @db.Decimal(12, 2)
+  lossOfUseLimit        Decimal? @db.Decimal(12, 2)
+  liabilityLimit        Decimal? @db.Decimal(12, 2)
+  medicalPaymentsLimit  Decimal? @db.Decimal(12, 2)
+  deductible            Decimal? @db.Decimal(10, 2)
+  // Wind/hail and named-storm deductibles are often a percentage of the
+  // dwelling limit rather than a dollar figure, so both forms are kept.
+  windHailDeductible    String?
+  // "Guaranteed Replacement Cost", "Replacement Cost", "Actual Cash Value" —
+  // free text because carriers word it differently and the wording matters.
+  replacementCostBasis  String?
+  agentName             String?
+  agentPhone            String?
+  agentEmail            String?
+  namedInsured          String?
+  mortgageePayee        String?
   effectiveDate    DateTime?
   expirationDate   DateTime?
   documentUrl      String?
