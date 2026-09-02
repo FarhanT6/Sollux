@@ -432,11 +432,33 @@ async function main() {
 
       if (!account) { imported++; continue; }
 
-      const monthStart = new Date(statementDate.getFullYear(), statementDate.getMonth(), 1);
-      const monthEnd = new Date(statementDate.getFullYear(), statementDate.getMonth() + 1, 0, 23, 59, 59);
-      const existing = await db.statement.findFirst({
-        where: { utilityAccountId: account.id, statementDate: { gte: monthStart, lte: monthEnd } },
-      });
+      // Keyed on the billing period, not the issue month: a drifting cycle
+      // puts two bills in one calendar month, and a month key treats the
+      // second as a duplicate of the first and overwrites it.
+      let existing = null;
+      if (ex.billingPeriodStart) {
+        const start = new Date(ex.billingPeriodStart);
+        const window = 7 * 24 * 60 * 60 * 1000;
+        existing = await db.statement.findFirst({
+          where: {
+            utilityAccountId: account.id,
+            billingPeriodStart: {
+              gte: new Date(start.getTime() - window),
+              lte: new Date(start.getTime() + window),
+            },
+          },
+        });
+      } else {
+        const monthStart = new Date(Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth(), 1));
+        const monthEnd = new Date(Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth() + 1, 0, 23, 59, 59));
+        existing = await db.statement.findFirst({
+          where: {
+            utilityAccountId: account.id,
+            statementDate: { gte: monthStart, lte: monthEnd },
+            billingPeriodStart: null,
+          },
+        });
+      }
 
       if (dryRun) { existing ? updated++ : imported++; continue; }
 
