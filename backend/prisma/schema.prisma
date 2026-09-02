@@ -280,6 +280,12 @@ model Statement {
   pdfS3Key             String?
   pdfUrl               String?
   rawDataJson          Json?
+  // When a penalty lands if the bill goes unpaid, and what the bill becomes
+  // then. Providers print both — a City of Brawley bill carries "Penalty Date
+  // 9/16/2026" and "AMOUNT DUE AFTER 09/15/2026 $507.54" — and they are the
+  // difference between predicting a late fee and guessing at one.
+  penaltyDate          DateTime?
+  amountAfterDueDate   Decimal?        @db.Decimal(10, 2)
   // A deposit or down payment taken at the start of a term, not a period's
   // charge. Kept as its own row so the PDF and the amount are on file, but
   // excluded from monthly totals and from per-month averages — otherwise the

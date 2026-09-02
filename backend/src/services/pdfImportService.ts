@@ -63,6 +63,9 @@ export interface ExtractedBillData {
   // An arrears installment charged inside this bill, itemised by some
   // providers as its own line ("Payment Plan" on a City of Brawley bill).
   paymentPlanAmount:  number | null;
+  // When a late penalty applies, and what the bill becomes then.
+  penaltyDate:        string | null;
+  amountAfterDueDate: number | null;
   lateFee:            number | null;
   usageValue:         number | null;
   usageUnit:          string | null;   // kWh, CCF, therms, gallons, etc.
@@ -118,6 +121,8 @@ Schema (use null for any field not present in the document):
   "isPaid": boolean — true ONLY if balance is $0.00 or document shows 'Paid in Full' / paid stamp,
   "utilityType": "electric | gas | water | sewer | trash | solar | internet | phone | other",
   "paymentPlanAmount": number or null — an installment on an arrears or payment-plan arrangement charged within this bill, when the bill itemises one (a line reading "Payment Plan", "Installment", "Arrears Payment" or similar). This is repayment of an older debt carried inside a current bill, not this period's service, so report it separately as well as leaving it in the total,
+  "penaltyDate": "YYYY-MM-DD" or null — the date a penalty or late fee applies if the bill is unpaid, when the bill states one ("Penalty Date", "Late after", "Penalty applies after"). This is often a day or two later than the due date; report what the bill says, not the due date,
+  "amountAfterDueDate": number or null — what the bill says is payable if paid after the due date ("Amount due after 09/15/2026", "After Due Date Pay"). The difference between this and the amount due is the late fee this provider will charge,
   "chargeBreakdown": { "line item name": dollar_amount, ... } or null — every individual charge the bill itemises, using the bill's own wording as the key ({"Water": 118.53, "Sewer": 121.50} for a bill splitting the two). Include credits and discounts as negative values. This is how a total is explained later, so itemise whenever the bill does,
   "alerts": ["string", ...] — notable flags: past due, late fees, NSF, payment plan, high usage, leak, outage credit, SCRA, debt collection notice, legal action warning, etc.
 }
@@ -130,6 +135,9 @@ Important extraction tips:
 - statementDate: if not explicit, infer from postmark, billing period end, or document date.
 - Bills printed in two columns often place the prior balance and this period's charges side by side. Read the labels, not the position: a figure next to 'Past Due' is previousBalance even when it sits where current charges usually appear.
 - Credits are negative, and the sign matters. A bill reading "Total Account Balance -$91.67" or "Your account has a credit balance of $91.67" is money the provider owes you, not money you owe: report amountDue as the negative figure, never its absolute value. Likewise a California Climate Credit or any line that reduces the bill belongs in chargeBreakdown as a negative number. A credit reported as positive turns a refund into a payment demand.
+- Carried balance is worded differently by every provider, and missing it makes a two-month bill look like a one-month bill. All of these mean the same thing: "Previous Balance", "Balance Forward", "Amount of Last Bill", "Past Due on <date>", "Previous Amount Due". Report it net of any payment the bill shows against it. Two worked examples:
+  · "Amount of Last Bill 13.40 / Payment Received .00 / Current Charges 18.73 / Total Amount Due 32.13" → previousBalance 13.40, amountDue 18.73. Nothing was paid, so the whole prior bill is still carried.
+  · "Past Due on 08/20/26 716.10 / Payments/Adjustments -449.58 / Current Invoice Charges 326.38 / Total Amount Due 592.90" → previousBalance 266.52 (716.10 less the 449.58 paid), amountDue 326.38, and 266.52 + 326.38 = 592.90 as the bill's own total confirms.
 - Sanity-check yourself before answering: previousBalance + amountDue should equal the grand total the bill asks for, because previousBalance is already net of payments. If it does not, you have most likely put a carried-forward balance into amountDue. Re-read and split them.
 - Some bills show several totals (this period, total with past due, budget-billing amount, minimum payment). amountDue is always this period's charges alone.`;
 
@@ -750,6 +758,18 @@ async function extractWithRegex(pdfBuffer: Buffer, filename: string): Promise<Ex
     previousBalance,
     // The regex extractor reads the breakdown; a line named for a payment plan
     // is the installment. AI extraction reports it directly.
+    // Regex side: a "penalty date" or "after due date" figure when the bill
+    // prints one in a recognisable form.
+    penaltyDate: (() => {
+      const m = text.match(/penalty\s*date[^\d]{0,20}(\d{1,2}\/\d{1,2}\/\d{2,4})/i);
+      if (!m) return null;
+      const d = new Date(m[1]);
+      return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+    })(),
+    amountAfterDueDate: (() => {
+      const m = text.match(/(?:amount\s+due\s+after|after\s+due\s+date\s+pay)[^$]{0,30}\$\s*([\d,]+\.\d{2})/i);
+      return m ? parseFloat(m[1].replace(/,/g, '')) : null;
+    })(),
     paymentPlanAmount: Object.entries(chargeBreakdown)
       .find(([label]) => /payment\s*plan|installment|arrears/i.test(label))?.[1] ?? null,
     paymentsReceived,
@@ -1094,6 +1114,7 @@ export async function parseBill(
         statementDate: null, dueDate: null, billingPeriodStart: null,
         billingPeriodEnd: null, amountDue: null, previousBalance: null,
         paymentsReceived: null, currentCharges: null, paymentPlanAmount: null,
+        penaltyDate: null, amountAfterDueDate: null,
         lateFee: null, usageValue: null,
         usageUnit: null, ratePlan: null, isPaid: false,
         utilityType: 'other', chargeBreakdown: null, alerts: [],
