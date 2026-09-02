@@ -665,3 +665,9 @@ export const getChargeAnalytics = (accountId: string, months?: number) =>
   api.get<ChargeAnalytics>(`/analytics/charges/${accountId}`, { params: months ? { months } : {} }).then(r => r.data);
 export const getAgingReconciliation = (accountId: string) =>
   api.get<AgingReconciliation>(`/analytics/aging/${accountId}`).then(r => r.data);
+
+// Slim per-account billing history for the portfolio spend figures. The
+// properties list carries one statement per account, which cannot produce an
+// average.
+export const getSpendData = () =>
+  api.get<any[]>('/properties/spend-data').then(r => r.data);
