@@ -88,14 +88,43 @@ export async function attachDbUser(req: Request, res: Response, next: NextFuncti
       const primaryPhone = clerkUser.phoneNumbers.find(p => p.id === clerkUser.primaryPhoneNumberId)?.phoneNumber
         ?? clerkUser.phoneNumbers[0]?.phoneNumber
         ?? null;
-      user = await db.user.create({
-        data: {
-          clerkUserId,
-          email: primaryEmail,
-          fullName,
-          phone: primaryPhone,
-        },
-      });
+
+      // Clerk user ids are per-instance. Moving from a development instance to
+      // a production one issues an entirely new id for the same person, so this
+      // lookup misses and the create below collides with the `email @unique`
+      // constraint — throwing on every request and locking the account's owner
+      // out of their own data.
+      //
+      // So: adopt an existing row that carries this email and has no Clerk id
+      // bound to it yet, rather than creating a second one. Only a *verified*
+      // email is accepted, because an unverified one is just a string the
+      // person signing up typed, and honouring it would hand an existing
+      // account to anyone who claimed its address.
+      const emailIsVerified = clerkUser.emailAddresses.some(
+        e => e.emailAddress === primaryEmail && e.verification?.status === 'verified'
+      );
+
+      if (emailIsVerified) {
+        const orphaned = await db.user.findUnique({ where: { email: primaryEmail } });
+        if (orphaned && orphaned.clerkUserId === null) {
+          user = await db.user.update({
+            where: { id: orphaned.id },
+            data: { clerkUserId, fullName: orphaned.fullName || fullName, phone: orphaned.phone ?? primaryPhone },
+          });
+          console.log(`[Auth] Adopted existing account for ${primaryEmail} under new Clerk id ${clerkUserId}`);
+        }
+      }
+
+      if (!user) {
+        user = await db.user.create({
+          data: {
+            clerkUserId,
+            email: primaryEmail,
+            fullName,
+            phone: primaryPhone,
+          },
+        });
+      }
     }
 
     // Shared access: if this person was invited to someone's account and
