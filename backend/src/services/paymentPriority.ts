@@ -1,4 +1,5 @@
 import { db } from '../config/db';
+import { normaliseLabel, isFeeLikeCharge } from './chargeAnalytics';
 
 /**
  * Which bills to pay first, and what it costs to be late on each.
@@ -321,14 +322,17 @@ export interface FeeSummary {
  * across twenty accounts.
  */
 export async function getFeeSummary(userId: string, since?: Date): Promise<FeeSummary> {
+  // Not filtered to penaltiesFees > 0: fees also hide inside the charge
+  // breakdown — a contamination charge on a trash bill is a penalty, printed
+  // as a line item rather than in the late-fee field — so every statement is
+  // read and the fee content of each is worked out below.
   const statements = await db.statement.findMany({
     where: {
-      penaltiesFees: { gt: 0 },
       utilityAccount: { property: { userId } },
       ...(since ? { statementDate: { gte: since } } : {}),
     },
     select: {
-      statementDate: true, penaltiesFees: true,
+      statementDate: true, penaltiesFees: true, rawDataJson: true,
       utilityAccount: {
         select: {
           id: true, providerName: true, serviceLabel: true,
@@ -344,7 +348,20 @@ export async function getFeeSummary(userId: string, since?: Date): Promise<FeeSu
   let totalFeesPaid = 0;
 
   for (const s of statements) {
-    const fee = num(s.penaltiesFees);
+    // penaltiesFees carries the extracted late fee; the breakdown can carry
+    // further penalties printed as line items. Late-fee lines in the breakdown
+    // are excluded there because they are already counted here — everything
+    // else fee-like (contamination, returned payments, reconnection) adds on.
+    const breakdown = ((s.rawDataJson as Record<string, unknown> | null)?.chargeBreakdown ?? null) as Record<string, number> | null;
+    let breakdownFees = 0;
+    if (breakdown) {
+      for (const [rawLabel, value] of Object.entries(breakdown)) {
+        const label = normaliseLabel(rawLabel);
+        if (isFeeLikeCharge(label) && !/late\s*fee/i.test(label)) breakdownFees += num(value);
+      }
+    }
+    const fee = num(s.penaltiesFees) + breakdownFees;
+    if (fee <= 0) continue;
     totalFeesPaid += fee;
 
     const a = s.utilityAccount;

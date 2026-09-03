@@ -41,8 +41,20 @@ const num = (v: unknown): number => {
  */
 const UNIT_OR_RATE = /(?:kwh|mwh|kw\b|ccf|hcf|mcf|therm|gallon|cu\.?\s*ft|c\.?f\.?|@|\$|\/\s*kwh)/i;
 
+/**
+ * A charge that is a consequence rather than a service: something the account
+ * was punished or surcharged with, not something it bought. These belong with
+ * fees and penalties wherever fees are counted, whatever container or service
+ * the provider printed them against.
+ */
+const FEE_LIKE = /late\s*fee|penalt|contaminated\s*materials?|contamination|returned\s*(?:check|payment)|nsf\b|insufficient\s*funds|interest\s*charge|collection|disconnect|reconnect|shut[\s-]*off/i;
+
+export function isFeeLikeCharge(label: string): boolean {
+  return FEE_LIKE.test(label);
+}
+
 export function normaliseLabel(label: string): string {
-  return label
+  let out = label
     // Parentheticals carrying a quantity or rate: "(10,813.290 kWh@$0.1884/kWh)"
     .replace(/\(([^)]*)\)/g, (whole, inner) => (UNIT_OR_RATE.test(inner) && /\d/.test(inner) ? '' : whole))
     // The same fragments unparenthesised: "10,790 kWh @ $0.1093/kWh"
@@ -50,6 +62,34 @@ export function normaliseLabel(label: string): string {
     .replace(/@\s*\$?[\d.]+(?:\/\s*\w+)?/g, '')                                              // a bare rate
     .replace(/\b\d{1,2}\/\d{1,2}(\/\d{2,4})?\s*[-–]\s*\d{1,2}\/\d{1,2}(\/\d{2,4})?\b/g, '') // 08/01-08/31
     .replace(/\b\d{1,2}\/\d{1,2}(\/\d{2,4})?\b/g, '')                                       // a lone date
+    .replace(/\(\s*\)/g, '');                                                                   // an emptied "()"
+
+  // A contamination charge is the same event whichever container it was
+  // printed against — "Recycle Container 4 Cu Yd, 1 Lift Per Week
+  // Contaminated Materials" and bare "Contaminated Materials" are one line of
+  // spending, and it is a penalty, not a service.
+  if (/contaminated\s*materials?/i.test(out)) return 'Contaminated Materials';
+
+  // Waste-hauler labels drift more than most: the same container appears with
+  // and without a leading quantity ("1 Fl Waste Container…"), a front-load
+  // marker ("Fl"), "Cu Yd" vs "Yd", a lift-frequency clause, a stray " - ",
+  // and a trailing service descriptor. None of that is the container's
+  // identity; the size and type are.
+  out = out
+    .replace(/^\d+\s+(?=[A-Za-z])/, '')                       // leading quantity: "1 Waste Container…"
+    .replace(/^Fl\s+/i, '')                                    // front-load marker
+    .replace(/\bCu\.?\s*Yd\b/gi, 'Yd')                        // "3 Cu Yd" and "3 Yd" are the same container
+    .replace(/,?\s*\d+\s*Lifts?\s*Per\s*Week\b/gi, '')      // lift frequency
+    .replace(/\s+-\s+/g, ' ');                                // "… - Pickup Service"
+
+  // Trailing service descriptors, dropped only when a container or cart
+  // remains to carry the identity — standalone "Recycling Service" is its own
+  // charge and stays.
+  if (/\b(?:container|cart)\b/i.test(out)) {
+    out = out.replace(/\s+(?:Pickup|Recycling)?\s*Service$/i, '');
+  }
+
+  return out
     .replace(/\s+/g, ' ')
     .replace(/[\s,.:;-]+$/, '')
     .trim();
@@ -57,6 +97,9 @@ export function normaliseLabel(label: string): string {
 
 export interface ChargeLineSeries {
   label: string;
+  /** A penalty or surcharge rather than a purchased service — late fees,
+   *  contamination charges, returned payments. Counted with fees. */
+  isFee: boolean;
   /** Every month this line appeared, most recent first. */
   months: { month: string; amount: number }[];
   total: number;
@@ -155,6 +198,7 @@ export async function getChargeAnalytics(
 
     lines.push({
       label,
+      isFee: isFeeLikeCharge(label),
       months: entries,
       total,
       average: total / entries.length,
