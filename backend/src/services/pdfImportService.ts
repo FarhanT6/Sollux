@@ -94,6 +94,16 @@ export interface ParsedBill {
   extracted: ExtractedBillData;
   match:     MatchResult;
   error?:    string;
+  /**
+   * Which extractor actually produced this, which is not always the one that
+   * was asked for: AI extraction falls back to reading the text layer when the
+   * API cannot open a PDF. The two are not equivalent — the text path cannot
+   * produce a charge breakdown at all and reads totals far less reliably — so
+   * a silent downgrade leaves a bill that looks extracted and is quietly worse.
+   */
+  extractedBy: 'ai' | 'text';
+  /** Why the fallback happened, when it did. */
+  extractionNote?: string;
 }
 
 // ── Claude extraction ─────────────────────────────────────────────────────────
@@ -1178,6 +1188,9 @@ export async function parseBill(
   userId: string,
   method: 'ai' | 'regex' = 'ai',
 ): Promise<ParsedBill> {
+  let extractedBy: 'ai' | 'text' = method === 'regex' ? 'text' : 'ai';
+  let extractionNote: string | undefined;
+
   try {
     let extracted: ExtractedBillData;
     if (method === 'regex') {
@@ -1195,11 +1208,18 @@ export async function parseBill(
         const message = aiErr instanceof Error ? aiErr.message : String(aiErr);
         if (!/not valid|Cannot read |could not be processed|unsupported/i.test(message)) throw aiErr;
         console.warn(`[PDFImport] ${filename}: AI extraction unavailable (${message}) — falling back to text extraction.`);
+        // Record the downgrade rather than only logging it. Until now this was
+        // a server-side console line, so an import run with AI extraction on
+        // could quietly file some bills through the text path — with no charge
+        // breakdown, an inferred billing period, and the whole balance read as
+        // the month's charge — and nothing on screen said which ones.
+        extractedBy = 'text';
+        extractionNote = message;
         extracted = await extractWithRegex(buffer, filename);
       }
     }
     const match     = await matchToAccount(extracted, userId);
-    return { filename, extracted, match };
+    return { filename, extracted, match, extractedBy, extractionNote };
   } catch (err) {
     console.error(`[PDFImport] Error parsing ${filename}:`, err instanceof Error ? err.message : err);
     return {
@@ -1219,6 +1239,8 @@ export async function parseBill(
         utilityAccountId: null, propertyId: null,
         propertyName: null, providerName: null,
       },
+      extractedBy,
+      extractionNote,
       error: err instanceof Error ? err.message : 'Unknown error',
     };
   }
