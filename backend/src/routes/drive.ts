@@ -261,9 +261,51 @@ router.post('/stream', attachDbUser, async (req, res) => {
           if (acct) {
             const filenameDate  = parseDateFromFilename(file.name);
             const statementDate = ex.statementDate ? new Date(ex.statementDate) : (filenameDate ?? new Date());
-            const monthStart    = new Date(statementDate.getFullYear(), statementDate.getMonth(), 1);
-            const monthEnd      = new Date(statementDate.getFullYear(), statementDate.getMonth() + 1, 0, 23, 59, 59);
-            const existing      = await db.statement.findFirst({ where: { utilityAccountId: acct.id, statementDate: { gte: monthStart, lte: monthEnd } } });
+
+            // The same bill-identity rule as /import/confirm: a bill is its
+            // billing period, not its issue month. This path kept the old
+            // month-based lookup after the rest of the importers moved on, and
+            // it is the path Drive uploads actually take — so IID's drifting
+            // cycle kept losing bills here long after the "fix" shipped. A
+            // February bill issued 2 March and the March bill issued 30 March
+            // share an issue month; the month lookup called them the same bill
+            // and the update overwrote February with March, in place, leaving
+            // the count unchanged and the loss invisible.
+            let existing = null;
+            if (ex.billingPeriodStart) {
+              const start = new Date(ex.billingPeriodStart);
+              const window = 7 * 24 * 60 * 60 * 1000;
+              existing = await db.statement.findFirst({
+                where: {
+                  utilityAccountId: acct.id,
+                  billingPeriodStart: {
+                    gte: new Date(start.getTime() - window),
+                    lte: new Date(start.getTime() + window),
+                  },
+                },
+              });
+            }
+            if (!existing) {
+              // Issue-month fallback, restricted to rows that carry no real
+              // period of their own — null from this path's own create, or the
+              // whole-calendar-month shape the confirm path infers. A row with
+              // a genuine period is identified by that period and must never
+              // be claimed by a different bill that merely shares its month.
+              const monthStart = new Date(Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth(), 1));
+              const monthEnd   = new Date(Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth() + 1, 0, 23, 59, 59));
+              const DAY = 24 * 60 * 60 * 1000;
+              const firstOfMonth = Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth(), 1);
+              existing = await db.statement.findFirst({
+                where: {
+                  utilityAccountId: acct.id,
+                  statementDate: { gte: monthStart, lte: monthEnd },
+                  OR: [
+                    { billingPeriodStart: null },
+                    { billingPeriodStart: { gte: new Date(firstOfMonth - DAY), lte: new Date(firstOfMonth + DAY) } },
+                  ],
+                },
+              });
+            }
 
             const s3Key = buildStatementKey(userId, acct.propertyId, acct.id, statementDate, sanitizeFilename(file.name));
             const pdfS3Key = await uploadDocument(s3Key, buffer);

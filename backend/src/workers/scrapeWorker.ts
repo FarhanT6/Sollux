@@ -183,14 +183,38 @@ const worker = new Worker<ScrapeJobData>(
             pdfS3Key = await uploadDocument(key, stmt.pdfBuffer);
           }
 
-          // Check for exact date match first, then same-month match (catches account summary
-          // rows that arrive with today's date instead of the real statement date)
-          const monthStart = new Date(stmt.statementDate.getFullYear(), stmt.statementDate.getMonth(), 1);
-          const monthEnd = new Date(stmt.statementDate.getFullYear(), stmt.statementDate.getMonth() + 1, 0, 23, 59, 59);
-          const existing = await db.statement.findFirst({
-            where: { utilityAccountId: acct.id, statementDate: { gte: monthStart, lte: monthEnd } },
-            orderBy: { createdAt: 'asc' }, // prefer the oldest (first scraped = real statement)
-          });
+          // A bill is its billing period, not its issue month: a drifting
+          // cycle puts two bills in one month, and the plain month lookup this
+          // used to be overwrote the first with the second. Match the period
+          // when the scraper reports one; the month fallback still exists for
+          // scrapers that do not (and for account-summary rows arriving with
+          // today's date), but it may only claim rows without a real period —
+          // a row with one is identified by it.
+          let existing = null;
+          if (stmt.billingPeriodStart) {
+            const window = 7 * 24 * 60 * 60 * 1000;
+            existing = await db.statement.findFirst({
+              where: {
+                utilityAccountId: acct.id,
+                billingPeriodStart: {
+                  gte: new Date(stmt.billingPeriodStart.getTime() - window),
+                  lte: new Date(stmt.billingPeriodStart.getTime() + window),
+                },
+              },
+            });
+          }
+          if (!existing) {
+            const monthStart = new Date(stmt.statementDate.getFullYear(), stmt.statementDate.getMonth(), 1);
+            const monthEnd = new Date(stmt.statementDate.getFullYear(), stmt.statementDate.getMonth() + 1, 0, 23, 59, 59);
+            existing = await db.statement.findFirst({
+              where: {
+                utilityAccountId: acct.id,
+                statementDate: { gte: monthStart, lte: monthEnd },
+                ...(stmt.billingPeriodStart ? { billingPeriodStart: null } : {}),
+              },
+              orderBy: { createdAt: 'asc' }, // prefer the oldest (first scraped = real statement)
+            });
+          }
 
           const isPaid = stmt.rawData?.isPaid === true;
           const amountPaid = isPaid && stmt.amountDue ? stmt.amountDue : undefined;

@@ -203,11 +203,43 @@ const worker = new Worker<DriveImportJobData>(
             const parsedDate = ex.statementDate ? new Date(ex.statementDate) : new Date();
             const statementDate = isNaN(parsedDate.getTime()) ? new Date() : parsedDate;
 
-            const monthStart = new Date(statementDate.getFullYear(), statementDate.getMonth(), 1);
-            const monthEnd = new Date(statementDate.getFullYear(), statementDate.getMonth() + 1, 0, 23, 59, 59);
-            const existing = await db.statement.findFirst({
-              where: { utilityAccountId: acct.id, statementDate: { gte: monthStart, lte: monthEnd } },
-            });
+            // A bill is its billing period, not its issue month — a drifting
+            // cycle puts two bills in one month, and the month lookup this
+            // used to be treated the second as a duplicate of the first and
+            // overwrote it in place. Same rule as /import/confirm and the
+            // streaming Drive path: match the period when the bill states
+            // one; fall back to the issue month only against rows that carry
+            // no real period of their own.
+            let existing = null;
+            if (ex.billingPeriodStart) {
+              const start = new Date(ex.billingPeriodStart);
+              const window = 7 * 24 * 60 * 60 * 1000;
+              existing = await db.statement.findFirst({
+                where: {
+                  utilityAccountId: acct.id,
+                  billingPeriodStart: {
+                    gte: new Date(start.getTime() - window),
+                    lte: new Date(start.getTime() + window),
+                  },
+                },
+              });
+            }
+            if (!existing) {
+              const monthStart = new Date(Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth(), 1));
+              const monthEnd = new Date(Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth() + 1, 0, 23, 59, 59));
+              const DAY = 24 * 60 * 60 * 1000;
+              const firstOfMonth = Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth(), 1);
+              existing = await db.statement.findFirst({
+                where: {
+                  utilityAccountId: acct.id,
+                  statementDate: { gte: monthStart, lte: monthEnd },
+                  OR: [
+                    { billingPeriodStart: null },
+                    { billingPeriodStart: { gte: new Date(firstOfMonth - DAY), lte: new Date(firstOfMonth + DAY) } },
+                  ],
+                },
+              });
+            }
 
             const key = buildStatementKey(userId, acct.propertyId, acct.id, statementDate, sanitizeFilename(file.name));
             const pdfS3Key = await uploadDocument(key, buffer);
