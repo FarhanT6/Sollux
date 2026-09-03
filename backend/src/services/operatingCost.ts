@@ -45,7 +45,15 @@ const num = (v: number | string | null | undefined): number =>
  * penalties and arrears has an operating cost of nothing, not a negative.
  */
 export function operatingCost(bill: BillAmounts, opts: OperatingCostOptions = {}): number {
-  let total = num(bill.amountDue);
+  const billed = num(bill.amountDue);
+  // A credit memo bills a negative amount — service cancelled mid-cycle, an
+  // over-payment refunded — and that negative is a real reduction in what the
+  // period cost. Clamping it to zero counted the charge months in full and
+  // threw the refund away, overstating cost by exactly the credit. The floor
+  // below exists only for positive bills, where subtracting penalties and
+  // arrears must not push service cost below nothing.
+  if (billed < 0) return billed;
+  let total = billed;
   if (!opts.includePenalties) total -= num(bill.penaltiesFees);
   if (!opts.includePaymentPlan) total -= num(bill.paymentPlanAmount);
   return Math.max(0, total);

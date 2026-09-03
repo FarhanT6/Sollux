@@ -1156,6 +1156,19 @@ export default function UtilityDetailPage() {
                           const owed = totalDue ?? amt;
                           const primary = isFullyPaid ? amt : owed;
                           const showBillSubline = !isFullyPaid && owed > amt && amt > 0;
+                          // A negative amount is a credit memo: money the
+                          // provider owes, offsetting the next bill. Rendering
+                          // it like a charge reads as a payment demand.
+                          if (primary < 0) {
+                            return (
+                              <>
+                                <p className="text-base font-semibold text-emerald-400">
+                                  −${Math.abs(primary).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                                </p>
+                                <p className="text-xs text-emerald-600">credit — offsets next bill</p>
+                              </>
+                            );
+                          }
                           return (
                             <>
                               <p className="text-base font-semibold text-white">{fmtMoney(primary)}</p>
