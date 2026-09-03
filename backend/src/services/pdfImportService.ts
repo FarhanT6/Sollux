@@ -121,7 +121,7 @@ Schema (use null for any field not present in the document):
   "statementDate": "YYYY-MM-DD — date the bill was issued or generated",
   "dueDate": "YYYY-MM-DD — the date payment for THIS bill is due. Bills often print several other dates: a next meter-read date, a service-period end, a solar/net-metering true-up date, an autopay draft date. None of those are the due date — use only a date explicitly labelled as when payment is due,
   "billingPeriodStart": "YYYY-MM-DD — start of billing period if shown",
-  "billingPeriodEnd": "YYYY-MM-DD — end of billing period if shown",
+  "billingPeriodEnd": "YYYY-MM-DD — end of billing period if shown. Bills often print the period without a year (e.g. \"SERVICE PERIOD: 11/19 - 12/19\" means Nov 19 to Dec 19 — those are days, never years). Take the year from the bill's own issue date: the period ends on or shortly before it, and a cycle that spans New Year starts the year before it ends.",
   "amountDue": number or null — THIS period's charges only, including any late fee or penalty added this period, but EXCLUDING any balance carried forward from earlier bills. If the bill shows only one grand total and that total includes a prior balance, do NOT put the grand total here — put the prior balance in previousBalance and this period's charges here,
   "previousBalance": number or null — how much from EARLIER bills is still unpaid, after applying any payments the bill shows. If the bill lists 'Previous Balance' then 'Payments Received' then 'Balance Forward', report the Balance Forward figure, not the Previous Balance. Never include this period's charges. Use null, not 0, when nothing is carried forward,
   "paymentsReceived": number or null — payments or credits applied since last bill (enter as a positive number),
@@ -1197,6 +1197,61 @@ export async function matchToAccount(
   return noMatch;
 }
 
+/**
+ * Repairs a billing period whose year was misread.
+ *
+ * Bills print the period without a year — "SERVICE PERIOD: 11/19 - 12/19"
+ * means Nov 19 to Dec 19 — and an extractor sometimes takes those trailing
+ * digits as a year, filing a January 2026 bill under December 2019. The
+ * period's month and day are read reliably; it is only the invented year that
+ * is wrong, so the repair keeps month and day and takes the year from the
+ * bill's own issue date.
+ *
+ * Only a period ending implausibly far in the PAST is touched. A period
+ * ending after the issue date is left alone: insurance premiums and other
+ * bills issued in advance legitimately cover time that has not happened yet.
+ */
+export function repairMisreadPeriodYear(ex: ExtractedBillData): void {
+  if (!ex.statementDate || !ex.billingPeriodEnd) return;
+  const issued = new Date(ex.statementDate);
+  const end = new Date(ex.billingPeriodEnd);
+  if (isNaN(issued.getTime()) || isNaN(end.getTime())) return;
+
+  const DAY = 24 * 60 * 60 * 1000;
+  // Within 370 days is plausible even for an annual account; beyond that no
+  // provider bills, and the gap can only be a misread year.
+  if (issued.getTime() - end.getTime() <= 370 * DAY) return;
+
+  const anchor = (d: Date): Date => {
+    const sameYear = new Date(Date.UTC(issued.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+    // The period ends on or shortly before the bill that reports it, so a
+    // date landing after the issue date belongs to the previous year.
+    return sameYear.getTime() > issued.getTime() + 5 * DAY
+      ? new Date(Date.UTC(issued.getUTCFullYear() - 1, d.getUTCMonth(), d.getUTCDate()))
+      : sameYear;
+  };
+
+  const fixedEnd = anchor(end);
+  ex.billingPeriodEnd = fixedEnd.toISOString().slice(0, 10);
+
+  if (ex.billingPeriodStart) {
+    const start = new Date(ex.billingPeriodStart);
+    if (!isNaN(start.getTime())) {
+      let fixedStart = anchor(start);
+      // A cycle that crosses New Year starts the year before it ends.
+      if (fixedStart.getTime() > fixedEnd.getTime()) {
+        fixedStart = new Date(Date.UTC(fixedStart.getUTCFullYear() - 1, fixedStart.getUTCMonth(), fixedStart.getUTCDate()));
+      }
+      ex.billingPeriodStart = fixedStart.toISOString().slice(0, 10);
+    }
+  }
+
+  console.warn(
+    `[PDFImport] repaired misread billing period year: now covers ` +
+    `${ex.billingPeriodStart ?? '?'} → ${ex.billingPeriodEnd} (issued ${ex.statementDate})`
+  );
+}
+
 // ── Main entry point ──────────────────────────────────────────────────────────
 
 export async function parseBill(
@@ -1235,6 +1290,7 @@ export async function parseBill(
         extracted = await extractWithRegex(buffer, filename);
       }
     }
+    repairMisreadPeriodYear(extracted);
     const match     = await matchToAccount(extracted, userId);
     return { filename, extracted, match, extractedBy, extractionNote };
   } catch (err) {
