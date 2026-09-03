@@ -24,10 +24,30 @@ const num = (v: unknown): number => {
  * Line labels drift between bills — a date range appended, spacing changed,
  * a service period tacked on. Normalising too hard would merge genuinely
  * different containers, so this only removes what is definitely incidental:
- * embedded dates, repeated whitespace, and trailing punctuation.
+ * embedded dates, quantities and rates, repeated whitespace, and trailing
+ * punctuation.
+ *
+ * Quantities and rates are the electric-bill case. IID labels its main line
+ * "Usage (10,813.290 kWh@$0.1884/kWh)" — the kWh and the rate change every
+ * cycle, so every bill minted a brand-new charge and an account showed 81
+ * distinct charges that were really about seven. The quantity is not part of
+ * the charge's identity; the amount column already carries what it cost.
+ *
+ * A parenthetical is only dropped when it contains a unit, a rate, or a
+ * dollar figure. One that merely contains a number — "Waste Container
+ * (3 Yard)" — stays, because there the number IS the identity: merging the
+ * 3-yard and 4-yard containers would hide exactly the distinction this page
+ * exists to show.
  */
+const UNIT_OR_RATE = /(?:kwh|mwh|kw\b|ccf|hcf|mcf|therm|gallon|cu\.?\s*ft|c\.?f\.?|@|\$|\/\s*kwh)/i;
+
 export function normaliseLabel(label: string): string {
   return label
+    // Parentheticals carrying a quantity or rate: "(10,813.290 kWh@$0.1884/kWh)"
+    .replace(/\(([^)]*)\)/g, (whole, inner) => (UNIT_OR_RATE.test(inner) && /\d/.test(inner) ? '' : whole))
+    // The same fragments unparenthesised: "10,790 kWh @ $0.1093/kWh"
+    .replace(/[\d,]+(?:\.\d+)?\s*(?:kWh|MWh|kW|CCF|HCF|MCF|therms?|gallons?|cu\.?\s*ft\.?)\b\s*(?:@\s*\$?[\d.]+(?:\/\s*\w+)?)?/gi, '')
+    .replace(/@\s*\$?[\d.]+(?:\/\s*\w+)?/g, '')                                              // a bare rate
     .replace(/\b\d{1,2}\/\d{1,2}(\/\d{2,4})?\s*[-–]\s*\d{1,2}\/\d{1,2}(\/\d{2,4})?\b/g, '') // 08/01-08/31
     .replace(/\b\d{1,2}\/\d{1,2}(\/\d{2,4})?\b/g, '')                                       // a lone date
     .replace(/\s+/g, ' ')
@@ -64,7 +84,10 @@ export interface ChargeAnalytics {
 export async function getChargeAnalytics(
   accountId: string,
   userId: string,
-  months = 24,
+  // Five years, not two: the panel filters by year and by month-across-years
+  // on the client, and a filter over a window shorter than the account's
+  // history quietly shows partial answers.
+  months = 60,
 ): Promise<ChargeAnalytics | null> {
   const account = await db.utilityAccount.findFirst({
     where: { id: accountId, property: { userId } },
