@@ -506,9 +506,11 @@ router.get('/:id/payment-plan', async (req, res, next) => {
     const account = await requireOwnedAccount(req.params.id, req.dbUserId!);
     if (!account) return res.status(404).json({ error: 'Not found' });
 
+    // Most accounts have no payment plan, and that is the normal case rather
+    // than an error. Answering 404 made every utility page log a failed request
+    // to the console, which buries the failures that do matter.
     const plan = await db.paymentPlan.findUnique({ where: { utilityAccountId: req.params.id } });
-    if (!plan) return res.status(404).json({ error: 'No payment plan' });
-    res.json(plan);
+    res.json(plan ?? null);
   } catch (err) { next(err); }
 });
 

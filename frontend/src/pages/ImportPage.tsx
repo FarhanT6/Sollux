@@ -1234,7 +1234,25 @@ export default function ImportPage() {
   const [progress, setProgress]             = useState('');
   const [refreshing, setRefreshing]         = useState(false);
   const [driveProgress, setDriveProgress]   = useState<{ done: number; total: number } | null>(null);
-  const [extractionMethod, setExtractionMethod] = useState<'ai' | 'regex'>('regex');
+  // Defaults to AI, and remembers the choice. It used to default to text
+  // parsing and reset on every page load, so unless the toggle was flipped
+  // immediately before each import — in that same visit — every bill went
+  // through the text extractor while the person importing believed otherwise.
+  // That is not a preference the app should quietly re-decide: the two paths
+  // differ in whether a charge breakdown exists at all, whether the billing
+  // period is real or inferred from the issue month, and whether the amount
+  // recorded is this month's charge or the whole outstanding balance.
+  const [extractionMethod, setExtractionMethod] = useState<'ai' | 'regex'>(() => {
+    try {
+      return localStorage.getItem('sollux.extractionMethod') === 'regex' ? 'regex' : 'ai';
+    } catch {
+      return 'ai';
+    }
+  });
+
+  useEffect(() => {
+    try { localStorage.setItem('sollux.extractionMethod', extractionMethod); } catch { /* private mode */ }
+  }, [extractionMethod]);
 
   const handleRefreshAccounts = async () => {
     setRefreshing(true);
