@@ -930,6 +930,17 @@ async function extractWithClaude(pdfBuffer: Buffer, filename: string): Promise<E
   const rejection = pdfRejectionReason(pdfBuffer);
   if (rejection) throw new Error(`Cannot read ${filename}: ${rejection}.`);
 
+  // Some producers emit junk bytes before the %PDF- header — City of
+  // Imperial's portal prepends a bare newline. Every PDF reader tolerates
+  // that; the API's validator does not, and rejects the document as not a
+  // valid PDF. That rejection message matches the fallback pattern below in
+  // parseBill, so the bill silently dropped to text extraction — which is why
+  // the same provider's bills split into cleanly-extracted and garbage rows
+  // depending on nothing but which download produced the file. Trim to the
+  // header before sending.
+  const headerAt = pdfBuffer.indexOf('%PDF-');
+  if (headerAt > 0) pdfBuffer = pdfBuffer.subarray(headerAt);
+
   // Send every PDF as a native document — Claude reads the actual layout,
   // not a text dump that loses column relationships.
   console.log(`[PDFImport] ${filename}: ${Math.round(pdfBuffer.length / 1024)}KB`);
