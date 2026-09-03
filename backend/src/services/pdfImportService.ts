@@ -911,10 +911,16 @@ function pdfRejectionReason(buffer: Buffer): string | null {
       ? 'the download returned a web page, not a PDF — the Drive link may point at a shortcut or a file you cannot read'
       : 'the file is not a PDF';
   }
-  // An encrypted PDF is structurally valid but the API will not open it.
-  // /Encrypt appears in the trailer, so check the tail rather than the head.
-  const tail = buffer.subarray(Math.max(0, buffer.length - 4096)).toString('latin1');
-  if (/\/Encrypt\b/.test(tail)) return 'the PDF is password-protected';
+  // Deliberately no /Encrypt check. Utility statements very often carry an
+  // encryption dictionary with an empty user password — they open fine in any
+  // reader, and the API reads them too. Refusing them here on the presence of
+  // the keyword downgraded those bills to text extraction before Claude was
+  // ever asked, and because that threw "Cannot read …" it matched the fallback
+  // pattern and happened silently.
+  //
+  // A PDF the API genuinely cannot open still falls back, on the API's own
+  // answer rather than a guess made locally. The two checks left are ones no
+  // request could survive: nothing to send, or not a PDF at all.
   return null;
 }
 

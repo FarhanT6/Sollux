@@ -410,7 +410,20 @@ function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed, onProgres
               onStreamStart?.({} as any, 0);
               started = true;
             }
-            onBillStreamed?.({ filename: event.filename, extracted: event.extracted, match: event.match, fileData: event.fileData, error: event.error });
+            // Forwarded whole rather than field by field. Rebuilding the bill
+            // by hand silently dropped extractedBy and extractionNote, so a
+            // Drive import that fell back to text extraction looked identical
+            // to one Claude had read — which is precisely the case the warning
+            // exists for, and precisely where it was invisible.
+            onBillStreamed?.({
+              filename:       event.filename,
+              extracted:      event.extracted,
+              match:          event.match,
+              fileData:       event.fileData,
+              error:          event.error,
+              extractedBy:    event.extractedBy,
+              extractionNote: event.extractionNote,
+            });
           } else if (event.type === 'auto_imported') {
             counted++;
             setStreamDone(counted);
