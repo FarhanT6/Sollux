@@ -8,7 +8,7 @@ import {
   arrayMove, SortableContext, rectSortingStrategy, useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { getProperties, updateProperty, deleteProperty, getCostSettings } from '../api/client';
+import { getProperties, updateProperty, deleteProperty, getCostSettings, getSpendData } from '../api/client';
 import type { Property } from '../types';
 import { PageHeader, StatCard, Skeleton, EmptyState, Modal } from '../components/ui';
 import { PROPERTY_TYPE_LABELS } from '../types';
@@ -41,6 +41,10 @@ export default function PropertiesPage() {
   const [loading, setLoading] = useState(true);
   const [showAddProperty, setShowAddProperty] = useState(false);
   const [costOptions, setCostOptions] = useState({ includePenalties: false, includePaymentPlan: false });
+  // Spend is computed from its own feed: the properties list carries one
+  // statement per account, and an average of one bill is not an average.
+  const [spendData, setSpendData] = useState<any[]>([]);
+  useEffect(() => { getSpendData().then(setSpendData).catch(() => {}); }, []);
   useEffect(() => {
     getCostSettings()
       .then(cs => setCostOptions({
@@ -98,8 +102,8 @@ export default function PropertiesPage() {
   // bill on different cycles, and picking one month for the whole portfolio
   // would drop whichever of them happen to bill later.
   const spend = useMemo(
-    () => computePortfolioSpend(properties as any, costOptions),
-    [properties, costOptions],
+    () => computePortfolioSpend(spendData as any, costOptions),
+    [spendData, costOptions],
   );
   const [showBreakdown, setShowBreakdown] = useState(false);
 

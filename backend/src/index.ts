@@ -115,7 +115,18 @@ app.use('/api/legal', express.json({ limit: '50mb' }));
 app.use(express.json({ limit: '10mb' }));
 
 // ─── Health check ─────────────────────────────────────────
-app.get('/health', (_, res) => res.json({ status: 'ok', version: '1.0.0' }));
+const STARTED_AT = new Date().toISOString();
+
+// Reports the commit actually running, not a hardcoded version string. Twice
+// now a fix has looked broken when the truth was that a deploy failed and
+// production was still serving older code; guessing at that from the outside
+// costs far more than one field does.
+app.get('/health', (_, res) => res.json({
+  status: 'ok',
+  commit: process.env.RENDER_GIT_COMMIT ?? 'unknown',
+  branch: process.env.RENDER_GIT_BRANCH ?? 'unknown',
+  startedAt: STARTED_AT,
+}));
 
 // ─── Public routes ────────────────────────────────────────
 app.use('/api/auth', authRouter);

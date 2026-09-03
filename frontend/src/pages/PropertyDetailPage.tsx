@@ -85,10 +85,23 @@ export default function PropertyDetailPage() {
   const inactiveAccounts = accounts.filter(a => a.isActive === false);
   // Two figures rather than one, and both explainable — see lib/monthlySpend.ts
   // for why the previous single number belonged to no particular month.
-  const spend = useMemo(
-    () => computeMonthlySpend(activeAccounts as any, costOptions),
-    [activeAccounts, costOptions],
-  );
+  // Built from the full statement list, not from the handful the property
+  // payload carries per account. Averaging over the six most recent bills is
+  // not an average over a year — it silently becomes "the last six bills",
+  // and for an account with a two-bill month it is not even six months.
+  const spend = useMemo(() => {
+    const byAccount = new Map<string, any[]>();
+    for (const st of statements) {
+      const list = byAccount.get(st.utilityAccountId) ?? [];
+      list.push(st);
+      byAccount.set(st.utilityAccountId, list);
+    }
+    const enriched = activeAccounts.map(a => ({
+      ...a,
+      statements: byAccount.get(a.id) ?? a.statements ?? [],
+    }));
+    return computeMonthlySpend(enriched as any, costOptions);
+  }, [activeAccounts, statements, costOptions]);
   const [showBreakdown, setShowBreakdown] = useState(false);
 
   const lastSynced = activeAccounts.map(a => a.lastSyncedAt).filter(Boolean).sort().pop();

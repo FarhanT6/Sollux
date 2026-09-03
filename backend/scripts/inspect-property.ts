@@ -102,22 +102,44 @@ const day = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : '—');
         const statements = await db.statement.findMany({
           where: { utilityAccountId: a.id },
           orderBy: { statementDate: 'desc' },
-          take: 12,
           select: {
             statementDate: true, dueDate: true, amountDue: true, balance: true,
             pastDueCarried: true, penaltiesFees: true, amountPaid: true,
+            billingPeriodStart: true, billingPeriodEnd: true,
             pdfS3Key: true, sourceType: true,
           },
         });
+        // Every statement, not a window: the point of this listing is usually
+        // to find which bills are absent, and a truncated list cannot answer
+        // that. The billing period is shown because it, not the issue date, is
+        // what identifies a bill — a drifting cycle puts two in one month.
         for (const s of statements) {
+          const period = s.billingPeriodStart || s.billingPeriodEnd
+            ? `${day(s.billingPeriodStart)}→${day(s.billingPeriodEnd)}`
+            : 'no period';
           console.log(
-            `      ${day(s.statementDate)}  due ${day(s.dueDate)}  ` +
+            `      issued ${day(s.statementDate)}  covers ${period}  ` +
             `amt ${money(s.amountDue)}  bal ${money(s.balance)}  ` +
             `pastDue ${money(s.pastDueCarried)}  fees ${money(s.penaltiesFees)}  ` +
-            `paid ${money(s.amountPaid)}  ${s.pdfS3Key ? 'pdf' : 'no pdf'}  ${s.sourceType}`
+            `${s.pdfS3Key ? 'pdf' : 'no pdf'}`
           );
         }
-        if (a._count.statements > 12) console.log(`      … ${a._count.statements - 12} more`);
+
+        // Gaps in the sequence, judged on the period billed. A missing month is
+        // the thing people come here to find, so say it rather than leaving it
+        // to be spotted in a list of forty rows.
+        const periods = statements
+          .map(s => s.billingPeriodEnd ?? s.statementDate)
+          .sort((x, y) => x.getTime() - y.getTime());
+        const gaps: string[] = [];
+        for (let i = 1; i < periods.length; i++) {
+          const days = Math.round((periods[i].getTime() - periods[i - 1].getTime()) / 86400000);
+          if (days > 45) gaps.push(`${day(periods[i - 1])} → ${day(periods[i])} (${days} days)`);
+        }
+        if (gaps.length) {
+          console.log(`\n    ⚠ ${gaps.length} gap(s) longer than 45 days between billed periods:`);
+          gaps.forEach(g => console.log(`        ${g}`));
+        }
       }
     }
 

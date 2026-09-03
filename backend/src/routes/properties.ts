@@ -32,6 +32,55 @@ const PropertySchema = z.object({
 });
 
 // GET /api/properties — list all for user
+/**
+ * GET /api/properties/spend-data
+ *
+ * Just enough to compute monthly spend across the portfolio: every account's
+ * billing history for the window, and nothing else.
+ *
+ * The properties list carries one statement per account, which is right for
+ * the cards — they show the latest bill — but computing an average from it
+ * produced an average of one bill, so every property reported its latest month
+ * and its average as the same number. Sending the full history on that
+ * endpoint instead would mean shipping rawDataJson for hundreds of statements
+ * to render a handful of figures, so the spend calculation gets its own slim
+ * feed.
+ */
+router.get('/spend-data', async (req, res, next) => {
+  try {
+    const months = req.query.months ? Number(req.query.months) : 13;
+    const since = new Date();
+    since.setMonth(since.getMonth() - months);
+
+    const properties = await db.property.findMany({
+      where: { userId: req.dbUserId! },
+      select: {
+        id: true, address: true, nickname: true,
+        utilityAccounts: {
+          select: {
+            id: true, providerName: true, serviceLabel: true, category: true, isActive: true,
+            billingCadence: true, termMonths: true, expectedAmount: true,
+            statements: {
+              where: { statementDate: { gte: since } },
+              orderBy: { statementDate: 'desc' },
+              // Only the fields the calculation reads. rawDataJson is the bulk
+              // of a statement row and none of it is needed here.
+              select: {
+                id: true, statementDate: true, billingPeriodEnd: true,
+                amountDue: true, penaltiesFees: true, paymentPlanAmount: true,
+                isDownPayment: true,
+              },
+            },
+          },
+        },
+      },
+      orderBy: { address: 'asc' },
+    });
+
+    res.json(properties);
+  } catch (err) { next(err); }
+});
+
 router.get('/', async (req, res, next) => {
   try {
     const properties = await db.property.findMany({

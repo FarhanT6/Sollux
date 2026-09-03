@@ -1442,6 +1442,12 @@ export default function ImportPage() {
 
     setStage('importing');
 
+    // Anything not ready is about to be left behind. Saying so is the whole
+    // point: an import that reports "9 imported" after being handed 12 files
+    // looks like a success, and the three that vanished are only discovered
+    // later by counting rows by hand. Name them here instead.
+    const excluded = bills.filter(b => !isBillReady(b));
+
     const toItem = (b: ParsedBill) => ({
       filename:         b.filename,
       fileData:         b.fileData,
@@ -1465,6 +1471,12 @@ export default function ImportPage() {
     const totals = { imported: 0, skipped: 0, errors: [] as string[] };
     const failed: ParsedBill[] = [];
 
+    for (const b of excluded) {
+      totals.errors.push(
+        `${b.filename}: not filed — ${b.error ? `could not be read (${b.error})` : 'no utility account assigned'}`
+      );
+    }
+
     for (let i = 0; i < ready.length; i += CONFIRM_BATCH) {
       const batch = ready.slice(i, i + CONFIRM_BATCH);
       setProgress(`Filing ${Math.min(i + batch.length, ready.length)} / ${ready.length}...`);
@@ -1479,6 +1491,18 @@ export default function ImportPage() {
         const detail = err?.response?.data?.error ?? err?.message ?? 'request failed';
         totals.errors.push(`${batch.length} file(s) failed: ${detail}`);
       }
+    }
+
+    // Reconcile what was sent against what the server accounted for. Every
+    // known drop path already reports itself, so a shortfall here means a file
+    // went missing through a path nobody has named yet — which is exactly the
+    // thing that must not pass silently.
+    const accountedFor = totals.imported + totals.skipped + totals.errors.length - excluded.length;
+    if (accountedFor < ready.length) {
+      totals.errors.push(
+        `${ready.length - accountedFor} file(s) were sent but not accounted for by the server. ` +
+        'Nothing was reported against them — please re-run the import for those bills.'
+      );
     }
 
     setProgress('');

@@ -330,18 +330,32 @@ router.post('/confirm', async (req: Request, res: Response) => {
               },
             });
           }
-          if (!existing && !ex.billingPeriodStart) {
-            // No stated period. UTC boundaries: statement dates are stored at
-            // midnight UTC, so a local-time window is offset by the server's
-            // zone and straddles the month edge.
+          if (!existing) {
+            // Fall back to the issue month, matching only a row that has no
+            // period of its own. Two cases land here, and both want the same
+            // thing:
+            //
+            //   - the new bill states no period either, so the month is all
+            //     there is to go on;
+            //   - the new bill states a period but nothing matched it, and the
+            //     account still holds a period-less row from an older import
+            //     that predates period extraction. That row *is* this bill; it
+            //     just never had a period recorded. Matching it backfills the
+            //     period instead of creating a second copy of the same bill.
+            //
+            // A row that already carries a period is deliberately excluded:
+            // that one is identified by its period, not by its month, and a
+            // drifting cycle puts two distinct bills in one issue month.
+            //
+            // UTC boundaries: statement dates are stored at midnight UTC, so a
+            // local-time window is offset by the server's zone and straddles
+            // the month edge.
             const monthStart = new Date(Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth(), 1));
             const monthEnd   = new Date(Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth() + 1, 0, 23, 59, 59));
             existing = await db.statement.findFirst({
               where: {
                 utilityAccountId,
                 statementDate: { gte: monthStart, lte: monthEnd },
-                // Do not collide with a statement that has a period of its own:
-                // that one is identified by its period, not by its month.
                 billingPeriodStart: null,
               },
             });
