@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   getUtility, syncUtility, deleteUtility, updateUtility, getStatementDownloadUrl,
   getPaymentPlan, createPaymentPlan, updatePaymentPlan, deletePaymentPlan,
-  upsertUtilityLoan, deleteUtilityLoan, patchStatement, createStatement,
+  upsertUtilityLoan, deleteUtilityLoan, patchStatement, createStatement, deleteStatement,
   revealUtilityAccountNumber, createPayment, updatePayment, deletePayment,
   getBankAccounts, getCostSettings, updateCostSettings,
 } from '../api/client';
@@ -1342,9 +1342,32 @@ function StatementModal({ accountId, statement, onClose, onSaved }: {
   const [pastDueCarried, setPastDueCarried] = useState(statement?.pastDueCarried != null ? String(statement.pastDueCarried) : '');
   const [notes, setNotes] = useState(statement?.notes ?? '');
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState('');
 
   const num = (v: string) => v.trim() === '' ? null : parseFloat(v);
+
+  // A bad import leaves rows that have to come off — a duplicate, or one whose
+  // figures were read wrong. The endpoint has always existed and the statement
+  // history panel uses it; this page simply never offered it, so the only way
+  // to remove a statement was to delete the whole account with every other
+  // statement, payment and PDF on it.
+  async function handleDelete() {
+    if (!confirm(
+      `Delete this statement?\n\n` +
+      `${statementDate}${amountDue ? ` · $${amountDue}` : ''}\n\n` +
+      'The stored PDF goes with it. This cannot be undone.'
+    )) return;
+    setDeleting(true);
+    setError('');
+    try {
+      await deleteStatement(statement.id);
+      onSaved();
+    } catch (err: any) {
+      setError(err?.response?.data?.error || 'Failed to delete statement');
+      setDeleting(false);
+    }
+  }
 
   async function handleSave() {
     setSaving(true);
@@ -1436,9 +1459,20 @@ function StatementModal({ accountId, statement, onClose, onSaved }: {
 
         {error && <p className="text-xs text-red-400">{error}</p>}
 
-        <div className="flex justify-end gap-2 pt-1">
+        <div className="flex items-center gap-2 pt-1">
+          {isEdit && (
+            <button
+              onClick={handleDelete}
+              disabled={deleting || saving}
+              className="text-xs px-2 py-1 rounded text-red-400 hover:text-red-300 disabled:opacity-50"
+              style={{ background: 'rgba(255,0,0,0.08)' }}
+            >
+              {deleting ? 'Deleting…' : 'Delete'}
+            </button>
+          )}
+          <div className="flex-1" />
           <button onClick={onClose} className="btn text-xs">Cancel</button>
-          <button onClick={handleSave} disabled={saving} className="btn btn-primary text-xs disabled:opacity-50">
+          <button onClick={handleSave} disabled={saving || deleting} className="btn btn-primary text-xs disabled:opacity-50">
             {saving ? 'Saving…' : isEdit ? 'Save' : 'Add statement'}
           </button>
         </div>
