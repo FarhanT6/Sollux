@@ -353,11 +353,36 @@ router.post('/confirm', async (req: Request, res: Response) => {
             // the month edge.
             const monthStart = new Date(Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth(), 1));
             const monthEnd   = new Date(Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth() + 1, 0, 23, 59, 59));
+
+            // A row whose period was inferred rather than extracted counts as
+            // period-less here, because that is what it is. The importer writes
+            // an inferred period on create (the whole calendar month) but this
+            // lookup used to demand a null one — so a bill whose period cannot
+            // be extracted was written with a period, then never recognised
+            // again, and every single re-import filed another copy of it.
+            //
+            // An inferred period is identifiable by its shape: it runs from the
+            // first of a month to the last day of that same month. A real cycle
+            // effectively never does — providers read meters mid-month — so
+            // this does not swallow genuine periods.
+            // Matched as a window rather than an instant: the inferred period is
+            // built in the server's local zone on write and compared here in
+            // UTC, so on a server that is not UTC the two are a few hours apart
+            // and an equality test would silently never match.
+            const DAY = 24 * 60 * 60 * 1000;
+            const firstOfMonth = Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth(), 1);
+
             existing = await db.statement.findFirst({
               where: {
                 utilityAccountId,
                 statementDate: { gte: monthStart, lte: monthEnd },
-                billingPeriodStart: null,
+                OR: [
+                  { billingPeriodStart: null },
+                  { billingPeriodStart: {
+                      gte: new Date(firstOfMonth - DAY),
+                      lte: new Date(firstOfMonth + DAY),
+                  } },
+                ],
               },
             });
           }
