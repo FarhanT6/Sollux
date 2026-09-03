@@ -58,6 +58,12 @@ interface ParsedBill {
   extracted:    ExtractedBill;
   match:        MatchResult;
   error?:       string;
+  // Which extractor actually ran. AI extraction falls back to reading the text
+  // layer for PDFs the API cannot open, and that path produces no charge
+  // breakdown, infers the billing period from the issue month, and reads
+  // totals far less reliably — so the downgrade has to be visible.
+  extractedBy?: 'ai' | 'text';
+  extractionNote?: string;
   fileData:     string;       // base64, retained for S3 upload on confirm
   newProperty?: NewPropertyPayload;
   newAccount?:  NewAccountPayload;
@@ -900,6 +906,17 @@ function BillCard({
               {ex.providerName || 'Unknown provider'}
               {ex.serviceAddress ? ` · ${ex.serviceAddress}` : ''}
             </p>
+            {/* AI extraction quietly falls back to reading the text layer when
+                the API cannot open a PDF. That path produces no charge
+                breakdown and infers the billing period, so the bill lands
+                looking fine and is materially worse. Say so here. */}
+            {bill.extractedBy === 'text' && (
+              <p className="text-xs mt-1" style={{ color: '#F5A623' }}>
+                Read as text, not by AI — no charge breakdown, and the billing
+                period may be guessed from the issue month
+                {bill.extractionNote ? ` (${bill.extractionNote})` : ''}
+              </p>
+            )}
           </div>
         </div>
         <button onClick={onRemove} className="text-gray-600 hover:text-gray-400 flex-shrink-0 transition-colors">
@@ -1452,6 +1469,7 @@ export default function ImportPage() {
       filename:         b.filename,
       fileData:         b.fileData,
       extracted:        b.extracted,
+      extractedBy:      b.extractedBy,
       match:            b.match,
       utilityAccountId: b.match.utilityAccountId || null,
       propertyId:       b.addToPropertyId || null,

@@ -119,6 +119,7 @@ interface ConfirmItem {
   fileData:         string;           // base64 PDF
   extracted:        ExtractedBillData;
   match:            MatchResult;
+  extractedBy?:     'ai' | 'text';    // which extractor actually produced `extracted`
   utilityAccountId: string | null;    // existing account OR null if creating new
   propertyId?:      string | null;    // existing property to add a new account to
   newProperty?:     NewPropertyPayload;
@@ -415,7 +416,7 @@ router.post('/confirm', async (req: Request, res: Response) => {
               usageValue:  ex.usageValue ?? existing.usageValue,
               usageUnit:   ex.usageUnit  ?? existing.usageUnit,
               ratePlan:    ex.ratePlan   ?? existing.ratePlan,
-              rawDataJson: buildRawData(ex) as Prisma.InputJsonValue,
+              rawDataJson: buildRawData(ex, item.extractedBy) as Prisma.InputJsonValue,
               ...(pdfS3Key ? { pdfS3Key } : {}),
             },
           });
@@ -443,7 +444,7 @@ router.post('/confirm', async (req: Request, res: Response) => {
               ratePlan:    ex.ratePlan   ?? null,
               pdfS3Key:    pdfS3Key      ?? null,
               sourceType:  'MANUAL',
-              rawDataJson: buildRawData(ex) as Prisma.InputJsonValue,
+              rawDataJson: buildRawData(ex, item.extractedBy) as Prisma.InputJsonValue,
             },
           });
           imported++;
@@ -497,9 +498,13 @@ function parseDateFromFilename(filename: string): Date | null {
   return null;
 }
 
-function buildRawData(ex: ExtractedBillData): Record<string, unknown> {
+function buildRawData(ex: ExtractedBillData, extractedBy?: 'ai' | 'text'): Record<string, unknown> {
   return {
     source:           'pdf_import',
+    // Which extractor produced this. AI extraction silently falls back to the
+    // text layer for PDFs the API cannot open, and the two are not equally
+    // trustworthy, so the row records which one it came from.
+    extractedBy:      extractedBy ?? null,
     providerName:     ex.providerName,
     serviceAddress:   ex.serviceAddress,
     accountNumber:    ex.accountNumber,
