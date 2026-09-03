@@ -147,6 +147,8 @@ Important extraction tips:
 - accountNumber: include dashes and spaces as they appear; do not normalize.
 - statementDate: if not explicit, infer from postmark, billing period end, or document date.
 - Bills printed in two columns often place the prior balance and this period's charges side by side. Read the labels, not the position: a figure next to 'Past Due' is previousBalance even when it sits where current charges usually appear.
+- Copy every figure's sign exactly as the bill prints it. A leading minus, a parenthesised amount, or a trailing "CR" all mean negative ("$361.44CR" is -361.44). Never flip a bill's signs to make its lines read like ordinary charges, and never report an absolute value.
+- A credit memo is a bill whose CURRENT charges are negative — service cancelled mid-cycle, an over-payment, a refund. Its currentCharges and amountDue are negative, its balance is the negative credit balance, and "Do Not Pay" or "Credit Balance" does NOT mean isPaid. Its chargeBreakdown lines keep their printed signs and must sum to the printed (negative) total.
 - Credits are negative, and the sign matters. A bill reading "Total Account Balance -$91.67" or "Your account has a credit balance of $91.67" is money the provider owes you, not money you owe: report amountDue as the negative figure, never its absolute value. Likewise a California Climate Credit or any line that reduces the bill belongs in chargeBreakdown as a negative number. A credit reported as positive turns a refund into a payment demand.
 - Carried balance is worded differently by every provider, and missing it makes a two-month bill look like a one-month bill. All of these mean the same thing: "Previous Balance", "Balance Forward", "Amount of Last Bill", "Past Due on <date>", "Previous Amount Due". Report it net of any payment the bill shows against it. Two worked examples:
   · "Amount of Last Bill 13.40 / Payment Received .00 / Current Charges 18.73 / Total Amount Due 32.13" → previousBalance 13.40, amountDue 18.73. Nothing was paid, so the whole prior bill is still carried.
@@ -199,12 +201,16 @@ function parseDate(s: string): string | null {
 
 // Search the full text for a label and return the dollar amount near it
 function findDollarNear(text: string, labels: RegExp[]): number | null {
-  const suffix = '[\\s\\S]{0,80}?\\$?\\s*([\\d,]+\\.\\d{2})';
+  // The sign travels with the figure. Bills write a credit three ways — a
+  // leading minus, a trailing CR, or both — and dropping it turns money the
+  // provider owes into money demanded: a -$361.44 credit memo read unsigned
+  // becomes a $361.44 bill.
+  const suffix = '[\\s\\S]{0,80}?(-?)\\$?\\s*(-?)([\\d,]+\\.\\d{2})\\s*(CR)?';
   for (const label of labels) {
     const m = text.match(new RegExp(label.source + suffix, label.flags));
     if (m) {
-      const n = parseFloat(m[1].replace(/,/g, ''));
-      if (!isNaN(n)) return n;
+      const n = parseFloat(m[3].replace(/,/g, ''));
+      if (!isNaN(n)) return (m[1] || m[2] || m[4]) ? -n : n;
     }
   }
   return null;
@@ -237,12 +243,13 @@ interface AmountHit { amount: number; position: number; context: string }
 
 /** Find every $X.XX pattern in the text with surrounding context. */
 function scanAllAmounts(text: string): AmountHit[] {
-  const re = /\$\s*([\d,]+\.\d{2})/g;
+  const re = /(-?)\$\s*(-?)([\d,]+\.\d{2})\s*(CR)?/g;
   const hits: AmountHit[] = [];
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
-    const amount = parseFloat(m[1].replace(/,/g, ''));
+    let amount = parseFloat(m[3].replace(/,/g, ''));
     if (isNaN(amount)) continue;
+    if (m[1] || m[2] || m[4]) amount = -amount;
     const start = Math.max(0, m.index - 60);
     hits.push({ amount, position: m.index, context: text.slice(start, m.index + m[0].length + 20) });
   }

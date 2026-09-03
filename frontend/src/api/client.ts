@@ -637,6 +637,7 @@ export const getFeeSummary = (months?: number) =>
 // ── Charge analytics ─────────────────────────────────────
 export interface ChargeLineSeries {
   label: string;
+  isFee: boolean;
   months: { month: string; amount: number }[];
   total: number;
   average: number;

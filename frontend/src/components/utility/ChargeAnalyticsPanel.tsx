@@ -100,6 +100,9 @@ export default function ChargeAnalyticsPanel({ accountId }: { accountId: string 
 
   const viewTotal = view.reduce((t, l) => t + l.total, 0);
   const viewMonths = new Set(view.flatMap(l => l.months.map(m => m.month))).size;
+  // What the account was punished with, as opposed to what it bought — late
+  // fees, contamination charges and their kin, summed over the same view.
+  const viewFees = view.filter(l => l.isFee).reduce((t, l) => t + l.total, 0);
 
   if (!data || data.lines.length === 0) {
     return (
@@ -155,11 +158,12 @@ export default function ChargeAnalyticsPanel({ accountId }: { accountId: string 
         </select>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {[
           { label: filter.kind === 'all' ? 'Year to date' : 'Total in view', value: money(filter.kind === 'all' ? data.yearToDate : viewTotal) },
           { label: 'Months covered', value: String(filter.kind === 'all' ? data.monthsCovered : viewMonths) },
           { label: 'Distinct charges', value: String(view.length) },
+          { label: 'Fees & penalties', value: money(viewFees) },
         ].map(s => (
           <div key={s.label} className="rounded-xl px-4 py-3"
             style={{ background: '#161616', border: '1px solid rgba(255,255,255,0.06)' }}>
@@ -199,6 +203,12 @@ export default function ChargeAnalyticsPanel({ accountId }: { accountId: string 
             >
               <span className="min-w-0 pr-3">
                 <span className="text-gray-200">{line.label}</span>
+                {line.isFee && (
+                  <span className="ml-2 text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded"
+                    style={{ background: 'rgba(245,166,35,0.12)', border: '1px solid rgba(245,166,35,0.3)', color: '#F5A623' }}>
+                    fee
+                  </span>
+                )}
                 {line.changePercent != null && Math.abs(line.changePercent) >= 5 && (
                   <span className={line.changePercent > 0 ? 'text-red-400 ml-2' : 'text-emerald-400 ml-2'}>
                     {line.changePercent > 0 ? '↑' : '↓'} {Math.abs(line.changePercent).toFixed(0)}%
