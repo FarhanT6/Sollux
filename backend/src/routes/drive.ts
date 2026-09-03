@@ -394,10 +394,14 @@ router.post('/import', attachDbUser, async (req, res, next) => {
     const { driveImportQueue } = await import('../workers/queues');
     await driveImportQueue.add(
       'import',
-      // Default to regex: this path bills the user's Anthropic key per PDF, and
-      // a bulk folder import is thousands of files. AI extraction has to be
-      // asked for, never assumed.
-      { jobId: job.id, tokenId, folderId, fileIds, userId: req.dbUserId!, method: method === 'ai' ? 'ai' : 'regex' },
+      // Matches the other two entry points, which default to AI when the
+      // caller says nothing. This one defaulted to text parsing to keep a bulk
+      // folder import cheap — but a caller that omits the field gets the
+      // cheaper, materially less accurate extractor without ever choosing it,
+      // and the same reasoning is what put a silent text-parsing default in
+      // front of every import for two months. Cost is a decision to make
+      // explicitly, not one to make on someone's behalf by omission.
+      { jobId: job.id, tokenId, folderId, fileIds, userId: req.dbUserId!, method: method === 'regex' ? 'regex' : 'ai' },
       { attempts: 1 }
     );
 
