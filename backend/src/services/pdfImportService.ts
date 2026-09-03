@@ -543,6 +543,35 @@ async function extractWithRegex(pdfBuffer: Buffer, filename: string): Promise<Ex
     }
   }
 
+  // Some bills date the period without a year, because on paper the year is
+  // obvious from the rest of the page. City of Imperial prints
+  // "SERVICE PERIOD: 05/23 - 06/23". Every pattern above requires a year, so
+  // the period was never found and the importer inferred a calendar month
+  // instead — which is why these bills read as "Jan 1 – Jan 31" rather than
+  // the cycle they actually cover. The year comes from the statement date: a
+  // period cannot end after the bill that reports it.
+  if ((!billingPeriodStart || !billingPeriodEnd) && statementDate) {
+    const m = text.match(
+      /(?:service|billing)\s+period[:\s]+(\d{1,2})\/(\d{1,2})\s*(?:to|through|thru|[-–—])\s*(\d{1,2})\/(\d{1,2})(?!\s*[\/-]\s*\d)/i
+    );
+    if (m) {
+      const issued = new Date(statementDate);
+      const [sMon, sDay, eMon, eDay] = [+m[1], +m[2], +m[3], +m[4]];
+      const iso = (y: number, mo: number, d: number) =>
+        `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+
+      // The period ends on or before the day the bill was issued, so a month
+      // later than the issue month belongs to the previous year.
+      let endYear = issued.getUTCFullYear();
+      if (eMon > issued.getUTCMonth() + 1) endYear -= 1;
+      // A start month after the end month means the cycle crossed New Year.
+      const startYear = sMon > eMon ? endYear - 1 : endYear;
+
+      billingPeriodStart = iso(startYear, sMon, sDay);
+      billingPeriodEnd   = iso(endYear, eMon, eDay);
+    }
+  }
+
   // ── Amount due ────────────────────────────────────────────────────────────
   const amountDueLabels: RegExp[] = [
     // Generic
@@ -649,6 +678,24 @@ async function extractWithRegex(pdfBuffer: Buffer, filename: string): Promise<Ex
     currentCharges = amountDue;
   }
 
+  // Bills that lay their totals out in a table put the label and its figure in
+  // separate cells, which the text layer can emit far apart — so "TOTAL CURRENT
+  // CHARGES" is present but no dollar amount sits near it, and the label-based
+  // search comes back empty. "TOTAL AMOUNT DUE" is easier to find, so the bill
+  // gets recorded at its whole balance and every month of arrears is counted
+  // again as if it were this month's cost.
+  //
+  // The bill states enough to recover the figure without finding it: what this
+  // period charged is the balance owed less what was carried in. City of
+  // Imperial prints 2,272.98 due against a 1,538.32 previous balance — 734.66,
+  // exactly the current charges it also prints.
+  if (currentCharges == null && amountDue != null && previousBalance != null) {
+    const derived = amountDue - previousBalance;
+    // A negative or absurd result means the two figures are not what they were
+    // taken for, and a wrong number here is worse than none.
+    if (derived > 0 && derived <= amountDue) currentCharges = Number(derived.toFixed(2));
+  }
+
   // ── Usage ─────────────────────────────────────────────────────────────────
   let usageValue: number | null = null;
   let usageUnit:  string | null = null;
@@ -675,8 +722,16 @@ async function extractWithRegex(pdfBuffer: Buffer, filename: string): Promise<Ex
     // Internet (data)
     [/([\d,]+\.?\d*)\s*GB\s*(?:used|data|of\s+data)/i, 'GB'],
   ];
+  // Bills explain their own units, and the explanation looks exactly like a
+  // reading. City of Imperial prints "Meter reads are in Cubic Feet (C.F.)
+  // 1 C.F. = 7.65 gallons", which was recorded as 7.65 gallons of water used
+  // for the month. Drop the conversion legends before scanning for a reading.
+  const usageText = text
+    .replace(/\b1\s*(?:C\.?F\.?|CCF|HCF|MCF|unit|therm)s?\s*[=≈]\s*[\d,.]+\s*\w+/gi, ' ')
+    .replace(/\bmeter\s+reads?\s+are\s+in[^\n]*/gi, ' ');
+
   for (const [pattern, unit] of usagePatterns) {
-    const m = text.match(pattern);
+    const m = usageText.match(pattern);
     if (m) {
       const val = m[1] || m[2];
       if (!val) continue;
