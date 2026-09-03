@@ -47,7 +47,7 @@ const UNIT_OR_RATE = /(?:kwh|mwh|kw\b|ccf|hcf|mcf|therm|gallon|cu\.?\s*ft|c\.?f\
  * fees and penalties wherever fees are counted, whatever container or service
  * the provider printed them against.
  */
-const FEE_LIKE = /late\s*fee|penalt|contaminated\s*materials?|contamination|returned\s*(?:check|payment)|nsf\b|insufficient\s*funds|interest\s*charge|collection|disconnect|reconnect|shut[\s-]*off/i;
+const FEE_LIKE = /late\s*fee|penalt|contaminated\s*materials?|contamination|overage|returned\s*(?:check|payment)|nsf\b|insufficient\s*funds|interest\s*charge|collection|disconnect|reconnect|shut[\s-]*off/i;
 
 export function isFeeLikeCharge(label: string): boolean {
   return FEE_LIKE.test(label);
@@ -82,12 +82,27 @@ export function normaliseLabel(label: string): string {
     .replace(/,?\s*\d+\s*Lifts?\s*Per\s*Week\b/gi, '')      // lift frequency
     .replace(/\s+-\s+/g, ' ');                                // "… - Pickup Service"
 
-  // Trailing service descriptors, dropped only when a container or cart
-  // remains to carry the identity — standalone "Recycling Service" is its own
-  // charge and stays.
+  // Hauler labels bolt a container onto a service, in both directions: the
+  // same yardwaste line appears as "Mixed Organics Cart Gal Organics
+  // Yardwaste", "Organics Yardwaste Service", and bare "Yardwaste Service";
+  // the same recycling line as "Recycle Container Recycling Service" and
+  // "Recycling Service". When a specific service name is present, it is the
+  // identity and the container is scaffolding — so the container prefix goes
+  // and the service is canonicalised. A generic tail ("Pickup Service") says
+  // nothing, so there the container stays and the tail goes.
   if (/\b(?:container|cart)\b/i.test(out)) {
-    out = out.replace(/\s+(?:Pickup|Recycling)?\s*Service$/i, '');
+    const specific = out.match(/\b((?:organics?\s+)?yardwaste(?:\s+service)?|organic\s+waste\s+processing|recycling\s+service|waste\/recycling\s+overage|contaminated.*)$/i);
+    if (specific) {
+      out = specific[1];
+    } else {
+      out = out.replace(/\s+(?:Pickup|Recycling)?\s*Service$/i, '').replace(/\s+Pickup$/i, '');
+    }
   }
+  out = out
+    .replace(/^\s*Total\s+/i, '')                                  // "Total City Of Brawley Utility Fee"
+    .replace(/^(?:organics?\s+)?yardwaste(?:\s+service)?$/i, 'Yardwaste Service')
+    .replace(/^organic\s+waste\s+processing$/i, 'Organic Waste Processing')
+    .replace(/^recycling\s+service$/i, 'Recycling Service');
 
   return out
     .replace(/\s+/g, ' ')

@@ -1259,6 +1259,26 @@ export function repairMisreadPeriodYear(ex: ExtractedBillData): void {
   );
 }
 
+/**
+ * Copies a payment-plan installment out of the charge breakdown when the
+ * extractor did not fill the dedicated field.
+ *
+ * A City of Brawley bill itemises "Payment Plan 195.27" among its lines. That
+ * installment repays months that were not paid, not this month's service, and
+ * operating cost can only exclude it if paymentPlanAmount is set — a plan
+ * that exists only as a breakdown line is invisible to the split. The bill
+ * has already said which line it is; this just reads it.
+ */
+export function derivePaymentPlanFromBreakdown(ex: ExtractedBillData): void {
+  if (ex.paymentPlanAmount != null || !ex.chargeBreakdown) return;
+  const PLAN_LINE = /payment\s*plan|installment|arrears\s*(?:payment|repayment)?|payment\s*arrangement|deferred\s*payment/i;
+  let plan = 0;
+  for (const [label, value] of Object.entries(ex.chargeBreakdown)) {
+    if (PLAN_LINE.test(label)) plan += Number(value) || 0;
+  }
+  if (plan > 0) ex.paymentPlanAmount = Number(plan.toFixed(2));
+}
+
 // ── Main entry point ──────────────────────────────────────────────────────────
 
 export async function parseBill(
@@ -1298,6 +1318,7 @@ export async function parseBill(
       }
     }
     repairMisreadPeriodYear(extracted);
+    derivePaymentPlanFromBreakdown(extracted);
     const match     = await matchToAccount(extracted, userId);
     return { filename, extracted, match, extractedBy, extractionNote };
   } catch (err) {
