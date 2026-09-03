@@ -516,6 +516,12 @@ export default function UtilityDetailPage() {
   const [showLoanModal, setShowLoanModal] = useState(false);
   const [markingPaid, setMarkingPaid] = useState<string | null>(null);
   const [editingStatement, setEditingStatement] = useState<any | null>(null);
+  // Multi-select delete. Cleaning up after a bad import means removing many
+  // rows, and doing that through the edit modal one confirm at a time does not
+  // scale past two or three.
+  const [selecting, setSelecting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [revealedAccountNumber, setRevealedAccountNumber] = useState<string | null>(null);
   const [revealingAccountNumber, setRevealingAccountNumber] = useState(false);
   const [togglingActive, setTogglingActive] = useState(false);
@@ -663,6 +669,28 @@ export default function UtilityDetailPage() {
     } finally {
       setTogglingActive(false);
     }
+  }
+
+  async function handleBulkDelete() {
+    if (selectedIds.size === 0) return;
+    if (!confirm(
+      `Delete ${selectedIds.size} statement${selectedIds.size === 1 ? '' : 's'}?\n\n` +
+      'Their stored PDFs go with them. This cannot be undone.'
+    )) return;
+    setBulkDeleting(true);
+    // One at a time rather than Promise.all: each delete is a separate
+    // permission on the server, and a burst of parallel deletes against a
+    // pooled connection is how imports have timed out before. The failures,
+    // if any, are named rather than summed.
+    const failed: string[] = [];
+    for (const id of selectedIds) {
+      try { await deleteStatement(id); } catch { failed.push(id); }
+    }
+    setBulkDeleting(false);
+    setSelecting(false);
+    setSelectedIds(new Set());
+    if (failed.length) alert(`${failed.length} statement(s) could not be deleted — they are still listed.`);
+    if (accountId) getUtility(accountId).then(a => { setAccount(a); setLoan((a as any).loan ?? null); });
   }
 
   async function handleDelete() {
@@ -969,8 +997,35 @@ export default function UtilityDetailPage() {
                 <option value="all">All years</option>
                 {years.map(y => <option key={y} value={y}>{y}</option>)}
               </select>
-              {tab === 'statements' && (
-                <button onClick={() => setEditingStatement({})} className="btn text-xs">+ Add statement</button>
+              {tab === 'statements' && !selecting && (
+                <>
+                  <button onClick={() => setEditingStatement({})} className="btn text-xs">+ Add statement</button>
+                  <button onClick={() => setSelecting(true)} className="btn text-xs" title="Select statements to delete">Select</button>
+                </>
+              )}
+              {tab === 'statements' && selecting && (
+                <>
+                  <button
+                    onClick={() => setSelectedIds(new Set(filteredStatements.map(st => st.id)))}
+                    className="btn text-xs"
+                  >
+                    Select all ({filteredStatements.length})
+                  </button>
+                  <button
+                    onClick={handleBulkDelete}
+                    disabled={selectedIds.size === 0 || bulkDeleting}
+                    className="text-xs px-3 py-1.5 rounded-lg text-red-400 hover:text-red-300 disabled:opacity-40"
+                    style={{ background: 'rgba(255,0,0,0.08)', border: '1px solid rgba(255,0,0,0.2)' }}
+                  >
+                    {bulkDeleting ? 'Deleting…' : `Delete (${selectedIds.size})`}
+                  </button>
+                  <button
+                    onClick={() => { setSelecting(false); setSelectedIds(new Set()); }}
+                    className="btn text-xs"
+                  >
+                    Cancel
+                  </button>
+                </>
               )}
             </div>
           )}
@@ -1004,9 +1059,23 @@ export default function UtilityDetailPage() {
                   return (
                     <div key={s.id} className="rounded-xl px-5 py-4 flex items-center gap-4"
                       style={{
-                        background: '#1e1e1e',
-                        border: isLatest ? '1px solid rgba(245,166,35,0.3)' : '1px solid rgba(255,255,255,0.06)',
+                        background: selectedIds.has(s.id) ? 'rgba(255,60,60,0.06)' : '#1e1e1e',
+                        border: selectedIds.has(s.id)
+                          ? '1px solid rgba(255,80,80,0.4)'
+                          : isLatest ? '1px solid rgba(245,166,35,0.3)' : '1px solid rgba(255,255,255,0.06)',
                       }}>
+                      {selecting && (
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(s.id)}
+                          onChange={() => setSelectedIds(prev => {
+                            const next = new Set(prev);
+                            next.has(s.id) ? next.delete(s.id) : next.add(s.id);
+                            return next;
+                          })}
+                          className="w-4 h-4 flex-shrink-0 accent-red-500 cursor-pointer"
+                        />
+                      )}
                       {/* Month */}
                       <div className="w-20 flex-shrink-0">
                         {/* Labelled by the period billed, not the day the bill
