@@ -961,7 +961,12 @@ function UtilityAccountCard({
     .filter(p => stmtDate ? new Date(p.paymentDate) >= stmtDate : false)
     .reduce((s, p) => s + Number(p.amount ?? 0), 0);
   const isPaidViaPayment = !!recentPmt && openBalance != null && recentPaidSum >= openBalance - 0.01;
-  const isPaidViaStatement = latest?.amountPaid != null && Number(latest.amountPaid) > 0;
+  // amountPaid is the payment the bill says arrived during its cycle — money
+  // that settled the PREVIOUS bill. It only proves this bill paid when it
+  // covers this bill's own open balance; its mere presence stamped accounts
+  // with a rolling unpaid chain as Paid on every face card.
+  const isPaidViaStatement = latest?.amountPaid != null && openBalance != null
+    && Number(latest.amountPaid) >= openBalance - 0.01;
   const isPaid = isPaidViaPayment || isPaidViaStatement;
 
   const now = new Date();
