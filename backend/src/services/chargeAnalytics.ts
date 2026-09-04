@@ -104,10 +104,19 @@ export function normaliseLabel(label: string): string {
     .replace(/^organic\s+waste\s+processing$/i, 'Organic Waste Processing')
     .replace(/^recycling\s+service$/i, 'Recycling Service');
 
-  return out
+  out = out
     .replace(/\s+/g, ' ')
     .replace(/[\s,.:;-]+$/, '')
     .trim();
+
+  // Providers change their shouting between years — El Centro printed SEWER,
+  // Sewer and sewer on different bills, splitting one charge into three. A
+  // label written in a single case carries no casing information, so it is
+  // title-cased; mixed-case labels are left as the bill wrote them.
+  if (out === out.toUpperCase() || out === out.toLowerCase()) {
+    out = out.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+  }
+  return out;
 }
 
 export interface ChargeLineSeries {
@@ -168,6 +177,7 @@ export async function getChargeAnalytics(
     (s.billingPeriodEnd ?? s.statementDate).toISOString().slice(0, 7);
 
   const byLabel = new Map<string, Map<string, number>>();
+  const displayName = new Map<string, string>();
   const byMonth: ChargeAnalytics['byMonth'] = [];
   const monthsSeen = new Set<string>();
 
@@ -186,8 +196,13 @@ export async function getChargeAnalytics(
         const amount = num(value);
         itemised += amount;
 
-        if (!byLabel.has(label)) byLabel.set(label, new Map());
-        const series = byLabel.get(label)!;
+        // Keyed case-insensitively so no casing variant that survives the
+        // normalisation above can split a charge; the first-seen form is what
+        // gets displayed.
+        const key = label.toLowerCase();
+        if (!displayName.has(key)) displayName.set(key, label);
+        if (!byLabel.has(key)) byLabel.set(key, new Map());
+        const series = byLabel.get(key)!;
         // A month with two bills sums rather than overwrites: both were charged.
         series.set(month, (series.get(month) ?? 0) + amount);
       }
@@ -197,7 +212,8 @@ export async function getChargeAnalytics(
   }
 
   const lines: ChargeLineSeries[] = [];
-  for (const [label, series] of byLabel) {
+  for (const [key, series] of byLabel) {
+    const label = displayName.get(key) ?? key;
     const entries = [...series.entries()]
       .map(([month, amount]) => ({ month, amount }))
       .sort((a, b) => b.month.localeCompare(a.month));

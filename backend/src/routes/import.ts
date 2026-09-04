@@ -4,7 +4,7 @@
  */
 import { Router, Request, Response } from 'express';
 import { Prisma } from '@prisma/client';
-import { parseBill, ExtractedBillData, MatchResult } from '../services/pdfImportService';
+import { parseBill, applyPastDueNotice, ExtractedBillData, MatchResult } from '../services/pdfImportService';
 import { uploadDocument, buildStatementKey } from '../services/s3Service';
 import { attachDbUser } from '../middleware/requireAuth';
 import { db } from '../config/db';
@@ -137,6 +137,7 @@ router.post('/confirm', async (req: Request, res: Response) => {
 
     let imported = 0;
     let skipped  = 0;
+    let notices  = 0;
     const errors: string[] = [];
 
     // Dedup maps — keyed by normalized address / `propertyId:providerName`
@@ -285,6 +286,21 @@ router.post('/confirm', async (req: Request, res: Response) => {
         }
 
         const ex = item.extracted;
+
+        // A past-due / disconnection notice is not a bill: it demands a
+        // balance the real bills already carry and states no service period.
+        // Filed as a statement it becomes a fake month of spending and counts
+        // the same debt twice. Its aging table and shut-off date attach to
+        // the account's newest statement instead.
+        if (ex.documentKind === 'past_due_notice') {
+          const attached = await applyPastDueNotice(utilityAccountId, ex);
+          if (attached) {
+            notices++;
+          } else {
+            errors.push(`${item.filename}: past-due notice, but the account has no statement to attach it to — import the bills first`);
+          }
+          continue;
+        }
         const filenameDate   = parseDateFromFilename(item.filename);
         const hasReliableDate = !!(ex.statementDate || filenameDate);
         const statementDate  = ex.statementDate
@@ -501,7 +517,7 @@ router.post('/confirm', async (req: Request, res: Response) => {
       }
     }
 
-    return res.json({ imported, skipped, errors });
+    return res.json({ imported, notices, skipped, errors });
   } catch (err) {
     console.error('[Import] Confirm error:', err);
     return res.status(500).json({ error: 'Failed to save statements' });

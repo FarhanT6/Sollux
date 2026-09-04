@@ -46,10 +46,17 @@ function openBalanceOf(s: any): number | null {
 // may not yet have posted on the provider's API. Sums all payments dated on/after
 // the statement date; if the sum covers the open balance, treat as paid.
 function isStatementPaid(s: any, payments: any[] = []): boolean {
-  if (s.amountPaid != null) return true;
   const openBalance = openBalanceOf(s);
   if (openBalance == null) return false;
   if (openBalance <= 0.01) return true;
+  // amountPaid is what the bill says was received during its cycle — on most
+  // layouts that is the payment that settled the PREVIOUS bill ("Payments
+  // Received, Thank You"), and it says nothing about whether THIS bill was
+  // paid. Treating its mere presence as "paid" stamped an account with
+  // $1,042 outstanding as fully paid, row by row, because every imported
+  // statement records some payment. A payment only proves this bill paid
+  // when it covers this bill's own open balance.
+  if (Number(s.amountPaid ?? 0) >= openBalance - 0.01) return true;
   const stmtDate = s.statementDate ? new Date(s.statementDate) : null;
   if (!stmtDate) return false;
   const sumSinceStmt = payments
@@ -622,7 +629,11 @@ export default function UtilityDetailPage() {
     const isPaid = s.amountPaid != null;
     setMarkingPaid(s.id);
     try {
-      const updated = await patchStatement(s.id, { amountPaid: isPaid ? null : Number(s.amountDue ?? 0) });
+      // Marking paid records the full open balance — the bill's own charge
+      // plus anything carried into it — because that is what settling this
+      // bill costs. Recording only amountDue left the carried arrears
+      // "unpaid" and the row stuck on Due.
+      const updated = await patchStatement(s.id, { amountPaid: isPaid ? null : Number(openBalanceOf(s) ?? s.amountDue ?? 0) });
       setAccount((prev: any) => prev ? {
         ...prev,
         statements: (prev.statements ?? []).map((r: any) => r.id === s.id ? { ...r, amountPaid: updated.amountPaid } : r),

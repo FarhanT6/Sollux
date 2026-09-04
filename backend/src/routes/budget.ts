@@ -133,7 +133,9 @@ router.get('/monthly', async (req, res, next) => {
         amountDue: due,
         amountPaid: paid,
         dueDate: s.dueDate,
-        status: s.amountPaid != null ? 'paid' : 'unpaid',
+        // Paid means the payment covered the bill, not that some payment
+        // exists — the recorded figure is often the prior cycle's settlement.
+        status: paid >= due - 0.01 && due > 0 ? 'paid' : paid > 0 && due === 0 ? 'paid' : 'unpaid',
       };
     });
 
