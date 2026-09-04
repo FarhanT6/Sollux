@@ -4,7 +4,7 @@ import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { getSignedDocumentUrl, downloadDocument, uploadDocument, buildStatementKey } from '../services/s3Service';
-import { parseBill } from '../services/pdfImportService';
+import { applyPastDueNotice, parseBill } from '../services/pdfImportService';
 import { findOrCreateUtilityAccount } from '../services/utilityAccountResolver';
 
 const router = Router();
@@ -253,6 +253,20 @@ router.post('/stream', attachDbUser, async (req, res) => {
             accountNumber: ex.accountNumber,
           });
           utilityAccountId = acct.id;
+        }
+
+        // A past-due / disconnection notice never becomes a statement — it
+        // demands a balance the real bills already carry. Its aging table and
+        // shut-off date attach to the account's newest statement instead.
+        if (utilityAccountId && ex.documentKind === 'past_due_notice') {
+          const attached = await applyPastDueNotice(utilityAccountId, ex);
+          if (attached) {
+            autoImported++;
+            send({ type: 'auto_imported', filename: file.name, note: 'past-due notice attached' });
+          } else {
+            send({ type: 'error', filename: file.name, message: 'past-due notice, but the account has no statement to attach it to — import the bills first' });
+          }
+          return;
         }
 
         // High-confidence: auto-import to DB, don't need review

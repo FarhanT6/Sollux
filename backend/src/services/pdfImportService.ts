@@ -68,6 +68,10 @@ export interface ExtractedBillData {
   amountAfterDueDate: number | null;
   // How the provider ages the balance, when it prints buckets.
   agingBuckets:       { current?: number; days30?: number; days60?: number; days90plus?: number } | null;
+  /** 'past_due_notice' when the document is a dunning/disconnection notice
+   *  rather than a bill — it demands an existing balance and bills nothing
+   *  new, so it must never become a statement row. */
+  documentKind?:      'bill' | 'past_due_notice';
   lateFee:            number | null;
   usageValue:         number | null;
   usageUnit:          string | null;   // kWh, CCF, therms, gallons, etc.
@@ -136,6 +140,7 @@ Schema (use null for any field not present in the document):
   "penaltyDate": "YYYY-MM-DD" or null — the date a penalty or late fee applies if the bill is unpaid, when the bill states one ("Penalty Date", "Late after", "Penalty applies after"). This is often a day or two later than the due date; report what the bill says, not the due date,
   "amountAfterDueDate": number or null — what the bill says is payable if paid after the due date ("Amount due after 09/15/2026", "After Due Date Pay"). The difference between this and the amount due is the late fee this provider will charge,
   "agingBuckets": object or null — when the bill prints an aging table (commonly "Past Due | 30 Days | 60 Days | 90+ Days"), report it as {"current": n, "days30": n, "days60": n, "days90plus": n}, omitting any bucket the bill does not show. Report each bucket's own figure, not a running total,
+  "documentKind": "bill | past_due_notice — 'past_due_notice' when this is a delinquency, past-due, or disconnection/shut-off notice rather than a bill: it demands an already-overdue balance, shows no service period and no new charges ('PAST DUE STATEMENT', 'FINAL NOTICE', 'service will be locked/disconnected'). For a notice: the demanded amount goes in previousBalance, currentCharges is null, any stated lock-up/disconnection or penalty date goes in penaltyDate, and its aging table in agingBuckets. Everything else is 'bill'",
   "chargeBreakdown": { "line item name": dollar_amount, ... } or null — every individual charge the bill itemises, using the bill's own wording as the key ({"Water": 118.53, "Sewer": 121.50} for a bill splitting the two). Include credits and discounts as negative values. This is how a total is explained later, so itemise whenever the bill does,
   "alerts": ["string", ...] — notable flags: past due, late fees, NSF, payment plan, high usage, leak, outage credit, SCRA, debt collection notice, legal action warning, etc.
 }
@@ -1277,6 +1282,40 @@ export function derivePaymentPlanFromBreakdown(ex: ExtractedBillData): void {
     if (PLAN_LINE.test(label)) plan += Number(value) || 0;
   }
   if (plan > 0) ex.paymentPlanAmount = Number(plan.toFixed(2));
+}
+
+/**
+ * Files a past-due / disconnection notice against an account without minting
+ * a statement.
+ *
+ * A notice is not a bill: it demands a balance the real bills already carry,
+ * states no service period, and bills nothing new. Imported as a statement it
+ * becomes a fake month of spending and counts the same debt twice. What a
+ * notice does carry that bills usually do not is an aging table and a
+ * shut-off date — exactly what payment prioritisation needs — so those are
+ * written onto the account's newest statement at or before the notice date.
+ */
+export async function applyPastDueNotice(utilityAccountId: string, ex: ExtractedBillData): Promise<boolean> {
+  const noticeDate = ex.statementDate ? new Date(ex.statementDate) : new Date();
+  const target = await db.statement.findFirst({
+    where: { utilityAccountId, statementDate: { lte: noticeDate } },
+    orderBy: { statementDate: 'desc' },
+  });
+  if (!target) return false;
+
+  const raw = (target.rawDataJson ?? {}) as Record<string, unknown>;
+  const alerts = new Set<string>([...(Array.isArray(raw.alerts) ? raw.alerts as string[] : []), ...(ex.alerts ?? [])]);
+  alerts.add(`Past-due notice ${ex.statementDate ?? ''}`.trim());
+
+  await db.statement.update({
+    where: { id: target.id },
+    data: {
+      ...(ex.agingBuckets ? { agingBuckets: ex.agingBuckets as object } : {}),
+      ...(ex.penaltyDate ? { penaltyDate: new Date(ex.penaltyDate) } : {}),
+      rawDataJson: { ...raw, alerts: [...alerts] } as object,
+    },
+  });
+  return true;
 }
 
 // ── Main entry point ──────────────────────────────────────────────────────────

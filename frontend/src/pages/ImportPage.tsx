@@ -923,6 +923,11 @@ function BillCard({
                 the API cannot open a PDF. That path produces no charge
                 breakdown and infers the billing period, so the bill lands
                 looking fine and is materially worse. Say so here. */}
+            {(bill.extracted as any)?.documentKind === 'past_due_notice' && (
+              <p className="text-xs mt-1 text-amber-400">
+                Past-due notice, not a bill — will attach its aging and shut-off date to the account instead of creating a statement
+              </p>
+            )}
             {bill.extractedBy === 'text' && (
               <p className="text-xs mt-1" style={{ color: '#F5A623' }}>
                 Read as text, not by AI — no charge breakdown, and the billing
@@ -1517,7 +1522,7 @@ export default function ImportPage() {
     // Batching means a failure costs one batch, the rest are already saved,
     // and whatever did not land stays on screen to retry.
     const CONFIRM_BATCH = 5;
-    const totals = { imported: 0, skipped: 0, errors: [] as string[] };
+    const totals = { imported: 0, skipped: 0, notices: 0, errors: [] as string[] };
     const failed: ParsedBill[] = [];
 
     for (const b of excluded) {
@@ -1532,6 +1537,7 @@ export default function ImportPage() {
       try {
         const res = await api.post('/import/confirm', { items: batch.map(toItem) });
         totals.imported += res.data?.imported ?? 0;
+        totals.notices  += res.data?.notices ?? 0;
         totals.skipped  += res.data?.skipped ?? 0;
         if (Array.isArray(res.data?.errors)) totals.errors.push(...res.data.errors);
       } catch (err: any) {
@@ -1546,7 +1552,7 @@ export default function ImportPage() {
     // known drop path already reports itself, so a shortfall here means a file
     // went missing through a path nobody has named yet — which is exactly the
     // thing that must not pass silently.
-    const accountedFor = totals.imported + totals.skipped + totals.errors.length - excluded.length;
+    const accountedFor = totals.imported + totals.skipped + totals.notices + totals.errors.length - excluded.length;
     if (accountedFor < ready.length) {
       totals.errors.push(
         `${ready.length - accountedFor} file(s) were sent but not accounted for by the server. ` +
@@ -1766,6 +1772,12 @@ export default function ImportPage() {
               <p className="text-lg font-semibold text-gray-100">
                 {result.imported} statement{result.imported !== 1 ? 's' : ''} imported
               </p>
+              {(result as any).notices > 0 && (
+                <p className="text-sm text-amber-400 mt-1">
+                  {(result as any).notices} past-due notice{(result as any).notices !== 1 ? 's' : ''} attached to
+                  {(result as any).notices !== 1 ? ' their accounts' : ' its account'} (aging & shut-off dates) — not counted as bills
+                </p>
+              )}
               {result.skipped > 0 && (
                 <p className="text-sm text-gray-500 mt-1">{result.skipped} already existed (updated if needed)</p>
               )}
