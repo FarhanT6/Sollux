@@ -745,7 +745,14 @@ export default function UtilityDetailPage() {
       if (!format(date, 'MMMM yyyy').toLowerCase().includes(q) && !String(s.amountDue || '').includes(q)) return false;
     }
     return true;
-  }), [statements, yearFilter, search]);
+  // Ordered by the period billed, the same key the rows are labelled by. The
+  // API sorts by statement date, but a provider that prints no issue date
+  // (Fallbrook PUD) gives every statement its import day as the date — thirty
+  // rows tied on "Sep 4" shuffle arbitrarily, and August lands mid-list.
+  }).sort((a, b) =>
+    new Date(b.billingPeriodEnd ?? b.statementDate).getTime() -
+    new Date(a.billingPeriodEnd ?? a.statementDate).getTime()
+  ), [statements, yearFilter, search]);
 
   const filteredPayments = useMemo(() => payments.filter(p => {
     const date = new Date(p.paymentDate);

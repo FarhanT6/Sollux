@@ -148,7 +148,10 @@ function toSlug(name: string): string {
 
 function parseDateFromFilename(filename: string): Date | null {
   const name = filename.replace(/\.[^.]+$/, '');
-  const m = name.match(/^(\d{1,2})[-_](\d{1,2})[-_](\d{2,4})$/);
+  // Anchored to the end, not the whole name: portals prefix their exports
+  // ("eBill_08_24_2026"), and requiring the date to be the entire name threw
+  // the date away exactly where it was most needed.
+  const m = name.match(/(\d{1,2})[-_](\d{1,2})[-_](\d{2,4})$/);
   if (m) {
     const year = m[3].length === 2 ? 2000 + parseInt(m[3]) : parseInt(m[3]);
     const d = new Date(year, parseInt(m[1]) - 1, parseInt(m[2]));

@@ -1356,6 +1356,14 @@ export async function parseBill(
         extracted = await extractWithRegex(buffer, filename);
       }
     }
+    // Some bills print no issue date at all — Fallbrook PUD gives only a due
+    // date and a service period. Without this, the statement date fell back to
+    // the day of import, so thirty statements imported together all read
+    // "billed Sep 4" and sorted in arbitrary order. A cycle is billed when it
+    // ends; the period end is the honest stand-in.
+    if (!extracted.statementDate && extracted.billingPeriodEnd) {
+      extracted.statementDate = extracted.billingPeriodEnd;
+    }
     repairMisreadPeriodYear(extracted);
     derivePaymentPlanFromBreakdown(extracted);
     const match     = await matchToAccount(extracted, userId);
