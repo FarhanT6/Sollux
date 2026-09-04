@@ -1318,6 +1318,56 @@ export async function applyPastDueNotice(utilityAccountId: string, ex: Extracted
   return true;
 }
 
+/**
+ * Records the payment a bill confirms receiving.
+ *
+ * Nearly every statement prints the provider's own acknowledgement —
+ * "Payments Received, Thank You  $716.10" — which is a payment record in all
+ * but name: the provider confirming money arrived during the cycle. It was
+ * extracted as paymentsReceived and then discarded, which is why every
+ * account shows "Payments (0)" against years of settled bills.
+ *
+ * The payment is dated by the statement that confirms it (the provider had
+ * received it by then) and linked to the newest earlier statement, since a
+ * cycle's incoming payment is what settled the previous bill. A marker in the
+ * notes makes re-imports update the same record rather than log the payment
+ * twice.
+ */
+export async function recordConfirmedPayment(
+  utilityAccountId: string,
+  statementId: string,
+  ex: ExtractedBillData,
+): Promise<void> {
+  const amount = Math.abs(Number(ex.paymentsReceived ?? 0));
+  if (!amount || amount <= 0.01) return;
+
+  const marker = `[from-statement:${statementId}]`;
+  const paymentDate = ex.statementDate ? new Date(ex.statementDate) : new Date();
+  const prior = await db.statement.findFirst({
+    where: { utilityAccountId, statementDate: { lt: paymentDate }, id: { not: statementId } },
+    orderBy: { statementDate: 'desc' },
+    select: { id: true },
+  });
+
+  const existing = await db.payment.findFirst({
+    where: { utilityAccountId, notes: { contains: marker } },
+  });
+
+  const data = {
+    amount,
+    paymentDate,
+    status: 'PAID' as const,
+    statementId: prior?.id ?? null,
+    notes: `Confirmed by the ${ex.statementDate ?? 'imported'} statement ("Payments Received"). ${marker}`,
+  };
+
+  if (existing) {
+    await db.payment.update({ where: { id: existing.id }, data });
+  } else {
+    await db.payment.create({ data: { utilityAccountId, ...data } });
+  }
+}
+
 // ── Main entry point ──────────────────────────────────────────────────────────
 
 export async function parseBill(

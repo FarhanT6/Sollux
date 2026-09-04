@@ -4,7 +4,7 @@
  */
 import { Router, Request, Response } from 'express';
 import { Prisma } from '@prisma/client';
-import { parseBill, applyPastDueNotice, ExtractedBillData, MatchResult } from '../services/pdfImportService';
+import { parseBill, applyPastDueNotice, recordConfirmedPayment, ExtractedBillData, MatchResult } from '../services/pdfImportService';
 import { uploadDocument, buildStatementKey } from '../services/s3Service';
 import { attachDbUser } from '../middleware/requireAuth';
 import { db } from '../config/db';
@@ -461,9 +461,10 @@ router.post('/confirm', async (req: Request, res: Response) => {
               ...(pdfS3Key ? { pdfS3Key } : {}),
             },
           });
+          await recordConfirmedPayment(utilityAccountId, existing.id, ex);
           skipped++;
         } else {
-          await db.statement.create({
+          const created = await db.statement.create({
             data: {
               utilityAccountId,
               statementDate,
@@ -488,6 +489,7 @@ router.post('/confirm', async (req: Request, res: Response) => {
               rawDataJson: buildRawData(ex, item.extractedBy) as Prisma.InputJsonValue,
             },
           });
+          await recordConfirmedPayment(utilityAccountId, created.id, ex);
           imported++;
         }
 
