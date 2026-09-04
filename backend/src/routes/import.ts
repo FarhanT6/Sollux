@@ -530,7 +530,8 @@ router.post('/confirm', async (req: Request, res: Response) => {
 function parseDateFromFilename(filename: string): Date | null {
   const name = filename.replace(/\.[^.]+$/, '');
   // M-D-YY or MM-DD-YY or M-D-YYYY
-  const m = name.match(/^(\d{1,2})[-_](\d{1,2})[-_](\d{2,4})$/);
+  // Anchored to the end only: portals prefix exports ("eBill_08_24_2026").
+  const m = name.match(/(\d{1,2})[-_](\d{1,2})[-_](\d{2,4})$/);
   if (m) {
     const year = m[3].length === 2 ? 2000 + parseInt(m[3]) : parseInt(m[3]);
     const d = new Date(year, parseInt(m[1]) - 1, parseInt(m[2]));
