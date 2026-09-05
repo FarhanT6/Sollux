@@ -81,8 +81,16 @@ function computeResolvedByFutureCheckpoint(statements: any[]): Set<string> {
   // pastDueCarried is 0/empty), proving the prior bill was cleared.
   for (const s of statements) {
     if (sawZeroCheckpoint) resolved.add(s.id);
-    const carriedIn = Number(s.pastDueCarried ?? 0);
-    if (carriedIn === 0) sawZeroCheckpoint = true;
+    // A missing past-due figure is not evidence of a zero one — an extractor
+    // that found no such line proves nothing about the balance. A bill only
+    // counts as carrying in nothing when it says so: an explicit zero, or a
+    // balance equal to its own charge (nothing older rolled in).
+    const carried = s.pastDueCarried != null ? Number(s.pastDueCarried) : null;
+    const balance = s.balance != null ? Number(s.balance) : null;
+    const due = s.amountDue != null ? Number(s.amountDue) : null;
+    const provenZero = carried === 0
+      || (carried == null && balance != null && due != null && Math.abs(balance - due) < 0.01);
+    if (provenZero) sawZeroCheckpoint = true;
   }
 
   // The provider's own arrears figure also says how far back the debt
@@ -745,7 +753,18 @@ export default function UtilityDetailPage() {
     }
   }
 
-  const statements: any[] = useMemo(() => account?.statements || [], [account]);
+  // Ordered newest period first. Every judgement below — which bill is
+  // latest, which bills a zero carry-in resolves, which bill's arrears reach
+  // how far back — walks this list assuming newest-first, and the API
+  // orders by statement date. A bill that printed no issue date gets its
+  // import day as the date, which put a two-year-old FPUD/VID bill "newer"
+  // than this month's and resolved the newest bill's balance off the back
+  // of an old one. The period is the honest key and it is what rows are
+  // labelled by.
+  const statements: any[] = useMemo(() => {
+    const key = (s: any) => new Date(s.billingPeriodEnd ?? s.statementDate).getTime();
+    return [...(account?.statements || [])].sort((a, b) => key(b) - key(a));
+  }, [account]);
   const payments: any[] = useMemo(() => account?.payments || [], [account]);
   // Computed from the FULL statement history (not the filtered/searched
   // view) so status stays correct regardless of year filter or search.
