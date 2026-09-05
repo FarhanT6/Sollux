@@ -428,7 +428,15 @@ router.post('/confirm', async (req: Request, res: Response) => {
         const totalDue = (ex.currentCharges != null || ex.previousBalance != null)
           ? (ex.currentCharges ?? 0) + (ex.previousBalance ?? 0)
           : ex.amountDue ?? null;
-        const paidAmount = ex.paymentsReceived ?? (ex.isPaid ? totalDue : null);
+        // paymentsReceived settles the PREVIOUS cycle and is recorded as a
+        // Payment against that statement — writing it onto THIS bill's
+        // amountPaid marked every freshly imported bill "Paid" while its own
+        // charge sat unpaid. Seeded only when the bill itself proves settled.
+        const paidAmount = ex.isPaid ? totalDue : null;
+        // Re-imports also clear the legacy value this bug wrote: an existing
+        // amountPaid equal to the bill's own "payments received" figure is
+        // bill-derived, not something the owner recorded.
+        const legacyDerivedPaid = ex.paymentsReceived != null ? Number(ex.paymentsReceived) : null;
         // Kept as its own column: an arrears installment inside a current bill
         // is repayment, not this month's service (see operatingCost.ts).
         const planAmount = ex.paymentPlanAmount ?? null;
@@ -446,7 +454,7 @@ router.post('/confirm', async (req: Request, res: Response) => {
               billingPeriodEnd,
               amountDue:      periodCharge      ?? existing.amountDue,
               balance:        totalDue          ?? existing.balance,
-              amountPaid:     paidAmount        ?? existing.amountPaid,
+              amountPaid:     paidAmount ?? (legacyDerivedPaid != null && Number(existing.amountPaid) === legacyDerivedPaid ? null : existing.amountPaid),
               chargesExcludingFees: ex.currentCharges ?? existing.chargesExcludingFees,
               penaltiesFees:  ex.lateFee         ?? existing.penaltiesFees,
               paymentPlanAmount: planAmount       ?? existing.paymentPlanAmount,

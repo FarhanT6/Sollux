@@ -329,9 +329,15 @@ function PropertyCard({ property, onEdit, onDelete }: { property: Property; onEd
     const latest = a.statements?.[0];
     if (!latest) return false;
     const raw = latest.rawDataJson as Record<string, unknown> | undefined;
-    if (Number(latest.amountPaid ?? 0) > 0 || raw?.isPaid === true) return true;
     const openBalance = (raw?.accountBalance ?? raw?.totalDue ?? (latest as any).balance ?? latest.amountDue) as number | undefined;
     if (openBalance == null || openBalance <= 0.01) return true;
+    // A payment only proves this bill paid when it covers this bill's own
+    // balance — the recorded figure is usually the prior cycle's settlement,
+    // and its mere presence stamped accounts owing thousands as Paid on the
+    // homepage. The extractor's isPaid flag still counts: it asserts the bill
+    // itself showed a zero balance or a paid stamp.
+    if (raw?.isPaid === true) return true;
+    if (Number(latest.amountPaid ?? 0) >= Number(openBalance) - 0.01) return true;
     const stmtDate = latest.statementDate ? new Date(latest.statementDate) : null;
     const pmts = ((a as any).payments ?? []) as Array<{ paymentDate: string; amount: number }>;
     const sumSinceStmt = pmts
@@ -464,6 +470,13 @@ function PropertyCard({ property, onEdit, onDelete }: { property: Property; onEd
                 </p>
                 {hasPastDueBalance && (
                   <p className="text-xs text-red-400">{`+$${pastDueAmt.toFixed(0)} past due`}</p>
+                )}
+                {/* The newest bill's own penalty deadline — the date that
+                    actually costs money — rolls forward as new bills import. */}
+                {!isPaid && (account.statements?.[0] as any)?.penaltyDate && new Date((account.statements![0] as any).penaltyDate) >= now && (
+                  <p className="text-xs text-amber-400">
+                    penalty after {new Date((account.statements![0] as any).penaltyDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                  </p>
                 )}
                 <p className={`text-xs mt-0.5 ${statusColor}`}>{statusLabel}</p>
               </div>
