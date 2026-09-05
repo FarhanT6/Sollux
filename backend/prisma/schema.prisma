@@ -41,6 +41,7 @@ model User {
   notificationPreferences NotificationPreference[]
   gmailTokens             GmailToken[]
   driveTokens             DriveToken[]
+  clickupConnection       ClickUpConnection?
   paymentRecipient        PaymentRecipient?
   bankAccounts            BankAccount[]
   plaidItems              PlaidItem[]
@@ -123,6 +124,8 @@ model Property {
   documents              Document[]
   outgoingTransactions   OutgoingTransaction[]
 
+  /// ClickUp list holding this property's operations tasks (created on demand).
+  clickupListId   String?
   @@index([userId, state])
   @@map("properties")
 }
@@ -314,6 +317,8 @@ model Statement {
 
   payments Payment[]
 
+  /// ClickUp task created for paying this bill, so it can be updated and closed.
+  clickupTaskId        String?
   @@map("statements")
 }
 
@@ -1458,4 +1463,30 @@ enum OtherIncomeCategory {
   DEPOSIT_REFUND_IN // deposit returned that you previously paid
   LAUNDRY // laundry machine income
   OTHER
+}
+
+// ─── CLICKUP ────────────────────────────────────────────
+/// One ClickUp connection per user: a personal API token, the workspace and
+/// folder that hold property operations, and the webhook registered there.
+model ClickUpConnection {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenEnc         String
+  clickupUserId    String?
+  clickupUserName  String?
+  teamId           String?
+  teamName         String?
+  spaceId          String?
+  spaceName        String?
+  folderId         String?
+  folderName       String?
+  webhookId        String?
+  webhookSecretEnc String?
+  /// Create and close a ClickUp task for every unpaid bill.
+  syncBills        Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@map("clickup_connections")
 }
