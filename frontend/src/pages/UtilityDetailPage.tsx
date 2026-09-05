@@ -660,19 +660,38 @@ export default function UtilityDetailPage() {
   }
 
   async function handleMarkPaid(s: any) {
-    const isPaid = s.amountPaid != null;
+    // Marking a bill paid records a real payment for its full open balance —
+    // the bill's own charge plus everything carried into it — dated today and
+    // linked to the bill. A payment, rather than a flag on one statement,
+    // because that is what settles the older open cycles too: the paid check
+    // sums payments made since each bill's date, so one lump payment clears
+    // every cycle the arrears reached back to. Setting amountPaid on the
+    // newest bill alone left those older cycles Overdue until the next bill.
+    const marker = `[marked-paid:${s.id}]`;
+    const marked = payments.find((p: any) => typeof p.notes === 'string' && p.notes.includes(marker));
     setMarkingPaid(s.id);
     try {
-      // Marking paid records the full open balance — the bill's own charge
-      // plus anything carried into it — because that is what settling this
-      // bill costs. Recording only amountDue left the carried arrears
-      // "unpaid" and the row stuck on Due.
-      const updated = await patchStatement(s.id, { amountPaid: isPaid ? null : Number(openBalanceOf(s) ?? s.amountDue ?? 0) });
-      setAccount((prev: any) => prev ? {
-        ...prev,
-        statements: (prev.statements ?? []).map((r: any) => r.id === s.id ? { ...r, amountPaid: updated.amountPaid } : r),
-      } : prev);
-    } catch { } finally { setMarkingPaid(null); }
+      if (marked) {
+        await deletePayment(marked.id);
+      } else {
+        const amount = Number(openBalanceOf(s) ?? s.amountDue ?? 0);
+        if (amount <= 0) return;
+        await createPayment({
+          utilityAccountId: accountId,
+          amount,
+          paymentDate: new Date().toISOString().slice(0, 10),
+          paymentMethod: null,
+          status: 'PAID',
+          statementId: s.id,
+          confirmationNumber: null,
+          bankAccountId: null,
+          notes: `Marked paid from the statements list. ${marker}`,
+        });
+      }
+      await reloadAccount();
+    } catch (err: any) {
+      alert(err?.response?.data?.error ?? 'Could not record that payment.');
+    } finally { setMarkingPaid(null); }
   }
 
   async function toggleAccountNumber() {
