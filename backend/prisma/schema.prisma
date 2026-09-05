@@ -217,6 +217,8 @@ model UtilityAccount {
 /// that does not arrive monthly.
 enum BillingCadence {
   MONTHLY
+  /// Once every two months — EDCO and several haulers bill this way.
+  BIMONTHLY
   QUARTERLY
   SEMI_ANNUAL
   ANNUAL

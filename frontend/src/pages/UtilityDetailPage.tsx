@@ -7,6 +7,7 @@ import {
   revealUtilityAccountNumber, createPayment, updatePayment, deletePayment,
   getBankAccounts, getCostSettings, updateCostSettings,
 } from '../api/client';
+import { CADENCE_LABELS } from '../lib/cadence';
 import { CATEGORY_LABELS, CATEGORY_COLORS, LOAN_TYPE_LABELS,
   UTILITY_PAYMENT_METHODS, PAYMENT_STATUS_LABELS } from '../types';
 import type { BankAccount } from '../types';
@@ -82,6 +83,31 @@ function computeResolvedByFutureCheckpoint(statements: any[]): Set<string> {
     if (sawZeroCheckpoint) resolved.add(s.id);
     const carriedIn = Number(s.pastDueCarried ?? 0);
     if (carriedIn === 0) sawZeroCheckpoint = true;
+  }
+
+  // The provider's own arrears figure also says how far back the debt
+  // reaches. A newest bill carrying $191.36 past due, over bills of $95.68
+  // each, accounts for exactly the two preceding cycles — so everything
+  // older is settled, even though no intervening bill ever carried zero.
+  // Without this, one long-running balance kept every historical bill
+  // marked Overdue forever.
+  //
+  // For each statement that reports what it carried in, walk older bills
+  // accumulating their charges: once the accumulated newer charges reach the
+  // carried amount, the debt is fully attributed and every older bill is
+  // resolved. Attribution is newest-debt-first, which matches how providers
+  // roll balances forward.
+  for (let k = 0; k < statements.length; k++) {
+    const carried = statements[k].pastDueCarried != null ? Number(statements[k].pastDueCarried) : null;
+    if (carried == null || carried <= 0) continue;
+    let accounted = 0;
+    for (let j = k + 1; j < statements.length; j++) {
+      if (accounted >= carried - 0.01) {
+        resolved.add(statements[j].id);
+      } else {
+        accounted += Number(statements[j].amountDue ?? 0);
+      }
+    }
   }
   return resolved;
 }
@@ -864,6 +890,27 @@ export default function UtilityDetailPage() {
             </div>
             <h1 className="text-base font-semibold text-white">{account.providerName}</h1>
             <span className="text-xs text-gray-500">{(CATEGORY_LABELS as Record<string, string>)[account.category]}</span>
+            {/* Billing cadence, editable in place. It was only settable at
+                creation, so an account filed as monthly stayed monthly even
+                once its bills proved it bi-monthly — and every monthly
+                figure derived from it was double. */}
+            <select
+              value={account.billingCadence ?? 'MONTHLY'}
+              onChange={async e => {
+                const billingCadence = e.target.value;
+                try {
+                  await updateUtility(accountId!, { billingCadence } as any);
+                  setAccount((prev: any) => prev ? { ...prev, billingCadence } : prev);
+                } catch { alert('Could not update the billing schedule.'); }
+              }}
+              title="How often this provider bills — drives the monthly-equivalent maths"
+              className="text-xs px-1.5 py-0.5 rounded-md text-gray-400 focus:outline-none cursor-pointer"
+              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)' }}
+            >
+              {Object.entries(CADENCE_LABELS).map(([v, l]) => (
+                <option key={v} value={v}>{l}</option>
+              ))}
+            </select>
             {account.isActive === false && (
               <span className="text-xs px-1.5 py-0.5 rounded-full text-gray-400 border border-white/10 bg-white/5">Inactive</span>
             )}
@@ -1101,7 +1148,19 @@ export default function UtilityDetailPage() {
                             April to late May — calling that row "Jun 2026"
                             makes May look absent and double-counts June. */}
                         <p className="text-sm font-semibold text-white">
-                          {fmtDate(s.billingPeriodEnd || s.statementDate, 'MMM yyyy')}
+                          {(() => {
+                            // A bill covering more than one month is named by
+                            // its span — "May–Jun 2026" — because naming a
+                            // two-month EDCO bill after only its final month
+                            // reads as the wrong month entirely.
+                            const end = s.billingPeriodEnd || s.statementDate;
+                            if (s.billingPeriodStart && s.billingPeriodEnd
+                                && monthKey(s.billingPeriodStart) !== monthKey(s.billingPeriodEnd)) {
+                              const sameYear = new Date(s.billingPeriodStart).getUTCFullYear() === new Date(s.billingPeriodEnd).getUTCFullYear();
+                              return `${fmtDate(s.billingPeriodStart, sameYear ? 'MMM' : 'MMM yy')}–${fmtDate(s.billingPeriodEnd, sameYear ? 'MMM yyyy' : 'MMM yy')}`;
+                            }
+                            return fmtDate(end, 'MMM yyyy');
+                          })()}
                         </p>
                         {s.billingPeriodEnd && monthKey(s.billingPeriodEnd) !== monthKey(s.statementDate) && (
                           <p className="text-xs text-gray-600">billed {fmtDate(s.statementDate, 'MMM d')}</p>

@@ -190,7 +190,7 @@ const UtilitySchema = z.object({
   serviceLabel: z.string().optional().transform(v => v === '' ? null : v),
   // How often this account bills, and what one bill looks like. Needed for
   // anything that costs a month: an annual premium is not a monthly expense.
-  billingCadence: z.enum(['MONTHLY','QUARTERLY','SEMI_ANNUAL','ANNUAL','TERM','ONE_TIME','IRREGULAR']).optional(),
+  billingCadence: z.enum(['MONTHLY','BIMONTHLY','QUARTERLY','SEMI_ANNUAL','ANNUAL','TERM','ONE_TIME','IRREGULAR']).optional(),
   // Payment rules you know and the statements do not state. These override
   // what billing history infers — see paymentPriority.ts.
   graceDays: z.number().int().min(0).max(365).nullable().optional(),
