@@ -4,7 +4,7 @@ import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { getSignedDocumentUrl, downloadDocument, uploadDocument, buildStatementKey } from '../services/s3Service';
-import { applyPastDueNotice, parseBill } from '../services/pdfImportService';
+import { applyPastDueNotice, parseBill, recordConfirmedPayment } from '../services/pdfImportService';
 import { findOrCreateUtilityAccount } from '../services/utilityAccountResolver';
 
 const router = Router();
@@ -376,8 +376,9 @@ router.post('/stream', attachDbUser, async (req, res) => {
                 rawDataJson: rawData as Prisma.InputJsonValue,
                 ...(pdfS3Key ? { pdfS3Key } : {}),
               }});
+              await recordConfirmedPayment(acct.id, existing.id, ex);
             } else {
-              await db.statement.create({ data: {
+              const created = await db.statement.create({ data: {
                 utilityAccountId: acct.id, statementDate,
                 dueDate: ex.dueDate ? new Date(ex.dueDate) : null,
                 billingPeriodStart: ex.billingPeriodStart ? new Date(ex.billingPeriodStart) : null,
@@ -392,6 +393,7 @@ router.post('/stream', attachDbUser, async (req, res) => {
                 ratePlan: ex.ratePlan ?? null, pdfS3Key, sourceType: 'MANUAL',
                 rawDataJson: rawData as Prisma.InputJsonValue,
               }});
+              await recordConfirmedPayment(acct.id, created.id, ex);
             }
             autoImported++;
             send({ type: 'auto_imported', filename: file.name });

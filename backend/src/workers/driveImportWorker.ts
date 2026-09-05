@@ -4,7 +4,7 @@ import { Prisma } from '@prisma/client';
 import { guardWorker } from './redisGuard';
 import { createWorkerConnection, workerTuning } from './queues';
 import { db } from '../config/db';
-import { applyPastDueNotice, parseBill } from '../services/pdfImportService';
+import { recordConfirmedPayment, applyPastDueNotice, parseBill } from '../services/pdfImportService';
 import { findOrCreateUtilityAccount } from '../services/utilityAccountResolver';
 import { uploadDocument, buildStatementKey } from '../services/s3Service';
 
@@ -273,8 +273,9 @@ const worker = new Worker<DriveImportJobData>(
                   ...(pdfS3Key && !existing.pdfS3Key ? { pdfS3Key } : {}),
                 },
               });
+              await recordConfirmedPayment(acct.id, existing.id, ex);
             } else {
-              await db.statement.create({
+              const created = await db.statement.create({
                 data: {
                   utilityAccountId: acct.id,
                   statementDate,
@@ -292,7 +293,8 @@ const worker = new Worker<DriveImportJobData>(
                   rawDataJson: rawData as Prisma.InputJsonValue,
                 },
               });
-            }
+            await recordConfirmedPayment(acct.id, created.id, ex);
+          }
 
             autoImported++;
           } else {

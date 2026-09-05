@@ -11,13 +11,14 @@
  */
 
 export type Cadence =
-  | 'MONTHLY' | 'QUARTERLY' | 'SEMI_ANNUAL' | 'ANNUAL'
+  | 'MONTHLY' | 'BIMONTHLY' | 'QUARTERLY' | 'SEMI_ANNUAL' | 'ANNUAL'
   | 'TERM' | 'ONE_TIME' | 'IRREGULAR';
 
 /** How many months one bill on this cadence covers. */
 export function monthsCovered(cadence: Cadence, termMonths?: number | null): number {
   switch (cadence) {
     case 'MONTHLY': return 1;
+    case 'BIMONTHLY': return 2;
     case 'QUARTERLY': return 3;
     case 'SEMI_ANNUAL': return 6;
     case 'ANNUAL': return 12;

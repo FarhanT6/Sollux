@@ -9,11 +9,12 @@
  */
 
 export type Cadence =
-  | 'MONTHLY' | 'QUARTERLY' | 'SEMI_ANNUAL' | 'ANNUAL'
+  | 'MONTHLY' | 'BIMONTHLY' | 'QUARTERLY' | 'SEMI_ANNUAL' | 'ANNUAL'
   | 'TERM' | 'ONE_TIME' | 'IRREGULAR';
 
 export const CADENCE_LABELS: Record<Cadence, string> = {
   MONTHLY: 'Monthly',
+  BIMONTHLY: 'Every 2 months',
   QUARTERLY: 'Every 3 months',
   SEMI_ANNUAL: 'Every 6 months',
   ANNUAL: 'Once a year',
@@ -24,6 +25,7 @@ export const CADENCE_LABELS: Record<Cadence, string> = {
 
 export function monthsCovered(cadence: Cadence, termMonths?: number | null): number {
   switch (cadence) {
+    case 'BIMONTHLY': return 2;
     case 'QUARTERLY': return 3;
     case 'SEMI_ANNUAL': return 6;
     case 'ANNUAL': return 12;
