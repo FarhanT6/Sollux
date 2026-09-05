@@ -97,7 +97,7 @@ router.get('/', async (req, res, next) => {
             statements: {
               orderBy: { statementDate: 'desc' },
               take: 1,
-              select: { amountDue: true, dueDate: true, amountPaid: true, rawDataJson: true, statementDate: true },
+              select: { amountDue: true, dueDate: true, amountPaid: true, rawDataJson: true, statementDate: true, penaltyDate: true },
             },
             // Recent payments so the PropertyCard can reconcile balance against
             // payments that haven't yet posted on the provider's API side.

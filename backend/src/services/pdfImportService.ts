@@ -140,7 +140,7 @@ Schema (use null for any field not present in the document):
   "penaltyDate": "YYYY-MM-DD" or null — the date a penalty or late fee applies if the bill is unpaid, when the bill states one ("Penalty Date", "Late after", "Penalty applies after"). This is often a day or two later than the due date; report what the bill says, not the due date,
   "amountAfterDueDate": number or null — what the bill says is payable if paid after the due date ("Amount due after 09/15/2026", "After Due Date Pay"). The difference between this and the amount due is the late fee this provider will charge,
   "agingBuckets": object or null — when the bill prints an aging table (commonly "Past Due | 30 Days | 60 Days | 90+ Days"), report it as {"current": n, "days30": n, "days60": n, "days90plus": n}, omitting any bucket the bill does not show. Report each bucket's own figure, not a running total,
-  "documentKind": "bill | past_due_notice — 'past_due_notice' when this is a delinquency, past-due, or disconnection/shut-off notice rather than a bill: it demands an already-overdue balance, shows no service period and no new charges ('PAST DUE STATEMENT', 'FINAL NOTICE', 'service will be locked/disconnected'). For a notice: the demanded amount goes in previousBalance, currentCharges is null, any stated lock-up/disconnection or penalty date goes in penaltyDate, and its aging table in agingBuckets. Everything else is 'bill'",
+  "documentKind": "bill | past_due_notice — 'past_due_notice' ONLY when the document bills nothing new: it demands an already-overdue balance, shows no service period and no new charges. A regular invoice that carries a PAST DUE or suspension banner but also bills a new period's service is a 'bill', never a notice ('PAST DUE STATEMENT', 'FINAL NOTICE', 'service will be locked/disconnected'). For a notice: the demanded amount goes in previousBalance, currentCharges is null, any stated lock-up/disconnection or penalty date goes in penaltyDate, and its aging table in agingBuckets. Everything else is 'bill'",
   "chargeBreakdown": { "line item name": dollar_amount, ... } or null — every individual charge the bill itemises, using the bill's own wording as the key ({"Water": 118.53, "Sewer": 121.50} for a bill splitting the two). Include credits and discounts as negative values. This is how a total is explained later, so itemise whenever the bill does,
   "alerts": ["string", ...] — notable flags: past due, late fees, NSF, payment plan, high usage, leak, outage credit, SCRA, debt collection notice, legal action warning, etc.
 }
@@ -1342,9 +1342,15 @@ export async function recordConfirmedPayment(
   if (!amount || amount <= 0.01) return;
 
   const marker = `[from-statement:${statementId}]`;
-  const paymentDate = ex.statementDate ? new Date(ex.statementDate) : new Date();
+  // Dated the day BEFORE the statement that confirms it, not the same day.
+  // The bill says the payment had already arrived when it was issued, and the
+  // paid check counts payments from a statement's own date onward — dated
+  // equal, the prior cycle's payment was counted against the very bill that
+  // reported it, and every freshly imported bill read Paid.
+  const confirmedOn = ex.statementDate ? new Date(ex.statementDate) : new Date();
+  const paymentDate = new Date(confirmedOn.getTime() - 24 * 60 * 60 * 1000);
   const prior = await db.statement.findFirst({
-    where: { utilityAccountId, statementDate: { lt: paymentDate }, id: { not: statementId } },
+    where: { utilityAccountId, statementDate: { lt: confirmedOn }, id: { not: statementId } },
     orderBy: { statementDate: 'desc' },
     select: { id: true },
   });
@@ -1413,6 +1419,15 @@ export async function parseBill(
     // ends; the period end is the honest stand-in.
     if (!extracted.statementDate && extracted.billingPeriodEnd) {
       extracted.statementDate = extracted.billingPeriodEnd;
+    }
+    // A document with new charges is a bill, whatever banner it wears. EDCO
+    // prints "PAST DUE — SUBJECT TO SUSPENSION" across a regular invoice that
+    // also bills the next two months of service; classified as a notice it
+    // was attached instead of filed, and the cycle went missing. The
+    // classification is only trusted when the document truly bills nothing.
+    if (extracted.documentKind === 'past_due_notice'
+        && ((extracted.currentCharges ?? 0) > 0 || extracted.billingPeriodStart || extracted.billingPeriodEnd)) {
+      extracted.documentKind = 'bill';
     }
     repairMisreadPeriodYear(extracted);
     derivePaymentPlanFromBreakdown(extracted);

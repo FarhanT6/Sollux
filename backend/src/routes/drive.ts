@@ -350,16 +350,19 @@ router.post('/stream', attachDbUser, async (req, res) => {
             };
 
             const pastDueAmt = ex.previousBalance != null && ex.previousBalance > 0 ? ex.previousBalance : null;
-            // Prefer the actual payment amount the statement shows over
-            // guessing "fully paid" from the isPaid flag.
-            const amountPaidValue = ex.paymentsReceived ?? (ex.isPaid ? (totalDue ?? amountDueCurrent ?? null) : null);
+            // paymentsReceived settles the PREVIOUS cycle and is recorded as
+            // a Payment against that statement — writing it onto THIS bill's
+            // amountPaid marked every freshly imported bill "Paid" while its
+            // own charge sat unpaid. Seeded only when the bill proves settled.
+            const amountPaidValue = ex.isPaid ? (totalDue ?? amountDueCurrent ?? null) : null;
+            const legacyDerivedPaid = ex.paymentsReceived != null ? Number(ex.paymentsReceived) : null;
 
             if (existing) {
               await db.statement.update({ where: { id: existing.id }, data: {
                 statementDate,
                 amountDue: amountDueCurrent ?? existing.amountDue,
                 balance: totalDue ?? amountDueCurrent ?? existing.balance,
-                amountPaid: amountPaidValue ?? existing.amountPaid,
+                amountPaid: amountPaidValue ?? (legacyDerivedPaid != null && Number(existing.amountPaid) === legacyDerivedPaid ? null : existing.amountPaid),
                 dueDate: ex.dueDate ? new Date(ex.dueDate) : existing.dueDate,
                 chargesExcludingFees: ex.currentCharges ?? existing.chargesExcludingFees,
                 penaltiesFees: ex.lateFee ?? existing.penaltiesFees,

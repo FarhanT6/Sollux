@@ -966,9 +966,24 @@ export default function UtilityDetailPage() {
             value: fmtMoney(isLatestPaid ? 0 : (latestTotalDue ?? latestAmt)),
             sub: isLatestPaid
               ? <span className="text-emerald-400">Paid</span>
-              : (latestPastDue && latestPastDue > 0
-                ? <span className="text-red-400">{fmtMoney(latestPastDue)} past due</span>
-                : undefined),
+              : (
+                <span>
+                  {latestPastDue && latestPastDue > 0 && (
+                    <span className="text-red-400">{fmtMoney(latestPastDue)} past due</span>
+                  )}
+                  {/* The bill's own penalty deadline — "Late penalty assessed
+                      09/09/2026" — is the date that actually costs money, and
+                      it always comes from the newest bill, so it rolls
+                      forward on its own as each new bill imports. */}
+                  {latestStmt?.penaltyDate && !isLatestPaid && (
+                    <span className="block text-amber-400">
+                      {new Date(latestStmt.penaltyDate) >= new Date()
+                        ? `Pay by ${fmtDate(latestStmt.penaltyDate, 'MMM d')} to avoid a penalty`
+                        : `Penalty applied ${fmtDate(latestStmt.penaltyDate, 'MMM d')}`}
+                    </span>
+                  )}
+                </span>
+              ),
           },
           {
             label: 'Month over month',
@@ -1180,6 +1195,13 @@ export default function UtilityDetailPage() {
                         )}
                         {(pastDue ?? 0) > 0 && priorPaid && (
                           <p className="text-xs text-green-500 mt-0.5">✓ Prior balance paid</p>
+                        )}
+                        {s.penaltyDate && !isPaid && (
+                          <p className={`text-xs mt-0.5 ${new Date(s.penaltyDate) >= new Date() ? 'text-amber-400' : 'text-red-400'}`}>
+                            {new Date(s.penaltyDate) >= new Date()
+                              ? `⏰ Penalty after ${fmtDate(s.penaltyDate, 'MMM d, yyyy')}`
+                              : `⚠ Penalty assessed ${fmtDate(s.penaltyDate, 'MMM d, yyyy')}`}
+                          </p>
                         )}
                         {s.usageValue && (
                           <p className="text-xs text-gray-600 mt-0.5">{s.usageValue} {s.usageUnit}</p>
