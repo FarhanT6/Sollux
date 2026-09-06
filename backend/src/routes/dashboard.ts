@@ -53,13 +53,33 @@ router.get('/summary', async (req, res, next) => {
     const sevenDaysFromNow = new Date();
     sevenDaysFromNow.setDate(sevenDaysFromNow.getDate() + 7);
 
-    const billsDueSoon = await db.statement.count({
+    const dueSoon = await db.statement.findMany({
       where: {
         utilityAccount: { property: { userId } },
         dueDate: { gte: new Date(), lte: sevenDaysFromNow },
         amountPaid: null,
       },
+      select: {
+        id: true, dueDate: true, amountDue: true, pastDueCarried: true, billingPeriodEnd: true, statementDate: true,
+        utilityAccount: { select: { id: true, providerName: true, category: true, property: { select: { id: true, address: true, nickname: true } } } },
+      },
+      orderBy: { dueDate: 'asc' },
     });
+    const billsDueSoon = dueSoon.length;
+    // The count alone sends the reader hunting; each bill named, with where it
+    // lives, lets them go straight to it.
+    const billsDueSoonList = dueSoon.map(s => ({
+      id: s.id,
+      dueDate: s.dueDate,
+      amountDue: s.amountDue != null ? Number(s.amountDue) : null,
+      pastDueCarried: s.pastDueCarried != null ? Number(s.pastDueCarried) : null,
+      periodEnd: s.billingPeriodEnd ?? s.statementDate,
+      accountId: s.utilityAccount.id,
+      providerName: s.utilityAccount.providerName,
+      category: s.utilityAccount.category,
+      propertyId: s.utilityAccount.property.id,
+      propertyLabel: s.utilityAccount.property.nickname || s.utilityAccount.property.address,
+    }));
 
     res.json({
       totalProperties,
@@ -68,6 +88,7 @@ router.get('/summary', async (req, res, next) => {
       unreadInsights,
       alertInsights,
       billsDueSoon,
+      billsDueSoonList,
     });
   } catch (err) {
     next(err);

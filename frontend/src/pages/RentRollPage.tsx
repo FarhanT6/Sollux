@@ -17,6 +17,7 @@ export default function RentRollPage({ embedded }: { embedded?: boolean } = {}) 
   const [showPayForm, setShowPayForm] = useState<string | null>(null);
   const [payAmount, setPayAmount] = useState('');
   const [payDate, setPayDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [payForMonth, setPayForMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [payMethod, setPayMethod] = useState('ZELLE');
   const [payNotes, setPayNotes] = useState('');
   const [saving, setSaving] = useState(false);
@@ -45,10 +46,9 @@ export default function RentRollPage({ embedded }: { embedded?: boolean } = {}) 
     if (!payAmount || !payDate) return;
     setSaving(true);
     try {
-      const now = new Date();
       await createRentPayment({
         leaseId,
-        periodDate: new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1)).toISOString(),
+        periodDate: `${payForMonth}-01T00:00:00.000Z`,
         amount: parseFloat(payAmount),
         paidDate: payDate,
         method: payMethod,
@@ -167,7 +167,15 @@ export default function RentRollPage({ embedded }: { embedded?: boolean } = {}) 
                               className="input-dark text-xs w-24"
                             />
                             <input
+                              type="month"
+                              title="Month this payment applies to"
+                              value={payForMonth}
+                              onChange={e => setPayForMonth(e.target.value)}
+                              className="input-dark text-xs w-32"
+                            />
+                            <input
                               type="date"
+                              title="Date the money arrived"
                               value={payDate}
                               onChange={e => setPayDate(e.target.value)}
                               className="input-dark text-xs w-32"

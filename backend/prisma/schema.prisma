@@ -6,8 +6,13 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // Migrations bypass the connection pooler: Prisma's advisory lock is
+  // session-level and does not survive Neon's transaction-mode pooler.
+  // scripts/migrate-deploy.cjs fills this from DATABASE_URL when no direct
+  // URL is configured, so local setups need nothing extra.
+  directUrl = env("DIRECT_DATABASE_URL")
 }
 
 // ─── USERS ───────────────────────────────────────────────
