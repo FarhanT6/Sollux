@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useUser } from '@clerk/clerk-react';
-import { getDashboardSummary, getRecentActivity, getInsights, queryPortfolio, getPlaidItems, getBankAccounts } from '../api/client';
-import type { DashboardSummary, AIInsight, BankAccount } from '../types';
+import { getDashboardSummary, getRecentActivity, getInsights, queryPortfolio, getPlaidItems, getBankAccounts, getLeases, getRentPayments } from '../api/client';
+import type { DashboardSummary, AIInsight, BankAccount, Lease, RentPayment } from '../types';
 import type { PlaidItem } from '../api/client';
 import { StatCard, InsightCard, Skeleton, EmptyState } from '../components/ui';
 import { format } from 'date-fns';
@@ -27,6 +27,9 @@ export default function DashboardPage() {
   const [showAddProperty, setShowAddProperty] = useState(false);
 
   // AI search bar state
+  const [leases, setLeases] = useState<Lease[]>([]);
+  const [rentPayments, setRentPayments] = useState<RentPayment[]>([]);
+  const [showDue, setShowDue] = useState(false);
   const [query, setQuery] = useState('');
   const [queryLoading, setQueryLoading] = useState(false);
   const [queryAnswer, setQueryAnswer] = useState('');
@@ -43,8 +46,12 @@ export default function DashboardPage() {
       getInsights({ unread: true }),
       getPlaidItems().catch(() => []),
       getBankAccounts().catch(() => []),
-    ]).then(([s, a, i, p, ba]) => {
+      getLeases({ status: 'ACTIVE' }).catch(() => []),
+      getRentPayments().catch(() => []),
+    ]).then(([s, a, i, p, ba, ls, rp]) => {
       setSummary(s);
+      setLeases(ls as Lease[]);
+      setRentPayments(rp as RentPayment[]);
       setActivity(a);
       setInsights(i.slice(0, 4));
       setPlaidItems(p as PlaidItem[]);
@@ -113,12 +120,45 @@ export default function DashboardPage() {
                 sub={`${summary?.totalUtilityAccounts ?? 0} utility accounts`}
                 subColor="neutral"
               />
-              <StatCard
-                label="Bills due this week"
-                value={summary?.billsDueSoon ?? '—'}
-                sub={summary?.billsDueSoon ? 'Needs attention' : 'All clear'}
-                subColor={summary?.billsDueSoon ? 'red' : 'green'}
-              />
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => summary?.billsDueSoon && setShowDue(v => !v)}
+                  className="stat-card w-full text-left"
+                  style={{ cursor: summary?.billsDueSoon ? 'pointer' : 'default' }}
+                  aria-expanded={showDue}
+                >
+                  <p className="text-xs text-gray-500 mb-1">Bills due this week</p>
+                  <p className="text-xl font-semibold text-white leading-none">{summary?.billsDueSoon ?? '—'}</p>
+                  <p className={`text-xs mt-1 flex items-center gap-1 ${summary?.billsDueSoon ? 'text-red-400' : 'text-emerald-400'}`}>
+                    {summary?.billsDueSoon ? 'Needs attention' : 'All clear'}
+                    {!!summary?.billsDueSoon && <span className="text-gray-500">{showDue ? '▴' : '▾'}</span>}
+                  </p>
+                </button>
+                {showDue && !!summary?.billsDueSoonList?.length && (
+                  <div className="absolute left-0 right-0 z-20 mt-1 rounded-xl overflow-hidden shadow-2xl" style={{ background: '#151515', border: '1px solid rgba(255,255,255,0.1)', minWidth: 320 }}>
+                    {summary.billsDueSoonList.map(b => (
+                      <Link
+                        key={b.id}
+                        to={`/properties/${b.propertyId}/utilities/${b.accountId}`}
+                        className="flex items-center justify-between gap-3 px-3 py-2 hover:bg-white/5"
+                        style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}
+                        onClick={() => setShowDue(false)}
+                      >
+                        <div className="min-w-0">
+                          <p className="text-xs text-white truncate">{b.propertyLabel}</p>
+                          <p className="text-[11px] text-gray-500 truncate">{b.providerName} · due {fmtDate(b.dueDate, 'MMM d')}</p>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <p className="text-xs font-medium text-white">${(b.amountDue ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                          {!!b.pastDueCarried && b.pastDueCarried > 0 && <p className="text-[11px] text-red-400">+${b.pastDueCarried.toLocaleString('en-US', { minimumFractionDigits: 2 })} past due</p>}
+                        </div>
+                      </Link>
+                    ))}
+                    <Link to="/payments" className="block px-3 py-2 text-[11px] text-gold-500 hover:underline" onClick={() => setShowDue(false)}>All payments →</Link>
+                  </div>
+                )}
+              </div>
               <StatCard
                 label="AI alerts"
                 value={summary?.unreadInsights ?? '—'}
@@ -131,6 +171,9 @@ export default function DashboardPage() {
 
         {/* Cash Position */}
         {(plaidItems.length > 0 || manualAccounts.length > 0) && <CashPositionCard items={plaidItems} manualAccounts={manualAccounts} />}
+
+        {/* Rent */}
+        {!loading && leases.length > 0 && <RentSummaryCard leases={leases} payments={rentPayments} />}
 
         {/* AI Search Bar */}
         <div className="mb-6">
@@ -371,6 +414,110 @@ function CashPositionCard({ items, manualAccounts }: { items: PlaidItem[]; manua
             );
           })}
         </div>
+      </div>
+    </div>
+  );
+}
+
+
+/**
+ * Rent, the way the utility cards already show bills: what the roll expects
+ * this month, what has come in against it, who has not paid yet, and what is
+ * owed from before. Paid means a received payment whose period is this
+ * month, the same rule the rent roll uses when it logs one.
+ */
+const ordinal = (n: number) => {
+  const r = n % 100;
+  if (r >= 11 && r <= 13) return `${n}th`;
+  return `${n}${['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'}`;
+};
+
+function RentSummaryCard({ leases, payments }: { leases: Lease[]; payments: RentPayment[] }) {
+  const now = new Date();
+  const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const money = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+
+  const paidByLease = new Map<string, number>();
+  for (const p of payments) {
+    if (p.status !== 'RECEIVED') continue;
+    if (String(p.periodDate).slice(0, 7) !== ym) continue;
+    paidByLease.set(p.leaseId, (paidByLease.get(p.leaseId) ?? 0) + Number(p.amount));
+  }
+
+  const expected = leases.reduce((s, l) => s + Number(l.rentAmount), 0);
+  const collected = leases.reduce((s, l) => s + Math.min(paidByLease.get(l.id) ?? 0, Number(l.rentAmount)), 0);
+  const arrears = leases.reduce((s, l) => s + Number(l.arrearsBalance ?? 0), 0);
+  const unpaid = leases
+    .filter(l => (paidByLease.get(l.id) ?? 0) + 0.01 < Number(l.rentAmount))
+    .map(l => ({
+      lease: l,
+      remaining: Number(l.rentAmount) - (paidByLease.get(l.id) ?? 0),
+      overdue: now.getDate() > (l.rentDueDay ?? 1),
+    }))
+    .sort((a, b) => Number(b.overdue) - Number(a.overdue) || b.remaining - a.remaining);
+
+  const pct = expected > 0 ? Math.round((collected / expected) * 100) : 0;
+
+  return (
+    <div className="mb-6">
+      <div className="flex items-center justify-between mb-2.5">
+        <p className="section-label">Rent · {format(now, 'MMMM')}</p>
+        <Link to="/tenants?tab=rent-roll" className="text-xs text-gold-500 hover:underline">Rent roll →</Link>
+      </div>
+      <div className="card p-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+          <div>
+            <p className="text-xs text-gray-500 mb-1">Expected</p>
+            <p className="text-xl font-semibold text-white leading-none">{money(expected)}</p>
+            <p className="text-xs text-gray-500 mt-1">{leases.length} active lease{leases.length === 1 ? '' : 's'}</p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-500 mb-1">Collected</p>
+            <p className="text-xl font-semibold text-emerald-400 leading-none">{money(collected)}</p>
+            <p className="text-xs text-gray-500 mt-1">{pct}% of expected</p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-500 mb-1">Still owed this month</p>
+            <p className={`text-xl font-semibold leading-none ${expected - collected > 0 ? 'text-amber-400' : 'text-white'}`}>{money(Math.max(expected - collected, 0))}</p>
+            <p className="text-xs text-gray-500 mt-1">{unpaid.length} lease{unpaid.length === 1 ? '' : 's'} unpaid</p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-500 mb-1">Arrears</p>
+            <p className={`text-xl font-semibold leading-none ${arrears > 0 ? 'text-red-400' : 'text-white'}`}>{money(arrears)}</p>
+            <p className="text-xs text-gray-500 mt-1">owed from earlier months</p>
+          </div>
+        </div>
+        <div className="h-1.5 rounded-full overflow-hidden mb-4" style={{ background: 'rgba(255,255,255,0.06)' }}>
+          <div className="h-full rounded-full" style={{ width: `${Math.min(pct, 100)}%`, background: '#10b981' }} />
+        </div>
+        {unpaid.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            {unpaid.slice(0, 8).map(({ lease, remaining, overdue }) => {
+              const prop = lease.unit?.property;
+              const tenants = lease.leaseTenants?.map(lt => lt.tenant.fullName).join(', ') || '—';
+              return (
+                <Link
+                  key={lease.id}
+                  to={lease.leaseTenants?.[0]?.tenant?.id ? `/tenants/${lease.leaseTenants[0].tenant.id}` : '/tenants?tab=rent-roll'}
+                  className="flex items-center justify-between gap-3 rounded-lg px-3 py-2 hover:bg-white/5"
+                  style={{ border: '1px solid rgba(255,255,255,0.06)' }}
+                >
+                  <div className="min-w-0">
+                    <p className="text-xs text-white truncate">{prop?.nickname || prop?.address || '—'}{lease.unit?.unitLabel ? ` · ${lease.unit.unitLabel}` : ''}</p>
+                    <p className="text-[11px] text-gray-500 truncate">{tenants}{lease.rentDueDay ? ` · due the ${ordinal(lease.rentDueDay)}` : ''}</p>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <p className="text-xs font-medium text-white">{money(remaining)}</p>
+                    <p className={`text-[11px] ${overdue ? 'text-red-400' : 'text-gray-500'}`}>{overdue ? 'Late' : 'Not yet due'}</p>
+                  </div>
+                </Link>
+              );
+            })}
+            {unpaid.length > 8 && <Link to="/tenants?tab=rent-roll" className="text-xs text-gold-500 hover:underline px-3 py-2">+{unpaid.length - 8} more →</Link>}
+          </div>
+        ) : (
+          <p className="text-xs text-emerald-400">Every lease has paid for {format(now, 'MMMM')}.</p>
+        )}
       </div>
     </div>
   );

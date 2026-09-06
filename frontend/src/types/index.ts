@@ -858,6 +858,10 @@ export interface DashboardSummary {
   unreadInsights: number;
   alertInsights: number;
   billsDueSoon: number;
+  billsDueSoonList?: {
+    id: string; dueDate: string; amountDue: number | null; pastDueCarried: number | null; periodEnd: string;
+    accountId: string; providerName: string; category: UtilityCategory; propertyId: string; propertyLabel: string;
+  }[];
 }
 
 // ─── UI helpers ───────────────────────────────────────────
