@@ -41,6 +41,7 @@ model User {
   notificationPreferences NotificationPreference[]
   gmailTokens             GmailToken[]
   driveTokens             DriveToken[]
+  clickupConnection       ClickUpConnection?
   paymentRecipient        PaymentRecipient?
   bankAccounts            BankAccount[]
   plaidItems              PlaidItem[]
@@ -123,6 +124,8 @@ model Property {
   documents              Document[]
   outgoingTransactions   OutgoingTransaction[]
 
+  /// ClickUp list holding this property's operations tasks (created on demand).
+  clickupListId   String?
   @@index([userId, state])
   @@map("properties")
 }
@@ -314,6 +317,8 @@ model Statement {
 
   payments Payment[]
 
+  /// ClickUp task created for paying this bill, so it can be updated and closed.
+  clickupTaskId        String?
   @@map("statements")
 }
 
@@ -614,6 +619,7 @@ model Lease {
   updatedAt              DateTime    @updatedAt
 
   leaseTenants         LeaseTenant[]
+  utilityReimbursement UtilityReimbursement?
   rentPayments         RentPayment[]
   rentNotices          RentNotice[]
   rentChanges          RentChange[]
@@ -1458,4 +1464,100 @@ enum OtherIncomeCategory {
   DEPOSIT_REFUND_IN // deposit returned that you previously paid
   LAUNDRY // laundry machine income
   OTHER
+}
+
+// ─── CLICKUP ────────────────────────────────────────────
+/// One ClickUp connection per user: a personal API token, the workspace and
+/// folder that hold property operations, and the webhook registered there.
+model ClickUpConnection {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenEnc         String
+  clickupUserId    String?
+  clickupUserName  String?
+  teamId           String?
+  teamName         String?
+  spaceId          String?
+  spaceName        String?
+  folderId         String?
+  folderName       String?
+  webhookId        String?
+  webhookSecretEnc String?
+  /// Create and close a ClickUp task for every unpaid bill.
+  syncBills        Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@map("clickup_connections")
+}
+
+// ─── TENANT UTILITY REIMBURSEMENT ────────────────────────
+/// A lease under which the tenant repays some share of the property's
+/// utilities: a percentage of each water/electric bill, a flat monthly trash
+/// charge, and so on. Not every lease has this — only those configured here.
+model UtilityReimbursement {
+  id            String   @id @default(cuid())
+  leaseId       String   @unique
+  lease         Lease    @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  enabled       Boolean  @default(true)
+  /// [{ category, mode: PERCENT | FULL | FLAT_MONTHLY, value, label? }]
+  rulesJson     Json
+  /// Restrict to specific utility accounts; empty means every account on the
+  /// property in the rules\' categories (excluding meters tied to other units).
+  accountIdsJson Json?
+  /// Tenant overpayment carried forward to the next invoice.
+  creditBalance Decimal  @default(0) @db.Decimal(10, 2)
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  invoices ReimbursementInvoice[]
+
+  @@map("utility_reimbursements")
+}
+
+model ReimbursementInvoice {
+  id              String   @id @default(cuid())
+  reimbursementId String
+  reimbursement   UtilityReimbursement @relation(fields: [reimbursementId], references: [id], onDelete: Cascade)
+  periodStart     DateTime
+  periodEnd       DateTime
+  subtotal        Decimal  @db.Decimal(10, 2)
+  creditApplied   Decimal  @default(0) @db.Decimal(10, 2)
+  total           Decimal  @db.Decimal(10, 2)
+  paidAmount      Decimal  @default(0) @db.Decimal(10, 2)
+  paidAt          DateTime?
+  /// DRAFT | SENT | PARTIAL | PAID
+  status          String   @default("DRAFT")
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  lines ReimbursementInvoiceLine[]
+
+  @@index([reimbursementId, periodEnd])
+  @@map("reimbursement_invoices")
+}
+
+/// One line of an invoice: a share of one statement, or a flat monthly charge.
+/// A statement can be billed to a tenant once — the unique statementId is
+/// what stops a bill appearing on two invoices.
+model ReimbursementInvoiceLine {
+  id           String   @id @default(cuid())
+  invoiceId    String
+  invoice      ReimbursementInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  /// STATEMENT | FLAT
+  kind         String
+  category     String
+  label        String
+  statementId  String?  @unique
+  periodStart  DateTime?
+  periodEnd    DateTime?
+  baseAmount   Decimal  @db.Decimal(10, 2)
+  sharePercent Float?
+  amount       Decimal  @db.Decimal(10, 2)
+  sortKey      DateTime
+
+  @@map("reimbursement_invoice_lines")
 }

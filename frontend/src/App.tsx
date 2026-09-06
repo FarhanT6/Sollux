@@ -7,6 +7,7 @@ import PropertiesPage from './pages/PropertiesPage';
 import PropertyDetailPage from './pages/PropertyDetailPage';
 import UtilityDetailPage from './pages/UtilityDetailPage';
 import InsightsPage from './pages/InsightsPage';
+import OperationsPage from './pages/OperationsPage';
 import PaymentPrioritiesPage from './pages/PaymentPrioritiesPage';
 import SettingsPage from './pages/SettingsPage';
 import FinancesPage from './pages/FinancesPage';
@@ -20,6 +21,7 @@ import ScanPage from './pages/ScanPage';
 import LoanDetailPage from './pages/LoanDetailPage';
 import NoticeDetailPage from './pages/NoticeDetailPage';
 import TenantDetailPage from './pages/TenantDetailPage';
+import ReimbursementInvoicePage from './pages/ReimbursementInvoicePage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isSignedIn, isLoaded } = useAuth();
@@ -63,6 +65,7 @@ export default function App() {
           {/* Tenants hub */}
           <Route path="tenants" element={<TenantsHubPage />} />
           <Route path="tenants/:id" element={<TenantDetailPage />} />
+          <Route path="reimbursements/:id" element={<ReimbursementInvoicePage />} />
           <Route path="notices/:id" element={<NoticeDetailPage />} />
 
           {/* Lives as a Finances tab; keep the direct URL working for links. */}
@@ -73,6 +76,7 @@ export default function App() {
 
           {/* Standalone pages */}
           <Route path="payments" element={<PaymentPrioritiesPage />} />
+          <Route path="operations" element={<OperationsPage />} />
           <Route path="insights" element={<InsightsPage />} />
           <Route path="settings" element={<SettingsPage />} />
 

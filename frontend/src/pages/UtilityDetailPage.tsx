@@ -23,6 +23,21 @@ const CATEGORY_ICONS: Record<string, string> = {
   SOLAR: '☀️', INSURANCE: '🛡️', HOA: '🏘️', TAXES: '🏛️', OTHER: '📄',
 };
 
+// The name a bill goes by everywhere on this page: the period it covers, not
+// the month it was issued in. Insurance and haulers bill in advance, so two
+// consecutive bills can be issued in the same month — labelled by issue
+// month, the September policy month and the August one both read "Aug 2026"
+// and the payment form offered two identical choices. A bill covering more
+// than one month is named by its span.
+function periodLabel(s: any): string {
+  const end = s.billingPeriodEnd || s.statementDate;
+  if (s.billingPeriodStart && s.billingPeriodEnd && monthKey(s.billingPeriodStart) !== monthKey(s.billingPeriodEnd)) {
+    const sameYear = new Date(s.billingPeriodStart).getUTCFullYear() === new Date(s.billingPeriodEnd).getUTCFullYear();
+    return `${fmtDate(s.billingPeriodStart, sameYear ? 'MMM' : 'MMM yy')}–${fmtDate(s.billingPeriodEnd, sameYear ? 'MMM yyyy' : 'MMM yy')}`;
+  }
+  return fmtDate(end, 'MMM yyyy');
+}
+
 function fmtMoney(v?: number | string | null) {
   if (v == null) return '—';
   const n = Number(v);
@@ -660,19 +675,38 @@ export default function UtilityDetailPage() {
   }
 
   async function handleMarkPaid(s: any) {
-    const isPaid = s.amountPaid != null;
+    // Marking a bill paid records a real payment for its full open balance —
+    // the bill's own charge plus everything carried into it — dated today and
+    // linked to the bill. A payment, rather than a flag on one statement,
+    // because that is what settles the older open cycles too: the paid check
+    // sums payments made since each bill's date, so one lump payment clears
+    // every cycle the arrears reached back to. Setting amountPaid on the
+    // newest bill alone left those older cycles Overdue until the next bill.
+    const marker = `[marked-paid:${s.id}]`;
+    const marked = payments.find((p: any) => typeof p.notes === 'string' && p.notes.includes(marker));
     setMarkingPaid(s.id);
     try {
-      // Marking paid records the full open balance — the bill's own charge
-      // plus anything carried into it — because that is what settling this
-      // bill costs. Recording only amountDue left the carried arrears
-      // "unpaid" and the row stuck on Due.
-      const updated = await patchStatement(s.id, { amountPaid: isPaid ? null : Number(openBalanceOf(s) ?? s.amountDue ?? 0) });
-      setAccount((prev: any) => prev ? {
-        ...prev,
-        statements: (prev.statements ?? []).map((r: any) => r.id === s.id ? { ...r, amountPaid: updated.amountPaid } : r),
-      } : prev);
-    } catch { } finally { setMarkingPaid(null); }
+      if (marked) {
+        await deletePayment(marked.id);
+      } else {
+        const amount = Number(openBalanceOf(s) ?? s.amountDue ?? 0);
+        if (amount <= 0) return;
+        await createPayment({
+          utilityAccountId: accountId,
+          amount,
+          paymentDate: new Date().toISOString().slice(0, 10),
+          paymentMethod: null,
+          status: 'PAID',
+          statementId: s.id,
+          confirmationNumber: null,
+          bankAccountId: null,
+          notes: `Marked paid from the statements list. ${marker}`,
+        });
+      }
+      await reloadAccount();
+    } catch (err: any) {
+      alert(err?.response?.data?.error ?? 'Could not record that payment.');
+    } finally { setMarkingPaid(null); }
   }
 
   async function toggleAccountNumber() {
@@ -1182,19 +1216,7 @@ export default function UtilityDetailPage() {
                             April to late May — calling that row "Jun 2026"
                             makes May look absent and double-counts June. */}
                         <p className="text-sm font-semibold text-white">
-                          {(() => {
-                            // A bill covering more than one month is named by
-                            // its span — "May–Jun 2026" — because naming a
-                            // two-month EDCO bill after only its final month
-                            // reads as the wrong month entirely.
-                            const end = s.billingPeriodEnd || s.statementDate;
-                            if (s.billingPeriodStart && s.billingPeriodEnd
-                                && monthKey(s.billingPeriodStart) !== monthKey(s.billingPeriodEnd)) {
-                              const sameYear = new Date(s.billingPeriodStart).getUTCFullYear() === new Date(s.billingPeriodEnd).getUTCFullYear();
-                              return `${fmtDate(s.billingPeriodStart, sameYear ? 'MMM' : 'MMM yy')}–${fmtDate(s.billingPeriodEnd, sameYear ? 'MMM yyyy' : 'MMM yy')}`;
-                            }
-                            return fmtDate(end, 'MMM yyyy');
-                          })()}
+                          {periodLabel(s)}
                         </p>
                         {s.billingPeriodEnd && monthKey(s.billingPeriodEnd) !== monthKey(s.statementDate) && (
                           <p className="text-xs text-gray-600">billed {fmtDate(s.statementDate, 'MMM d')}</p>
@@ -1381,7 +1403,7 @@ export default function UtilityDetailPage() {
                 <option value="">— Not against a specific bill —</option>
                 {statements.slice(0, 36).map((st: any) => (
                   <option key={st.id} value={st.id}>
-                    {fmtDate(st.statementDate, 'MMM yyyy')} — {fmtMoney(st.amountDue)} due
+                    {periodLabel(st)} — {fmtMoney(st.amountDue)} due · billed {fmtDate(st.statementDate, 'MMM d')}
                   </option>
                 ))}
               </select>

@@ -14,6 +14,8 @@ import accountRouter from './routes/account';
 import dashboardRouter from './routes/dashboard';
 import gmailRouter from './routes/gmail';
 import driveRouter from './routes/drive';
+import clickupRouter from './routes/clickup';
+import reimbursementsRouter from './routes/reimbursements';
 import notificationsRouter from './routes/notifications';
 import authRouter from './routes/auth';
 import settingsRouter from './routes/settings';
@@ -74,7 +76,7 @@ app.set('trust proxy', 1);
 // can't carry that handshake, so those routes must skip Clerk entirely.
 const clerkMw = clerkMiddleware();
 app.use((req, res, next) => {
-  if (req.path === '/api/gmail/callback' || req.path === '/api/drive/callback') {
+  if (req.path === '/api/gmail/callback' || req.path === '/api/drive/callback' || req.path === '/api/clickup/webhook') {
     return next();
   }
   return clerkMw(req, res, next);
@@ -112,6 +114,8 @@ app.use('/api/import', express.json({ limit: '100mb' }));
 app.use('/api/leases', express.json({ limit: '50mb' }));
 app.use('/api/scanned-documents', express.json({ limit: '50mb' }));
 app.use('/api/legal', express.json({ limit: '50mb' }));
+// ClickUp signs webhook deliveries over the raw body; it must not be JSON-parsed first.
+app.use('/api/clickup/webhook', express.raw({ type: '*/*', limit: '1mb' }));
 app.use(express.json({ limit: '10mb' }));
 
 // ─── Health check ─────────────────────────────────────────
@@ -140,7 +144,7 @@ app.use('/api/stripe', stripeRouter);
 // to our OAuth callbacks obviously isn't authed, so those two paths need to
 // bypass this the same way they bypass clerkMiddleware above.
 app.use('/api', (req, res, next) => {
-  if (req.path === '/gmail/callback' || req.path === '/drive/callback') {
+  if (req.path === '/gmail/callback' || req.path === '/drive/callback' || req.path === '/clickup/webhook') {
     return next();
   }
   return requireAuth(req, res, next);
@@ -155,6 +159,8 @@ app.use('/api/account', accountRouter);
 app.use('/api/documents', documentsRouter);
 app.use('/api/gmail', gmailRouter);
 app.use('/api/drive', driveRouter);
+app.use('/api/clickup', clickupRouter);
+app.use('/api/reimbursements', reimbursementsRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/import', importRouter);
 // Property management

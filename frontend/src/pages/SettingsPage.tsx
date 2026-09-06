@@ -1,4 +1,6 @@
 import { useUser, useClerk } from '@clerk/clerk-react';
+import ClickUpCard from '../components/settings/ClickUpCard';
+import LetterheadCard from '../components/settings/LetterheadCard';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { usePlaidLink } from 'react-plaid-link';
@@ -223,6 +225,9 @@ export default function SettingsPage() {
             </button>
           </div>
         </div>
+
+        <LetterheadCard />
+        <ClickUpCard />
 
         <div className="card p-5">
           <h2 className="text-sm font-semibold text-white mb-4">Account actions</h2>

@@ -6,10 +6,11 @@ import { CATEGORY_LABELS, CATEGORY_COLORS, INSURANCE_TYPE_LABELS, LOAN_TYPE_LABE
 import { PageHeader, StatCard, InsightCard, Skeleton, EmptyState, Pill, Modal } from '../components/ui';
 import { format } from 'date-fns';
 import AddUtilityModal from '../components/utility/AddUtilityModal';
+import PropertyOperations from '../components/property/PropertyOperations';
 import { fmtDate } from '../lib/date';
 import { computeMonthlySpend } from '../lib/monthlySpend';
 
-type Tab = 'utilities' | 'payments' | 'insights' | 'documents';
+type Tab = 'utilities' | 'operations' | 'payments' | 'insights' | 'documents';
 
 // Surface what the API actually said. A generic "not found" hides the useful
 // part — an unrun migration, for instance, reports a missing column.
@@ -145,6 +146,7 @@ export default function PropertyDetailPage() {
 
   const TABS: { key: Tab; label: string }[] = [
     { key: 'utilities', label: 'Utilities' },
+    { key: 'operations', label: 'Operations' },
     { key: 'payments', label: 'Payment history' },
     { key: 'insights', label: `AI insights${insights.filter(i => !i.isRead).length > 0 ? ` (${insights.filter(i => !i.isRead).length})` : ''}` },
     { key: 'documents', label: 'Documents' },
@@ -339,6 +341,14 @@ export default function PropertyDetailPage() {
                 )}
               </div>
             )}
+          </>
+        )}
+
+        {/* ── Operations tab (ClickUp) ─────────────────── */}
+        {tab === 'operations' && id && (
+          <>
+            <p className="section-label mb-3">Operations</p>
+            <PropertyOperations propertyId={id} />
           </>
         )}
 

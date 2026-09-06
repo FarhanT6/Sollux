@@ -1359,6 +1359,26 @@ export async function recordConfirmedPayment(
     where: { utilityAccountId, notes: { contains: marker } },
   });
 
+  // The owner may already have logged this payment by hand on the day they
+  // made it. Recording it again from the bill would count the same money
+  // twice in Total Paid — so a hand-logged payment of the same amount, made
+  // between the prior bill and this one, is taken as the record and the
+  // bill's confirmation is not duplicated.
+  if (!existing) {
+    const priorDate = prior
+      ? (await db.statement.findUnique({ where: { id: prior.id }, select: { statementDate: true } }))?.statementDate ?? null
+      : null;
+    const handLogged = await db.payment.findFirst({
+      where: {
+        utilityAccountId,
+        amount: { gte: amount - 0.01, lte: amount + 0.01 },
+        paymentDate: { ...(priorDate ? { gte: priorDate } : {}), lte: confirmedOn },
+        NOT: { notes: { contains: '[from-statement:' } },
+      },
+    });
+    if (handLogged) return;
+  }
+
   const data = {
     amount,
     paymentDate,

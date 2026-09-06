@@ -8,6 +8,7 @@ import {
 } from '../api/client';
 import type { Tenant, Lease, LeaseTenant, RentPayment, Improvement } from '../types';
 import { fmtDate } from '../lib/date';
+import UtilityReimbursementPanel from '../components/tenant/UtilityReimbursementPanel';
 
 const money = (n?: number | string | null) =>
   n == null ? '—' : Number(n).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
@@ -280,6 +281,9 @@ function LeaseCard({ lease, maintenance, onChanged }: {
           </label>
         )}
       </div>
+
+      {/* Utility reimbursement — only for leases where the tenant repays a share */}
+      <UtilityReimbursementPanel leaseId={lease.id} />
 
       {/* Payment history */}
       {lease.rentPayments && lease.rentPayments.length > 0 && (
