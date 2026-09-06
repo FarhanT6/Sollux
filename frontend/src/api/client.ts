@@ -756,3 +756,7 @@ export const setReimbursementInvoiceStatus = (id: string, status: 'DRAFT' | 'SEN
   api.patch(`/reimbursements/invoices/${id}`, { status, notes }).then(r => r.data);
 export const deleteReimbursementInvoice = (id: string) =>
   api.delete(`/reimbursements/invoices/${id}`);
+
+export interface Letterhead { name: string; address?: string | null; phone?: string | null; email?: string | null }
+export const getLetterhead = () => api.get<Letterhead | null>('/reimbursements/letterhead').then(r => r.data);
+export const saveLetterhead = (body: Letterhead) => api.put<Letterhead>('/reimbursements/letterhead', body).then(r => r.data);

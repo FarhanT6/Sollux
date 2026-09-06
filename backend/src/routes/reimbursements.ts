@@ -52,6 +52,21 @@ router.post('/lease/:leaseId/invoices', async (req, res) => {
   try { res.status(201).json(await r.createInvoice(req.params.leaseId, req.dbUserId!, parsed.data.from, parsed.data.to)); } catch (err) { fail(res, err); }
 });
 
+router.get('/letterhead', async (req, res) => {
+  try { res.json(await r.getLetterhead(req.dbUserId!)); } catch (err) { fail(res, err); }
+});
+
+router.put('/letterhead', async (req, res) => {
+  const parsed = z.object({
+    name: z.string().min(1),
+    address: z.string().nullable().optional(),
+    phone: z.string().nullable().optional(),
+    email: z.string().nullable().optional(),
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'The letterhead needs a name.' });
+  try { res.json(await r.upsertLetterhead(req.dbUserId!, parsed.data)); } catch (err) { fail(res, err); }
+});
+
 router.get('/invoices/:id', async (req, res) => {
   try { res.json(await r.getInvoice(req.params.id, req.dbUserId!)); } catch (err) { fail(res, err); }
 });

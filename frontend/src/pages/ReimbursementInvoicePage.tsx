@@ -72,6 +72,18 @@ export default function ReimbursementInvoicePage() {
       </div>
 
       <div className="inv mx-auto px-8 py-8" style={{ maxWidth: 820 }}>
+        {inv.letterhead?.name && (
+          <div style={{ borderBottom: '2px solid #111', paddingBottom: 10, marginBottom: 18, display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
+            <div>
+              <p style={{ fontSize: 22, fontWeight: 700, letterSpacing: 0.3, fontFamily: 'Georgia, "Times New Roman", serif' }}>{inv.letterhead.name}</p>
+              {inv.letterhead.address && <p style={{ fontSize: 12, color: '#444' }}>{inv.letterhead.address}</p>}
+            </div>
+            <div style={{ textAlign: 'right', fontSize: 12, color: '#444' }}>
+              {inv.letterhead.phone && <p>{inv.letterhead.phone}</p>}
+              {inv.letterhead.email && <p>{inv.letterhead.email}</p>}
+            </div>
+          </div>
+        )}
         <div className="flex items-start justify-between mb-6">
           <div>
             <h1 style={{ fontSize: 20, fontWeight: 700 }}>Utility Reimbursement</h1>
@@ -145,6 +157,11 @@ export default function ReimbursementInvoicePage() {
           </tbody>
         </table>
 
+        {inv.letterhead?.name && (
+          <p style={{ marginTop: 18, fontSize: 12, color: '#333' }}>
+            Please make payments payable to <strong>{inv.letterhead.name}</strong>{inv.letterhead.address ? ` · ${inv.letterhead.address}` : ''}.
+          </p>
+        )}
         {inv.notes && <p style={{ marginTop: 16, fontSize: 12, color: '#555' }}>{inv.notes}</p>}
       </div>
     </div>

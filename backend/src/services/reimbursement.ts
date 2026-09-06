@@ -248,7 +248,8 @@ export async function getInvoice(invoiceId: string, userId: string) {
     },
   });
   if (!invoice) throw new ReimbursementError('Invoice not found', 404);
-  return invoice;
+  const letterhead = await db.paymentRecipient.findUnique({ where: { userId } });
+  return { ...invoice, letterhead };
 }
 
 /**
@@ -294,5 +295,25 @@ export async function deleteInvoice(invoiceId: string, userId: string) {
       await tx.utilityReimbursement.update({ where: { id: invoice.reimbursementId }, data: { creditBalance: { increment: num(invoice.creditApplied) } } });
     }
     await tx.reimbursementInvoice.delete({ where: { id: invoiceId } });
+  });
+}
+
+// ── Letterhead ──────────────────────────────────────────────────────────────
+
+/**
+ * Who the invoice is from and who the tenant pays. The owner's entity — a
+ * trust, an LLC, a name — with an address and contact line. Stored once and
+ * printed on every invoice, so the tenant sees the same payee every time.
+ */
+export async function getLetterhead(userId: string) {
+  return db.paymentRecipient.findUnique({ where: { userId } });
+}
+
+export async function upsertLetterhead(userId: string, input: { name: string; address?: string | null; phone?: string | null; email?: string | null }) {
+  if (!input.name.trim()) throw new ReimbursementError('The letterhead needs a name.');
+  return db.paymentRecipient.upsert({
+    where: { userId },
+    create: { userId, name: input.name.trim(), address: input.address ?? null, phone: input.phone ?? null, email: input.email ?? null },
+    update: { name: input.name.trim(), address: input.address ?? null, phone: input.phone ?? null, email: input.email ?? null },
   });
 }
