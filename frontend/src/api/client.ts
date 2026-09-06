@@ -367,6 +367,25 @@ export const getPropertyPnL = (id: string, params?: { start?: string; end?: stri
 export const getMonthlyPnL = (params?: { year?: number; propertyId?: string }) =>
   api.get<MonthlyPnL[]>('/pnl/monthly', { params }).then(r => r.data);
 
+// Cash flow: rent received against loans, and against loans + utilities
+export interface CashflowMonth {
+  month: string; rent: number; rentExpected: number; loans: number; loansScheduled: boolean; utilities: number;
+  netAfterLoans: number; netAfterAll: number;
+  detail: {
+    rent: { tenant: string; unit: string; amount: number; paidDate: string }[];
+    loans: { lender: string; amount: number; scheduled: boolean; date: string | null }[];
+    utilities: { provider: string; amount: number; period: string | null }[];
+  };
+}
+export interface CashflowTotals { rent: number; rentExpected: number; loans: number; utilities: number; netAfterLoans: number; netAfterAll: number }
+export interface CashflowProperty { propertyId: string; propertyName: string; months: CashflowMonth[]; totals: CashflowTotals }
+export interface CashflowReport {
+  year: number; months: string[]; byProperty: CashflowProperty[];
+  totals: CashflowTotals & { byMonth: { month: string; rent: number; loans: number; utilities: number; netAfterLoans: number; netAfterAll: number }[] };
+}
+export const getCashflow = (params?: { year?: number; propertyId?: string }) =>
+  api.get<CashflowReport>('/cashflow', { params }).then(r => r.data);
+
 // Utility accounts
 export const getUtilities = (propertyId?: string) =>
   api.get<UtilityAccount[]>('/utilities', { params: { propertyId } }).then(r => r.data);

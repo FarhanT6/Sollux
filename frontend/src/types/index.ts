@@ -706,6 +706,8 @@ export interface PropertyPnL {
   rentalIncome: number;
   /** Rent payments actually recorded in the period. */
   rentCollected?: number;
+  rentRollMonthly?: number;
+  rentMonths?: number;
   operatingExpenses: number;
   insuranceExpense: number;
   propertyTaxExpense: number;
