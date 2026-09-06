@@ -219,7 +219,7 @@ export default function PnLPage({ embedded }: { embedded?: boolean } = {}) {
           {totals && (
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
               {[
-                { label: 'Rental income', value: totals.rentalIncome, color: '#10b981' },
+                { label: 'Rental income', value: totals.rentalIncome, color: '#10b981', sub: `Scheduled from leases · ${money(totals.rentCollected ?? 0)} collected` },
                 { label: 'Operating expenses', value: totals.operatingExpenses + totals.insuranceExpense + totals.propertyTaxExpense, color: '#ef4444' },
                 { label: 'NOI', value: totals.noi, color: '#F5A623' },
                 { label: 'Cash flow', value: totals.cashFlow, color: totals.cashFlow >= 0 ? '#10b981' : '#ef4444' },
@@ -227,6 +227,7 @@ export default function PnLPage({ embedded }: { embedded?: boolean } = {}) {
                 <div key={stat.label} className="rounded-xl p-4" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
                   <p className="text-xs text-gray-400 mb-1">{stat.label}</p>
                   <p className="text-xl font-semibold" style={{ color: stat.color }}>{money(stat.value)}</p>
+                  {'sub' in stat && stat.sub && <p className="text-[11px] text-gray-500 mt-1">{stat.sub}</p>}
                 </div>
               ))}
             </div>
