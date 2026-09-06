@@ -1,6 +1,7 @@
 import { useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/ui';
 import PnLPage from './PnLPage';
+import CashflowPage from './CashflowPage';
 import BudgetPage from './BudgetPage';
 import LoansPage from './LoansPage';
 import ExpensesPage from './ExpensesPage';
@@ -12,10 +13,11 @@ import FeesSummaryPage from './FeesSummaryPage';
 import PaymentsPage from './PaymentsPage';
 import DocumentsPage from './DocumentsPage';
 
-type Tab = 'pnl' | 'budget' | 'loans' | 'expenses' | 'personal' | 'reconciliation' | 'incoming' | 'outgoing' | 'fees' | 'utility-payments' | 'bills';
+type Tab = 'pnl' | 'cashflow' | 'budget' | 'loans' | 'expenses' | 'personal' | 'reconciliation' | 'incoming' | 'outgoing' | 'fees' | 'utility-payments' | 'bills';
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'pnl',            label: 'P&L'            },
+  { key: 'cashflow',       label: 'Cash Flow'      },
   { key: 'budget',         label: 'Budget'         },
   { key: 'loans',          label: 'Loans'          },
   { key: 'expenses',       label: 'Expenses'       },
@@ -38,6 +40,7 @@ export default function FinancesPage() {
 
   const subtitles: Record<Tab, string> = {
     pnl:            'Net operating income and cash flow by property',
+    cashflow:       'Rent received against the loans, and against the loans and utilities — per property, per month',
     budget:         'Monthly cash position, rent collection, and delinquency',
     loans:          'Mortgages, HELOCs, and installment plans',
     expenses:       'Operating and capital expenditures across all properties',
@@ -72,6 +75,7 @@ export default function FinancesPage() {
 
       <div className="px-6 py-5">
         {tab === 'pnl'      && <PnLPage embedded />}
+        {tab === 'cashflow' && <CashflowPage embedded />}
         {tab === 'budget'   && <BudgetPage embedded />}
         {tab === 'loans'    && <LoansPage embedded />}
         {tab === 'expenses' && <ExpensesPage embedded />}

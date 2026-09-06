@@ -10,6 +10,10 @@ export type PropertyPnL = {
   rentalIncome: number;
   /** Rent payments actually recorded in the period. */
   rentCollected: number;
+  /** The rent roll for the last month in the range — what the portfolio page calls monthly rent. */
+  rentRollMonthly: number;
+  /** How many months of rent the rentalIncome figure covers. */
+  rentMonths: number;
   operatingExpenses: number;
   insuranceExpense: number;
   propertyTaxExpense: number;
@@ -65,6 +69,15 @@ function monthsOverlap(range: DateRange, from?: Date | null, to?: Date | null): 
  * counted, exactly as the rent roll counts it.
  */
 type LeaseLike = { unitId: string; startDate: Date; endDate: Date | null; rentAmount: Prisma.Decimal | number; status: string };
+
+function monthsInRange(range: DateRange): number {
+  const now = new Date();
+  const lastMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  const stop = range.end < lastMonth ? range.end : lastMonth;
+  let n = 0;
+  for (let m = new Date(Date.UTC(range.start.getUTCFullYear(), range.start.getUTCMonth(), 1)); m < stop; m = new Date(Date.UTC(m.getUTCFullYear(), m.getUTCMonth() + 1, 1))) n++;
+  return n;
+}
 
 function scheduledRent(leases: LeaseLike[], range: DateRange): number {
   const now = new Date();
@@ -142,6 +155,10 @@ export async function getPropertyPnL(propertyId: string, range: DateRange, userI
 
   const rentalIncome = scheduledRent(leases, range);
   const rentCollected = rentPayments.reduce((s, p) => s + toNum(p.amount), 0);
+  const rentMonths = monthsInRange(range);
+  const rollMonthStart = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1));
+  const rollMonth = { start: rollMonthStart, end: new Date(Date.UTC(rollMonthStart.getUTCFullYear(), rollMonthStart.getUTCMonth() + 1, 1)) };
+  const rentRollMonthly = scheduledRent(leases, rollMonth);
 
   // Insurance bills are utility statements too, but they belong on the
   // insurance line, not with water and power.
@@ -190,6 +207,8 @@ export async function getPropertyPnL(propertyId: string, range: DateRange, userI
     propertyName: property.nickname || property.address,
     rentalIncome,
     rentCollected,
+    rentRollMonthly,
+    rentMonths,
     operatingExpenses,
     insuranceExpense,
     propertyTaxExpense,
@@ -296,12 +315,14 @@ export async function getPortfolioPnL(range: DateRange, userId: string) {
   const totals = byProperty.reduce((acc, p) => ({
     rentalIncome: acc.rentalIncome + p.rentalIncome,
     rentCollected: acc.rentCollected + p.rentCollected,
+    rentRollMonthly: acc.rentRollMonthly + p.rentRollMonthly,
+    rentMonths: Math.max(acc.rentMonths, p.rentMonths),
     operatingExpenses: acc.operatingExpenses + p.operatingExpenses,
     insuranceExpense: acc.insuranceExpense + p.insuranceExpense,
     propertyTaxExpense: acc.propertyTaxExpense + p.propertyTaxExpense,
     noi: acc.noi + p.noi,
     debtService: acc.debtService + p.debtService,
     cashFlow: acc.cashFlow + p.cashFlow,
-  }), { rentalIncome: 0, rentCollected: 0, operatingExpenses: 0, insuranceExpense: 0, propertyTaxExpense: 0, noi: 0, debtService: 0, cashFlow: 0 });
+  }), { rentalIncome: 0, rentCollected: 0, rentRollMonthly: 0, rentMonths: 0, operatingExpenses: 0, insuranceExpense: 0, propertyTaxExpense: 0, noi: 0, debtService: 0, cashFlow: 0 });
   return { byProperty, totals };
 }
