@@ -732,7 +732,7 @@ export interface ReimbursementInvoiceSummary {
   _count: { lines: number };
 }
 export interface ReimbursementLine {
-  id?: string; kind: 'STATEMENT' | 'FLAT'; category: string; label: string; statementId: string | null;
+  id?: string; key?: string; kind: 'STATEMENT' | 'FLAT'; category: string; label: string; statementId: string | null;
   periodStart: string | null; periodEnd: string | null; baseAmount: number | string; sharePercent: number | null;
   amount: number | string; sortKey: string;
 }
@@ -744,10 +744,10 @@ export const getReimbursement = (leaseId: string) =>
   api.get<{ lease: any; config: ReimbursementConfig | null; invoices: ReimbursementInvoiceSummary[]; accounts: { id: string; providerName: string; serviceLabel: string | null; category: string; unitId: string | null }[] }>(`/reimbursements/lease/${leaseId}`).then(r => r.data);
 export const saveReimbursement = (leaseId: string, body: { enabled: boolean; rules: ReimbursementRule[]; accountIds?: string[]; notes?: string | null }) =>
   api.put<ReimbursementConfig>(`/reimbursements/lease/${leaseId}`, body).then(r => r.data);
-export const previewReimbursementInvoice = (leaseId: string, from: string, to: string) =>
-  api.post<ReimbursementDraft>(`/reimbursements/lease/${leaseId}/preview`, { from, to }).then(r => r.data);
-export const createReimbursementInvoice = (leaseId: string, from: string, to: string) =>
-  api.post<{ id: string }>(`/reimbursements/lease/${leaseId}/invoices`, { from, to }).then(r => r.data);
+export const previewReimbursementInvoice = (leaseId: string, from: string, to: string, exclude: string[] = []) =>
+  api.post<ReimbursementDraft>(`/reimbursements/lease/${leaseId}/preview`, { from, to, exclude }).then(r => r.data);
+export const createReimbursementInvoice = (leaseId: string, from: string, to: string, exclude: string[] = []) =>
+  api.post<{ id: string }>(`/reimbursements/lease/${leaseId}/invoices`, { from, to, exclude }).then(r => r.data);
 export const getReimbursementInvoice = (id: string) =>
   api.get<any>(`/reimbursements/invoices/${id}`).then(r => r.data);
 export const recordReimbursementPayment = (id: string, amount: number, paidAt?: string) =>

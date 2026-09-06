@@ -62,6 +62,9 @@ export function normaliseLabel(label: string): string {
     .replace(/@\s*\$?[\d.]+(?:\/\s*\w+)?/g, '')                                              // a bare rate
     .replace(/\b\d{1,2}\/\d{1,2}(\/\d{2,4})?\s*[-–]\s*\d{1,2}\/\d{1,2}(\/\d{2,4})?\b/g, '') // 08/01-08/31
     .replace(/\b\d{1,2}\/\d{1,2}(\/\d{2,4})?\b/g, '')                                       // a lone date
+    // A spelled-out date range: "(Mar 26 Apr 9)", "(Apr 1 - Apr 30)" — a rate
+    // change mid-cycle splits one charge into two dated halves.
+    .replace(/\(\s*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:,?\s*\d{4})?\s*(?:[-–]|to)?\s*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:,?\s*\d{4})?\s*\)/gi, '')
     .replace(/\(\s*\)/g, '');                                                                   // an emptied "()"
 
   // A contamination charge is the same event whichever container it was
@@ -115,6 +118,68 @@ export function normaliseLabel(label: string): string {
   // title-cased; mixed-case labels are left as the bill wrote them.
   if (out === out.toUpperCase() || out === out.toLowerCase()) {
     out = out.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+  }
+  return out;
+}
+
+/**
+ * SDG&E prints one bill three ways at once: a summary box with three
+ * sections — Electric Delivery, Electric Generation (the CCA's charge), Gas
+ * Service — and, behind each, a detail block of a dozen sub-lines
+ * (Transmission, Distribution, Public Purpose Programs, Nuclear
+ * Decommissioning, Wildfire Fund Charge, PCIA, the generation credit, …),
+ * sometimes split again at a mid-cycle rate change. Extraction picks a
+ * different mix of those levels on every bill, so one account showed 55
+ * distinct charges, with "Electricity Delivery", "Electric Delivery",
+ * "Electric Delivery (Distribution)" and "Distribution (Electric)" all
+ * competing to be the same money — and where a bill listed both a section
+ * and its sub-lines, that money was counted twice.
+ *
+ * This reduces every bill to the summary box. Each line is assigned to a
+ * section; if the bill printed the section's own total, the sub-lines are
+ * folded into it (they are already inside it), and if it printed only the
+ * sub-lines, they are summed to become it. Program discounts and the climate
+ * credit are kept as their own lines because they are what a person looks
+ * for; penalties stay separate as always.
+ */
+const SDGE_PROVIDER = /sdg\s*&?\s*e|san\s+diego\s+gas/i;
+const SDGE_SECTION = { delivery: 'Electric Delivery', generation: 'Electric Generation', gas: 'Gas Service' } as const;
+type SdgeSection = keyof typeof SDGE_SECTION;
+
+function sdgeClassify(label: string): { section: SdgeSection; isParent: boolean } | null {
+  const l = label.toLowerCase().replace(/\s+/g, ' ').trim();
+  if (FEE_LIKE.test(l)) return null;
+  if (/climate\s+credit|^care\s+discount|^fera\s+discount|^(?:care|fera)$/.test(l)) return null;
+
+  if (/^electric(?:ity)?\s+delivery(?:\s+charges?)?$/.test(l)) return { section: 'delivery', isParent: true };
+  if (/^(?:cca\s+)?electric(?:ity)?\s+generation(?:\s+charges?)?$/.test(l)) return { section: 'generation', isParent: true };
+  if (/^gas\s+service(?:\s+charges?)?$/.test(l)) return { section: 'gas', isParent: true };
+
+  if (/\(gas\)|^gas\b|\bgas\s+(?:energy|commodity|delivery|transmission|procurement)/.test(l)) return { section: 'gas', isParent: false };
+  if (/^cca\b|community\s+power|clean\s+energy\s+alliance/.test(l)) return { section: 'generation', isParent: false };
+  if (/\bgeneration\b/.test(l) && !/local\s+generation|generation\s+credit|generation\s+\(electric\)/.test(l)) return { section: 'generation', isParent: false };
+  return { section: 'delivery', isParent: false };
+}
+
+export function consolidateSdgeBreakdown(breakdown: Record<string, number>): Record<string, number> {
+  const out: Record<string, number> = {};
+  const parent: Partial<Record<SdgeSection, number>> = {};
+  const children: Partial<Record<SdgeSection, number>> = {};
+
+  for (const [rawLabel, value] of Object.entries(breakdown)) {
+    const label = normaliseLabel(rawLabel);
+    if (!label) continue;
+    const amount = num(value);
+    const c = sdgeClassify(label);
+    if (!c) { out[label] = (out[label] ?? 0) + amount; continue; }
+    if (c.isParent) parent[c.section] = (parent[c.section] ?? 0) + amount;
+    else children[c.section] = (children[c.section] ?? 0) + amount;
+  }
+
+  for (const section of Object.keys(SDGE_SECTION) as SdgeSection[]) {
+    const total = parent[section] ?? children[section];
+    if (total == null) continue;
+    out[SDGE_SECTION[section]] = total;
   }
   return out;
 }
@@ -186,7 +251,8 @@ export async function getChargeAnalytics(
     monthsSeen.add(month);
 
     const raw = s.rawDataJson as Record<string, unknown> | null;
-    const breakdown = (raw?.chargeBreakdown ?? null) as Record<string, number> | null;
+    let breakdown = (raw?.chargeBreakdown ?? null) as Record<string, number> | null;
+    if (breakdown && SDGE_PROVIDER.test(account.providerName)) breakdown = consolidateSdgeBreakdown(breakdown);
 
     let itemised = 0;
     if (breakdown) {
