@@ -702,7 +702,10 @@ export const LEGAL_DOC_CATEGORIES = ['LEGAL', 'CONTRACT', 'COURT_FILING', 'CORRE
 export interface PropertyPnL {
   propertyId: string;
   propertyName: string;
+  /** Scheduled rent from the leases (the rent roll), pro-rated by months. */
   rentalIncome: number;
+  /** Rent payments actually recorded in the period. */
+  rentCollected?: number;
   operatingExpenses: number;
   insuranceExpense: number;
   propertyTaxExpense: number;
@@ -715,6 +718,7 @@ export interface MonthlyPnL {
   month: string;
   label: string;
   rentalIncome: number;
+  rentCollected?: number;
   operatingExpenses: number;
   insuranceExpense: number;
   propertyTaxExpense: number;
@@ -792,6 +796,8 @@ export interface Statement {
 export interface StatementSummaryRow {
   id: string;
   statementDate: string;
+  billingPeriodStart?: string | null;
+  billingPeriodEnd?: string | null;
   dueDate: string | null;
   amountDue: number | null;
   amountPaid: number | null;

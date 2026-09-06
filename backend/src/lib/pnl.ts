@@ -6,7 +6,10 @@ export type DateRange = { start: Date; end: Date };
 export type PropertyPnL = {
   propertyId: string;
   propertyName: string;
+  /** Scheduled rent: the rent roll, pro-rated for the months each lease ran. */
   rentalIncome: number;
+  /** Rent payments actually recorded in the period. */
+  rentCollected: number;
   operatingExpenses: number;
   insuranceExpense: number;
   propertyTaxExpense: number;
@@ -19,6 +22,7 @@ export type MonthlyPnL = {
   month: string;
   label: string;
   rentalIncome: number;
+  rentCollected: number;
   operatingExpenses: number;
   insuranceExpense: number;
   propertyTaxExpense: number;
@@ -44,6 +48,28 @@ function monthsOverlap(range: DateRange, from?: Date | null, to?: Date | null): 
 
 
 /**
+ * Income is the rent roll, not the payment log. A lease is an obligation to
+ * pay a known rent each month; the P&L reports that obligation for the months
+ * the lease ran, the same figure the portfolio page calls monthly rent. What
+ * was actually collected is reported beside it — the gap between the two is
+ * arrears, and belongs in the open rather than silently shrinking income
+ * whenever a payment goes unlogged.
+ */
+type LeaseLike = { startDate: Date; endDate: Date | null; rentAmount: Prisma.Decimal | number; status: string };
+
+function scheduledRent(leases: LeaseLike[], range: DateRange): number {
+  return leases.reduce((s, l) => {
+    if (l.status === 'PENDING') return s;
+    // A lease that has ended without an end date recorded has nothing to say
+    // about when; only an active lease may run open-ended.
+    const end = l.endDate ?? (l.status === 'ACTIVE' ? null : l.startDate);
+    return s + toNum(l.rentAmount) * monthsOverlap(range, l.startDate, end);
+  }, 0);
+}
+
+const leaseSelect = { startDate: true, endDate: true, rentAmount: true, status: true } as const;
+
+/**
  * Insurance is recorded twice by design: as a UtilityAccount, which carries the
  * bills actually received, and as an InsurancePolicy, which carries coverage
  * and the agreed premium. Both are wanted — one is what happened, the other is
@@ -63,7 +89,11 @@ function isCoveredByStatements(policy: { utilityAccountId?: string | null }): bo
 export async function getPropertyPnL(propertyId: string, range: DateRange, userId: string): Promise<PropertyPnL> {
   const property = await db.property.findFirstOrThrow({ where: { id: propertyId, userId } });
 
-  const [rentPayments, expenses, policies, taxAssessments, loans, utilityStatements] = await Promise.all([
+  const [leases, rentPayments, expenses, policies, taxAssessments, loans, utilityStatements] = await Promise.all([
+    db.lease.findMany({
+      where: { unit: { propertyId }, startDate: { lt: range.end }, OR: [{ endDate: null }, { endDate: { gt: range.start } }] },
+      select: leaseSelect,
+    }),
     db.rentPayment.findMany({
       where: { paidDate: { gte: range.start, lt: range.end }, lease: { unit: { propertyId } } },
     }),
@@ -88,7 +118,8 @@ export async function getPropertyPnL(propertyId: string, range: DateRange, userI
     }),
   ]);
 
-  const rentalIncome = rentPayments.reduce((s, p) => s + toNum(p.amount), 0);
+  const rentalIncome = scheduledRent(leases, range);
+  const rentCollected = rentPayments.reduce((s, p) => s + toNum(p.amount), 0);
 
   // Insurance bills are utility statements too, but they belong on the
   // insurance line, not with water and power.
@@ -136,6 +167,7 @@ export async function getPropertyPnL(propertyId: string, range: DateRange, userI
     propertyId,
     propertyName: property.nickname || property.address,
     rentalIncome,
+    rentCollected,
     operatingExpenses,
     insuranceExpense,
     propertyTaxExpense,
@@ -159,7 +191,12 @@ export async function getMonthlyPnL(year: number, userId: string, propertyId?: s
 
   const utilityAccountFilter = propertyId ? { propertyId } : { property: { userId } };
 
-  const [rentPayments, expenses, policies, taxAssessments, loanPayments, utilityStatements] = await Promise.all([
+  const leaseWhere = propertyId ? { unit: { propertyId } } : { unit: { property: { userId } } };
+  const [leases, rentPayments, expenses, policies, taxAssessments, loanPayments, utilityStatements] = await Promise.all([
+    db.lease.findMany({
+      where: { ...leaseWhere, startDate: { lt: yearEnd }, OR: [{ endDate: null }, { endDate: { gt: yearStart } }] },
+      select: leaseSelect,
+    }),
     db.rentPayment.findMany({ where: { paidDate: { gte: yearStart, lt: yearEnd }, ...leaseFilter } }),
     db.expense.findMany({ where: { date: { gte: yearStart, lt: yearEnd }, isCapEx: false, isPersonal: false, ...propertyFilter } }),
     db.insurancePolicy.findMany({ where: { isPersonal: false, isActive: true, ...propertyFilter } }),
@@ -184,7 +221,8 @@ export async function getMonthlyPnL(year: number, userId: string, propertyId?: s
     const end = new Date(Date.UTC(year, i + 1, 1));
     const range: DateRange = { start, end };
 
-    const rentalIncome = rentPayments.filter(p => p.paidDate >= start && p.paidDate < end).reduce((s, p) => s + toNum(p.amount), 0);
+    const rentalIncome = scheduledRent(leases, range);
+    const rentCollected = rentPayments.filter(p => p.paidDate >= start && p.paidDate < end).reduce((s, p) => s + toNum(p.amount), 0);
     const monthExpenses = expenses.filter(e => e.date >= start && e.date < end);
     const monthUtilities = utilityStatements.filter(st => {
       const d = st.dueDate ?? st.statementDate;
@@ -219,6 +257,7 @@ export async function getMonthlyPnL(year: number, userId: string, propertyId?: s
       month: `${year}-${String(i + 1).padStart(2, '0')}`,
       label: MONTH_LABELS[i],
       rentalIncome,
+      rentCollected,
       operatingExpenses,
       insuranceExpense,
       propertyTaxExpense,
@@ -234,12 +273,13 @@ export async function getPortfolioPnL(range: DateRange, userId: string) {
   const byProperty = await Promise.all(properties.map(p => getPropertyPnL(p.id, range, userId)));
   const totals = byProperty.reduce((acc, p) => ({
     rentalIncome: acc.rentalIncome + p.rentalIncome,
+    rentCollected: acc.rentCollected + p.rentCollected,
     operatingExpenses: acc.operatingExpenses + p.operatingExpenses,
     insuranceExpense: acc.insuranceExpense + p.insuranceExpense,
     propertyTaxExpense: acc.propertyTaxExpense + p.propertyTaxExpense,
     noi: acc.noi + p.noi,
     debtService: acc.debtService + p.debtService,
     cashFlow: acc.cashFlow + p.cashFlow,
-  }), { rentalIncome: 0, operatingExpenses: 0, insuranceExpense: 0, propertyTaxExpense: 0, noi: 0, debtService: 0, cashFlow: 0 });
+  }), { rentalIncome: 0, rentCollected: 0, operatingExpenses: 0, insuranceExpense: 0, propertyTaxExpense: 0, noi: 0, debtService: 0, cashFlow: 0 });
   return { byProperty, totals };
 }

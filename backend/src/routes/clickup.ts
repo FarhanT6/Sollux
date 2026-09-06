@@ -50,9 +50,15 @@ router.post('/connect', attachDbUser, async (req, res) => {
   const parsed = z.object({ token: z.string().min(10) }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Paste your ClickUp personal API token.' });
   try {
-    const c = await cu.connect(req.dbUserId!, parsed.data.token.trim());
-    const teams = await cu.listTeams(parsed.data.token.trim());
-    res.json({ connected: true, user: c.clickupUserName, teams });
+    const token = parsed.data.token.trim();
+    const c = await cu.connect(req.dbUserId!, token);
+    // The token verified and is saved. Listing workspaces is the next step,
+    // not a condition of connecting — if it fails the card still shows
+    // Connected and the folder picker can retry it.
+    let teams: { id: string; name: string }[] = [];
+    let warning: string | undefined;
+    try { teams = await cu.listTeams(token); } catch (e) { warning = e instanceof Error ? e.message : 'Could not list workspaces.'; }
+    res.json({ connected: true, user: c.clickupUserName, teams, warning });
   } catch (err) { fail(res, err); }
 });
 

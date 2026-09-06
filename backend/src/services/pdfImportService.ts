@@ -1274,6 +1274,55 @@ export function repairMisreadPeriodYear(ex: ExtractedBillData): void {
  * that exists only as a breakdown line is invisible to the split. The bill
  * has already said which line it is; this just reads it.
  */
+/**
+ * A late fee is a small number printed next to a big one. Waste Management
+ * writes "a late fee will be assessed on balances unpaid after 12/05 …
+ * Total Due $870.53", and the figure nearest the words "late fee" is the
+ * bill, not the fee — so an account's fee history showed $870.53, $487.28
+ * and $367.75 in months where the real fee was a few dollars or nothing.
+ *
+ * The bill's own itemisation is the authority when it has one: a line the
+ * bill itself calls a late fee or penalty is the fee. Failing that, a fee
+ * that matches the bill's total, its current charges, its carried balance
+ * or its overall balance is that figure misread, and one larger than the
+ * charges it was supposedly added to is not a fee either.
+ */
+/**
+ * This period's charges cannot exceed what the bill asks for. Regex reads
+ * "current charges" off whatever number sits nearest the words — on a
+ * Fallbrook water bill that was 1,204.31 against a 72.65 bill, and the fees
+ * summary then reported a month of water at sixteen times the bill. When
+ * the figure is larger than the amount due plus anything carried in, it is
+ * not the charges; the amount due less any fee is the honest fallback.
+ */
+export function sanitiseCurrentCharges(ex: ExtractedBillData): void {
+  if (ex.currentCharges == null || ex.amountDue == null) return;
+  if (ex.currentCharges < 0 || ex.amountDue < 0) return;   // credit memos keep their signs
+  const ceiling = ex.amountDue + Math.max(ex.previousBalance ?? 0, 0) + 0.01;
+  if (ex.currentCharges > ceiling) {
+    ex.currentCharges = Number(Math.max(ex.amountDue - (ex.lateFee ?? 0), 0).toFixed(2));
+  }
+}
+
+export function sanitiseLateFee(ex: ExtractedBillData): void {
+  const FEE_LINE = /late\s*(?:fee|charge|payment\s*(?:fee|charge|penalty))|penalt|overdue\s*charge|nsf|returned\s*(?:check|payment)|finance\s*charge|interest\s*charge/i;
+  if (ex.chargeBreakdown) {
+    let fromLines = 0, seen = false;
+    for (const [label, value] of Object.entries(ex.chargeBreakdown)) {
+      if (FEE_LINE.test(label)) { fromLines += Number(value) || 0; seen = true; }
+    }
+    if (seen) { ex.lateFee = fromLines > 0 ? Number(fromLines.toFixed(2)) : null; return; }
+  }
+  if (ex.lateFee == null) return;
+  const fee = Math.abs(ex.lateFee);
+  if (fee === 0) { ex.lateFee = null; return; }
+  const same = (v: number | null | undefined) => v != null && Math.abs(Math.abs(v) - fee) < 0.01;
+  const grand = ex.amountDue != null && ex.previousBalance != null ? ex.amountDue + ex.previousBalance : null;
+  if (same(ex.amountDue) || same(ex.currentCharges) || same(ex.previousBalance) || same(grand)) { ex.lateFee = null; return; }
+  const charges = ex.currentCharges ?? ex.amountDue;
+  if (charges != null && charges > 0 && fee > charges) ex.lateFee = null;
+}
+
 export function derivePaymentPlanFromBreakdown(ex: ExtractedBillData): void {
   if (ex.paymentPlanAmount != null || !ex.chargeBreakdown) return;
   const PLAN_LINE = /payment\s*plan|installment|arrears\s*(?:payment|repayment)?|payment\s*arrangement|deferred\s*payment/i;
@@ -1450,6 +1499,8 @@ export async function parseBill(
       extracted.documentKind = 'bill';
     }
     repairMisreadPeriodYear(extracted);
+    sanitiseLateFee(extracted);
+    sanitiseCurrentCharges(extracted);
     derivePaymentPlanFromBreakdown(extracted);
     const match     = await matchToAccount(extracted, userId);
     return { filename, extracted, match, extractedBy, extractionNote };

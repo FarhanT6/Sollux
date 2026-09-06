@@ -701,7 +701,7 @@ export interface ClickUpTaskGroup { propertyId: string; propertyName: string; li
 
 export const getClickUpStatus = () => api.get<ClickUpStatus>('/clickup/status').then(r => r.data);
 export const connectClickUp = (token: string) =>
-  api.post<{ connected: boolean; user: string; teams: { id: string; name: string }[] }>('/clickup/connect', { token }).then(r => r.data);
+  api.post<{ connected: boolean; user: string; teams: { id: string; name: string }[]; warning?: string }>('/clickup/connect', { token }).then(r => r.data);
 export const disconnectClickUp = () => api.delete('/clickup/disconnect');
 export const getClickUpTeams = () => api.get<{ teams: { id: string; name: string }[] }>('/clickup/teams').then(r => r.data.teams);
 export const getClickUpSpaces = (teamId: string) => api.get<{ spaces: { id: string; name: string }[] }>('/clickup/spaces', { params: { teamId } }).then(r => r.data.spaces);
