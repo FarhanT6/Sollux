@@ -38,18 +38,18 @@ router.put('/lease/:leaseId', async (req, res) => {
   try { res.json(await r.upsertConfig(req.params.leaseId, req.dbUserId!, parsed.data)); } catch (err) { fail(res, err); }
 });
 
-const Range = z.object({ from: z.string().min(10), to: z.string().min(10) });
+const Range = z.object({ from: z.string().min(10), to: z.string().min(10), exclude: z.array(z.string()).optional() });
 
 router.post('/lease/:leaseId/preview', async (req, res) => {
   const parsed = Range.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Choose a date range.' });
-  try { res.json(await r.draftInvoice(req.params.leaseId, req.dbUserId!, parsed.data.from, parsed.data.to)); } catch (err) { fail(res, err); }
+  try { res.json(await r.draftInvoice(req.params.leaseId, req.dbUserId!, parsed.data.from, parsed.data.to, parsed.data.exclude ?? [])); } catch (err) { fail(res, err); }
 });
 
 router.post('/lease/:leaseId/invoices', async (req, res) => {
   const parsed = Range.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Choose a date range.' });
-  try { res.status(201).json(await r.createInvoice(req.params.leaseId, req.dbUserId!, parsed.data.from, parsed.data.to)); } catch (err) { fail(res, err); }
+  try { res.status(201).json(await r.createInvoice(req.params.leaseId, req.dbUserId!, parsed.data.from, parsed.data.to, parsed.data.exclude ?? [])); } catch (err) { fail(res, err); }
 });
 
 router.get('/letterhead', async (req, res) => {

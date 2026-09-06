@@ -41,6 +41,9 @@ export default function UtilityReimbursementPanel({ leaseId }: { leaseId: string
   // Generation
   const [range, setRange] = useState({ from: '', to: '' });
   const [draft, setDraft] = useState<ReimbursementDraft | null>(null);
+  // Lines struck out of the draft — already billed on a hand-made invoice,
+  // or settled some other way. Re-previewed without them so the totals are true.
+  const [excluded, setExcluded] = useState<string[]>([]);
 
   // Payment recording
   const [payingId, setPayingId] = useState<string | null>(null);
@@ -71,10 +74,10 @@ export default function UtilityReimbursementPanel({ leaseId }: { leaseId: string
     } finally { setBusy(null); }
   }
 
-  async function preview() {
+  async function preview(nextExcluded: string[] = excluded) {
     if (!range.from || !range.to) return;
-    setBusy('preview'); setError(null); setDraft(null);
-    try { setDraft(await previewReimbursementInvoice(leaseId, range.from, range.to)); }
+    setBusy('preview'); setError(null);
+    try { setDraft(await previewReimbursementInvoice(leaseId, range.from, range.to, nextExcluded)); }
     catch (err: any) { setError(err?.response?.data?.error ?? 'Could not build a preview.'); }
     finally { setBusy(null); }
   }
@@ -82,8 +85,8 @@ export default function UtilityReimbursementPanel({ leaseId }: { leaseId: string
   async function generate() {
     setBusy('generate'); setError(null);
     try {
-      const inv = await createReimbursementInvoice(leaseId, range.from, range.to);
-      setDraft(null);
+      const inv = await createReimbursementInvoice(leaseId, range.from, range.to, excluded);
+      setDraft(null); setExcluded([]);
       await load();
       window.open(`/reimbursements/${inv.id}`, '_blank');
     } catch (err: any) {
@@ -192,10 +195,10 @@ export default function UtilityReimbursementPanel({ leaseId }: { leaseId: string
         <div className="space-y-2">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs text-gray-400">Bill the tenant for</span>
-            <input type="date" className={sel} value={range.from} onChange={e => setRange(r => ({ ...r, from: e.target.value }))} />
+            <input type="date" className={sel} value={range.from} onChange={e => { setExcluded([]); setDraft(null); setRange(r => ({ ...r, from: e.target.value })); }} />
             <span className="text-xs text-gray-500">to</span>
-            <input type="date" className={sel} value={range.to} onChange={e => setRange(r => ({ ...r, to: e.target.value }))} />
-            <button onClick={preview} disabled={!range.from || !range.to || busy === 'preview'} className="btn text-xs disabled:opacity-50">{busy === 'preview' ? 'Building…' : 'Preview'}</button>
+            <input type="date" className={sel} value={range.to} onChange={e => { setExcluded([]); setDraft(null); setRange(r => ({ ...r, to: e.target.value })); }} />
+            <button onClick={() => preview()} disabled={!range.from || !range.to || busy === 'preview'} className="btn text-xs disabled:opacity-50">{busy === 'preview' ? 'Building…' : 'Preview'}</button>
           </div>
 
           {draft && (
@@ -204,10 +207,17 @@ export default function UtilityReimbursementPanel({ leaseId }: { leaseId: string
                 <p className="text-xs text-gray-500">Nothing to bill in that range.</p>
               ) : (
                 <table className="w-full text-xs">
-                  <thead><tr className="text-gray-500"><th className="text-left py-1">Utility</th><th className="text-left">Period</th><th className="text-right">Bill</th><th className="text-right">Share</th><th className="text-right">Tenant owes</th></tr></thead>
+                  <thead><tr className="text-gray-500"><th></th><th className="text-left py-1">Utility</th><th className="text-left">Period</th><th className="text-right">Bill</th><th className="text-right">Share</th><th className="text-right">Tenant owes</th></tr></thead>
                   <tbody>
                     {draft.lines.map((l, i) => (
                       <tr key={i} className="border-t border-white/5 text-gray-300">
+                        <td className="py-1 pr-2">
+                          <button
+                            title="Leave this line off — already billed or paid another way"
+                            onClick={() => { const next = [...excluded, l.key!]; setExcluded(next); preview(next); }}
+                            className="text-gray-600 hover:text-red-400"
+                          >✕</button>
+                        </td>
                         <td className="py-1">{l.label}</td>
                         <td className="text-gray-500">{l.periodStart && l.periodEnd ? `${fmtDate(l.periodStart, 'M/d/yy')} – ${fmtDate(l.periodEnd, 'M/d/yy')}` : '—'}</td>
                         <td className="text-right">{money(l.baseAmount)}</td>
@@ -223,6 +233,12 @@ export default function UtilityReimbursementPanel({ leaseId }: { leaseId: string
                 {draft.creditApplied > 0 && <p className="text-emerald-400">Credit applied <span className="ml-2">−{money(draft.creditApplied)}</span></p>}
                 <p className="text-gray-200 font-semibold">Total due <span className="text-white ml-2">{money(draft.total)}</span></p>
               </div>
+              {excluded.length > 0 && (
+                <p className="text-xs text-gray-500">
+                  {excluded.length} line{excluded.length === 1 ? '' : 's'} left off.{' '}
+                  <button onClick={() => { setExcluded([]); preview([]); }} className="text-amber-400 hover:text-amber-300">Restore all</button>
+                </p>
+              )}
               {draft.alreadyBilled.length > 0 && (
                 <p className="text-xs text-amber-400">
                   {draft.alreadyBilled.length} bill{draft.alreadyBilled.length === 1 ? ' is' : 's are'} already on an earlier invoice and won't be billed again: {draft.alreadyBilled.map(b => `${b.label} ${b.period}`).join('; ')}.

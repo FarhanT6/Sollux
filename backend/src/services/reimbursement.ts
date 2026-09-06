@@ -26,6 +26,8 @@ export interface Rule {
 }
 
 export interface LineDraft {
+  /** Stable identity for excluding a line: the statement id, or flat:<category>:<YYYY-MM>. */
+  key: string;
   kind: 'STATEMENT' | 'FLAT';
   category: string;
   label: string;
@@ -110,7 +112,7 @@ export async function upsertConfig(leaseId: string, userId: string, input: { ena
  * The invoice for a range, computed but not saved. Generation persists exactly
  * this, so what the owner previews is what the tenant gets.
  */
-export async function draftInvoice(leaseId: string, userId: string, fromISO: string, toISO: string): Promise<Draft> {
+export async function draftInvoice(leaseId: string, userId: string, fromISO: string, toISO: string, exclude: string[] = []): Promise<Draft> {
   const lease = await ownedLease(leaseId, userId);
   const config = lease.utilityReimbursement;
   if (!config || !config.enabled) throw new ReimbursementError('This lease has no utility reimbursement set up.');
@@ -167,6 +169,7 @@ export async function draftInvoice(leaseId: string, userId: string, fromISO: str
       const base = num(s.amountDue);
       const share = rule.mode === 'FULL' ? 100 : num(rule.value);
       lines.push({
+        key: s.id,
         kind: 'STATEMENT', category: acct.category, label, statementId: s.id,
         periodStart: s.billingPeriodStart?.toISOString() ?? null,
         periodEnd: s.billingPeriodEnd?.toISOString() ?? null,
@@ -184,6 +187,7 @@ export async function draftInvoice(leaseId: string, userId: string, fromISO: str
     while (cursor <= last) {
       const monthEnd = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 0));
       lines.push({
+        key: `flat:${rule.category}:${cursor.toISOString().slice(0, 7)}`,
         kind: 'FLAT', category: rule.category,
         label: `${label} (${cursor.toLocaleDateString('en-US', { month: 'long', timeZone: 'UTC' })})`,
         statementId: null, periodStart: cursor.toISOString(), periodEnd: monthEnd.toISOString(),
@@ -194,15 +198,21 @@ export async function draftInvoice(leaseId: string, userId: string, fromISO: str
     }
   }
 
-  lines.sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+  // Lines the owner has struck out — a flat charge already billed on an
+  // invoice made before Sollux, a bill settled some other way. The first
+  // Sollux invoice after a run of hand-made ones needs this, and so does
+  // any month with an "already paid" note.
+  const excluded = new Set(exclude);
+  const kept = lines.filter(l => !excluded.has(l.key)).sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+  lines.length = 0; lines.push(...kept);
   const subtotal = round2(lines.reduce((t, l) => t + l.amount, 0));
   const creditAvailable = num(config.creditBalance);
   const creditApplied = round2(Math.min(creditAvailable, Math.max(subtotal, 0)));
   return { from: fromISO, to: toISO, lines, subtotal, creditAvailable, creditApplied, total: round2(subtotal - creditApplied), alreadyBilled };
 }
 
-export async function createInvoice(leaseId: string, userId: string, fromISO: string, toISO: string) {
-  const draft = await draftInvoice(leaseId, userId, fromISO, toISO);
+export async function createInvoice(leaseId: string, userId: string, fromISO: string, toISO: string, exclude: string[] = []) {
+  const draft = await draftInvoice(leaseId, userId, fromISO, toISO, exclude);
   if (draft.lines.length === 0) throw new ReimbursementError('Nothing to bill in that range — no statements, and no flat charges.');
   const config = (await db.utilityReimbursement.findUnique({ where: { leaseId } }))!;
 
