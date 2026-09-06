@@ -951,6 +951,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   const [showPayForm, setShowPayForm] = useState<string | null>(null);
   const [payAmount, setPayAmount] = useState('');
   const [payDate, setPayDate]     = useState(() => new Date().toISOString().slice(0, 10));
+  const [payForMonth, setPayForMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [payMethod, setPayMethod] = useState('ZELLE');
   const [payNotes, setPayNotes]   = useState('');
   const [payBankAccountId, setPayBankAccountId] = useState('');
@@ -1428,10 +1429,9 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
     if (!payAmount || !payDate) return;
     setSaving(true);
     try {
-      const now = new Date();
       await createRentPayment({
         leaseId,
-        periodDate: new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1)).toISOString(),
+        periodDate: `${payForMonth}-01T00:00:00.000Z`,
         amount: parseFloat(payAmount),
         paidDate: payDate,
         method: payMethod,
@@ -1975,7 +1975,8 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                 {showPayForm === lease.id && (
                   <div className="px-4 py-3 flex gap-2 flex-wrap" style={{ background: 'rgba(255,255,255,0.03)', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                     <input type="number" placeholder="Amount" value={payAmount} onChange={e => setPayAmount(e.target.value)} className="input-dark text-xs w-28" />
-                    <input type="date"   value={payDate}   onChange={e => setPayDate(e.target.value)}   className="input-dark text-xs w-36" />
+                    <input type="month"  title="Month this payment applies to" value={payForMonth} onChange={e => setPayForMonth(e.target.value)} className="input-dark text-xs w-36" />
+                    <input type="date"   title="Date the money arrived" value={payDate}   onChange={e => setPayDate(e.target.value)}   className="input-dark text-xs w-36" />
                     <select value={payMethod} onChange={e => {
                       setPayMethod(e.target.value);
                       // Drop a stale account if the new method isn't one that

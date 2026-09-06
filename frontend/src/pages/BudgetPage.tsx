@@ -233,7 +233,7 @@ function OverviewTab({ budget, onChanged }: { budget: BudgetSummary; onChanged: 
       {/* Rent collection by property */}
       <Section title="Rent Collection" badge={`${fmt(rent.collected)} / ${fmt(rent.expected)}`}>
         <ProgressBar value={rent.collected} total={rent.expected} color="emerald" />
-        <RentCollectionTable rows={rent.rows} outstanding={rent.outstanding} expected={rent.expected} collected={rent.collected} onChanged={onChanged} />
+        <RentCollectionTable rows={rent.rows} outstanding={rent.outstanding} expected={rent.expected} collected={rent.collected} onChanged={onChanged} period={`${budget.year}-${String(budget.month).padStart(2, '0')}`} />
       </Section>
 
       {/* Mortgages */}
@@ -367,7 +367,9 @@ function OverviewTab({ budget, onChanged }: { budget: BudgetSummary; onChanged: 
 const RENT_STATUS_FILTERS = ['all', 'paid', 'partial', 'unpaid'] as const;
 type RentStatusFilter = typeof RENT_STATUS_FILTERS[number];
 
-function RentCollectionTable({ rows, outstanding, expected, collected, onChanged }: {
+function RentCollectionTable({ rows, outstanding, expected, collected, onChanged, period }: {
+  /** The month the table is showing, YYYY-MM — what a logged payment applies to by default. */
+  period: string;
   rows: import('../types').BudgetRentRow[];
   outstanding: number; expected: number; collected: number;
   onChanged: () => void;
@@ -490,6 +492,7 @@ function RentCollectionTable({ rows, outstanding, expected, collected, onChanged
       {logRent && (
         <LogRentPaymentModal
           row={logRent}
+          period={period}
           onClose={() => setLogRent(null)}
           onSaved={() => { setLogRent(null); onChanged(); }}
         />
@@ -879,10 +882,13 @@ function ScoreBar({ score }: { score: number }) {
 
 // ─── Modals ───────────────────────────────────────────────
 
-function LogRentPaymentModal({ row, onClose, onSaved }: {
-  row: import('../types').BudgetRentRow; onClose: () => void; onSaved: () => void;
+function LogRentPaymentModal({ row, period, onClose, onSaved }: {
+  row: import('../types').BudgetRentRow; period: string; onClose: () => void; onSaved: () => void;
 }) {
   const [amount, setAmount] = useState(String(row.remaining > 0 ? row.remaining : row.expected));
+  // The month the money is FOR, not the month it arrived: a payment logged
+  // while looking at August is August's rent, however late it came in.
+  const [forMonth, setForMonth] = useState(period);
   const [paidDate, setPaidDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [method, setMethod] = useState('ZELLE');
   const [notes, setNotes] = useState('');
@@ -892,10 +898,9 @@ function LogRentPaymentModal({ row, onClose, onSaved }: {
     if (!amount) return;
     setSaving(true);
     try {
-      const now = new Date();
       await createRentPayment({
         leaseId: row.leaseId,
-        periodDate: new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1)).toISOString(),
+        periodDate: `${forMonth}-01T00:00:00.000Z`,
         amount: parseFloat(amount),
         paidDate,
         method,
@@ -910,6 +915,8 @@ function LogRentPaymentModal({ row, onClose, onSaved }: {
       <p className="text-xs text-gray-500 mb-3">{row.unit} · {row.property}</p>
       <label className="field-label">Amount *</label>
       <input type="number" value={amount} onChange={e => setAmount(e.target.value)} className="field-input mb-3 w-full" />
+      <label className="field-label">Apply to month</label>
+      <input type="month" value={forMonth} onChange={e => setForMonth(e.target.value)} className="field-input mb-3 w-full" />
       <label className="field-label">Paid date</label>
       <input type="date" value={paidDate} onChange={e => setPaidDate(e.target.value)} className="field-input mb-3 w-full" />
       <label className="field-label">Method</label>
