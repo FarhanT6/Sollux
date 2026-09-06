@@ -115,6 +115,8 @@ router.get('/summary', async (req, res, next) => {
       return {
         id: s.id,
         statementDate: s.statementDate,
+        billingPeriodStart: s.billingPeriodStart,
+        billingPeriodEnd: s.billingPeriodEnd,
         dueDate: s.dueDate,
         amountDue,
         amountPaid: s.amountPaid != null ? Number(s.amountPaid) : null,

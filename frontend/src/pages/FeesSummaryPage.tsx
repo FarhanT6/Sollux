@@ -29,8 +29,23 @@ const BREAKDOWN_FIELDS: { key: Metric; label: string }[] = [
   { key: 'totalDueWithPastDue', label: 'Total Due w/ Past Due' },
 ];
 
+/**
+ * A bill belongs to the month its billing period ended, not the month it was
+ * issued — an SDG&E bill for July is issued in August, and filing it under
+ * August left July empty here while the property page had it in July. Only
+ * a bill that states no period falls back to its issue date. A UTC date-only
+ * value is read in UTC so a period ending 31 July does not slip into June.
+ */
+function billingMonthOf(r: { statementDate: string; billingPeriodEnd?: string | null }): string {
+  return r.billingPeriodEnd || r.statementDate;
+}
 function periodKey(dateStr: string, groupBy: GroupBy): string {
   const d = new Date(dateStr);
+  if (dateStr.length === 10 || /T00:00:00(?:\.000)?Z$/.test(dateStr)) {
+    if (groupBy === 'all') return 'all';
+    if (groupBy === 'year') return String(d.getUTCFullYear());
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+  }
   if (groupBy === 'all') return 'all';
   if (groupBy === 'year') return String(d.getFullYear());
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -74,7 +89,7 @@ export default function FeesSummaryPage({ embedded }: { embedded?: boolean } = {
 
   const grandTotal = useMemo(() => {
     const relevant = monthFilter
-      ? rows.filter(r => periodKey(r.statementDate, 'month') === monthFilter)
+      ? rows.filter(r => periodKey(billingMonthOf(r), 'month') === monthFilter)
       : rows;
     return relevant.reduce((s, r) => s + (r[metric] ?? 0), 0);
   }, [rows, metric, monthFilter]);
@@ -87,7 +102,7 @@ export default function FeesSummaryPage({ embedded }: { embedded?: boolean } = {
     for (const r of rows) {
       const v = r[metric];
       if (v == null || v === 0) continue;
-      const pk = periodKey(r.statementDate, effectiveGroupBy);
+      const pk = periodKey(billingMonthOf(r), effectiveGroupBy);
       if (monthFilter && pk !== monthFilter) continue;
       periodSet.add(pk);
 
@@ -253,6 +268,7 @@ export default function FeesSummaryPage({ embedded }: { embedded?: boolean } = {
             <table className="text-sm min-w-[560px]">
               <thead>
                 <tr className="text-left text-gray-500 text-xs">
+                  <th className="px-2 py-1.5">Billing period</th>
                   <th className="px-2 py-1.5">Statement date</th>
                   <th className="px-2 py-1.5">Due date</th>
                   {BREAKDOWN_FIELDS.map(f => <th key={f.key} className="px-2 py-1.5 text-right whitespace-nowrap">{f.label}</th>)}
@@ -261,6 +277,7 @@ export default function FeesSummaryPage({ embedded }: { embedded?: boolean } = {
               <tbody className="divide-y divide-white/5">
                 {drillDown.rows.map(r => (
                   <tr key={r.id}>
+                    <td className="px-2 py-1.5 text-gray-300 whitespace-nowrap">{r.billingPeriodStart && r.billingPeriodEnd ? `${dateStr(r.billingPeriodStart)} – ${dateStr(r.billingPeriodEnd)}` : '—'}</td>
                     <td className="px-2 py-1.5 text-gray-300 whitespace-nowrap">{dateStr(r.statementDate)}</td>
                     <td className="px-2 py-1.5 text-gray-300 whitespace-nowrap">{dateStr(r.dueDate)}</td>
                     {BREAKDOWN_FIELDS.map(f => (

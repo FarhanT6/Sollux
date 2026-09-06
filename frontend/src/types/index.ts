@@ -796,6 +796,8 @@ export interface Statement {
 export interface StatementSummaryRow {
   id: string;
   statementDate: string;
+  billingPeriodStart?: string | null;
+  billingPeriodEnd?: string | null;
   dueDate: string | null;
   amountDue: number | null;
   amountPaid: number | null;
