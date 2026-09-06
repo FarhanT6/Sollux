@@ -259,7 +259,19 @@ export async function getInvoice(invoiceId: string, userId: string) {
   });
   if (!invoice) throw new ReimbursementError('Invoice not found', 404);
   const letterhead = await db.paymentRecipient.findUnique({ where: { userId } });
-  return { ...invoice, letterhead };
+
+  // INV-2026-007: the owner's seventh invoice of the year, across every
+  // lease. Derived from creation order rather than stored, so it never needs
+  // renumbering and a deleted draft leaves no hole worth explaining.
+  const year = invoice.createdAt.getUTCFullYear();
+  const earlier = await db.reimbursementInvoice.count({
+    where: {
+      reimbursement: { lease: { unit: { property: { userId } } } },
+      createdAt: { gte: new Date(Date.UTC(year, 0, 1)), lt: invoice.createdAt },
+    },
+  });
+  const number = `INV-${year}-${String(earlier + 1).padStart(3, '0')}`;
+  return { ...invoice, letterhead, number };
 }
 
 /**
