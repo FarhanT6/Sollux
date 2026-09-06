@@ -21,6 +21,7 @@ import ScanPage from './pages/ScanPage';
 import LoanDetailPage from './pages/LoanDetailPage';
 import NoticeDetailPage from './pages/NoticeDetailPage';
 import TenantDetailPage from './pages/TenantDetailPage';
+import ReimbursementInvoicePage from './pages/ReimbursementInvoicePage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isSignedIn, isLoaded } = useAuth();
@@ -64,6 +65,7 @@ export default function App() {
           {/* Tenants hub */}
           <Route path="tenants" element={<TenantsHubPage />} />
           <Route path="tenants/:id" element={<TenantDetailPage />} />
+          <Route path="reimbursements/:id" element={<ReimbursementInvoicePage />} />
           <Route path="notices/:id" element={<NoticeDetailPage />} />
 
           {/* Lives as a Finances tab; keep the direct URL working for links. */}

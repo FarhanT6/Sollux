@@ -15,6 +15,7 @@ import dashboardRouter from './routes/dashboard';
 import gmailRouter from './routes/gmail';
 import driveRouter from './routes/drive';
 import clickupRouter from './routes/clickup';
+import reimbursementsRouter from './routes/reimbursements';
 import notificationsRouter from './routes/notifications';
 import authRouter from './routes/auth';
 import settingsRouter from './routes/settings';
@@ -159,6 +160,7 @@ app.use('/api/documents', documentsRouter);
 app.use('/api/gmail', gmailRouter);
 app.use('/api/drive', driveRouter);
 app.use('/api/clickup', clickupRouter);
+app.use('/api/reimbursements', reimbursementsRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/import', importRouter);
 // Property management

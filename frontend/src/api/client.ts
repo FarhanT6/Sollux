@@ -718,3 +718,41 @@ export const updateClickUpTask = (id: string, t: { name?: string; description?: 
 export const closeClickUpTask = (id: string, listId: string) => api.post(`/clickup/tasks/${id}/close`, { listId }).then(r => r.data);
 export const syncClickUpBills = () =>
   api.post<{ created: number; updated: number; closed: number; skipped: string[] }>('/clickup/sync-bills').then(r => r.data);
+
+
+// ─── Tenant utility reimbursement ───────────────────────────────────────────
+export interface ReimbursementRule { category: string; mode: 'PERCENT' | 'FULL' | 'FLAT_MONTHLY'; value: number; label?: string }
+export interface ReimbursementConfig {
+  id: string; leaseId: string; enabled: boolean; rulesJson: ReimbursementRule[]; accountIdsJson: string[] | null;
+  creditBalance: number | string; notes: string | null;
+}
+export interface ReimbursementInvoiceSummary {
+  id: string; periodStart: string; periodEnd: string; subtotal: number | string; creditApplied: number | string;
+  total: number | string; paidAmount: number | string; paidAt: string | null; status: string; createdAt: string;
+  _count: { lines: number };
+}
+export interface ReimbursementLine {
+  id?: string; kind: 'STATEMENT' | 'FLAT'; category: string; label: string; statementId: string | null;
+  periodStart: string | null; periodEnd: string | null; baseAmount: number | string; sharePercent: number | null;
+  amount: number | string; sortKey: string;
+}
+export interface ReimbursementDraft {
+  from: string; to: string; lines: ReimbursementLine[]; subtotal: number; creditAvailable: number; creditApplied: number; total: number;
+  alreadyBilled: { statementId: string; label: string; period: string; invoiceId: string }[];
+}
+export const getReimbursement = (leaseId: string) =>
+  api.get<{ lease: any; config: ReimbursementConfig | null; invoices: ReimbursementInvoiceSummary[]; accounts: { id: string; providerName: string; serviceLabel: string | null; category: string; unitId: string | null }[] }>(`/reimbursements/lease/${leaseId}`).then(r => r.data);
+export const saveReimbursement = (leaseId: string, body: { enabled: boolean; rules: ReimbursementRule[]; accountIds?: string[]; notes?: string | null }) =>
+  api.put<ReimbursementConfig>(`/reimbursements/lease/${leaseId}`, body).then(r => r.data);
+export const previewReimbursementInvoice = (leaseId: string, from: string, to: string) =>
+  api.post<ReimbursementDraft>(`/reimbursements/lease/${leaseId}/preview`, { from, to }).then(r => r.data);
+export const createReimbursementInvoice = (leaseId: string, from: string, to: string) =>
+  api.post<{ id: string }>(`/reimbursements/lease/${leaseId}/invoices`, { from, to }).then(r => r.data);
+export const getReimbursementInvoice = (id: string) =>
+  api.get<any>(`/reimbursements/invoices/${id}`).then(r => r.data);
+export const recordReimbursementPayment = (id: string, amount: number, paidAt?: string) =>
+  api.post(`/reimbursements/invoices/${id}/payment`, { amount, paidAt }).then(r => r.data);
+export const setReimbursementInvoiceStatus = (id: string, status: 'DRAFT' | 'SENT', notes?: string | null) =>
+  api.patch(`/reimbursements/invoices/${id}`, { status, notes }).then(r => r.data);
+export const deleteReimbursementInvoice = (id: string) =>
+  api.delete(`/reimbursements/invoices/${id}`);
