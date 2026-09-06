@@ -37,9 +37,15 @@ export default function ClickUpCard() {
       setTeams(r.teams);
       await refresh();
       setPicking(true);
+      if (r.warning) setError(`Connected, but the workspace list failed: ${r.warning}. Click “Choose folder” to try again.`);
       if (r.teams.length === 1) { setTeamId(r.teams[0].id); setSpaces(await getClickUpSpaces(r.teams[0].id)); }
     } catch (err: any) {
-      setError(err?.response?.data?.error ?? 'Could not connect. Check the token.');
+      const msg = err?.response?.data?.error;
+      setError(
+        msg === 'ClickUp rejected the token.'
+          ? 'ClickUp rejected the token. Personal tokens start with “pk_” (ClickUp → your avatar → Settings → Apps → API Token). Generating a new token there invalidates the old one, so paste the newest.'
+          : msg ?? 'Could not connect. Check the token.',
+      );
     } finally { setBusy(false); }
   }
 
