@@ -101,7 +101,9 @@ export default function FeesSummaryPage({ embedded }: { embedded?: boolean } = {
       cell.rows.push(r);
     }
 
-    const periods = monthFilter ? [monthFilter] : [...periodSet].sort();
+    // Newest first, and one property's columns are its own: a fee some other
+    // property paid in 2019 is no reason to show this one a 2019 column.
+    const periods = monthFilter ? [monthFilter] : [...periodSet].sort().reverse();
     return { byProperty, periods };
   }, [rows, metric, effectiveGroupBy, monthFilter]);
 
@@ -188,6 +190,7 @@ export default function FeesSummaryPage({ embedded }: { embedded?: boolean } = {
                   propertyGrandTotal += cell.total;
                 }
               }
+              const periods = grouped.periods.filter(pk => propertyTotalByPeriod.has(pk));
               return (
                 <div key={propId} className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
                   <div className="flex items-center justify-between px-4 py-3" style={{ background: 'rgba(255,255,255,0.04)' }}>
@@ -199,7 +202,7 @@ export default function FeesSummaryPage({ embedded }: { embedded?: boolean } = {
                       <thead>
                         <tr className="text-left text-gray-500 text-xs">
                           <th className="px-4 py-2">Provider</th>
-                          {grouped.periods.map(pk => <th key={pk} className="px-3 py-2 text-right whitespace-nowrap">{periodLabel(pk, effectiveGroupBy)}</th>)}
+                          {periods.map(pk => <th key={pk} className="px-3 py-2 text-right whitespace-nowrap">{periodLabel(pk, effectiveGroupBy)}</th>)}
                           <th className="px-4 py-2 text-right">Total</th>
                         </tr>
                       </thead>
@@ -209,7 +212,7 @@ export default function FeesSummaryPage({ embedded }: { embedded?: boolean } = {
                           return (
                             <tr key={provider}>
                               <td className="px-4 py-2 text-gray-300">{provider}</td>
-                              {grouped.periods.map(pk => {
+                              {periods.map(pk => {
                                 const cell = provMap.get(pk);
                                 return (
                                   <td
@@ -227,7 +230,7 @@ export default function FeesSummaryPage({ embedded }: { embedded?: boolean } = {
                         })}
                         <tr className="bg-white/5">
                           <td className="px-4 py-2 text-gray-200 font-medium">All utilities</td>
-                          {grouped.periods.map(pk => (
+                          {periods.map(pk => (
                             <td key={pk} className="px-3 py-2 text-right font-mono text-gray-300 font-medium">
                               {propertyTotalByPeriod.has(pk) ? money(propertyTotalByPeriod.get(pk)!) : '—'}
                             </td>
