@@ -112,6 +112,14 @@ router.get('/summary', async (req, res, next) => {
       const raw = s.rawDataJson as Record<string, unknown> | null;
       const amountDue = s.amountDue != null ? Number(s.amountDue) : null;
       const pastDueCarried = s.pastDueCarried != null ? Number(s.pastDueCarried) : firstNumeric(raw, PAST_DUE_KEYS);
+      const penaltiesFees = s.penaltiesFees != null ? Number(s.penaltiesFees) : firstNumeric(raw, FEE_KEYS);
+      // Charges before fees can never exceed the bill. A stored figure that
+      // does is a misread; the bill less its fee is what it should have been.
+      let chargesExcludingFees = s.chargesExcludingFees != null ? Number(s.chargesExcludingFees) : firstNumeric(raw, CHARGES_EXCL_FEES_KEYS);
+      if (amountDue != null && amountDue >= 0 && chargesExcludingFees != null
+          && chargesExcludingFees > amountDue + Math.max(pastDueCarried ?? 0, 0) + 0.01) {
+        chargesExcludingFees = Math.max(amountDue - (penaltiesFees ?? 0), 0);
+      }
       return {
         id: s.id,
         statementDate: s.statementDate,
@@ -120,8 +128,8 @@ router.get('/summary', async (req, res, next) => {
         dueDate: s.dueDate,
         amountDue,
         amountPaid: s.amountPaid != null ? Number(s.amountPaid) : null,
-        chargesExcludingFees: s.chargesExcludingFees != null ? Number(s.chargesExcludingFees) : firstNumeric(raw, CHARGES_EXCL_FEES_KEYS),
-        penaltiesFees: s.penaltiesFees != null ? Number(s.penaltiesFees) : firstNumeric(raw, FEE_KEYS),
+        chargesExcludingFees,
+        penaltiesFees,
         pastDueCarried,
         totalDueWithPastDue: amountDue != null || pastDueCarried != null ? (amountDue ?? 0) + (pastDueCarried ?? 0) : null,
         notes: s.notes,

@@ -1287,6 +1287,23 @@ export function repairMisreadPeriodYear(ex: ExtractedBillData): void {
  * or its overall balance is that figure misread, and one larger than the
  * charges it was supposedly added to is not a fee either.
  */
+/**
+ * This period's charges cannot exceed what the bill asks for. Regex reads
+ * "current charges" off whatever number sits nearest the words — on a
+ * Fallbrook water bill that was 1,204.31 against a 72.65 bill, and the fees
+ * summary then reported a month of water at sixteen times the bill. When
+ * the figure is larger than the amount due plus anything carried in, it is
+ * not the charges; the amount due less any fee is the honest fallback.
+ */
+export function sanitiseCurrentCharges(ex: ExtractedBillData): void {
+  if (ex.currentCharges == null || ex.amountDue == null) return;
+  if (ex.currentCharges < 0 || ex.amountDue < 0) return;   // credit memos keep their signs
+  const ceiling = ex.amountDue + Math.max(ex.previousBalance ?? 0, 0) + 0.01;
+  if (ex.currentCharges > ceiling) {
+    ex.currentCharges = Number(Math.max(ex.amountDue - (ex.lateFee ?? 0), 0).toFixed(2));
+  }
+}
+
 export function sanitiseLateFee(ex: ExtractedBillData): void {
   const FEE_LINE = /late\s*(?:fee|charge|payment\s*(?:fee|charge|penalty))|penalt|overdue\s*charge|nsf|returned\s*(?:check|payment)|finance\s*charge|interest\s*charge/i;
   if (ex.chargeBreakdown) {
@@ -1483,6 +1500,7 @@ export async function parseBill(
     }
     repairMisreadPeriodYear(extracted);
     sanitiseLateFee(extracted);
+    sanitiseCurrentCharges(extracted);
     derivePaymentPlanFromBreakdown(extracted);
     const match     = await matchToAccount(extracted, userId);
     return { filename, extracted, match, extractedBy, extractionNote };
