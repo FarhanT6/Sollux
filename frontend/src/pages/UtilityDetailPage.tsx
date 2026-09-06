@@ -23,6 +23,21 @@ const CATEGORY_ICONS: Record<string, string> = {
   SOLAR: '☀️', INSURANCE: '🛡️', HOA: '🏘️', TAXES: '🏛️', OTHER: '📄',
 };
 
+// The name a bill goes by everywhere on this page: the period it covers, not
+// the month it was issued in. Insurance and haulers bill in advance, so two
+// consecutive bills can be issued in the same month — labelled by issue
+// month, the September policy month and the August one both read "Aug 2026"
+// and the payment form offered two identical choices. A bill covering more
+// than one month is named by its span.
+function periodLabel(s: any): string {
+  const end = s.billingPeriodEnd || s.statementDate;
+  if (s.billingPeriodStart && s.billingPeriodEnd && monthKey(s.billingPeriodStart) !== monthKey(s.billingPeriodEnd)) {
+    const sameYear = new Date(s.billingPeriodStart).getUTCFullYear() === new Date(s.billingPeriodEnd).getUTCFullYear();
+    return `${fmtDate(s.billingPeriodStart, sameYear ? 'MMM' : 'MMM yy')}–${fmtDate(s.billingPeriodEnd, sameYear ? 'MMM yyyy' : 'MMM yy')}`;
+  }
+  return fmtDate(end, 'MMM yyyy');
+}
+
 function fmtMoney(v?: number | string | null) {
   if (v == null) return '—';
   const n = Number(v);
@@ -1201,19 +1216,7 @@ export default function UtilityDetailPage() {
                             April to late May — calling that row "Jun 2026"
                             makes May look absent and double-counts June. */}
                         <p className="text-sm font-semibold text-white">
-                          {(() => {
-                            // A bill covering more than one month is named by
-                            // its span — "May–Jun 2026" — because naming a
-                            // two-month EDCO bill after only its final month
-                            // reads as the wrong month entirely.
-                            const end = s.billingPeriodEnd || s.statementDate;
-                            if (s.billingPeriodStart && s.billingPeriodEnd
-                                && monthKey(s.billingPeriodStart) !== monthKey(s.billingPeriodEnd)) {
-                              const sameYear = new Date(s.billingPeriodStart).getUTCFullYear() === new Date(s.billingPeriodEnd).getUTCFullYear();
-                              return `${fmtDate(s.billingPeriodStart, sameYear ? 'MMM' : 'MMM yy')}–${fmtDate(s.billingPeriodEnd, sameYear ? 'MMM yyyy' : 'MMM yy')}`;
-                            }
-                            return fmtDate(end, 'MMM yyyy');
-                          })()}
+                          {periodLabel(s)}
                         </p>
                         {s.billingPeriodEnd && monthKey(s.billingPeriodEnd) !== monthKey(s.statementDate) && (
                           <p className="text-xs text-gray-600">billed {fmtDate(s.statementDate, 'MMM d')}</p>
@@ -1400,7 +1403,7 @@ export default function UtilityDetailPage() {
                 <option value="">— Not against a specific bill —</option>
                 {statements.slice(0, 36).map((st: any) => (
                   <option key={st.id} value={st.id}>
-                    {fmtDate(st.statementDate, 'MMM yyyy')} — {fmtMoney(st.amountDue)} due
+                    {periodLabel(st)} — {fmtMoney(st.amountDue)} due · billed {fmtDate(st.statementDate, 'MMM d')}
                   </option>
                 ))}
               </select>
