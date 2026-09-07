@@ -10,6 +10,10 @@ export type PropertyPnL = {
   rentalIncome: number;
   /** Rent payments actually recorded in the period. */
   rentCollected: number;
+  /** The rent roll for the last month in the range — what the portfolio page calls monthly rent. */
+  rentRollMonthly: number;
+  /** How many months of rent the rentalIncome figure covers. */
+  rentMonths: number;
   operatingExpenses: number;
   insuranceExpense: number;
   propertyTaxExpense: number;
@@ -54,20 +58,51 @@ function monthsOverlap(range: DateRange, from?: Date | null, to?: Date | null): 
  * was actually collected is reported beside it — the gap between the two is
  * arrears, and belongs in the open rather than silently shrinking income
  * whenever a payment goes unlogged.
+ *
+ * Two rules keep it honest. A unit is rented once per month: where an old
+ * lease's paper end date overlaps its replacement, only one of them counts,
+ * the active one first, so a building cannot show thirteen months of rent in
+ * a year. And a month that has not happened is not income: the range stops
+ * at the current month, so a year's figure is year-to-date, on the same
+ * footing as the expenses beside it, which are only what has been billed.
+ * An active lease past its end date is a holdover — still paying — and is
+ * counted, exactly as the rent roll counts it.
  */
-type LeaseLike = { startDate: Date; endDate: Date | null; rentAmount: Prisma.Decimal | number; status: string };
+type LeaseLike = { unitId: string; startDate: Date; endDate: Date | null; rentAmount: Prisma.Decimal | number; status: string };
 
-function scheduledRent(leases: LeaseLike[], range: DateRange): number {
-  return leases.reduce((s, l) => {
-    if (l.status === 'PENDING') return s;
-    // A lease that has ended without an end date recorded has nothing to say
-    // about when; only an active lease may run open-ended.
-    const end = l.endDate ?? (l.status === 'ACTIVE' ? null : l.startDate);
-    return s + toNum(l.rentAmount) * monthsOverlap(range, l.startDate, end);
-  }, 0);
+function monthsInRange(range: DateRange): number {
+  const now = new Date();
+  const lastMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  const stop = range.end < lastMonth ? range.end : lastMonth;
+  let n = 0;
+  for (let m = new Date(Date.UTC(range.start.getUTCFullYear(), range.start.getUTCMonth(), 1)); m < stop; m = new Date(Date.UTC(m.getUTCFullYear(), m.getUTCMonth() + 1, 1))) n++;
+  return n;
 }
 
-const leaseSelect = { startDate: true, endDate: true, rentAmount: true, status: true } as const;
+function scheduledRent(leases: LeaseLike[], range: DateRange): number {
+  const now = new Date();
+  const lastMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  const stop = range.end < lastMonth ? range.end : lastMonth;
+
+  let total = 0;
+  for (let m = new Date(Date.UTC(range.start.getUTCFullYear(), range.start.getUTCMonth(), 1)); m < stop; m = new Date(Date.UTC(m.getUTCFullYear(), m.getUTCMonth() + 1, 1))) {
+    const monthEnd = new Date(Date.UTC(m.getUTCFullYear(), m.getUTCMonth() + 1, 1));
+    const perUnit = new Map<string, LeaseLike>();
+    for (const l of leases) {
+      if (l.status === 'PENDING') continue;
+      if (l.startDate >= monthEnd) continue;
+      const inForce = l.status === 'ACTIVE' ? true : (l.endDate != null && l.endDate >= m);
+      if (!inForce) continue;
+      const cur = perUnit.get(l.unitId);
+      // Active beats ended; among equals the later start is the current one.
+      if (!cur || (l.status === 'ACTIVE' && cur.status !== 'ACTIVE') || (l.status === cur.status && l.startDate > cur.startDate)) perUnit.set(l.unitId, l);
+    }
+    for (const l of perUnit.values()) total += toNum(l.rentAmount);
+  }
+  return total;
+}
+
+const leaseSelect = { unitId: true, startDate: true, endDate: true, rentAmount: true, status: true } as const;
 
 /**
  * Insurance is recorded twice by design: as a UtilityAccount, which carries the
@@ -91,7 +126,7 @@ export async function getPropertyPnL(propertyId: string, range: DateRange, userI
 
   const [leases, rentPayments, expenses, policies, taxAssessments, loans, utilityStatements] = await Promise.all([
     db.lease.findMany({
-      where: { unit: { propertyId }, startDate: { lt: range.end }, OR: [{ endDate: null }, { endDate: { gt: range.start } }] },
+      where: { unit: { propertyId }, startDate: { lt: range.end }, OR: [{ status: 'ACTIVE' }, { endDate: null }, { endDate: { gt: range.start } }] },
       select: leaseSelect,
     }),
     db.rentPayment.findMany({
@@ -120,6 +155,10 @@ export async function getPropertyPnL(propertyId: string, range: DateRange, userI
 
   const rentalIncome = scheduledRent(leases, range);
   const rentCollected = rentPayments.reduce((s, p) => s + toNum(p.amount), 0);
+  const rentMonths = monthsInRange(range);
+  const rollMonthStart = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1));
+  const rollMonth = { start: rollMonthStart, end: new Date(Date.UTC(rollMonthStart.getUTCFullYear(), rollMonthStart.getUTCMonth() + 1, 1)) };
+  const rentRollMonthly = scheduledRent(leases, rollMonth);
 
   // Insurance bills are utility statements too, but they belong on the
   // insurance line, not with water and power.
@@ -168,6 +207,8 @@ export async function getPropertyPnL(propertyId: string, range: DateRange, userI
     propertyName: property.nickname || property.address,
     rentalIncome,
     rentCollected,
+    rentRollMonthly,
+    rentMonths,
     operatingExpenses,
     insuranceExpense,
     propertyTaxExpense,
@@ -194,7 +235,7 @@ export async function getMonthlyPnL(year: number, userId: string, propertyId?: s
   const leaseWhere = propertyId ? { unit: { propertyId } } : { unit: { property: { userId } } };
   const [leases, rentPayments, expenses, policies, taxAssessments, loanPayments, utilityStatements] = await Promise.all([
     db.lease.findMany({
-      where: { ...leaseWhere, startDate: { lt: yearEnd }, OR: [{ endDate: null }, { endDate: { gt: yearStart } }] },
+      where: { ...leaseWhere, startDate: { lt: yearEnd }, OR: [{ status: 'ACTIVE' }, { endDate: null }, { endDate: { gt: yearStart } }] },
       select: leaseSelect,
     }),
     db.rentPayment.findMany({ where: { paidDate: { gte: yearStart, lt: yearEnd }, ...leaseFilter } }),
@@ -274,12 +315,14 @@ export async function getPortfolioPnL(range: DateRange, userId: string) {
   const totals = byProperty.reduce((acc, p) => ({
     rentalIncome: acc.rentalIncome + p.rentalIncome,
     rentCollected: acc.rentCollected + p.rentCollected,
+    rentRollMonthly: acc.rentRollMonthly + p.rentRollMonthly,
+    rentMonths: Math.max(acc.rentMonths, p.rentMonths),
     operatingExpenses: acc.operatingExpenses + p.operatingExpenses,
     insuranceExpense: acc.insuranceExpense + p.insuranceExpense,
     propertyTaxExpense: acc.propertyTaxExpense + p.propertyTaxExpense,
     noi: acc.noi + p.noi,
     debtService: acc.debtService + p.debtService,
     cashFlow: acc.cashFlow + p.cashFlow,
-  }), { rentalIncome: 0, rentCollected: 0, operatingExpenses: 0, insuranceExpense: 0, propertyTaxExpense: 0, noi: 0, debtService: 0, cashFlow: 0 });
+  }), { rentalIncome: 0, rentCollected: 0, rentRollMonthly: 0, rentMonths: 0, operatingExpenses: 0, insuranceExpense: 0, propertyTaxExpense: 0, noi: 0, debtService: 0, cashFlow: 0 });
   return { byProperty, totals };
 }

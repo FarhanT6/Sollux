@@ -219,7 +219,7 @@ export default function PnLPage({ embedded }: { embedded?: boolean } = {}) {
           {totals && (
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
               {[
-                { label: 'Rental income', value: totals.rentalIncome, color: '#10b981', sub: `Scheduled from leases · ${money(totals.rentCollected ?? 0)} collected` },
+                { label: 'Rental income', value: totals.rentalIncome, color: '#10b981', sub: `${money(totals.rentRollMonthly ?? 0)}/mo rent roll × ${totals.rentMonths ?? 0} month${totals.rentMonths === 1 ? '' : 's'} · ${money(totals.rentCollected ?? 0)} collected` },
                 { label: 'Operating expenses', value: totals.operatingExpenses + totals.insuranceExpense + totals.propertyTaxExpense, color: '#ef4444' },
                 { label: 'NOI', value: totals.noi, color: '#F5A623' },
                 { label: 'Cash flow', value: totals.cashFlow, color: totals.cashFlow >= 0 ? '#10b981' : '#ef4444' },

@@ -110,9 +110,22 @@ export default function PaymentPrioritiesPage() {
                     </div>
 
                     <div className="text-right flex-shrink-0">
-                      <p className="text-lg font-semibold text-white">{money(p.balanceToCurrent)}</p>
-                      {p.pastDue > 0 && <p className="text-xs text-red-400">{money(p.pastDue)} past due</p>}
-                      <p className="text-xs text-gray-600">{money(p.currentCharges)} this period</p>
+                      {p.paymentPlan ? (
+                        <>
+                          <p className="text-lg font-semibold text-white">{money(p.payThisMonth)}</p>
+                          <p className="text-xs text-gray-500">pay this month</p>
+                          <p className="text-xs text-gray-600">{money(p.currentCharges)} this period + {money(Math.min(p.paymentPlan.monthlyAmount, p.onPlan))} instalment</p>
+                          {p.onPlan > 0 && <p className="text-xs text-amber-400">{money(p.onPlan)} on payment plan</p>}
+                          {p.pastDue > 0 && <p className="text-xs text-red-400">{money(p.pastDue)} past due outside the plan</p>}
+                          <p className="text-xs text-gray-600">{money(p.balanceToCurrent)} total balance</p>
+                        </>
+                      ) : (
+                        <>
+                          <p className="text-lg font-semibold text-white">{money(p.balanceToCurrent)}</p>
+                          {p.pastDue > 0 && <p className="text-xs text-red-400">{money(p.pastDue)} past due</p>}
+                          <p className="text-xs text-gray-600">{money(p.currentCharges)} this period</p>
+                        </>
+                      )}
                       {p.dueDate && <p className="text-xs text-gray-500 mt-1">Due {fmtDate(p.dueDate, 'MMM d')}</p>}
                       <button onClick={() => setEditing(p)}
                         className="text-xs text-gray-500 hover:text-[#F5A623] mt-1"
