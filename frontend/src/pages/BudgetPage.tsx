@@ -4,8 +4,9 @@ import {
   getBudgetMonthly, getBudgetDelinquency, getBudgetForecast,
   getBankAccounts, createBankAccount, updateBankAccount, deleteBankAccount, recordBankBalance,
   createOtherIncome, deleteOtherIncome, updateLease,
-  createRentPayment, createLoanPayment,
+  createRentPayment, createLoanPayment, getRentPayments,
 } from '../api/client';
+import type { RentPayment } from '../types';
 import type {
   BudgetSummary, BankAccount, DelinquencyTenant, OtherIncome,
   BankAccountType, OtherIncomeCategory, BudgetForecast,
@@ -377,6 +378,19 @@ function RentCollectionTable({ rows, outstanding, expected, collected, onChanged
   const [propertyFilter, setPropertyFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState<RentStatusFilter>('all');
   const [logRent, setLogRent] = useState<import('../types').BudgetRentRow | null>(null);
+  // Clicking a name opens that lease's payment history under the row, so
+  // "paid" and "partial" can be checked against the actual payments without
+  // leaving the table.
+  const [openLease, setOpenLease] = useState<string | null>(null);
+  const [history, setHistory] = useState<Record<string, RentPayment[] | 'loading'>>({});
+  function toggleHistory(leaseId: string) {
+    if (openLease === leaseId) { setOpenLease(null); return; }
+    setOpenLease(leaseId);
+    if (!history[leaseId]) {
+      setHistory(h => ({ ...h, [leaseId]: 'loading' }));
+      getRentPayments({ leaseId }).then(p => setHistory(h => ({ ...h, [leaseId]: p }))).catch(() => setHistory(h => ({ ...h, [leaseId]: [] })));
+    }
+  }
 
   const properties = useMemo(() => {
     const seen = new Map<string, string>();
@@ -444,11 +458,12 @@ function RentCollectionTable({ rows, outstanding, expected, collected, onChanged
           </thead>
           <tbody>
             {sortedRows.map(row => (
-              <tr key={row.leaseId} className="border-b border-white/5 hover:bg-white/2">
+              <Fragment key={row.leaseId}>
+              <tr className="border-b border-white/5 hover:bg-white/2">
                 <td className="py-2 text-white font-medium">
-                  {row.tenantId
-                    ? <Link to={`/tenants/${row.tenantId}`} className="hover:text-amber-400">{row.tenant}</Link>
-                    : row.tenant}
+                  <button onClick={() => toggleHistory(row.leaseId)} className="hover:text-amber-400 text-left" title="Payment history">
+                    {row.tenant} <span className="text-gray-600 text-xs">{openLease === row.leaseId ? '▴' : '▾'}</span>
+                  </button>
                 </td>
                 <td className="py-2 text-gray-400">{row.unit} · {row.property}</td>
                 <td className="py-2 text-right text-gray-300">{fmt(row.expected)}</td>
@@ -470,6 +485,18 @@ function RentCollectionTable({ rows, outstanding, expected, collected, onChanged
                   )}
                 </td>
               </tr>
+              {openLease === row.leaseId && (
+                <tr className="border-b border-white/5">
+                  <td colSpan={8} className="py-3 px-3" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                    <PaymentHistory
+                      row={row}
+                      payments={history[row.leaseId]}
+                      onLog={() => setLogRent(row)}
+                    />
+                  </td>
+                </tr>
+              )}
+              </Fragment>
             ))}
           </tbody>
           <tfoot>
@@ -876,6 +903,68 @@ function ScoreBar({ score }: { score: number }) {
         <div className={`h-full rounded-full ${color}`} style={{ width: `${score}%` }} />
       </div>
       <span className="text-xs text-gray-400">{score}</span>
+    </div>
+  );
+}
+
+// ─── Payment history under a rent row ─────────────────────
+
+function PaymentHistory({ row, payments, onLog }: {
+  row: import('../types').BudgetRentRow;
+  payments: RentPayment[] | 'loading' | undefined;
+  onLog: () => void;
+}) {
+  const money = (n: number) => `$${Number(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+  const monthOf = (iso: string) => new Date(iso).toLocaleDateString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' });
+  const day = (iso: string) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+  const list = Array.isArray(payments) ? payments.slice(0, 24) : [];
+  const total12 = Array.isArray(payments)
+    ? payments.filter(p => p.status === 'RECEIVED' && new Date(p.paidDate) >= new Date(Date.now() - 365 * 86400000)).reduce((s, p) => s + Number(p.amount), 0)
+    : 0;
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs text-gray-400">
+          Payment history · {row.unit} · {row.property}
+          {Array.isArray(payments) && <span className="text-gray-600"> · {money(total12)} received in the last 12 months</span>}
+        </p>
+        <div className="flex items-center gap-3">
+          <button onClick={onLog} className="text-xs text-amber-400 hover:text-amber-300">Log payment</button>
+          {row.tenantId && <Link to={`/tenants/${row.tenantId}`} className="text-xs text-gray-400 hover:text-amber-400">Tenant page →</Link>}
+        </div>
+      </div>
+      {payments === 'loading' || payments === undefined ? (
+        <p className="text-xs text-gray-600">Loading…</p>
+      ) : list.length === 0 ? (
+        <p className="text-xs text-gray-600">No payments logged for this lease.</p>
+      ) : (
+        <table className="text-xs w-full max-w-3xl">
+          <thead>
+            <tr className="text-gray-500">
+              <th className="text-left pb-1 font-normal">For month</th>
+              <th className="text-left pb-1 font-normal">Paid on</th>
+              <th className="text-right pb-1 font-normal">Amount</th>
+              <th className="text-right pb-1 font-normal">To arrears</th>
+              <th className="text-left pb-1 pl-4 font-normal">Method</th>
+              <th className="text-left pb-1 pl-4 font-normal">Status</th>
+              <th className="text-left pb-1 pl-4 font-normal">Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {list.map(p => (
+              <tr key={p.id} className="border-t border-white/5">
+                <td className="py-1 text-gray-200">{monthOf(p.periodDate)}</td>
+                <td className="py-1 text-gray-400">{day(p.paidDate)}</td>
+                <td className="py-1 text-right text-emerald-500 font-mono">{money(Number(p.amount))}</td>
+                <td className="py-1 text-right text-gray-500 font-mono">{Number(p.appliedToArrears) > 0 ? money(Number(p.appliedToArrears)) : '—'}</td>
+                <td className="py-1 pl-4 text-gray-400">{RENT_PAYMENT_METHOD_LABELS[p.method] ?? p.method}</td>
+                <td className={`py-1 pl-4 ${p.status === 'RECEIVED' ? 'text-emerald-500' : 'text-amber-500'}`}>{p.status === 'RECEIVED' ? 'received' : 'pending'}</td>
+                <td className="py-1 pl-4 text-gray-500 truncate max-w-[200px]">{p.notes || ''}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }
