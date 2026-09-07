@@ -349,7 +349,9 @@ router.post('/stream', attachDbUser, async (req, res) => {
               alerts: ex.alerts,
             };
 
-            const pastDueAmt = ex.previousBalance != null && ex.previousBalance > 0 ? ex.previousBalance : null;
+            // Positive is arrears, negative is a credit carried in; both change
+            // what this bill actually asks for. Only an exact zero says nothing.
+            const pastDueAmt = ex.previousBalance != null && ex.previousBalance !== 0 ? ex.previousBalance : null;
             // paymentsReceived settles the PREVIOUS cycle and is recorded as
             // a Payment against that statement — writing it onto THIS bill's
             // amountPaid marked every freshly imported bill "Paid" while its
