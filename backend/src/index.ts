@@ -88,6 +88,10 @@ app.use(cors({
     if (
       !origin ||
       origin.startsWith('http://localhost:') ||
+      // The iOS app loads its bundle from disk; WKWebView reports this
+      // scheme as the origin. Android's shell uses https://localhost.
+      origin === 'capacitor://localhost' ||
+      origin === 'https://localhost' ||
       origin === process.env.FRONTEND_URL ||
       /^https:\/\/sollux[a-z0-9-]*\.vercel\.app$/.test(origin)
     ) {

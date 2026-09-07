@@ -2,3 +2,13 @@ node_modules/
 .env
 backend/dist/
 frontend/dist/
+
+# iOS shell (Capacitor): keep the Xcode project, drop what it generates
+frontend/.env.ios
+frontend/ios/App/Pods/
+frontend/ios/App/App/public/
+frontend/ios/App/App/capacitor.config.json
+frontend/ios/App/build/
+frontend/ios/App/App.xcworkspace/xcuserdata/
+frontend/ios/App/App.xcodeproj/xcuserdata/
+frontend/ios/DerivedData/
