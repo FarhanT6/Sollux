@@ -35,6 +35,12 @@ export interface AccountPriority {
   currentCharges: number;
   /** Carried from earlier periods. */
   pastDue: number;
+  /** An arrears arrangement on the account, when one is recorded. */
+  paymentPlan: { monthlyAmount: number; remainingBalance: number; endDate: string | null; description: string | null } | null;
+  /** How much of the carried balance is covered by that plan — owed, but not overdue. */
+  onPlan: number;
+  /** What this month's payment should be: this period's charge plus the plan installment, less payments since. */
+  payThisMonth: number;
 
   dueDate: string | null;
   /** When a penalty lands, from the bill if stated, else estimated from history. */
@@ -144,6 +150,7 @@ export async function getPaymentPriorities(userId: string, propertyId?: string):
         orderBy: { paymentDate: 'desc' }, take: 24,
         select: { amount: true, paymentDate: true },
       },
+      paymentPlan: { select: { monthlyAmount: true, remainingBalance: true, endDate: true, description: true, status: true } },
     },
   });
 
@@ -166,6 +173,21 @@ export async function getPaymentPriorities(userId: string, propertyId?: string):
     const statementPaid = num(latest.amountPaid);
 
     const balanceToCurrent = Math.max(0, currentCharges + pastDue - paidSince - statementPaid);
+
+    // An arrears arrangement changes the question. The carried balance is
+    // still owed, but it is not overdue: the provider has agreed to take it
+    // in instalments, so what this month asks for is the period's charge
+    // plus one instalment — not the whole balance, and not a penalty risk
+    // on the part that is on the plan.
+    const plan = account.paymentPlan && account.paymentPlan.status === 'ACTIVE' ? account.paymentPlan : null;
+    const onPlan = plan ? Math.min(Math.max(pastDue, 0), num(plan.remainingBalance)) : 0;
+    const pastDueOffPlan = Math.max(0, pastDue - onPlan);
+    const payThisMonth = plan
+      ? Math.max(0, currentCharges + pastDueOffPlan + Math.min(num(plan.monthlyAmount), onPlan) - paidSince - statementPaid)
+      : balanceToCurrent;
+    // Urgency is judged on what is actually late: the charge and any arrears
+    // outside the plan.
+    const balanceAtRisk = plan ? Math.max(0, balanceToCurrent - onPlan) : balanceToCurrent;
 
     const fees = analyseFees(statements);
 
@@ -209,7 +231,7 @@ export async function getPaymentPriorities(userId: string, propertyId?: string):
     // Shutoff is never inferred: it appears on a disconnection notice, not a
     // bill, so it is reported only when you have recorded the threshold.
     let shutoffDate: Date | null = null;
-    if (account.shutoffAfterDays != null && latest.dueDate && balanceToCurrent > 0) {
+    if (account.shutoffAfterDays != null && latest.dueDate && balanceAtRisk > 0) {
       shutoffDate = new Date(latest.dueDate.getTime() + account.shutoffAfterDays * DAY);
     }
     const daysUntilShutoff = shutoffDate ? daysBetween(shutoffDate, now) : null;
@@ -228,7 +250,7 @@ export async function getPaymentPriorities(userId: string, propertyId?: string):
     let urgencyScore = 0;
     const reasons: string[] = [];
 
-    if (balanceToCurrent > 0) {
+    if (balanceAtRisk > 0) {
       const proximity = daysUntilPenalty == null ? 0.5
         : daysUntilPenalty < 0 ? 2      // already past the penalty date
         : daysUntilPenalty <= 7 ? 1.5
@@ -268,9 +290,14 @@ export async function getPaymentPriorities(userId: string, propertyId?: string):
       } else {
         reasons.push('Not enough billing history to know whether this provider charges late fees');
       }
-      if (pastDue > 0) reasons.push(`Already carrying ${pastDue.toFixed(2)} from earlier periods`);
+      if (pastDueOffPlan > 0) reasons.push(`Already carrying ${pastDueOffPlan.toFixed(2)} from earlier periods`);
+    } else if (balanceToCurrent > 0 && plan) {
+      reasons.push('Current, as long as the plan instalment is paid with this month\'s bill');
     } else {
       reasons.push('Nothing owed');
+    }
+    if (plan && onPlan > 0) {
+      reasons.push(`${onPlan.toFixed(2)} of the balance is on a payment plan: ${num(plan.monthlyAmount).toFixed(2)}/month${plan.endDate ? ` until ${plan.endDate.toISOString().slice(0, 10)}` : ''}`);
     }
 
     results.push({
@@ -282,7 +309,10 @@ export async function getPaymentPriorities(userId: string, propertyId?: string):
       category: account.category,
       balanceToCurrent,
       currentCharges,
-      pastDue,
+      pastDue: pastDueOffPlan,
+      paymentPlan: plan ? { monthlyAmount: num(plan.monthlyAmount), remainingBalance: num(plan.remainingBalance), endDate: plan.endDate?.toISOString() ?? null, description: plan.description } : null,
+      onPlan,
+      payThisMonth,
       dueDate: latest.dueDate?.toISOString() ?? null,
       penaltyDate: penaltyDate?.toISOString() ?? null,
       penaltyDateIsEstimate,

@@ -1022,9 +1022,22 @@ export default function UtilityDetailPage() {
               ? <span className="text-emerald-400">Paid</span>
               : (
                 <span>
-                  {latestPastDue && latestPastDue > 0 && (
-                    <span className="text-red-400">{fmtMoney(latestPastDue)} past due</span>
-                  )}
+                  {latestPastDue && latestPastDue > 0 && (() => {
+                    // Arrears on an active plan are owed, not overdue: the
+                    // provider takes them in instalments alongside the bill.
+                    const onPlan = plan && plan.status === 'ACTIVE' ? Math.min(latestPastDue, Number(plan.remainingBalance)) : 0;
+                    const offPlan = latestPastDue - onPlan;
+                    return (
+                      <>
+                        {offPlan > 0.01 && <span className="text-red-400">{fmtMoney(offPlan)} past due</span>}
+                        {onPlan > 0.01 && (
+                          <span className="text-amber-400 block">
+                            {fmtMoney(onPlan)} on payment plan · pay {fmtMoney((latestAmt ?? 0) + Math.min(Number(plan!.monthlyAmount), onPlan))} this month
+                          </span>
+                        )}
+                      </>
+                    );
+                  })()}
                   {/* The bill's own penalty deadline — "Late penalty assessed
                       09/09/2026" — is the date that actually costs money, and
                       it always comes from the newest bill, so it rolls
