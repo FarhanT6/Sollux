@@ -35,6 +35,7 @@ interface MatchResult {
   propertyId:       string | null;
   propertyName:     string | null;
   providerName:     string | null;
+  candidates?:      { utilityAccountId: string; label: string }[];
 }
 
 interface NewPropertyPayload {
@@ -1150,6 +1151,24 @@ function BillCard({
                     </optgroup>
                   )}
                 </select>
+                {/* More than one account with this provider at the bill's
+                    address: the importer will not guess, so offer the choice. */}
+                {match.method === 'address_and_provider_ambiguous' && match.candidates && match.candidates.length > 0 && !selectedAcctId && (
+                  <div className="rounded-lg px-3 py-2 text-xs" style={{ background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.3)' }}>
+                    <p className="text-amber-300 mb-1.5">
+                      {match.candidates.length} {match.providerName ?? ''} accounts at {match.propertyName}{ex.accountNumber ? ` — this bill is for account ${ex.accountNumber}` : ''}. Which one?
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {match.candidates.map(c => (
+                        <button key={c.utilityAccountId} onClick={() => handleAcctSelect(c.utilityAccountId)}
+                          className="px-2 py-1 rounded-md text-xs text-gray-200 hover:text-white"
+                          style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)' }}>
+                          {c.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {/* If the backend found a matching property with no account, surface it prominently */}
                 {match.method === 'property_exists_no_account' && match.propertyId && (
                   <button

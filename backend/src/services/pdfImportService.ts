@@ -91,6 +91,8 @@ export interface MatchResult {
   propertyId:       string | null;
   propertyName:     string | null;
   providerName:     string | null;
+  /** When more than one account could be the bill's, the ones to choose between. */
+  candidates?:      { utilityAccountId: string; label: string }[];
 }
 
 export interface ParsedBill {
@@ -1004,7 +1006,7 @@ function normalizeAddress(addr: string): string {
     .trim();
 }
 
-function normalizeAcct(s: string): string {
+export function normalizeAcct(s: string): string {
   return s.replace(/[-\s]/g, '').toLowerCase();
 }
 
@@ -1034,6 +1036,9 @@ interface AccountRow {
   id: string;
   propertyId: string;
   providerName: string;
+  serviceLabel: string | null;
+  /** The masked form kept for display ("****9734"); the full number is encrypted. */
+  accountNumber: string | null;
   accountNumberEnc: string | null;
   property: { address: string; nickname: string | null };
 }
@@ -1109,15 +1114,23 @@ export async function matchToAccount(
           };
         }
         if (withProvider.length > 1) {
-          // Multiple — still high confidence, pick first
-          const acct = withProvider[0];
+          // Two SDG&E accounts at one address — a main meter and a unit —
+          // and the bill's account number matched neither on file. Picking
+          // the first sent every bill for the property to the same account,
+          // where it overwrote the other account's statement for the same
+          // period. Nothing here can tell them apart; the reviewer can.
+          const first = withProvider[0];
           return {
-            confidence: 'medium',
+            confidence: 'low',
             method: 'address_and_provider_ambiguous',
-            utilityAccountId: acct.id,
-            propertyId: acct.propertyId,
-            propertyName: acct.property.nickname || acct.property.address,
-            providerName: acct.providerName,
+            utilityAccountId: null,
+            propertyId: first.propertyId,
+            propertyName: first.property.nickname || first.property.address,
+            providerName: first.providerName,
+            candidates: withProvider.map(a => ({
+              utilityAccountId: a.id,
+              label: [a.serviceLabel, a.accountNumber].filter(Boolean).join(' · ') || a.providerName,
+            })),
           };
         }
       }

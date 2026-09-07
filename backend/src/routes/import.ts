@@ -4,7 +4,8 @@
  */
 import { Router, Request, Response } from 'express';
 import { Prisma } from '@prisma/client';
-import { parseBill, applyPastDueNotice, recordConfirmedPayment, ExtractedBillData, MatchResult } from '../services/pdfImportService';
+import { parseBill, applyPastDueNotice, recordConfirmedPayment, normalizeAcct, ExtractedBillData, MatchResult } from '../services/pdfImportService';
+import { encrypt, decrypt } from '../crypto/encrypt';
 import { uploadDocument, buildStatementKey } from '../services/s3Service';
 import { attachDbUser } from '../middleware/requireAuth';
 import { db } from '../config/db';
@@ -286,6 +287,27 @@ router.post('/confirm', async (req: Request, res: Response) => {
         }
 
         const ex = item.extracted;
+
+        // The bill names its account. If the chosen account names a different
+        // one, this import would file one account's bill under another and
+        // overwrite whatever that account had for the period — refuse, and
+        // say which is which. An account with no number on file takes the
+        // bill's, so the next import matches on it without asking.
+        const billAcct = ex.accountNumber ? normalizeAcct(ex.accountNumber) : '';
+        if (billAcct.length >= 6) {
+          let stored = '';
+          try { stored = acct.accountNumberEnc ? normalizeAcct(decrypt(acct.accountNumberEnc)) : ''; } catch { stored = ''; }
+          if (stored.length >= 6 && !stored.includes(billAcct) && !billAcct.includes(stored)) {
+            errors.push(`${item.filename}: this bill is for account ending ${billAcct.slice(-4)}, but the selected account's number on file ends ${stored.slice(-4)}. Choose the right account, or correct the account number on it, then import again.`);
+            continue;
+          }
+          if (!stored) {
+            await db.utilityAccount.update({
+              where: { id: acct.id },
+              data: { accountNumberEnc: encrypt(ex.accountNumber!), accountNumber: `****${ex.accountNumber!.replace(/\s/g, '').slice(-4)}` },
+            });
+          }
+        }
 
         // A past-due / disconnection notice is not a bill: it demands a
         // balance the real bills already carry and states no service period.
