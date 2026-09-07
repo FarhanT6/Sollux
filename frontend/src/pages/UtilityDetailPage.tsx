@@ -103,7 +103,8 @@ function computeResolvedByFutureCheckpoint(statements: any[]): Set<string> {
     const carried = s.pastDueCarried != null ? Number(s.pastDueCarried) : null;
     const balance = s.balance != null ? Number(s.balance) : null;
     const due = s.amountDue != null ? Number(s.amountDue) : null;
-    const provenZero = carried === 0
+    // A credit carried in (negative) proves nothing older is owed, as a zero does.
+    const provenZero = (carried != null && carried <= 0)
       || (carried == null && balance != null && due != null && Math.abs(balance - due) < 0.01);
     if (provenZero) sawZeroCheckpoint = true;
   }
@@ -156,7 +157,7 @@ function statementStatus(s: any, payments: any[] = [], newerStmt?: any, isLatest
     // 0 carried in = this bill was cleared before the next was issued.
     const newerCarriedIn = Number(newerStmt.pastDueCarried ?? 0);
     const thisDue = Number(s.amountDue ?? 0);
-    if (newerCarriedIn === 0) return { color: 'green', label: 'Paid' };
+    if (newerCarriedIn <= 0) return { color: 'green', label: 'Paid' };
     if (thisDue > 0 && newerCarriedIn >= thisDue - 0.01) {
       const pastDueDate = s.dueDate && isAfter(new Date(), new Date(s.dueDate));
       return pastDueDate ? { color: 'red', label: 'Overdue' } : { color: 'amber', label: 'Due' };
@@ -1234,6 +1235,9 @@ export default function UtilityDetailPage() {
                         {pastDue != null && pastDue > 0 && !priorPaid && (
                           <p className="text-xs text-red-400 mt-0.5">⚠ Past due: {fmtMoney(pastDue)}</p>
                         )}
+                        {pastDue != null && pastDue < 0 && (
+                          <p className="text-xs text-emerald-500 mt-0.5">✓ Credit applied: −{fmtMoney(-pastDue)}</p>
+                        )}
                         {(pastDue ?? 0) > 0 && priorPaid && (
                           <p className="text-xs text-green-500 mt-0.5">✓ Prior balance paid</p>
                         )}
@@ -1295,7 +1299,9 @@ export default function UtilityDetailPage() {
                           const amt = Number(s.amountDue ?? 0);
                           const owed = totalDue ?? amt;
                           const primary = isFullyPaid ? amt : owed;
-                          const showBillSubline = !isFullyPaid && owed > amt && amt > 0;
+                          // The subline explains a total that differs from the
+                          // charge: arrears rolled in, or a credit taken off.
+                          const showBillSubline = !isFullyPaid && Math.abs(owed - amt) > 0.01 && amt > 0;
                           // A negative amount is a credit memo: money the
                           // provider owes, offsetting the next bill. Rendering
                           // it like a charge reads as a payment demand.
@@ -1314,6 +1320,9 @@ export default function UtilityDetailPage() {
                               <p className="text-base font-semibold text-white">{fmtMoney(primary)}</p>
                               {showBillSubline && (
                                 <p className="text-xs text-gray-500">Bill: {fmtMoney(amt)}</p>
+                              )}
+                              {isFullyPaid && totalDue != null && totalDue < -0.01 && (
+                                <p className="text-xs text-emerald-600">credit −{fmtMoney(-totalDue)} carried forward</p>
                               )}
                             </>
                           );
