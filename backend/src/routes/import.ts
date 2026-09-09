@@ -4,7 +4,7 @@
  */
 import { Router, Request, Response } from 'express';
 import { Prisma } from '@prisma/client';
-import { parseBill, applyPastDueNotice, recordConfirmedPayment, normalizeAcct, ExtractedBillData, MatchResult } from '../services/pdfImportService';
+import { parseBill, applyPastDueNotice, recordConfirmedPayment, syncPaymentPlanFromBill, normalizeAcct, ExtractedBillData, MatchResult } from '../services/pdfImportService';
 import { encrypt, decrypt } from '../crypto/encrypt';
 import { uploadDocument, buildStatementKey } from '../services/s3Service';
 import { attachDbUser } from '../middleware/requireAuth';
@@ -492,6 +492,7 @@ router.post('/confirm', async (req: Request, res: Response) => {
             },
           });
           await recordConfirmedPayment(utilityAccountId, existing.id, ex);
+          await syncPaymentPlanFromBill(utilityAccountId, ex);
           skipped++;
         } else {
           const created = await db.statement.create({
@@ -520,6 +521,7 @@ router.post('/confirm', async (req: Request, res: Response) => {
             },
           });
           await recordConfirmedPayment(utilityAccountId, created.id, ex);
+          await syncPaymentPlanFromBill(utilityAccountId, ex);
           imported++;
         }
 

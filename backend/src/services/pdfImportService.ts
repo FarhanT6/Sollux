@@ -63,6 +63,25 @@ export interface ExtractedBillData {
   // An arrears installment charged inside this bill, itemised by some
   // providers as its own line ("Payment Plan" on a City of Brawley bill).
   paymentPlanAmount:  number | null;
+  /** The single figure the bill asks to be paid now — its "Total Amount Due"
+   *  box — negative when the account is in credit. Kept apart from
+   *  amountDue (this period's charges) so the two can be reconciled. */
+  statedTotalDue?:    number | null;
+  /** Everything owed including what a payment arrangement has deferred
+   *  ("Total Account Balance" on an SDG&E bill). */
+  totalAccountBalance?: number | null;
+  /** A payment arrangement the bill itself reports, as SDG&E's "Pay
+   *  Agreement Plan" box does. The remaining balance is owed but not due;
+   *  one installment is billed each cycle inside the charges. */
+  paymentPlan?: {
+    original: number | null;
+    remaining: number | null;
+    installment: number | null;
+    installmentsTotal: number | null;
+    installmentsRemaining: number | null;
+    began: string | null;
+    agreementNumber: string | null;
+  } | null;
   // When a late penalty applies, and what the bill becomes then.
   penaltyDate:        string | null;
   amountAfterDueDate: number | null;
@@ -138,6 +157,9 @@ Schema (use null for any field not present in the document):
   "ratePlan": "string or null — rate schedule, plan name, or tier",
   "isPaid": boolean — true ONLY if balance is $0.00 or document shows 'Paid in Full' / paid stamp,
   "utilityType": "electric | gas | water | sewer | trash | solar | internet | phone | other",
+  "statedTotalDue": number or null — the ONE figure the bill asks to be paid now: its "Total Amount Due" / "Amount Due" box. Negative when the account is in credit ("No payment is due. Your account has a credit balance of $0.82" → -0.82). This is the grand total AFTER previous balance, payments, credits and any payment-arrangement deferral; report it exactly as printed,
+  "totalAccountBalance": number or null — "Total Account Balance" when printed: everything owed including a balance a payment arrangement has deferred,
+  "paymentPlan": object or null — when the bill prints a payment-arrangement box (SDG&E "Pay Agreement Plan": Original Pay Agreement, Down Payment, Installments Billed to Date, Remaining PA Balance, Agreement began, Agreement number, Total Installments, Remaining Installments, Installment amount), report {"original": n, "remaining": n, "installment": n, "installmentsTotal": n, "installmentsRemaining": n, "began": "YYYY-MM-DD", "agreementNumber": "string"}. On such a bill the account summary reads "Previous Balance / Payment Received / Remaining Pay Agreement Balance (subtracted) / Current Charges / Total Amount Due": the Remaining Pay Agreement Balance is NOT past due — it is deferred — so do NOT put it in previousBalance. Report currentCharges as the "Current Charges" line, paymentPlanAmount as the installment amount, statedTotalDue as the Total Amount Due, and leave previousBalance to be derived,
   "paymentPlanAmount": number or null — an installment on an arrears or payment-plan arrangement charged within this bill, when the bill itemises one (a line reading "Payment Plan", "Installment", "Arrears Payment" or similar). This is repayment of an older debt carried inside a current bill, not this period's service, so report it separately as well as leaving it in the total,
   "penaltyDate": "YYYY-MM-DD" or null — the date a penalty or late fee applies if the bill is unpaid, when the bill states one ("Penalty Date", "Late after", "Penalty applies after"). This is often a day or two later than the due date; report what the bill says, not the due date,
   "amountAfterDueDate": number or null — what the bill says is payable if paid after the due date ("Amount due after 09/15/2026", "After Due Date Pay"). The difference between this and the amount due is the late fee this provider will charge,
@@ -213,7 +235,8 @@ function findDollarNear(text: string, labels: RegExp[]): number | null {
   // leading minus, a trailing CR, or both — and dropping it turns money the
   // provider owes into money demanded: a -$361.44 credit memo read unsigned
   // becomes a $361.44 bill.
-  const suffix = '[\\s\\S]{0,80}?(-?)\\$?\\s*(-?)([\\d,]+\\.\\d{2})\\s*(CR)?';
+  // "[\\d,]*" rather than "+": SDG&E prints a sub-dollar credit as "-$.82".
+  const suffix = '[\\s\\S]{0,80}?(-?)\\$?\\s*(-?)([\\d,]*\\.\\d{2})\\s*(CR)?';
   for (const label of labels) {
     const m = text.match(new RegExp(label.source + suffix, label.flags));
     if (m) {
@@ -379,7 +402,7 @@ function detectUtilityType(text: string, provider: string | null): ExtractedBill
   return 'other';
 }
 
-async function extractWithRegex(pdfBuffer: Buffer, filename: string): Promise<ExtractedBillData> {
+export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Promise<ExtractedBillData> {
   console.log(`[PDFImport/regex] ${filename}: ${Math.round(pdfBuffer.length / 1024)}KB`);
   const { text } = await pdfParse(pdfBuffer);
   const garbled  = isGarbledText(text);
@@ -599,6 +622,9 @@ async function extractWithRegex(pdfBuffer: Buffer, filename: string): Promise<Ex
 
   // ── Amount due ────────────────────────────────────────────────────────────
   const amountDueLabels: RegExp[] = [
+    // The bill's own grand-total line, read tightly so a sentence elsewhere
+    // that happens to say "amount due" cannot win over it.
+    /total\s+amount\s+due(?=\s*:?\s*-?\$?\s*-?[\d,]*\.\d{2})/i,
     // Generic
     /(?:total\s+)?amount\s+due/i,
     /total\s+due/i,
@@ -658,7 +684,8 @@ async function extractWithRegex(pdfBuffer: Buffer, filename: string): Promise<Ex
   ]);
 
   // ── Payments received ─────────────────────────────────────────────────────
-  const paymentsReceived: number | null = findDollarNear(text, [
+  // Reported as a positive amount whatever sign the bill prints it with.
+  const paymentsReceivedRaw: number | null = findDollarNear(text, [
     /payments?\s+received/i,
     /payments?\s+&\s+(?:adjustments?|credits?)/i,
     /credits?\s+applied/i,
@@ -669,6 +696,7 @@ async function extractWithRegex(pdfBuffer: Buffer, filename: string): Promise<Ex
     /payment\s+applied/i,
     /auto.?pay\s+(?:amount|payment)/i,
   ]);
+  const paymentsReceived = paymentsReceivedRaw != null ? Math.abs(paymentsReceivedRaw) : null;
 
   // ── Late fee / penalty ────────────────────────────────────────────────────
   const lateFee: number | null = findDollarNear(text, [
@@ -678,6 +706,25 @@ async function extractWithRegex(pdfBuffer: Buffer, filename: string): Promise<Ex
     /overdue\s+charge/i,
     /nsf\s+fee/i,
   ]);
+
+  // ── Payment arrangement (SDG&E "Pay Agreement Plan") ──────────────────────
+  const paRemainingRaw = findDollarNear(text, [/remaining\s+pa\s+balance/i, /remaining\s+pay\s+agreement\s+balance/i]);
+  // The summary prints it subtracted ("- 2,025.11"); the plan box prints it
+  // plain. It is a balance either way.
+  const paRemaining = paRemainingRaw != null ? Math.abs(paRemainingRaw) : null;
+  const paInstallment = findDollarNear(text, [/installment\s+amount/i]);
+  const paOriginal = findDollarNear(text, [/original\s+pay\s+agreement/i]);
+  const paTotalInst = text.match(/total\s+installments\s*:?\s*(\d{1,3})/i);
+  const paRemInst = text.match(/remaining\s+installments\s*:?\s*(\d{1,3})/i);
+  const paBegan = findDateNear(text, [/agreement\s+began/i]);
+  const paNumber = text.match(/agreement\s+number\s*:?\s*([0-9-]{6,})/i);
+  const totalAccountBalance = findDollarNear(text, [/total\s+account\s+balance/i]);
+  const paymentPlan = paRemaining != null ? {
+    original: paOriginal, remaining: paRemaining, installment: paInstallment,
+    installmentsTotal: paTotalInst ? Number(paTotalInst[1]) : null,
+    installmentsRemaining: paRemInst ? Number(paRemInst[1]) : null,
+    began: paBegan, agreementNumber: paNumber ? paNumber[1] : null,
+  } : null;
 
   // ── Current charges ───────────────────────────────────────────────────────
   let currentCharges: number | null = findDollarNear(text, [
@@ -894,6 +941,11 @@ async function extractWithRegex(pdfBuffer: Buffer, filename: string): Promise<Ex
       .find(([label]) => /payment\s*plan|installment|arrears/i.test(label))?.[1] ?? null,
     paymentsReceived,
     currentCharges,
+    // The regex path's amountDue is the bill's grand total; keep it as such
+    // so the reconciliation below can split it the same way for every path.
+    statedTotalDue: amountDue,
+    totalAccountBalance,
+    paymentPlan,
     lateFee,
     usageValue,
     usageUnit,
@@ -1318,6 +1370,95 @@ export function sanitiseCurrentCharges(ex: ExtractedBillData): void {
   }
 }
 
+/**
+ * Make the figures agree with the bill's own arithmetic.
+ *
+ * An SDG&E bill under a pay agreement reads: Previous Balance 1,936.25 ·
+ * Payment Received .00 · Remaining Pay Agreement Balance −1,849.03 · Current
+ * Charges +281.01 · Total Amount Due 368.23 · Total Account Balance 2,217.26,
+ * with an 88.04 installment billed each cycle. Read naively, the 1,849.03
+ * became "past due" and the 0.82 credit and the installment vanished, so
+ * Sollux said 2,130.04 was owed when the bill asked for 368.23.
+ *
+ * The identity that holds on every bill is: what is asked for now = this
+ * period's charges (installment included) + whatever was carried in (a
+ * credit when negative). So when the bill states its total, the carried
+ * balance is derived from it rather than read off a line that may include
+ * deferred money; and a stated installment joins this period's charges.
+ */
+export function reconcileWithStatedTotal(ex: ExtractedBillData): void {
+  const total = ex.statedTotalDue;
+  if (total == null) return;
+  const plan = ex.paymentPlan;
+  const installment = plan?.installment ?? ex.paymentPlanAmount ?? null;
+
+  if (plan && plan.remaining != null) {
+    plan.remaining = Math.abs(plan.remaining);
+    // Under an arrangement: charges = current + installment; carried = total − charges.
+    const current = ex.currentCharges ?? (ex.amountDue != null && installment != null && ex.amountDue > installment ? ex.amountDue - installment : ex.amountDue);
+    if (current != null) {
+      ex.currentCharges = Number(current.toFixed(2));
+      ex.amountDue = Number((current + (installment ?? 0)).toFixed(2));
+      ex.paymentPlanAmount = installment;
+      ex.previousBalance = Number((total - ex.amountDue).toFixed(2));
+      if (ex.totalAccountBalance == null) ex.totalAccountBalance = Number((total + plan.remaining).toFixed(2));
+    }
+    return;
+  }
+
+  // No arrangement: the carried balance is what the total does not explain.
+  // Only fill a gap or repair a contradiction; a consistent bill is left alone.
+  if (ex.amountDue != null) {
+    const derived = Number((total - ex.amountDue).toFixed(2));
+    const stated = ex.previousBalance;
+    if (stated == null || Math.abs((stated + ex.amountDue) - total) > 0.01) {
+      // A stated previous balance that does not add up is usually the gross
+      // figure before a payment the bill also lists; the derived one is net.
+      ex.previousBalance = Math.abs(derived) < 0.005 ? null : derived;
+    }
+  }
+}
+
+/**
+ * Keep the account's payment plan in step with what its newest bill says.
+ * SDG&E restates the arrangement on every bill — original amount, what is
+ * left, how many installments remain — so there is nothing to type in and
+ * nothing to fall out of date. Only the newest bill may write it; an older
+ * bill imported later must not roll the plan backwards.
+ */
+export async function syncPaymentPlanFromBill(utilityAccountId: string, ex: ExtractedBillData): Promise<void> {
+  const plan = ex.paymentPlan;
+  if (!plan || plan.remaining == null) return;
+  const billDate = ex.statementDate ? new Date(ex.statementDate) : new Date();
+  const newer = await db.statement.findFirst({
+    where: { utilityAccountId, statementDate: { gt: billDate }, isDownPayment: false },
+    select: { id: true },
+  });
+  if (newer) return;
+  const installment = plan.installment ?? ex.paymentPlanAmount ?? 0;
+  const original = plan.original ?? plan.remaining;
+  const parts: string[] = [];
+  if (plan.agreementNumber) parts.push(`Agreement ${plan.agreementNumber}`);
+  if (plan.installmentsRemaining != null && plan.installmentsTotal != null) parts.push(`${plan.installmentsRemaining} of ${plan.installmentsTotal} installments left`);
+  parts.push('from the bill');
+  const data = {
+    totalAmount: original,
+    monthlyAmount: installment,
+    remainingBalance: plan.remaining,
+    startDate: plan.began ? new Date(plan.began) : billDate,
+    endDate: plan.installmentsRemaining != null
+      ? new Date(billDate.getFullYear(), billDate.getMonth() + plan.installmentsRemaining, billDate.getDate())
+      : null,
+    description: parts.join(' · '),
+    status: plan.remaining <= 0.005 ? 'COMPLETED' as const : 'ACTIVE' as const,
+  };
+  await db.paymentPlan.upsert({
+    where: { utilityAccountId },
+    create: { utilityAccountId, ...data },
+    update: data,
+  });
+}
+
 export function sanitiseLateFee(ex: ExtractedBillData): void {
   const FEE_LINE = /late\s*(?:fee|charge|payment\s*(?:fee|charge|penalty))|penalt|overdue\s*charge|nsf|returned\s*(?:check|payment)|finance\s*charge|interest\s*charge/i;
   if (ex.chargeBreakdown) {
@@ -1513,6 +1654,7 @@ export async function parseBill(
       extracted.documentKind = 'bill';
     }
     repairMisreadPeriodYear(extracted);
+    reconcileWithStatedTotal(extracted);
     sanitiseLateFee(extracted);
     sanitiseCurrentCharges(extracted);
     derivePaymentPlanFromBreakdown(extracted);
@@ -1526,7 +1668,7 @@ export async function parseBill(
         providerName: null, serviceAddress: null, accountNumber: null,
         statementDate: null, dueDate: null, billingPeriodStart: null,
         billingPeriodEnd: null, amountDue: null, previousBalance: null,
-        paymentsReceived: null, currentCharges: null, paymentPlanAmount: null,
+        paymentsReceived: null, currentCharges: null, paymentPlanAmount: null, statedTotalDue: null, totalAccountBalance: null, paymentPlan: null,
         penaltyDate: null, amountAfterDueDate: null, agingBuckets: null,
         lateFee: null, usageValue: null,
         usageUnit: null, ratePlan: null, isPaid: false,

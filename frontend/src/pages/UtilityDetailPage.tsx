@@ -1022,18 +1022,31 @@ export default function UtilityDetailPage() {
               ? <span className="text-emerald-400">Paid</span>
               : (
                 <span>
-                  {latestPastDue && latestPastDue > 0 && (() => {
-                    // Arrears on an active plan are owed, not overdue: the
-                    // provider takes them in instalments alongside the bill.
-                    const onPlan = plan && plan.status === 'ACTIVE' ? Math.min(latestPastDue, Number(plan.remainingBalance)) : 0;
-                    const offPlan = latestPastDue - onPlan;
+                  {(() => {
+                    const carried = latestPastDue ?? 0;
+                    const active = plan && plan.status === 'ACTIVE' ? plan : null;
+                    const installmentBilled = Number(latestStmt?.paymentPlanAmount ?? 0) > 0;
+                    // Under an arrangement the deferred balance is owed, not
+                    // overdue. When the bill charges the installment itself
+                    // (SDG&E) the total already includes it; otherwise (an
+                    // HOA ledger) the deferred part is inside "past due" and
+                    // one installment joins this month's payment.
+                    const onPlan = active ? (installmentBilled ? Number(active.remainingBalance) : Math.min(Math.max(carried, 0), Number(active.remainingBalance))) : 0;
+                    const offPlan = active && !installmentBilled ? carried - onPlan : carried;
                     return (
                       <>
                         {offPlan > 0.01 && <span className="text-red-400">{fmtMoney(offPlan)} past due</span>}
-                        {onPlan > 0.01 && (
+                        {carried < -0.01 && <span className="text-emerald-400">{fmtMoney(-carried)} credit applied</span>}
+                        {active && onPlan > 0.01 && (
                           <span className="text-amber-400 block">
-                            {fmtMoney(onPlan)} on payment plan · pay {fmtMoney((latestAmt ?? 0) + Math.min(Number(plan!.monthlyAmount), onPlan))} this month
+                            {fmtMoney(onPlan)} deferred on payment plan · {fmtMoney(Number(active.monthlyAmount))}/mo
+                            {installmentBilled
+                              ? ' included in this bill'
+                              : ` · pay ${fmtMoney((latestAmt ?? 0) + Math.max(offPlan, 0) + Math.min(Number(active.monthlyAmount), onPlan))} this month`}
                           </span>
+                        )}
+                        {active && installmentBilled && latestTotalDue != null && (
+                          <span className="text-gray-500 block">Account balance {fmtMoney(latestTotalDue + onPlan)} incl. plan</span>
                         )}
                       </>
                     );
