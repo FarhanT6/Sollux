@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
+import BackLink from '../components/ui/BackLink';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { getLoan, getLoanAmortization, updateLoan, getProperties, extendLoan } from '../api/client';
 import type { Loan, Property, LoanType, PrepaymentPenalty, PrepaymentPenaltyTier } from '../types';
@@ -726,7 +727,7 @@ export default function LoanDetailPage() {
       {/* Header */}
       <div className="flex items-start justify-between mb-1">
         <div>
-          <Link to="/loans" className="text-xs text-gray-500 hover:text-gray-300">&larr; Loans</Link>
+          <BackLink fallback="/loans" className="text-xs text-gray-500 hover:text-gray-300">&larr; Back</BackLink>
           <h1 className="text-xl font-semibold text-white mt-1">{loan.lender}</h1>
           <p className="text-sm text-gray-400 mt-0.5">
             {LOAN_TYPE_LABELS[loan.loanType] ?? loan.loanType}

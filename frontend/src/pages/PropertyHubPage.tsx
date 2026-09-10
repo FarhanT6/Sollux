@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
+import BackLink from '../components/ui/BackLink';
 import { format } from 'date-fns';
 import {
   deleteLeaseAgreement,
@@ -166,11 +167,11 @@ export default function PropertyHubPage() {
         <div className="px-6 pt-4 pb-0">
           <div className="flex items-start justify-between mb-3">
             <div className="flex items-start gap-3">
-              <Link to="/portfolio" className="mt-0.5 text-gray-500 hover:text-gray-300 transition-colors">
+              <BackLink fallback="/portfolio" className="mt-0.5 text-gray-500 hover:text-gray-300 transition-colors">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M19 12H5M12 19l-7-7 7-7"/>
                 </svg>
-              </Link>
+              </BackLink>
               <div>
                 <h1 className="text-base font-semibold text-white leading-tight">
                   {property.nickname || property.address}
