@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
+import BackLink from '../components/ui/BackLink';
 import { format } from 'date-fns';
 import {
   getTenant, updateTenant, deleteTenant,
@@ -112,7 +113,7 @@ export default function TenantDetailPage() {
       {/* Header */}
       <div className="flex items-start justify-between mb-1">
         <div>
-          <Link to="/tenants" className="text-xs text-gray-500 hover:text-gray-300">&larr; Tenants</Link>
+          <BackLink fallback="/tenants" className="text-xs text-gray-500 hover:text-gray-300">&larr; Back</BackLink>
           <h1 className="text-xl font-semibold text-white mt-1">{tenant.fullName}</h1>
         </div>
         <div className="flex items-center gap-2">

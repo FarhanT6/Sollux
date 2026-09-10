@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
+import BackLink from '../components/ui/BackLink';
 import { getReimbursementInvoice, setReimbursementInvoiceStatus } from '../api/client';
 import { fmtDate } from '../lib/date';
 
@@ -106,7 +107,7 @@ export default function ReimbursementInvoicePage() {
       `}</style>
 
       <div className="no-print px-6 py-3 flex items-center gap-3" style={{ borderBottom: `1px solid ${RULE}`, background: '#fff' }}>
-        <Link to={`/tenants`} className="text-xs" style={{ color: MUTED }}>← Back</Link>
+        <BackLink fallback="/tenants" className="text-xs" style={{ color: MUTED }}>← Back</BackLink>
         <div className="flex-1" />
         <span className="text-xs" style={{ color: MUTED }}>Status: {inv.status}</span>
         {inv.status === 'DRAFT' && <button onClick={markSent} className="text-xs px-3 py-1 rounded" style={{ border: `1px solid ${RULE}`, color: INK }}>Mark as sent</button>}
