@@ -70,6 +70,19 @@ export interface ExtractedBillData {
   /** Everything owed including what a payment arrangement has deferred
    *  ("Total Account Balance" on an SDG&E bill). */
   totalAccountBalance?: number | null;
+  /** What an insurance billing statement says about the policy it bills:
+   *  which policy, its coverage term, the term premium, the installment.
+   *  A new policy number with a later coverage start is a renewal. */
+  insurance?: {
+    policyNumber: string | null;
+    coverageStart: string | null;   // YYYY-MM-DD
+    coverageEnd: string | null;
+    termPremium: number | null;     // the policy's full premium for the term
+    installment: number | null;     // per-installment amount, before service charge
+    serviceCharge: number | null;
+    installmentsRemaining: number | null;
+    renewedOn: string | null;       // date the renewal posted, when the statement says
+  } | null;
   /** A payment arrangement the bill itself reports, as SDG&E's "Pay
    *  Agreement Plan" box does. The remaining balance is owed but not due;
    *  one installment is billed each cycle inside the charges. */
@@ -157,6 +170,7 @@ Schema (use null for any field not present in the document):
   "ratePlan": "string or null — rate schedule, plan name, or tier",
   "isPaid": boolean — true ONLY if balance is $0.00 or document shows 'Paid in Full' / paid stamp,
   "utilityType": "electric | gas | water | sewer | trash | solar | internet | phone | other",
+  "insurance": object or null — ONLY for an insurance billing statement (carrier billing account: Nationwide, Safeco, Bamboo, State Farm…): {"policyNumber": "string", "coverageStart": "YYYY-MM-DD", "coverageEnd": "YYYY-MM-DD", "termPremium": n, "installment": n, "serviceCharge": n, "installmentsRemaining": n, "renewedOn": "YYYY-MM-DD"}. Read the policy table ("Policy / Coverage period / Balance / Installment"): the policy number is the alphanumeric code on that row, the coverage period is its two dates, termPremium is the policy balance at renewal (the "Renewal" line under Policy Activity, or the Full Balance when the term has just begun), installment is the per-policy installment on that row (before any service charge), serviceCharge the stated processing fee, installmentsRemaining the number of dated lines in "Your Installment Schedule", renewedOn the date on the "Renewal" activity line. A statement whose policy row shows a different policy number and a later coverage start than the account's previous statements is a renewal onto a new policy,
   "statedTotalDue": number or null — the ONE figure the bill asks to be paid now: its "Total Amount Due" / "Amount Due" box. Negative when the account is in credit ("No payment is due. Your account has a credit balance of $0.82" → -0.82). This is the grand total AFTER previous balance, payments, credits and any payment-arrangement deferral; report it exactly as printed,
   "totalAccountBalance": number or null — "Total Account Balance" when printed: everything owed including a balance a payment arrangement has deferred,
   "paymentPlan": object or null — when the bill prints a payment-arrangement box (SDG&E "Pay Agreement Plan": Original Pay Agreement, Down Payment, Installments Billed to Date, Remaining PA Balance, Agreement began, Agreement number, Total Installments, Remaining Installments, Installment amount), report {"original": n, "remaining": n, "installment": n, "installmentsTotal": n, "installmentsRemaining": n, "began": "YYYY-MM-DD", "agreementNumber": "string"}. On such a bill the account summary reads "Previous Balance / Payment Received / Remaining Pay Agreement Balance (subtracted) / Current Charges / Total Amount Due": the Remaining Pay Agreement Balance is NOT past due — it is deferred — so do NOT put it in previousBalance. Report currentCharges as the "Current Charges" line, paymentPlanAmount as the installment amount, statedTotalDue as the Total Amount Due, and leave previousBalance to be derived,
@@ -248,11 +262,12 @@ function findDollarNear(text: string, labels: RegExp[]): number | null {
 }
 
 function findDateNear(text: string, labels: RegExp[]): string | null {
-  const suffix = '[\\s\\S]{0,60}?(\\d{1,2}[\\/\\-]\\d{1,2}[\\/\\-](?:\\d{4}|\\d{2})(?!\\d)|\\w{3,9}\\s+\\d{1,2},?\\s+\\d{4})';
+  const suffix = '[\\s\\S]{0,60}?(\\d{1,2}[\\/\\-]\\d{1,2}[\\/\\-](?:\\d{4}|\\d{2})(?!\\d)|[A-Za-z]{3,9}\\s*\\d{1,2},?\\s*\\d{4})';
   for (const label of labels) {
     const m = text.match(new RegExp(label.source + suffix, label.flags));
     if (m) {
-      const d = parseDate(m[1]);
+      // "April20,2026" — pdf-parse drops the spaces on some statements.
+      const d = parseDate(m[1].replace(/([A-Za-z])(\d)/, '$1 $2').replace(/,(\d)/, ', $1'));
       if (d) return d;
     }
   }
@@ -507,6 +522,9 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
       /issued\s+(?:on|date)/i,
     ]) || findDateNear(text, [/^date[:\s]/im]);
   }
+  // Carrier billing statements come through with their spaces stripped, so
+  // the garbled path never tried the label; "Date prepared" is unambiguous.
+  if (!statementDate) statementDate = findDateNear(text, [/date\s*prepared/i, /date\s*mailed/i]);
   if (!statementDate) {
     const allDates = scanAllDates(text);
     const nonDue = allDates.filter(d => !/due|pay\s+by/i.test(d.context));
@@ -522,6 +540,8 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
     /(?:amount\s+)?due\s+(?:by|on)/i,
     /remit\s+by/i,
   ]);
+  // Unspaced carrier statements: "Pleasepay$243.23by … 05/09/26".
+  if (!dueDate) dueDate = findDateNear(text, [/please\s*pay\s*(?:\$[\d,.]+\s*)?by/i, /pay\s*by/i]);
   if (!dueDate) {
     const allDates = scanAllDates(text);
     const dueDates = allDates.filter(d => /due|pay\s+by|payment\s+(?:date|deadline)/i.test(d.context));
@@ -627,6 +647,8 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
     /total\s+amount\s+due(?=\s*:?\s*-?\$?\s*-?[\d,]*\.\d{2})/i,
     // Generic
     /(?:total\s+)?amount\s+due/i,
+    /please\s*pay\s*\$/i,              // "Please pay $243.23 by …" (carrier statements, often unspaced)
+    /minimum\s*amount\s*due/i,
     /total\s+due/i,
     /balance\s+due/i,
     /please\s+pay/i,
@@ -725,6 +747,39 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
     installmentsRemaining: paRemInst ? Number(paRemInst[1]) : null,
     began: paBegan, agreementNumber: paNumber ? paNumber[1] : null,
   } : null;
+
+  // ── Insurance billing statement: which policy, which term ─────────────────
+  // pdf-parse often strips the spaces from these carrier statements, so the
+  // patterns tolerate none. The policy row reads "<type> <start>-$<balance>
+  // $<installment>" then "<policy number><end>" on the next line.
+  const insurance = (() => {
+    if (!/coverage\s*period|policy\s*number|insuring\s*company/i.test(text)) return null;
+    // The policy row: "<start>-$<balance>$<installment>" then, on the next
+    // line, "<policy number><end>" with no separator at all.
+    const row = text.match(/(\d{1,2}\/\d{1,2}\/\d{2,4})\s*-\s*\$?([\d,]*\.\d{2})\s*\$?([\d,]*\.\d{2})[\s\S]{0,60}?([A-Z]{2,6}\d{9,16}?)(?=\s*\d{1,2}\/\d{1,2}\/\d{2,4})\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/);
+    const policyNo = row?.[4] ?? text.match(/\b([A-Z]{2,6}\d{9,16}?)(?=\d{1,2}\/\d{1,2}\/|\b)/)?.[1] ?? null;
+    const coverageStart = row ? parseDate(row[1]) : null;
+    const coverageEnd = row ? parseDate(row[5]) : null;
+    const installment = row ? parseFloat(row[3].replace(/,/g, '')) : findDollarNear(text, [/monthly\s*installment/i]);
+    const renewal = text.match(/(\d{1,2}\/\d{1,2}\/\d{2,4})\s*renewal\s*\$?([\d,]*\.\d{2})/i);
+    // The term premium is the renewal amount; failing that the full balance,
+    // but only when it plainly is a term and not a last installment.
+    const fullBalance = findDollarNear(text, [/full\s*balance/i]);
+    const termPremium = renewal
+      ? parseFloat(renewal[2].replace(/,/g, ''))
+      : (fullBalance != null && installment != null && fullBalance > installment * 1.5 ? fullBalance : null);
+    // "$6.00 Service Charge" and "Service Charge … $6.00" both occur; either
+    // way the figure sits within a few characters of the words.
+    const sc = text.match(/\$([\d,]*\.\d{2})\s*service\s*charge/i) ?? text.match(/service\s*charge[^$\n]{0,40}\$([\d,]*\.\d{2})/i);
+    const serviceCharge = sc ? parseFloat(sc[1].replace(/,/g, '')) : null;
+    const schedule = text.match(/installment\s*schedule[\s\S]{0,1200}/i)?.[0] ?? '';
+    const remaining = (schedule.match(/\$[\d,]*\.\d{2}\s*\d{1,2}\/\d{1,2}\/\d{4}/g) ?? []).length || null;
+    if (!policyNo && !coverageStart) return null;
+    return {
+      policyNumber: policyNo, coverageStart, coverageEnd, termPremium, installment, serviceCharge,
+      installmentsRemaining: remaining, renewedOn: renewal ? parseDate(renewal[1]) : null,
+    };
+  })();
 
   // ── Current charges ───────────────────────────────────────────────────────
   let currentCharges: number | null = findDollarNear(text, [
@@ -946,6 +1001,7 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
     statedTotalDue: amountDue,
     totalAccountBalance,
     paymentPlan,
+    insurance,
     lateFee,
     usageValue,
     usageUnit,
@@ -1459,6 +1515,79 @@ export async function syncPaymentPlanFromBill(utilityAccountId: string, ex: Extr
   });
 }
 
+/**
+ * Keep the account's insurance policy in step with what its billing
+ * statements say. A carrier's billing account outlives any one policy: the
+ * April statement bills the last installment of policy …3130444825
+ * (09/09/25–09/09/26) and the August one the first of …3140444825
+ * (09/09/26–09/09/27), posted as a "Renewal" of 2,198.00. When the newest
+ * statement names a policy the account is not linked to, the old policy is
+ * closed at its coverage end and kept as history, and the new one is
+ * created and linked with its term, premium and installment. The same
+ * policy re-billed merely refreshes those figures.
+ */
+export async function syncInsurancePolicyFromBill(utilityAccountId: string, ex: ExtractedBillData): Promise<void> {
+  const ins = ex.insurance;
+  if (!ins || (!ins.policyNumber && !ins.coverageStart)) return;
+  const account = await db.utilityAccount.findUnique({
+    where: { id: utilityAccountId },
+    select: { id: true, propertyId: true, providerName: true, category: true, insurancePolicy: { select: { id: true, policyNumber: true, effectiveDate: true, expirationDate: true } } },
+  });
+  if (!account || account.category !== 'INSURANCE') return;
+  const billDate = ex.statementDate ? new Date(ex.statementDate) : new Date();
+  const newer = await db.statement.findFirst({ where: { utilityAccountId, statementDate: { gt: billDate }, isDownPayment: false }, select: { id: true } });
+  if (newer) return;
+
+  const norm = (v: string | null | undefined) => (v ?? '').replace(/[\s-]/g, '').toUpperCase();
+  const start = ins.coverageStart ? new Date(ins.coverageStart) : null;
+  const end = ins.coverageEnd ? new Date(ins.coverageEnd) : null;
+  const perInstallment = ins.installment != null ? ins.installment + (ins.serviceCharge ?? 0) : null;
+  const figures = {
+    ...(ins.policyNumber ? { policyNumber: ins.policyNumber } : {}),
+    ...(start ? { effectiveDate: start } : {}),
+    ...(end ? { expirationDate: end } : {}),
+    ...(ins.termPremium != null ? { termPremium: ins.termPremium } : {}),
+    ...(perInstallment != null ? { premiumAmount: perInstallment, premiumFrequency: 'MONTHLY' as const } : {}),
+    isActive: true,
+  };
+
+  const current = account.insurancePolicy;
+  const samePolicy = current && (
+    (ins.policyNumber && current.policyNumber && norm(current.policyNumber) === norm(ins.policyNumber))
+    || (!ins.policyNumber && start && current.effectiveDate && Math.abs(current.effectiveDate.getTime() - start.getTime()) < 7 * 86400000)
+  );
+
+  if (current && samePolicy) {
+    await db.insurancePolicy.update({ where: { id: current.id }, data: figures });
+    return;
+  }
+  if (current && !samePolicy) {
+    // A different policy on the same billing account: the old one has run its
+    // term. Close it where its own coverage ended (or where the new one
+    // begins), keep it as history, and free the account link for the new one.
+    const closedOn = current.expirationDate ?? start ?? billDate;
+    await db.insurancePolicy.update({
+      where: { id: current.id },
+      data: {
+        isActive: false, expirationDate: closedOn, utilityAccountId: null,
+        notes: `Renewed onto ${ins.policyNumber ?? 'a new policy'}${ins.renewedOn ? ` on ${ins.renewedOn}` : ''} (from the billing statement)`,
+      },
+    });
+  }
+  await db.insurancePolicy.create({
+    data: {
+      propertyId: account.propertyId,
+      utilityAccountId: account.id,
+      carrier: account.providerName,
+      policyType: 'PROPERTY',
+      premiumAmount: perInstallment ?? ins.termPremium ?? 0,
+      premiumFrequency: perInstallment != null ? 'MONTHLY' : 'ANNUAL',
+      ...figures,
+      notes: `Created from the ${ex.statementDate ?? ''} billing statement${ins.installmentsRemaining != null ? ` · ${ins.installmentsRemaining} installments remaining` : ''}`,
+    },
+  });
+}
+
 export function sanitiseLateFee(ex: ExtractedBillData): void {
   const FEE_LINE = /late\s*(?:fee|charge|payment\s*(?:fee|charge|penalty))|penalt|overdue\s*charge|nsf|returned\s*(?:check|payment)|finance\s*charge|interest\s*charge/i;
   if (ex.chargeBreakdown) {
@@ -1668,7 +1797,7 @@ export async function parseBill(
         providerName: null, serviceAddress: null, accountNumber: null,
         statementDate: null, dueDate: null, billingPeriodStart: null,
         billingPeriodEnd: null, amountDue: null, previousBalance: null,
-        paymentsReceived: null, currentCharges: null, paymentPlanAmount: null, statedTotalDue: null, totalAccountBalance: null, paymentPlan: null,
+        paymentsReceived: null, currentCharges: null, paymentPlanAmount: null, statedTotalDue: null, totalAccountBalance: null, paymentPlan: null, insurance: null,
         penaltyDate: null, amountAfterDueDate: null, agingBuckets: null,
         lateFee: null, usageValue: null,
         usageUnit: null, ratePlan: null, isPaid: false,

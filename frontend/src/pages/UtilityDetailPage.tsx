@@ -6,6 +6,7 @@ import {
   upsertUtilityLoan, deleteUtilityLoan, patchStatement, createStatement, deleteStatement,
   revealUtilityAccountNumber, createPayment, updatePayment, deletePayment,
   getBankAccounts, getCostSettings, updateCostSettings,
+  getInsurancePolicies,
 } from '../api/client';
 import { CADENCE_LABELS } from '../lib/cadence';
 import { CATEGORY_LABELS, CATEGORY_COLORS, LOAN_TYPE_LABELS,
@@ -1114,6 +1115,8 @@ export default function UtilityDetailPage() {
           </button>
         )}
 
+        {account.category === 'INSURANCE' && <PolicyCard accountId={accountId!} propertyId={propertyId!} carrier={account.providerName} />}
+
         {/* Payment Plan */}
         {plan ? (
           <PaymentPlanCard plan={plan} accountId={accountId!}
@@ -1760,6 +1763,53 @@ function StatementModal({ accountId, statement, onClose, onSaved }: {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+
+/**
+ * The policy this billing account is paying for, as the statements state
+ * it: number, coverage term, term premium, installment. A carrier's billing
+ * account outlives any one policy, so the previous policy stays listed as
+ * history once a renewal statement has replaced it.
+ */
+function PolicyCard({ accountId, propertyId, carrier }: { accountId: string; propertyId: string; carrier: string }) {
+  const [policies, setPolicies] = useState<any[] | null>(null);
+  useEffect(() => { getInsurancePolicies({ propertyId }).then(setPolicies).catch(() => setPolicies([])); }, [propertyId, accountId]);
+  if (!policies) return null;
+  const current = policies.find(p => p.utilityAccountId === accountId);
+  const previous = policies
+    .filter(p => p.id !== current?.id && !p.isActive && (p.utilityAccountId == null) && p.carrier?.toLowerCase() === carrier.toLowerCase())
+    .sort((a, b) => String(b.expirationDate ?? '').localeCompare(String(a.expirationDate ?? '')));
+  if (!current && previous.length === 0) return null;
+  const money = (v: any) => v == null ? '—' : `$${Number(v).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
+  const daysLeft = current?.expirationDate ? Math.ceil((new Date(current.expirationDate).getTime() - Date.now()) / 86400000) : null;
+  return (
+    <div className="mx-6 mb-4 rounded-xl p-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-sm font-semibold text-white">🛡 Policy</p>
+        {current && <span className={`pill ${daysLeft != null && daysLeft < 45 ? 'pill-amber' : 'pill-green'}`}>{daysLeft != null && daysLeft < 0 ? 'Expired' : 'Active'}</span>}
+      </div>
+      {current ? (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+          <div><p className="text-xs text-gray-500">Policy number</p><p className="text-gray-200">{current.policyNumber ?? '—'}</p></div>
+          <div><p className="text-xs text-gray-500">Coverage</p><p className="text-gray-200">{current.effectiveDate ? fmtDate(current.effectiveDate, 'MMM d, yyyy') : '—'} – {current.expirationDate ? fmtDate(current.expirationDate, 'MMM d, yyyy') : '—'}{daysLeft != null && daysLeft >= 0 ? <span className="text-gray-500"> · {daysLeft}d left</span> : null}</p></div>
+          <div><p className="text-xs text-gray-500">Term premium</p><p className="text-gray-200">{money(current.termPremium)}</p></div>
+          <div><p className="text-xs text-gray-500">Installment</p><p className="text-gray-200">{money(current.premiumAmount)} / {String(current.premiumFrequency ?? '').toLowerCase().replace('_', '-') || 'term'}</p></div>
+          {current.notes && <p className="col-span-2 md:col-span-4 text-xs text-gray-500">{current.notes}</p>}
+        </div>
+      ) : <p className="text-xs text-gray-500">No current policy linked to this account.</p>}
+      {previous.length > 0 && (
+        <div className="mt-3 pt-2" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+          <p className="text-xs text-gray-500 mb-1">Previous</p>
+          {previous.map(p => (
+            <p key={p.id} className="text-xs text-gray-400">
+              {p.policyNumber ?? 'Policy'} · {p.effectiveDate ? fmtDate(p.effectiveDate, 'MMM d, yyyy') : '—'} – {p.expirationDate ? fmtDate(p.expirationDate, 'MMM d, yyyy') : '—'}{p.termPremium ? ` · ${money(p.termPremium)}` : ''}{p.notes ? <span className="text-gray-600"> · {p.notes}</span> : null}
+            </p>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

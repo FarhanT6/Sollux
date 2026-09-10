@@ -4,7 +4,7 @@
  */
 import { Router, Request, Response } from 'express';
 import { Prisma } from '@prisma/client';
-import { parseBill, applyPastDueNotice, recordConfirmedPayment, syncPaymentPlanFromBill, normalizeAcct, ExtractedBillData, MatchResult } from '../services/pdfImportService';
+import { parseBill, applyPastDueNotice, recordConfirmedPayment, syncPaymentPlanFromBill, syncInsurancePolicyFromBill, normalizeAcct, ExtractedBillData, MatchResult } from '../services/pdfImportService';
 import { encrypt, decrypt } from '../crypto/encrypt';
 import { uploadDocument, buildStatementKey } from '../services/s3Service';
 import { attachDbUser } from '../middleware/requireAuth';
@@ -493,6 +493,7 @@ router.post('/confirm', async (req: Request, res: Response) => {
           });
           await recordConfirmedPayment(utilityAccountId, existing.id, ex);
           await syncPaymentPlanFromBill(utilityAccountId, ex);
+          await syncInsurancePolicyFromBill(utilityAccountId, ex);
           skipped++;
         } else {
           const created = await db.statement.create({
@@ -522,6 +523,7 @@ router.post('/confirm', async (req: Request, res: Response) => {
           });
           await recordConfirmedPayment(utilityAccountId, created.id, ex);
           await syncPaymentPlanFromBill(utilityAccountId, ex);
+          await syncInsurancePolicyFromBill(utilityAccountId, ex);
           imported++;
         }
 
@@ -600,6 +602,7 @@ function buildRawData(ex: ExtractedBillData, extractedBy?: 'ai' | 'text'): Recor
     totalAccountBalance: ex.totalAccountBalance ?? null,
     paymentPlan:         ex.paymentPlan ?? null,
     paymentPlanAmount:   ex.paymentPlanAmount ?? null,
+    insurance:           ex.insurance ?? null,
   };
 }
 
