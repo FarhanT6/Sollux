@@ -41,6 +41,12 @@ router.get('/:id', async (req, res, next) => {
                 unit: { include: { property: { select: { id: true, address: true, nickname: true } } } },
                 rentPayments: { orderBy: { paidDate: 'desc' } },
                 rentNotices: { orderBy: { noticeDate: 'desc' } },
+                // Everything the edit form knows, so the tenant page can show
+                // it read-only instead of hiding it behind Edit.
+                leaseTenants: { include: { tenant: { select: { id: true, fullName: true } } } },
+                scheduledIncreases: { orderBy: { effectiveDate: 'asc' } },
+                paymentAliases: true,
+                utilityCharges: true,
               },
             },
           },
