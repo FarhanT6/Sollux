@@ -4,7 +4,7 @@ import { getExpenses, createExpense, updateExpense, deleteExpense, getProperties
 import type { Expense, Property, ExpenseCategory } from '../types';
 import { EXPENSE_CATEGORY_LABELS } from '../types';
 import { format } from 'date-fns';
-import { fmtDate } from '../lib/date';
+import { fmtDate, todayISO } from '../lib/date';
 
 const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 
@@ -30,7 +30,7 @@ export default function ExpensesPage({ embedded }: { embedded?: boolean } = {}) 
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
     propertyId: '', category: 'REPAIRS_MAINTENANCE' as ExpenseCategory,
-    amount: '', date: new Date().toISOString().slice(0, 10),
+    amount: '', date: todayISO(),
     vendor: '', description: '', isCapEx: false, isPersonal: false,
   });
   const [saving, setSaving] = useState(false);

@@ -27,7 +27,7 @@ import type {
 import { PROPERTY_TYPE_LABELS, EXPENSE_CATEGORY_LABELS, DOCUMENT_CATEGORY_LABELS, CATEGORY_LABELS,
   RENT_PAYMENT_METHODS, RENT_PAYMENT_METHOD_LABELS, BANK_LINKED_METHODS } from '../types';
 import type { Document as DocType } from '../types';
-import { fmtDate as fmtDateSafe, monthKey, localMonthKey } from '../lib/date';
+import { fmtDate as fmtDateSafe, monthKey, localMonthKey, todayISO, thisMonthISO } from '../lib/date';
 import LegalPage from './LegalPage';
 import UnitsTab from '../components/UnitsTab';
 
@@ -438,7 +438,7 @@ function PropertyEditModal({ property, onClose, onSave }: {
       setForm(prev => ({
         ...prev,
         estimatedValue: String(valuation.price),
-        valuationDate: new Date().toISOString().slice(0, 10),
+        valuationDate: todayISO(),
         valuationNotes: `RentCast AVM estimate${valuation.priceRangeLow && valuation.priceRangeHigh ? ` ($${valuation.priceRangeLow.toLocaleString()}–$${valuation.priceRangeHigh.toLocaleString()} range)` : ''}, ${new Date().toLocaleDateString()}`,
       }));
     } catch (e: any) {
@@ -950,8 +950,8 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   const [filterStatus, setFilterStatus] = useState('ACTIVE');
   const [showPayForm, setShowPayForm] = useState<string | null>(null);
   const [payAmount, setPayAmount] = useState('');
-  const [payDate, setPayDate]     = useState(() => new Date().toISOString().slice(0, 10));
-  const [payForMonth, setPayForMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [payDate, setPayDate]     = useState(() => todayISO());
+  const [payForMonth, setPayForMonth] = useState(() => thisMonthISO());
   const [payMethod, setPayMethod] = useState('ZELLE');
   const [payNotes, setPayNotes]   = useState('');
   const [payBankAccountId, setPayBankAccountId] = useState('');
@@ -2029,7 +2029,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                       <div className="flex items-center justify-between mb-1.5">
                         <p className="text-xs font-medium text-gray-300">Rent history</p>
                         <button
-                          onClick={() => setRcForm({ leaseId: lease.id, effectiveDate: new Date().toISOString().slice(0, 10), newAmount: String(lease.rentAmount ?? ''), note: '' })}
+                          onClick={() => setRcForm({ leaseId: lease.id, effectiveDate: todayISO(), newAmount: String(lease.rentAmount ?? ''), note: '' })}
                           className="text-xs text-amber-400 hover:text-amber-300">+ Add past change</button>
                       </div>
                       {(rentChanges[lease.id]?.length ?? 0) === 0 ? (
@@ -2191,7 +2191,7 @@ function NewLeaseModal({ propertyId, onClose, onCreated }: {
   const [creatingUnit, setCreatingUnit] = useState(false);
   const [tenantRows, setTenantRows] = useState<TenantRow[]>([{ ...EMPTY_TENANT_ROW }]);
   const [form, setForm] = useState({
-    rentAmount: '', securityDeposit: '', startDate: new Date().toISOString().slice(0, 10),
+    rentAmount: '', securityDeposit: '', startDate: todayISO(),
     endDate: '', leaseType: 'MONTH_TO_MONTH', status: 'ACTIVE', notes: '',
   });
   const [saving, setSaving] = useState(false);
@@ -2452,7 +2452,7 @@ function LoansTab({ propertyId, loans, setLoans }: {
 
 // ─── Expenses ──────────────────────────────────────────────────────────────────
 
-const EMPTY_EXPENSE_FORM = { category: 'REPAIRS_MAINTENANCE', amount: '', date: new Date().toISOString().slice(0, 10), vendor: '', description: '', isCapEx: false, isPersonal: false };
+const EMPTY_EXPENSE_FORM = { category: 'REPAIRS_MAINTENANCE', amount: '', date: todayISO(), vendor: '', description: '', isCapEx: false, isPersonal: false };
 
 function ExpensesTab({ propertyId, expenses, setExpenses }: {
   propertyId: string; expenses: Expense[]; setExpenses: (e: Expense[]) => void;

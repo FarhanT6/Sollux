@@ -12,6 +12,7 @@ import type {
   BankAccountType, OtherIncomeCategory, BudgetForecast,
 } from '../types';
 import { OTHER_INCOME_LABELS, RENT_PAYMENT_METHODS, RENT_PAYMENT_METHOD_LABELS } from '../types';
+import { todayISO } from '../lib/date';
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
@@ -978,7 +979,7 @@ function LogRentPaymentModal({ row, period, onClose, onSaved }: {
   // The month the money is FOR, not the month it arrived: a payment logged
   // while looking at August is August's rent, however late it came in.
   const [forMonth, setForMonth] = useState(period);
-  const [paidDate, setPaidDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [paidDate, setPaidDate] = useState(() => todayISO());
   const [method, setMethod] = useState('ZELLE');
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
@@ -1028,7 +1029,7 @@ function LogMortgagePaymentModal({ row, onClose, onSaved }: {
   row: import('../types').BudgetMortgageRow; onClose: () => void; onSaved: () => void;
 }) {
   const [amount, setAmount] = useState(String(row.monthlyPayment));
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(() => todayISO());
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
 

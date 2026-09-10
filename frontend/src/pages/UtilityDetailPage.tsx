@@ -13,7 +13,7 @@ import { CATEGORY_LABELS, CATEGORY_COLORS, LOAN_TYPE_LABELS,
 import type { BankAccount } from '../types';
 import { Pill, Skeleton, EmptyState } from '../components/ui';
 import { format, isAfter } from 'date-fns';
-import { monthKey, fmtDate, yearOf } from '../lib/date';
+import { monthKey, fmtDate, yearOf, todayISO } from '../lib/date';
 import { operatingCost } from '../lib/operatingCost';
 import ChargeAnalyticsPanel from '../components/utility/ChargeAnalyticsPanel';
 
@@ -178,7 +178,7 @@ function PaymentPlanModal({
   const [total, setTotal] = useState(existing ? String(existing.totalAmount) : '');
   const [monthly, setMonthly] = useState(existing ? String(existing.monthlyAmount) : '');
   const [startDate, setStartDate] = useState(
-    existing ? existing.startDate.slice(0, 10) : new Date().toISOString().slice(0, 10)
+    existing ? existing.startDate.slice(0, 10) : todayISO()
   );
   const [desc, setDesc] = useState(existing?.description || '');
   const [saving, setSaving] = useState(false);
@@ -587,7 +587,7 @@ export default function UtilityDetailPage() {
   const [editPaymentId, setEditPaymentId] = useState<string | null>(null);
   const [savingPayment, setSavingPayment] = useState(false);
   const [payForm, setPayForm] = useState({
-    amount: '', paymentDate: new Date().toISOString().slice(0, 10),
+    amount: '', paymentDate: todayISO(),
     paymentMethod: 'ACH', status: 'PAID', statementId: '',
     confirmationNumber: '', bankAccountId: '', notes: '',
   });
@@ -603,7 +603,7 @@ export default function UtilityDetailPage() {
 
   function resetPayForm() {
     setPayForm({
-      amount: '', paymentDate: new Date().toISOString().slice(0, 10),
+      amount: '', paymentDate: todayISO(),
       paymentMethod: 'ACH', status: 'PAID', statementId: '',
       confirmationNumber: '', bankAccountId: '', notes: '',
     });
@@ -695,7 +695,7 @@ export default function UtilityDetailPage() {
         await createPayment({
           utilityAccountId: accountId,
           amount,
-          paymentDate: new Date().toISOString().slice(0, 10),
+          paymentDate: todayISO(),
           paymentMethod: null,
           status: 'PAID',
           statementId: s.id,
@@ -1590,7 +1590,7 @@ function StatementModal({ accountId, statement, onClose, onSaved }: {
   accountId: string; statement: any; onClose: () => void; onSaved: () => void;
 }) {
   const isEdit = !!statement?.id;
-  const [statementDate, setStatementDate] = useState(statement?.statementDate?.slice(0, 10) ?? new Date().toISOString().slice(0, 10));
+  const [statementDate, setStatementDate] = useState(statement?.statementDate?.slice(0, 10) ?? todayISO());
   const [dueDate, setDueDate] = useState(statement?.dueDate?.slice(0, 10) ?? '');
   const [amountDue, setAmountDue] = useState(statement?.amountDue != null ? String(statement.amountDue) : '');
   const [amountPaid, setAmountPaid] = useState(statement?.amountPaid != null ? String(statement.amountPaid) : '');
