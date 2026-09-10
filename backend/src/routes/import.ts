@@ -593,6 +593,13 @@ function buildRawData(ex: ExtractedBillData, extractedBy?: 'ai' | 'text'): Recor
     chargeBreakdown:  ex.chargeBreakdown,
     alerts:           ex.alerts,
     ratePlan:         ex.ratePlan,
+    // What the bill itself states about the account as a whole — its total
+    // balance and any payment arrangement — so the statement row can show
+    // them without re-reading the PDF.
+    statedTotalDue:      ex.statedTotalDue ?? null,
+    totalAccountBalance: ex.totalAccountBalance ?? null,
+    paymentPlan:         ex.paymentPlan ?? null,
+    paymentPlanAmount:   ex.paymentPlanAmount ?? null,
   };
 }
 

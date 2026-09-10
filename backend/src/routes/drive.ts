@@ -347,6 +347,10 @@ router.post('/stream', attachDbUser, async (req, res) => {
               utilityType: ex.utilityType,
               chargeBreakdown: ex.chargeBreakdown,
               alerts: ex.alerts,
+              statedTotalDue: ex.statedTotalDue ?? null,
+              totalAccountBalance: ex.totalAccountBalance ?? null,
+              paymentPlan: ex.paymentPlan ?? null,
+              paymentPlanAmount: ex.paymentPlanAmount ?? null,
             };
 
             // Positive is arrears, negative is a credit carried in; both change

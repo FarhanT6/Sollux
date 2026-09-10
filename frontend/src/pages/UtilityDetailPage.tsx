@@ -1309,9 +1309,12 @@ export default function UtilityDetailPage() {
 
                       {/* Due date */}
                       <div className="text-right flex-shrink-0 w-24">
-                        {s.dueDate && (
+                        {s.dueDate ? (
                           <p className="text-xs text-gray-500">Due {fmtDate(s.dueDate, 'MMM d')}</p>
-                        )}
+                        ) : totalDue != null && totalDue <= 0.01 ? (
+                          // A bill that asks for nothing prints no due date.
+                          <p className="text-xs text-emerald-600">No payment due</p>
+                        ) : null}
                       </div>
 
                       {/* Amount column.
@@ -1358,8 +1361,14 @@ export default function UtilityDetailPage() {
                                 // is owed in all, including what a payment
                                 // arrangement has deferred beyond this bill.
                                 const raw = s.rawDataJson as any;
-                                const acctBal = raw?.totalAccountBalance != null ? Number(raw.totalAccountBalance) : null;
-                                const deferred = raw?.paymentPlan?.remaining != null ? Math.abs(Number(raw.paymentPlan.remaining)) : null;
+                                // From the bill when the import kept it; for the
+                                // newest bill, from the account's plan otherwise.
+                                const deferred = raw?.paymentPlan?.remaining != null
+                                  ? Math.abs(Number(raw.paymentPlan.remaining))
+                                  : (isLatest && plan && plan.status === 'ACTIVE' ? Number(plan.remainingBalance) : null);
+                                const acctBal = raw?.totalAccountBalance != null
+                                  ? Number(raw.totalAccountBalance)
+                                  : (deferred != null && totalDue != null ? totalDue + deferred : null);
                                 if (acctBal == null || Math.abs(acctBal - (totalDue ?? amt)) < 0.01) return null;
                                 return (
                                   <p className="text-xs text-gray-500">
