@@ -4,7 +4,7 @@ import { Prisma } from '@prisma/client';
 import { guardWorker } from './redisGuard';
 import { createWorkerConnection, workerTuning } from './queues';
 import { db } from '../config/db';
-import { recordConfirmedPayment, syncPaymentPlanFromBill, applyPastDueNotice, parseBill } from '../services/pdfImportService';
+import { recordConfirmedPayment, syncPaymentPlanFromBill, syncInsurancePolicyFromBill, applyPastDueNotice, parseBill } from '../services/pdfImportService';
 import { findOrCreateUtilityAccount } from '../services/utilityAccountResolver';
 import { uploadDocument, buildStatementKey } from '../services/s3Service';
 
@@ -132,6 +132,7 @@ function buildRawData(ex: Awaited<ReturnType<typeof parseBill>>['extracted']) {
     totalAccountBalance: ex.totalAccountBalance ?? null,
     paymentPlan: ex.paymentPlan ?? null,
     paymentPlanAmount: ex.paymentPlanAmount ?? null,
+    insurance: ex.insurance ?? null,
   };
 }
 
@@ -279,6 +280,7 @@ const worker = new Worker<DriveImportJobData>(
               });
               await recordConfirmedPayment(acct.id, existing.id, ex);
               await syncPaymentPlanFromBill(acct.id, ex);
+              await syncInsurancePolicyFromBill(acct.id, ex);
             } else {
               const created = await db.statement.create({
                 data: {
@@ -300,6 +302,7 @@ const worker = new Worker<DriveImportJobData>(
               });
             await recordConfirmedPayment(acct.id, created.id, ex);
             await syncPaymentPlanFromBill(acct.id, ex);
+            await syncInsurancePolicyFromBill(acct.id, ex);
           }
 
             autoImported++;
