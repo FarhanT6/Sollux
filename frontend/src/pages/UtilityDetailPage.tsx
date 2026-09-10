@@ -1309,9 +1309,12 @@ export default function UtilityDetailPage() {
 
                       {/* Due date */}
                       <div className="text-right flex-shrink-0 w-24">
-                        {s.dueDate && (
+                        {s.dueDate ? (
                           <p className="text-xs text-gray-500">Due {fmtDate(s.dueDate, 'MMM d')}</p>
-                        )}
+                        ) : totalDue != null && totalDue <= 0.01 ? (
+                          // A bill that asks for nothing prints no due date.
+                          <p className="text-xs text-emerald-600">No payment due</p>
+                        ) : null}
                       </div>
 
                       {/* Amount column.
