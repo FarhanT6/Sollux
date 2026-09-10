@@ -891,8 +891,11 @@ export default function UtilityDetailPage() {
   // If the prior (older) statement is paid, the balance carried into this one
   // is stale — suppress it. See isPriorStatementPaid.
   const priorToLatestPaid = latestStmt ? isPriorStatementPaid(latestStmt, statements, payments) : false;
-  const latestPastDue = (!priorToLatestPaid && latestStmt?.pastDueCarried != null)
-    ? Number(latestStmt.pastDueCarried)
+  // A carried CREDIT is never stale — it is money the provider holds — so it
+  // is kept even when the prior bill is paid; only carried arrears are.
+  const latestCarried = latestStmt?.pastDueCarried != null ? Number(latestStmt.pastDueCarried) : null;
+  const latestPastDue = latestCarried != null && (latestCarried < 0 || !priorToLatestPaid)
+    ? latestCarried
     : null;
   const latestChargesExclFees = latestStmt?.chargesExcludingFees != null ? Number(latestStmt.chargesExcludingFees) : null;
   const latestOwed = openBalanceOf(latestStmt);
@@ -901,7 +904,7 @@ export default function UtilityDetailPage() {
   const isLatestPaid = latestStmt ? isStatementPaid(latestStmt, payments) : false;
   const latestTotalDue = isLatestPaid
     ? 0
-    : (priorToLatestPaid && latestChargesExclFees != null)
+    : (priorToLatestPaid && latestChargesExclFees != null && !(latestCarried != null && latestCarried < 0))
       ? latestChargesExclFees
       : latestOwed;
 
@@ -1350,6 +1353,20 @@ export default function UtilityDetailPage() {
                               {isFullyPaid && totalDue != null && totalDue < -0.01 && (
                                 <p className="text-xs text-emerald-600">credit −{fmtMoney(-totalDue)} carried forward</p>
                               )}
+                              {(() => {
+                                // The provider's own "Total Account Balance": what
+                                // is owed in all, including what a payment
+                                // arrangement has deferred beyond this bill.
+                                const raw = s.rawDataJson as any;
+                                const acctBal = raw?.totalAccountBalance != null ? Number(raw.totalAccountBalance) : null;
+                                const deferred = raw?.paymentPlan?.remaining != null ? Math.abs(Number(raw.paymentPlan.remaining)) : null;
+                                if (acctBal == null || Math.abs(acctBal - (totalDue ?? amt)) < 0.01) return null;
+                                return (
+                                  <p className="text-xs text-gray-500">
+                                    Account balance {fmtMoney(acctBal)}{deferred ? ` · ${fmtMoney(deferred)} on plan` : ''}
+                                  </p>
+                                );
+                              })()}
                             </>
                           );
                         })()}
