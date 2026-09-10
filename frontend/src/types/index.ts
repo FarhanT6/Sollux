@@ -150,7 +150,7 @@ export interface Lease {
   id: string;
   unitId: string;
   unit?: Unit & { property?: Pick<Property, 'id' | 'address' | 'nickname'> };
-  startDate: string;
+  startDate: string | null;
   endDate?: string;
   rentAmount: number;
   section8Amount?: number;

@@ -589,7 +589,9 @@ model Lease {
   id                     String      @id @default(cuid())
   unitId                 String
   unit                   Unit        @relation(fields: [unitId], references: [id], onDelete: Cascade)
-  startDate              DateTime
+  // Optional: a tenant already in place when the portfolio was set up may
+  // have no known move-in date, and a blank is more honest than a guess.
+  startDate              DateTime?
   endDate                DateTime?
   rentAmount             Decimal     @db.Decimal(10, 2)
   section8Amount         Decimal?    @db.Decimal(10, 2)
