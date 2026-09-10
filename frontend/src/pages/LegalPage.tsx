@@ -12,13 +12,13 @@ import {
   LEGAL_PRIORITIES, LEGAL_DOC_CATEGORIES, DOCUMENT_CATEGORY_LABELS,
 } from '../types';
 import { PageHeader } from '../components/ui';
-import { fmtDate } from '../lib/date';
+import { fmtDate, todayISO } from '../lib/date';
 
 const money = (n?: number | string | null) =>
   n == null || n === '' ? '—'
     : Number(n).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => todayISO();
 
 function readFileAsBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {

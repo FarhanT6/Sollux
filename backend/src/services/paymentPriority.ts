@@ -37,8 +37,12 @@ export interface AccountPriority {
   pastDue: number;
   /** An arrears arrangement on the account, when one is recorded. */
   paymentPlan: { monthlyAmount: number; remainingBalance: number; endDate: string | null; description: string | null } | null;
-  /** How much of the carried balance is covered by that plan — owed, but not overdue. */
+  /** The balance the plan defers — owed, but not overdue. */
   onPlan: number;
+  /** True when the bill itself charges the installment, so it is already inside currentCharges. */
+  installmentBilled: boolean;
+  /** The account's total balance as the provider states it, when the bill prints one. */
+  totalAccountBalance: number | null;
   /** What this month's payment should be: this period's charge plus the plan installment, less payments since. */
   payThisMonth: number;
 
@@ -142,7 +146,7 @@ export async function getPaymentPriorities(userId: string, propertyId?: string):
         take: 36,
         select: {
           id: true, statementDate: true, dueDate: true, amountDue: true,
-          pastDueCarried: true, penaltiesFees: true, amountPaid: true,
+          pastDueCarried: true, penaltiesFees: true, amountPaid: true, paymentPlanAmount: true,
           penaltyDate: true, amountAfterDueDate: true, isDownPayment: true,
         },
       },
@@ -180,14 +184,23 @@ export async function getPaymentPriorities(userId: string, propertyId?: string):
     // plus one instalment — not the whole balance, and not a penalty risk
     // on the part that is on the plan.
     const plan = account.paymentPlan && account.paymentPlan.status === 'ACTIVE' ? account.paymentPlan : null;
-    const onPlan = plan ? Math.min(Math.max(pastDue, 0), num(plan.remainingBalance)) : 0;
-    const pastDueOffPlan = Math.max(0, pastDue - onPlan);
-    const payThisMonth = plan
+    // Two shapes of arrangement. SDG&E bills the installment inside the
+    // charges and keeps the deferred balance out of the carried figure, so
+    // the bill's total is already what to pay. An HOA ledger carries the
+    // whole balance and the plan is an agreement on the side, so the
+    // deferred part must be taken out of "past due" and one installment
+    // added back to this month's payment.
+    const installmentBilled = num(latest.paymentPlanAmount) > 0;
+    const onPlan = plan
+      ? (installmentBilled ? num(plan.remainingBalance) : Math.min(Math.max(pastDue, 0), num(plan.remainingBalance)))
+      : 0;
+    const pastDueOffPlan = plan && !installmentBilled ? Math.max(0, pastDue - onPlan) : pastDue;
+    const payThisMonth = plan && !installmentBilled
       ? Math.max(0, currentCharges + pastDueOffPlan + Math.min(num(plan.monthlyAmount), onPlan) - paidSince - statementPaid)
       : balanceToCurrent;
     // Urgency is judged on what is actually late: the charge and any arrears
     // outside the plan.
-    const balanceAtRisk = plan ? Math.max(0, balanceToCurrent - onPlan) : balanceToCurrent;
+    const balanceAtRisk = plan && !installmentBilled ? Math.max(0, balanceToCurrent - onPlan) : balanceToCurrent;
 
     const fees = analyseFees(statements);
 
@@ -291,13 +304,14 @@ export async function getPaymentPriorities(userId: string, propertyId?: string):
         reasons.push('Not enough billing history to know whether this provider charges late fees');
       }
       if (pastDueOffPlan > 0) reasons.push(`Already carrying ${pastDueOffPlan.toFixed(2)} from earlier periods`);
+      if (pastDue < -0.005) reasons.push(`A ${Math.abs(pastDue).toFixed(2)} credit is applied to this bill`);
     } else if (balanceToCurrent > 0 && plan) {
       reasons.push('Current, as long as the plan instalment is paid with this month\'s bill');
     } else {
       reasons.push('Nothing owed');
     }
     if (plan && onPlan > 0) {
-      reasons.push(`${onPlan.toFixed(2)} of the balance is on a payment plan: ${num(plan.monthlyAmount).toFixed(2)}/month${plan.endDate ? ` until ${plan.endDate.toISOString().slice(0, 10)}` : ''}`);
+      reasons.push(`${onPlan.toFixed(2)} is deferred on a payment plan: ${num(plan.monthlyAmount).toFixed(2)}/month${installmentBilled ? ', billed inside each statement' : ''}${plan.endDate ? ` until ${plan.endDate.toISOString().slice(0, 10)}` : ''}`);
     }
 
     results.push({
@@ -312,6 +326,8 @@ export async function getPaymentPriorities(userId: string, propertyId?: string):
       pastDue: pastDueOffPlan,
       paymentPlan: plan ? { monthlyAmount: num(plan.monthlyAmount), remainingBalance: num(plan.remainingBalance), endDate: plan.endDate?.toISOString() ?? null, description: plan.description } : null,
       onPlan,
+      installmentBilled,
+      totalAccountBalance: plan ? Math.round((balanceToCurrent + (installmentBilled ? onPlan : 0)) * 100) / 100 : null,
       payThisMonth,
       dueDate: latest.dueDate?.toISOString() ?? null,
       penaltyDate: penaltyDate?.toISOString() ?? null,

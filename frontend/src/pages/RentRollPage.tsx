@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { getLeases, createRentPayment, getProperties, getUnits } from '../api/client';
 import type { Lease, Property, Unit } from '../types';
 import { format } from 'date-fns';
-import { fmtDate } from '../lib/date';
+import { fmtDate, todayISO, thisMonthISO } from '../lib/date';
 
 const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 
@@ -16,8 +16,8 @@ export default function RentRollPage({ embedded }: { embedded?: boolean } = {}) 
   const [filterStatus, setFilterStatus] = useState('ACTIVE');
   const [showPayForm, setShowPayForm] = useState<string | null>(null);
   const [payAmount, setPayAmount] = useState('');
-  const [payDate, setPayDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [payForMonth, setPayForMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [payDate, setPayDate] = useState(() => todayISO());
+  const [payForMonth, setPayForMonth] = useState(() => thisMonthISO());
   const [payMethod, setPayMethod] = useState('ZELLE');
   const [payNotes, setPayNotes] = useState('');
   const [saving, setSaving] = useState(false);

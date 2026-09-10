@@ -11,7 +11,7 @@ import type {
 } from '../types';
 import { EXPENSE_CATEGORY_LABELS } from '../types';
 import { format } from 'date-fns';
-import { fmtDate } from '../lib/date';
+import { fmtDate, todayISO } from '../lib/date';
 
 const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 
@@ -296,9 +296,9 @@ function NewStatementModal({ profile, loans, onClose, onCreated }: {
 }) {
   const profileLoans = useMemo(() => loans.filter(l => profile.loanIds.includes(l.id)), [loans, profile]);
 
-  const [statementDate, setStatementDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [statementDate, setStatementDate] = useState(() => todayISO());
   const [items, setItems] = useState<ReconciliationLineItem[]>(() => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayISO();
     const initial: ReconciliationLineItem[] = [];
     if (profile.leaseId) {
       initial.push({ type: 'RENT', targetId: profile.leaseId, targetLabel: 'Rent collected', description: 'Rent collected', amount: 0, direction: 'CREDIT', date: today });

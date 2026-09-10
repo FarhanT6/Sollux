@@ -13,7 +13,7 @@ import { CATEGORY_LABELS, CATEGORY_COLORS, LOAN_TYPE_LABELS,
 import type { BankAccount } from '../types';
 import { Pill, Skeleton, EmptyState } from '../components/ui';
 import { format, isAfter } from 'date-fns';
-import { monthKey, fmtDate, yearOf } from '../lib/date';
+import { monthKey, fmtDate, yearOf, todayISO } from '../lib/date';
 import { operatingCost } from '../lib/operatingCost';
 import ChargeAnalyticsPanel from '../components/utility/ChargeAnalyticsPanel';
 
@@ -178,7 +178,7 @@ function PaymentPlanModal({
   const [total, setTotal] = useState(existing ? String(existing.totalAmount) : '');
   const [monthly, setMonthly] = useState(existing ? String(existing.monthlyAmount) : '');
   const [startDate, setStartDate] = useState(
-    existing ? existing.startDate.slice(0, 10) : new Date().toISOString().slice(0, 10)
+    existing ? existing.startDate.slice(0, 10) : todayISO()
   );
   const [desc, setDesc] = useState(existing?.description || '');
   const [saving, setSaving] = useState(false);
@@ -587,7 +587,7 @@ export default function UtilityDetailPage() {
   const [editPaymentId, setEditPaymentId] = useState<string | null>(null);
   const [savingPayment, setSavingPayment] = useState(false);
   const [payForm, setPayForm] = useState({
-    amount: '', paymentDate: new Date().toISOString().slice(0, 10),
+    amount: '', paymentDate: todayISO(),
     paymentMethod: 'ACH', status: 'PAID', statementId: '',
     confirmationNumber: '', bankAccountId: '', notes: '',
   });
@@ -603,7 +603,7 @@ export default function UtilityDetailPage() {
 
   function resetPayForm() {
     setPayForm({
-      amount: '', paymentDate: new Date().toISOString().slice(0, 10),
+      amount: '', paymentDate: todayISO(),
       paymentMethod: 'ACH', status: 'PAID', statementId: '',
       confirmationNumber: '', bankAccountId: '', notes: '',
     });
@@ -695,7 +695,7 @@ export default function UtilityDetailPage() {
         await createPayment({
           utilityAccountId: accountId,
           amount,
-          paymentDate: new Date().toISOString().slice(0, 10),
+          paymentDate: todayISO(),
           paymentMethod: null,
           status: 'PAID',
           statementId: s.id,
@@ -1022,18 +1022,31 @@ export default function UtilityDetailPage() {
               ? <span className="text-emerald-400">Paid</span>
               : (
                 <span>
-                  {latestPastDue && latestPastDue > 0 && (() => {
-                    // Arrears on an active plan are owed, not overdue: the
-                    // provider takes them in instalments alongside the bill.
-                    const onPlan = plan && plan.status === 'ACTIVE' ? Math.min(latestPastDue, Number(plan.remainingBalance)) : 0;
-                    const offPlan = latestPastDue - onPlan;
+                  {(() => {
+                    const carried = latestPastDue ?? 0;
+                    const active = plan && plan.status === 'ACTIVE' ? plan : null;
+                    const installmentBilled = Number(latestStmt?.paymentPlanAmount ?? 0) > 0;
+                    // Under an arrangement the deferred balance is owed, not
+                    // overdue. When the bill charges the installment itself
+                    // (SDG&E) the total already includes it; otherwise (an
+                    // HOA ledger) the deferred part is inside "past due" and
+                    // one installment joins this month's payment.
+                    const onPlan = active ? (installmentBilled ? Number(active.remainingBalance) : Math.min(Math.max(carried, 0), Number(active.remainingBalance))) : 0;
+                    const offPlan = active && !installmentBilled ? carried - onPlan : carried;
                     return (
                       <>
                         {offPlan > 0.01 && <span className="text-red-400">{fmtMoney(offPlan)} past due</span>}
-                        {onPlan > 0.01 && (
+                        {carried < -0.01 && <span className="text-emerald-400">{fmtMoney(-carried)} credit applied</span>}
+                        {active && onPlan > 0.01 && (
                           <span className="text-amber-400 block">
-                            {fmtMoney(onPlan)} on payment plan · pay {fmtMoney((latestAmt ?? 0) + Math.min(Number(plan!.monthlyAmount), onPlan))} this month
+                            {fmtMoney(onPlan)} deferred on payment plan · {fmtMoney(Number(active.monthlyAmount))}/mo
+                            {installmentBilled
+                              ? ' included in this bill'
+                              : ` · pay ${fmtMoney((latestAmt ?? 0) + Math.max(offPlan, 0) + Math.min(Number(active.monthlyAmount), onPlan))} this month`}
                           </span>
+                        )}
+                        {active && installmentBilled && latestTotalDue != null && (
+                          <span className="text-gray-500 block">Account balance {fmtMoney(latestTotalDue + onPlan)} incl. plan</span>
                         )}
                       </>
                     );
@@ -1577,7 +1590,7 @@ function StatementModal({ accountId, statement, onClose, onSaved }: {
   accountId: string; statement: any; onClose: () => void; onSaved: () => void;
 }) {
   const isEdit = !!statement?.id;
-  const [statementDate, setStatementDate] = useState(statement?.statementDate?.slice(0, 10) ?? new Date().toISOString().slice(0, 10));
+  const [statementDate, setStatementDate] = useState(statement?.statementDate?.slice(0, 10) ?? todayISO());
   const [dueDate, setDueDate] = useState(statement?.dueDate?.slice(0, 10) ?? '');
   const [amountDue, setAmountDue] = useState(statement?.amountDue != null ? String(statement.amountDue) : '');
   const [amountPaid, setAmountPaid] = useState(statement?.amountPaid != null ? String(statement.amountPaid) : '');

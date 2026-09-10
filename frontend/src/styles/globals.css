@@ -11,10 +11,33 @@
     color: #f0f0f0;
     margin: 0;
     min-height: 100vh;
+    /* Inside the iOS shell the page must never rubber-band as a whole; the
+       main pane scrolls instead. Tap highlights read as glitches on a dark UI. */
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-text-size-adjust: 100%;
+  }
+  /* The notch, home indicator and rounded corners. Zero on the web. */
+  :root {
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-left: env(safe-area-inset-left, 0px);
+    --safe-right: env(safe-area-inset-right, 0px);
+  }
+  /* iOS zooms any input under 16px on focus; keep them at 16px on phones. */
+  @media (max-width: 767px) {
+    input, select, textarea { font-size: 16px !important; }
   }
 }
 
 @layer components {
+  .pt-safe { padding-top: var(--safe-top); }
+  .pb-safe { padding-bottom: var(--safe-bottom); }
+  .tabbar-link {
+    @apply flex flex-col items-center justify-center gap-0.5 flex-1 py-1.5 text-[10px] text-gray-500 transition-colors;
+  }
+  .tabbar-link.active { color: #F5A623; }
+
   .sidebar-link {
     @apply flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-sm text-gray-400
            cursor-pointer transition-colors;

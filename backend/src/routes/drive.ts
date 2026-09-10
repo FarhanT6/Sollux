@@ -4,7 +4,7 @@ import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { getSignedDocumentUrl, downloadDocument, uploadDocument, buildStatementKey } from '../services/s3Service';
-import { applyPastDueNotice, parseBill, recordConfirmedPayment } from '../services/pdfImportService';
+import { applyPastDueNotice, parseBill, recordConfirmedPayment, syncPaymentPlanFromBill } from '../services/pdfImportService';
 import { findOrCreateUtilityAccount } from '../services/utilityAccountResolver';
 
 const router = Router();
@@ -382,6 +382,7 @@ router.post('/stream', attachDbUser, async (req, res) => {
                 ...(pdfS3Key ? { pdfS3Key } : {}),
               }});
               await recordConfirmedPayment(acct.id, existing.id, ex);
+              await syncPaymentPlanFromBill(acct.id, ex);
             } else {
               const created = await db.statement.create({ data: {
                 utilityAccountId: acct.id, statementDate,
@@ -399,6 +400,7 @@ router.post('/stream', attachDbUser, async (req, res) => {
                 rawDataJson: rawData as Prisma.InputJsonValue,
               }});
               await recordConfirmedPayment(acct.id, created.id, ex);
+              await syncPaymentPlanFromBill(acct.id, ex);
             }
             autoImported++;
             send({ type: 'auto_imported', filename: file.name });

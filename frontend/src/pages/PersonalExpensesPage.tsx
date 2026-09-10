@@ -4,7 +4,7 @@ import type { Expense, ExpenseCategory } from '../types';
 import { EXPENSE_CATEGORY_LABELS, PERSONAL_EXPENSE_CATEGORIES } from '../types';
 import { format } from 'date-fns';
 import { PageHeader } from '../components/ui';
-import { fmtDate } from '../lib/date';
+import { fmtDate, todayISO } from '../lib/date';
 
 const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 
@@ -21,7 +21,7 @@ export default function PersonalExpensesPage({ embedded }: { embedded?: boolean 
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
     category: 'CREDIT_CARD' as ExpenseCategory,
-    amount: '', date: new Date().toISOString().slice(0, 10),
+    amount: '', date: todayISO(),
     vendor: '', description: '',
   });
   const [saving, setSaving] = useState(false);

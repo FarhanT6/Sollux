@@ -46,3 +46,24 @@ export function yearOf(d?: string | Date | null): number | null {
 export function localMonthKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
+
+/**
+ * Today, in Pacific time. `new Date().toISOString()` is UTC, which after
+ * 5pm on the West Coast is already tomorrow — so every "paid date" and "as
+ * of" field defaulted to a day that had not happened yet. The portfolio is
+ * run from California, so dates a person is about to confirm are pinned
+ * to Pacific time whatever device or timezone they happen to be on.
+ */
+export const HOME_TIME_ZONE = 'America/Los_Angeles';
+
+export function todayISO(): string {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: HOME_TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' })
+    .formatToParts(new Date());
+  const get = (t: string) => parts.find(p => p.type === t)?.value ?? '';
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
+/** This month in Pacific time, as YYYY-MM. */
+export function thisMonthISO(): string {
+  return todayISO().slice(0, 7);
+}

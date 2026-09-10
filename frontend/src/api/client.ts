@@ -625,6 +625,8 @@ export interface AccountPriority {
   pastDue: number;
   paymentPlan: { monthlyAmount: number; remainingBalance: number; endDate: string | null; description: string | null } | null;
   onPlan: number;
+  installmentBilled: boolean;
+  totalAccountBalance: number | null;
   payThisMonth: number;
   dueDate: string | null;
   penaltyDate: string | null;

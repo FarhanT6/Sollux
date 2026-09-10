@@ -33,7 +33,7 @@ import api, {
 import type { PlaidItem } from '../api/client';
 import type { BankAccount, IndexRate } from '../types';
 import { format } from 'date-fns';
-import { fmtDate as fmtDateSafe } from '../lib/date';
+import { fmtDate as fmtDateSafe, todayISO } from '../lib/date';
 import { getAccount, inviteAccountMember, cancelAccountInvite, removeAccountMember,
   getNotificationPreferences, updateNotificationPreferences } from '../api/client';
 import type { AccountInfo } from '../api/client';
@@ -254,7 +254,7 @@ function RatesTab() {
   const [rates, setRates]     = useState<IndexRate[]>([]);
   const [loading, setLoading] = useState(true);
   const [rate, setRate]       = useState('');
-  const [effectiveDate, setEffectiveDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [effectiveDate, setEffectiveDate] = useState(() => todayISO());
   const [notes, setNotes]     = useState('');
   const [saving, setSaving]   = useState(false);
 

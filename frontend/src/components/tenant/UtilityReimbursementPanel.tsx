@@ -5,7 +5,7 @@ import {
   recordReimbursementPayment, deleteReimbursementInvoice,
   type ReimbursementRule, type ReimbursementConfig, type ReimbursementInvoiceSummary, type ReimbursementDraft,
 } from '../../api/client';
-import { fmtDate } from '../../lib/date';
+import { fmtDate, todayISO } from '../../lib/date';
 
 /**
  * The tenant's utility reimbursement for one lease: which utilities they
@@ -47,7 +47,7 @@ export default function UtilityReimbursementPanel({ leaseId }: { leaseId: string
 
   // Payment recording
   const [payingId, setPayingId] = useState<string | null>(null);
-  const [payForm, setPayForm] = useState({ amount: '', paidAt: new Date().toISOString().slice(0, 10) });
+  const [payForm, setPayForm] = useState({ amount: '', paidAt: todayISO() });
 
   async function load() {
     setLoading(true);
@@ -101,7 +101,7 @@ export default function UtilityReimbursementPanel({ leaseId }: { leaseId: string
     try {
       await recordReimbursementPayment(id, amount, payForm.paidAt);
       setPayingId(null);
-      setPayForm({ amount: '', paidAt: new Date().toISOString().slice(0, 10) });
+      setPayForm({ amount: '', paidAt: todayISO() });
       await load();
     } catch (err: any) {
       setError(err?.response?.data?.error ?? 'Could not record the payment.');

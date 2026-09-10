@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { ClerkProvider } from '@clerk/clerk-react';
 import App from './App';
 import './styles/globals.css';
+import { initNative, hideSplash } from './lib/native';
 
 const CLERK_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
 
@@ -27,6 +28,9 @@ function ConfigError() {
 }
 
 const root = ReactDOM.createRoot(document.getElementById('root')!);
+// Inside the iOS shell: status bar, back button, then drop the splash once
+// the first frame is up. No-ops on the web.
+initNative().finally(() => requestAnimationFrame(() => setTimeout(hideSplash, 150)));
 
 // This guard used to be a bare top-level `throw`. Vite inlines a missing env
 // var as the literal `undefined`, which makes `!CLERK_KEY` statically true, so
