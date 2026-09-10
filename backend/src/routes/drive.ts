@@ -363,7 +363,7 @@ router.post('/stream', attachDbUser, async (req, res) => {
               await db.statement.update({ where: { id: existing.id }, data: {
                 statementDate,
                 amountDue: amountDueCurrent ?? existing.amountDue,
-                balance: totalDue ?? amountDueCurrent ?? existing.balance,
+                balance: ex.totalAccountBalance ?? totalDue ?? amountDueCurrent ?? existing.balance,
                 amountPaid: amountPaidValue ?? (legacyDerivedPaid != null && Number(existing.amountPaid) === legacyDerivedPaid ? null : existing.amountPaid),
                 dueDate: ex.dueDate ? new Date(ex.dueDate) : existing.dueDate,
                 chargesExcludingFees: ex.currentCharges ?? existing.chargesExcludingFees,
@@ -390,7 +390,7 @@ router.post('/stream', attachDbUser, async (req, res) => {
                 billingPeriodStart: ex.billingPeriodStart ? new Date(ex.billingPeriodStart) : null,
                 billingPeriodEnd:   ex.billingPeriodEnd   ? new Date(ex.billingPeriodEnd)   : null,
                 amountDue: amountDueCurrent ?? null,
-                balance: totalDue ?? amountDueCurrent ?? null,
+                balance: ex.totalAccountBalance ?? totalDue ?? amountDueCurrent ?? null,
                 amountPaid: amountPaidValue,
                 chargesExcludingFees: ex.currentCharges ?? null,
                 penaltiesFees: ex.lateFee ?? null,

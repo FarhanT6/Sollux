@@ -75,7 +75,7 @@ export async function getCashflow(year: number, userId: string, propertyId?: str
       },
     }),
     db.lease.findMany({
-      where: { unit: { propertyId: { in: ids } }, startDate: { lt: yearEnd }, OR: [{ status: 'ACTIVE' }, { endDate: null }, { endDate: { gt: yearStart } }] },
+      where: { unit: { propertyId: { in: ids } }, OR: [{ startDate: null }, { startDate: { lt: yearEnd } }], AND: { OR: [{ status: 'ACTIVE' }, { endDate: null }, { endDate: { gt: yearStart } }] } },
       select: { unitId: true, startDate: true, endDate: true, rentAmount: true, status: true, unit: { select: { propertyId: true } } },
     }),
     db.loan.findMany({
@@ -120,11 +120,11 @@ export async function getCashflow(year: number, userId: string, propertyId?: str
       // The rent roll for the month: one lease per unit, active first.
       const perUnit = new Map<string, typeof leases[number]>();
       for (const l of leases) {
-        if (l.unit.propertyId !== p.id || l.status === 'PENDING' || l.startDate >= mEnd) continue;
+        if (l.unit.propertyId !== p.id || l.status === 'PENDING' || (l.startDate && l.startDate >= mEnd)) continue;
         const inForce = l.status === 'ACTIVE' ? true : (l.endDate != null && l.endDate >= mStart);
         if (!inForce) continue;
         const cur = perUnit.get(l.unitId);
-        if (!cur || (l.status === 'ACTIVE' && cur.status !== 'ACTIVE') || (l.status === cur.status && l.startDate > cur.startDate)) perUnit.set(l.unitId, l);
+        if (!cur || (l.status === 'ACTIVE' && cur.status !== 'ACTIVE') || (l.status === cur.status && (l.startDate?.getTime() ?? 0) > (cur.startDate?.getTime() ?? 0))) perUnit.set(l.unitId, l);
       }
       const rentExpected = [...perUnit.values()].reduce((s, l) => s + toNum(l.rentAmount), 0);
 

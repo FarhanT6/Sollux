@@ -24,7 +24,7 @@ interface Tenancy {
   leaseId: string;
   tenants: string[];
   businessName: string | null;
-  startDate: string;
+  startDate: string | null;
   endDate: string | null;
   rentAmount: number;
   status: string;
@@ -100,12 +100,12 @@ router.get('/', async (req, res, next) => {
         // A month-to-month lease past its end date is still running, so measure
         // an ACTIVE tenancy to today rather than to a stale endDate.
         const measureTo = l.status === 'ACTIVE' ? now : (end ?? now);
-        const months = round2(daysBetween(l.startDate, measureTo) / 30.44);
+        const months = l.startDate ? round2(daysBetween(l.startDate, measureTo) / 30.44) : 0;
         return {
           leaseId: l.id,
           tenants: tenantNames(l),
           businessName: l.businessName ?? null,
-          startDate: l.startDate.toISOString(),
+          startDate: l.startDate ? l.startDate.toISOString() : null,
           endDate: end ? end.toISOString() : null,
           rentAmount: Number(l.rentAmount),
           status: l.status,
@@ -120,8 +120,9 @@ router.get('/', async (req, res, next) => {
       for (let i = 0; i < leases.length - 1; i++) {
         const prev = leases[i];
         const next = leases[i + 1];
-        // Without an end date on the outgoing lease there's no gap to measure.
-        if (!prev.endDate) continue;
+        // Without an end date on the outgoing lease, or a start on the
+        // incoming one, there's no gap to measure.
+        if (!prev.endDate || !next.startDate) continue;
 
         // Clamp: overlapping or back-to-back leases mean no vacancy, not a
         // negative one (a re-let that starts before the old lease formally ends

@@ -121,6 +121,8 @@ export interface ExtractedLeaseTerms {
 }
 export const extractLeaseTerms = (leaseId: string, fileData: string, filename: string) =>
   api.post<ExtractedLeaseTerms>(`/leases/${leaseId}/extract-terms`, { fileData, filename }).then(r => r.data);
+export const deleteLeaseAgreement = (leaseId: string) =>
+  api.delete(`/leases/${leaseId}/document`);
 export const deleteLeaseDocument = (leaseId: string, docId: string) =>
   api.delete(`/leases/${leaseId}/documents/${docId}`);
 export const addScheduledIncrease = (leaseId: string, data: { effectiveDate: string; newAmount?: number | null; percent?: number | null; percentMax?: number | null; note?: string | null }) =>

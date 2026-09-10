@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { format } from 'date-fns';
 import {
   getTenant, updateTenant, deleteTenant,
-  updateLease, uploadLeaseDocument, getLeaseDocumentUrl,
+  updateLease, uploadLeaseDocument, deleteLeaseAgreement, getLeaseDocumentUrl,
   getImprovements,
 } from '../api/client';
 import type { Tenant, Lease, LeaseTenant, RentPayment, Improvement } from '../types';
@@ -68,7 +68,7 @@ export default function TenantDetailPage() {
       const propertyId = lease.unit?.property?.id;
       if (!propertyId || maintenanceByLease[lease.id]) return;
       getImprovements({ propertyId }).then(items => {
-        const start = new Date(lease.startDate).getTime();
+        const start = lease.startDate ? new Date(lease.startDate).getTime() : 0;
         const end = lease.endDate ? new Date(lease.endDate).getTime() : Date.now();
         const inRange = items.filter(i => {
           const d = i.startDate || i.completionDate;
@@ -195,7 +195,7 @@ function LeaseCard({ lease, maintenance, onChanged }: {
       await updateLease(lease.id, {
         rentAmount: parseFloat(form.rentAmount) || undefined,
         securityDeposit: form.securityDeposit ? parseFloat(form.securityDeposit) : null,
-        startDate: form.startDate || undefined,
+        startDate: form.startDate || null,
         endDate: form.endDate || null,
         leaseType: form.leaseType,
         status: form.status,
@@ -231,7 +231,7 @@ function LeaseCard({ lease, maintenance, onChanged }: {
             {lease.unit?.unitLabel && <span className="text-gray-500"> · Unit {lease.unit.unitLabel}</span>}
           </p>
           <p className="text-xs text-gray-500 mt-0.5">
-            {lease.leaseType === 'FIXED_TERM' ? `${fmtDate(lease.startDate)} – ${fmtDate(lease.endDate)}` : `Month-to-month from ${fmtDate(lease.startDate)}`}
+            {lease.leaseType === 'FIXED_TERM' ? `${fmtDate(lease.startDate)} – ${fmtDate(lease.endDate)}` : (lease.startDate ? `Month-to-month from ${fmtDate(lease.startDate)}` : 'Month-to-month')}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -272,7 +272,11 @@ function LeaseCard({ lease, maintenance, onChanged }: {
       {/* Lease document */}
       <div className="mt-3 flex items-center gap-2 text-xs">
         {lease.documentUrl ? (
-          <button onClick={viewDocument} className="text-amber-400 hover:text-amber-300">📄 View lease agreement</button>
+          <>
+            <button onClick={viewDocument} className="text-amber-400 hover:text-amber-300">📄 View lease agreement</button>
+            <button onClick={async () => { if (confirm('Remove the lease agreement from this lease?')) { await deleteLeaseAgreement(lease.id); onChanged(); } }}
+              className="text-gray-600 hover:text-red-400">Remove</button>
+          </>
         ) : (
           <label className="text-gray-500 hover:text-gray-300 cursor-pointer">
             {uploading ? 'Uploading…' : '+ Upload lease agreement (PDF)'}

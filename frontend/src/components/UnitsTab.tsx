@@ -16,7 +16,8 @@ const isCurrent = (l: Lease) => l.status === 'ACTIVE';
 const tenantNames = (l: Lease) =>
   (l.leaseTenants ?? []).map(lt => lt.tenant.fullName).join(', ') || 'Unnamed tenant';
 
-function monthsBetween(startIso: string, endIso?: string | null): number | null {
+function monthsBetween(startIso: string | null, endIso?: string | null): number | null {
+  if (!startIso) return null;
   const start = new Date(startIso).getTime();
   const end = endIso ? new Date(endIso).getTime() : Date.now();
   if (Number.isNaN(start) || Number.isNaN(end)) return null;
@@ -221,7 +222,7 @@ export default function UnitsTab({ propertyId }: { propertyId: string }) {
                           // one moving in. leases are newest-first.
                           const previous = leases[i + 1];
                           const gapDays = previous?.endDate
-                            ? Math.max(0, Math.round((new Date(l.startDate).getTime() - new Date(previous.endDate).getTime()) / MS_PER_DAY))
+                            ? (l.startDate ? Math.max(0, Math.round((new Date(l.startDate).getTime() - new Date(previous.endDate).getTime()) / MS_PER_DAY)) : null)
                             : null;
                           return (
                             <div key={l.id}>

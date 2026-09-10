@@ -68,7 +68,7 @@ function monthsOverlap(range: DateRange, from?: Date | null, to?: Date | null): 
  * An active lease past its end date is a holdover — still paying — and is
  * counted, exactly as the rent roll counts it.
  */
-type LeaseLike = { unitId: string; startDate: Date; endDate: Date | null; rentAmount: Prisma.Decimal | number; status: string };
+type LeaseLike = { unitId: string; startDate: Date | null; endDate: Date | null; rentAmount: Prisma.Decimal | number; status: string };
 
 function monthsInRange(range: DateRange): number {
   const now = new Date();
@@ -90,12 +90,12 @@ function scheduledRent(leases: LeaseLike[], range: DateRange): number {
     const perUnit = new Map<string, LeaseLike>();
     for (const l of leases) {
       if (l.status === 'PENDING') continue;
-      if (l.startDate >= monthEnd) continue;
+      if (l.startDate && l.startDate >= monthEnd) continue;
       const inForce = l.status === 'ACTIVE' ? true : (l.endDate != null && l.endDate >= m);
       if (!inForce) continue;
       const cur = perUnit.get(l.unitId);
       // Active beats ended; among equals the later start is the current one.
-      if (!cur || (l.status === 'ACTIVE' && cur.status !== 'ACTIVE') || (l.status === cur.status && l.startDate > cur.startDate)) perUnit.set(l.unitId, l);
+      if (!cur || (l.status === 'ACTIVE' && cur.status !== 'ACTIVE') || (l.status === cur.status && (l.startDate?.getTime() ?? 0) > (cur.startDate?.getTime() ?? 0))) perUnit.set(l.unitId, l);
     }
     for (const l of perUnit.values()) total += toNum(l.rentAmount);
   }
@@ -126,7 +126,7 @@ export async function getPropertyPnL(propertyId: string, range: DateRange, userI
 
   const [leases, rentPayments, expenses, policies, taxAssessments, loans, utilityStatements] = await Promise.all([
     db.lease.findMany({
-      where: { unit: { propertyId }, startDate: { lt: range.end }, OR: [{ status: 'ACTIVE' }, { endDate: null }, { endDate: { gt: range.start } }] },
+      where: { unit: { propertyId }, OR: [{ startDate: null }, { startDate: { lt: range.end } }], AND: { OR: [{ status: 'ACTIVE' }, { endDate: null }, { endDate: { gt: range.start } }] } },
       select: leaseSelect,
     }),
     db.rentPayment.findMany({
@@ -235,7 +235,7 @@ export async function getMonthlyPnL(year: number, userId: string, propertyId?: s
   const leaseWhere = propertyId ? { unit: { propertyId } } : { unit: { property: { userId } } };
   const [leases, rentPayments, expenses, policies, taxAssessments, loanPayments, utilityStatements] = await Promise.all([
     db.lease.findMany({
-      where: { ...leaseWhere, startDate: { lt: yearEnd }, OR: [{ status: 'ACTIVE' }, { endDate: null }, { endDate: { gt: yearStart } }] },
+      where: { ...leaseWhere, OR: [{ startDate: null }, { startDate: { lt: yearEnd } }], AND: { OR: [{ status: 'ACTIVE' }, { endDate: null }, { endDate: { gt: yearStart } }] } },
       select: leaseSelect,
     }),
     db.rentPayment.findMany({ where: { paidDate: { gte: yearStart, lt: yearEnd }, ...leaseFilter } }),

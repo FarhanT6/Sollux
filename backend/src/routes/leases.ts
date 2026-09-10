@@ -14,8 +14,9 @@ function sanitizeFilename(name: string): string {
 
 const LeaseSchema = z.object({
   unitId: z.string(),
-  startDate: z.string().transform(s => new Date(s)),
-  endDate: z.string().transform(s => new Date(s)).optional().nullable(),
+  // Absent = leave alone; empty or null = clear; a string = set.
+  startDate: z.union([z.string(), z.null()]).optional().transform(v => (v === undefined ? undefined : v ? new Date(v) : null)),
+  endDate: z.union([z.string(), z.null()]).optional().transform(v => (v === undefined ? undefined : v ? new Date(v) : null)),
   rentAmount: z.number().positive(),
   section8Amount: z.number().optional().nullable(),
   securityDeposit: z.number().optional().nullable(),
@@ -434,9 +435,29 @@ router.get('/:id/documents/:docId/url', async (req, res, next) => {
 // DELETE /api/leases/:id/documents/:docId — remove an attachment
 router.delete('/:id/documents/:docId', async (req, res, next) => {
   try {
-    await db.document.deleteMany({
+    const doc = await db.document.findFirst({
       where: { id: req.params.docId, userId: req.dbUserId!, linkedType: 'Lease', linkedId: req.params.id },
     });
+    if (!doc) return res.status(204).send();
+    await db.document.delete({ where: { id: doc.id } });
+    // The lease also keeps a single "agreement" link from before attachments
+    // were categorised, and uploads of a LEASE document refresh it. Deleting
+    // the agreement must take that link with it, or the tenant page goes on
+    // offering a document the owner has removed.
+    if (doc.category === 'LEASE') {
+      const remaining = await db.document.count({ where: { linkedType: 'Lease', linkedId: req.params.id, category: 'LEASE' } });
+      if (remaining === 0) {
+        await db.lease.updateMany({ where: { id: req.params.id, unit: { property: { userId: req.dbUserId! } } }, data: { documentUrl: null } });
+      }
+    }
+    res.status(204).send();
+  } catch (err) { next(err); }
+});
+
+// DELETE /api/leases/:id/document — drop the legacy agreement link itself
+router.delete('/:id/document', async (req, res, next) => {
+  try {
+    await db.lease.updateMany({ where: { id: req.params.id, unit: { property: { userId: req.dbUserId! } } }, data: { documentUrl: null } });
     res.status(204).send();
   } catch (err) { next(err); }
 });

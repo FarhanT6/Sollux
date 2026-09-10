@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { format } from 'date-fns';
 import {
+  deleteLeaseAgreement,
   getProperty, getLeases, getLoans, getExpenses, getInsurancePolicies,
   getTaxAssessments, getImprovements, getPropertyPnL, getRentPayments,
   createRentPayment, createExpense, createImprovement, createInsurancePolicy,
@@ -1212,7 +1213,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
         unitId: editForm.unitId || undefined,
         rentAmount: parseFloat(editForm.rentAmount) || undefined,
         securityDeposit: editForm.securityDeposit ? parseFloat(editForm.securityDeposit) : null,
-        startDate: editForm.startDate || undefined,
+        startDate: editForm.startDate || null,
         endDate: editForm.endDate || null,
         leaseType: editForm.leaseType,
         status: editForm.status,
@@ -1544,7 +1545,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                         <p className="text-xs text-gray-400">{lease.businessName}</p>
                       )}
                       <p className="text-xs text-gray-500">
-                        Unit {lease.unit?.unitLabel} · {lease.leaseType === 'FIXED_TERM' ? `${fmtDate(lease.startDate)} – ${fmtDate(lease.endDate)}` : `Month-to-month from ${fmtDate(lease.startDate)}`}
+                        Unit {lease.unit?.unitLabel} · {lease.leaseType === 'FIXED_TERM' ? `${fmtDate(lease.startDate)} – ${fmtDate(lease.endDate)}` : (lease.startDate ? `Month-to-month from ${fmtDate(lease.startDate)}` : 'Month-to-month')}
                         {lease.leaseType === 'MONTH_TO_MONTH' && lease.endDate && new Date(lease.endDate) < new Date() && (
                           <span className="text-gray-600"> · holdover since {fmtDate(lease.endDate)}</span>
                         )}
@@ -1948,7 +1949,18 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                       )}
                       <div className="space-y-1">
                         {(leaseDocs[lease.id] ?? []).length === 0 ? (
-                          <span className="text-xs text-gray-600">No documents attached</span>
+                          lease.documentUrl ? (
+                            // An agreement uploaded before attachments were
+                            // categorised: still linked, so still removable here.
+                            <div className="flex items-center gap-2 text-xs group">
+                              <span className="px-1.5 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.08)' }}>Lease agreement</span>
+                              <span className="text-gray-400">attached earlier</span>
+                              <button onClick={async () => { await deleteLeaseAgreement(lease.id); setLeases(await getLeases({ propertyId })); }}
+                                className="text-gray-600 hover:text-red-400 ml-auto">✕</button>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-gray-600">No documents attached</span>
+                          )
                         ) : (
                           (leaseDocs[lease.id] ?? []).map(d => (
                             <div key={d.id} className="flex items-center gap-2 text-xs group">
@@ -2241,7 +2253,7 @@ function NewLeaseModal({ propertyId, onClose, onCreated }: {
       }
       await createLease({
         unitId: finalUnitId,
-        startDate: form.startDate,
+        startDate: form.startDate || null,
         endDate: form.endDate || undefined,
         rentAmount: parseFloat(form.rentAmount),
         securityDeposit: form.securityDeposit ? parseFloat(form.securityDeposit) : undefined,

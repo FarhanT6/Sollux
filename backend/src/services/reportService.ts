@@ -137,10 +137,10 @@ export async function buildRentRollWorkbook(
           cell.value = occupied ? 'Occupied' : 'VACANT';
           break;
         case 'moveIn':
-          if (occupied) { cell.value = lease!.startDate; cell.numFmt = 'm/d/yyyy'; }
+          if (occupied && lease!.startDate) { cell.value = lease!.startDate; cell.numFmt = 'm/d/yyyy'; }
           break;
         case 'periodStart':
-          if (occupied) { cell.value = lease!.startDate; cell.numFmt = 'm/d/yyyy'; }
+          if (occupied && lease!.startDate) { cell.value = lease!.startDate; cell.numFmt = 'm/d/yyyy'; }
           break;
         case 'periodEnd':
           if (occupied && lease!.endDate) { cell.value = lease!.endDate; cell.numFmt = 'm/d/yyyy'; }
