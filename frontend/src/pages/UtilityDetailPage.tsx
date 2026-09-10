@@ -1361,8 +1361,14 @@ export default function UtilityDetailPage() {
                                 // is owed in all, including what a payment
                                 // arrangement has deferred beyond this bill.
                                 const raw = s.rawDataJson as any;
-                                const acctBal = raw?.totalAccountBalance != null ? Number(raw.totalAccountBalance) : null;
-                                const deferred = raw?.paymentPlan?.remaining != null ? Math.abs(Number(raw.paymentPlan.remaining)) : null;
+                                // From the bill when the import kept it; for the
+                                // newest bill, from the account's plan otherwise.
+                                const deferred = raw?.paymentPlan?.remaining != null
+                                  ? Math.abs(Number(raw.paymentPlan.remaining))
+                                  : (isLatest && plan && plan.status === 'ACTIVE' ? Number(plan.remainingBalance) : null);
+                                const acctBal = raw?.totalAccountBalance != null
+                                  ? Number(raw.totalAccountBalance)
+                                  : (deferred != null && totalDue != null ? totalDue + deferred : null);
                                 if (acctBal == null || Math.abs(acctBal - (totalDue ?? amt)) < 0.01) return null;
                                 return (
                                   <p className="text-xs text-gray-500">

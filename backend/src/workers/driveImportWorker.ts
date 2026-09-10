@@ -128,6 +128,10 @@ function buildRawData(ex: Awaited<ReturnType<typeof parseBill>>['extracted']) {
     chargeBreakdown: ex.chargeBreakdown,
     alerts: ex.alerts,
     ratePlan: ex.ratePlan,
+    statedTotalDue: ex.statedTotalDue ?? null,
+    totalAccountBalance: ex.totalAccountBalance ?? null,
+    paymentPlan: ex.paymentPlan ?? null,
+    paymentPlanAmount: ex.paymentPlanAmount ?? null,
   };
 }
 
