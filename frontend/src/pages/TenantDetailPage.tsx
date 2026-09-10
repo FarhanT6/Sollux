@@ -5,9 +5,11 @@ import { format } from 'date-fns';
 import {
   getTenant, updateTenant, deleteTenant,
   updateLease, uploadLeaseDocument, deleteLeaseAgreement, getLeaseDocumentUrl,
+  getLeaseDocuments, addLeaseDocument, getLeaseDocumentViewUrl, deleteLeaseDocument,
   getImprovements,
 } from '../api/client';
-import type { Tenant, Lease, LeaseTenant, RentPayment, Improvement } from '../types';
+import type { Tenant, Lease, LeaseTenant, RentPayment, Improvement, Document } from '../types';
+import { DOCUMENT_CATEGORY_LABELS } from '../types';
 import { fmtDate } from '../lib/date';
 import UtilityReimbursementPanel from '../components/tenant/UtilityReimbursementPanel';
 
@@ -245,11 +247,38 @@ function LeaseCard({ lease, maintenance, onChanged }: {
       </div>
 
       {!editing ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-3 text-sm">
-          <div><p className="text-xs text-gray-500">Rent</p><p className="text-white font-medium">{money(lease.rentAmount)}/mo</p></div>
-          <div><p className="text-xs text-gray-500">Security deposit</p><p className="text-gray-300">{money(lease.securityDeposit)}</p></div>
-          <div><p className="text-xs text-gray-500">Arrears</p><p className={arrears > 0 ? 'text-red-400 font-medium' : 'text-gray-300'}>{money(arrears)}</p></div>
-        </div>
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-3 text-sm">
+            <div><p className="text-xs text-gray-500">Rent</p><p className="text-white font-medium">{money(lease.rentAmount)}/mo{lease.rentDueDay ? <span className="text-xs text-gray-500 font-normal"> · due the {lease.rentDueDay}{lease.rentDueDay === 1 ? 'st' : lease.rentDueDay === 2 ? 'nd' : lease.rentDueDay === 3 ? 'rd' : 'th'}</span> : null}</p></div>
+            <div><p className="text-xs text-gray-500">Security deposit</p><p className="text-gray-300">{money(lease.securityDeposit)}</p></div>
+            <div><p className="text-xs text-gray-500">Arrears</p><p className={arrears > 0 ? 'text-red-400 font-medium' : 'text-gray-300'}>{money(arrears)}</p></div>
+            {(lease.leaseTenants?.length ?? 0) > 1 && (
+              <div><p className="text-xs text-gray-500">On this lease</p><p className="text-gray-300">{lease.leaseTenants!.map(lt => lt.tenant?.fullName).filter(Boolean).join(', ')}</p></div>
+            )}
+            {(lease.lateFeeAmount != null || lease.lateFeePercent != null) && (
+              <div><p className="text-xs text-gray-500">Late fee</p><p className="text-gray-300">
+                {lease.lateFeeAmount != null ? money(lease.lateFeeAmount) : `${lease.lateFeePercent}% of rent`}
+                {lease.lateFeeGraceDays ? <span className="text-gray-500"> · after {lease.lateFeeGraceDays} day grace</span> : null}
+              </p></div>
+            )}
+            {lease.status === 'ACTIVE' && lease.endDate && new Date(lease.endDate) < new Date() && (
+              <div><p className="text-xs text-gray-500">Term</p><p className="text-red-400">Holdover since {fmtDate(lease.endDate)}</p></div>
+            )}
+            {(lease.scheduledIncreases ?? []).filter(i => !i.applied).slice(0, 1).map(i => (
+              <div key={i.id}><p className="text-xs text-gray-500">Next increase</p><p className="text-emerald-400">
+                {fmtDate(i.effectiveDate)} → {i.newAmount != null ? money(i.newAmount) : i.percent != null ? `+${i.percent}${i.percentMax != null ? `–${i.percentMax}` : ''}%` : '—'}
+              </p></div>
+            ))}
+            {(lease.utilityCharges?.length ?? 0) > 0 && (
+              <div><p className="text-xs text-gray-500">Of which utilities</p><p className="text-gray-300">{lease.utilityCharges!.map(u => `${u.category.toLowerCase()} ${money(u.amount)}`).join(', ')}</p></div>
+            )}
+            {(lease.paymentAliases?.length ?? 0) > 0 && (
+              <div><p className="text-xs text-gray-500">Rent also arrives from</p><p className="text-gray-300">{lease.paymentAliases!.map(a => a.name).join(', ')}</p></div>
+            )}
+            {lease.notes && <div className="sm:col-span-2 lg:col-span-3"><p className="text-xs text-gray-500">Notes</p><p className="text-gray-300">{lease.notes}</p></div>}
+          </div>
+          <LeaseDocuments leaseId={lease.id} legacyUrl={lease.documentUrl} onLegacyRemoved={onChanged} />
+        </>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-3">
           <input type="number" placeholder="Rent/mo" value={form.rentAmount} onChange={e => setForm(f => ({ ...f, rentAmount: e.target.value }))} className="input-dark text-sm" />
@@ -270,22 +299,23 @@ function LeaseCard({ lease, maintenance, onChanged }: {
         </div>
       )}
 
-      {/* Lease document */}
-      <div className="mt-3 flex items-center gap-2 text-xs">
-        {lease.documentUrl ? (
-          <>
-            <button onClick={viewDocument} className="text-amber-400 hover:text-amber-300">📄 View lease agreement</button>
-            <button onClick={async () => { if (confirm('Remove the lease agreement from this lease?')) { await deleteLeaseAgreement(lease.id); onChanged(); } }}
-              className="text-gray-600 hover:text-red-400">Remove</button>
-          </>
-        ) : (
-          <label className="text-gray-500 hover:text-gray-300 cursor-pointer">
-            {uploading ? 'Uploading…' : '+ Upload lease agreement (PDF)'}
-            <input type="file" accept="application/pdf" className="hidden" disabled={uploading}
-              onChange={e => e.target.files?.[0] && handleUpload(e.target.files[0])} />
-          </label>
-        )}
-      </div>
+      {editing && (
+        <div className="mt-3 flex items-center gap-2 text-xs">
+          {lease.documentUrl ? (
+            <>
+              <button onClick={viewDocument} className="text-amber-400 hover:text-amber-300">📄 View lease agreement</button>
+              <button onClick={async () => { if (confirm('Remove the lease agreement from this lease?')) { await deleteLeaseAgreement(lease.id); onChanged(); } }}
+                className="text-gray-600 hover:text-red-400">Remove</button>
+            </>
+          ) : (
+            <label className="text-gray-500 hover:text-gray-300 cursor-pointer">
+              {uploading ? 'Uploading…' : '+ Upload lease agreement (PDF)'}
+              <input type="file" accept="application/pdf" className="hidden" disabled={uploading}
+                onChange={e => e.target.files?.[0] && handleUpload(e.target.files[0])} />
+            </label>
+          )}
+        </div>
+      )}
 
       {/* Utility reimbursement — only for leases where the tenant repays a share */}
       <UtilityReimbursementPanel leaseId={lease.id} />
@@ -329,6 +359,86 @@ function LeaseCard({ lease, maintenance, onChanged }: {
             ))}
           </div>
         </details>
+      )}
+    </div>
+  );
+}
+
+
+/**
+ * The lease's attachments — agreement, application, ID, screening — the
+ * same list the property hub's edit form keeps, shown here where the
+ * tenant is looked up, with view, upload and remove. The pre-categorised
+ * agreement link, when one exists and nothing else does, is shown too.
+ */
+function LeaseDocuments({ leaseId, legacyUrl, onLegacyRemoved }: { leaseId: string; legacyUrl?: string | null; onLegacyRemoved: () => void }) {
+  const [docs, setDocs] = useState<Document[] | null>(null);
+  const [category, setCategory] = useState('LEASE');
+  const [busy, setBusy] = useState(false);
+  const reload = () => getLeaseDocuments(leaseId).then(setDocs).catch(() => setDocs([]));
+  useEffect(() => { reload(); }, [leaseId]);
+
+  async function upload(file: File) {
+    setBusy(true);
+    try {
+      const base64 = await readFileAsBase64(file);
+      await addLeaseDocument(leaseId, { fileData: base64, filename: file.name, category });
+      await reload();
+    } finally { setBusy(false); }
+  }
+  async function view(id: string) {
+    const { url } = await getLeaseDocumentViewUrl(leaseId, id);
+    window.open(url, '_blank');
+  }
+  async function remove(id: string) {
+    if (!confirm('Delete this document?')) return;
+    await deleteLeaseDocument(leaseId, id);
+    await reload();
+    onLegacyRemoved();
+  }
+  async function viewLegacy() {
+    const { url } = await getLeaseDocumentUrl(leaseId);
+    window.open(url, '_blank');
+  }
+
+  const categories = Object.entries(DOCUMENT_CATEGORY_LABELS).filter(([k]) => ['LEASE', 'APPLICATION', 'IDENTITY', 'SCREENING', 'OTHER'].includes(k));
+
+  return (
+    <div className="mt-3">
+      <div className="flex items-center gap-2 mb-1.5">
+        <p className="text-xs text-gray-500">Documents</p>
+        <select value={category} onChange={e => setCategory(e.target.value)} className="input-dark text-xs py-0.5">
+          {categories.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+        </select>
+        <label className={`text-xs cursor-pointer ${busy ? 'text-gray-600' : 'text-amber-400 hover:text-amber-300'}`}>
+          {busy ? 'Uploading…' : '+ Add file'}
+          <input type="file" accept="application/pdf,image/*" className="hidden" disabled={busy}
+            onChange={e => e.target.files?.[0] && upload(e.target.files[0])} />
+        </label>
+      </div>
+      {docs == null ? (
+        <p className="text-xs text-gray-600">Loading…</p>
+      ) : docs.length === 0 && !legacyUrl ? (
+        <p className="text-xs text-gray-600">No documents attached</p>
+      ) : (
+        <div className="space-y-1">
+          {docs.length === 0 && legacyUrl && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="px-1.5 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.08)' }}>Lease agreement</span>
+              <button onClick={viewLegacy} className="text-gray-300 hover:text-amber-400">View</button>
+              <button onClick={async () => { if (confirm('Remove the lease agreement from this lease?')) { await deleteLeaseAgreement(leaseId); onLegacyRemoved(); } }}
+                className="text-gray-600 hover:text-red-400 ml-auto">✕</button>
+            </div>
+          )}
+          {docs.map(d => (
+            <div key={d.id} className="flex items-center gap-2 text-xs group">
+              <span className="px-1.5 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.08)' }}>{DOCUMENT_CATEGORY_LABELS[d.category as keyof typeof DOCUMENT_CATEGORY_LABELS] ?? d.category}</span>
+              <button onClick={() => view(d.id)} className="text-gray-300 hover:text-amber-400 truncate max-w-[260px]">{d.title}</button>
+              <span className="text-gray-600">{fmtDate(d.createdAt)}</span>
+              <button onClick={() => remove(d.id)} className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 ml-auto">✕</button>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
