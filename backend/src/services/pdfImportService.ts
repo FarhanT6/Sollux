@@ -1462,6 +1462,20 @@ export function reconcileWithStatedTotal(ex: ExtractedBillData): void {
     return;
   }
 
+  // A statement with a stated total but no period charge — an insurance
+  // installment bill, where nothing reads as a "charge" — still asks for a
+  // figure. What it asks for, less anything it says was carried in, is
+  // this period's charge; leaving it empty made the bill unpayable.
+  if (ex.amountDue == null) {
+    const carried = ex.previousBalance ?? 0;
+    const derived = Number((total - carried).toFixed(2));
+    ex.amountDue = ex.currentCharges ?? (derived !== 0 || carried === 0 ? derived : null);
+    if (ex.amountDue != null && ex.previousBalance == null && Math.abs(total - ex.amountDue) > 0.01) {
+      ex.previousBalance = Number((total - ex.amountDue).toFixed(2));
+    }
+    return;
+  }
+
   // No arrangement: the carried balance is what the total does not explain.
   // Only fill a gap or repair a contradiction; a consistent bill is left alone.
   if (ex.amountDue != null) {
@@ -1538,7 +1552,13 @@ export async function syncInsurancePolicyFromBill(utilityAccountId: string, ex: 
   const newer = await db.statement.findFirst({ where: { utilityAccountId, statementDate: { gt: billDate }, isDownPayment: false }, select: { id: true } });
   if (newer) return;
 
-  const norm = (v: string | null | undefined) => (v ?? '').replace(/[\s-]/g, '').toUpperCase();
+  // Carriers' policy numbers are read with drifting letters ("ACP BP01" vs
+  // "ACP EP01"); the digits are the identity. The billing account number is
+  // never a policy number, and a policy needs a coverage term to be one.
+  const norm = (v: string | null | undefined) => (v ?? '').replace(/[^0-9]/g, '');
+  const acctDigits = (ex.accountNumber ?? '').replace(/[^0-9]/g, '');
+  if (ins.policyNumber && acctDigits && norm(ins.policyNumber) === acctDigits) ins.policyNumber = null;
+  if (!ins.coverageStart) return;
   const start = ins.coverageStart ? new Date(ins.coverageStart) : null;
   const end = ins.coverageEnd ? new Date(ins.coverageEnd) : null;
   const perInstallment = ins.installment != null ? ins.installment + (ins.serviceCharge ?? 0) : null;
@@ -1552,13 +1572,27 @@ export async function syncInsurancePolicyFromBill(utilityAccountId: string, ex: 
   };
 
   const current = account.insurancePolicy;
+  const sameTerm = (eff: Date | null) => !!(start && eff && Math.abs(eff.getTime() - start.getTime()) < 45 * 86400000);
   const samePolicy = current && (
     (ins.policyNumber && current.policyNumber && norm(current.policyNumber) === norm(ins.policyNumber))
-    || (!ins.policyNumber && start && current.effectiveDate && Math.abs(current.effectiveDate.getTime() - start.getTime()) < 7 * 86400000)
+    || sameTerm(current.effectiveDate)
   );
 
   if (current && samePolicy) {
     await db.insurancePolicy.update({ where: { id: current.id }, data: figures });
+    return;
+  }
+
+  // The policy may already exist unlinked — an earlier statement of the same
+  // term, or a renewal read twice with different letters. Reuse it rather
+  // than minting another.
+  const unlinked = await db.insurancePolicy.findMany({ where: { propertyId: account.propertyId, utilityAccountId: null } });
+  const twin = unlinked.find(p => (ins.policyNumber && p.policyNumber && norm(p.policyNumber) === norm(ins.policyNumber)) || sameTerm(p.effectiveDate)) ?? null;
+  // Only a genuinely later term is a renewal; an older statement of a prior
+  // term must not push the current policy aside.
+  const isLater = !current?.effectiveDate || (start != null && start.getTime() > current.effectiveDate.getTime() + 45 * 86400000);
+  if (current && !isLater) {
+    if (twin) await db.insurancePolicy.update({ where: { id: twin.id }, data: { ...figures, isActive: false } });
     return;
   }
   if (current && !samePolicy) {
@@ -1573,6 +1607,10 @@ export async function syncInsurancePolicyFromBill(utilityAccountId: string, ex: 
         notes: `Renewed onto ${ins.policyNumber ?? 'a new policy'}${ins.renewedOn ? ` on ${ins.renewedOn}` : ''} (from the billing statement)`,
       },
     });
+  }
+  if (twin) {
+    await db.insurancePolicy.update({ where: { id: twin.id }, data: { ...figures, utilityAccountId: account.id, carrier: account.providerName } });
+    return;
   }
   await db.insurancePolicy.create({
     data: {

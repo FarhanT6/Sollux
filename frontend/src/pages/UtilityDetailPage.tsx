@@ -64,7 +64,13 @@ function openBalanceOf(s: any): number | null {
 // the statement date; if the sum covers the open balance, treat as paid.
 function isStatementPaid(s: any, payments: any[] = []): boolean {
   const openBalance = openBalanceOf(s);
-  if (openBalance == null) return false;
+  // A bill with no amount on file cannot be measured against payments, but
+  // a payment made against it, or a mark-paid, still settles it.
+  if (openBalance == null) {
+    if (Number(s.amountPaid ?? 0) > 0) return true;
+    const marker = `[marked-paid:${s.id}]`;
+    return payments.some(p => typeof p.notes === 'string' && p.notes.includes(marker));
+  }
   if (openBalance <= 0.01) return true;
   // amountPaid is what the bill says was received during its cycle — on most
   // layouts that is the payment that settled the PREVIOUS bill ("Payments
@@ -691,8 +697,15 @@ export default function UtilityDetailPage() {
       if (marked) {
         await deletePayment(marked.id);
       } else {
-        const amount = Number(openBalanceOf(s) ?? s.amountDue ?? 0);
-        if (amount <= 0) return;
+        let amount = Number(openBalanceOf(s) ?? s.amountDue ?? 0);
+        if (amount <= 0) {
+          // No amount on file: ask, and put it on the bill so it stops being unknown.
+          const typed = prompt('This bill has no amount on file. How much did you pay?');
+          const n = typed ? parseFloat(typed.replace(/[^0-9.]/g, '')) : NaN;
+          if (!(n > 0)) return;
+          amount = n;
+          await patchStatement(s.id, { amountDue: n });
+        }
         await createPayment({
           utilityAccountId: accountId,
           amount,
