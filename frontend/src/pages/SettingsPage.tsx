@@ -31,8 +31,8 @@ import api, {
   deleteIndexRate,
 } from '../api/client';
 import { CARD_NETWORKS } from '../types';
-import type { BankAccountType, PlaidItem } from '../api/client';
-import type { BankAccount, IndexRate } from '../types';
+import type { PlaidItem } from '../api/client';
+import type { BankAccount, BankAccountType, IndexRate } from '../types';
 import { format } from 'date-fns';
 import { fmtDate as fmtDateSafe, todayISO } from '../lib/date';
 import { getAccount, inviteAccountMember, cancelAccountInvite, removeAccountMember,
