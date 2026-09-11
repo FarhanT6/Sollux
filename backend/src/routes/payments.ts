@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
+import { allocateAccountPayments } from '../lib/paymentAllocation';
 
 const router = Router();
 router.use(attachDbUser);
@@ -45,12 +46,31 @@ router.get('/', async (req, res, next) => {
             property: { select: { id: true, address: true, nickname: true } },
           },
         },
-        statement: { select: { statementDate: true, amountDue: true, dueDate: true } },
+        statement: { select: { statementDate: true, amountDue: true, dueDate: true, billingPeriodEnd: true } },
         bankAccount: { select: { id: true, name: true, bank: true, last4: true } },
       },
     });
 
-    res.json(payments);
+    // Where each payment landed — fee, past due, installment, current — worked
+    // out per account from every statement and payment on it.
+    const accountIds = [...new Set(payments.map(p => p.utilityAccountId))];
+    const [stmts, allPayments] = await Promise.all([
+      db.statement.findMany({
+        where: { utilityAccountId: { in: accountIds }, isDownPayment: false },
+        select: { id: true, utilityAccountId: true, statementDate: true, billingPeriodEnd: true, amountDue: true, pastDueCarried: true, penaltiesFees: true, paymentPlanAmount: true },
+      }),
+      db.payment.findMany({
+        where: { utilityAccountId: { in: accountIds } },
+        select: { id: true, utilityAccountId: true, paymentDate: true, amount: true, feeAmount: true, status: true, statementId: true },
+      }),
+    ]);
+    const breakdowns = new Map<string, ReturnType<typeof allocateAccountPayments> extends Map<string, infer B> ? B : never>();
+    for (const accountId of accountIds) {
+      const m = allocateAccountPayments(stmts.filter(s => s.utilityAccountId === accountId), allPayments.filter(p => p.utilityAccountId === accountId));
+      for (const [k, v] of m) breakdowns.set(k, v);
+    }
+
+    res.json(payments.map(p => ({ ...p, breakdown: breakdowns.get(p.id) ?? null })));
   } catch (err) {
     next(err);
   }
@@ -60,6 +80,7 @@ const PaymentSchema = z.object({
   utilityAccountId: z.string(),
   statementId: z.string().optional().nullable(),
   amount: z.number().positive(),
+  feeAmount: z.number().min(0).optional().nullable(),
   // Accepts a plain date ("2026-08-17") as well as a full ISO timestamp — the
   // old .datetime() rule rejected what a <input type="date"> sends.
   paymentDate: z.string(),

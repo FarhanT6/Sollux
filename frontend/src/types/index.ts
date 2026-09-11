@@ -815,11 +815,20 @@ export interface StatementSummaryRow {
   propertyLabel: string;
 }
 
+export interface PaymentBreakdown {
+  statementId: string | null; statementLabel: string | null;
+  toFees: number; toPastDue: number; toInstallment: number; toCurrent: number;
+  overpaid: number; creditUsed: number; transactionFee: number; totalOut: number; remainingAfter: number;
+}
+
 export interface Payment {
   id: string;
   utilityAccountId: string;
   statementId?: string;
   amount: number;
+  /** Processing / convenience fee paid on top of the amount. */
+  feeAmount?: number | null;
+  breakdown?: PaymentBreakdown | null;
   paymentDate: string;
   confirmationNumber?: string;
   paymentMethod?: string;

@@ -341,6 +341,9 @@ model Payment {
   statementId        String?
   statement          Statement?     @relation(fields: [statementId], references: [id])
   amount             Decimal        @db.Decimal(10, 2)
+  // A processing / convenience fee paid on top of the amount — money out
+  // that never reduced the bill.
+  feeAmount          Decimal?       @db.Decimal(10, 2)
   paymentDate        DateTime
   confirmationNumber String?
   paymentMethod      String?
