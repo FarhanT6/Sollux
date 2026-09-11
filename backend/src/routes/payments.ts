@@ -47,7 +47,7 @@ router.get('/', async (req, res, next) => {
           },
         },
         statement: { select: { statementDate: true, amountDue: true, dueDate: true, billingPeriodEnd: true } },
-        bankAccount: { select: { id: true, name: true, bank: true, last4: true } },
+        bankAccount: { select: { id: true, name: true, bank: true, last4: true, accountType: true, ownerLabel: true, cardNetwork: true } },
       },
     });
 
@@ -147,7 +147,7 @@ router.post('/', async (req, res, next) => {
 
     const payment = await db.payment.create({
       data: { ...data, paymentDate: new Date(data.paymentDate) },
-      include: { bankAccount: { select: { id: true, name: true, bank: true, last4: true } } },
+      include: { bankAccount: { select: { id: true, name: true, bank: true, last4: true, accountType: true, ownerLabel: true, cardNetwork: true } } },
     });
     await syncStatementPaid(data.statementId);
 
@@ -188,7 +188,7 @@ router.patch('/:id', async (req, res, next) => {
         ...data,
         ...(data.paymentDate ? { paymentDate: new Date(data.paymentDate) } : {}),
       },
-      include: { bankAccount: { select: { id: true, name: true, bank: true, last4: true } } },
+      include: { bankAccount: { select: { id: true, name: true, bank: true, last4: true, accountType: true, ownerLabel: true, cardNetwork: true } } },
     });
 
     // Both statements need recomputing when a payment moves between them.

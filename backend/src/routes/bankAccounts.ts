@@ -17,6 +17,9 @@ function serialize(a: any) {
     name: a.name,
     last4: a.last4,
     bank: a.bank,
+    ownerLabel: a.ownerLabel,
+    cardNetwork: a.cardNetwork,
+    cardExpiry: a.cardExpiry,
     accountType: a.accountType,
     isActive: a.isActive,
     sortOrder: a.sortOrder,
@@ -50,9 +53,9 @@ router.get('/', async (req, res, next) => {
 // POST /api/bank-accounts
 router.post('/', async (req, res, next) => {
   try {
-    const { name, last4, bank, accountType, sortOrder, notes } = req.body;
+    const { name, last4, bank, ownerLabel, cardNetwork, cardExpiry, accountType, sortOrder, notes } = req.body;
     const account = await db.bankAccount.create({
-      data: { userId: req.dbUserId!, name, last4, bank, accountType, sortOrder: sortOrder ?? 0, notes },
+      data: { userId: req.dbUserId!, name, last4, bank, ownerLabel, cardNetwork, cardExpiry, accountType, sortOrder: sortOrder ?? 0, notes },
       include: { balances: { orderBy: { asOfDate: 'desc' }, take: 1 } },
     });
     res.status(201).json(serialize(account));
@@ -64,10 +67,10 @@ router.patch('/:id', async (req, res, next) => {
   try {
     const acct = await db.bankAccount.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
     if (!acct) return res.status(404).json({ error: 'Not found' });
-    const { name, last4, bank, accountType, isActive, sortOrder, notes, watchForRentPayments, watchForExpenses } = req.body;
+    const { name, last4, bank, ownerLabel, cardNetwork, cardExpiry, accountType, isActive, sortOrder, notes, watchForRentPayments, watchForExpenses } = req.body;
     const updated = await db.bankAccount.update({
       where: { id: acct.id },
-      data: { name, last4, bank, accountType, isActive, sortOrder, notes, watchForRentPayments, watchForExpenses },
+      data: { name, last4, bank, ownerLabel, cardNetwork, cardExpiry, accountType, isActive, sortOrder, notes, watchForRentPayments, watchForExpenses },
       include: { balances: { orderBy: { asOfDate: 'desc' }, take: 1 } },
     });
     res.json(serialize(updated));
