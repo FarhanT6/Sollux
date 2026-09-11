@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import PaymentBreakdownLine from '../components/utility/PaymentBreakdownLine';
+import { bankAccountLabel } from '../lib/bankAccountLabel';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   getUtility, syncUtility, deleteUtility, updateUtility, getStatementDownloadUrl,
@@ -63,8 +64,17 @@ function openBalanceOf(s: any): number | null {
 // Determine if a statement is paid, including reconciliation against payments that
 // may not yet have posted on the provider's API. Sums all payments dated on/after
 // the statement date; if the sum covers the open balance, treat as paid.
-function isStatementPaid(s: any, payments: any[] = []): boolean {
-  const openBalance = openBalanceOf(s);
+function isStatementPaid(s: any, payments: any[] = [], priorSettled = false): boolean {
+  // What this bill still needs: its own charge, plus what it carried in —
+  // unless the bill that balance came from is already settled, in which
+  // case the carried figure is stale and only the charge counts. Paying
+  // the July bill's $1,661.62 in full left it Overdue because the check
+  // demanded $3,210.77, half of which the prior bill had already cleared.
+  // A carried credit always applies.
+  const carried = s?.pastDueCarried != null ? Number(s.pastDueCarried) : 0;
+  const openBalance = s == null || (s.amountDue == null && s.pastDueCarried == null)
+    ? null
+    : Number(s.amountDue ?? 0) + (carried < 0 ? carried : priorSettled ? 0 : carried);
   // A bill with no amount on file cannot be measured against payments, but
   // a payment made against it, or a mark-paid, still settles it.
   if (openBalance == null) {
@@ -144,21 +154,38 @@ function computeResolvedByFutureCheckpoint(statements: any[]): Set<string> {
   return resolved;
 }
 
-function isEffectivelyPaid(s: any, payments: any[], resolvedByFuture: Set<string>): boolean {
+/**
+ * Paid state for every statement, decided oldest-first so each bill knows
+ * whether the bill before it is settled. `statements` newest-first, as the
+ * API returns them.
+ */
+function computePaidMap(statements: any[], payments: any[], resolvedByFuture: Set<string>): Map<string, boolean> {
+  const paid = new Map<string, boolean>();
+  for (let i = statements.length - 1; i >= 0; i--) {
+    const s = statements[i];
+    const prior = statements[i + 1];
+    const priorSettled = prior ? (paid.get(prior.id) ?? false) : false;
+    paid.set(s.id, resolvedByFuture.has(s.id) || isStatementPaid(s, payments, priorSettled));
+  }
+  return paid;
+}
+
+function isEffectivelyPaid(s: any, payments: any[], resolvedByFuture: Set<string>, paidMap?: Map<string, boolean>): boolean {
+  if (paidMap?.has(s.id)) return paidMap.get(s.id)!;
   return isStatementPaid(s, payments) || resolvedByFuture.has(s.id);
 }
 
 // Past due carried on a statement reflects an older unpaid balance. Once the
 // prior (chronologically older) statement is marked paid in Sollux, that
 // carried-forward figure is stale — suppress the past-due display for it.
-function isPriorStatementPaid(current: any, all: any[], payments: any[] = [], resolvedByFuture: Set<string> = new Set()): boolean {
+function isPriorStatementPaid(current: any, all: any[], payments: any[] = [], resolvedByFuture: Set<string> = new Set(), paidMap?: Map<string, boolean>): boolean {
   const idx = all.findIndex(x => x.id === current.id);
   if (idx === -1 || idx + 1 >= all.length) return false;
-  return isEffectivelyPaid(all[idx + 1], payments, resolvedByFuture);
+  return isEffectivelyPaid(all[idx + 1], payments, resolvedByFuture, paidMap);
 }
 
-function statementStatus(s: any, payments: any[] = [], newerStmt?: any, isLatest = false, resolvedByFuture: Set<string> = new Set()): { color: 'green' | 'amber' | 'red'; label: string } {
-  if (isEffectivelyPaid(s, payments, resolvedByFuture)) return { color: 'green', label: 'Paid' };
+function statementStatus(s: any, payments: any[] = [], newerStmt?: any, isLatest = false, resolvedByFuture: Set<string> = new Set(), paidMap?: Map<string, boolean>): { color: 'green' | 'amber' | 'red'; label: string } {
+  if (isEffectivelyPaid(s, payments, resolvedByFuture, paidMap)) return { color: 'green', label: 'Paid' };
 
   if (!isLatest && newerStmt) {
     // The next bill's carried-in balance tells us whether this one was paid:
@@ -821,6 +848,7 @@ export default function UtilityDetailPage() {
   // Computed from the FULL statement history (not the filtered/searched
   // view) so status stays correct regardless of year filter or search.
   const resolvedByFuture = useMemo(() => computeResolvedByFutureCheckpoint(statements), [statements]);
+  const paidMap = useMemo(() => computePaidMap(statements, payments, resolvedByFuture), [statements, payments, resolvedByFuture]);
 
   const stmtYears = useMemo(() => {
     const years = new Set(statements.map(s => String(yearOf(s.statementDate))));
@@ -907,7 +935,7 @@ export default function UtilityDetailPage() {
   const latestStmt = statements[0];
   // If the prior (older) statement is paid, the balance carried into this one
   // is stale — suppress it. See isPriorStatementPaid.
-  const priorToLatestPaid = latestStmt ? isPriorStatementPaid(latestStmt, statements, payments) : false;
+  const priorToLatestPaid = latestStmt ? isPriorStatementPaid(latestStmt, statements, payments, resolvedByFuture, paidMap) : false;
   // A carried CREDIT is never stale — it is money the provider holds — so it
   // is kept even when the prior bill is paid; only carried arrears are.
   const latestCarried = latestStmt?.pastDueCarried != null ? Number(latestStmt.pastDueCarried) : null;
@@ -918,7 +946,7 @@ export default function UtilityDetailPage() {
   const latestOwed = openBalanceOf(latestStmt);
   // Reconcile the displayed current balance against recent payments. If the user paid
   // a bill but the provider's API hasn't reflected it yet, we still want $0 here.
-  const isLatestPaid = latestStmt ? isStatementPaid(latestStmt, payments) : false;
+  const isLatestPaid = latestStmt ? isEffectivelyPaid(latestStmt, payments, resolvedByFuture, paidMap) : false;
   const latestTotalDue = isLatestPaid
     ? 0
     : (priorToLatestPaid && latestChargesExclFees != null && !(latestCarried != null && latestCarried < 0))
@@ -1231,13 +1259,13 @@ export default function UtilityDetailPage() {
                 {filteredStatements.map((s, idx) => {
                   // filteredStatements sorted DESC; [idx-1] is more recent; idx===0 is latest
                   const isLatest = idx === 0 && yearFilter === 'all' && !search;
-                  const { color: sc, label: sl } = statementStatus(s, payments, filteredStatements[idx - 1], isLatest, resolvedByFuture);
+                  const { color: sc, label: sl } = statementStatus(s, payments, filteredStatements[idx - 1], isLatest, resolvedByFuture, paidMap);
                   // Everything from the dedicated, editable columns — no
                   // rawDataJson fallback, so edits always show up.
                   const pastDue  = s.pastDueCarried != null ? Number(s.pastDueCarried) : null;
                   const totalDue = openBalanceOf(s);
-                  const isPaid = isEffectivelyPaid(s, payments, resolvedByFuture);
-                  const priorPaid = isPriorStatementPaid(s, statements, payments, resolvedByFuture);
+                  const isPaid = isEffectivelyPaid(s, payments, resolvedByFuture, paidMap);
+                  const priorPaid = isPriorStatementPaid(s, statements, payments, resolvedByFuture, paidMap);
                   return (
                     <div key={s.id} className="rounded-xl px-5 py-4 flex items-center gap-4"
                       style={{
@@ -1493,7 +1521,7 @@ export default function UtilityDetailPage() {
                 className="input-dark text-xs">
                 <option value="">— Paid from which account? —</option>
                 {bankAccounts.map(b => (
-                  <option key={b.id} value={b.id}>{[b.name, b.last4 ? `••${b.last4}` : null].filter(Boolean).join(' ')}</option>
+                  <option key={b.id} value={b.id}>{bankAccountLabel(b)}</option>
                 ))}
               </select>
               <input value={payForm.confirmationNumber} onChange={e => setPayForm(f => ({ ...f, confirmationNumber: e.target.value }))}
@@ -1526,7 +1554,7 @@ export default function UtilityDetailPage() {
                     <div className="flex-1 min-w-0">
                       <p className="text-sm text-gray-300">{p.paymentMethod || 'Payment'}</p>
                       {p.bankAccount && (
-                        <p className="text-xs text-gray-500">from {p.bankAccount.name}{p.bankAccount.last4 ? ` ••${p.bankAccount.last4}` : ''}</p>
+                        <p className="text-xs text-gray-500">from {bankAccountLabel(p.bankAccount as any)}</p>
                       )}
                       {p.statement && (
                         <p className="text-xs text-gray-500">toward {fmtDate(p.statement.statementDate, 'MMM yyyy')} bill</p>

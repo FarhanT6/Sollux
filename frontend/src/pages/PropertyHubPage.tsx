@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
 import BackLink from '../components/ui/BackLink';
+import { bankAccountLabel } from '../lib/bankAccountLabel';
 import { format } from 'date-fns';
 import {
   deleteLeaseAgreement,
@@ -72,7 +73,7 @@ function rentBreakdown(lease: Lease) {
 
 // "Chase Checking ••4821" — bank and last4 are both optional in the schema.
 const bankLabel = (b: BankAccount) =>
-  [b.name, b.last4 ? `••${b.last4}` : null].filter(Boolean).join(' ');
+  bankAccountLabel(b);
 
 const money = (n: number) =>
   n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });

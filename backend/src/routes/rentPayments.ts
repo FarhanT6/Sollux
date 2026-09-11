@@ -43,7 +43,7 @@ router.get('/', async (req, res, next) => {
       },
       include: {
         lease: { include: { unit: { include: { property: { select: { id: true, address: true, nickname: true } } } } } },
-        bankAccount: { select: { id: true, name: true, bank: true, last4: true } },
+        bankAccount: { select: { id: true, name: true, bank: true, last4: true, accountType: true, ownerLabel: true, cardNetwork: true } },
       },
       orderBy: { paidDate: 'desc' },
     });
@@ -126,7 +126,7 @@ router.patch('/:id', async (req, res, next) => {
         ...(data.bankAccountId !== undefined ? { bankAccountId: data.bankAccountId } : {}),
         ...(data.notes !== undefined ? { notes: data.notes } : {}),
       },
-      include: { bankAccount: { select: { id: true, name: true, bank: true, last4: true } } },
+      include: { bankAccount: { select: { id: true, name: true, bank: true, last4: true, accountType: true, ownerLabel: true, cardNetwork: true } } },
     });
     res.json(payment);
   } catch (err) { next(err); }

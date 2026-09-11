@@ -926,7 +926,9 @@ export const EXPENSE_CATEGORY_LABELS: Record<ExpenseCategory, string> = {
 
 // ─── Budget / Bank ─────────────────────────────────────────
 
-export type BankAccountType = 'CHECKING' | 'SAVINGS' | 'CREDIT_CARD' | 'CASH_POOL';
+export type BankAccountType = 'CHECKING' | 'SAVINGS' | 'CREDIT_CARD' | 'DEBIT_CARD' | 'CASH_POOL';
+export const BANK_ACCOUNT_TYPE_LABELS: Record<BankAccountType, string> = { CHECKING: 'Checking', SAVINGS: 'Savings', CREDIT_CARD: 'Credit card', DEBIT_CARD: 'Debit card', CASH_POOL: 'Cash / digital wallet' };
+export const CARD_NETWORKS = ['Visa', 'Mastercard', 'Amex', 'Discover', 'Other'];
 export type OtherIncomeCategory =
   | 'APPLIANCE_SERVICE' | 'APPLIANCE_DELIVERY' | 'APPLIANCE_SALE'
   | 'GOVERNMENT_BENEFIT' | 'INTERNATIONAL' | 'LOAN_RECEIVED'
@@ -937,6 +939,9 @@ export interface BankAccount {
   name: string;
   last4?: string;
   bank?: string;
+  ownerLabel?: string | null;
+  cardNetwork?: string | null;
+  cardExpiry?: string | null;
   accountType: BankAccountType;
   isActive: boolean;
   sortOrder: number;

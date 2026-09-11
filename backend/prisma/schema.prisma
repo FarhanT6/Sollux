@@ -1324,6 +1324,10 @@ model BankAccount {
   last4                String? // e.g. "4821"
   bank                 String? // e.g. "Chase", "Wells Fargo"
   ownerLabel           String? // e.g. "Farhan", "Joint", "LLC"
+  // Cards: the network and expiry, so the right card is picked when paying
+  // and a lapsed one is noticed. Never the number — last4 is all that is kept.
+  cardNetwork          String? // Visa, Mastercard, Amex, Discover
+  cardExpiry           String? // MM/YY
   accountType          BankAccountType @default(CHECKING)
   isActive             Boolean         @default(true)
   sortOrder            Int             @default(0)
@@ -1424,6 +1428,7 @@ enum BankAccountType {
   CHECKING
   SAVINGS
   CREDIT_CARD
+  DEBIT_CARD
   CASH_POOL // cash on hand, Venmo, etc.
 }
 

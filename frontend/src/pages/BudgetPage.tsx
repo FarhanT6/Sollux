@@ -49,6 +49,7 @@ const ACCT_TYPE_LABELS: Record<BankAccountType, string> = {
   CHECKING:    'Checking',
   SAVINGS:     'Savings',
   CREDIT_CARD: 'Credit Card',
+  DEBIT_CARD:  'Debit Card',
   CASH_POOL:   'Cash / Venmo',
 };
 

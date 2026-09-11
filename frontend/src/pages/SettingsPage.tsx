@@ -30,7 +30,8 @@ import api, {
   createIndexRate,
   deleteIndexRate,
 } from '../api/client';
-import type { PlaidItem } from '../api/client';
+import { CARD_NETWORKS } from '../types';
+import type { BankAccountType, PlaidItem } from '../api/client';
 import type { BankAccount, IndexRate } from '../types';
 import { format } from 'date-fns';
 import { fmtDate as fmtDateSafe, todayISO } from '../lib/date';
@@ -363,6 +364,7 @@ const fmtDate = (d: string | null | undefined) => fmtDateSafe(d);
 
 const ACCOUNT_TYPE_LABELS: Record<string, string> = {
   CHECKING: 'Checking', SAVINGS: 'Savings', CREDIT_CARD: 'Credit card', CASH_POOL: 'Cash / Wallet',
+  DEBIT_CARD: 'Debit card',
 };
 
 const MANUAL_PRESETS = [
@@ -477,12 +479,18 @@ function SortablePlaidCard({
 }
 
 // ── Add manual account modal ──────────────────────────────────────────────────
-function AddManualAccountModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
-  const [name, setName] = useState('');
-  const [bank, setBank] = useState('');
-  const [accountType, setAccountType] = useState<'CHECKING' | 'SAVINGS' | 'CREDIT_CARD' | 'CASH_POOL'>('CASH_POOL');
+function AddManualAccountModal({ existing, onClose, onSaved }: { existing?: BankAccount | null; onClose: () => void; onSaved: () => void }) {
+  const [name, setName] = useState(existing?.name ?? '');
+  const [bank, setBank] = useState(existing?.bank ?? '');
+  const [accountType, setAccountType] = useState<BankAccountType>(existing?.accountType ?? 'CASH_POOL');
+  const [last4, setLast4] = useState(existing?.last4 ?? '');
+  const [ownerLabel, setOwnerLabel] = useState(existing?.ownerLabel ?? '');
+  const [cardNetwork, setCardNetwork] = useState(existing?.cardNetwork ?? '');
+  const [cardExpiry, setCardExpiry] = useState(existing?.cardExpiry ?? '');
+  const [notes, setNotes] = useState(existing?.notes ?? '');
   const [balance, setBalance] = useState('');
   const [saving, setSaving] = useState(false);
+  const isCard = accountType === 'CREDIT_CARD' || accountType === 'DEBIT_CARD';
 
   function applyPreset(p: typeof MANUAL_PRESETS[number]) {
     setName(p.name); setBank(p.bank); setAccountType(p.accountType);
@@ -492,9 +500,23 @@ function AddManualAccountModal({ onClose, onSaved }: { onClose: () => void; onSa
     if (!name.trim()) return;
     setSaving(true);
     try {
-      const acct = await createBankAccount({ name: name.trim(), bank: bank.trim() || undefined, accountType });
-      if (balance && !isNaN(parseFloat(balance))) {
-        await recordBankBalance(acct.id, { balance: parseFloat(balance) });
+      // Only the last four digits are ever stored — enough to tell cards
+      // apart, never enough to charge one.
+      const body = {
+        name: name.trim(), bank: bank.trim() || undefined, accountType,
+        last4: last4.replace(/\D/g, '').slice(-4) || undefined,
+        ownerLabel: ownerLabel.trim() || null,
+        cardNetwork: isCard ? (cardNetwork || null) : null,
+        cardExpiry: isCard ? (cardExpiry.trim() || null) : null,
+        notes: notes.trim() || undefined,
+      };
+      if (existing) {
+        await updateBankAccount(existing.id, body);
+      } else {
+        const acct = await createBankAccount(body);
+        if (balance && !isNaN(parseFloat(balance))) {
+          await recordBankBalance(acct.id, { balance: parseFloat(balance) });
+        }
       }
       onSaved();
     } catch { } finally { setSaving(false); }
@@ -503,11 +525,11 @@ function AddManualAccountModal({ onClose, onSaved }: { onClose: () => void; onSa
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.7)' }} onClick={onClose}>
       <div className="w-full max-w-md rounded-2xl p-6" style={{ background: '#1a1a1a', border: '1px solid rgba(255,255,255,0.1)' }} onClick={e => e.stopPropagation()}>
-        <h2 className="text-base font-semibold text-white mb-4">Add account</h2>
+        <h2 className="text-base font-semibold text-white mb-4">{existing ? 'Edit account' : 'Add account or card'}</h2>
 
         {/* Quick presets */}
-        <p className="text-xs text-gray-500 mb-2">Quick add</p>
-        <div className="flex flex-wrap gap-1.5 mb-4">
+        {!existing && <p className="text-xs text-gray-500 mb-2">Quick add</p>}
+        <div className="flex flex-wrap gap-1.5 mb-4" hidden={!!existing}>
           {MANUAL_PRESETS.map(p => (
             <button key={p.name} onClick={() => applyPreset(p)}
               className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${name === p.name ? 'bg-amber-500/15 border-amber-500/40 text-amber-400' : 'border-white/10 text-gray-400 hover:border-white/20'}`}>
@@ -534,20 +556,58 @@ function AddManualAccountModal({ onClose, onSaved }: { onClose: () => void; onSa
               <option value="CHECKING">Checking</option>
               <option value="SAVINGS">Savings</option>
               <option value="CREDIT_CARD">Credit card</option>
+              <option value="DEBIT_CARD">Debit card</option>
               <option value="CASH_POOL">Cash / Digital wallet</option>
             </select>
           </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Last 4 digits</label>
+              <input value={last4} onChange={e => setLast4(e.target.value)} placeholder="4093" maxLength={4} inputMode="numeric"
+                className="w-full px-3 py-2 text-sm rounded-lg bg-white/5 border border-white/10 text-white placeholder-gray-600 focus:border-amber-500/40 outline-none" />
+            </div>
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Owned by</label>
+              <input value={ownerLabel} onChange={e => setOwnerLabel(e.target.value)} placeholder="e.g. Farhan, Dad, Trust"
+                className="w-full px-3 py-2 text-sm rounded-lg bg-white/5 border border-white/10 text-white placeholder-gray-600 focus:border-amber-500/40 outline-none" />
+            </div>
+          </div>
+          {isCard && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Card network</label>
+                <select value={cardNetwork} onChange={e => setCardNetwork(e.target.value)}
+                  className="w-full px-3 py-2 text-sm rounded-lg bg-white/5 border border-white/10 text-white focus:border-amber-500/40 outline-none">
+                  <option value="">—</option>
+                  {CARD_NETWORKS.map(n => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Expires (MM/YY)</label>
+                <input value={cardExpiry} onChange={e => setCardExpiry(e.target.value)} placeholder="08/28" maxLength={5}
+                  className="w-full px-3 py-2 text-sm rounded-lg bg-white/5 border border-white/10 text-white placeholder-gray-600 focus:border-amber-500/40 outline-none" />
+              </div>
+            </div>
+          )}
           <div>
-            <label className="text-xs text-gray-400 block mb-1">Current balance ($)</label>
-            <input value={balance} onChange={e => setBalance(e.target.value)} placeholder="0.00" type="number" step="0.01"
+            <label className="text-xs text-gray-400 block mb-1">Notes (optional)</label>
+            <input value={notes} onChange={e => setNotes(e.target.value)} placeholder="e.g. autopay for SDGE, 2% back on utilities"
               className="w-full px-3 py-2 text-sm rounded-lg bg-white/5 border border-white/10 text-white placeholder-gray-600 focus:border-amber-500/40 outline-none" />
           </div>
+          {!existing && (
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">{isCard ? 'Current balance owed ($)' : 'Current balance ($)'}</label>
+              <input value={balance} onChange={e => setBalance(e.target.value)} placeholder="0.00" type="number" step="0.01"
+                className="w-full px-3 py-2 text-sm rounded-lg bg-white/5 border border-white/10 text-white placeholder-gray-600 focus:border-amber-500/40 outline-none" />
+            </div>
+          )}
+          <p className="text-[11px] text-gray-600">Only the last four digits are kept. Sollux never stores a full card or account number.</p>
         </div>
 
         <div className="flex justify-end gap-2 mt-5">
           <button onClick={onClose} className="btn text-xs">Cancel</button>
           <button onClick={handleSave} disabled={!name.trim() || saving} className="btn btn-primary text-xs">
-            {saving ? 'Saving…' : 'Add account'}
+            {saving ? 'Saving…' : existing ? 'Save changes' : 'Add account'}
           </button>
         </div>
       </div>
@@ -576,6 +636,7 @@ function BankingTab() {
   const [syncMsg, setSyncMsg]     = useState('');
   const [showAddManual, setShowAddManual] = useState(false);
   const [editingBal, setEditingBal] = useState<string | null>(null);
+  const [editingAcct, setEditingAcct] = useState<BankAccount | null>(null);
   const [editingBalVal, setEditingBalVal] = useState('');
   const [savingBal, setSavingBal] = useState(false);
 
@@ -748,9 +809,13 @@ function BankingTab() {
                   <div key={acct.id} className="flex items-center justify-between py-2 border-t border-white/5">
                     <div>
                       <p className="text-sm text-gray-100">{acct.name}</p>
-                      <span className="text-xs text-gray-500">{ACCOUNT_TYPE_LABELS[acct.accountType] ?? acct.accountType}</span>
+                      <span className="text-xs text-gray-500">
+                        {ACCOUNT_TYPE_LABELS[acct.accountType] ?? acct.accountType}
+                        {acct.cardNetwork ? ` · ${acct.cardNetwork}` : ''}{acct.last4 ? ` ••${acct.last4}` : ''}{acct.bank ? ` · ${acct.bank}` : ''}{acct.ownerLabel ? ` · ${acct.ownerLabel}` : ''}{acct.cardExpiry ? ` · exp ${acct.cardExpiry}` : ''}
+                      </span>
                     </div>
                     <div className="flex items-center gap-2">
+                      <button onClick={() => setEditingAcct(acct)} className="text-xs text-gray-500 hover:text-amber-400">Edit</button>
                       {editingBal === acct.id ? (
                         <>
                           <input
@@ -797,6 +862,13 @@ function BankingTab() {
         <AddManualAccountModal
           onClose={() => setShowAddManual(false)}
           onSaved={() => { setShowAddManual(false); loadAll(); }}
+        />
+      )}
+      {editingAcct && (
+        <AddManualAccountModal
+          existing={editingAcct}
+          onClose={() => setEditingAcct(null)}
+          onSaved={() => { setEditingAcct(null); loadAll(); }}
         />
       )}
     </div>
