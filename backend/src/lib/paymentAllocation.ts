@@ -84,7 +84,8 @@ export function allocateAccountPayments(
     const target = (p.statementId && statements.find(s => s.id === p.statementId))
       || byDateDesc.find(s => s.statementDate.getTime() <= p.paymentDate.getTime() + 86400000)
       || null;
-    const label = target ? (target.billingPeriodEnd ?? target.statementDate).toISOString().slice(0, 7) : null;
+    // Named as the statement list names it: by the month the bill was issued.
+    const label = target ? target.statementDate.toISOString().slice(0, 7) : null;
 
     if (!target || p.status === 'FAILED') {
       out.set(p.id, { statementId: target?.id ?? null, statementLabel: label, toFees: 0, toPastDue: 0, toInstallment: 0, toCurrent: 0, overpaid: p.status === 'FAILED' ? 0 : amount, creditUsed: 0, transactionFee: fee, totalOut: amount + fee, remainingAfter: 0 });

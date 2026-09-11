@@ -33,15 +33,17 @@ const CATEGORY_ICONS: Record<string, string> = {
 // month, the September policy month and the August one both read "Aug 2026"
 // and the payment form offered two identical choices. A bill covering more
 // than one month is named by its span.
+/**
+ * A bill is named for the month it was issued — the August bill is the one
+ * dated August 1, whatever month's service it covers. The service period
+ * is printed on the row beneath the name, so nothing is lost; naming rows
+ * by the period made every bill read a month early ("Jul 2026" for the bill
+ * that arrived in August). A bill with no issue date falls back to its
+ * period end.
+ */
 function periodLabel(s: any): string {
-  const end = s.billingPeriodEnd || s.statementDate;
-  if (s.billingPeriodStart && s.billingPeriodEnd && monthKey(s.billingPeriodStart) !== monthKey(s.billingPeriodEnd)) {
-    const sameYear = new Date(s.billingPeriodStart).getUTCFullYear() === new Date(s.billingPeriodEnd).getUTCFullYear();
-    return `${fmtDate(s.billingPeriodStart, sameYear ? 'MMM' : 'MMM yy')}–${fmtDate(s.billingPeriodEnd, sameYear ? 'MMM yyyy' : 'MMM yy')}`;
-  }
-  return fmtDate(end, 'MMM yyyy');
+  return fmtDate(s.statementDate || s.billingPeriodEnd, 'MMM yyyy');
 }
-
 function fmtMoney(v?: number | string | null) {
   if (v == null) return '—';
   const n = Number(v);
@@ -1139,7 +1141,7 @@ export default function UtilityDetailPage() {
                         <p className="text-sm font-semibold text-white">
                           {periodLabel(s)}
                         </p>
-                        {s.billingPeriodEnd && monthKey(s.billingPeriodEnd) !== monthKey(s.statementDate) && (
+                        {s.statementDate && (
                           <p className="text-xs text-gray-600">billed {fmtDate(s.statementDate, 'MMM d')}</p>
                         )}
                         {isLatest && <p className="text-xs text-amber-500 mt-0.5">Latest</p>}
