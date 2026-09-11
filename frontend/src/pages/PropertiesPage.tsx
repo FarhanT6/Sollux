@@ -14,6 +14,7 @@ import { PageHeader, StatCard, Skeleton, EmptyState, Modal } from '../components
 import { PROPERTY_TYPE_LABELS } from '../types';
 import AddPropertyModal from '../components/property/AddPropertyModal';
 import { computePortfolioSpend } from '../lib/monthlySpend';
+import { accountView } from '../lib/paidState';
 import { fmtDate } from '../lib/date';
 
 const TYPE_COLORS: Record<string, string> = {
@@ -325,25 +326,15 @@ function PropertyCard({ property, onEdit, onDelete }: { property: Property; onEd
 
   // Same reconciliation logic as the detail page: if recent payments cover the open
   // balance, treat the account as paid even if the provider's API hasn't reflected it.
+  // One paid rule for every page: the newest bill is paid when its own
+  // charge is covered — a settled prior bill makes the carried balance moot.
+  const viewOf = (a: typeof accounts[number]) => accountView((a.statements ?? []) as any[], ((a as any).payments ?? []) as any[]);
   const isAccountPaid = (a: typeof accounts[number]): boolean => {
     const latest = a.statements?.[0];
     if (!latest) return false;
     const raw = latest.rawDataJson as Record<string, unknown> | undefined;
-    const openBalance = (raw?.accountBalance ?? raw?.totalDue ?? (latest as any).balance ?? latest.amountDue) as number | undefined;
-    if (openBalance == null || openBalance <= 0.01) return true;
-    // A payment only proves this bill paid when it covers this bill's own
-    // balance — the recorded figure is usually the prior cycle's settlement,
-    // and its mere presence stamped accounts owing thousands as Paid on the
-    // homepage. The extractor's isPaid flag still counts: it asserts the bill
-    // itself showed a zero balance or a paid stamp.
     if (raw?.isPaid === true) return true;
-    if (Number(latest.amountPaid ?? 0) >= Number(openBalance) - 0.01) return true;
-    const stmtDate = latest.statementDate ? new Date(latest.statementDate) : null;
-    const pmts = ((a as any).payments ?? []) as Array<{ paymentDate: string; amount: number }>;
-    const sumSinceStmt = pmts
-      .filter(p => stmtDate ? new Date(p.paymentDate) >= stmtDate : false)
-      .reduce((s, p) => s + Number(p.amount ?? 0), 0);
-    return sumSinceStmt >= openBalance - 0.01;
+    return viewOf(a).isPaid;
   };
 
   const monthlyTotal = accounts.reduce((s, a) => {
@@ -354,10 +345,7 @@ function PropertyCard({ property, onEdit, onDelete }: { property: Property; onEd
   // a rollup matching what each utility card shows individually.
   const totalPastDue = accounts.reduce((s, a) => {
     if (isAccountPaid(a)) return s;
-    const latest = a.statements?.[0];
-    const raw = latest?.rawDataJson as Record<string, unknown> | undefined;
-    const pastDue = raw?.pastDue != null ? Number(raw.pastDue) : 0;
-    return s + (pastDue > 0 ? pastDue : 0);
+    return s + viewOf(a).pastDue;
   }, 0);
   const hasAlert = (property._count?.insights ?? 0) > 0;
   const hasPastDue = totalPastDue > 0 || accounts.some(a => {
@@ -444,7 +432,7 @@ function PropertyCard({ property, onEdit, onDelete }: { property: Property; onEd
             const isPaid = isAccountPaid(account);
             const isPastDue = !isPaid && (raw?.isPastDue === true || (dueDate && dueDate < now));
             const isDueSoon = !isPaid && !isPastDue && dueDate && dueDate <= new Date(now.getTime() + 7 * 86400000);
-            const pastDueAmt = raw?.pastDue != null ? Number(raw.pastDue) : 0;
+            const pastDueAmt = viewOf(account).pastDue;
             const hasPastDueBalance = !isPaid && pastDueAmt > 0;
 
             // Display current charge only (amountDue); past due shown separately below.
