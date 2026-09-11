@@ -1220,7 +1220,13 @@ export default function UtilityDetailPage() {
                           // an unpaid one shows the open balance owed.
                           const isFullyPaid = isPaid || (totalDue === 0 && Number(s.amountDue ?? 0) > 0);
                           const amt = Number(s.amountDue ?? 0);
-                          const owed = totalDue ?? amt;
+                          // Once the bill before this one is settled, the balance
+                          // this bill carried in is history: what is owed is its
+                          // own charge (less any credit). The row said "Prior
+                          // balance paid" and still showed the charge plus that
+                          // balance — 1,042.48 for a 326.38 bill.
+                          const carriedIn = s.pastDueCarried != null ? Number(s.pastDueCarried) : 0;
+                          const owed = priorPaid && carriedIn > 0 ? amt : (totalDue ?? amt);
                           const primary = isFullyPaid ? amt : owed;
                           // The subline explains a total that differs from the
                           // charge: arrears rolled in, or a credit taken off.
