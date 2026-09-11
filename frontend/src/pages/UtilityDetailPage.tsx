@@ -93,8 +93,10 @@ function isStatementPaid(s: any, payments: any[] = [], priorSettled = false): bo
   if (Number(s.amountPaid ?? 0) >= openBalance - 0.01) return true;
   const stmtDate = s.statementDate ? new Date(s.statementDate) : null;
   if (!stmtDate) return false;
+  // A payment logged against a specific bill is that bill's alone; one
+  // logged "toward Jul 2026" must not also count as paying August.
   const sumSinceStmt = payments
-    .filter(p => new Date(p.paymentDate) >= stmtDate)
+    .filter(p => new Date(p.paymentDate) >= stmtDate && (!p.statementId || p.statementId === s.id) && p.status !== 'FAILED' && p.status !== 'PENDING')
     .reduce((acc, p) => acc + Number(p.amount ?? 0), 0);
   return sumSinceStmt >= openBalance - 0.01;
 }
@@ -161,11 +163,34 @@ function computeResolvedByFutureCheckpoint(statements: any[]): Set<string> {
  */
 function computePaidMap(statements: any[], payments: any[], resolvedByFuture: Set<string>): Map<string, boolean> {
   const paid = new Map<string, boolean>();
+  // A dollar pays one bill. Payments tied to a bill go to that bill only;
+  // the rest are a pool, drawn down oldest bill first, so a payment that
+  // cleared July is not counted again as clearing August.
+  const counted = (p: any) => p.status !== 'FAILED' && p.status !== 'PENDING';
+  const pool = payments
+    .filter(p => counted(p) && !p.statementId)
+    .map(p => ({ date: new Date(p.paymentDate).getTime(), left: Number(p.amount ?? 0) }))
+    .sort((a, b) => a.date - b.date);
   for (let i = statements.length - 1; i >= 0; i--) {
     const s = statements[i];
     const prior = statements[i + 1];
     const priorSettled = prior ? (paid.get(prior.id) ?? false) : false;
-    paid.set(s.id, resolvedByFuture.has(s.id) || isStatementPaid(s, payments, priorSettled));
+    if (resolvedByFuture.has(s.id)) { paid.set(s.id, true); continue; }
+    const carried = s?.pastDueCarried != null ? Number(s.pastDueCarried) : 0;
+    if (s.amountDue == null && s.pastDueCarried == null) {
+      paid.set(s.id, isStatementPaid(s, payments, priorSettled));
+      continue;
+    }
+    const open = Number(s.amountDue ?? 0) + (carried < 0 ? carried : priorSettled ? 0 : carried);
+    let need = open - Number(s.amountPaid ?? 0)
+      - payments.filter(p => counted(p) && p.statementId === s.id).reduce((t, p) => t + Number(p.amount ?? 0), 0);
+    const since = new Date(s.statementDate).getTime() - 86400000;
+    for (const p of pool) {
+      if (need <= 0.01) break;
+      if (p.left <= 0 || p.date < since) continue;
+      const take = Math.min(p.left, need); p.left -= take; need -= take;
+    }
+    paid.set(s.id, need <= 0.01);
   }
   return paid;
 }
