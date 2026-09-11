@@ -5,6 +5,7 @@ import type { Property, Statement, Payment, AIInsight, UtilityAccount } from '..
 import { CATEGORY_LABELS, CATEGORY_COLORS, INSURANCE_TYPE_LABELS, LOAN_TYPE_LABELS, UTILITY_PAYMENT_METHODS, PAYMENT_STATUS_LABELS } from '../types';
 import PaymentBreakdownLine from '../components/utility/PaymentBreakdownLine';
 import { todayISO } from '../lib/date';
+import { accountView } from '../lib/paidState';
 import { PageHeader, StatCard, InsightCard, Skeleton, EmptyState, Pill, Modal } from '../components/ui';
 import { format } from 'date-fns';
 import AddUtilityModal from '../components/utility/AddUtilityModal';
@@ -998,7 +999,11 @@ function UtilityAccountCard({
   // with a rolling unpaid chain as Paid on every face card.
   const isPaidViaStatement = latest?.amountPaid != null && openBalance != null
     && Number(latest.amountPaid) >= openBalance - 0.01;
-  const isPaid = isPaidViaPayment || isPaidViaStatement;
+  // The one paid rule shared with the account page and the properties list:
+  // a payment tied to a bill pays that bill only, a settled prior bill makes
+  // the carried balance moot, a carried credit always applies.
+  const view = accountView((account.statements ?? []) as any[], payments as any[]);
+  const isPaid = view.isPaid || isPaidViaStatement || isPaidViaPayment;
 
   const now = new Date();
   const isPastDue = !isPaid && dueDate != null && dueDate < now;
@@ -1126,11 +1131,10 @@ function UtilityAccountCard({
             //   Past due       = balance carried from prior periods (pastDueCarried)
             //   Total balance  = current + past due
             const currentCharge = latest?.amountDue != null ? Number(latest.amountDue) : undefined;
-            const pastDue = (latest as any)?.pastDueCarried != null ? Number((latest as any).pastDueCarried) : undefined;
-            const totalBalance = latest
-              ? Number(latest.amountDue ?? 0) + Number((latest as any).pastDueCarried ?? 0)
-              : undefined;
-            const pastDueAmt = pastDue && pastDue > 0 ? pastDue : undefined;
+            // Arrears only while the bill they came from is still open; a
+            // carried credit comes off the total.
+            const pastDueAmt = view.pastDue > 0 ? view.pastDue : undefined;
+            const totalBalance = latest ? Math.max(view.current + view.pastDue - view.credit, 0) : undefined;
 
             if (!latest) {
               return (

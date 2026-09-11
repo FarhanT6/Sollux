@@ -94,18 +94,19 @@ router.get('/', async (req, res, next) => {
             isActive: true,
             lastSyncStatus: true,
             lastSyncedAt: true,
+            // The newest few bills, not one: whether the newest is paid
+            // depends on whether the one before it is, and the card's
+            // "past due" is the carried balance only while that prior bill
+            // is still open.
             statements: {
               orderBy: { statementDate: 'desc' },
-              take: 1,
-              select: { amountDue: true, dueDate: true, amountPaid: true, rawDataJson: true, statementDate: true, penaltyDate: true },
+              take: 4,
+              select: { id: true, amountDue: true, dueDate: true, amountPaid: true, rawDataJson: true, statementDate: true, penaltyDate: true, pastDueCarried: true, penaltiesFees: true, paymentPlanAmount: true, balance: true },
             },
-            // Recent payments so the PropertyCard can reconcile balance against
-            // payments that haven't yet posted on the provider's API side.
-            // Limit to the 5 most recent — enough to detect "paid in full".
             payments: {
               orderBy: { paymentDate: 'desc' },
-              take: 5,
-              select: { paymentDate: true, amount: true },
+              take: 12,
+              select: { id: true, paymentDate: true, amount: true, statementId: true, status: true, notes: true },
             },
           },
         },
