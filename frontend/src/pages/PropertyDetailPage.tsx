@@ -1,8 +1,10 @@
 import { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { getProperty, getStatements, getPayments, getInsights, syncUtility, updateUtility, deleteUtility, updateProperty, deleteProperty, markInsightRead, dismissInsight, getStatementDownloadUrl, revealUtilityAccountNumber, getUtilityUsername, getUtilityPassword, getCostSettings } from '../api/client';
+import { getProperty, getStatements, getPayments, getInsights, createPayment, syncUtility, updateUtility, deleteUtility, updateProperty, deleteProperty, markInsightRead, dismissInsight, getStatementDownloadUrl, revealUtilityAccountNumber, getUtilityUsername, getUtilityPassword, getCostSettings } from '../api/client';
 import type { Property, Statement, Payment, AIInsight, UtilityAccount } from '../types';
-import { CATEGORY_LABELS, CATEGORY_COLORS, INSURANCE_TYPE_LABELS, LOAN_TYPE_LABELS } from '../types';
+import { CATEGORY_LABELS, CATEGORY_COLORS, INSURANCE_TYPE_LABELS, LOAN_TYPE_LABELS, UTILITY_PAYMENT_METHODS, PAYMENT_STATUS_LABELS } from '../types';
+import PaymentBreakdownLine from '../components/utility/PaymentBreakdownLine';
+import { todayISO } from '../lib/date';
 import { PageHeader, StatCard, InsightCard, Skeleton, EmptyState, Pill, Modal } from '../components/ui';
 import { format } from 'date-fns';
 import AddUtilityModal from '../components/utility/AddUtilityModal';
@@ -34,6 +36,7 @@ export default function PropertyDetailPage() {
   const navigate = useNavigate();
   const [syncing, setSyncing] = useState<string | null>(null);
   const [showAddUtility, setShowAddUtility] = useState(false);
+  const [showLogPayment, setShowLogPayment] = useState(false);
   const [showEditProperty, setShowEditProperty] = useState(false);
   const [showDeleteProperty, setShowDeleteProperty] = useState(false);
   const [showInactive, setShowInactive] = useState(false);
@@ -355,17 +358,28 @@ export default function PropertyDetailPage() {
         {/* ── Payments tab ──────────────────────────────── */}
         {tab === 'payments' && (
           <>
-            <p className="section-label mb-3">Payment history</p>
+            <div className="flex items-center justify-between mb-3">
+              <p className="section-label mb-0">Payment history</p>
+              <button onClick={() => setShowLogPayment(true)} className="btn btn-primary text-xs">+ Log payment</button>
+            </div>
+            {showLogPayment && (
+              <LogPropertyPaymentModal
+                accounts={accounts}
+                onClose={() => setShowLogPayment(false)}
+                onSaved={async () => { setShowLogPayment(false); setPayments(await getPayments({ propertyId: id! })); }}
+              />
+            )}
             {payments.length === 0 ? (
-              <EmptyState icon="💳" title="No payments yet" body="Payment history will appear here once accounts are synced." />
+              <EmptyState icon="💳" title="No payments yet" body="Log a payment above, or import a bill that confirms one." />
             ) : (
               <div className="overflow-x-auto">
                 <table className="table-base">
                   <thead>
                     <tr>
                       <th>Utility</th>
-                      <th>Amount</th>
                       <th>Date</th>
+                      <th>Amount</th>
+                      <th>Applied to</th>
                       <th>Confirmation #</th>
                       <th>Status</th>
                     </tr>
@@ -373,11 +387,18 @@ export default function PropertyDetailPage() {
                   <tbody>
                     {payments.map(p => (
                       <tr key={p.id}>
-                        <td className="font-medium">{p.utilityAccount?.providerName}</td>
-                        <td className="font-semibold">${Number(p.amount).toFixed(2)}</td>
+                        <td className="font-medium">
+                          <Link to={`/properties/${id}/utilities/${p.utilityAccountId}`} className="hover:text-amber-400">{p.utilityAccount?.providerName}</Link>
+                          {p.paymentMethod && <span className="block text-xs text-gray-500">{p.paymentMethod}{p.bankAccount ? ` · ${p.bankAccount.name}${p.bankAccount.last4 ? ` ••${p.bankAccount.last4}` : ''}` : ''}</span>}
+                        </td>
                         <td className="text-gray-500">{fmtDate(p.paymentDate, 'MMM d, yyyy')}</td>
+                        <td className="font-semibold">
+                          ${Number(p.amount).toFixed(2)}
+                          {Number(p.feeAmount ?? 0) > 0 && <span className="block text-xs text-gray-500 font-normal">+ ${Number(p.feeAmount).toFixed(2)} fee · ${(Number(p.amount) + Number(p.feeAmount)).toFixed(2)} out</span>}
+                        </td>
+                        <td><PaymentBreakdownLine b={p.breakdown} /></td>
                         <td><span className="font-mono text-xs text-gray-400">{p.confirmationNumber || '—'}</span></td>
-                        <td><Pill color="green">Paid</Pill></td>
+                        <td><Pill color={p.status === 'PAID' ? 'green' : p.status === 'PENDING' ? 'amber' : 'red'}>{PAYMENT_STATUS_LABELS[p.status] ?? p.status}</Pill></td>
                       </tr>
                     ))}
                   </tbody>
@@ -1220,5 +1241,58 @@ function UtilityAccountCard({
       </div>
       </div>
     </div>
+  );
+}
+
+
+/**
+ * Log a payment from the property, against any of its accounts. The same
+ * fields as the account page's form; the allocation (fees, past due,
+ * installment, current) is worked out on the server from the bills.
+ */
+function LogPropertyPaymentModal({ accounts, onClose, onSaved }: { accounts: UtilityAccount[]; onClose: () => void; onSaved: () => void }) {
+  const [form, setForm] = useState({ utilityAccountId: accounts[0]?.id ?? '', amount: '', feeAmount: '', paymentDate: todayISO(), paymentMethod: 'ACH', status: 'PAID', confirmationNumber: '', notes: '' });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function save() {
+    const amount = parseFloat(form.amount);
+    if (!form.utilityAccountId || !(amount > 0)) { setError('Pick an account and enter an amount.'); return; }
+    setSaving(true); setError(null);
+    try {
+      await createPayment({
+        utilityAccountId: form.utilityAccountId, amount,
+        feeAmount: form.feeAmount ? parseFloat(form.feeAmount) : null,
+        paymentDate: form.paymentDate, paymentMethod: form.paymentMethod || null, status: form.status,
+        confirmationNumber: form.confirmationNumber || null, notes: form.notes || null,
+      });
+      onSaved();
+    } catch (err: any) { setError(err?.response?.data?.error ?? 'Could not save that payment.'); }
+    finally { setSaving(false); }
+  }
+  const input = 'input-dark text-sm w-full';
+  return (
+    <Modal title="Log a payment" onClose={onClose}>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <select value={form.utilityAccountId} onChange={e => setForm(f => ({ ...f, utilityAccountId: e.target.value }))} className={`${input} sm:col-span-2`}>
+          {accounts.map(a => <option key={a.id} value={a.id}>{a.providerName}{a.serviceLabel ? ` — ${a.serviceLabel}` : ''}{a.accountNumber ? ` (${a.accountNumber})` : ''}</option>)}
+        </select>
+        <input type="number" placeholder="Amount *" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} className={input} />
+        <input type="number" placeholder="Transaction fee (optional)" value={form.feeAmount} onChange={e => setForm(f => ({ ...f, feeAmount: e.target.value }))} className={input} />
+        <input type="date" value={form.paymentDate} onChange={e => setForm(f => ({ ...f, paymentDate: e.target.value }))} className={input} />
+        <select value={form.paymentMethod} onChange={e => setForm(f => ({ ...f, paymentMethod: e.target.value }))} className={input}>
+          {UTILITY_PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
+        </select>
+        <select value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))} className={input}>
+          {['PAID', 'PENDING', 'PARTIAL', 'FAILED'].map(st => <option key={st} value={st}>{PAYMENT_STATUS_LABELS[st]}</option>)}
+        </select>
+        <input placeholder="Confirmation #" value={form.confirmationNumber} onChange={e => setForm(f => ({ ...f, confirmationNumber: e.target.value }))} className={input} />
+        <input placeholder="Notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className={`${input} sm:col-span-2`} />
+      </div>
+      {error && <p className="text-xs text-red-400 mt-2">{error}</p>}
+      <div className="flex justify-end gap-3 mt-4">
+        <button onClick={onClose} className="text-xs text-gray-500 hover:text-gray-300">Cancel</button>
+        <button onClick={save} disabled={saving} className="btn btn-primary text-xs disabled:opacity-50">{saving ? '…' : 'Log payment'}</button>
+      </div>
+    </Modal>
   );
 }

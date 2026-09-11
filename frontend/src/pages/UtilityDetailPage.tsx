@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from 'react';
+import PaymentBreakdownLine from '../components/utility/PaymentBreakdownLine';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   getUtility, syncUtility, deleteUtility, updateUtility, getStatementDownloadUrl,
@@ -594,7 +595,7 @@ export default function UtilityDetailPage() {
   const [editPaymentId, setEditPaymentId] = useState<string | null>(null);
   const [savingPayment, setSavingPayment] = useState(false);
   const [payForm, setPayForm] = useState({
-    amount: '', paymentDate: todayISO(),
+    amount: '', feeAmount: '', paymentDate: todayISO(),
     paymentMethod: 'ACH', status: 'PAID', statementId: '',
     confirmationNumber: '', bankAccountId: '', notes: '',
   });
@@ -610,7 +611,7 @@ export default function UtilityDetailPage() {
 
   function resetPayForm() {
     setPayForm({
-      amount: '', paymentDate: todayISO(),
+      amount: '', feeAmount: '', paymentDate: todayISO(),
       paymentMethod: 'ACH', status: 'PAID', statementId: '',
       confirmationNumber: '', bankAccountId: '', notes: '',
     });
@@ -619,6 +620,7 @@ export default function UtilityDetailPage() {
   function openPaymentEdit(p: any) {
     setPayForm({
       amount: String(p.amount ?? ''),
+      feeAmount: p.feeAmount != null ? String(p.feeAmount) : '',
       paymentDate: (p.paymentDate ?? '').slice(0, 10),
       paymentMethod: p.paymentMethod || 'ACH',
       status: p.status || 'PAID',
@@ -651,6 +653,7 @@ export default function UtilityDetailPage() {
       const body = {
         utilityAccountId: accountId,
         amount,
+        feeAmount: payForm.feeAmount ? parseFloat(payForm.feeAmount) : null,
         paymentDate: payForm.paymentDate,
         paymentMethod: payForm.paymentMethod || null,
         status: payForm.status,
@@ -1461,6 +1464,8 @@ export default function UtilityDetailPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
               <input type="number" value={payForm.amount} onChange={e => setPayForm(f => ({ ...f, amount: e.target.value }))}
                 placeholder="Amount *" className="input-dark text-xs" />
+              <input type="number" value={payForm.feeAmount} onChange={e => setPayForm(f => ({ ...f, feeAmount: e.target.value }))}
+                placeholder="Transaction fee (optional)" title="A processing or convenience fee paid on top — not part of the bill" className="input-dark text-xs" />
               <input type="date" value={payForm.paymentDate} onChange={e => setPayForm(f => ({ ...f, paymentDate: e.target.value }))}
                 className="input-dark text-xs" />
               <select value={payForm.paymentMethod} onChange={e => setPayForm(f => ({ ...f, paymentMethod: e.target.value }))}
@@ -1530,9 +1535,11 @@ export default function UtilityDetailPage() {
                         <p className="font-mono text-xs text-gray-500 mt-0.5">Conf# {p.confirmationNumber}</p>
                       )}
                       {p.notes && <p className="text-xs text-gray-600 mt-0.5">{p.notes}</p>}
+                      <PaymentBreakdownLine b={p.breakdown} />
                     </div>
-                    <div className="text-right flex-shrink-0 w-24">
+                    <div className="text-right flex-shrink-0 w-28">
                       <p className="text-base font-semibold text-white">{fmtMoney(p.amount)}</p>
+                      {Number(p.feeAmount ?? 0) > 0 && <p className="text-xs text-gray-500">+ {fmtMoney(p.feeAmount)} fee · {fmtMoney(Number(p.amount) + Number(p.feeAmount))} out</p>}
                     </div>
                     <div className="flex-shrink-0 w-20 text-right">
                       <Pill color={p.status === 'PAID' ? 'green' : p.status === 'PENDING' ? 'amber' : 'red'}>{p.status}</Pill>
