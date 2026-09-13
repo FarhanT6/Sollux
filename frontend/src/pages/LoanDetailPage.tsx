@@ -39,6 +39,7 @@ interface AmortizationResponse {
     historicalSchedule: { paymentNumber: number; date: string; paymentAmount: number; principal: number; interest: number; balance: number }[];
     payoffDate: string | null;
     monthsRemaining: number | null;
+    balloonAtMaturity?: number | null;
     totalInterestRemaining: number;
     totalDeferredInterest: number;
     scheduleEndsAt: string | null;
@@ -850,6 +851,11 @@ export default function LoanDetailPage() {
                 {amortization.payoffDate ? fmtDate(amortization.payoffDate, 'MMM yyyy') : '—'}
               </p>
               {amortization.monthsRemaining && <p className="text-xs text-gray-600 mt-1">{amortization.monthsRemaining} payments left</p>}
+              {amortization.balloonAtMaturity != null && amortization.balloonAtMaturity > 0 && (
+                <p className="text-xs text-amber-400 mt-1" title="The regular payment does not retire the note by the maturity date; this balance falls due then.">
+                  {money(amortization.balloonAtMaturity)} due at maturity
+                </p>
+              )}
             </>
           )}
         </div>

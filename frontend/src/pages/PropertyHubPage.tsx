@@ -8,7 +8,7 @@ import {
   getProperty, getLeases, getLoans, getExpenses, getInsurancePolicies,
   getTaxAssessments, getImprovements, getPropertyPnL, getRentPayments,
   createRentPayment, createExpense, createImprovement, createInsurancePolicy,
-  createTaxAssessment, createLoan,
+  createTaxAssessment, createLoan, deleteLoan,
   updateExpense, deleteExpense, updateInsurancePolicy, deleteInsurancePolicy,
   updateTaxAssessment, deleteTaxAssessment, updateImprovement, deleteImprovement,
   updateLease, updateProperty, lookupPropertyByAddress,
@@ -21,6 +21,7 @@ import {
   addScheduledIncrease, applyScheduledIncrease, deleteScheduledIncrease,
   addLeaseUtilityCharge, deleteLeaseUtilityCharge, getTurnover, getBankAccounts,
   addPaymentAlias, deletePaymentAlias, deleteRentPayment, updateRentPayment,
+  addLeaseDeposit, deleteLeaseDeposit,
 } from '../api/client';
 import type {
   Property, Lease, Loan, Expense, InsurancePolicy, TaxAssessment,
@@ -962,6 +963,10 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   const [payExpectedDate, setPayExpectedDate] = useState('');
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
   const [saving, setSaving]       = useState(false);
+  // Security deposit received — its own form, its own table, never rent.
+  const [showDepositForm, setShowDepositForm] = useState<string | null>(null);
+  const [depForm, setDepForm] = useState({ amount: '', paidDate: todayISO(), method: 'ZELLE', bankAccountId: '', notes: '' });
+  const [deletingDeposit, setDeletingDeposit] = useState<string | null>(null);
   const [expandLease, setExpandLease] = useState<string | null>(null);
   const [payments, setPayments] = useState<Record<string, any[]>>({});
   const [editLease, setEditLease] = useState<string | null>(null);
@@ -1455,6 +1460,42 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
     } finally { setSaving(false); }
   }
 
+  const depositReceived = (lease: Lease) => (lease.deposits ?? []).reduce((s, d) => s + Number(d.amount), 0);
+
+  function openDepositForm(lease: Lease) {
+    if (showDepositForm === lease.id) { setShowDepositForm(null); return; }
+    // Default to whatever is still outstanding on the deposit the lease calls for.
+    const remaining = Math.max(0, Number(lease.securityDeposit ?? 0) - depositReceived(lease));
+    setDepForm({ amount: remaining > 0 ? String(remaining) : '', paidDate: todayISO(), method: 'ZELLE', bankAccountId: '', notes: '' });
+    setShowPayForm(null);
+    setShowDepositForm(lease.id);
+  }
+
+  async function logDeposit(leaseId: string) {
+    if (!depForm.amount || !depForm.paidDate) return;
+    setSaving(true);
+    try {
+      await addLeaseDeposit(leaseId, {
+        amount: parseFloat(depForm.amount),
+        paidDate: depForm.paidDate,
+        method: depForm.method,
+        bankAccountId: depForm.bankAccountId || null,
+        notes: depForm.notes || null,
+      });
+      setLeases(await getLeases({ propertyId }));
+      setShowDepositForm(null);
+    } finally { setSaving(false); }
+  }
+
+  async function removeDeposit(leaseId: string, depositId: string) {
+    if (!window.confirm('Remove this deposit entry?')) return;
+    setDeletingDeposit(depositId);
+    try {
+      await deleteLeaseDeposit(leaseId, depositId);
+      setLeases(await getLeases({ propertyId }));
+    } finally { setDeletingDeposit(null); }
+  }
+
   async function toggleHistory(leaseId: string) {
     if (expandLease === leaseId) { setExpandLease(null); return; }
     setExpandLease(leaseId);
@@ -1494,6 +1535,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
       {showNewLease && (
         <NewLeaseModal
           propertyId={propertyId}
+          isCommercial={isCommercial}
           onClose={() => setShowNewLease(false)}
           onCreated={async () => {
             // The modal can create units and tenants of its own, so refresh
@@ -1619,7 +1661,20 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                           </p>
                         );
                       })()}
-                      {Number(lease.securityDeposit ?? 0) > 0 && <p className="text-xs text-gray-500">{money(Number(lease.securityDeposit))} dep.</p>}
+                      {(() => {
+                        const required = Number(lease.securityDeposit ?? 0);
+                        const received = depositReceived(lease);
+                        if (required <= 0 && received <= 0) return null;
+                        const short = required - received;
+                        return (
+                          <p className="text-xs text-gray-500">
+                            {required > 0 ? `${money(required)} dep.` : 'Deposit'}
+                            {received > 0 && short <= 0 && <span className="text-emerald-400"> · {required > 0 ? 'received' : `${money(received)} received`}{short < 0 ? ` (+${money(-short)})` : ''}</span>}
+                            {received > 0 && short > 0 && <span className="text-amber-400"> · {money(received)} received, {money(short)} owed</span>}
+                            {received <= 0 && required > 0 && <span className="text-red-400"> · not received</span>}
+                          </p>
+                        );
+                      })()}
                       {lease.rentChanges && lease.rentChanges.length > 0 && (
                         <p className="text-xs text-gray-500">Last raised {fmtDate(lease.rentChanges[0].effectiveDate)}</p>
                       )}
@@ -1642,6 +1697,12 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                       <button onClick={() => setShowPayForm(showPayForm === lease.id ? null : lease.id)}
                         className="text-xs text-amber-400 hover:text-amber-300">
                         Log payment
+                      </button>
+                    )}
+                    {lease.status !== 'ENDED' && lease.status !== 'TERMINATED' && (
+                      <button onClick={() => openDepositForm(lease)}
+                        className="text-xs text-amber-400 hover:text-amber-300" title="Record security deposit money received">
+                        Log deposit
                       </button>
                     )}
                     <button onClick={() => toggleHistory(lease.id)}
@@ -2036,6 +2097,33 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                   </div>
                 )}
 
+                {showDepositForm === lease.id && (
+                  <div className="px-4 py-3" style={{ background: 'rgba(255,255,255,0.03)', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                    <p className="text-xs text-gray-500 mb-2">
+                      Security deposit received. Held apart from rent: it never counts toward the month's rent or your income.
+                    </p>
+                    <div className="flex gap-2 flex-wrap">
+                      <input type="number" placeholder="Amount" value={depForm.amount} onChange={e => setDepForm(f => ({ ...f, amount: e.target.value }))} className="input-dark text-xs w-28" />
+                      <input type="date" title="Date received" value={depForm.paidDate} onChange={e => setDepForm(f => ({ ...f, paidDate: e.target.value }))} className="input-dark text-xs w-36" />
+                      <select value={depForm.method} onChange={e => {
+                        const m = e.target.value;
+                        setDepForm(f => ({ ...f, method: m, bankAccountId: BANK_LINKED_METHODS.includes(m as RentPaymentMethod) ? f.bankAccountId : '' }));
+                      }} className="input-dark text-xs">
+                        {RENT_PAYMENT_METHODS.filter(m => m !== 'SECTION_8' && m !== 'RENTAL_ASSISTANCE').map(m => <option key={m} value={m}>{RENT_PAYMENT_METHOD_LABELS[m]}</option>)}
+                      </select>
+                      {BANK_LINKED_METHODS.includes(depForm.method as RentPaymentMethod) && bankAccounts.length > 0 && (
+                        <select value={depForm.bankAccountId} onChange={e => setDepForm(f => ({ ...f, bankAccountId: e.target.value }))} className="input-dark text-xs">
+                          <option value="">— Into which account? (optional) —</option>
+                          {bankAccounts.map(b => <option key={b.id} value={b.id}>{bankLabel(b)}</option>)}
+                        </select>
+                      )}
+                      <input placeholder="Notes (optional)" value={depForm.notes} onChange={e => setDepForm(f => ({ ...f, notes: e.target.value }))} className="input-dark text-xs flex-1 min-w-32" />
+                      <button onClick={() => logDeposit(lease.id)} disabled={saving || !depForm.amount} className="btn btn-primary text-xs">{saving ? '…' : 'Log deposit'}</button>
+                      <button onClick={() => setShowDepositForm(null)} className="text-xs text-gray-500 hover:text-gray-300">✕</button>
+                    </div>
+                  </div>
+                )}
+
                 {isExpanded && (
                   <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                     {/* Rent change history */}
@@ -2080,6 +2168,30 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                         </div>
                       )}
                     </div>
+
+                    {/* Security deposit */}
+                    {(lease.deposits?.length ?? 0) > 0 && (
+                      <div className="px-4 py-3" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                        <p className="text-xs font-medium text-gray-300 mb-1.5">
+                          Security deposit
+                          <span className="text-gray-500 font-normal"> · {money(depositReceived(lease))} held{Number(lease.securityDeposit ?? 0) > 0 ? ` of ${money(Number(lease.securityDeposit))}` : ''}</span>
+                        </p>
+                        <div className="space-y-1">
+                          {lease.deposits!.map(d => (
+                            <div key={d.id} className="flex items-center gap-2 text-xs group">
+                              <span className="text-gray-500 w-24">{fmtDate(d.paidDate)}</span>
+                              <span className="font-medium text-white">{money(Number(d.amount))}</span>
+                              <span className="text-gray-500">{RENT_PAYMENT_METHOD_LABELS[d.method] ?? d.method}{d.bankAccount ? ` → ${bankLabel(d.bankAccount as BankAccount)}` : ''}</span>
+                              {d.notes && <span className="text-gray-600">· {d.notes}</span>}
+                              <button onClick={() => removeDeposit(lease.id, d.id)} disabled={deletingDeposit === d.id}
+                                className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 ml-auto disabled:opacity-40">
+                                {deletingDeposit === d.id ? '…' : '✕'}
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                     {/* Payment history */}
                     <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
@@ -2195,8 +2307,13 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
 interface TenantRow { mode: 'existing' | 'new'; tenantId: string; fullName: string; email: string; phone: string; }
 const EMPTY_TENANT_ROW: TenantRow = { mode: 'new', tenantId: '', fullName: '', email: '', phone: '' };
 
-function NewLeaseModal({ propertyId, onClose, onCreated }: {
-  propertyId: string; onClose: () => void; onCreated: () => void;
+// A rent step written into the lease: "$3,000 from 3/1/27, then $3,200 from
+// year two". Saved as scheduled increases once the lease exists.
+interface IncreaseRow { effectiveDate: string; newAmount: string; percent: string; note: string; }
+const EMPTY_INCREASE_ROW: IncreaseRow = { effectiveDate: '', newAmount: '', percent: '', note: '' };
+
+function NewLeaseModal({ propertyId, isCommercial, onClose, onCreated }: {
+  propertyId: string; isCommercial?: boolean; onClose: () => void; onCreated: () => void;
 }) {
   const [units, setUnits] = useState<Unit[]>([]);
   const [allTenants, setAllTenants] = useState<Tenant[]>([]);
@@ -2207,9 +2324,41 @@ function NewLeaseModal({ propertyId, onClose, onCreated }: {
   const [form, setForm] = useState({
     rentAmount: '', securityDeposit: '', startDate: todayISO(),
     endDate: '', leaseType: 'MONTH_TO_MONTH', status: 'ACTIVE', notes: '',
+    rentDueDay: '', lateFeeAmount: '', lateFeePercent: '', lateFeeGraceDays: '', businessName: '',
   });
+  const [increases, setIncreases] = useState<IncreaseRow[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  function updateIncrease(i: number, patch: Partial<IncreaseRow>) {
+    setIncreases(rows => rows.map((r, idx) => idx === i ? { ...r, ...patch } : r));
+  }
+  function addIncrease() {
+    // Default each new step to a year after the previous one (or the lease start).
+    const prev = increases[increases.length - 1]?.effectiveDate || form.startDate;
+    let next = '';
+    if (prev) {
+      const d = new Date(`${prev}T00:00:00`);
+      d.setFullYear(d.getFullYear() + 1);
+      next = format(d, 'yyyy-MM-dd');
+    }
+    setIncreases(rows => [...rows, { ...EMPTY_INCREASE_ROW, effectiveDate: next }]);
+  }
+  function removeIncrease(i: number) {
+    setIncreases(rows => rows.filter((_, idx) => idx !== i));
+  }
+
+  // The rent each step lands on, so the user can see the ladder as they type it.
+  const increasePreview = (() => {
+    let rent = parseFloat(form.rentAmount || '0') || 0;
+    return increases.map(r => {
+      const amt = parseFloat(r.newAmount);
+      const pct = parseFloat(r.percent);
+      if (!Number.isNaN(amt) && amt > 0) rent = amt;
+      else if (!Number.isNaN(pct) && pct !== 0) rent = Math.round(rent * (1 + pct / 100) * 100) / 100;
+      return rent;
+    });
+  })();
 
   useEffect(() => {
     getUnits({ propertyId }).then(u => { setUnits(u); if (u.length === 1) setUnitId(u[0].id); });
@@ -2241,6 +2390,10 @@ function NewLeaseModal({ propertyId, onClose, onCreated }: {
     const validRows = tenantRows.filter(r => r.mode === 'existing' ? r.tenantId : r.fullName.trim());
     if (validRows.length === 0) { setError('Add at least one tenant.'); return; }
     if (!form.rentAmount) { setError('Rent amount is required.'); return; }
+    const steps = increases.filter(r => r.effectiveDate && (r.newAmount || r.percent));
+    if (increases.some(r => !r.effectiveDate || !(r.newAmount || r.percent))) {
+      setError('Each rent step needs a date and either a new amount or a percent.'); return;
+    }
 
     setSaving(true);
     try {
@@ -2253,7 +2406,7 @@ function NewLeaseModal({ propertyId, onClose, onCreated }: {
           tenantIds.push(created.id);
         }
       }
-      await createLease({
+      const lease = await createLease({
         unitId: finalUnitId,
         startDate: form.startDate || null,
         endDate: form.endDate || undefined,
@@ -2262,8 +2415,23 @@ function NewLeaseModal({ propertyId, onClose, onCreated }: {
         leaseType: form.leaseType,
         status: form.status,
         notes: form.notes || undefined,
+        rentDueDay: form.rentDueDay ? parseInt(form.rentDueDay, 10) : undefined,
+        lateFeeAmount: form.lateFeeAmount ? parseFloat(form.lateFeeAmount) : undefined,
+        lateFeePercent: form.lateFeePercent ? parseFloat(form.lateFeePercent) : undefined,
+        lateFeeGraceDays: form.lateFeeGraceDays ? parseInt(form.lateFeeGraceDays, 10) : undefined,
+        businessName: form.businessName.trim() || undefined,
         tenantIds,
       });
+      // Rent steps are stored as scheduled increases; the worker applies each
+      // on its date and the card shows the ladder in the meantime.
+      for (const step of steps) {
+        await addScheduledIncrease(lease.id, {
+          effectiveDate: step.effectiveDate,
+          newAmount: step.newAmount ? parseFloat(step.newAmount) : null,
+          percent: !step.newAmount && step.percent ? parseFloat(step.percent) : null,
+          note: step.note || null,
+        });
+      }
       onCreated();
     } catch {
       setError('Failed to create lease. Please check the fields and try again.');
@@ -2340,10 +2508,76 @@ function NewLeaseModal({ propertyId, onClose, onCreated }: {
               <select value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))} className="input-dark text-sm">
                 {['ACTIVE', 'PENDING', 'ENDED', 'TERMINATED'].map(s => <option key={s} value={s}>{s}</option>)}
               </select>
-              <input type="date" value={form.startDate} onChange={e => setForm(f => ({ ...f, startDate: e.target.value }))} className="input-dark text-sm" />
-              <input type="date" placeholder="End date" value={form.endDate} onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))} className="input-dark text-sm" />
+              <div>
+                <label className="block text-[11px] text-gray-600 mb-0.5">Move-in / start</label>
+                <input type="date" value={form.startDate} onChange={e => setForm(f => ({ ...f, startDate: e.target.value }))} className="input-dark text-sm w-full" />
+              </div>
+              <div>
+                <label className="block text-[11px] text-gray-600 mb-0.5">End date{form.leaseType === 'MONTH_TO_MONTH' ? ' (optional)' : ''}</label>
+                <input type="date" value={form.endDate} onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))} className="input-dark text-sm w-full" />
+              </div>
+              <input type="number" min={1} max={31} placeholder="Rent due day (default 1st)" value={form.rentDueDay}
+                onChange={e => setForm(f => ({ ...f, rentDueDay: e.target.value }))} className="input-dark text-sm"
+                title="Day of the month rent is due" />
+              {isCommercial ? (
+                <input placeholder="Business name on the lease" value={form.businessName}
+                  onChange={e => setForm(f => ({ ...f, businessName: e.target.value }))} className="input-dark text-sm" />
+              ) : <div />}
               <input placeholder="Notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="input-dark text-sm col-span-2" />
             </div>
+          </div>
+
+          <div>
+            <p className="text-xs text-gray-500 mb-2 font-medium uppercase tracking-wide">Late fee <span className="normal-case font-normal text-gray-600">(leave blank if none)</span></p>
+            <div className="grid grid-cols-3 gap-3">
+              <input type="number" placeholder="Flat amount $" value={form.lateFeeAmount}
+                onChange={e => setForm(f => ({ ...f, lateFeeAmount: e.target.value, lateFeePercent: e.target.value ? '' : f.lateFeePercent }))}
+                className="input-dark text-sm" />
+              <input type="number" placeholder="% of rent" value={form.lateFeePercent}
+                onChange={e => setForm(f => ({ ...f, lateFeePercent: e.target.value, lateFeeAmount: e.target.value ? '' : f.lateFeeAmount }))}
+                className="input-dark text-sm" />
+              <input type="number" placeholder="Grace days" value={form.lateFeeGraceDays}
+                onChange={e => setForm(f => ({ ...f, lateFeeGraceDays: e.target.value }))}
+                className="input-dark text-sm" title="Days after the due date before the fee applies" />
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">
+                Rent steps <span className="normal-case font-normal text-gray-600">(increases written into the lease)</span>
+              </p>
+              <button onClick={addIncrease} className="text-xs text-amber-400 hover:text-amber-300">+ Add step</button>
+            </div>
+            {increases.length === 0 ? (
+              <p className="text-xs text-gray-600">
+                None. Add a step for each scheduled bump, e.g. $3,000 from Mar 1 2027, then $3,200 at the start of year two.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {increases.map((row, i) => (
+                  <div key={i} className="rounded-lg p-3" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      <input type="date" value={row.effectiveDate} onChange={e => updateIncrease(i, { effectiveDate: e.target.value })} className="input-dark text-sm" title="Takes effect on" />
+                      <input type="number" placeholder="New rent $" value={row.newAmount}
+                        onChange={e => updateIncrease(i, { newAmount: e.target.value, percent: e.target.value ? '' : row.percent })} className="input-dark text-sm" />
+                      <input type="number" placeholder="or +%" value={row.percent}
+                        onChange={e => updateIncrease(i, { percent: e.target.value, newAmount: e.target.value ? '' : row.newAmount })} className="input-dark text-sm" />
+                      <div className="flex gap-2">
+                        <input placeholder="Note" value={row.note} onChange={e => updateIncrease(i, { note: e.target.value })} className="input-dark text-sm flex-1 min-w-0" />
+                        <button onClick={() => removeIncrease(i)} className="text-xs text-gray-600 hover:text-red-400" title="Remove step">✕</button>
+                      </div>
+                    </div>
+                    {increasePreview[i] > 0 && (row.newAmount || row.percent) && (
+                      <p className="text-[11px] text-gray-500 mt-1.5">
+                        Step {i + 1}: rent becomes <span className="text-white font-medium">{money(increasePreview[i])}/mo</span>
+                        {row.effectiveDate ? ` from ${fmtDate(row.effectiveDate)}` : ''}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
@@ -2364,9 +2598,23 @@ function LoansTab({ propertyId, loans, setLoans }: {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ loanType: 'MORTGAGE', lender: '', originalAmount: '', interestRate: '', monthlyPayment: '', currentBalance: '', originationDate: '', maturityDate: '', notes: '' });
   const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const sorted = [...loans].sort((a, b) => (b.currentBalance ?? 0) - (a.currentBalance ?? 0));
   const totalDebt = loans.filter(l => l.isActive).reduce((s, l) => s + Number(l.currentBalance ?? 0), 0);
+  const totalService = loans.filter(l => l.isActive).reduce((s, l) => s + Number(l.monthlyPayment ?? 0) + Number(l.escrowAmount ?? 0), 0);
+
+  async function remove(loan: Loan) {
+    const label = `${loan.lender}${loan.currentBalance ? ` (${money(Number(loan.currentBalance))})` : ''}`;
+    if (!window.confirm(`Delete the loan from ${label}? Its logged payments go with it. This cannot be undone.`)) return;
+    setDeletingId(loan.id);
+    try {
+      await deleteLoan(loan.id);
+      setLoans(loans.filter(l => l.id !== loan.id));
+    } catch {
+      window.alert('Could not delete this loan. Please try again.');
+    } finally { setDeletingId(null); }
+  }
 
   async function save() {
     if (!form.lender) return;
@@ -2396,7 +2644,10 @@ function LoansTab({ propertyId, loans, setLoans }: {
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <p className="text-xs text-gray-500">Total debt: <span className="text-white font-medium">{money(totalDebt)}</span></p>
+        <p className="text-xs text-gray-500">
+          Total debt: <span className="text-white font-medium">{money(totalDebt)}</span>
+          {totalService > 0 && <> · Payments: <span className="text-white font-medium">{money(totalService)}/mo</span></>}
+        </p>
         <button onClick={() => setShowForm(!showForm)} className="btn text-xs">+ Add loan</button>
       </div>
 
@@ -2436,11 +2687,12 @@ function LoansTab({ propertyId, loans, setLoans }: {
                   <th className="px-4 py-3">Rate</th>
                   <th className="px-4 py-3">Maturity</th>
                   <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
                 {sorted.map(loan => (
-                  <tr key={loan.id} className="hover:bg-white/[0.02]">
+                  <tr key={loan.id} className="hover:bg-white/[0.02] group">
                     <td className="px-4 py-3">
                       <Link to={`/loans/${loan.id}`} className="text-white font-medium hover:text-amber-400 transition-colors">{loan.lender}</Link>
                       {loan.accountLast4 && <p className="text-xs text-gray-500">····{loan.accountLast4}</p>}
@@ -2452,6 +2704,13 @@ function LoansTab({ propertyId, loans, setLoans }: {
                     <td className="px-4 py-3 text-gray-400 text-xs">{loan.maturityDate ? fmtDate(loan.maturityDate) : '—'}</td>
                     <td className="px-4 py-3">
                       <span className={`pill ${loan.isActive ? 'pill-green' : 'pill-gray'}`}>{loan.isActive ? 'Active' : 'Paid off'}</span>
+                    </td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                      <Link to={`/loans/${loan.id}`} className="text-xs text-gray-500 hover:text-gray-300 mr-3">Edit</Link>
+                      <button onClick={() => remove(loan)} disabled={deletingId === loan.id}
+                        className="text-xs text-gray-600 hover:text-red-400 disabled:opacity-40" title="Delete this loan">
+                        {deletingId === loan.id ? 'Deleting…' : 'Delete'}
+                      </button>
                     </td>
                   </tr>
                 ))}

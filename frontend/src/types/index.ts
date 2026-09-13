@@ -173,11 +173,26 @@ export interface Lease {
   createdAt: string;
   leaseTenants?: LeaseTenant[];
   rentPayments?: RentPayment[];
+  deposits?: LeaseDeposit[];
   rentNotices?: RentNotice[];
   rentChanges?: RentChange[];
   scheduledIncreases?: ScheduledRentIncrease[];
   utilityCharges?: LeaseUtilityCharge[];
   paymentAliases?: LeasePaymentAlias[];
+}
+
+// Security-deposit money received on a lease. Not rent: never counted as
+// income anywhere. Lease.securityDeposit is what the lease calls for.
+export interface LeaseDeposit {
+  id: string;
+  leaseId: string;
+  amount: number;
+  paidDate: string;
+  method: RentPaymentMethod;
+  bankAccountId?: string | null;
+  bankAccount?: Pick<BankAccount, 'id' | 'name' | 'bank' | 'last4' | 'accountType' | 'ownerLabel' | 'cardNetwork'> | null;
+  notes?: string | null;
+  createdAt: string;
 }
 
 // A name this lease's rent may arrive under — a spouse, a relative, an

@@ -231,7 +231,7 @@ function PropertyCard({ p, stat }: { p: Property; stat?: { rent: number; arrears
           )}
         </div>
       </div>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-3 gap-y-2 pt-3" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+      <div className="grid grid-cols-3 sm:grid-cols-5 gap-x-3 gap-y-2 pt-3" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
         <div>
           <p className="text-xs text-gray-500 mb-0.5">Net/mo</p>
           <p className={`text-sm font-semibold ${s.net > 0 ? 'text-emerald-400' : s.net < 0 ? 'text-red-400' : 'text-gray-600'}`}
@@ -242,6 +242,13 @@ function PropertyCard({ p, stat }: { p: Property; stat?: { rent: number; arrears
         <div>
           <p className="text-xs text-gray-500 mb-0.5">Rent/mo</p>
           <p className="text-sm font-semibold text-white">{s.rent ? money(s.rent) : '—'}</p>
+        </div>
+        <div>
+          <p className="text-xs text-gray-500 mb-0.5">Loans/mo</p>
+          <p className={`text-sm font-semibold ${s.debtService > 0 ? 'text-amber-400' : 'text-gray-600'}`}
+             title={s.debt > 0 ? `Monthly P&I + escrow on ${money(s.debt)} of debt` : 'No active loans'}>
+            {s.debtService > 0 ? money(s.debtService) : '—'}
+          </p>
         </div>
         <div>
           <p className="text-xs text-gray-500 mb-0.5">Arrears</p>
