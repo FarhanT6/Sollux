@@ -67,6 +67,7 @@ router.get('/', async (req, res, next) => {
         unit: { include: { property: { select: { id: true, address: true, nickname: true } } } },
         leaseTenants: { include: { tenant: true } },
         rentPayments: { orderBy: { paidDate: 'desc' }, take: 6 },
+        deposits: { orderBy: { paidDate: 'desc' }, include: { bankAccount: { select: { id: true, name: true, bank: true, last4: true, accountType: true, ownerLabel: true, cardNetwork: true } } } },
         rentChanges: { orderBy: { effectiveDate: 'desc' } },
         scheduledIncreases: { where: { applied: false }, orderBy: { effectiveDate: 'asc' } },
         utilityCharges: { orderBy: { createdAt: 'asc' } },
@@ -86,6 +87,7 @@ router.get('/:id', async (req, res, next) => {
         unit: { include: { property: true } },
         leaseTenants: { include: { tenant: true } },
         rentPayments: { orderBy: { paidDate: 'desc' } },
+        deposits: { orderBy: { paidDate: 'desc' }, include: { bankAccount: { select: { id: true, name: true, bank: true, last4: true, accountType: true, ownerLabel: true, cardNetwork: true } } } },
         rentNotices: { orderBy: { noticeDate: 'desc' } },
         rentChanges: { orderBy: { effectiveDate: 'desc' } },
         scheduledIncreases: { where: { applied: false }, orderBy: { effectiveDate: 'asc' } },
@@ -304,6 +306,61 @@ router.delete('/:id/scheduled-increases/:sid', async (req, res, next) => {
     const lease = await db.lease.findFirst({ where: { id: req.params.id, unit: { property: { userId: req.dbUserId! } } } });
     if (!lease) return res.status(404).json({ error: 'Lease not found' });
     await db.scheduledRentIncrease.deleteMany({ where: { id: req.params.sid, leaseId: lease.id } });
+    res.status(204).send();
+  } catch (err) { next(err); }
+});
+
+// ── Security deposits ─────────────────────────────────────────────────────
+// Deposit money is the tenant's, held in trust: it is recorded on its own
+// table so nothing that sums rent (P&L, cash flow, rent roll, paid state)
+// ever sees it. See LeaseDeposit in the schema.
+const LeaseDepositSchema = z.object({
+  amount: z.number().positive(),
+  paidDate: z.string().transform(s => new Date(s)),
+  method: z.enum([
+    'CASH','CHECK','ZELLE','ACH','MONEY_ORDER','CARD',
+    'VENMO','PAYPAL','CASH_APP','APPLE_CASH','BANK_DEPOSIT','SECTION_8','RENTAL_ASSISTANCE','OTHER',
+  ]).default('OTHER'),
+  bankAccountId: z.string().optional().nullable(),
+  notes: z.string().optional().nullable(),
+});
+
+const depositInclude = {
+  bankAccount: { select: { id: true, name: true, bank: true, last4: true, accountType: true, ownerLabel: true, cardNetwork: true } },
+} as const;
+
+// POST /api/leases/:id/deposits — log deposit money received
+router.post('/:id/deposits', async (req, res, next) => {
+  try {
+    const data = LeaseDepositSchema.parse(req.body);
+    const lease = await db.lease.findFirst({ where: { id: req.params.id, unit: { property: { userId: req.dbUserId! } } } });
+    if (!lease) return res.status(404).json({ error: 'Lease not found' });
+    // Never take a bank account id on trust — see rentPayments.
+    if (data.bankAccountId) {
+      const acct = await db.bankAccount.findFirst({ where: { id: data.bankAccountId, userId: req.dbUserId! } });
+      if (!acct) return res.status(404).json({ error: 'Bank account not found' });
+    }
+    const created = await db.leaseDeposit.create({
+      data: {
+        leaseId: lease.id,
+        amount: data.amount,
+        paidDate: data.paidDate,
+        method: data.method,
+        bankAccountId: data.bankAccountId ?? null,
+        notes: data.notes ?? null,
+      },
+      include: depositInclude,
+    });
+    res.status(201).json(created);
+  } catch (err) { next(err); }
+});
+
+// DELETE /api/leases/:id/deposits/:did — remove a mistaken deposit entry
+router.delete('/:id/deposits/:did', async (req, res, next) => {
+  try {
+    const lease = await db.lease.findFirst({ where: { id: req.params.id, unit: { property: { userId: req.dbUserId! } } } });
+    if (!lease) return res.status(404).json({ error: 'Lease not found' });
+    await db.leaseDeposit.deleteMany({ where: { id: req.params.did, leaseId: lease.id } });
     res.status(204).send();
   } catch (err) { next(err); }
 });

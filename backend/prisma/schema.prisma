@@ -631,6 +631,7 @@ model Lease {
   leaseTenants         LeaseTenant[]
   utilityReimbursement UtilityReimbursement?
   rentPayments         RentPayment[]
+  deposits             LeaseDeposit[]
   rentNotices          RentNotice[]
   rentChanges          RentChange[]
   scheduledIncreases   ScheduledRentIncrease[]
@@ -756,6 +757,29 @@ model RentPayment {
 enum RentPaymentStatus {
   PENDING
   RECEIVED
+}
+
+// ─── LEASE DEPOSITS ──────────────────────────────────────
+/// Security-deposit money actually received on a lease. Kept apart from
+/// RentPayment on purpose: a deposit is the tenant's money held in trust, not
+/// income, so it must never count toward the rent roll, the P&L, the cash-flow
+/// sheet or the month's "paid" state. Lease.securityDeposit is what the lease
+/// calls for; these rows are what has been handed over.
+model LeaseDeposit {
+  id            String            @id @default(cuid())
+  leaseId       String
+  lease         Lease             @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  amount        Decimal           @db.Decimal(10, 2)
+  paidDate      DateTime
+  method        RentPaymentMethod @default(OTHER)
+  bankAccountId String?
+  bankAccount   BankAccount?      @relation(fields: [bankAccountId], references: [id], onDelete: SetNull)
+  notes         String?
+  createdAt     DateTime          @default(now())
+
+  @@index([leaseId])
+  @@index([bankAccountId])
+  @@map("lease_deposits")
 }
 
 enum RentPaymentMethod {
@@ -1347,6 +1371,7 @@ model BankAccount {
   incomingTransactions IncomingTransaction[]
   outgoingTransactions OutgoingTransaction[]
   rentPayments         RentPayment[]
+  leaseDeposits        LeaseDeposit[]
   legalFees            LegalFee[]
   utilityPayments      Payment[]
 

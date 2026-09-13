@@ -53,6 +53,9 @@ export interface AmortizationResult {
   schedule: AmortizationRow[];    // forward-looking, from current balance to payoff
   payoffDate: string | null;
   monthsRemaining: number | null;
+  // Principal still owed on the maturity date when the payment on file does
+  // not retire the note by then — the lump sum the final row settles.
+  balloonAtMaturity: number | null;
   totalInterestRemaining: number;
   totalDeferredInterest: number;  // unpaid interest capitalized into the balance (negative amortization only)
   scheduleEndsAt: string | null;  // last projected date — payoff date, or projection horizon if negatively amortizing
@@ -198,6 +201,7 @@ export function buildAmortizationSchedule(
       schedule: [],
       payoffDate: null,
       monthsRemaining: null,
+      balloonAtMaturity: null,
       totalInterestRemaining: 0,
       totalDeferredInterest: 0,
       scheduleEndsAt: null,
@@ -250,14 +254,42 @@ export function buildAmortizationSchedule(
   // would keep compounding past the maturity date's true payoff amount.
   const isBalloonMaturity = (negativeAmortization || isInterestOnly) && loan.maturityDate != null;
 
+  // An ordinary amortizing loan also ends at its maturity date: whatever the
+  // payment on file, the note is paid off — or the remaining balance falls due
+  // as a lump sum — the month it matures. Without this cap a payment a few
+  // dollars light projected a payoff months after the maturity on the note,
+  // and the two dates on the page disagreed.
+  const monthsToMaturity = !isBalloonMaturity && loan.maturityDate
+    ? monthsBetween(startDate, loan.maturityDate)
+    : null;
+  const amortizingHorizon = monthsToMaturity != null && monthsToMaturity >= 1 ? Math.min(600, monthsToMaturity) : null;
+
   const schedule: AmortizationRow[] = [];
   let balance = balanceResult.balance;
   let totalInterestRemaining = 0;
   let totalDeferredInterest = 0;
+  let balloonAtMaturity: number | null = null;
 
   // Cap at 600 rows (50 years) as a hard safety limit against runaway loops.
   for (let i = 1; i <= 600 && (flatHorizonMonths != null ? i <= flatHorizonMonths : balance > 0.01); i++) {
     const interest = balance * monthlyRate;
+    const atMaturity = amortizingHorizon != null && i === amortizingHorizon;
+    // The regular payment would not have cleared the note by maturity, so the
+    // final row settles what is left.
+    if (atMaturity && !negativeAmortization && !isInterestOnly && balance - (payment - interest) > 0.01) {
+      balloonAtMaturity = Math.round(balance * 100) / 100;
+      totalInterestRemaining += interest;
+      balance = 0;
+      schedule.push({
+        paymentNumber: i,
+        date: iso(addMonths(startDate, i)),
+        paymentAmount: Math.round((balloonAtMaturity + interest) * 100) / 100,
+        principal: balloonAtMaturity,
+        interest: Math.round(interest * 100) / 100,
+        balance: 0,
+      });
+      break;
+    }
     const isFinalBalloonRow = isBalloonMaturity && i === flatHorizonMonths;
     let principal = isFinalBalloonRow ? balance : isInterestOnly ? 0 : payment - interest;
     let paymentAmount = isFinalBalloonRow
@@ -296,6 +328,7 @@ export function buildAmortizationSchedule(
     schedule,
     payoffDate: reachedPayoff ? last!.date : null,
     monthsRemaining: reachedPayoff ? schedule.length : null,
+    balloonAtMaturity,
     totalInterestRemaining: Math.round(totalInterestRemaining * 100) / 100,
     totalDeferredInterest: Math.round(totalDeferredInterest * 100) / 100,
     scheduleEndsAt: last?.date ?? null,

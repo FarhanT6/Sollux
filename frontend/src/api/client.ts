@@ -26,7 +26,7 @@ export default api;
 
 import type {
   Property, UtilityAccount, Statement, StatementSummaryRow, Payment, AIInsight, DashboardSummary,
-  Unit, Tenant, LeaseTenant, Lease, RentPayment, RentNotice, RentChange, ScheduledRentIncrease, LeaseUtilityCharge, Expense, Loan, LoanPayment,
+  Unit, Tenant, LeaseTenant, Lease, LeaseDeposit, RentPayment, RentNotice, RentChange, ScheduledRentIncrease, LeaseUtilityCharge, Expense, Loan, LoanPayment,
   InsurancePolicy, TaxAssessment, Improvement, LegalMatter, PropertyPnL, MonthlyPnL,
   BankAccount, OtherIncome, BudgetSummary, DelinquencyTenant, BudgetForecast, IndexRate,
   ReconciliationProfile, ReconciliationStatement, ReconciliationLineItem,
@@ -131,6 +131,10 @@ export const applyScheduledIncrease = (leaseId: string, sid: string, override?: 
   api.post<ScheduledRentIncrease>(`/leases/${leaseId}/scheduled-increases/${sid}/apply`, override || {}).then(r => r.data);
 export const deleteScheduledIncrease = (leaseId: string, sid: string) =>
   api.delete(`/leases/${leaseId}/scheduled-increases/${sid}`);
+export const addLeaseDeposit = (leaseId: string, data: { amount: number; paidDate: string; method?: string; bankAccountId?: string | null; notes?: string | null }) =>
+  api.post<LeaseDeposit>(`/leases/${leaseId}/deposits`, data).then(r => r.data);
+export const deleteLeaseDeposit = (leaseId: string, depositId: string) =>
+  api.delete(`/leases/${leaseId}/deposits/${depositId}`);
 export const addPaymentAlias = (leaseId: string, data: { name: string; note?: string }) =>
   api.post<LeasePaymentAlias>(`/leases/${leaseId}/payment-aliases`, data).then(r => r.data);
 export const deletePaymentAlias = (leaseId: string, aliasId: string) =>
