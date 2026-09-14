@@ -1812,6 +1812,35 @@ export async function recordConfirmedPayment(
   }
 }
 
+/**
+ * A bill that says in words that the account is in credit is in credit,
+ * whatever sign the extractor gave its figures. "No payment is due. Your
+ * account has a credit balance of $47.34" fixes the stated total at −47.34
+ * and the account balance at −47.34; a "Total Account Balance - $47.34"
+ * printed with a space after the minus does the same. Read from the PDF's
+ * own text layer, so it corrects the AI path as well as the regex one —
+ * the AI returned the credit as a positive 47.34, and the bill filed as a
+ * $5.26 charge with no credit against it.
+ */
+export function applyCreditFromText(text: string, ex: ExtractedBillData): void {
+  if (!text) return;
+  let credit: number | null = null;
+  const phrase = text.match(/credit\s+balance\s+of\s+-?\$?\s*([\d,]*\.\d{2})/i);
+  if (phrase) credit = parseFloat(phrase[1].replace(/,/g, ''));
+  if (credit == null) {
+    const tab = findDollarNear(text, [/total\s+account\s+balance/i]);
+    if (tab != null && tab < 0 && !ex.paymentPlan) credit = -tab;
+  }
+  if (credit == null || !(credit > 0)) return;
+  ex.statedTotalDue = -credit;
+  if (ex.totalAccountBalance == null || Math.abs(Math.abs(ex.totalAccountBalance) - credit) < 0.01) ex.totalAccountBalance = -credit;
+  // The charge itself stays positive: the credit, not the charge, is what
+  // makes nothing due.
+  if (ex.amountDue != null && ex.amountDue < 0 && Math.abs(ex.amountDue + credit) < 0.01) {
+    ex.amountDue = ex.currentCharges != null && ex.currentCharges > 0 ? ex.currentCharges : null;
+  }
+}
+
 // ── Main entry point ──────────────────────────────────────────────────────────
 
 export async function parseBill(
@@ -1868,6 +1897,11 @@ export async function parseBill(
       extracted.documentKind = 'bill';
     }
     repairMisreadPeriodYear(extracted);
+    // The text layer settles what the figures cannot: a bill in credit.
+    try {
+      const { text } = await pdfParse(buffer);
+      applyCreditFromText(text, extracted);
+    } catch { /* an unreadable text layer changes nothing */ }
     reconcileWithStatedTotal(extracted);
     sanitiseLateFee(extracted);
     sanitiseCurrentCharges(extracted);

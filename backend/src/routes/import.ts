@@ -454,7 +454,8 @@ router.post('/confirm', async (req: Request, res: Response) => {
         // Payment against that statement — writing it onto THIS bill's
         // amountPaid marked every freshly imported bill "Paid" while its own
         // charge sat unpaid. Seeded only when the bill itself proves settled.
-        const paidAmount = ex.isPaid ? totalDue : null;
+        // A bill in credit is settled by the credit, not by money paid.
+        const paidAmount = ex.isPaid && totalDue != null ? Math.max(totalDue, 0) : null;
         // Re-imports also clear the legacy value this bug wrote: an existing
         // amountPaid equal to the bill's own "payments received" figure is
         // bill-derived, not something the owner recorded.
