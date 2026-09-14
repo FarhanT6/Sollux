@@ -2599,8 +2599,14 @@ function LoansTab({ propertyId, loans, setLoans }: {
   const [form, setForm] = useState({ loanType: 'MORTGAGE', lender: '', originalAmount: '', interestRate: '', monthlyPayment: '', currentBalance: '', originationDate: '', maturityDate: '', notes: '' });
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [typeFilter, setTypeFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'' | 'active' | 'paid'>('');
 
-  const sorted = [...loans].sort((a, b) => (b.currentBalance ?? 0) - (a.currentBalance ?? 0));
+  const typesPresent = [...new Set(loans.map(l => l.loanType))].sort();
+  const sorted = [...loans]
+    .filter(l => !typeFilter || l.loanType === typeFilter)
+    .filter(l => !statusFilter || (statusFilter === 'active' ? l.isActive : !l.isActive))
+    .sort((a, b) => (b.currentBalance ?? 0) - (a.currentBalance ?? 0));
   const totalDebt = loans.filter(l => l.isActive).reduce((s, l) => s + Number(l.currentBalance ?? 0), 0);
   const totalService = loans.filter(l => l.isActive).reduce((s, l) => s + Number(l.monthlyPayment ?? 0) + Number(l.escrowAmount ?? 0), 0);
 
@@ -2648,7 +2654,22 @@ function LoansTab({ propertyId, loans, setLoans }: {
           Total debt: <span className="text-white font-medium">{money(totalDebt)}</span>
           {totalService > 0 && <> · Payments: <span className="text-white font-medium">{money(totalService)}/mo</span></>}
         </p>
-        <button onClick={() => setShowForm(!showForm)} className="btn text-xs">+ Add loan</button>
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          {loans.length > 1 && (
+            <>
+              <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} className="input-dark text-xs" title="Filter by loan type">
+                <option value="">All types</option>
+                {typesPresent.map(t => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
+              </select>
+              <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as any)} className="input-dark text-xs" title="Filter by status">
+                <option value="">Active + paid off</option>
+                <option value="active">Active only</option>
+                <option value="paid">Paid off only</option>
+              </select>
+            </>
+          )}
+          <button onClick={() => setShowForm(!showForm)} className="btn text-xs">+ Add loan</button>
+        </div>
       </div>
 
       {showForm && (
@@ -2673,7 +2694,7 @@ function LoansTab({ propertyId, loans, setLoans }: {
       )}
 
       {sorted.length === 0 ? (
-        <div className="text-center py-12 text-gray-500 text-sm">No loans recorded</div>
+        <div className="text-center py-12 text-gray-500 text-sm">{loans.length === 0 ? 'No loans recorded' : 'No loans match this filter'}</div>
       ) : (
         <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
           <div className="overflow-x-auto">
