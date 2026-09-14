@@ -941,9 +941,20 @@ function UtilityAccountCard({
     ? Number(latest.amountDue ?? 0) + Number((latest as any).pastDueCarried ?? 0)
     : undefined;
   const stmtDate = latest?.statementDate ? new Date(latest.statementDate) : null;
-  const recentPmt = payments
-    .filter(p => stmtDate ? new Date(p.paymentDate) >= stmtDate : true)
-    .sort((a, b) => new Date(b.paymentDate).getTime() - new Date(a.paymentDate).getTime())[0];
+  // The payment that paid THIS bill: one logged against it by name first;
+  // failing that, unlinked money since the bill was issued. Two payments on
+  // the same day used to tie on date, and the card named whichever the
+  // database returned first — the July bill's $1,919.03 instead of the
+  // $990.40 card payment logged toward August.
+  const counted = (p: any) => p.status !== 'FAILED' && p.status !== 'PENDING';
+  const linkedToLatest = latest ? payments.filter(p => counted(p) && (p as any).statementId === latest.id) : [];
+  const paidForBill = linkedToLatest.length > 0
+    ? linkedToLatest
+    : payments.filter(p => counted(p) && !(p as any).statementId && (stmtDate ? new Date(p.paymentDate) >= stmtDate : true));
+  const recentPmt = [...paidForBill].sort((a, b) =>
+    (new Date(b.paymentDate).getTime() - new Date(a.paymentDate).getTime())
+    || (new Date((b as any).createdAt ?? 0).getTime() - new Date((a as any).createdAt ?? 0).getTime()))[0];
+  const paidForBillTotal = paidForBill.reduce((s, p) => s + Number(p.amount ?? 0), 0);
   const recentPaidSum = payments
     .filter(p => stmtDate ? new Date(p.paymentDate) >= stmtDate : false)
     .reduce((s, p) => s + Number(p.amount ?? 0), 0);
@@ -1113,7 +1124,8 @@ function UtilityAccountCard({
                 {isPaid && recentPmt && !isPaidViaStatement && (
                   <div className="mt-1 flex items-center gap-1.5">
                     <span className="text-xs text-emerald-400">
-                      Paid {fmt(Number(recentPmt.amount))} on {fmtDate(recentPmt.paymentDate, 'MMM d')}
+                      Paid {fmt(paidForBillTotal)} on {fmtDate(recentPmt.paymentDate, 'MMM d')}
+                      {paidForBill.length > 1 && <span className="text-gray-500"> · {paidForBill.length} payments</span>}
                     </span>
                   </div>
                 )}

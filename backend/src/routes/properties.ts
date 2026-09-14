@@ -104,9 +104,9 @@ router.get('/', async (req, res, next) => {
               select: { id: true, amountDue: true, dueDate: true, amountPaid: true, rawDataJson: true, statementDate: true, penaltyDate: true, pastDueCarried: true, penaltiesFees: true, paymentPlanAmount: true, balance: true },
             },
             payments: {
-              orderBy: { paymentDate: 'desc' },
+              orderBy: [{ paymentDate: 'desc' }, { createdAt: 'desc' }],
               take: 12,
-              select: { id: true, paymentDate: true, amount: true, statementId: true, status: true, notes: true },
+              select: { id: true, paymentDate: true, amount: true, statementId: true, status: true, notes: true, createdAt: true },
             },
           },
         },
@@ -159,7 +159,9 @@ router.get('/:id', async (req, res, next) => {
         utilityAccounts: {
           include: {
             statements: { orderBy: { statementDate: 'desc' }, take: 6 },
-            payments: { orderBy: { paymentDate: 'desc' }, take: 6 },
+            // createdAt breaks a same-day tie so "the latest payment" is the
+            // one logged last, not whichever row the database returns first.
+            payments: { orderBy: [{ paymentDate: 'desc' }, { createdAt: 'desc' }], take: 6 },
           },
         },
         insights: {
