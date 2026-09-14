@@ -53,6 +53,7 @@ model User {
   otherIncome             OtherIncome[]
   incomingTransactions    IncomingTransaction[]
   outgoingTransactions    OutgoingTransaction[]
+  pendingOutflows         PendingOutflow[]
 
   @@map("users")
 }
@@ -916,11 +917,16 @@ model Loan {
   nextRateAdjustment        DateTime? // next date the rate is due to reset; advances each time it fires
   isPersonal                Boolean         @default(false)
   isActive                  Boolean         @default(true)
+  // The account this loan is usually paid from. The pay planner starts
+  // there and only moves to another account when this one cannot cover it.
+  payFromBankAccountId      String?
+  payFromBankAccount        BankAccount?    @relation("LoanPayFrom", fields: [payFromBankAccountId], references: [id], onDelete: SetNull)
   createdAt                 DateTime        @default(now())
   updatedAt                 DateTime        @updatedAt
 
-  loanPayments   LoanPayment[]
-  loanExtensions LoanExtension[]
+  loanPayments    LoanPayment[]
+  loanExtensions  LoanExtension[]
+  pendingOutflows PendingOutflow[]
 
   @@index([propertyId])
   @@index([userId])
@@ -1374,6 +1380,8 @@ model BankAccount {
   leaseDeposits        LeaseDeposit[]
   legalFees            LegalFee[]
   utilityPayments      Payment[]
+  pendingOutflows      PendingOutflow[]
+  loansPaidFrom        Loan[]          @relation("LoanPayFrom")
 
   @@index([userId])
   @@index([plaidItemId])
@@ -1471,6 +1479,35 @@ model BankBalance {
 
   @@unique([bankAccountId, asOfDate])
   @@map("bank_balances")
+}
+
+// ─── PENDING OUTFLOWS ────────────────────────────────────
+/// Money already committed from an account that the bank has not taken yet:
+/// a check in the mail, a payment scheduled on a lender's site, a transfer
+/// that has not posted. The bank's balance still shows it; the pay planner
+/// must not. A row is cleared once the bank has taken the money.
+model PendingOutflow {
+  id            String      @id @default(cuid())
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bankAccountId String
+  bankAccount   BankAccount @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
+  amount        Decimal     @db.Decimal(12, 2)
+  description   String
+  kind          String      @default("OTHER") // CHECK | SCHEDULED | TRANSFER | CARD | OTHER
+  expectedDate  DateTime?
+  // When this is a loan payment already sent, the planner treats that loan
+  // as handled for the month instead of asking for it again.
+  loanId        String?
+  loan          Loan?       @relation(fields: [loanId], references: [id], onDelete: SetNull)
+  cleared       Boolean     @default(false)
+  clearedAt     DateTime?
+  notes         String?
+  createdAt     DateTime    @default(now())
+
+  @@index([userId, cleared])
+  @@index([bankAccountId])
+  @@map("pending_outflows")
 }
 
 // ─── OTHER INCOME ────────────────────────────────────────

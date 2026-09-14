@@ -497,6 +497,8 @@ export interface Loan {
   notes?: string;
   isPersonal: boolean;
   isActive: boolean;
+  // The owner's account this loan is usually paid from (pay planner).
+  payFromBankAccountId?: string | null;
   createdAt: string;
   property?: Pick<Property, 'id' | 'address' | 'nickname'>;
   loanPayments?: LoanPayment[];
@@ -965,8 +967,77 @@ export interface BankAccount {
   watchForExpenses?: boolean;
   plaidAccountId?: string | null;
   balance: number;
+  available?: number;
   creditLimit?: number;
   asOfDate?: string;
+}
+
+// Money committed from an account that the bank has not taken yet: a check
+// in the mail, a payment scheduled on a lender's site. Subtracted from the
+// balance by the pay planner until it is marked cleared.
+export type PendingOutflowKind = 'CHECK' | 'SCHEDULED' | 'TRANSFER' | 'CARD' | 'OTHER';
+export const PENDING_OUTFLOW_KIND_LABELS: Record<PendingOutflowKind, string> = {
+  CHECK: 'Check sent', SCHEDULED: 'Scheduled payment', TRANSFER: 'Transfer', CARD: 'Card charge', OTHER: 'Other',
+};
+export interface PendingOutflow {
+  id: string;
+  bankAccountId: string;
+  amount: number;
+  description: string;
+  kind: PendingOutflowKind;
+  expectedDate?: string | null;
+  loanId?: string | null;
+  loan?: { id: string; lender: string };
+  cleared: boolean;
+  clearedAt?: string | null;
+  notes?: string | null;
+  createdAt: string;
+}
+
+// The pay planner's answer: what is due in the window, what is free in each
+// account once pending outflows are off, and which account pays what.
+export interface PayPlanAccount {
+  id: string;
+  name: string;
+  bank: string | null;
+  last4: string | null;
+  ownerLabel: string | null;
+  accountType: BankAccountType;
+  balance: number;
+  available: number | null;
+  asOfDate: string | null;
+  stale: boolean;
+  pending: { id: string; amount: number; description: string; kind: PendingOutflowKind; expectedDate: string | null; loanId: string | null }[];
+  pendingTotal: number;
+  cushion: number;
+  spendable: number;
+  assigned: number;
+  remaining: number;
+}
+export interface PayPlanObligation {
+  key: string;
+  kind: 'LOAN' | 'UTILITY';
+  id: string;
+  label: string;
+  detail: string | null;
+  propertyId: string | null;
+  amount: number;
+  dueDate: string;
+  daysUntil: number;
+  status: 'DUE' | 'SENT' | 'SHORT';
+  preferredAccountId: string | null;
+  payFrom: { accountId: string; amount: number }[];
+  reason: string;
+  link: string;
+}
+export interface PayPlan {
+  asOf: string;
+  horizonDays: number;
+  cushion: number;
+  accounts: PayPlanAccount[];
+  obligations: PayPlanObligation[];
+  totals: { due: number; sent: number; spendable: number; afterPlan: number; short: number };
+  warnings: string[];
 }
 
 export interface OtherIncome {

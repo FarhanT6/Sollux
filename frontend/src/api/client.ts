@@ -28,7 +28,7 @@ import type {
   Property, UtilityAccount, Statement, StatementSummaryRow, Payment, AIInsight, DashboardSummary,
   Unit, Tenant, LeaseTenant, Lease, LeaseDeposit, RentPayment, RentNotice, RentChange, ScheduledRentIncrease, LeaseUtilityCharge, Expense, Loan, LoanPayment,
   InsurancePolicy, TaxAssessment, Improvement, LegalMatter, PropertyPnL, MonthlyPnL,
-  BankAccount, OtherIncome, BudgetSummary, DelinquencyTenant, BudgetForecast, IndexRate,
+  BankAccount, PendingOutflow, PendingOutflowKind, PayPlan, OtherIncome, BudgetSummary, DelinquencyTenant, BudgetForecast, IndexRate,
   ReconciliationProfile, ReconciliationStatement, ReconciliationLineItem,
   Document, DocumentClassification, DocumentMatch, DocumentCategory,
   IncomingTransaction, IncomingTransactionStatus, OutgoingTransaction, UtilityCandidate,
@@ -515,6 +515,18 @@ export const deleteBankAccount = (id: string) =>
   api.delete(`/bank-accounts/${id}`);
 export const recordBankBalance = (id: string, data: { balance: number; creditLimit?: number; asOfDate?: string; notes?: string }) =>
   api.post(`/bank-accounts/${id}/balance`, data).then(r => r.data);
+
+// Pending outflows and the pay planner
+export const getPendingOutflows = (includeCleared = false) =>
+  api.get<PendingOutflow[]>('/bank-accounts/pending', { params: includeCleared ? { cleared: '1' } : {} }).then(r => r.data);
+export const addPendingOutflow = (bankAccountId: string, data: { amount: number; description: string; kind?: PendingOutflowKind; expectedDate?: string | null; loanId?: string | null; notes?: string | null }) =>
+  api.post<PendingOutflow>(`/bank-accounts/${bankAccountId}/pending`, data).then(r => r.data);
+export const updatePendingOutflow = (id: string, data: Partial<Pick<PendingOutflow, 'amount' | 'description' | 'kind' | 'expectedDate' | 'cleared' | 'notes' | 'bankAccountId'>>) =>
+  api.patch<PendingOutflow>(`/bank-accounts/pending/${id}`, data).then(r => r.data);
+export const deletePendingOutflow = (id: string) =>
+  api.delete(`/bank-accounts/pending/${id}`);
+export const getPayPlan = (params?: { days?: number; cushion?: number; utilities?: boolean }) =>
+  api.get<PayPlan>('/pay-plan', { params: { days: params?.days, cushion: params?.cushion, utilities: params?.utilities === false ? '0' : undefined } }).then(r => r.data);
 
 // Other Income
 export const getOtherIncome = (params?: { year?: number; month?: number }) =>

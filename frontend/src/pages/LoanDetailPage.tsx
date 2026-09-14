@@ -2,8 +2,9 @@ import { useEffect, useState, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import BackLink from '../components/ui/BackLink';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { getLoan, getLoanAmortization, updateLoan, getProperties, extendLoan } from '../api/client';
-import type { Loan, Property, LoanType, PrepaymentPenalty, PrepaymentPenaltyTier } from '../types';
+import { getLoan, getLoanAmortization, updateLoan, getProperties, extendLoan, getBankAccounts } from '../api/client';
+import type { Loan, Property, LoanType, PrepaymentPenalty, PrepaymentPenaltyTier, BankAccount } from '../types';
+import { bankAccountLabel } from '../lib/bankAccountLabel';
 import { format, addMonths } from 'date-fns';
 import { fmtDate } from '../lib/date';
 
@@ -213,9 +214,12 @@ function EditModal({ loan, properties, onClose, onSave }: {
     notes: loan.notes ?? '',
     isPersonal: loan.isPersonal,
     isActive: loan.isActive,
+    payFromBankAccountId: loan.payFromBankAccountId ?? '',
   });
   const [penalty, setPenalty] = useState<PrepaymentPenalty | null>(loan.prepaymentPenaltyJson ?? null);
   const [saving, setSaving] = useState(false);
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
+  useEffect(() => { getBankAccounts().then(setBankAccounts).catch(() => {}); }, []);
 
   function autoCalcBalance() {
     const P = parseFloat(form.originalAmount);
@@ -300,6 +304,7 @@ function EditModal({ loan, properties, onClose, onSave }: {
         notes: form.notes || null,
         isPersonal: form.isPersonal,
         isActive: form.isActive,
+        payFromBankAccountId: form.payFromBankAccountId || null,
         prepaymentPenaltyJson: penalty?.enabled ? penalty : null,
       };
       const updated = await updateLoan(loan.id, payload);
@@ -482,6 +487,16 @@ function EditModal({ loan, properties, onClose, onSave }: {
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Account number</label>
                 <input value={form.accountNumber} onChange={f('accountNumber')} className="input-dark w-full text-sm" placeholder="Full account number" />
+              </div>
+              <div className="col-span-2">
+                <label className="block text-xs text-gray-500 mb-1">Usually paid from</label>
+                <select value={form.payFromBankAccountId} onChange={f('payFromBankAccountId')} className="input-dark w-full text-sm">
+                  <option value="">— No usual account (planner picks the one with most room) —</option>
+                  {bankAccounts.filter(b => b.accountType !== 'CREDIT_CARD').map(b => (
+                    <option key={b.id} value={b.id}>{bankAccountLabel(b)}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-600 mt-1">The pay planner starts here and only moves to another account when this one cannot cover the payment.</p>
               </div>
               <div className="flex flex-col justify-end gap-2 pb-0.5">
                 <label className="flex items-center gap-2 cursor-pointer">

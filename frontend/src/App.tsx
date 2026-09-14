@@ -9,6 +9,7 @@ import UtilityDetailPage from './pages/UtilityDetailPage';
 import InsightsPage from './pages/InsightsPage';
 import OperationsPage from './pages/OperationsPage';
 import PaymentPrioritiesPage from './pages/PaymentPrioritiesPage';
+import PayPlanPage from './pages/PayPlanPage';
 import SettingsPage from './pages/SettingsPage';
 import FinancesPage from './pages/FinancesPage';
 import TenantsHubPage from './pages/TenantsHubPage';
@@ -75,7 +76,8 @@ export default function App() {
           <Route path="legal" element={<LegalPage />} />
 
           {/* Standalone pages */}
-          <Route path="payments" element={<PaymentPrioritiesPage />} />
+          <Route path="payments" element={<PayPlanPage />} />
+          <Route path="payments/priorities" element={<PaymentPrioritiesPage />} />
           <Route path="operations" element={<OperationsPage />} />
           <Route path="insights" element={<InsightsPage />} />
           <Route path="settings" element={<SettingsPage />} />

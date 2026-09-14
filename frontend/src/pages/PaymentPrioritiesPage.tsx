@@ -6,6 +6,7 @@ import {
 } from '../api/client';
 import { PageHeader, StatCard, Skeleton, EmptyState, Pill, Modal, Field, Input } from '../components/ui';
 import { fmtDate } from '../lib/date';
+import PaymentsTabs from '../components/PaymentsTabs';
 
 /**
  * What to pay first when everything cannot be paid at once.
@@ -55,6 +56,7 @@ export default function PaymentPrioritiesPage() {
   return (
     <div>
       <PageHeader title="Payments" subtitle="What to pay first, and what waiting costs" />
+      <PaymentsTabs active="priorities" />
 
       <div className="px-6 py-5">
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
