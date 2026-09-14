@@ -1767,11 +1767,22 @@ export async function recordConfirmedPayment(
   // reported it, and every freshly imported bill read Paid.
   const confirmedOn = ex.statementDate ? new Date(ex.statementDate) : new Date();
   const paymentDate = new Date(confirmedOn.getTime() - 24 * 60 * 60 * 1000);
-  const prior = await db.statement.findFirst({
-    where: { utilityAccountId, statementDate: { lt: confirmedOn }, id: { not: statementId } },
+  // Which earlier bill did this payment settle? The one whose charge (or
+  // open balance) matches the amount, newest first — not simply the bill
+  // before this one. CR&R's Sep 1 statement confirmed $272.52 received; the
+  // bill before it was the Aug 31 one for $278.26, and the $272.52 was the
+  // July bill's. Position filed it under August; amount files it under July.
+  const priors = await db.statement.findMany({
+    where: { utilityAccountId, statementDate: { lt: confirmedOn }, id: { not: statementId }, isDownPayment: false },
     orderBy: { statementDate: 'desc' },
-    select: { id: true },
+    take: 6,
+    select: { id: true, statementDate: true, amountDue: true, pastDueCarried: true },
   });
+  const near = (a: number, b: number) => Math.abs(a - b) <= Math.max(0.05, b * 0.005);
+  const prior = priors.find(p => p.amountDue != null && near(amount, Number(p.amountDue)))
+    ?? priors.find(p => p.amountDue != null && near(amount, Number(p.amountDue) + Number(p.pastDueCarried ?? 0)))
+    ?? priors[0]
+    ?? null;
 
   const existing = await db.payment.findFirst({
     where: { utilityAccountId, notes: { contains: marker } },
@@ -1783,9 +1794,7 @@ export async function recordConfirmedPayment(
   // between the prior bill and this one, is taken as the record and the
   // bill's confirmation is not duplicated.
   if (!existing) {
-    const priorDate = prior
-      ? (await db.statement.findUnique({ where: { id: prior.id }, select: { statementDate: true } }))?.statementDate ?? null
-      : null;
+    const priorDate = prior?.statementDate ?? null;
     const handLogged = await db.payment.findFirst({
       where: {
         utilityAccountId,
