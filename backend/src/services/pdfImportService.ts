@@ -95,6 +95,10 @@ export interface ExtractedBillData {
     began: string | null;
     agreementNumber: string | null;
   } | null;
+  /** Payments a running-ledger statement lists one by one (HOA managers
+   *  such as Seabreeze / CINC), each on its own date. Recorded as separate
+   *  payments rather than one lump "payments received". */
+  ledgerPayments?:    { date: string; amount: number; description: string }[] | null;
   // When a late penalty applies, and what the bill becomes then.
   penaltyDate:        string | null;
   amountAfterDueDate: number | null;
@@ -263,7 +267,10 @@ function findDollarNear(text: string, labels: RegExp[]): number | null {
 }
 
 function findDateNear(text: string, labels: RegExp[]): string | null {
-  const suffix = '[\\s\\S]{0,60}?(\\d{1,2}[\\/\\-]\\d{1,2}[\\/\\-](?:\\d{4}|\\d{2})(?!\\d)|[A-Za-z]{3,9}\\s*\\d{1,2},?\\s*\\d{4})';
+  // The spelled-out form must start with a month name: "Due\n073603497319"
+  // once matched as a word, two digits and four more, and swallowed the
+  // real "Sep 1, 2026" behind it.
+  const suffix = '[\\s\\S]{0,60}?(\\d{1,2}[\\/\\-]\\d{1,2}[\\/\\-](?:\\d{4}|\\d{2})(?!\\d)|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\\.?\\s*\\d{1,2},?\\s*\\d{4})';
   for (const label of labels) {
     const m = text.match(new RegExp(label.source + suffix, label.flags));
     if (m) {
@@ -1756,6 +1763,10 @@ export async function recordConfirmedPayment(
   statementId: string,
   ex: ExtractedBillData,
 ): Promise<void> {
+  if (ex.ledgerPayments && ex.ledgerPayments.length > 0) {
+    await recordLedgerPayments(utilityAccountId, statementId, ex);
+    return;
+  }
   const amount = Math.abs(Number(ex.paymentsReceived ?? 0));
   if (!amount || amount <= 0.01) return;
 
@@ -1822,6 +1833,58 @@ export async function recordConfirmedPayment(
 }
 
 /**
+ * A ledger statement lists each payment on its own date. Each becomes its
+ * own payment record, dated as printed and linked to the newest bill issued
+ * on or before that date, since that is the bill the money answered. A
+ * payment the owner already logged by hand for the same amount within a
+ * few days is taken as the record. Re-imports update the same records, and
+ * an earlier lump "payments received" record for this statement is
+ * replaced, not doubled.
+ */
+async function recordLedgerPayments(utilityAccountId: string, statementId: string, ex: ExtractedBillData): Promise<void> {
+  const rows = ex.ledgerPayments ?? [];
+  const lumpMarker = `[from-statement:${statementId}]`;
+  await db.payment.deleteMany({ where: { utilityAccountId, notes: { contains: lumpMarker } } });
+
+  const bills = await db.statement.findMany({
+    where: { utilityAccountId, isDownPayment: false },
+    orderBy: { statementDate: 'desc' },
+    select: { id: true, statementDate: true },
+  });
+  const DAY = 24 * 60 * 60 * 1000;
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const marker = `[from-statement:${statementId}#${i + 1}]`;
+    const paymentDate = new Date(`${row.date}T12:00:00Z`);
+    const existing = await db.payment.findFirst({ where: { utilityAccountId, notes: { contains: marker } } });
+    if (!existing) {
+      // The same payment may already be on file: logged by hand, or
+      // confirmed by an earlier statement that listed the same ledger line.
+      const dup = await db.payment.findFirst({
+        where: {
+          utilityAccountId,
+          amount: { gte: row.amount - 0.01, lte: row.amount + 0.01 },
+          paymentDate: { gte: new Date(paymentDate.getTime() - 3 * DAY), lte: new Date(paymentDate.getTime() + 3 * DAY) },
+        },
+      });
+      if (dup) continue;
+    }
+    const bill = bills.find(b => b.statementDate.getTime() <= paymentDate.getTime() && b.id !== statementId) ?? null;
+    const data = {
+      amount: row.amount,
+      paymentDate,
+      status: 'PAID' as const,
+      statementId: bill?.id ?? null,
+      paymentMethod: /e-?check/i.test(row.description) ? 'CHECK' : undefined,
+      notes: `${row.description} — listed on the ${ex.statementDate ?? 'imported'} statement. ${marker}`,
+    };
+    if (existing) await db.payment.update({ where: { id: existing.id }, data });
+    else await db.payment.create({ data: { utilityAccountId, ...data } });
+  }
+}
+
+/**
  * A bill that says in words that the account is in credit is in credit,
  * whatever sign the extractor gave its figures. "No payment is due. Your
  * account has a credit balance of $47.34" fixes the stated total at −47.34
@@ -1848,6 +1911,78 @@ export function applyCreditFromText(text: string, ex: ExtractedBillData): void {
   if (ex.amountDue != null && ex.amountDue < 0 && Math.abs(ex.amountDue + credit) < 0.01) {
     ex.amountDue = ex.currentCharges != null && ex.currentCharges > 0 ? ex.currentCharges : null;
   }
+}
+
+/**
+ * A running-ledger statement (Seabreeze / CINC HOA managers): a DATE /
+ * DESCRIPTION / CHARGES / CREDITS / BALANCE table opening with BALANCE
+ * FORWARD, listing two or three months of assessments, fees and payments,
+ * with a header box giving the Billing Date and the Amount Due. Read
+ * naively it became a bill for every charge on the page, with the running
+ * balance after the first payment taken as "past due" — 5,444.51 owed on
+ * a statement that asked for 4,331.32.
+ *
+ * Read as a ledger: this period's charges are the lines dated in the
+ * billing month (the 09/01 assessments for a Sep 1 billing date); the
+ * carried balance is the Amount Due less those; the CREDITS column is the
+ * payments, each kept on its own date. The ledger's own arithmetic — the
+ * last running balance equals the Amount Due — is checked before any of
+ * it is trusted.
+ */
+export function applyLedgerFromText(text: string, ex: ExtractedBillData): void {
+  if (!text || !/balance\s+forward/i.test(text) || !/credits?/i.test(text) || !/balance/i.test(text)) return;
+  const amountDue = findDollarNear(text, [/amount\s+due/i, /pay\s+this\s+amount/i]);
+  const billingDate = findDateNear(text, [/billing\s+date/i]);
+  if (amountDue == null || !billingDate) return;
+
+  const money = /\(?-?\$?\s*[\d,]+\.\d{2}\)?/g;
+  type Row = { date: string; desc: string; charge: number; credit: number; balance: number };
+  const rows: Row[] = [];
+  let forward: number | null = null;
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    const dm = line.match(/^(\d{1,2}\/\d{1,2}\/\d{2,4})\s+(.*)$/);
+    if (!dm) continue;
+    const date = parseDate(dm[1]);
+    if (!date) continue;
+    const rest = dm[2];
+    const tokens = rest.match(money) ?? [];
+    if (tokens.length === 0) continue;
+    const num = (t: string) => parseFloat(t.replace(/[^\d.]/g, ''));
+    const first = tokens[0]!;
+    const desc = rest.slice(0, rest.indexOf(first)).trim();
+    const balance = num(tokens[tokens.length - 1]!);
+    if (/balance\s+forward/i.test(desc) && tokens.length === 1) { forward = balance; continue; }
+    if (tokens.length < 2) continue;
+    const isCredit = /^\(/.test(first) || /^-/.test(first.replace(/^\$/, ''));
+    rows.push({ date, desc, charge: isCredit ? 0 : num(first), credit: isCredit ? num(first) : 0, balance });
+  }
+  if (forward == null || rows.length === 0) return;
+
+  // The ledger must add up to what it asks for, or it is not being read right.
+  let running = forward;
+  for (const r of rows) running = Number((running + r.charge - r.credit).toFixed(2));
+  if (Math.abs(running - amountDue) > 0.01 || Math.abs(rows[rows.length - 1].balance - amountDue) > 0.01) return;
+
+  const billMonth = billingDate.slice(0, 7);
+  const current = rows.filter(r => r.charge > 0 && r.date.slice(0, 7) === billMonth);
+  const currentTotal = Number(current.reduce((s, r) => s + r.charge, 0).toFixed(2));
+  if (currentTotal <= 0) return;
+  const credits = rows.filter(r => r.credit > 0);
+
+  ex.statementDate = billingDate;
+  ex.billingPeriodStart = `${billMonth}-01`;
+  ex.billingPeriodEnd = new Date(Date.UTC(Number(billMonth.slice(0, 4)), Number(billMonth.slice(5, 7)), 0)).toISOString().slice(0, 10);
+  ex.currentCharges = currentTotal;
+  ex.amountDue = currentTotal;
+  ex.statedTotalDue = amountDue;
+  ex.previousBalance = Number((amountDue - currentTotal).toFixed(2));
+  ex.paymentsReceived = credits.length > 0 ? Number(credits.reduce((s, r) => s + r.credit, 0).toFixed(2)) : null;
+  ex.ledgerPayments = credits.map(r => ({ date: r.date, amount: r.credit, description: r.desc }));
+  ex.chargeBreakdown = Object.fromEntries(current.map((r, i) => [current.filter((o, j) => j < i && o.desc === r.desc).length ? `${r.desc} (${i + 1})` : r.desc, r.charge]));
+  ex.lateFee = null;
+  ex.isPaid = amountDue <= 0.01;
+  ex.documentKind = 'bill';
 }
 
 // ── Main entry point ──────────────────────────────────────────────────────────
@@ -1909,6 +2044,7 @@ export async function parseBill(
     // The text layer settles what the figures cannot: a bill in credit.
     try {
       const { text } = await pdfParse(buffer);
+      applyLedgerFromText(text, extracted);
       applyCreditFromText(text, extracted);
     } catch { /* an unreadable text layer changes nothing */ }
     reconcileWithStatedTotal(extracted);
