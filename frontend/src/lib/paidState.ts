@@ -171,7 +171,17 @@ export function isPriorStatementPaid(current: any, all: any[], payments: any[] =
   return isEffectivelyPaid(all[idx + 1], payments, resolvedByFuture, paidMap);
 }
 
+/** A credit carried into the bill that covers its whole charge: nothing to pay. */
+export function coveredByCredit(s: any): boolean {
+  const carried = s?.pastDueCarried != null ? Number(s.pastDueCarried) : 0;
+  const open = openBalanceOf(s);
+  return carried < -0.005 && open != null && open <= 0.01;
+}
+
 export function statementStatus(s: any, payments: any[] = [], newerStmt?: any, isLatest = false, resolvedByFuture: Set<string> = new Set(), paidMap?: Map<string, boolean>): { color: 'green' | 'amber' | 'red'; label: string } {
+  // Settled by the provider's own credit, not by a payment — say so rather
+  // than "Paid", which reads as money having gone out.
+  if (coveredByCredit(s)) return { color: 'green', label: 'Credit' };
   if (isEffectivelyPaid(s, payments, resolvedByFuture, paidMap)) return { color: 'green', label: 'Paid' };
 
   if (!isLatest && newerStmt) {
