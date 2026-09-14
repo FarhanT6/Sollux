@@ -144,18 +144,12 @@ export function computePaidMap(statements: any[], payments: any[], resolvedByFut
       continue;
     }
     const open = Number(s.amountDue ?? 0) + (carried < 0 ? carried : priorSettled ? 0 : carried);
+    // A payment logged against a bill pays that bill and nothing else — it
+    // never runs on to the next one, whatever the bill needed. Letting the
+    // surplus flow forward marked September paid off a payment the owner
+    // had deliberately filed against August.
     const linked = payments.filter(p => counted(p) && p.statementId === s.id);
     let need = open - Number(s.amountPaid ?? 0) - linked.reduce((t, p) => t + Number(p.amount ?? 0), 0);
-    // Money logged against a bill beyond what that bill needed is not lost:
-    // it goes on to the next bill, as it would at the provider. A $278.26
-    // payment logged "toward Aug" when Aug was already settled by the
-    // $272.52 the September statement confirmed used to leave September
-    // showing the full charge owed.
-    if (need < -0.01 && linked.length > 0) {
-      const latestLinked = linked.reduce((m, p) => Math.max(m, new Date(p.paymentDate).getTime()), 0);
-      pool.push({ date: latestLinked, left: -need });
-      pool.sort((a, b) => a.date - b.date);
-    }
     const since = new Date(s.statementDate).getTime() - 86400000;
     for (const p of pool) {
       if (need <= 0.01) break;
