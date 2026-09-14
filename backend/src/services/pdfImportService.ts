@@ -155,7 +155,7 @@ Schema (use null for any field not present in the document):
 {
   "providerName": "string — company or organization name sending this bill",
   "serviceAddress": "string — the property/service address (NOT the mailing/remittance address)",
-  "accountNumber": "string — account, customer, or reference number",
+  "accountNumber": "string or null — the ACCOUNT or customer number. A 'Bill number', 'Statement #' or 'Invoice #' is the bill's own serial and is NOT the account number; if the bill prints no account number, return null rather than the bill number",
   "statementDate": "YYYY-MM-DD — the date the bill itself carries: 'Bill Date', 'Statement Date', 'Invoice Date', 'Date Mailed'. NOT an 'As of' or 'Printed' date — that is the day the copy was generated, often months after the bill (a Tyler 'Bill Detail' reading 'As of 08/13/2026 / Bill Date 6/25/2026' has statementDate 2026-06-25)",
   "dueDate": "YYYY-MM-DD — the date payment for THIS bill is due. Bills often print several other dates: a next meter-read date, a service-period end, a solar/net-metering true-up date, an autopay draft date. None of those are the due date — use only a date explicitly labelled as when payment is due,
   "billingPeriodStart": "YYYY-MM-DD — start of billing period if shown",
@@ -499,9 +499,16 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
     /loan\s+(?:number|no\.?|#)/i,      // loans
     /unit\s+(?:number|no\.?|#)/i,      // HOA
   ]);
+  // A bill's own serial ("Bill number 1949585", "Statement #") is not the
+  // account. A Tyler "Bill Detail" prints no account number at all, and the
+  // bare-digits fallback below used to take the bill number for one — then
+  // every re-import was refused as "a bill for account ending 9585".
+  const billSerials = new Set<string>();
+  for (const m of text.matchAll(/(?:bill|statement|document|receipt)\s+(?:number|no\.?|#)\s*:?\s*(\d{5,20})/gi)) billSerials.add(m[1]);
+  if (accountNumber && billSerials.has(accountNumber.replace(/\D/g, ''))) accountNumber = null;
   // Fallback: grouped or contiguous digit strings
   if (!accountNumber) {
-    const candidates = scanAccountNumbers(text);
+    const candidates = scanAccountNumbers(text).filter(c => !billSerials.has(c.replace(/\D/g, '')));
     if (candidates.length > 0) {
       accountNumber = candidates.sort((a, b) => b.length - a.length)[0];
     }
