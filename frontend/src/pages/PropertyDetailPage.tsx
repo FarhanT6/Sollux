@@ -1121,11 +1121,24 @@ function UtilityAccountCard({
 
                 {/* Paid sub-line: reassures the user their payment is recognized even when
                     the provider's API hasn't reflected it yet. */}
-                {isPaid && recentPmt && !isPaidViaStatement && (
+                {/* Every paid card says how it was paid, not only the ones
+                    with a payment logged here: the bill's own paid stamp, a
+                    credit, or a later bill that carried nothing forward. */}
+                {isPaid && (
                   <div className="mt-1 flex items-center gap-1.5">
                     <span className="text-xs text-emerald-400">
-                      Paid {fmt(paidForBillTotal)} on {fmtDate(recentPmt.paymentDate, 'MMM d')}
-                      {paidForBill.length > 1 && <span className="text-gray-500"> · {paidForBill.length} payments</span>}
+                      {recentPmt && paidForBillTotal > 0 ? (
+                        <>
+                          Paid {fmt(paidForBillTotal)} on {fmtDate(recentPmt.paymentDate, 'MMM d')}
+                          {paidForBill.length > 1 && <span className="text-gray-500"> · {paidForBill.length} payments</span>}
+                        </>
+                      ) : view.credit > 0 && view.current - view.credit <= 0.01 ? (
+                        <>Covered by credit{view.credit - view.current > 0.01 ? ` · ${fmt(view.credit - view.current)} credit remains` : ''}</>
+                      ) : isPaidViaStatement ? (
+                        <>Bill shows {fmt(Number(latest?.amountPaid ?? 0))} paid</>
+                      ) : (
+                        <>Cleared · later bill carries no balance</>
+                      )}
                     </span>
                   </div>
                 )}
