@@ -696,6 +696,17 @@ export default function UtilityDetailPage() {
   const resolvedByFuture = useMemo(() => computeResolvedByFutureCheckpoint(statements), [statements]);
   const paidMap = useMemo(() => computePaidMap(statements, payments, resolvedByFuture), [statements, payments, resolvedByFuture]);
 
+  // A fresh Log payment starts on the newest bill that is still open, with
+  // its amount filled in — that is what is being paid nine times in ten.
+  useEffect(() => {
+    if (!showPayForm || editPaymentId || payForm.statementId || payForm.amount) return;
+    const open = statements.find((st: any) => !(paidMap.get(st.id) ?? false));
+    if (!open) return;
+    const owed = openBalanceOf(open);
+    setPayForm(f => ({ ...f, statementId: open.id, amount: owed != null && owed > 0 ? owed.toFixed(2) : f.amount }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showPayForm, editPaymentId]);
+
   const stmtYears = useMemo(() => {
     const years = new Set(statements.map(s => String(yearOf(s.statementDate))));
     return Array.from(years).sort((a, b) => Number(b) - Number(a));
@@ -1380,15 +1391,20 @@ export default function UtilityDetailPage() {
                 ))}
               </select>
 
-              {/* Linking to a statement is what marks that bill paid. */}
+              {/* Linking to a statement is what marks that bill paid. Bills
+                  already settled say so, so a payment for the newest bill is
+                  not filed against the one before it by mistake. */}
               <select value={payForm.statementId} onChange={e => setPayForm(f => ({ ...f, statementId: e.target.value }))}
                 className="input-dark text-xs sm:col-span-2">
                 <option value="">— Not against a specific bill —</option>
-                {statements.slice(0, 36).map((st: any) => (
-                  <option key={st.id} value={st.id}>
-                    {periodLabel(st)} — {fmtMoney(st.amountDue)} due · billed {fmtDate(st.statementDate, 'MMM d')}
-                  </option>
-                ))}
+                {statements.slice(0, 36).map((st: any) => {
+                  const settled = paidMap.get(st.id) ?? false;
+                  return (
+                    <option key={st.id} value={st.id}>
+                      {periodLabel(st)} — {fmtMoney(st.amountDue)} · billed {fmtDate(st.statementDate, 'MMM d')}{st.dueDate ? ` · due ${fmtDate(st.dueDate, 'MMM d')}` : ''}{settled ? ' · already paid' : ' · open'}
+                    </option>
+                  );
+                })}
               </select>
               <select value={payForm.bankAccountId} onChange={e => setPayForm(f => ({ ...f, bankAccountId: e.target.value }))}
                 className="input-dark text-xs">

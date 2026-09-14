@@ -948,9 +948,12 @@ function UtilityAccountCard({
   // $990.40 card payment logged toward August.
   const counted = (p: any) => p.status !== 'FAILED' && p.status !== 'PENDING';
   const linkedToLatest = latest ? payments.filter(p => counted(p) && (p as any).statementId === latest.id) : [];
+  // Failing a payment logged against it, any money dated after the bill was
+  // issued — a payment filed against the bill before, when that bill was
+  // already settled, is this bill's money too.
   const paidForBill = linkedToLatest.length > 0
     ? linkedToLatest
-    : payments.filter(p => counted(p) && !(p as any).statementId && (stmtDate ? new Date(p.paymentDate) >= stmtDate : true));
+    : payments.filter(p => counted(p) && (stmtDate ? new Date(p.paymentDate) >= stmtDate : !(p as any).statementId));
   const recentPmt = [...paidForBill].sort((a, b) =>
     (new Date(b.paymentDate).getTime() - new Date(a.paymentDate).getTime())
     || (new Date((b as any).createdAt ?? 0).getTime() - new Date((a as any).createdAt ?? 0).getTime()))[0];
