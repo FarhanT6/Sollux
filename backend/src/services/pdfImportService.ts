@@ -250,7 +250,8 @@ function findDollarNear(text: string, labels: RegExp[]): number | null {
   // provider owes into money demanded: a -$361.44 credit memo read unsigned
   // becomes a $361.44 bill.
   // "[\\d,]*" rather than "+": SDG&E prints a sub-dollar credit as "-$.82".
-  const suffix = '[\\s\\S]{0,80}?(-?)\\$?\\s*(-?)([\\d,]*\\.\\d{2})\\s*(CR)?';
+  // "(-?)\\s*\\$?": SoCalGas prints "- $47.34" with a space after the minus.
+  const suffix = '[\\s\\S]{0,80}?(-?)\\s*\\$?\\s*(-?)([\\d,]*\\.\\d{2})\\s*(CR)?';
   for (const label of labels) {
     const m = text.match(new RegExp(label.source + suffix, label.flags));
     if (m) {
@@ -702,6 +703,10 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
     /balance\s+from\s+(?:last|previous)/i,
     /(?:last|prior)\s+(?:month['s]?\s+)?balance/i,
     /amount\s+from\s+previous\s+bill/i,
+    // SoCalGas: "Amount of Last Bill - $52.60"
+    /amount\s+of\s+(?:your\s+)?(?:last|previous)\s+bill/i,
+    /(?:last|previous)\s+bill\s+amount/i,
+    /previous\s+(?:amount\s+due|charges)/i,
     /(?:outstanding|past\s+due)\s+balance/i,
   ]);
 
@@ -998,7 +1003,16 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
     currentCharges,
     // The regex path's amountDue is the bill's grand total; keep it as such
     // so the reconciliation below can split it the same way for every path.
-    statedTotalDue: amountDue,
+    // Unless the bill says outright that nothing is owed: "No payment is
+    // due. Your account has a credit balance of $47.34" is a total of
+    // −47.34 whatever charge line the label search happened to land on,
+    // and so is a negative "Total Account Balance" with no arrangement.
+    statedTotalDue: (() => {
+      const credit = text.match(/credit\s+balance\s+of\s+-?\$?\s*([\d,]*\.\d{2})/i);
+      if (credit) return -parseFloat(credit[1].replace(/,/g, ''));
+      if (totalAccountBalance != null && totalAccountBalance < 0 && !paymentPlan) return totalAccountBalance;
+      return amountDue;
+    })(),
     totalAccountBalance,
     paymentPlan,
     insurance,

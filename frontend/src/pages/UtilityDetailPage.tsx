@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import PaymentBreakdownLine from '../components/utility/PaymentBreakdownLine';
-import { openBalanceOf, isStatementPaid, computeResolvedByFutureCheckpoint, computePaidMap, isEffectivelyPaid, isPriorStatementPaid, statementStatus } from '../lib/paidState';
+import { openBalanceOf, isStatementPaid, computeResolvedByFutureCheckpoint, computePaidMap, isEffectivelyPaid, isPriorStatementPaid, statementStatus, coveredByCredit } from '../lib/paidState';
 import { bankAccountLabel } from '../lib/bankAccountLabel';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
@@ -912,7 +912,16 @@ export default function UtilityDetailPage() {
           {
             label: 'Current balance',
             value: fmtMoney(isLatestPaid ? 0 : (latestTotalDue ?? latestAmt)),
-            sub: isLatestPaid
+            // In credit: nothing to pay, and the provider holds the rest. The
+            // bill's own charge still shows so the month's cost is visible.
+            sub: latestStmt && coveredByCredit(latestStmt)
+              ? (
+                <span className="text-emerald-400">
+                  No payment due · {fmtMoney(Number(latestStmt.amountDue ?? 0))} charge covered by credit
+                  {latestOwed != null && latestOwed < -0.01 && <span className="block">{fmtMoney(-latestOwed)} credit remains on the account</span>}
+                </span>
+              )
+              : isLatestPaid
               ? <span className="text-emerald-400">Paid</span>
               : (
                 <span>
@@ -1202,7 +1211,11 @@ export default function UtilityDetailPage() {
 
                       {/* Due date */}
                       <div className="text-right flex-shrink-0 w-24">
-                        {s.dueDate ? (
+                        {coveredByCredit(s) ? (
+                          // The credit carried in covers the charge; the printed
+                          // due date is moot and reads as a demand.
+                          <p className="text-xs text-emerald-500">No payment due</p>
+                        ) : s.dueDate ? (
                           <p className="text-xs text-gray-500">Due {fmtDate(s.dueDate, 'MMM d')}</p>
                         ) : totalDue != null && totalDue <= 0.01 ? (
                           // A bill that asks for nothing prints no due date.
@@ -1252,8 +1265,16 @@ export default function UtilityDetailPage() {
                               {showBillSubline && (
                                 <p className="text-xs text-gray-500">Bill: {fmtMoney(amt)}</p>
                               )}
+                              {/* The charge stands as the bill's figure; the
+                                  credit that covers it, and what is left of
+                                  that credit afterwards, are the story. */}
                               {isFullyPaid && totalDue != null && totalDue < -0.01 && (
-                                <p className="text-xs text-emerald-600">credit −{fmtMoney(-totalDue)} carried forward</p>
+                                <p className="text-xs text-emerald-600">
+                                  {coveredByCredit(s) ? 'covered by credit · ' : ''}{fmtMoney(-totalDue)} credit remains
+                                </p>
+                              )}
+                              {coveredByCredit(s) && totalDue != null && totalDue >= -0.01 && (
+                                <p className="text-xs text-emerald-600">covered by credit</p>
                               )}
                               {(() => {
                                 // The provider's own "Total Account Balance": what
