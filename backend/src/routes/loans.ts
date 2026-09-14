@@ -68,6 +68,8 @@ const LoanSchema = z.object({
   notes: z.string().optional().nullable(),
   isPersonal: z.boolean().default(false),
   isActive: z.boolean().default(true),
+  // The owner's account this loan is usually paid from (pay planner).
+  payFromBankAccountId: z.string().optional().nullable(),
 });
 
 const LoanPaymentSchema = z.object({
@@ -259,13 +261,18 @@ router.post('/', async (req, res, next) => {
       const prop = await db.property.findFirst({ where: { id: data.propertyId, userId: req.dbUserId! } });
       if (!prop) return res.status(404).json({ error: 'Property not found' });
     }
-    const { propertyId, prepaymentPenaltyJson, accountNumber, ...rest } = data;
+    const { propertyId, prepaymentPenaltyJson, accountNumber, payFromBankAccountId, ...rest } = data;
     if (rest.rateType === 'VARIABLE' && rest.nextRateAdjustment == null && rest.rateAdjustmentMonths) {
       rest.nextRateAdjustment = deriveDefaultNextAdjustment(rest.rateAdjustmentMonths, rest.originationDate);
+    }
+    if (payFromBankAccountId) {
+      const acct = await db.bankAccount.findFirst({ where: { id: payFromBankAccountId, userId: req.dbUserId! } });
+      if (!acct) return res.status(404).json({ error: 'Bank account not found' });
     }
     const loan = await db.loan.create({
       data: {
         ...rest,
+        ...(payFromBankAccountId ? { payFromBankAccount: { connect: { id: payFromBankAccountId } } } : {}),
         ...(accountNumber
           ? { accountNumberEnc: encryptOptional(accountNumber), accountLast4: accountNumber.slice(-4) }
           : {}),
@@ -280,9 +287,13 @@ router.post('/', async (req, res, next) => {
 
 router.patch('/:id', async (req, res, next) => {
   try {
-    const { propertyId, prepaymentPenaltyJson, accountNumber, ...rest } = LoanSchema.partial().parse(req.body);
+    const { propertyId, prepaymentPenaltyJson, accountNumber, payFromBankAccountId, ...rest } = LoanSchema.partial().parse(req.body);
     const existing = await db.loan.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
     if (!existing) return res.status(404).json({ error: 'Loan not found' });
+    if (payFromBankAccountId) {
+      const acct = await db.bankAccount.findFirst({ where: { id: payFromBankAccountId, userId: req.dbUserId! } });
+      if (!acct) return res.status(404).json({ error: 'Bank account not found' });
+    }
     const effectiveRateType = rest.rateType ?? existing.rateType;
     const effectiveAdjustmentMonths = rest.rateAdjustmentMonths ?? existing.rateAdjustmentMonths;
     if (effectiveRateType === 'VARIABLE' && rest.nextRateAdjustment === undefined && existing.nextRateAdjustment == null && effectiveAdjustmentMonths) {
@@ -305,6 +316,11 @@ router.patch('/:id', async (req, res, next) => {
           ? propertyId != null
             ? { property: { connect: { id: propertyId } } }
             : { property: { disconnect: true } }
+          : {}),
+        ...(payFromBankAccountId !== undefined
+          ? payFromBankAccountId
+            ? { payFromBankAccount: { connect: { id: payFromBankAccountId } } }
+            : { payFromBankAccount: { disconnect: true } }
           : {}),
       },
     });
