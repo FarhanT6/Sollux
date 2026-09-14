@@ -489,8 +489,13 @@ router.delete('/:id', async (req, res, next) => {
 const PaymentPlanSchema = z.object({
   totalAmount:    z.number().positive(),
   monthlyAmount:  z.number().positive(),
+  // Charged with each installment; paid every month, never off the balance.
+  installmentFee: z.number().min(0).optional().nullable(),
   startDate:      z.string(),        // ISO date string
   description:    z.string().optional(),
+  // Installments already made before the plan was entered here, so the
+  // remaining balance starts where the arrangement actually stands.
+  installmentsMade: z.number().int().min(0).optional(),
 });
 
 /** Verify the utility account belongs to the requesting user. */
@@ -521,25 +526,20 @@ router.post('/:id/payment-plan', async (req, res, next) => {
     if (!account) return res.status(404).json({ error: 'Not found' });
 
     const body = PaymentPlanSchema.parse(req.body);
+    const remaining = Math.max(0, Number((body.totalAmount - (body.installmentsMade ?? 0) * body.monthlyAmount).toFixed(2)));
+    const fields = {
+      totalAmount:      body.totalAmount,
+      remainingBalance: remaining,
+      monthlyAmount:    body.monthlyAmount,
+      installmentFee:   body.installmentFee ?? null,
+      startDate:        new Date(body.startDate),
+      description:      body.description,
+      status:           remaining <= 0 ? 'COMPLETED' as const : 'ACTIVE' as const,
+    };
     const plan = await db.paymentPlan.upsert({
       where: { utilityAccountId: req.params.id },
-      create: {
-        utilityAccountId: req.params.id,
-        totalAmount:      body.totalAmount,
-        remainingBalance: body.totalAmount,  // starts at full amount
-        monthlyAmount:    body.monthlyAmount,
-        startDate:        new Date(body.startDate),
-        description:      body.description,
-        status:           'ACTIVE',
-      },
-      update: {
-        totalAmount:      body.totalAmount,
-        remainingBalance: body.totalAmount,  // reset on re-create
-        monthlyAmount:    body.monthlyAmount,
-        startDate:        new Date(body.startDate),
-        description:      body.description,
-        status:           'ACTIVE',
-      },
+      create: { utilityAccountId: req.params.id, ...fields },
+      update: fields,
     });
     res.json(plan);
   } catch (err) { next(err); }
@@ -554,7 +554,7 @@ router.patch('/:id/payment-plan', async (req, res, next) => {
     const plan = await db.paymentPlan.findUnique({ where: { utilityAccountId: req.params.id } });
     if (!plan) return res.status(404).json({ error: 'No payment plan' });
 
-    const { applyPayment, remainingBalance, status, monthlyAmount, description } = req.body;
+    const { applyPayment, remainingBalance, status, monthlyAmount, installmentFee, description } = req.body;
 
     let newRemaining = Number(plan.remainingBalance);
 
@@ -573,6 +573,7 @@ router.patch('/:id/payment-plan', async (req, res, next) => {
         remainingBalance: newRemaining,
         status:           newStatus,
         ...(typeof monthlyAmount === 'number' ? { monthlyAmount } : {}),
+        ...(installmentFee !== undefined ? { installmentFee: typeof installmentFee === 'number' ? installmentFee : null } : {}),
         ...(description !== undefined ? { description } : {}),
       },
     });

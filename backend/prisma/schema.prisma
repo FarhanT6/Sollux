@@ -508,6 +508,10 @@ model PaymentPlan {
   totalAmount      Decimal           @db.Decimal(10, 2)
   remainingBalance Decimal           @db.Decimal(10, 2)
   monthlyAmount    Decimal           @db.Decimal(10, 2)
+  // A fee charged with each installment that does not reduce the balance
+  // (Seabreeze's $30 monitoring fee). Part of what is paid each month, never
+  // part of what is owed on the plan.
+  installmentFee   Decimal?          @db.Decimal(10, 2)
   startDate        DateTime
   endDate          DateTime?
   description      String?
