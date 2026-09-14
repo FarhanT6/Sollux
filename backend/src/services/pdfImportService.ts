@@ -156,7 +156,7 @@ Schema (use null for any field not present in the document):
   "providerName": "string — company or organization name sending this bill",
   "serviceAddress": "string — the property/service address (NOT the mailing/remittance address)",
   "accountNumber": "string — account, customer, or reference number",
-  "statementDate": "YYYY-MM-DD — date the bill was issued or generated",
+  "statementDate": "YYYY-MM-DD — the date the bill itself carries: 'Bill Date', 'Statement Date', 'Invoice Date', 'Date Mailed'. NOT an 'As of' or 'Printed' date — that is the day the copy was generated, often months after the bill (a Tyler 'Bill Detail' reading 'As of 08/13/2026 / Bill Date 6/25/2026' has statementDate 2026-06-25)",
   "dueDate": "YYYY-MM-DD — the date payment for THIS bill is due. Bills often print several other dates: a next meter-read date, a service-period end, a solar/net-metering true-up date, an autopay draft date. None of those are the due date — use only a date explicitly labelled as when payment is due,
   "billingPeriodStart": "YYYY-MM-DD — start of billing period if shown",
   "billingPeriodEnd": "YYYY-MM-DD — end of billing period if shown. Bills often print the period without a year (e.g. \"SERVICE PERIOD: 11/19 - 12/19\" means Nov 19 to Dec 19 — those are days, never years). Take the year from the bill's own issue date: the period ends on or shortly before it, and a cycle that spans New Year starts the year before it ends.",
@@ -168,7 +168,7 @@ Schema (use null for any field not present in the document):
   "usageValue": number or null — consumption quantity if applicable (kWh, CCF, gallons, etc.),
   "usageUnit": "string or null — kWh | CCF | therms | gallons | HCF | pickup | other",
   "ratePlan": "string or null — rate schedule, plan name, or tier",
-  "isPaid": boolean — true ONLY if balance is $0.00 or document shows 'Paid in Full' / paid stamp,
+  "isPaid": boolean — true ONLY if balance is $0.00 or document shows 'Paid in Full' / paid stamp. A bill-detail layout with columns Billed / Payments and adjustments / Due where Due and TOTAL DUE are $0.00 is paid: report currentCharges and amountDue as the Billed figure and isPaid true,
   "utilityType": "electric | gas | water | sewer | trash | solar | internet | phone | other",
   "insurance": object or null — ONLY for an insurance billing statement (carrier billing account: Nationwide, Safeco, Bamboo, State Farm…): {"policyNumber": "string", "coverageStart": "YYYY-MM-DD", "coverageEnd": "YYYY-MM-DD", "termPremium": n, "installment": n, "serviceCharge": n, "installmentsRemaining": n, "renewedOn": "YYYY-MM-DD"}. Read the policy table ("Policy / Coverage period / Balance / Installment"): the policy number is the alphanumeric code on that row, the coverage period is its two dates, termPremium is the policy balance at renewal (the "Renewal" line under Policy Activity, or the Full Balance when the term has just begun), installment is the per-policy installment on that row (before any service charge), serviceCharge the stated processing fee, installmentsRemaining the number of dated lines in "Your Installment Schedule", renewedOn the date on the "Renewal" activity line. A statement whose policy row shows a different policy number and a later coverage start than the account's previous statements is a renewal onto a new policy,
   "statedTotalDue": number or null — the ONE figure the bill asks to be paid now: its "Total Amount Due" / "Amount Due" box. Negative when the account is in credit ("No payment is due. Your account has a credit balance of $0.82" → -0.82). This is the grand total AFTER previous balance, payments, credits and any payment-arrangement deferral; report it exactly as printed,
@@ -511,17 +511,25 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
   }
 
   // ── Statement date ────────────────────────────────────────────────────────
-  // Filename date is the most reliable source for statement date on garbled PDFs.
-  let statementDate: string | null = fnHints.date ?? null;
-  if (!statementDate && !garbled) {
+  // A date the bill labels as its own ("Bill Date", "Statement Date") beats
+  // everything else. A date in the filename is next: reliable on garbled
+  // PDFs, but on a portal export it is often the day the file was
+  // downloaded. "As of" is a print date — a Tyler "Bill Detail" printed on
+  // Aug 13 for a bill dated Jun 25 says "As of 08/13/2026" — so it comes
+  // last, and only when nothing better is printed.
+  let statementDate: string | null = null;
+  if (!garbled) {
     statementDate = findDateNear(text, [
       /(?:statement|bill|invoice|billing)\s+date/i,
       /date\s+(?:issued|generated|prepared|mailed)/i,
       /billing\s+date/i,
-      /(?:as\s+of|effective)\s+date/i,
       /prepared\s+(?:on|date)/i,
       /issued\s+(?:on|date)/i,
-    ]) || findDateNear(text, [/^date[:\s]/im]);
+    ]);
+  }
+  if (!statementDate) statementDate = fnHints.date ?? null;
+  if (!statementDate && !garbled) {
+    statementDate = findDateNear(text, [/effective\s+date/i, /as\s+of(?:\s+date)?/i]) || findDateNear(text, [/^date[:\s]/im]);
   }
   // Carrier billing statements come through with their spaces stripped, so
   // the garbled path never tried the label; "Date prepared" is unambiguous.
@@ -693,6 +701,17 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
   // $0.00 from a label means the balance was cleared (auto-pay applied, etc.) — treat as
   // "not found" so the fallback scanner can find the actual billing amount instead.
   if (amountDue === 0) amountDue = null;
+  // Tyler Technologies "Bill Detail" (City of El Centro): a table of Billed /
+  // Payments and adjustments / Due, whose SUBTOTAL row reads
+  // "$390.43 $380.43 $0.00". The charge is the first figure; the second is
+  // what was paid against it; "TOTAL DUE $0.00" is not the bill amount.
+  const tylerRow = /payments\s+and\s+adjustments/i.test(text)
+    ? text.match(/SUBTOTAL\s+\$?([\d,]+\.\d{2})\s+\(?\$?([\d,]+\.\d{2})\)?\s+\$?([\d,]+\.\d{2})/i)
+    : null;
+  const tyler = tylerRow
+    ? { billed: parseFloat(tylerRow[1].replace(/,/g, '')), paid: parseFloat(tylerRow[2].replace(/,/g, '')), due: parseFloat(tylerRow[3].replace(/,/g, '')) }
+    : null;
+  if (tyler) amountDue = tyler.billed;
   if (amountDue == null) amountDue = guessAmountDue(scanAllAmounts(text));
 
   // ── Previous balance ──────────────────────────────────────────────────────
@@ -714,7 +733,7 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
   // Reported as a positive amount whatever sign the bill prints it with.
   const paymentsReceivedRaw: number | null = findDollarNear(text, [
     /payments?\s+received/i,
-    /payments?\s+&\s+(?:adjustments?|credits?)/i,
+    /payments?\s+(?:&|and)\s+(?:adjustments?|credits?)/i,
     /credits?\s+applied/i,
     /payment\s+(?:amount|total|received)/i,
     /(?:last|recent)\s+payment/i,
@@ -723,7 +742,10 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
     /payment\s+applied/i,
     /auto.?pay\s+(?:amount|payment)/i,
   ]);
-  const paymentsReceived = paymentsReceivedRaw != null ? Math.abs(paymentsReceivedRaw) : null;
+  // On a Tyler bill the payment column settles THIS bill (isPaid carries
+  // that), not the one before it, so it must not read as a prior-cycle
+  // payment.
+  const paymentsReceived = tyler ? null : paymentsReceivedRaw != null ? Math.abs(paymentsReceivedRaw) : null;
 
   // ── Late fee / penalty ────────────────────────────────────────────────────
   const lateFee: number | null = findDollarNear(text, [
@@ -809,6 +831,7 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
   if (currentCharges == null && amountDue != null && /loan|mortgage|installment|auto|vehicle/i.test(text)) {
     currentCharges = amountDue;
   }
+  if (tyler) currentCharges = tyler.billed;
 
   // Bills that lay their totals out in a table put the label and its figure in
   // separate cells, which the text layer can emit far apart — so "TOTAL CURRENT
@@ -882,7 +905,10 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
   ]);
 
   // ── Paid status ───────────────────────────────────────────────────────────
+  // "TOTAL DUE $0.00" (Tyler "Bill Detail" exports print Billed, Payments and
+  // adjustments, Due — a settled bill shows its charge with nothing owed).
   const isPaid = /paid\s+in\s+full|balance\s+is\s+\$?0\.00|\$0\.00\s+(?:due|balance)|zero\s+balance|no\s+payment\s+due/i.test(text)
+    || /total\s+(?:amount\s+)?due\s*:?\s*\$?\s*0\.00(?!\d)/i.test(text)
     || (amountDue === 0);
 
   // ── Utility type ──────────────────────────────────────────────────────────

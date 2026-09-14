@@ -330,11 +330,12 @@ function PropertyCard({ property, onEdit, onDelete }: { property: Property; onEd
   // One paid rule for every page: the newest bill is paid when its own
   // charge is covered — a settled prior bill makes the carried balance moot.
   const viewOf = (a: typeof accounts[number]) => accountView((a.statements ?? []) as any[], ((a as any).payments ?? []) as any[]);
+  // One source of truth — the statement rows and payments, exactly as the
+  // account page reads them. The card used to trust the extractor's isPaid
+  // flag on its own and said Paid while the account page said Overdue.
   const isAccountPaid = (a: typeof accounts[number]): boolean => {
     const latest = a.statements?.[0];
     if (!latest) return false;
-    const raw = latest.rawDataJson as Record<string, unknown> | undefined;
-    if (raw?.isPaid === true) return true;
     return viewOf(a).isPaid;
   };
 
