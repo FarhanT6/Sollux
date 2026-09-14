@@ -101,7 +101,7 @@ export function calculateCurrentBalance(loan: LoanInput, payments: PaymentInput[
   // inputs) may know about extra payments, refinances, or other real-world
   // events a theoretical schedule can't see.
   if (loan.currentBalance != null) {
-    return { balance: loan.currentBalance, asOfDate: iso(new Date()), method: 'manual' };
+    return { balance: loan.currentBalance, asOfDate: iso(manualBalanceDate(loan)), method: 'manual' };
   }
 
   // 4. Last resort: theoretical schedule from origination to today, only
@@ -127,6 +127,42 @@ export function calculateCurrentBalance(loan: LoanInput, payments: PaymentInput[
 
   // 5. Nothing on file at all.
   return { balance: 0, asOfDate: iso(new Date()), method: 'manual' };
+}
+
+/**
+ * When a balance was typed in by hand there is no date on it. Dating it
+ * "today" put the past and the projected tables a month or more apart: the
+ * figure usually comes off a statement, and a statement balance sits on the
+ * note's own schedule. So walk the theoretical schedule from origination and,
+ * if the entered balance lands on it (within half a percent), date it to the
+ * month it was reached. Anything that does not fit is dated today as before.
+ */
+function manualBalanceDate(loan: LoanInput): Date {
+  const today = new Date();
+  if (loan.currentBalance == null || loan.originalAmount == null || loan.interestRate == null || !loan.originationDate) return today;
+  const monthlyRate = loan.interestRate / 100 / 12;
+  let payment = loan.monthlyPayment ?? null;
+  if (!payment && loan.maturityDate) {
+    payment = computeMonthlyPayment(loan.originalAmount, monthlyRate, Math.max(1, monthsBetween(loan.originationDate, loan.maturityDate)));
+  }
+  if (!payment) return today;
+  const interestOnly = loan.paymentType === 'INTEREST_ONLY';
+  const target = loan.currentBalance;
+  const tolerance = Math.max(1, target * 0.005);
+  const maxMonths = Math.min(600, Math.max(0, monthsBetween(loan.originationDate, today)));
+
+  let balance = loan.originalAmount;
+  let best: { months: number; diff: number } = { months: 0, diff: Math.abs(balance - target) };
+  for (let i = 1; i <= maxMonths && balance > 0.01; i++) {
+    const interest = balance * monthlyRate;
+    const principal = interestOnly ? 0 : payment - interest;
+    balance = Math.max(0, balance - principal);
+    const diff = Math.abs(balance - target);
+    if (diff < best.diff) best = { months: i, diff };
+  }
+  if (best.diff > tolerance) return today;
+  const dated = addMonths(loan.originationDate, best.months);
+  return dated > today ? today : dated;
 }
 
 function computeMonthlyPayment(principal: number, monthlyRate: number, termMonths: number): number {
@@ -155,15 +191,21 @@ function buildHistoricalSchedule(loan: LoanInput, balanceResult: BalanceResult, 
 
   const rows: AmortizationRow[] = [];
   let balance = loan.originalAmount;
+  const interestOnly = loan.paymentType === 'INTEREST_ONLY';
   for (let i = 1; i <= totalMonths && i <= 600; i++) {
     const interest = balance * monthlyRate;
-    let principal = payment - interest;
-    let paymentAmount = payment;
+    // A payment short of the interest leaves the shortfall on the balance —
+    // the past months of a negative-amortization note grow exactly as the
+    // projected ones do. Clamping principal at zero here used to show the
+    // balance sitting at the original amount for years, so the "past" table
+    // never met the "remaining" one.
+    let principal = interestOnly ? 0 : payment - interest;
+    let paymentAmount = interestOnly ? interest : payment;
     if (principal >= balance) {
       principal = balance;
       paymentAmount = balance + interest;
     }
-    balance = Math.max(0, balance - Math.max(0, principal));
+    balance = Math.max(0, balance - principal);
 
     rows.push({
       paymentNumber: i,

@@ -8,7 +8,8 @@ import {
   arrayMove, SortableContext, rectSortingStrategy, useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { getProperties, updateProperty, deleteProperty, getCostSettings, getSpendData } from '../api/client';
+import { getProperties, updateProperty, getCostSettings, getSpendData } from '../api/client';
+import DeletePropertyModal from '../components/DeletePropertyModal';
 import type { Property } from '../types';
 import { PageHeader, StatCard, Skeleton, EmptyState, Modal } from '../components/ui';
 import { PROPERTY_TYPE_LABELS } from '../types';
@@ -560,53 +561,6 @@ function EditPropertyModal({ property, onClose, onSaved }: { property: Property;
           <button className="btn text-xs flex-1" onClick={onClose}>Cancel</button>
           <button className="btn btn-primary text-xs flex-1" onClick={handleSave} disabled={loading || !form.address || !form.city || !form.state}>
             {loading ? 'Saving…' : 'Save changes'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Delete property modal ─────────────────────────────────────────────────────
-
-function DeletePropertyModal({ property, onClose, onDeleted }: { property: Property; onClose: () => void; onDeleted: () => void }) {
-  const [loading, setLoading] = useState(false);
-  const [error, setError]     = useState('');
-  const accountCount = property.utilityAccounts?.length ?? 0;
-
-  async function handleDelete() {
-    setLoading(true);
-    try {
-      await deleteProperty(property.id);
-      onDeleted();
-    } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to delete');
-      setLoading(false);
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
-      <div className="w-full max-w-sm rounded-2xl p-6 space-y-4" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.08)' }} onClick={e => e.stopPropagation()}>
-        <h3 className="text-sm font-semibold text-white">Delete {property.nickname || property.address}?</h3>
-        <div className="text-xs text-gray-400 space-y-1.5">
-          <p>This will permanently delete:</p>
-          <ul className="list-disc pl-4 space-y-0.5 text-gray-500">
-            <li>The property record</li>
-            <li>{accountCount} utility account{accountCount !== 1 ? 's' : ''}</li>
-            <li>All statements, payments, and AI insights for this property</li>
-          </ul>
-          <p className="text-red-400 font-medium pt-1">This cannot be undone.</p>
-        </div>
-        {error && <p className="text-xs text-red-400">{error}</p>}
-        <div className="flex gap-2">
-          <button className="btn text-xs flex-1" onClick={onClose}>Cancel</button>
-          <button
-            className="flex-1 rounded-lg px-3 py-2 text-xs font-medium bg-red-500/15 text-red-400 border border-red-500/30 hover:bg-red-500/25 transition-colors disabled:opacity-40"
-            onClick={handleDelete}
-            disabled={loading}
-          >
-            {loading ? 'Deleting…' : 'Delete permanently'}
           </button>
         </div>
       </div>

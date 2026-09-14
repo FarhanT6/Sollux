@@ -216,6 +216,56 @@ router.patch('/:id', async (req, res, next) => {
 });
 
 // DELETE /api/properties/:id
+// POST /api/properties/:id/merge — fold a duplicate property into another one.
+// Everything attached to the source (utility accounts and their statements,
+// units and leases, expenses, loans, insurance, taxes, improvements, legal
+// matters, documents, insights, matched bank transactions) is re-pointed at
+// the target, then the now-empty source is deleted. Nothing is lost and the
+// target keeps its own name, address and valuation.
+router.post('/:id/merge', async (req, res, next) => {
+  try {
+    const { targetId } = z.object({ targetId: z.string().min(1) }).parse(req.body);
+    if (targetId === req.params.id) return res.status(400).json({ error: 'Pick a different property to merge into' });
+    const [source, target] = await Promise.all([
+      db.property.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } }),
+      db.property.findFirst({ where: { id: targetId, userId: req.dbUserId! } }),
+    ]);
+    if (!source) return res.status(404).json({ error: 'Property not found' });
+    if (!target) return res.status(404).json({ error: 'Target property not found' });
+
+    const from = { propertyId: source.id };
+    const to = { propertyId: target.id };
+    const moved = await db.$transaction(async tx => {
+      const counts = {
+        utilityAccounts: (await tx.utilityAccount.updateMany({ where: from, data: to })).count,
+        units: (await tx.unit.updateMany({ where: from, data: to })).count,
+        expenses: (await tx.expense.updateMany({ where: from, data: to })).count,
+        loans: (await tx.loan.updateMany({ where: from, data: to })).count,
+        insurance: (await tx.insurancePolicy.updateMany({ where: from, data: to })).count,
+        taxAssessments: (await tx.taxAssessment.updateMany({ where: from, data: to })).count,
+        improvements: (await tx.improvement.updateMany({ where: from, data: to })).count,
+        legalMatters: (await tx.legalMatter.updateMany({ where: from, data: to })).count,
+        documents: (await tx.document.updateMany({ where: from, data: to })).count,
+        insights: (await tx.aIInsight.updateMany({ where: from, data: to })).count,
+        reconciliationProfiles: (await tx.reconciliationProfile.updateMany({ where: from, data: to })).count,
+        outgoingTransactions: (await tx.outgoingTransaction.updateMany({ where: from, data: to })).count,
+      };
+      // Keep the duplicate's notes rather than dropping them on the floor.
+      if (source.notes && source.notes.trim()) {
+        await tx.property.update({
+          where: { id: target.id },
+          data: { notes: target.notes ? `${target.notes}\n\n— Merged from ${source.address}: ${source.notes}` : source.notes },
+        });
+      }
+      await tx.property.delete({ where: { id: source.id } });
+      return counts;
+    });
+    res.json({ ok: true, targetId: target.id, moved });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.delete('/:id', async (req, res, next) => {
   try {
     const existing = await db.property.findFirst({

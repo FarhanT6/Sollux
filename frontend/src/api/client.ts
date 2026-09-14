@@ -52,6 +52,9 @@ export const updateProperty = (id: string, data: Partial<Property>) =>
   api.patch<Property>(`/properties/${id}`, data).then(r => r.data);
 export const deleteProperty = (id: string) =>
   api.delete(`/properties/${id}`);
+/** Move everything on `id` to `targetId`, then delete `id`. */
+export const mergeProperty = (id: string, targetId: string) =>
+  api.post<{ ok: true; targetId: string; moved: Record<string, number> }>(`/properties/${id}/merge`, { targetId }).then(r => r.data);
 export const lookupPropertyByAddress = (params: { address: string; city: string; state: string; zip?: string }) =>
   api.get<{
     record: {
