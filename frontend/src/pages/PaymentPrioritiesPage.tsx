@@ -118,7 +118,7 @@ export default function PaymentPrioritiesPage() {
                           <p className="text-xs text-gray-500">pay this month</p>
                           {p.installmentBilled
                             ? <p className="text-xs text-gray-600">{money(p.currentCharges)} this period, instalment included</p>
-                            : <p className="text-xs text-gray-600">{money(p.currentCharges)} this period + {money(Math.min(p.paymentPlan.monthlyAmount, p.onPlan))} instalment</p>}
+                            : <p className="text-xs text-gray-600">{money(p.currentCharges)} this period + {money(Math.min(p.paymentPlan.monthlyAmount, p.onPlan))} instalment{p.paymentPlan.installmentFee > 0 ? ` + ${money(p.paymentPlan.installmentFee)} fee` : ''}</p>}
                           {p.pastDue < -0.005 && <p className="text-xs text-emerald-400">{money(-p.pastDue)} credit applied</p>}
                           {p.onPlan > 0 && <p className="text-xs text-amber-400">{money(p.onPlan)} deferred on payment plan</p>}
                           {p.pastDue > 0 && <p className="text-xs text-red-400">{money(p.pastDue)} past due outside the plan</p>}

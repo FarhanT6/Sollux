@@ -36,7 +36,7 @@ export interface AccountPriority {
   /** Carried from earlier periods. */
   pastDue: number;
   /** An arrears arrangement on the account, when one is recorded. */
-  paymentPlan: { monthlyAmount: number; remainingBalance: number; endDate: string | null; description: string | null } | null;
+  paymentPlan: { monthlyAmount: number; installmentFee: number; remainingBalance: number; endDate: string | null; description: string | null } | null;
   /** The balance the plan defers — owed, but not overdue. */
   onPlan: number;
   /** True when the bill itself charges the installment, so it is already inside currentCharges. */
@@ -154,7 +154,7 @@ export async function getPaymentPriorities(userId: string, propertyId?: string):
         orderBy: { paymentDate: 'desc' }, take: 24,
         select: { amount: true, paymentDate: true },
       },
-      paymentPlan: { select: { monthlyAmount: true, remainingBalance: true, endDate: true, description: true, status: true } },
+      paymentPlan: { select: { monthlyAmount: true, installmentFee: true, remainingBalance: true, endDate: true, description: true, status: true } },
     },
   });
 
@@ -195,8 +195,11 @@ export async function getPaymentPriorities(userId: string, propertyId?: string):
       ? (installmentBilled ? num(plan.remainingBalance) : Math.min(Math.max(pastDue, 0), num(plan.remainingBalance)))
       : 0;
     const pastDueOffPlan = plan && !installmentBilled ? Math.max(0, pastDue - onPlan) : pastDue;
+    // The plan's per-installment fee is paid each month with the
+    // installment; it never comes off the balance.
+    const planFee = plan && !installmentBilled && onPlan > 0 ? num(plan.installmentFee) : 0;
     const payThisMonth = plan && !installmentBilled
-      ? Math.max(0, currentCharges + pastDueOffPlan + Math.min(num(plan.monthlyAmount), onPlan) - paidSince - statementPaid)
+      ? Math.max(0, currentCharges + pastDueOffPlan + Math.min(num(plan.monthlyAmount), onPlan) + planFee - paidSince - statementPaid)
       : balanceToCurrent;
     // Urgency is judged on what is actually late: the charge and any arrears
     // outside the plan.
@@ -324,7 +327,7 @@ export async function getPaymentPriorities(userId: string, propertyId?: string):
       balanceToCurrent,
       currentCharges,
       pastDue: pastDueOffPlan,
-      paymentPlan: plan ? { monthlyAmount: num(plan.monthlyAmount), remainingBalance: num(plan.remainingBalance), endDate: plan.endDate?.toISOString() ?? null, description: plan.description } : null,
+      paymentPlan: plan ? { monthlyAmount: num(plan.monthlyAmount), installmentFee: num(plan.installmentFee), remainingBalance: num(plan.remainingBalance), endDate: plan.endDate?.toISOString() ?? null, description: plan.description } : null,
       onPlan,
       installmentBilled,
       totalAccountBalance: plan ? Math.round((balanceToCurrent + (installmentBilled ? onPlan : 0)) * 100) / 100 : null,

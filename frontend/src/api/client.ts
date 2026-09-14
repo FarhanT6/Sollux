@@ -489,10 +489,10 @@ export const getDriveImportJob = (jobId: string) =>
 export const getPaymentPlan = (utilityAccountId: string) =>
   api.get(`/utilities/${utilityAccountId}/payment-plan`).then(r => r.data).catch(() => null);
 export const createPaymentPlan = (utilityAccountId: string, data: {
-  totalAmount: number; monthlyAmount: number; startDate: string; description?: string;
+  totalAmount: number; monthlyAmount: number; installmentFee?: number | null; startDate: string; description?: string; installmentsMade?: number;
 }) => api.post(`/utilities/${utilityAccountId}/payment-plan`, data).then(r => r.data);
 export const updatePaymentPlan = (utilityAccountId: string, data: {
-  applyPayment?: number; remainingBalance?: number; monthlyAmount?: number;
+  applyPayment?: number; remainingBalance?: number; monthlyAmount?: number; installmentFee?: number | null;
   status?: string; description?: string;
 }) => api.patch(`/utilities/${utilityAccountId}/payment-plan`, data).then(r => r.data);
 export const deletePaymentPlan = (utilityAccountId: string) =>
@@ -644,7 +644,7 @@ export interface AccountPriority {
   balanceToCurrent: number;
   currentCharges: number;
   pastDue: number;
-  paymentPlan: { monthlyAmount: number; remainingBalance: number; endDate: string | null; description: string | null } | null;
+  paymentPlan: { monthlyAmount: number; installmentFee: number; remainingBalance: number; endDate: string | null; description: string | null } | null;
   onPlan: number;
   installmentBilled: boolean;
   totalAccountBalance: number | null;

@@ -58,21 +58,38 @@ function PaymentPlanModal({
 }: { accountId: string; existing: any | null; onClose: () => void; onSave: (p: any) => void }) {
   const [total, setTotal] = useState(existing ? String(existing.totalAmount) : '');
   const [monthly, setMonthly] = useState(existing ? String(existing.monthlyAmount) : '');
+  const [fee, setFee] = useState(existing?.installmentFee != null ? String(existing.installmentFee) : '');
   const [startDate, setStartDate] = useState(
     existing ? existing.startDate.slice(0, 10) : todayISO()
   );
   const [desc, setDesc] = useState(existing?.description || '');
+  // Installments already made before the plan was entered here.
+  const [made, setMade] = useState(() => {
+    if (!existing) return '';
+    const m = Number(existing.monthlyAmount);
+    const paid = Number(existing.totalAmount) - Number(existing.remainingBalance);
+    return m > 0 && paid > 0 ? String(Math.round(paid / m)) : '';
+  });
   const [saving, setSaving] = useState(false);
+
+  const totalNum = parseFloat(total) || 0;
+  const monthlyNum = parseFloat(monthly) || 0;
+  const feeNum = parseFloat(fee) || 0;
+  const madeNum = parseInt(made, 10) || 0;
+  const months = monthlyNum > 0 ? totalNum / monthlyNum : null;
+  const remaining = Math.max(0, totalNum - madeNum * monthlyNum);
 
   async function handleSave() {
     if (!total || !monthly) return;
     setSaving(true);
     try {
       const plan = await createPaymentPlan(accountId, {
-        totalAmount: parseFloat(total),
-        monthlyAmount: parseFloat(monthly),
+        totalAmount: totalNum,
+        monthlyAmount: monthlyNum,
+        installmentFee: feeNum > 0 ? feeNum : null,
         startDate,
         description: desc || undefined,
+        installmentsMade: madeNum > 0 ? madeNum : undefined,
       });
       onSave(plan);
       onClose();
@@ -93,16 +110,40 @@ function PaymentPlanModal({
             <input type="number" value={total} onChange={e => setTotal(e.target.value)}
               className="w-full rounded-lg px-3 py-2 text-sm text-white bg-black/30 border border-white/10 focus:outline-none focus:border-amber-500" placeholder="e.g. 2000" />
           </div>
-          <div>
-            <label className="text-xs text-gray-400 block mb-1">Monthly installment ($)</label>
-            <input type="number" value={monthly} onChange={e => setMonthly(e.target.value)}
-              className="w-full rounded-lg px-3 py-2 text-sm text-white bg-black/30 border border-white/10 focus:outline-none focus:border-amber-500" placeholder="e.g. 81.36" />
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Monthly installment ($)</label>
+              <input type="number" value={monthly} onChange={e => setMonthly(e.target.value)}
+                className="w-full rounded-lg px-3 py-2 text-sm text-white bg-black/30 border border-white/10 focus:outline-none focus:border-amber-500" placeholder="e.g. 627.33" />
+            </div>
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Fee per installment ($)</label>
+              <input type="number" value={fee} onChange={e => setFee(e.target.value)}
+                className="w-full rounded-lg px-3 py-2 text-sm text-white bg-black/30 border border-white/10 focus:outline-none focus:border-amber-500" placeholder="e.g. 30" />
+            </div>
           </div>
-          <div>
-            <label className="text-xs text-gray-400 block mb-1">Start date</label>
-            <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
-              className="w-full rounded-lg px-3 py-2 text-sm text-white bg-black/30 border border-white/10 focus:outline-none focus:border-amber-500" />
+          <p className="text-xs text-gray-500">
+            Only the installment comes off the balance; the fee is paid on top each month.
+            {months != null && monthlyNum > 0 && totalNum > 0 && (
+              <> {fmtMoney(totalNum)} ÷ {fmtMoney(monthlyNum)} = {Number.isInteger(Math.round(months * 100) / 100) ? months : months.toFixed(2)} months
+                {feeNum > 0 ? ` · ${fmtMoney(monthlyNum + feeNum)} paid each month` : ''}.</>
+            )}
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Start date</label>
+              <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
+                className="w-full rounded-lg px-3 py-2 text-sm text-white bg-black/30 border border-white/10 focus:outline-none focus:border-amber-500" />
+            </div>
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Installments already made</label>
+              <input type="number" min={0} value={made} onChange={e => setMade(e.target.value)}
+                className="w-full rounded-lg px-3 py-2 text-sm text-white bg-black/30 border border-white/10 focus:outline-none focus:border-amber-500" placeholder="0" />
+            </div>
           </div>
+          {madeNum > 0 && monthlyNum > 0 && (
+            <p className="text-xs text-gray-500">Remaining after {madeNum} installment{madeNum === 1 ? '' : 's'}: <span className="text-white">{fmtMoney(remaining)}</span></p>
+          )}
           <div>
             <label className="text-xs text-gray-400 block mb-1">Description (optional)</label>
             <input type="text" value={desc} onChange={e => setDesc(e.target.value)}
@@ -408,6 +449,9 @@ function PaymentPlanCard({
           <div>
             <span className="text-gray-500">Monthly installment: </span>
             <span className="text-white font-medium">{fmtMoney(monthly)}</span>
+            {Number(plan.installmentFee ?? 0) > 0 && (
+              <span className="text-gray-500"> + {fmtMoney(Number(plan.installmentFee))} fee = <span className="text-gray-300">{fmtMoney(monthly + Number(plan.installmentFee))}/mo</span></span>
+            )}
           </div>
           {monthsLeft != null && !isCompleted && (
             <div>
@@ -953,10 +997,10 @@ export default function UtilityDetailPage() {
                         {carried < -0.01 && <span className="text-emerald-400">{fmtMoney(-carried)} credit applied</span>}
                         {active && onPlan > 0.01 && (
                           <span className="text-amber-400 block">
-                            {fmtMoney(onPlan)} deferred on payment plan · {fmtMoney(Number(active.monthlyAmount))}/mo
+                            {fmtMoney(onPlan)} deferred on payment plan · {fmtMoney(Number(active.monthlyAmount))}/mo{Number(active.installmentFee ?? 0) > 0 ? ` + ${fmtMoney(Number(active.installmentFee))} fee` : ''}
                             {installmentBilled
                               ? ' included in this bill'
-                              : ` · pay ${fmtMoney((latestAmt ?? 0) + Math.max(offPlan, 0) + Math.min(Number(active.monthlyAmount), onPlan))} this month`}
+                              : ` · pay ${fmtMoney((latestAmt ?? 0) + Math.max(offPlan, 0) + Math.min(Number(active.monthlyAmount), onPlan) + Number(active.installmentFee ?? 0))} this month`}
                           </span>
                         )}
                         {active && installmentBilled && latestTotalDue != null && (
