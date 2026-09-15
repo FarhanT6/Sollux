@@ -198,6 +198,10 @@ const UtilitySchema = z.object({
   lateFeePercent: z.number().min(0).max(100).nullable().optional(),
   shutoffAfterDays: z.number().int().min(0).max(730).nullable().optional(),
   paymentRuleNotes: z.string().nullable().optional(),
+  // Net-metering (solar) account with an annual true-up. Set on import when
+  // a bill shows a net-metering summary; editable by hand.
+  hasTrueUp: z.boolean().optional(),
+  trueUpDate: z.union([z.string(), z.null()]).optional().transform(v => (v === undefined ? undefined : v ? new Date(v) : null)),
   termMonths: z.number().int().positive().max(600).optional(),
   expectedAmount: z.number().nonnegative().optional(),
   // Only relevant when category is INSURANCE — passed through to the linked

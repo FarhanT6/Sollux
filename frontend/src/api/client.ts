@@ -652,6 +652,7 @@ export interface AccountPriority {
   onPlan: number;
   installmentBilled: boolean;
   totalAccountBalance: number | null;
+  trueUp: { deferredThisBill: number; balance: number | null; date: string | null } | null;
   payThisMonth: number;
   dueDate: string | null;
   penaltyDate: string | null;

@@ -937,8 +937,10 @@ function UtilityAccountCard({
   // to the provider's API still shows up correctly. If the latest payment is after
   // the latest statement AND covers the open balance, treat the bill as paid.
   // Open balance from the editable columns: current charge + any carried past due.
+  // Payable now: the charge less anything deferred to a net-metering true-up,
+  // plus what was carried in.
   const openBalance = latest
-    ? Number(latest.amountDue ?? 0) + Number((latest as any).pastDueCarried ?? 0)
+    ? Number(latest.amountDue ?? 0) - Number((latest as any).trueUpDeferred ?? 0) + Number((latest as any).pastDueCarried ?? 0)
     : undefined;
   const stmtDate = latest?.statementDate ? new Date(latest.statementDate) : null;
   // The payment that paid THIS bill: one logged against it by name first;

@@ -131,6 +131,12 @@ export default function PaymentPrioritiesPage() {
                           <p className="text-xs text-gray-600">{money(p.currentCharges)} this period</p>
                         </>
                       )}
+                      {p.trueUp && (
+                        <p className="text-xs text-sky-400">
+                          {p.trueUp.balance != null ? `${money(p.trueUp.balance)} deferred to true-up` : 'Net-metering account'}
+                          {p.trueUp.date ? ` · settles ${fmtDate(p.trueUp.date, 'MMM d')}` : ''}
+                        </p>
+                      )}
                       {p.dueDate && <p className="text-xs text-gray-500 mt-1">Due {fmtDate(p.dueDate, 'MMM d')}</p>}
                       <button onClick={() => setEditing(p)}
                         className="text-xs text-gray-500 hover:text-[#F5A623] mt-1"

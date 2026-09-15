@@ -766,6 +766,9 @@ export interface UtilityAccount {
   billingCadence?: BillingCadence;
   termMonths?: number | null;
   expectedAmount?: number | string | null;
+  /** Net-metering (solar) account: charges settle once a year at the true-up. */
+  hasTrueUp?: boolean;
+  trueUpDate?: string | null;
   syncEnabled: boolean;
   hasCredentials?: boolean;
   isActive: boolean;
@@ -793,6 +796,12 @@ export interface Statement {
   paymentPlanAmount?: number | string | null;
   /** The owner's word over every paid inference: 'UNPAID' keeps the bill open. */
   paidOverride?: 'UNPAID' | 'PAID' | null;
+  /** Net metering: the part of this period's charge deferred to the annual
+   *  true-up, the deferred balance after this bill, and the true-up date.
+   *  Payable now = amountDue − trueUpDeferred + pastDueCarried. */
+  trueUpDeferred?: number | string | null;
+  trueUpBalance?: number | string | null;
+  trueUpDate?: string | null;
   dueDate?: string;
   billingPeriodStart?: string;
   billingPeriodEnd?: string;
