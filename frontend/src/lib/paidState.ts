@@ -137,6 +137,9 @@ export function computePaidMap(statements: any[], payments: any[], resolvedByFut
     const s = statements[i];
     const prior = statements[i + 1];
     const priorSettled = prior ? (paid.get(prior.id) ?? false) : false;
+    // The owner's word beats every inference.
+    if (s.paidOverride === 'UNPAID') { paid.set(s.id, false); continue; }
+    if (s.paidOverride === 'PAID') { paid.set(s.id, true); continue; }
     if (resolvedByFuture.has(s.id)) { paid.set(s.id, true); continue; }
     const carried = s?.pastDueCarried != null ? Number(s.pastDueCarried) : 0;
     if (s.amountDue == null && s.pastDueCarried == null) {
@@ -162,6 +165,9 @@ export function computePaidMap(statements: any[], payments: any[], resolvedByFut
 }
 
 export function isEffectivelyPaid(s: any, payments: any[], resolvedByFuture: Set<string>, paidMap?: Map<string, boolean>): boolean {
+  // The owner's word beats every inference.
+  if (s?.paidOverride === 'UNPAID') return false;
+  if (s?.paidOverride === 'PAID') return true;
   if (paidMap?.has(s.id)) return paidMap.get(s.id)!;
   return isStatementPaid(s, payments) || resolvedByFuture.has(s.id);
 }
@@ -185,7 +191,7 @@ export function coveredByCredit(s: any): boolean {
 export function statementStatus(s: any, payments: any[] = [], newerStmt?: any, isLatest = false, resolvedByFuture: Set<string> = new Set(), paidMap?: Map<string, boolean>): { color: 'green' | 'amber' | 'red'; label: string } {
   // Settled by the provider's own credit, not by a payment — say so rather
   // than "Paid", which reads as money having gone out.
-  if (coveredByCredit(s)) return { color: 'green', label: 'Credit' };
+  if (s?.paidOverride !== 'UNPAID' && coveredByCredit(s)) return { color: 'green', label: 'Credit' };
   if (isEffectivelyPaid(s, payments, resolvedByFuture, paidMap)) return { color: 'green', label: 'Paid' };
 
   if (!isLatest && newerStmt) {

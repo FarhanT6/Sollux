@@ -277,6 +277,10 @@ model Statement {
   // but NOT including past due carried from prior periods.
   amountDue            Decimal?        @db.Decimal(10, 2)
   amountPaid           Decimal?        @db.Decimal(10, 2)
+  // The owner's word over every inference. 'UNPAID' keeps a bill open even
+  // when a later statement or a bill-reported figure would read it as
+  // settled; cleared again by marking it paid or logging a payment on it.
+  paidOverride         String?
   balance              Decimal?        @db.Decimal(10, 2)
   // First-class columns for line items that used to live only inside
   // rawDataJson (scraper-specific keys like "penalties"/"pastDue") — kept

@@ -791,6 +791,8 @@ export interface Statement {
   // An arrears installment charged inside this bill: repayment of old debt,
   // not this period's service. Excluded from operating cost by default.
   paymentPlanAmount?: number | string | null;
+  /** The owner's word over every paid inference: 'UNPAID' keeps the bill open. */
+  paidOverride?: 'UNPAID' | 'PAID' | null;
   dueDate?: string;
   billingPeriodStart?: string;
   billingPeriodEnd?: string;
