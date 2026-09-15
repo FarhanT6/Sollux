@@ -43,6 +43,8 @@ export interface AccountPriority {
   installmentBilled: boolean;
   /** The account's total balance as the provider states it, when the bill prints one. */
   totalAccountBalance: number | null;
+  /** Net metering: charges deferred to the annual true-up, and when that is. */
+  trueUp: { deferredThisBill: number; balance: number | null; date: string | null } | null;
   /** What this month's payment should be: this period's charge plus the plan installment, less payments since. */
   payThisMonth: number;
 
@@ -148,6 +150,7 @@ export async function getPaymentPriorities(userId: string, propertyId?: string):
           id: true, statementDate: true, dueDate: true, amountDue: true,
           pastDueCarried: true, penaltiesFees: true, amountPaid: true, paymentPlanAmount: true,
           penaltyDate: true, amountAfterDueDate: true, isDownPayment: true,
+          trueUpDeferred: true, trueUpBalance: true, trueUpDate: true,
         },
       },
       payments: {
@@ -166,7 +169,10 @@ export async function getPaymentPriorities(userId: string, propertyId?: string):
     const latest = statements[0];
     if (!latest) continue;
 
-    const currentCharges = num(latest.amountDue);
+    // On a net-metering account part of the charge is deferred to the annual
+    // true-up; only the rest is payable now.
+    const trueUpDeferred = num(latest.trueUpDeferred);
+    const currentCharges = num(latest.amountDue) - trueUpDeferred;
     const pastDue = num(latest.pastDueCarried);
 
     // Payments recorded after the statement reduce what is actually owed. The
@@ -332,6 +338,9 @@ export async function getPaymentPriorities(userId: string, propertyId?: string):
       installmentBilled,
       totalAccountBalance: plan ? Math.round((balanceToCurrent + (installmentBilled ? onPlan : 0)) * 100) / 100 : null,
       payThisMonth,
+      trueUp: trueUpDeferred !== 0 || latest.trueUpBalance != null
+        ? { deferredThisBill: trueUpDeferred, balance: latest.trueUpBalance != null ? num(latest.trueUpBalance) : null, date: latest.trueUpDate?.toISOString() ?? null }
+        : null,
       dueDate: latest.dueDate?.toISOString() ?? null,
       penaltyDate: penaltyDate?.toISOString() ?? null,
       penaltyDateIsEstimate,

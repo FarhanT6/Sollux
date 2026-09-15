@@ -17,10 +17,15 @@ import { isAfter } from 'date-fns';
 
 // Open balance a statement is asking for: this period's charge plus any
 // prior balance carried into it.
+/** The part of a bill's charge deferred to a net-metering true-up — not payable now. */
+export function deferredOf(s: any): number {
+  return s?.trueUpDeferred != null ? Number(s.trueUpDeferred) : 0;
+}
+
 export function openBalanceOf(s: any): number | null {
   if (!s) return null;
   if (s.amountDue == null && s.pastDueCarried == null) return null;
-  return Number(s.amountDue ?? 0) + Number(s.pastDueCarried ?? 0);
+  return Number(s.amountDue ?? 0) - deferredOf(s) + Number(s.pastDueCarried ?? 0);
 }
 
 // Determine if a statement is paid, including reconciliation against payments that
@@ -36,7 +41,7 @@ export function isStatementPaid(s: any, payments: any[] = [], priorSettled = fal
   const carried = s?.pastDueCarried != null ? Number(s.pastDueCarried) : 0;
   const openBalance = s == null || (s.amountDue == null && s.pastDueCarried == null)
     ? null
-    : Number(s.amountDue ?? 0) + (carried < 0 ? carried : priorSettled ? 0 : carried);
+    : Number(s.amountDue ?? 0) - deferredOf(s) + (carried < 0 ? carried : priorSettled ? 0 : carried);
   // A bill with no amount on file cannot be measured against payments, but
   // a payment made against it, or a mark-paid, still settles it.
   if (openBalance == null) {
@@ -242,7 +247,8 @@ export function accountView(statements: any[], payments: any[] = []): AccountVie
   const isPaid = paid.get(latest.id) ?? false;
   const priorSettled = sorted[1] ? (paid.get(sorted[1].id) ?? false) : false;
   const carried = latest.pastDueCarried != null ? Number(latest.pastDueCarried) : 0;
-  const current = Number(latest.amountDue ?? 0);
+  // Only the part of the charge not deferred to a true-up is payable now.
+  const current = Number(latest.amountDue ?? 0) - deferredOf(latest);
   const pastDue = carried > 0 && !priorSettled ? carried : 0;
   const credit = carried < 0 ? -carried : 0;
   const owed = isPaid ? 0 : Math.max(current + pastDue - credit, 0);

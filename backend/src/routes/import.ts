@@ -465,6 +465,12 @@ router.post('/confirm', async (req: Request, res: Response) => {
         const planAmount = ex.paymentPlanAmount ?? null;
         const aging = ex.agingBuckets ?? null;
         const penaltyOn = ex.penaltyDate ? new Date(ex.penaltyDate) : null;
+        // Net metering: the part of the charge deferred to the true-up, the
+        // deferred balance after this bill, and the true-up date.
+        const nem = ex.netMetering ?? null;
+        const trueUpFields = nem
+          ? { trueUpDeferred: nem.deferred, trueUpBalance: nem.ytdBalance, trueUpDate: nem.trueUpDate ? new Date(nem.trueUpDate) : null }
+          : {};
 
         if (existing) {
           // Overwrite with better data from the new extraction
@@ -488,6 +494,7 @@ router.post('/confirm', async (req: Request, res: Response) => {
               usageValue:  ex.usageValue ?? existing.usageValue,
               usageUnit:   ex.usageUnit  ?? existing.usageUnit,
               ratePlan:    ex.ratePlan   ?? existing.ratePlan,
+              ...trueUpFields,
               rawDataJson: buildRawData(ex, item.extractedBy) as Prisma.InputJsonValue,
               ...(pdfS3Key ? { pdfS3Key } : {}),
             },
@@ -495,6 +502,7 @@ router.post('/confirm', async (req: Request, res: Response) => {
           await recordConfirmedPayment(utilityAccountId, existing.id, ex);
           await syncPaymentPlanFromBill(utilityAccountId, ex);
           await syncInsurancePolicyFromBill(utilityAccountId, ex);
+          await syncTrueUpFromBill(utilityAccountId, ex);
           skipped++;
         } else {
           const created = await db.statement.create({
@@ -517,6 +525,7 @@ router.post('/confirm', async (req: Request, res: Response) => {
               usageValue:  ex.usageValue ?? null,
               usageUnit:   ex.usageUnit  ?? null,
               ratePlan:    ex.ratePlan   ?? null,
+              ...trueUpFields,
               pdfS3Key:    pdfS3Key      ?? null,
               sourceType:  'MANUAL',
               rawDataJson: buildRawData(ex, item.extractedBy) as Prisma.InputJsonValue,
@@ -525,6 +534,7 @@ router.post('/confirm', async (req: Request, res: Response) => {
           await recordConfirmedPayment(utilityAccountId, created.id, ex);
           await syncPaymentPlanFromBill(utilityAccountId, ex);
           await syncInsurancePolicyFromBill(utilityAccountId, ex);
+          await syncTrueUpFromBill(utilityAccountId, ex);
           imported++;
         }
 
@@ -604,7 +614,24 @@ function buildRawData(ex: ExtractedBillData, extractedBy?: 'ai' | 'text'): Recor
     paymentPlan:         ex.paymentPlan ?? null,
     paymentPlanAmount:   ex.paymentPlanAmount ?? null,
     insurance:           ex.insurance ?? null,
+    netMetering:         ex.netMetering ?? null,
   };
+}
+
+/**
+ * A bill with a net-metering summary marks its account as a true-up account
+ * and keeps the next true-up date current. Only the newest bill may move
+ * the date; an older bill imported later must not roll it back.
+ */
+async function syncTrueUpFromBill(utilityAccountId: string, ex: ExtractedBillData): Promise<void> {
+  const nem = ex.netMetering;
+  if (!nem) return;
+  const billDate = ex.statementDate ? new Date(ex.statementDate) : new Date();
+  const newer = await db.statement.findFirst({ where: { utilityAccountId, statementDate: { gt: billDate }, isDownPayment: false }, select: { id: true } });
+  await db.utilityAccount.update({
+    where: { id: utilityAccountId },
+    data: { hasTrueUp: true, ...(!newer && nem.trueUpDate ? { trueUpDate: new Date(nem.trueUpDate) } : {}) },
+  });
 }
 
 function sanitizeFilename(name: string): string {

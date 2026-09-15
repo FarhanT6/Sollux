@@ -99,6 +99,17 @@ export interface ExtractedBillData {
    *  such as Seabreeze / CINC), each on its own date. Recorded as separate
    *  payments rather than one lump "payments received". */
   ledgerPayments?:    { date: string; amount: number; description: string }[] | null;
+  /** Net-metering (solar) accounts: energy charges accrue monthly but are
+   *  settled once a year at the true-up. `deferred` is the part of this
+   *  period's charges not billed now; `ytdBalance` the deferred balance after
+   *  this bill. Payable now = amountDue − deferred + previousBalance. */
+  netMetering?: {
+    deferred: number;
+    previousYtd: number | null;
+    ytdBalance: number | null;
+    trueUpDate: string | null;   // YYYY-MM-DD
+    periodStart: string | null;  // YYYY-MM-DD
+  } | null;
   // When a late penalty applies, and what the bill becomes then.
   penaltyDate:        string | null;
   amountAfterDueDate: number | null;
@@ -533,10 +544,13 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
   // last, and only when nothing better is printed.
   let statementDate: string | null = null;
   if (!garbled) {
+    // "Date mailed" before "Bill date": an SDG&E statement prints its own
+    // DATE MAILED on every page and a CCA supplier's "Bill Date" (the read
+    // date) deep inside; the statement is dated by the former.
     statementDate = findDateNear(text, [
-      /(?:statement|bill|invoice|billing)\s+date/i,
+      /statement\s+date/i,
       /date\s+(?:issued|generated|prepared|mailed)/i,
-      /billing\s+date/i,
+      /(?:bill|invoice|billing)\s+date/i,
       /prepared\s+(?:on|date)/i,
       /issued\s+(?:on|date)/i,
     ]);
@@ -1501,17 +1515,20 @@ export function reconcileWithStatedTotal(ex: ExtractedBillData): void {
   if (total == null) return;
   const plan = ex.paymentPlan;
   const installment = plan?.installment ?? ex.paymentPlanAmount ?? null;
+  // On a net-metering account part of the charge is deferred to the true-up:
+  // what the bill asks for now is charge − deferred + carried.
+  const deferred = ex.netMetering?.deferred ?? 0;
 
   if (plan && plan.remaining != null) {
     plan.remaining = Math.abs(plan.remaining);
-    // Under an arrangement: charges = current + installment; carried = total − charges.
+    // Under an arrangement: charges = current + installment; carried = total − (charges − deferred).
     const current = ex.currentCharges ?? (ex.amountDue != null && installment != null && ex.amountDue > installment ? ex.amountDue - installment : ex.amountDue);
     if (current != null) {
       ex.currentCharges = Number(current.toFixed(2));
       ex.amountDue = Number((current + (installment ?? 0)).toFixed(2));
       ex.paymentPlanAmount = installment;
-      ex.previousBalance = Number((total - ex.amountDue).toFixed(2));
-      if (ex.totalAccountBalance == null) ex.totalAccountBalance = Number((total + plan.remaining).toFixed(2));
+      ex.previousBalance = Number((total - (ex.amountDue - deferred)).toFixed(2));
+      if (ex.totalAccountBalance == null) ex.totalAccountBalance = Number((total + plan.remaining + (ex.netMetering?.ytdBalance ?? 0)).toFixed(2));
     }
     return;
   }
@@ -1533,9 +1550,20 @@ export function reconcileWithStatedTotal(ex: ExtractedBillData): void {
   // No arrangement: the carried balance is what the total does not explain.
   // Only fill a gap or repair a contradiction; a consistent bill is left alone.
   if (ex.amountDue != null) {
-    const derived = Number((total - ex.amountDue).toFixed(2));
+    // The text path reads the grand total as amountDue. When the bill's own
+    // carried balance and its current charges add up to that total, the
+    // charge is the period's charge — not the total. SDG&E: Previous
+    // Balance 993.81 + (511.12 − 560.48 deferred) = 944.45.
+    if (ex.currentCharges != null && ex.previousBalance != null
+        && Math.abs(ex.amountDue - total) < 0.01
+        && Math.abs((ex.previousBalance + ex.currentCharges - deferred) - total) < 0.01) {
+      ex.amountDue = ex.currentCharges;
+      return;
+    }
+    const payableCharge = ex.amountDue - deferred;
+    const derived = Number((total - payableCharge).toFixed(2));
     const stated = ex.previousBalance;
-    if (stated == null || Math.abs((stated + ex.amountDue) - total) > 0.01) {
+    if (stated == null || Math.abs((stated + payableCharge) - total) > 0.01) {
       // A stated previous balance that does not add up is usually the gross
       // figure before a payment the bill also lists; the derived one is net.
       ex.previousBalance = Math.abs(derived) < 0.005 ? null : derived;
@@ -1985,6 +2013,53 @@ export function applyLedgerFromText(text: string, ex: ExtractedBillData): void {
   ex.documentKind = 'bill';
 }
 
+/**
+ * A net-metering (solar) bill bills almost nothing month to month. SDG&E's
+ * account summary reads "Current Charges − 49.36 / Total Amount Due $944.45"
+ * while the "Net Metering Account Summary" beside it carries the real
+ * energy cost: "Previous NEM YTD Balance $659.62 / Current Charges + 560.48
+ * / NEM Year-to-Date Balance $1,220.10 — Payment not required for NEM
+ * charges. Your account will true up on Dec 3, 2026." Read as an ordinary
+ * bill, the $511.12 of charges and the $944.45 asked for could not be
+ * reconciled, and the carried balance came out wrong every month.
+ *
+ * The energy cost stays as this period's charge (it is what the month cost,
+ * and what the true-up will collect); the deferred part is recorded so what
+ * is payable now is charge − deferred + carried.
+ */
+export function applyNetMeteringFromText(text: string, ex: ExtractedBillData): void {
+  if (!text || !/net\s+metering|NEM\s+year/i.test(text)) return;
+  const ytd = findDollarNear(text, [/NEM\s+year-?to-?date\s+balance/i]);
+  const prevYtd = findDollarNear(text, [/previous\s+NEM\s+YTD\s+balance/i]);
+  // The deferred charge is the line between them: "Current Charges + 560.48".
+  let deferred: number | null = null;
+  const block = text.match(/previous\s+NEM\s+YTD\s+balance[\s\S]{0,120}?current\s+charges\s*([+-]?)\s*\$?\s*([\d,]*\.\d{2})/i);
+  if (block) deferred = (block[1] === '-' ? -1 : 1) * parseFloat(block[2]!.replace(/,/g, ''));
+  if (deferred == null && ytd != null && prevYtd != null) deferred = Number((ytd - prevYtd).toFixed(2));
+  if (deferred == null) return;
+
+  const trueUp = findDateNear(text, [/true[\s-]*up\s+on/i, /true[\s-]*up\s+date\s*:?/i, /will\s+true[\s-]*up\s+on/i]);
+  const start = findDateNear(text, [/start\s+date\s*:?/i]);
+  ex.netMetering = {
+    deferred: Number(deferred.toFixed(2)),
+    previousYtd: prevYtd,
+    ytdBalance: ytd,
+    trueUpDate: trueUp,
+    periodStart: start,
+  };
+  // What the account summary bills this month is the charge less the
+  // deferred part — the California Climate Credit alone on a high-solar
+  // month. If the charge came out as that billed figure, restore the cost.
+  const billedNow = findDollarNear(text, [/account\s+summary[\s\S]{0,200}?current\s+charges/i]);
+  if (ex.currentCharges != null && billedNow != null && Math.abs(ex.currentCharges - billedNow) < 0.01) {
+    ex.currentCharges = Number((billedNow + deferred).toFixed(2));
+  }
+  if (ex.amountDue != null && billedNow != null && Math.abs(ex.amountDue - billedNow) < 0.01) {
+    ex.amountDue = Number((billedNow + deferred).toFixed(2));
+  }
+  if (ex.currentCharges == null && ex.amountDue != null) ex.currentCharges = ex.amountDue;
+}
+
 // ── Main entry point ──────────────────────────────────────────────────────────
 
 export async function parseBill(
@@ -2045,6 +2120,7 @@ export async function parseBill(
     try {
       const { text } = await pdfParse(buffer);
       applyLedgerFromText(text, extracted);
+      applyNetMeteringFromText(text, extracted);
       applyCreditFromText(text, extracted);
     } catch { /* an unreadable text layer changes nothing */ }
     reconcileWithStatedTotal(extracted);

@@ -203,6 +203,11 @@ model UtilityAccount {
   lateFeePercent   Decimal?        @db.Decimal(5, 2)
   shutoffAfterDays Int?            // days past due before service is cut
   paymentRuleNotes String?
+  // Net-metering (solar) account: energy charges accrue monthly but are
+  // settled once a year at the true-up. Set on import when a bill shows a
+  // net-metering summary; can be set by hand.
+  hasTrueUp        Boolean         @default(false)
+  trueUpDate       DateTime?       // next true-up (settlement) date
   syncEnabled      Boolean         @default(true)
   isActive         Boolean         @default(true)
   lastSyncedAt     DateTime?
@@ -281,6 +286,13 @@ model Statement {
   // when a later statement or a bill-reported figure would read it as
   // settled; cleared again by marking it paid or logging a payment on it.
   paidOverride         String?
+  // Net-metering (solar) accounts: the part of this period's charges the
+  // provider defers to the annual true-up rather than billing now, the
+  // deferred balance after this bill, and the true-up date. What is payable
+  // now is amountDue − trueUpDeferred + pastDueCarried.
+  trueUpDeferred       Decimal?        @db.Decimal(10, 2)
+  trueUpBalance        Decimal?        @db.Decimal(10, 2)
+  trueUpDate           DateTime?
   balance              Decimal?        @db.Decimal(10, 2)
   // First-class columns for line items that used to live only inside
   // rawDataJson (scraper-specific keys like "penalties"/"pastDue") — kept

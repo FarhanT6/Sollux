@@ -956,6 +956,28 @@ export default function UtilityDetailPage() {
             {account.isActive === false && (
               <span className="text-xs px-1.5 py-0.5 rounded-full text-gray-400 border border-white/10 bg-white/5">Inactive</span>
             )}
+            {/* Net metering: energy charges accrue monthly and settle once a
+                year. Set on import from the bill's net-metering summary, or
+                by hand here. */}
+            <button
+              onClick={async () => {
+                const next = !account.hasTrueUp;
+                let trueUpDate: string | null | undefined = undefined;
+                if (next) {
+                  const typed = prompt('True-up (settlement) date, YYYY-MM-DD — leave blank if unknown:', (account.trueUpDate ?? '').slice(0, 10));
+                  if (typed === null) return;
+                  trueUpDate = typed.trim() || null;
+                }
+                try {
+                  await updateUtility(accountId!, { hasTrueUp: next, ...(trueUpDate !== undefined ? { trueUpDate } : {}) } as any);
+                  setAccount((prev: any) => prev ? { ...prev, hasTrueUp: next, ...(trueUpDate !== undefined ? { trueUpDate } : {}) } : prev);
+                } catch { alert('Could not update the true-up setting.'); }
+              }}
+              title={account.hasTrueUp ? 'Net-metering account: charges settle at the annual true-up. Click to turn off.' : 'Mark this as a net-metering (solar) account with an annual true-up'}
+              className={`text-xs px-1.5 py-0.5 rounded-full border transition-colors ${account.hasTrueUp ? 'text-amber-400 border-amber-500/40 bg-amber-500/10' : 'text-gray-600 border-white/10 hover:text-gray-400'}`}
+            >
+              {account.hasTrueUp ? `☀ True-up${account.trueUpDate ? ` ${fmtDate(account.trueUpDate, 'MMM d, yyyy')}` : ''}` : '☀ Set true-up'}
+            </button>
             {account.accountNumber && (
               <span className="flex items-center gap-1">
                 <span className="font-mono text-xs text-gray-600">
@@ -1044,6 +1066,15 @@ export default function UtilityDetailPage() {
                         )}
                         {active && installmentBilled && latestTotalDue != null && (
                           <span className="text-gray-500 block">Account balance {fmtMoney(latestTotalDue + onPlan)} incl. plan</span>
+                        )}
+                        {/* Net metering: what this bill deferred, the deferred
+                            balance, and when it settles. */}
+                        {latestStmt?.trueUpDeferred != null && (
+                          <span className="text-sky-400 block">
+                            {fmtMoney(Number(latestStmt.trueUpDeferred))} of this bill's {fmtMoney(latestAmt ?? 0)} deferred to true-up
+                            {latestStmt.trueUpBalance != null ? ` · ${fmtMoney(Number(latestStmt.trueUpBalance))} deferred in all` : ''}
+                            {latestStmt.trueUpDate || account.trueUpDate ? ` · settles ${fmtDate(latestStmt.trueUpDate ?? account.trueUpDate, 'MMM d, yyyy')}` : ''}
+                          </span>
                         )}
                       </>
                     );
@@ -1358,6 +1389,15 @@ export default function UtilityDetailPage() {
                               <p className="text-base font-semibold text-white">{fmtMoney(primary)}</p>
                               {showBillSubline && (
                                 <p className="text-xs text-gray-500">Bill: {fmtMoney(amt)}</p>
+                              )}
+                              {/* Net metering: the charge is this month's energy
+                                  cost; most of it is deferred to the true-up and
+                                  only the rest was billed now. */}
+                              {s.trueUpDeferred != null && Number(s.trueUpDeferred) !== 0 && (
+                                <p className="text-xs text-sky-400">
+                                  {fmtMoney(Number(s.trueUpDeferred))} deferred to true-up
+                                  {' · '}billed now {fmtMoney(amt - Number(s.trueUpDeferred))}
+                                </p>
                               )}
                               {/* The charge stands as the bill's figure; the
                                   credit that covers it, and what is left of

@@ -352,7 +352,12 @@ router.post('/stream', attachDbUser, async (req, res) => {
               paymentPlan: ex.paymentPlan ?? null,
               paymentPlanAmount: ex.paymentPlanAmount ?? null,
               insurance: ex.insurance ?? null,
+              netMetering: ex.netMetering ?? null,
             };
+            const nem = ex.netMetering ?? null;
+            const trueUpFields = nem
+              ? { trueUpDeferred: nem.deferred, trueUpBalance: nem.ytdBalance, trueUpDate: nem.trueUpDate ? new Date(nem.trueUpDate) : null }
+              : {};
 
             // Positive is arrears, negative is a credit carried in; both change
             // what this bill actually asks for. Only an exact zero says nothing.
@@ -383,12 +388,14 @@ router.post('/stream', attachDbUser, async (req, res) => {
                 usageValue: ex.usageValue ?? existing.usageValue,
                 usageUnit:  ex.usageUnit  ?? existing.usageUnit,
                 ratePlan:   ex.ratePlan   ?? existing.ratePlan,
+                ...trueUpFields,
                 rawDataJson: rawData as Prisma.InputJsonValue,
                 ...(pdfS3Key ? { pdfS3Key } : {}),
               }});
               await recordConfirmedPayment(acct.id, existing.id, ex);
               await syncPaymentPlanFromBill(acct.id, ex);
               await syncInsurancePolicyFromBill(acct.id, ex);
+              if (nem) await db.utilityAccount.update({ where: { id: acct.id }, data: { hasTrueUp: true, ...(nem.trueUpDate ? { trueUpDate: new Date(nem.trueUpDate) } : {}) } });
             } else {
               const created = await db.statement.create({ data: {
                 utilityAccountId: acct.id, statementDate,
@@ -403,11 +410,13 @@ router.post('/stream', attachDbUser, async (req, res) => {
                 pastDueCarried: pastDueAmt,
                 usageValue: ex.usageValue ?? null, usageUnit: ex.usageUnit ?? null,
                 ratePlan: ex.ratePlan ?? null, pdfS3Key, sourceType: 'MANUAL',
+                ...trueUpFields,
                 rawDataJson: rawData as Prisma.InputJsonValue,
               }});
               await recordConfirmedPayment(acct.id, created.id, ex);
               await syncPaymentPlanFromBill(acct.id, ex);
               await syncInsurancePolicyFromBill(acct.id, ex);
+              if (nem) await db.utilityAccount.update({ where: { id: acct.id }, data: { hasTrueUp: true, ...(nem.trueUpDate ? { trueUpDate: new Date(nem.trueUpDate) } : {}) } });
             }
             autoImported++;
             send({ type: 'auto_imported', filename: file.name });
