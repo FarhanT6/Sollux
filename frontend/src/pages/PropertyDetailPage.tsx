@@ -950,31 +950,29 @@ function UtilityAccountCard({
   // $990.40 card payment logged toward August.
   const counted = (p: any) => p.status !== 'FAILED' && p.status !== 'PENDING';
   const linkedToLatest = latest ? payments.filter(p => counted(p) && (p as any).statementId === latest.id) : [];
-  // Failing a payment logged against it, any money dated after the bill was
-  // issued — a payment filed against the bill before, when that bill was
-  // already settled, is this bill's money too.
+  // Failing a payment logged against it, unlinked money since the bill was
+  // issued. A payment logged against an OLDER bill is that bill's, however
+  // recent: two Sep 15 payments toward earlier Cox bills used to read as
+  // paying the Aug 26 bill, and the card said Paid while the account page
+  // said Due.
   const paidForBill = linkedToLatest.length > 0
     ? linkedToLatest
-    : payments.filter(p => counted(p) && (stmtDate ? new Date(p.paymentDate) >= stmtDate : !(p as any).statementId));
+    : payments.filter(p => counted(p) && !(p as any).statementId && (stmtDate ? new Date(p.paymentDate) >= stmtDate : true));
   const recentPmt = [...paidForBill].sort((a, b) =>
     (new Date(b.paymentDate).getTime() - new Date(a.paymentDate).getTime())
     || (new Date((b as any).createdAt ?? 0).getTime() - new Date((a as any).createdAt ?? 0).getTime()))[0];
   const paidForBillTotal = paidForBill.reduce((s, p) => s + Number(p.amount ?? 0), 0);
-  const recentPaidSum = payments
-    .filter(p => stmtDate ? new Date(p.paymentDate) >= stmtDate : false)
-    .reduce((s, p) => s + Number(p.amount ?? 0), 0);
-  const isPaidViaPayment = !!recentPmt && openBalance != null && recentPaidSum >= openBalance - 0.01;
-  // amountPaid is the payment the bill says arrived during its cycle — money
-  // that settled the PREVIOUS bill. It only proves this bill paid when it
-  // covers this bill's own open balance; its mere presence stamped accounts
-  // with a rolling unpaid chain as Paid on every face card.
+  // A bill-reported paid figure that covers the bill's own open balance.
   const isPaidViaStatement = latest?.amountPaid != null && openBalance != null
     && Number(latest.amountPaid) >= openBalance - 0.01;
   // The one paid rule shared with the account page and the properties list:
-  // a payment tied to a bill pays that bill only, a settled prior bill makes
-  // the carried balance moot, a carried credit always applies.
+  // a payment tied to a bill pays that bill only, unlinked money pools to the
+  // oldest open bill, a settled prior bill makes the carried balance moot, a
+  // carried credit always applies, and the owner's "unpaid" pin wins. The
+  // card used to add its own "any payment since the bill" shortcut on top,
+  // which is how it disagreed with the account page.
   const view = accountView((account.statements ?? []) as any[], payments as any[]);
-  const isPaid = view.isPaid || isPaidViaStatement || isPaidViaPayment;
+  const isPaid = view.isPaid;
 
   const now = new Date();
   const isPastDue = !isPaid && dueDate != null && dueDate < now;
