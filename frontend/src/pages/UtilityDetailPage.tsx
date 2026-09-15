@@ -59,6 +59,7 @@ function PaymentPlanModal({
   const [total, setTotal] = useState(existing ? String(existing.totalAmount) : '');
   const [monthly, setMonthly] = useState(existing ? String(existing.monthlyAmount) : '');
   const [fee, setFee] = useState(existing?.installmentFee != null ? String(existing.installmentFee) : '');
+  const [down, setDown] = useState(existing?.downPayment != null ? String(existing.downPayment) : '');
   const [startDate, setStartDate] = useState(
     existing ? existing.startDate.slice(0, 10) : todayISO()
   );
@@ -67,7 +68,7 @@ function PaymentPlanModal({
   const [made, setMade] = useState(() => {
     if (!existing) return '';
     const m = Number(existing.monthlyAmount);
-    const paid = Number(existing.totalAmount) - Number(existing.remainingBalance);
+    const paid = Number(existing.totalAmount) - Number(existing.downPayment ?? 0) - Number(existing.remainingBalance);
     return m > 0 && paid > 0 ? String(Math.round(paid / m)) : '';
   });
   const [saving, setSaving] = useState(false);
@@ -75,9 +76,11 @@ function PaymentPlanModal({
   const totalNum = parseFloat(total) || 0;
   const monthlyNum = parseFloat(monthly) || 0;
   const feeNum = parseFloat(fee) || 0;
+  const downNum = parseFloat(down) || 0;
   const madeNum = parseInt(made, 10) || 0;
-  const months = monthlyNum > 0 ? totalNum / monthlyNum : null;
-  const remaining = Math.max(0, totalNum - madeNum * monthlyNum);
+  const financed = Math.max(0, totalNum - downNum);
+  const months = monthlyNum > 0 ? Math.round((financed / monthlyNum) * 100) / 100 : null;
+  const remaining = Math.max(0, financed - madeNum * monthlyNum);
 
   async function handleSave() {
     if (!total || !monthly) return;
@@ -87,6 +90,7 @@ function PaymentPlanModal({
         totalAmount: totalNum,
         monthlyAmount: monthlyNum,
         installmentFee: feeNum > 0 ? feeNum : null,
+        downPayment: downNum > 0 ? downNum : null,
         startDate,
         description: desc || undefined,
         installmentsMade: madeNum > 0 ? madeNum : undefined,
@@ -105,10 +109,17 @@ function PaymentPlanModal({
         </div>
         <p className="text-xs text-gray-400">Track a payment arrangement where a fixed monthly installment reduces a total arrears balance.</p>
         <div className="space-y-3">
-          <div>
-            <label className="text-xs text-gray-400 block mb-1">Total arrears / plan amount ($)</label>
-            <input type="number" value={total} onChange={e => setTotal(e.target.value)}
-              className="w-full rounded-lg px-3 py-2 text-sm text-white bg-black/30 border border-white/10 focus:outline-none focus:border-amber-500" placeholder="e.g. 2000" />
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Total arrears / plan amount ($)</label>
+              <input type="number" value={total} onChange={e => setTotal(e.target.value)}
+                className="w-full rounded-lg px-3 py-2 text-sm text-white bg-black/30 border border-white/10 focus:outline-none focus:border-amber-500" placeholder="e.g. 2000" />
+            </div>
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Down payment ($)</label>
+              <input type="number" value={down} onChange={e => setDown(e.target.value)}
+                className="w-full rounded-lg px-3 py-2 text-sm text-white bg-black/30 border border-white/10 focus:outline-none focus:border-amber-500" placeholder="0" />
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -124,8 +135,8 @@ function PaymentPlanModal({
           </div>
           <p className="text-xs text-gray-500">
             Only the installment comes off the balance; the fee is paid on top each month.
-            {months != null && monthlyNum > 0 && totalNum > 0 && (
-              <> {fmtMoney(totalNum)} ÷ {fmtMoney(monthlyNum)} = {Number.isInteger(Math.round(months * 100) / 100) ? months : months.toFixed(2)} months
+            {months != null && monthlyNum > 0 && financed > 0 && (
+              <> {downNum > 0 ? `${fmtMoney(totalNum)} − ${fmtMoney(downNum)} down = ${fmtMoney(financed)}; ` : ''}{fmtMoney(financed)} ÷ {fmtMoney(monthlyNum)} = {Number.isInteger(months) ? months : months.toFixed(2)} months
                 {feeNum > 0 ? ` · ${fmtMoney(monthlyNum + feeNum)} paid each month` : ''}.</>
             )}
           </p>
@@ -386,6 +397,7 @@ function PaymentPlanCard({
   const total = Number(plan.totalAmount);
   const remaining = Number(plan.remainingBalance);
   const monthly = Number(plan.monthlyAmount);
+  const down = Number(plan.downPayment ?? 0);
   const paid = total - remaining;
   const pct = total > 0 ? Math.min(100, (paid / total) * 100) : 0;
   const monthsLeft = monthly > 0 ? Math.ceil(remaining / monthly) : null;
@@ -431,7 +443,7 @@ function PaymentPlanCard({
         {/* Progress bar */}
         <div className="mb-3">
           <div className="flex justify-between text-xs text-gray-400 mb-1">
-            <span>Paid: {fmtMoney(paid)}</span>
+            <span>Paid: {fmtMoney(paid)}{down > 0 ? <span className="text-gray-600"> (incl. {fmtMoney(down)} down)</span> : null}</span>
             <span>Remaining: <span className={remaining > 0 ? 'text-amber-400 font-medium' : 'text-emerald-400'}>{fmtMoney(remaining)}</span></span>
           </div>
           <div className="h-2 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.08)' }}>

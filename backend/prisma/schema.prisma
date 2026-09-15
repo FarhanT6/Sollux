@@ -516,6 +516,8 @@ model PaymentPlan {
   // (Seabreeze's $30 monitoring fee). Part of what is paid each month, never
   // part of what is owed on the plan.
   installmentFee   Decimal?          @db.Decimal(10, 2)
+  // Paid up front when the arrangement was made; off the balance from day one.
+  downPayment      Decimal?          @db.Decimal(10, 2)
   startDate        DateTime
   endDate          DateTime?
   description      String?
