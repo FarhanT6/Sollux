@@ -180,10 +180,16 @@ function Dropzone({ onFiles }: { onFiles: (files: File[]) => void }) {
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // PDFs, and photographed or scanned bills. An image is read by Claude
+  // whatever extraction method is chosen — it has no text layer to parse.
+  const isImportable = (f: File) =>
+    f.type === 'application/pdf' || /\.pdf$/i.test(f.name)
+    || /^image\/(png|jpe?g|webp)$/i.test(f.type) || /\.(png|jpe?g|webp)$/i.test(f.name);
+
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDragging(false);
-    const pdfs = Array.from(e.dataTransfer.files).filter(f => f.type === 'application/pdf' || f.name.endsWith('.pdf'));
+    const pdfs = Array.from(e.dataTransfer.files).filter(f => isImportable(f));
     if (pdfs.length) onFiles(pdfs);
   }, [onFiles]);
 
@@ -202,11 +208,11 @@ function Dropzone({ onFiles }: { onFiles: (files: File[]) => void }) {
       <input
         ref={inputRef}
         type="file"
-        accept=".pdf,application/pdf"
+        accept=".pdf,application/pdf,.png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
         multiple
         className="hidden"
         onChange={e => {
-          const pdfs = Array.from(e.target.files || []);
+          const pdfs = Array.from(e.target.files || []).filter(f => isImportable(f));
           if (pdfs.length) onFiles(pdfs);
           e.target.value = '';
         }}
@@ -218,8 +224,8 @@ function Dropzone({ onFiles }: { onFiles: (files: File[]) => void }) {
         </svg>
       </div>
       <div className="text-center">
-        <p className="text-sm font-medium text-gray-200">Drop utility bill PDFs here</p>
-        <p className="text-xs text-gray-500 mt-1">or click to browse · any utility · any format · up to 50 at once</p>
+        <p className="text-sm font-medium text-gray-200">Drop utility bill PDFs or photos here</p>
+        <p className="text-xs text-gray-500 mt-1">or click to browse · PDF, PNG or JPG · any utility · up to 50 at once</p>
       </div>
     </div>
   );
@@ -1632,8 +1638,8 @@ export default function ImportPage() {
                 </p>
                 <p className="text-xs text-gray-500 mt-0.5">
                   {extractionMethod === 'regex'
-                    ? 'Text parsing — no API cost, works for most standard utility bills'
-                    : 'Claude reads the PDF directly — higher accuracy, uses Anthropic credits'}
+                    ? 'Text parsing — no API cost, works for most standard utility bills (photos and scans still go to Claude)'
+                    : 'Claude reads the PDF or photo directly — higher accuracy, uses Anthropic credits'}
                 </p>
               </div>
               <button
