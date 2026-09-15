@@ -1115,8 +1115,37 @@ function pdfRejectionReason(buffer: Buffer): string | null {
   return null;
 }
 
+/** The image type of a scanned or photographed bill, or null for anything else. */
+export function imageMediaType(buffer: Buffer): 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif' | null {
+  const h = buffer.subarray(0, 12);
+  if (h[0] === 0xff && h[1] === 0xd8 && h[2] === 0xff) return 'image/jpeg';
+  if (h[0] === 0x89 && h.subarray(1, 4).toString('latin1') === 'PNG') return 'image/png';
+  if (h.subarray(0, 4).toString('latin1') === 'RIFF' && h.subarray(8, 12).toString('latin1') === 'WEBP') return 'image/webp';
+  if (h.subarray(0, 3).toString('latin1') === 'GIF') return 'image/gif';
+  return null;
+}
+
 async function extractWithClaude(pdfBuffer: Buffer, filename: string): Promise<ExtractedBillData> {
   const anthropic = getAnthropic();
+
+  // A photographed or scanned bill (JPG, PNG, WebP) is read as an image;
+  // the layout is what matters and Claude reads it directly.
+  const image = imageMediaType(pdfBuffer);
+  if (image) {
+    console.log(`[PDFImport] ${filename}: ${image} ${Math.round(pdfBuffer.length / 1024)}KB`);
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 4096,
+      messages: [{ role: 'user', content: [
+        { type: 'image', source: { type: 'base64', media_type: image, data: pdfBuffer.toString('base64') } },
+        { type: 'text', text: EXTRACTION_PROMPT },
+      ] }],
+    });
+    const raw = response.content[0].type === 'text' ? response.content[0].text : '';
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error(`Claude returned no JSON for ${filename}. Response (first 400 chars): ${raw.slice(0, 400)}`);
+    return normaliseExtracted(JSON.parse(jsonMatch[0]), filename);
+  }
 
   const rejection = pdfRejectionReason(pdfBuffer);
   if (rejection) throw new Error(`Cannot read ${filename}: ${rejection}.`);
@@ -1162,11 +1191,12 @@ async function extractWithClaude(pdfBuffer: Buffer, filename: string): Promise<E
   if (!jsonMatch) {
     throw new Error(`Claude returned no JSON. Response (first 400 chars): ${raw.slice(0, 400)}`);
   }
-  const data = JSON.parse(jsonMatch[0]) as ExtractedBillData;
+  return normaliseExtracted(JSON.parse(jsonMatch[0]), filename);
+}
 
+function normaliseExtracted(data: ExtractedBillData, _filename: string): ExtractedBillData {
   // Normalise alerts: ensure it's always an array
   if (!Array.isArray(data.alerts)) data.alerts = [];
-
   return data;
 }
 
@@ -2073,7 +2103,14 @@ export async function parseBill(
 
   try {
     let extracted: ExtractedBillData;
-    if (method === 'regex') {
+    // A photo or scan has no text layer to parse: it is always read by
+    // Claude, whatever extraction method was chosen.
+    const isImage = imageMediaType(buffer) != null;
+    if (isImage) {
+      extractedBy = 'ai';
+      if (method === 'regex') extractionNote = 'Images are always read by Claude; text extraction needs a PDF.';
+      extracted = await extractWithClaude(buffer, filename);
+    } else if (method === 'regex') {
       extracted = await extractWithRegex(buffer, filename);
     } else {
       try {
