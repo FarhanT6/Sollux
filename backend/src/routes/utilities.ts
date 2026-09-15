@@ -491,6 +491,8 @@ const PaymentPlanSchema = z.object({
   monthlyAmount:  z.number().positive(),
   // Charged with each installment; paid every month, never off the balance.
   installmentFee: z.number().min(0).optional().nullable(),
+  // Paid up front; off the balance from the start.
+  downPayment:    z.number().min(0).optional().nullable(),
   startDate:      z.string(),        // ISO date string
   description:    z.string().optional(),
   // Installments already made before the plan was entered here, so the
@@ -526,12 +528,13 @@ router.post('/:id/payment-plan', async (req, res, next) => {
     if (!account) return res.status(404).json({ error: 'Not found' });
 
     const body = PaymentPlanSchema.parse(req.body);
-    const remaining = Math.max(0, Number((body.totalAmount - (body.installmentsMade ?? 0) * body.monthlyAmount).toFixed(2)));
+    const remaining = Math.max(0, Number((body.totalAmount - (body.downPayment ?? 0) - (body.installmentsMade ?? 0) * body.monthlyAmount).toFixed(2)));
     const fields = {
       totalAmount:      body.totalAmount,
       remainingBalance: remaining,
       monthlyAmount:    body.monthlyAmount,
       installmentFee:   body.installmentFee ?? null,
+      downPayment:      body.downPayment ?? null,
       startDate:        new Date(body.startDate),
       description:      body.description,
       status:           remaining <= 0 ? 'COMPLETED' as const : 'ACTIVE' as const,

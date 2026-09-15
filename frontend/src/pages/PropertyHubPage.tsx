@@ -2309,8 +2309,11 @@ const EMPTY_TENANT_ROW: TenantRow = { mode: 'new', tenantId: '', fullName: '', e
 
 // A rent step written into the lease: "$3,000 from 3/1/27, then $3,200 from
 // year two". Saved as scheduled increases once the lease exists.
-interface IncreaseRow { effectiveDate: string; newAmount: string; percent: string; note: string; }
-const EMPTY_INCREASE_ROW: IncreaseRow = { effectiveDate: '', newAmount: '', percent: '', note: '' };
+interface IncreaseRow { effectiveDate: string; newAmount: string; percent: string; percentMax: string; note: string; }
+const EMPTY_INCREASE_ROW: IncreaseRow = { effectiveDate: '', newAmount: '', percent: '', percentMax: '', note: '' };
+interface AliasRow { name: string; note: string; }
+interface ChargeRow { category: string; amount: string; note: string; }
+interface DocRow { file: File; category: string; }
 
 function NewLeaseModal({ propertyId, isCommercial, onClose, onCreated }: {
   propertyId: string; isCommercial?: boolean; onClose: () => void; onCreated: () => void;
@@ -2324,11 +2327,21 @@ function NewLeaseModal({ propertyId, isCommercial, onClose, onCreated }: {
   const [form, setForm] = useState({
     rentAmount: '', securityDeposit: '', startDate: todayISO(),
     endDate: '', leaseType: 'MONTH_TO_MONTH', status: 'ACTIVE', notes: '',
-    rentDueDay: '', lateFeeAmount: '', lateFeePercent: '', lateFeeGraceDays: '', businessName: '',
+    rentDueDay: '', lateFeeAmount: '', lateFeePercent: '', lateFeeGraceDays: '', businessName: '', arrearsBalance: '',
   });
   const [increases, setIncreases] = useState<IncreaseRow[]>([]);
+  // Everything the edit form knows, so a lease is complete the day it is
+  // created rather than after a second pass through Edit.
+  const [aliases, setAliases] = useState<AliasRow[]>([]);
+  const [charges, setCharges] = useState<ChargeRow[]>([]);
+  const [docs, setDocs] = useState<DocRow[]>([]);
+  const [docCategory, setDocCategory] = useState<string>('LEASE');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<string | null>(null);
+
+  const rentNum = parseFloat(form.rentAmount || '0') || 0;
+  const chargesTotal = charges.reduce((s, c) => s + (parseFloat(c.amount) || 0), 0);
 
   function updateIncrease(i: number, patch: Partial<IncreaseRow>) {
     setIncreases(rows => rows.map((r, idx) => idx === i ? { ...r, ...patch } : r));
@@ -2420,6 +2433,7 @@ function NewLeaseModal({ propertyId, isCommercial, onClose, onCreated }: {
         lateFeePercent: form.lateFeePercent ? parseFloat(form.lateFeePercent) : undefined,
         lateFeeGraceDays: form.lateFeeGraceDays ? parseInt(form.lateFeeGraceDays, 10) : undefined,
         businessName: form.businessName.trim() || undefined,
+        arrearsBalance: form.arrearsBalance ? parseFloat(form.arrearsBalance) : undefined,
         tenantIds,
       });
       // Rent steps are stored as scheduled increases; the worker applies each
@@ -2429,13 +2443,33 @@ function NewLeaseModal({ propertyId, isCommercial, onClose, onCreated }: {
           effectiveDate: step.effectiveDate,
           newAmount: step.newAmount ? parseFloat(step.newAmount) : null,
           percent: !step.newAmount && step.percent ? parseFloat(step.percent) : null,
+          percentMax: !step.newAmount && step.percentMax ? parseFloat(step.percentMax) : null,
           note: step.note || null,
         });
+      }
+      for (const a of aliases.filter(a => a.name.trim())) {
+        await addPaymentAlias(lease.id, { name: a.name.trim(), note: a.note.trim() || undefined });
+      }
+      for (const c of charges.filter(c => parseFloat(c.amount) > 0)) {
+        await addLeaseUtilityCharge(lease.id, { category: c.category, amount: parseFloat(c.amount), note: c.note.trim() || null });
+      }
+      for (const d of docs) {
+        setProgress(`Uploading ${d.file.name}…`);
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result));
+          reader.onerror = reject;
+          reader.readAsDataURL(d.file);
+        });
+        await addLeaseDocument(lease.id, { fileData: base64, filename: d.file.name, category: d.category });
+        if (d.category === 'LEASE') {
+          try { await uploadLeaseDocument(lease.id, base64, d.file.name); } catch { /* the categorized copy is saved */ }
+        }
       }
       onCreated();
     } catch {
       setError('Failed to create lease. Please check the fields and try again.');
-    } finally { setSaving(false); }
+    } finally { setSaving(false); setProgress(null); }
   }
 
   return (
@@ -2519,10 +2553,13 @@ function NewLeaseModal({ propertyId, isCommercial, onClose, onCreated }: {
               <input type="number" min={1} max={31} placeholder="Rent due day (default 1st)" value={form.rentDueDay}
                 onChange={e => setForm(f => ({ ...f, rentDueDay: e.target.value }))} className="input-dark text-sm"
                 title="Day of the month rent is due" />
-              {isCommercial ? (
+              <input type="number" placeholder="Arrears balance already owed" value={form.arrearsBalance}
+                onChange={e => setForm(f => ({ ...f, arrearsBalance: e.target.value }))} className="input-dark text-sm"
+                title="Unpaid rent the tenant already owes when this lease is entered" />
+              {isCommercial && (
                 <input placeholder="Business name on the lease" value={form.businessName}
-                  onChange={e => setForm(f => ({ ...f, businessName: e.target.value }))} className="input-dark text-sm" />
-              ) : <div />}
+                  onChange={e => setForm(f => ({ ...f, businessName: e.target.value }))} className="input-dark text-sm col-span-2" />
+              )}
               <input placeholder="Notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="input-dark text-sm col-span-2" />
             </div>
           </div>
@@ -2545,6 +2582,89 @@ function NewLeaseModal({ propertyId, isCommercial, onClose, onCreated }: {
           <div>
             <div className="flex items-center justify-between mb-2">
               <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">
+                Expected payer names <span className="normal-case font-normal text-gray-600">(rent from these names is logged automatically)</span>
+              </p>
+              <button onClick={() => setAliases(a => [...a, { name: '', note: '' }])} className="text-xs text-amber-400 hover:text-amber-300">+ Add name</button>
+            </div>
+            {aliases.length === 0 ? (
+              <p className="text-xs text-gray-600">None — only the tenants' own names are recognised. Add a spouse, relative or employer whose transfers pay this rent.</p>
+            ) : (
+              <div className="space-y-2">
+                {aliases.map((a, i) => (
+                  <div key={i} className="flex gap-2">
+                    <input placeholder="Name on the transfer" value={a.name} onChange={e => setAliases(rows => rows.map((r, j) => j === i ? { ...r, name: e.target.value } : r))} className="input-dark text-sm flex-1" />
+                    <input placeholder="Who they are (optional)" value={a.note} onChange={e => setAliases(rows => rows.map((r, j) => j === i ? { ...r, note: e.target.value } : r))} className="input-dark text-sm flex-1" />
+                    <button onClick={() => setAliases(rows => rows.filter((_, j) => j !== i))} className="text-xs text-gray-600 hover:text-red-400">✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">
+                Payments toward utilities <span className="normal-case font-normal text-gray-600">(part of the rent total — leave empty if utilities are included)</span>
+              </p>
+              <button onClick={() => setCharges(c => [...c, { category: 'WATER', amount: '', note: '' }])} className="text-xs text-amber-400 hover:text-amber-300">+ Add utility payment</button>
+            </div>
+            {charges.length === 0 ? (
+              <p className="text-xs text-gray-600">None — the full amount is rent.</p>
+            ) : (
+              <div className="space-y-2">
+                {charges.map((c, i) => (
+                  <div key={i} className="flex gap-2">
+                    <select value={c.category} onChange={e => setCharges(rows => rows.map((r, j) => j === i ? { ...r, category: e.target.value } : r))} className="input-dark text-sm">
+                      {UTILITY_CHARGE_CATEGORIES.map(cat => <option key={cat} value={cat}>{(CATEGORY_LABELS as Record<string, string>)[cat] ?? cat}</option>)}
+                    </select>
+                    <input type="number" placeholder="Amount $/mo" value={c.amount} onChange={e => setCharges(rows => rows.map((r, j) => j === i ? { ...r, amount: e.target.value } : r))} className="input-dark text-sm w-32" />
+                    <input placeholder="Note" value={c.note} onChange={e => setCharges(rows => rows.map((r, j) => j === i ? { ...r, note: e.target.value } : r))} className="input-dark text-sm flex-1" />
+                    <button onClick={() => setCharges(rows => rows.filter((_, j) => j !== i))} className="text-xs text-gray-600 hover:text-red-400">✕</button>
+                  </div>
+                ))}
+                {rentNum > 0 && (
+                  <p className="text-xs text-gray-500">Rent {money(Math.max(rentNum - chargesTotal, 0))} + utilities {money(chargesTotal)} = total <span className="text-amber-400">{money(rentNum)}</span></p>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">Documents</p>
+              <div className="flex items-center gap-2">
+                <select value={docCategory} onChange={e => setDocCategory(e.target.value)} className="input-dark text-xs">
+                  {LEASE_DOC_CATEGORIES.map(c => <option key={c} value={c}>{DOCUMENT_CATEGORY_LABELS[c]}</option>)}
+                </select>
+                <label className="text-xs text-amber-400 hover:text-amber-300 cursor-pointer">
+                  + Attach file
+                  <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png"
+                    onChange={e => {
+                      const f = e.target.files?.[0];
+                      if (f) setDocs(d => [...d, { file: f, category: docCategory }]);
+                      e.target.value = '';
+                    }} />
+                </label>
+              </div>
+            </div>
+            {docs.length === 0 ? (
+              <p className="text-xs text-gray-600">None yet. Attach the lease agreement, applications or IDs; they upload when the lease is created.</p>
+            ) : (
+              <div className="space-y-1">
+                {docs.map((d, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs">
+                    <span className="px-1.5 py-0.5 rounded text-gray-300" style={{ background: 'rgba(255,255,255,0.08)' }}>{DOCUMENT_CATEGORY_LABELS[d.category as DocumentCategory] ?? d.category}</span>
+                    <span className="text-gray-300 truncate flex-1">{d.file.name}</span>
+                    <button onClick={() => setDocs(rows => rows.filter((_, j) => j !== i))} className="text-gray-600 hover:text-red-400">✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">
                 Rent steps <span className="normal-case font-normal text-gray-600">(increases written into the lease)</span>
               </p>
               <button onClick={addIncrease} className="text-xs text-amber-400 hover:text-amber-300">+ Add step</button>
@@ -2557,12 +2677,14 @@ function NewLeaseModal({ propertyId, isCommercial, onClose, onCreated }: {
               <div className="space-y-2">
                 {increases.map((row, i) => (
                   <div key={i} className="rounded-lg p-3" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                       <input type="date" value={row.effectiveDate} onChange={e => updateIncrease(i, { effectiveDate: e.target.value })} className="input-dark text-sm" title="Takes effect on" />
                       <input type="number" placeholder="New rent $" value={row.newAmount}
-                        onChange={e => updateIncrease(i, { newAmount: e.target.value, percent: e.target.value ? '' : row.percent })} className="input-dark text-sm" />
-                      <input type="number" placeholder="or +%" value={row.percent}
+                        onChange={e => updateIncrease(i, { newAmount: e.target.value, percent: e.target.value ? '' : row.percent, percentMax: e.target.value ? '' : row.percentMax })} className="input-dark text-sm" />
+                      <input type="number" placeholder="or +% (min)" value={row.percent}
                         onChange={e => updateIncrease(i, { percent: e.target.value, newAmount: e.target.value ? '' : row.newAmount })} className="input-dark text-sm" />
+                      <input type="number" placeholder="% max (range)" value={row.percentMax}
+                        onChange={e => updateIncrease(i, { percentMax: e.target.value, newAmount: e.target.value ? '' : row.newAmount })} className="input-dark text-sm" title="Optional — for a range like 6%–10%" />
                       <div className="flex gap-2">
                         <input placeholder="Note" value={row.note} onChange={e => updateIncrease(i, { note: e.target.value })} className="input-dark text-sm flex-1 min-w-0" />
                         <button onClick={() => removeIncrease(i)} className="text-xs text-gray-600 hover:text-red-400" title="Remove step">✕</button>
@@ -2582,6 +2704,7 @@ function NewLeaseModal({ propertyId, isCommercial, onClose, onCreated }: {
         </div>
 
         <div className="sticky bottom-0 flex justify-end gap-2 px-6 py-4 border-t border-white/8" style={{ background: '#1a1a1a' }}>
+          {progress && <span className="text-xs text-gray-500 self-center mr-auto">{progress}</span>}
           <button onClick={onClose} className="btn text-sm">Cancel</button>
           <button onClick={handleSave} disabled={saving || creatingUnit} className="btn btn-primary text-sm">{saving || creatingUnit ? '…' : 'Create lease'}</button>
         </div>

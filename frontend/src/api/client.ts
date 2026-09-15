@@ -489,7 +489,7 @@ export const getDriveImportJob = (jobId: string) =>
 export const getPaymentPlan = (utilityAccountId: string) =>
   api.get(`/utilities/${utilityAccountId}/payment-plan`).then(r => r.data).catch(() => null);
 export const createPaymentPlan = (utilityAccountId: string, data: {
-  totalAmount: number; monthlyAmount: number; installmentFee?: number | null; startDate: string; description?: string; installmentsMade?: number;
+  totalAmount: number; monthlyAmount: number; installmentFee?: number | null; downPayment?: number | null; startDate: string; description?: string; installmentsMade?: number;
 }) => api.post(`/utilities/${utilityAccountId}/payment-plan`, data).then(r => r.data);
 export const updatePaymentPlan = (utilityAccountId: string, data: {
   applyPayment?: number; remainingBalance?: number; monthlyAmount?: number; installmentFee?: number | null;
