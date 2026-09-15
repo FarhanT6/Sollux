@@ -470,7 +470,10 @@ function PaymentPlanCard({
         {/* Apply installment button */}
         {!isCompleted && (
           <div className="mt-3 pt-3 border-t border-white/5 flex items-center justify-between">
-            <p className="text-xs text-gray-500">Mark this month's installment ({fmtMoney(monthly)}) as paid</p>
+            <p className="text-xs text-gray-500">
+              Mark this month's installment ({fmtMoney(monthly)}) as paid
+              <span className="block text-gray-600">A logged payment larger than the bill's charge applies to the plan on its own; use this only for a payment not logged here.</span>
+            </p>
             <button onClick={handleApplyPayment} disabled={applying}
               className="text-xs px-3 py-1.5 rounded-lg font-medium text-black bg-amber-500 hover:bg-amber-400 disabled:opacity-50 transition-colors">
               {applying ? 'Applying…' : '✓ Apply Payment'}
@@ -554,9 +557,11 @@ export default function UtilityDetailPage() {
   // reload the whole account rather than splicing the payment in locally.
   async function reloadAccount() {
     if (!accountId) return;
-    const fresh = await getUtility(accountId);
+    const [fresh, freshPlan] = await Promise.all([getUtility(accountId), getPaymentPlan(accountId)]);
     setAccount(fresh);
     setLoan((fresh as any).loan ?? null);
+    // A payment beyond the bill's charge comes off the plan server-side.
+    setPlan(freshPlan);
   }
 
   async function savePayment() {
@@ -1491,6 +1496,9 @@ export default function UtilityDetailPage() {
                       )}
                       {p.statement && (
                         <p className="text-xs text-gray-500">toward {fmtDate(p.statement.statementDate, 'MMM yyyy')} bill</p>
+                      )}
+                      {Number((p as any).planApplied ?? 0) > 0 && (
+                        <p className="text-xs text-amber-400">{fmtMoney(Number((p as any).planApplied))} applied to the payment plan</p>
                       )}
                       {p.confirmationNumber && (
                         <p className="font-mono text-xs text-gray-500 mt-0.5">Conf# {p.confirmationNumber}</p>

@@ -845,6 +845,8 @@ export interface Payment {
   amount: number;
   /** Processing / convenience fee paid on top of the amount. */
   feeAmount?: number | null;
+  /** What this payment took off the account's payment plan (set server-side). */
+  planApplied?: number | null;
   breakdown?: PaymentBreakdown | null;
   paymentDate: string;
   confirmationNumber?: string;
