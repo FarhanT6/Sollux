@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { allocateAccountPayments } from '../lib/paymentAllocation';
-import { applyPaymentToPlan, unapplyPaymentFromPlan } from '../services/planApplication';
+import { applyPaymentToPlan, unapplyPaymentFromPlan, applyPaymentToLoan, unapplyPaymentFromLoan } from '../services/planApplication';
 
 const router = Router();
 router.use(attachDbUser);
@@ -154,8 +154,9 @@ router.post('/', async (req, res, next) => {
     });
     await syncStatementPaid(data.statementId);
     const planApplied = await applyPaymentToPlan(payment.id);
+    const loanApplied = await applyPaymentToLoan(payment.id);
 
-    res.status(201).json({ ...payment, planApplied: planApplied > 0 ? planApplied : null });
+    res.status(201).json({ ...payment, planApplied: planApplied > 0 ? planApplied : null, loanApplied: loanApplied > 0 ? loanApplied : null });
   } catch (err) {
     next(err);
   }
@@ -200,10 +201,11 @@ router.patch('/:id', async (req, res, next) => {
     if (data.statementId !== undefined && data.statementId !== existing.statementId) {
       await syncStatementPaid(data.statementId);
     }
-    // Re-derive what this payment takes off the plan from its new figures.
+    // Re-derive what this payment takes off the plan and the loan from its new figures.
     const planApplied = await applyPaymentToPlan(payment.id);
+    const loanApplied = await applyPaymentToLoan(payment.id);
 
-    res.json({ ...payment, planApplied: planApplied > 0 ? planApplied : null });
+    res.json({ ...payment, planApplied: planApplied > 0 ? planApplied : null, loanApplied: loanApplied > 0 ? loanApplied : null });
   } catch (err) {
     next(err);
   }
@@ -215,8 +217,9 @@ router.delete('/:id', async (req, res, next) => {
       where: { id: req.params.id, utilityAccount: { property: { userId: req.dbUserId! } } },
     });
     if (!existing) return res.status(404).json({ error: 'Payment not found' });
-    // Whatever it took off the plan goes back on it.
+    // Whatever it took off the plan or the loan goes back on it.
     await unapplyPaymentFromPlan(existing.id);
+    await unapplyPaymentFromLoan(existing.id);
     await db.payment.delete({ where: { id: existing.id } });
     // Removing the last payment leaves the statement unpaid again.
     await syncStatementPaid(existing.statementId);
