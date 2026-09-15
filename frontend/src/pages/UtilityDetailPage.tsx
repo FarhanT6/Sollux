@@ -182,6 +182,7 @@ function LoanModal({ accountId, existing, onClose, onSave }: {
   const [loanType,        setLoanType]        = useState(existing?.loanType || 'OTHER');
   const [interestRate,    setInterestRate]    = useState(existing?.interestRate != null ? String(existing.interestRate) : '');
   const [originalAmount,  setOriginalAmount]  = useState(existing?.originalAmount != null ? String(existing.originalAmount) : '');
+  const [downPayment,     setDownPayment]     = useState(existing?.downPayment != null ? String(existing.downPayment) : '');
   const [monthlyPayment,  setMonthlyPayment]  = useState(existing?.monthlyPayment != null ? String(existing.monthlyPayment) : '');
   const [currentBalance,  setCurrentBalance]  = useState(existing?.currentBalance != null ? String(existing.currentBalance) : '');
   const [originationDate, setOriginationDate] = useState(existing?.originationDate ? existing.originationDate.slice(0, 10) : '');
@@ -218,6 +219,7 @@ function LoanModal({ accountId, existing, onClose, onSave }: {
         lender, loanType,
         interestRate:    interestRate    ? parseFloat(interestRate)    : null,
         originalAmount:  originalAmount  ? parseFloat(originalAmount)  : null,
+        downPayment:     downPayment     ? parseFloat(downPayment)     : null,
         monthlyPayment:  monthlyPayment  ? parseFloat(monthlyPayment)  : null,
         currentBalance:  currentBalance  ? parseFloat(currentBalance)  : null,
         originationDate: originationDate || null,
@@ -268,6 +270,13 @@ function LoanModal({ accountId, existing, onClose, onSave }: {
             <input type="number" step="0.01" value={originalAmount} onChange={e => setOriginalAmount(e.target.value)} className={inputCls} placeholder="e.g. 50000" />
           </div>
           <div>
+            <label className={labelCls}>Down payment ($)</label>
+            <input type="number" step="0.01" value={downPayment} onChange={e => setDownPayment(e.target.value)} className={inputCls} placeholder="0" />
+            {parseFloat(originalAmount) > 0 && parseFloat(downPayment) > 0 && (
+              <p className="text-xs text-gray-600 mt-1">Financed: {fmtMoney(parseFloat(originalAmount) - parseFloat(downPayment))}</p>
+            )}
+          </div>
+          <div>
             <div className="flex items-center justify-between mb-1">
               <label className={labelCls} style={{ marginBottom: 0 }}>Current balance ($)</label>
               <button type="button" onClick={autoCalcBalance} className="text-xs text-amber-400 hover:text-amber-300 transition-colors">⟳ Auto-calc</button>
@@ -307,6 +316,7 @@ function LoanCard({ loan, accountId, onUpdate, onDelete }: {
 
   const monthlyPayment  = loan.monthlyPayment  != null ? Number(loan.monthlyPayment)  : null;
   const originalAmount  = loan.originalAmount  != null ? Number(loan.originalAmount)  : null;
+  const downPayment     = loan.downPayment     != null ? Number(loan.downPayment)     : null;
   const currentBalance  = loan.currentBalance  != null ? Number(loan.currentBalance)  : null;
   const interestRate    = loan.interestRate    != null ? Number(loan.interestRate)    : null;
   const originationDate = loan.originationDate ? new Date(loan.originationDate) : null;
@@ -377,6 +387,7 @@ function LoanCard({ loan, accountId, onUpdate, onDelete }: {
         <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-xs">
           {interestRate    != null && <div><span className="text-gray-500">Interest rate: </span><span className="text-white font-medium">{interestRate.toFixed(3)}%</span></div>}
           {monthlyPayment  != null && <div><span className="text-gray-500">Monthly payment: </span><span className="text-white font-medium">{fmtMoney(monthlyPayment)}</span></div>}
+          {downPayment     != null && downPayment > 0 && <div><span className="text-gray-500">Down payment: </span><span className="text-white font-medium">{fmtMoney(downPayment)}</span>{originalAmount != null && <span className="text-gray-600"> · {fmtMoney(originalAmount - downPayment)} financed</span>}</div>}
           {termsRemaining  != null && <div><span className="text-gray-500">Terms remaining: </span><span className="text-white font-medium">~{termsRemaining} mo</span></div>}
           {maturityDate    != null && <div><span className="text-gray-500">Maturity: </span><span className="text-white font-medium">{format(maturityDate, 'MMM yyyy')}</span></div>}
           {originationDate != null && <div><span className="text-gray-500">Originated: </span><span className="text-gray-300">{format(originationDate, 'MMM d, yyyy')}</span></div>}

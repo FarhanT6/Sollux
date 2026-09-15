@@ -13,7 +13,7 @@ router.use(attachDbUser);
 // which silently breaks any frontend arithmetic or currency formatting on
 // them (e.g. "4256.4" + "1360.64" === "4256.41360.64" via string
 // concatenation). Convert to plain numbers before they leave the API.
-const DECIMAL_LOAN_FIELDS = ['originalAmount', 'interestRate', 'monthlyPayment', 'balloonPaymentAmount', 'escrowAmount', 'currentBalance', 'rateMargin'] as const;
+const DECIMAL_LOAN_FIELDS = ['originalAmount', 'downPayment', 'interestRate', 'monthlyPayment', 'balloonPaymentAmount', 'escrowAmount', 'currentBalance', 'rateMargin'] as const;
 const DECIMAL_PAYMENT_FIELDS = ['billAmount', 'amount', 'lateFee', 'principal', 'interest', 'escrow', 'balanceAfter'] as const;
 
 function serializeLoanPayment(p: any) {
@@ -48,6 +48,7 @@ const LoanSchema = z.object({
   accountLast4: z.string().max(4).optional().nullable(),
   accountNumber: z.string().optional().nullable(),
   originalAmount: z.number().optional().nullable(),
+  downPayment: z.number().min(0).optional().nullable(),
   interestRate: z.number().optional().nullable(),
   originationDate: z.string().transform(s => new Date(s)).optional().nullable(),
   maturityDate: z.string().transform(s => new Date(s)).optional().nullable(),

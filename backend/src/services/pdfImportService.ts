@@ -209,7 +209,7 @@ Important extraction tips:
 - Copy every figure's sign exactly as the bill prints it. A leading minus, a parenthesised amount, or a trailing "CR" all mean negative ("$361.44CR" is -361.44). Never flip a bill's signs to make its lines read like ordinary charges, and never report an absolute value.
 - A credit memo is a bill whose CURRENT charges are negative — service cancelled mid-cycle, an over-payment, a refund. Its currentCharges and amountDue are negative, its balance is the negative credit balance, and "Do Not Pay" or "Credit Balance" does NOT mean isPaid. Its chargeBreakdown lines keep their printed signs and must sum to the printed (negative) total.
 - Credits are negative, and the sign matters. A bill reading "Total Account Balance -$91.67" or "Your account has a credit balance of $91.67" is money the provider owes you, not money you owe: report amountDue as the negative figure, never its absolute value. Likewise a California Climate Credit or any line that reduces the bill belongs in chargeBreakdown as a negative number. A credit reported as positive turns a refund into a payment demand.
-- Carried balance is worded differently by every provider, and missing it makes a two-month bill look like a one-month bill. All of these mean the same thing: "Previous Balance", "Balance Forward", "Amount of Last Bill", "Past Due on <date>", "Previous Amount Due". Report it net of any payment the bill shows against it. Two worked examples:
+- Carried balance is worded differently by every provider, and missing it makes a two-month bill look like a one-month bill. All of these mean the same thing: "Previous Balance", "Balance Forward", "Amount of Last Bill", "Past Due on <date>", "Previous Amount Due", "Amount Past Due". Report it net of any payment the bill shows against it. On an installment or pre-need plan statement ("Payment Plan Amount Due $913.95 / Amount Past Due $5,483.70 / Total Payment Due $6,397.65"), amountDue is the installment (913.95), previousBalance the past-due figure (5,483.70), and the plan's total sale / current balance goes in totalAccountBalance, never in amountDue. Two worked examples:
   · "Amount of Last Bill 13.40 / Payment Received .00 / Current Charges 18.73 / Total Amount Due 32.13" → previousBalance 13.40, amountDue 18.73. Nothing was paid, so the whole prior bill is still carried.
   · "Past Due on 08/20/26 716.10 / Payments/Adjustments -449.58 / Current Invoice Charges 326.38 / Total Amount Due 592.90" → previousBalance 266.52 (716.10 less the 449.58 paid), amountDue 326.38, and 266.52 + 326.38 = 592.90 as the bill's own total confirms.
 - Sanity-check yourself before answering: previousBalance + amountDue should equal the grand total the bill asks for, because previousBalance is already net of payments. If it does not, you have most likely put a carried-forward balance into amountDue. Re-read and split them.
@@ -682,6 +682,10 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
     // The bill's own grand-total line, read tightly so a sentence elsewhere
     // that happens to say "amount due" cannot win over it.
     /total\s+amount\s+due(?=\s*:?\s*-?\$?\s*-?[\d,]*\.\d{2})/i,
+    // Dignity Memorial / pre-need plans: "Total Payment Due $6,397.65" is the
+    // grand total; "Payment Plan Amount Due $913.95" above it is the
+    // installment and must not win as the total.
+    /total\s+payment\s+due(?=\s*:?\s*-?\$?\s*-?[\d,]*\.\d{2})/i,
     // Generic
     /(?:total\s+)?amount\s+due/i,
     /please\s*pay\s*\$/i,              // "Please pay $243.23 by …" (carrier statements, often unspaced)
@@ -755,6 +759,7 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
     /(?:last|previous)\s+bill\s+amount/i,
     /previous\s+(?:amount\s+due|charges)/i,
     /(?:outstanding|past\s+due)\s+balance/i,
+    /amount\s+past\s+due/i,
   ]);
 
   // ── Payments received ─────────────────────────────────────────────────────
@@ -795,7 +800,9 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
   const paRemInst = text.match(/remaining\s+installments\s*:?\s*(\d{1,3})/i);
   const paBegan = findDateNear(text, [/agreement\s+began/i]);
   const paNumber = text.match(/agreement\s+number\s*:?\s*([0-9-]{6,})/i);
-  const totalAccountBalance = findDollarNear(text, [/total\s+account\s+balance/i]);
+  // "Current Balance" under an "Account Balance" heading (Dignity pre-need
+  // plans) is the whole contract balance, not this month's payment.
+  const totalAccountBalance = findDollarNear(text, [/total\s+account\s+balance/i, /account\s+balance[\s\S]{0,120}?current\s+balance/i]);
   const paymentPlan = paRemaining != null ? {
     original: paOriginal, remaining: paRemaining, installment: paInstallment,
     installmentsTotal: paTotalInst ? Number(paTotalInst[1]) : null,
@@ -839,6 +846,9 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
   // ── Current charges ───────────────────────────────────────────────────────
   let currentCharges: number | null = findDollarNear(text, [
     /current\s+charges?/i,
+    // An installment plan's own line: this period's payment, before arrears.
+    /payment\s+plan\s+amount\s+due/i,
+    /(?:monthly\s+)?installment\s+(?:amount\s+)?due/i,
     /new\s+charges?/i,
     /charges?\s+this\s+(?:period|month|statement)/i,
     /this\s+(?:month['s]?\s+)?charges?/i,

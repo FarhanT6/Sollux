@@ -204,6 +204,7 @@ function EditModal({ loan, properties, onClose, onSave }: {
     rateAdjustmentMonths: loan.rateAdjustmentMonths != null ? String(loan.rateAdjustmentMonths) : '12',
     monthlyPayment: loan.monthlyPayment != null ? String(loan.monthlyPayment) : '',
     balloonPaymentAmount: loan.balloonPaymentAmount != null ? String(loan.balloonPaymentAmount) : '',
+    downPayment: loan.downPayment != null ? String(loan.downPayment) : '',
     escrowAmount: loan.escrowAmount != null ? String(loan.escrowAmount) : '',
     currentBalance: loan.currentBalance != null ? String(loan.currentBalance) : '',
     dueDay: loan.dueDay != null ? String(loan.dueDay) : '',
@@ -294,6 +295,7 @@ function EditModal({ loan, properties, onClose, onSave }: {
         rateAdjustmentMonths: form.rateType === 'VARIABLE' && form.rateAdjustmentMonths ? parseInt(form.rateAdjustmentMonths, 10) : null,
         monthlyPayment: form.monthlyPayment ? parseFloat(form.monthlyPayment) : null,
         balloonPaymentAmount: form.balloonPaymentAmount ? parseFloat(form.balloonPaymentAmount) : null,
+        downPayment: form.downPayment ? parseFloat(form.downPayment) : null,
         escrowAmount: form.escrowAmount ? parseFloat(form.escrowAmount) : null,
         currentBalance: form.currentBalance ? parseFloat(form.currentBalance) : null,
         dueDay: form.dueDay ? parseInt(form.dueDay, 10) : null,
@@ -428,6 +430,13 @@ function EditModal({ loan, properties, onClose, onSave }: {
                   </button>
                 </div>
                 <input type="number" value={form.currentBalance} onChange={f('currentBalance')} className="input-dark w-full text-sm" placeholder="148000" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Down payment</label>
+                <input type="number" value={form.downPayment} onChange={f('downPayment')} className="input-dark w-full text-sm" placeholder="0" />
+                {parseFloat(form.originalAmount) > 0 && parseFloat(form.downPayment) > 0 && (
+                  <p className="text-xs text-gray-600 mt-1">Financed: {money(parseFloat(form.originalAmount) - parseFloat(form.downPayment))}</p>
+                )}
               </div>
               {form.paymentType === 'INTEREST_ONLY' && (
                 <div className="col-span-2">

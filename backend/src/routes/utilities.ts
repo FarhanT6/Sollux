@@ -608,7 +608,7 @@ router.put('/:id/loan', async (req, res, next) => {
     if (!account) return res.status(404).json({ error: 'Not found' });
 
     const {
-      loanType, lender, accountLast4, originalAmount, interestRate,
+      loanType, lender, accountLast4, originalAmount, downPayment, interestRate,
       originationDate, maturityDate, monthlyPayment, currentBalance, notes,
     } = req.body;
 
@@ -622,6 +622,7 @@ router.put('/:id/loan', async (req, res, next) => {
           lender:         lender         ?? existing.lender,
           accountLast4:   accountLast4   ?? existing.accountLast4,
           originalAmount: originalAmount != null ? originalAmount : existing.originalAmount,
+          downPayment:    downPayment    !== undefined ? downPayment : existing.downPayment,
           interestRate:   interestRate   != null ? interestRate   : existing.interestRate,
           originationDate: originationDate ? new Date(originationDate) : existing.originationDate,
           maturityDate:   maturityDate   ? new Date(maturityDate)   : existing.maturityDate,
@@ -642,6 +643,7 @@ router.put('/:id/loan', async (req, res, next) => {
         lender:          lender   || account.providerName,
         accountLast4,
         originalAmount,
+        downPayment: downPayment ?? null,
         interestRate,
         originationDate: originationDate ? new Date(originationDate) : null,
         maturityDate:    maturityDate    ? new Date(maturityDate)    : null,
