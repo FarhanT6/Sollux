@@ -28,6 +28,30 @@ export function openBalanceOf(s: any): number | null {
   return Number(s.amountDue ?? 0) - deferredOf(s) + Number(s.pastDueCarried ?? 0);
 }
 
+/**
+ * Money paid toward OLDER bills since this bill was issued. The balance a
+ * bill carried in is a snapshot from the day it was printed; a payment made
+ * after that against one of the bills that make up the arrears reduces
+ * them. Paying February's $913.95 in September used to leave August's
+ * "$5,483.70 past due" untouched.
+ */
+export function arrearsPaidSince(s: any, payments: any[] = []): number {
+  if (!s?.statementDate) return 0;
+  const since = new Date(s.statementDate).getTime();
+  return payments
+    .filter(p => p.status !== 'FAILED' && p.status !== 'PENDING'
+      && p.statementId && p.statementId !== s.id
+      && new Date(p.paymentDate).getTime() >= since)
+    .reduce((t, p) => t + Number(p.amount ?? 0), 0);
+}
+
+/** What a bill carried in that is still owed: the carried arrears less what has been paid toward older bills since. */
+export function liveCarriedOf(s: any, payments: any[] = []): number {
+  const carried = s?.pastDueCarried != null ? Number(s.pastDueCarried) : 0;
+  if (carried <= 0) return carried;
+  return Math.max(0, Number((carried - arrearsPaidSince(s, payments)).toFixed(2)));
+}
+
 // Determine if a statement is paid, including reconciliation against payments that
 // may not yet have posted on the provider's API. Sums all payments dated on/after
 // the statement date; if the sum covers the open balance, treat as paid.
@@ -38,7 +62,7 @@ export function isStatementPaid(s: any, payments: any[] = [], priorSettled = fal
   // the July bill's $1,661.62 in full left it Overdue because the check
   // demanded $3,210.77, half of which the prior bill had already cleared.
   // A carried credit always applies.
-  const carried = s?.pastDueCarried != null ? Number(s.pastDueCarried) : 0;
+  const carried = liveCarriedOf(s, payments);
   const openBalance = s == null || (s.amountDue == null && s.pastDueCarried == null)
     ? null
     : Number(s.amountDue ?? 0) - deferredOf(s) + (carried < 0 ? carried : priorSettled ? 0 : carried);
@@ -146,7 +170,7 @@ export function computePaidMap(statements: any[], payments: any[], resolvedByFut
     if (s.paidOverride === 'UNPAID') { paid.set(s.id, false); continue; }
     if (s.paidOverride === 'PAID') { paid.set(s.id, true); continue; }
     if (resolvedByFuture.has(s.id)) { paid.set(s.id, true); continue; }
-    const carried = s?.pastDueCarried != null ? Number(s.pastDueCarried) : 0;
+    const carried = liveCarriedOf(s, payments);
     if (s.amountDue == null && s.pastDueCarried == null) {
       paid.set(s.id, isStatementPaid(s, payments, priorSettled));
       continue;
@@ -249,7 +273,7 @@ export function accountView(statements: any[], payments: any[] = []): AccountVie
   const paid = computePaidMap(sorted, payments, resolved);
   const isPaid = paid.get(latest.id) ?? false;
   const priorSettled = sorted[1] ? (paid.get(sorted[1].id) ?? false) : false;
-  const carried = latest.pastDueCarried != null ? Number(latest.pastDueCarried) : 0;
+  const carried = liveCarriedOf(latest, payments);
   // Only the part of the charge not deferred to a true-up is payable now.
   const current = Number(latest.amountDue ?? 0) - deferredOf(latest);
   const pastDue = carried > 0 && !priorSettled ? carried : 0;

@@ -55,6 +55,55 @@ export async function applyPaymentToPlan(paymentId: string): Promise<number> {
   return applied;
 }
 
+/**
+ * Apply a payment to the loan linked to the account.
+ *
+ * A pre-need contract or an installment loan billed like a utility (Eternal
+ * Hills) carries a Loan record on the account. Each payment logged on the
+ * account is a payment on that contract, so the loan's balance comes down
+ * by it — the whole amount, since these contracts are billed as flat
+ * installments; a fee logged on the payment is not part of it. Kept on the
+ * payment so an edit or deletion puts it back.
+ */
+export async function applyPaymentToLoan(paymentId: string): Promise<number> {
+  const payment = await db.payment.findUnique({
+    where: { id: paymentId },
+    select: { id: true, utilityAccountId: true, amount: true, status: true, loanApplied: true },
+  });
+  if (!payment) return 0;
+
+  await unapplyPaymentFromLoan(payment.id);
+  if (Number(payment.loanApplied ?? 0) > 0) {
+    await db.payment.update({ where: { id: payment.id }, data: { loanApplied: null } });
+  }
+
+  const loan = await db.loan.findUnique({ where: { utilityAccountId: payment.utilityAccountId } });
+  if (!loan || !loan.isActive || loan.currentBalance == null) return 0;
+  if (payment.status !== 'PAID' && payment.status !== 'PARTIAL') return 0;
+  const balance = Number(loan.currentBalance);
+  if (balance <= 0.005) return 0;
+
+  const applied = Number(Math.min(Number(payment.amount), balance).toFixed(2));
+  if (applied <= 0) return 0;
+  const newBalance = Number((balance - applied).toFixed(2));
+  await db.loan.update({ where: { id: loan.id }, data: { currentBalance: newBalance, ...(newBalance <= 0.005 ? { isActive: false } : {}) } });
+  await db.payment.update({ where: { id: payment.id }, data: { loanApplied: applied } });
+  return applied;
+}
+
+/** Put back on the loan whatever a payment about to be deleted had taken off it. */
+export async function unapplyPaymentFromLoan(paymentId: string): Promise<void> {
+  const payment = await db.payment.findUnique({ where: { id: paymentId }, select: { utilityAccountId: true, loanApplied: true } });
+  const previously = Number(payment?.loanApplied ?? 0);
+  if (!payment || previously <= 0) return;
+  const loan = await db.loan.findUnique({ where: { utilityAccountId: payment.utilityAccountId } });
+  if (!loan) return;
+  await db.loan.update({
+    where: { id: loan.id },
+    data: { currentBalance: Number((Number(loan.currentBalance ?? 0) + previously).toFixed(2)), isActive: true },
+  });
+}
+
 /** Put back on the plan whatever a payment about to be deleted had taken off it. */
 export async function unapplyPaymentFromPlan(paymentId: string): Promise<void> {
   const payment = await db.payment.findUnique({ where: { id: paymentId }, select: { utilityAccountId: true, planApplied: true } });

@@ -860,6 +860,8 @@ export interface Payment {
   feeAmount?: number | null;
   /** What this payment took off the account's payment plan (set server-side). */
   planApplied?: number | null;
+  /** What this payment took off the loan linked to the account (set server-side). */
+  loanApplied?: number | null;
   breakdown?: PaymentBreakdown | null;
   paymentDate: string;
   confirmationNumber?: string;

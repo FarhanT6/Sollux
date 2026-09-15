@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import PaymentBreakdownLine from '../components/utility/PaymentBreakdownLine';
-import { openBalanceOf, isStatementPaid, computeResolvedByFutureCheckpoint, computePaidMap, isEffectivelyPaid, isPriorStatementPaid, statementStatus, coveredByCredit } from '../lib/paidState';
+import { openBalanceOf, isStatementPaid, computeResolvedByFutureCheckpoint, computePaidMap, isEffectivelyPaid, isPriorStatementPaid, statementStatus, coveredByCredit, liveCarriedOf } from '../lib/paidState';
 import { bankAccountLabel } from '../lib/bankAccountLabel';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
@@ -889,12 +889,18 @@ export default function UtilityDetailPage() {
   const priorToLatestPaid = latestStmt ? isPriorStatementPaid(latestStmt, statements, payments, resolvedByFuture, paidMap) : false;
   // A carried CREDIT is never stale — it is money the provider holds — so it
   // is kept even when the prior bill is paid; only carried arrears are.
-  const latestCarried = latestStmt?.pastDueCarried != null ? Number(latestStmt.pastDueCarried) : null;
+  // Carried arrears are brought up to date with anything paid toward older
+  // bills since the newest bill was printed; a credit is kept as printed.
+  const latestCarried = latestStmt?.pastDueCarried != null ? liveCarriedOf(latestStmt, payments) : null;
   const latestPastDue = latestCarried != null && (latestCarried < 0 || !priorToLatestPaid)
     ? latestCarried
     : null;
   const latestChargesExclFees = latestStmt?.chargesExcludingFees != null ? Number(latestStmt.chargesExcludingFees) : null;
-  const latestOwed = openBalanceOf(latestStmt);
+  const latestOwed = (() => {
+    const raw = openBalanceOf(latestStmt);
+    if (raw == null || latestStmt == null) return raw;
+    return Number((raw - (Number(latestStmt.pastDueCarried ?? 0) - (latestCarried ?? 0))).toFixed(2));
+  })();
   // Reconcile the displayed current balance against recent payments. If the user paid
   // a bill but the provider's API hasn't reflected it yet, we still want $0 here.
   const isLatestPaid = latestStmt ? isEffectivelyPaid(latestStmt, payments, resolvedByFuture, paidMap) : false;
@@ -1253,8 +1259,12 @@ export default function UtilityDetailPage() {
                   const { color: sc, label: sl } = statementStatus(s, payments, filteredStatements[idx - 1], isLatest, resolvedByFuture, paidMap);
                   // Everything from the dedicated, editable columns — no
                   // rawDataJson fallback, so edits always show up.
-                  const pastDue  = s.pastDueCarried != null ? Number(s.pastDueCarried) : null;
-                  const totalDue = openBalanceOf(s);
+                  // The carried arrears less anything paid toward older bills
+                  // since this bill was printed — a snapshot brought up to date.
+                  const liveCarried = liveCarriedOf(s, payments);
+                  const pastDue  = s.pastDueCarried != null ? liveCarried : null;
+                  const rawOpen = openBalanceOf(s);
+                  const totalDue = rawOpen == null ? null : Number((rawOpen - (Number(s.pastDueCarried ?? 0) - liveCarried)).toFixed(2));
                   const isPaid = isEffectivelyPaid(s, payments, resolvedByFuture, paidMap);
                   const priorPaid = isPriorStatementPaid(s, statements, payments, resolvedByFuture, paidMap);
                   return (
@@ -1376,7 +1386,7 @@ export default function UtilityDetailPage() {
                           // own charge (less any credit). The row said "Prior
                           // balance paid" and still showed the charge plus that
                           // balance — 1,042.48 for a 326.38 bill.
-                          const carriedIn = s.pastDueCarried != null ? Number(s.pastDueCarried) : 0;
+                          const carriedIn = liveCarried;
                           const owed = priorPaid && carriedIn > 0 ? amt : (totalDue ?? amt);
                           const primary = isFullyPaid ? amt : owed;
                           // The subline explains a total that differs from the
@@ -1421,26 +1431,6 @@ export default function UtilityDetailPage() {
                               {coveredByCredit(s) && totalDue != null && totalDue >= -0.01 && (
                                 <p className="text-xs text-emerald-600">covered by credit</p>
                               )}
-                              {(() => {
-                                // The provider's own "Total Account Balance": what
-                                // is owed in all, including what a payment
-                                // arrangement has deferred beyond this bill.
-                                const raw = s.rawDataJson as any;
-                                // From the bill when the import kept it; for the
-                                // newest bill, from the account's plan otherwise.
-                                const deferred = raw?.paymentPlan?.remaining != null
-                                  ? Math.abs(Number(raw.paymentPlan.remaining))
-                                  : (isLatest && plan && plan.status === 'ACTIVE' ? Number(plan.remainingBalance) : null);
-                                const acctBal = raw?.totalAccountBalance != null
-                                  ? Number(raw.totalAccountBalance)
-                                  : (deferred != null && totalDue != null ? totalDue + deferred : null);
-                                if (acctBal == null || Math.abs(acctBal - (totalDue ?? amt)) < 0.01) return null;
-                                return (
-                                  <p className="text-xs text-gray-500">
-                                    Account balance {fmtMoney(acctBal)}{deferred ? ` · ${fmtMoney(deferred)} on plan` : ''}
-                                  </p>
-                                );
-                              })()}
                             </>
                           );
                         })()}
@@ -1595,6 +1585,9 @@ export default function UtilityDetailPage() {
                       )}
                       {Number((p as any).planApplied ?? 0) > 0 && (
                         <p className="text-xs text-amber-400">{fmtMoney(Number((p as any).planApplied))} applied to the payment plan</p>
+                      )}
+                      {Number((p as any).loanApplied ?? 0) > 0 && (
+                        <p className="text-xs text-indigo-300">{fmtMoney(Number((p as any).loanApplied))} taken off the loan balance</p>
                       )}
                       {p.confirmationNumber && (
                         <p className="font-mono text-xs text-gray-500 mt-0.5">Conf# {p.confirmationNumber}</p>
