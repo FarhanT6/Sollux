@@ -345,6 +345,10 @@ model Payment {
   // A processing / convenience fee paid on top of the amount — money out
   // that never reduced the bill.
   feeAmount          Decimal?       @db.Decimal(10, 2)
+  // How much of this payment was taken off the account's payment plan:
+  // what was paid beyond the bill's own charge and the plan's fee. Kept
+  // on the payment so an edit or deletion puts it back on the plan.
+  planApplied        Decimal?       @db.Decimal(10, 2)
   paymentDate        DateTime
   confirmationNumber String?
   paymentMethod      String?
