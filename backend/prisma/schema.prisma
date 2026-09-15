@@ -916,6 +916,8 @@ model Loan {
   accountLast4              String?
   accountNumberEnc          String? // AES-256 encrypted full account number
   originalAmount            Decimal?        @db.Decimal(14, 2)
+  // Paid up front at signing; the amount financed is originalAmount − this.
+  downPayment               Decimal?        @db.Decimal(14, 2)
   interestRate              Decimal?        @db.Decimal(6, 3)
   originationDate           DateTime?
   maturityDate              DateTime?

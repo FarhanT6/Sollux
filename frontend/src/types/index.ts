@@ -477,6 +477,8 @@ export interface Loan {
   accountLast4?: string;
   accountNumber?: string | null; // full number, only populated on GET /loans/:id
   originalAmount?: number;
+  /** Paid up front at signing; amount financed = originalAmount − downPayment. */
+  downPayment?: number | null;
   interestRate?: number;
   originationDate?: string;
   maturityDate?: string;
