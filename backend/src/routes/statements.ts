@@ -155,6 +155,7 @@ const StatementSchema = z.object({
   penaltiesFees: z.number().optional().nullable(),
   pastDueCarried: z.number().optional().nullable(),
   notes: z.string().optional().nullable(),
+  paidOverride: z.enum(['UNPAID', 'PAID']).optional().nullable(),
 });
 
 // POST /api/statements — manual entry (no PDF required)
@@ -208,9 +209,34 @@ router.patch('/:id', async (req, res, next) => {
         ...(data.penaltiesFees !== undefined && { penaltiesFees: data.penaltiesFees }),
         ...(data.pastDueCarried !== undefined && { pastDueCarried: data.pastDueCarried }),
         ...(data.notes !== undefined && { notes: data.notes }),
+        ...(data.paidOverride !== undefined && { paidOverride: data.paidOverride }),
       },
     });
     res.json(updated);
+  } catch (err) { next(err); }
+});
+
+// POST /api/statements/:id/unpaid — the owner says this bill is not paid.
+// Undoes a "Mark paid" (its recorded payment is removed), clears any
+// bill-reported paid figure, and pins the bill open so no later statement
+// or inference reads it as settled again. Payments logged by hand against
+// the bill are left alone: they are the owner's own records, and removing
+// them is a separate decision.
+router.post('/:id/unpaid', async (req, res, next) => {
+  try {
+    const statement = await db.statement.findFirst({
+      where: { id: req.params.id, utilityAccount: { property: { userId: req.dbUserId! } } },
+    });
+    if (!statement) return res.status(404).json({ error: 'Statement not found' });
+
+    const removed = await db.payment.deleteMany({
+      where: { utilityAccountId: statement.utilityAccountId, notes: { contains: `[marked-paid:${statement.id}]` } },
+    });
+    const updated = await db.statement.update({
+      where: { id: statement.id },
+      data: { amountPaid: null, paidOverride: 'UNPAID' },
+    });
+    res.json({ ...updated, removedMarkPaid: removed.count });
   } catch (err) { next(err); }
 });
 

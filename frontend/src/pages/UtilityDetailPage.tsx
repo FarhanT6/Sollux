@@ -6,7 +6,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   getUtility, syncUtility, deleteUtility, updateUtility, getStatementDownloadUrl,
   getPaymentPlan, createPaymentPlan, updatePaymentPlan, deletePaymentPlan,
-  upsertUtilityLoan, deleteUtilityLoan, patchStatement, createStatement, deleteStatement,
+  upsertUtilityLoan, deleteUtilityLoan, patchStatement, createStatement, deleteStatement, markStatementUnpaid,
   revealUtilityAccountNumber, createPayment, updatePayment, deletePayment,
   getBankAccounts, getCostSettings, updateCostSettings,
   getInsurancePolicies,
@@ -631,6 +631,8 @@ export default function UtilityDetailPage() {
     const marked = payments.find((p: any) => typeof p.notes === 'string' && p.notes.includes(marker));
     setMarkingPaid(s.id);
     try {
+      // Marking paid lifts any "keep this open" pin the owner set earlier.
+      if (s.paidOverride) await patchStatement(s.id, { paidOverride: null });
       if (marked) {
         await deletePayment(marked.id);
       } else {
@@ -658,6 +660,26 @@ export default function UtilityDetailPage() {
       await reloadAccount();
     } catch (err: any) {
       alert(err?.response?.data?.error ?? 'Could not record that payment.');
+    } finally { setMarkingPaid(null); }
+  }
+
+  // The reverse: the bill is not paid, whatever a later statement, a
+  // bill-reported figure or an earlier "Mark paid" said. Payments logged
+  // by hand against it stay; removing those is a separate decision, and
+  // the row says so.
+  async function handleMarkUnpaid(s: any) {
+    const marker = `[marked-paid:${s.id}]`;
+    const linked = payments.filter((p: any) => p.statementId === s.id && !(typeof p.notes === 'string' && p.notes.includes(marker)));
+    const note = linked.length > 0
+      ? `\n\n${linked.length} payment${linked.length === 1 ? '' : 's'} logged against this bill will stay on the Payments tab; delete ${linked.length === 1 ? 'it' : 'them'} there if ${linked.length === 1 ? 'it was' : 'they were'} a mistake.`
+      : '';
+    if (!window.confirm(`Mark the ${periodLabel(s)} bill as unpaid?${note}`)) return;
+    setMarkingPaid(s.id);
+    try {
+      await markStatementUnpaid(s.id);
+      await reloadAccount();
+    } catch (err: any) {
+      alert(err?.response?.data?.error ?? 'Could not mark that bill unpaid.');
     } finally { setMarkingPaid(null); }
   }
 
@@ -1387,6 +1409,17 @@ export default function UtilityDetailPage() {
                             style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
                           >
                             {markingPaid === s.id ? '…' : '✓ Mark paid'}
+                          </button>
+                        )}
+                        {isPaid && (
+                          <button
+                            onClick={() => handleMarkUnpaid(s)}
+                            disabled={markingPaid === s.id}
+                            title="This bill is not paid — reopen it"
+                            className="text-xs px-2 py-1 rounded transition-colors disabled:opacity-30 text-gray-600 hover:text-amber-400"
+                            style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}
+                          >
+                            {markingPaid === s.id ? '…' : '↺ Unpaid'}
                           </button>
                         )}
                         {s.pdfS3Key && (

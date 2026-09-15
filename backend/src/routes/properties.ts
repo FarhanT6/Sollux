@@ -101,7 +101,7 @@ router.get('/', async (req, res, next) => {
             statements: {
               orderBy: { statementDate: 'desc' },
               take: 4,
-              select: { id: true, amountDue: true, dueDate: true, amountPaid: true, rawDataJson: true, statementDate: true, penaltyDate: true, pastDueCarried: true, penaltiesFees: true, paymentPlanAmount: true, balance: true },
+              select: { id: true, amountDue: true, dueDate: true, amountPaid: true, rawDataJson: true, statementDate: true, penaltyDate: true, pastDueCarried: true, penaltiesFees: true, paymentPlanAmount: true, balance: true, paidOverride: true },
             },
             payments: {
               orderBy: [{ paymentDate: 'desc' }, { createdAt: 'desc' }],

@@ -113,7 +113,9 @@ async function syncStatementPaid(statementId: string | null | undefined) {
   const total = agg._sum.amount;
   await db.statement.update({
     where: { id: statementId },
-    data: { amountPaid: total ?? null },
+    // A payment logged against a bill the owner had pinned open lifts the
+    // pin: the newer, more specific claim wins.
+    data: { amountPaid: total ?? null, ...(total != null && Number(total) > 0 ? { paidOverride: null } : {}) },
   });
 }
 

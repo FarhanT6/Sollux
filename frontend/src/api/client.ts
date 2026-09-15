@@ -426,7 +426,11 @@ export const patchStatement = (id: string, data: {
   amountPaid?: number | null; statementDate?: string; dueDate?: string | null;
   amountDue?: number | null; chargesExcludingFees?: number | null;
   penaltiesFees?: number | null; pastDueCarried?: number | null; notes?: string | null;
+  paidOverride?: 'UNPAID' | 'PAID' | null;
 }) => api.patch<Statement>(`/statements/${id}`, data).then(r => r.data);
+/** The owner says this bill is not paid: undoes Mark paid and pins it open. */
+export const markStatementUnpaid = (id: string) =>
+  api.post<Statement & { removedMarkPaid: number }>(`/statements/${id}/unpaid`).then(r => r.data);
 export const createStatement = (data: {
   utilityAccountId: string; statementDate: string; dueDate?: string | null;
   amountDue?: number | null; amountPaid?: number | null; chargesExcludingFees?: number | null;
