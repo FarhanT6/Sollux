@@ -7,7 +7,7 @@ import {
   getUtility, syncUtility, deleteUtility, updateUtility, getStatementDownloadUrl,
   getPaymentPlan, createPaymentPlan, updatePaymentPlan, deletePaymentPlan,
   upsertUtilityLoan, deleteUtilityLoan, patchStatement, createStatement, deleteStatement, markStatementUnpaid,
-  revealUtilityAccountNumber, createPayment, createSplitPayment, createBankAccount, updatePayment, deletePayment,
+  revealUtilityAccountNumber, createPayment, createSplitPayment, updatePayment, deletePayment,
   getBankAccounts, getCostSettings, updateCostSettings,
   getInsurancePolicies,
 } from '../api/client';
@@ -20,6 +20,8 @@ import { format, isAfter } from 'date-fns';
 import { monthKey, fmtDate, yearOf, todayISO, billMonthLabel } from '../lib/date';
 import { projectLoanBalance } from '../lib/loanMath';
 import LoanComponentsPanel from '../components/LoanComponentsPanel';
+import BillPicker, { emptyBillPick, splitAllocations, type BillPickerValue } from '../components/payments/BillPicker';
+import PaymentSourcePicker, { emptyNewCard, resolvePaymentSource, type NewCardForm } from '../components/payments/PaymentSourcePicker';
 import { operatingCost } from '../lib/operatingCost';
 import ChargeAnalyticsPanel from '../components/utility/ChargeAnalyticsPanel';
 
@@ -530,13 +532,9 @@ export default function UtilityDetailPage() {
     paymentMethod: 'ACH', status: 'PAID', statementId: '',
     confirmationNumber: '', bankAccountId: '', notes: '',
   });
-  // One payment covering several bills: which bills, and how much of the
-  // amount goes to each. Presence in the map is the selection.
-  const [splitMode, setSplitMode] = useState(false);
-  const [splitAlloc, setSplitAlloc] = useState<Record<string, string>>({});
-  // A card not yet on file, typed in right here. Only the last four are kept.
-  const NEW_CARD = '__new_card__';
-  const [newCard, setNewCard] = useState({ name: '', cardNetwork: 'Visa', last4: '', cardExpiry: '', accountType: 'CREDIT_CARD' as 'CREDIT_CARD' | 'DEBIT_CARD' });
+  // Which bill(s) the payment goes toward, and a card typed in on the spot.
+  const [bill, setBill] = useState<BillPickerValue>(emptyBillPick);
+  const [newCard, setNewCard] = useState<NewCardForm>(emptyNewCard);
 
   useEffect(() => {
     if (!accountId) return;
@@ -553,24 +551,8 @@ export default function UtilityDetailPage() {
       paymentMethod: 'ACH', status: 'PAID', statementId: '',
       confirmationNumber: '', bankAccountId: '', notes: '',
     });
-    setSplitMode(false);
-    setSplitAlloc({});
-    setNewCard({ name: '', cardNetwork: 'Visa', last4: '', cardExpiry: '', accountType: 'CREDIT_CARD' });
-  }
-
-  // Spread the amount over the chosen bills oldest-first: each takes what it
-  // has open, the last one takes whatever is left.
-  function autoAllocateSplit(total: number, ids: string[]) {
-    const chosen = statements.filter((s: any) => ids.includes(s.id)).slice().sort((a: any, b: any) => (a.statementDate ?? '').localeCompare(b.statementDate ?? ''));
-    let left = Number(total.toFixed(2));
-    const next: Record<string, string> = {};
-    chosen.forEach((s: any, i: number) => {
-      const open = Math.max(0, Number(openBalanceOf(s) ?? s.amountDue ?? 0));
-      const take = i === chosen.length - 1 ? left : Math.min(open, left);
-      next[s.id] = take.toFixed(2);
-      left = Number((left - take).toFixed(2));
-    });
-    setSplitAlloc(next);
+    setBill(emptyBillPick);
+    setNewCard(emptyNewCard);
   }
 
   function openPaymentEdit(p: any) {
@@ -585,6 +567,7 @@ export default function UtilityDetailPage() {
       bankAccountId: p.bankAccountId ?? '',
       notes: p.notes ?? '',
     });
+    setBill({ statementId: p.statementId ?? '', split: false, alloc: {} });
     setEditPaymentId(p.id);
     setShowPayForm(false);
   }
@@ -606,26 +589,11 @@ export default function UtilityDetailPage() {
       alert('Enter an amount greater than zero.');
       return;
     }
-    const splitEntries = splitMode && !editPaymentId
-      ? Object.entries(splitAlloc).map(([statementId, v]) => ({ statementId, amount: parseFloat(v) })).filter(a => a.amount > 0)
-      : [];
-    if (splitMode && !editPaymentId) {
-      if (splitEntries.length < 2) { alert('Pick at least two bills to split this payment across, or turn the split off.'); return; }
-      const allocated = Number(splitEntries.reduce((a, x) => a + x.amount, 0).toFixed(2));
-      if (Math.abs(allocated - amount) > 0.01) { alert(`The amounts per bill add up to ${fmtMoney(allocated)}, not the ${fmtMoney(amount)} paid. Adjust them or use Auto-fill.`); return; }
-    }
+    const split = bill.split && !editPaymentId ? splitAllocations(bill, amount) : null;
+    if (split && 'error' in split) { alert(split.error); return; }
     setSavingPayment(true);
     try {
-      let bankAccountId: string | null = payForm.bankAccountId || null;
-      if (bankAccountId === NEW_CARD) {
-        if (!newCard.name.trim() || !/^\d{4}$/.test(newCard.last4)) { alert('Give the card a name and its last four digits.'); setSavingPayment(false); return; }
-        const createdCard = await createBankAccount({
-          name: newCard.name.trim(), last4: newCard.last4, cardNetwork: newCard.cardNetwork || null,
-          cardExpiry: newCard.cardExpiry.trim() || null, accountType: newCard.accountType, bank: newCard.cardNetwork || undefined,
-        });
-        setBankAccounts(prev => [...prev, createdCard]);
-        bankAccountId = createdCard.id;
-      }
+      const bankAccountId = await resolvePaymentSource(payForm.bankAccountId, newCard, b => setBankAccounts(prev => [...prev, b]));
       const body = {
         utilityAccountId: accountId,
         amount,
@@ -633,20 +601,20 @@ export default function UtilityDetailPage() {
         paymentDate: payForm.paymentDate,
         paymentMethod: payForm.paymentMethod || null,
         status: payForm.status,
-        statementId: payForm.statementId || null,
+        statementId: bill.statementId || null,
         confirmationNumber: payForm.confirmationNumber || null,
         bankAccountId,
         notes: payForm.notes || null,
       };
       if (editPaymentId) await updatePayment(editPaymentId, body);
-      else if (splitEntries.length >= 2) await createSplitPayment({ ...body, statementId: undefined, allocations: splitEntries });
+      else if (split && 'allocations' in split) await createSplitPayment({ ...body, statementId: undefined, allocations: split.allocations });
       else await createPayment(body);
       setEditPaymentId(null);
       setShowPayForm(false);
       resetPayForm();
       await reloadAccount();
     } catch (err: any) {
-      alert(err?.response?.data?.error ?? 'Could not save that payment.');
+      alert(err?.response?.data?.error ?? err?.message ?? 'Could not save that payment.');
     } finally { setSavingPayment(false); }
   }
 
@@ -825,11 +793,12 @@ export default function UtilityDetailPage() {
   // A fresh Log payment starts on the newest bill that is still open, with
   // its amount filled in — that is what is being paid nine times in ten.
   useEffect(() => {
-    if (!showPayForm || editPaymentId || payForm.statementId || payForm.amount) return;
+    if (!showPayForm || editPaymentId || bill.statementId || bill.split || payForm.amount) return;
     const open = statements.find((st: any) => !(paidMap.get(st.id) ?? false));
     if (!open) return;
     const owed = openBalanceOf(open);
-    setPayForm(f => ({ ...f, statementId: open.id, amount: owed != null && owed > 0 ? owed.toFixed(2) : f.amount }));
+    setBill({ statementId: open.id, split: false, alloc: {} });
+    setPayForm(f => ({ ...f, amount: owed != null && owed > 0 ? owed.toFixed(2) : f.amount }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showPayForm, editPaymentId]);
 
@@ -1551,111 +1520,11 @@ export default function UtilityDetailPage() {
               {/* Linking to a statement is what marks that bill paid. Bills
                   already settled say so, so a payment for the newest bill is
                   not filed against the one before it by mistake. */}
-              {splitMode && !editPaymentId ? (
-                <div className="sm:col-span-2 rounded-lg px-3 py-2" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <p className="text-xs text-gray-400">Split across these bills</p>
-                    <div className="flex gap-3 text-xs">
-                      <button type="button" className="text-amber-400 hover:text-amber-300"
-                        onClick={() => autoAllocateSplit(parseFloat(payForm.amount) || 0, Object.keys(splitAlloc))}>Auto-fill</button>
-                      <button type="button" className="text-gray-500 hover:text-gray-300" onClick={() => { setSplitMode(false); setSplitAlloc({}); }}>One bill instead</button>
-                    </div>
-                  </div>
-                  <div className="max-h-44 overflow-y-auto space-y-1">
-                    {statements.slice(0, 36).map((st: any) => {
-                      const settled = paidMap.get(st.id) ?? false;
-                      const checked = st.id in splitAlloc;
-                      return (
-                        <label key={st.id} className="flex items-center gap-2 text-xs">
-                          <input type="checkbox" checked={checked} className="accent-amber-500"
-                            onChange={e => {
-                              const ids = e.target.checked ? [...Object.keys(splitAlloc), st.id] : Object.keys(splitAlloc).filter(id => id !== st.id);
-                              autoAllocateSplit(parseFloat(payForm.amount) || 0, ids);
-                            }} />
-                          <span className={`flex-1 ${settled ? 'text-gray-500' : 'text-gray-300'}`}>
-                            {periodLabel(st)} — {fmtMoney(openBalanceOf(st) ?? st.amountDue)} · billed {fmtDate(st.statementDate, 'MMM d')}{settled ? ' · already paid' : ' · open'}
-                          </span>
-                          {checked && (
-                            <input type="number" step="0.01" value={splitAlloc[st.id] ?? ''} className="input-dark text-xs w-24 py-0.5"
-                              onChange={e => setSplitAlloc(a => ({ ...a, [st.id]: e.target.value }))} />
-                          )}
-                        </label>
-                      );
-                    })}
-                  </div>
-                  {(() => {
-                    const allocated = Object.values(splitAlloc).reduce((a, v) => a + (parseFloat(v) || 0), 0);
-                    const total = parseFloat(payForm.amount) || 0;
-                    const diff = Number((total - allocated).toFixed(2));
-                    return (
-                      <p className={`text-xs mt-1.5 ${Math.abs(diff) > 0.01 ? 'text-amber-400' : 'text-gray-500'}`}>
-                        {fmtMoney(allocated)} of {fmtMoney(total)} assigned{Math.abs(diff) > 0.01 ? ` · ${fmtMoney(Math.abs(diff))} ${diff > 0 ? 'still to assign' : 'over'}` : ''}
-                      </p>
-                    );
-                  })()}
-                </div>
-              ) : (
-                <div className="sm:col-span-2">
-                  <select value={payForm.statementId} onChange={e => setPayForm(f => ({ ...f, statementId: e.target.value }))}
-                    className="input-dark text-xs w-full">
-                    <option value="">— Not against a specific bill —</option>
-                    {statements.slice(0, 36).map((st: any) => {
-                      const settled = paidMap.get(st.id) ?? false;
-                      return (
-                        <option key={st.id} value={st.id}>
-                          {periodLabel(st)} — {fmtMoney(st.amountDue)} · billed {fmtDate(st.statementDate, 'MMM d')}{st.dueDate ? ` · due ${fmtDate(st.dueDate, 'MMM d')}` : ''}{settled ? ' · already paid' : ' · open'}
-                        </option>
-                      );
-                    })}
-                  </select>
-                  {!editPaymentId && statements.length > 1 && (
-                    <button type="button" className="text-xs text-amber-400 hover:text-amber-300 mt-1"
-                      onClick={() => {
-                        setSplitMode(true);
-                        const ids = payForm.statementId ? [payForm.statementId] : [];
-                        autoAllocateSplit(parseFloat(payForm.amount) || 0, ids);
-                        setPayForm(f => ({ ...f, statementId: '' }));
-                      }}>
-                      Split across several bills
-                    </button>
-                  )}
-                </div>
-              )}
-              {/* Which account or card it came from. Paying by card lists the
-                  cards on file and offers to add one; anything else lists
-                  bank accounts first. */}
-              {(() => {
-                const isCard = (b: BankAccount) => b.accountType === 'CREDIT_CARD' || b.accountType === 'DEBIT_CARD';
-                const byCard = payForm.paymentMethod === 'Card';
-                const listed = byCard ? bankAccounts.filter(isCard) : [...bankAccounts.filter(b => !isCard(b)), ...bankAccounts.filter(isCard)];
-                return (
-                  <div className={payForm.bankAccountId === NEW_CARD ? 'sm:col-span-2 lg:col-span-2' : ''}>
-                    <select value={payForm.bankAccountId} onChange={e => setPayForm(f => ({ ...f, bankAccountId: e.target.value }))}
-                      className="input-dark text-xs w-full">
-                      <option value="">{byCard ? '— Which card? —' : '— Paid from which account? —'}</option>
-                      {listed.map(b => (
-                        <option key={b.id} value={b.id}>{bankAccountLabel(b)}</option>
-                      ))}
-                      <option value={NEW_CARD}>+ Add a new card…</option>
-                    </select>
-                    {payForm.bankAccountId === NEW_CARD && (
-                      <div className="grid grid-cols-2 gap-2 mt-2">
-                        <input value={newCard.name} onChange={e => setNewCard(c => ({ ...c, name: e.target.value }))} placeholder="Card name (Chase Sapphire) *" className="input-dark text-xs col-span-2" />
-                        <select value={newCard.cardNetwork} onChange={e => setNewCard(c => ({ ...c, cardNetwork: e.target.value }))} className="input-dark text-xs">
-                          {['Visa', 'Mastercard', 'Amex', 'Discover', 'Other'].map(n => <option key={n} value={n}>{n}</option>)}
-                        </select>
-                        <select value={newCard.accountType} onChange={e => setNewCard(c => ({ ...c, accountType: e.target.value as 'CREDIT_CARD' | 'DEBIT_CARD' }))} className="input-dark text-xs">
-                          <option value="CREDIT_CARD">Credit card</option>
-                          <option value="DEBIT_CARD">Debit card</option>
-                        </select>
-                        <input value={newCard.last4} onChange={e => setNewCard(c => ({ ...c, last4: e.target.value.replace(/\D/g, '').slice(0, 4) }))} placeholder="Last 4 digits *" inputMode="numeric" className="input-dark text-xs" />
-                        <input value={newCard.cardExpiry} onChange={e => setNewCard(c => ({ ...c, cardExpiry: e.target.value }))} placeholder="Expiry MM/YY" className="input-dark text-xs" />
-                        <p className="text-xs text-gray-600 col-span-2">Only the last four digits are kept. The card is saved to your accounts for next time.</p>
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
+              <BillPicker className="sm:col-span-2" statements={statements} payments={payments}
+                amount={parseFloat(payForm.amount) || 0} value={bill} onChange={setBill} />
+              <PaymentSourcePicker accounts={bankAccounts} paymentMethod={payForm.paymentMethod}
+                value={payForm.bankAccountId} onChange={id => setPayForm(f => ({ ...f, bankAccountId: id }))}
+                card={newCard} onCardChange={setNewCard} />
               <input value={payForm.confirmationNumber} onChange={e => setPayForm(f => ({ ...f, confirmationNumber: e.target.value }))}
                 placeholder="Confirmation #" className="input-dark text-xs" />
               <input value={payForm.notes} onChange={e => setPayForm(f => ({ ...f, notes: e.target.value }))}

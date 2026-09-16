@@ -1,6 +1,8 @@
 import { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { getProperty, getStatements, getPayments, getInsights, createPayment, syncUtility, updateUtility, deleteUtility, updateProperty, markInsightRead, dismissInsight, getStatementDownloadUrl, revealUtilityAccountNumber, getUtilityUsername, getUtilityPassword, getCostSettings } from '../api/client';
+import BillPicker, { emptyBillPick, splitAllocations, type BillPickerValue } from '../components/payments/BillPicker';
+import PaymentSourcePicker, { emptyNewCard, resolvePaymentSource, useBankAccounts, type NewCardForm } from '../components/payments/PaymentSourcePicker';
+import { getProperty, getStatements, getPayments, getInsights, createPayment, createSplitPayment, syncUtility, updateUtility, deleteUtility, updateProperty, markInsightRead, dismissInsight, getStatementDownloadUrl, revealUtilityAccountNumber, getUtilityUsername, getUtilityPassword, getCostSettings } from '../api/client';
 import DeletePropertyModal from '../components/DeletePropertyModal';
 import type { Property, Statement, Payment, AIInsight, UtilityAccount } from '../types';
 import { CATEGORY_LABELS, CATEGORY_COLORS, INSURANCE_TYPE_LABELS, LOAN_TYPE_LABELS, UTILITY_PAYMENT_METHODS, PAYMENT_STATUS_LABELS } from '../types';
@@ -367,6 +369,8 @@ export default function PropertyDetailPage() {
             {showLogPayment && (
               <LogPropertyPaymentModal
                 accounts={accounts}
+                statements={statements}
+                payments={payments}
                 onClose={() => setShowLogPayment(false)}
                 onSaved={async () => { setShowLogPayment(false); setPayments(await getPayments({ propertyId: id! })); }}
               />
@@ -1237,30 +1241,44 @@ function UtilityAccountCard({
  * fields as the account page's form; the allocation (fees, past due,
  * installment, current) is worked out on the server from the bills.
  */
-function LogPropertyPaymentModal({ accounts, onClose, onSaved }: { accounts: UtilityAccount[]; onClose: () => void; onSaved: () => void }) {
+function LogPropertyPaymentModal({ accounts, statements, payments, onClose, onSaved }: {
+  accounts: UtilityAccount[]; statements: Statement[]; payments: Payment[]; onClose: () => void; onSaved: () => void;
+}) {
   const [form, setForm] = useState({ utilityAccountId: accounts[0]?.id ?? '', amount: '', feeAmount: '', paymentDate: todayISO(), paymentMethod: 'ACH', status: 'PAID', confirmationNumber: '', notes: '' });
+  const [bill, setBill] = useState<BillPickerValue>(emptyBillPick);
+  const [bankAccountId, setBankAccountId] = useState('');
+  const [newCard, setNewCard] = useState<NewCardForm>(emptyNewCard);
+  const [bankAccounts, setBankAccounts] = useBankAccounts();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const accountStatements = statements.filter(s => s.utilityAccountId === form.utilityAccountId);
+  const accountPayments = payments.filter(p => p.utilityAccountId === form.utilityAccountId);
   async function save() {
     const amount = parseFloat(form.amount);
     if (!form.utilityAccountId || !(amount > 0)) { setError('Pick an account and enter an amount.'); return; }
+    const split = bill.split ? splitAllocations(bill, amount) : null;
+    if (split && 'error' in split) { setError(split.error); return; }
     setSaving(true); setError(null);
     try {
-      await createPayment({
+      const sourceId = await resolvePaymentSource(bankAccountId, newCard, b => setBankAccounts(prev => [...prev, b]));
+      const body = {
         utilityAccountId: form.utilityAccountId, amount,
         feeAmount: form.feeAmount ? parseFloat(form.feeAmount) : null,
         paymentDate: form.paymentDate, paymentMethod: form.paymentMethod || null, status: form.status,
         confirmationNumber: form.confirmationNumber || null, notes: form.notes || null,
-      });
+        bankAccountId: sourceId,
+      };
+      if (split && 'allocations' in split) await createSplitPayment({ ...body, allocations: split.allocations });
+      else await createPayment({ ...body, statementId: bill.statementId || null });
       onSaved();
-    } catch (err: any) { setError(err?.response?.data?.error ?? 'Could not save that payment.'); }
+    } catch (err: any) { setError(err?.response?.data?.error ?? err?.message ?? 'Could not save that payment.'); }
     finally { setSaving(false); }
   }
   const input = 'input-dark text-sm w-full';
   return (
     <Modal title="Log a payment" onClose={onClose}>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <select value={form.utilityAccountId} onChange={e => setForm(f => ({ ...f, utilityAccountId: e.target.value }))} className={`${input} sm:col-span-2`}>
+        <select value={form.utilityAccountId} onChange={e => { setForm(f => ({ ...f, utilityAccountId: e.target.value })); setBill(emptyBillPick); }} className={`${input} sm:col-span-2`}>
           {accounts.map(a => <option key={a.id} value={a.id}>{a.providerName}{a.serviceLabel ? ` — ${a.serviceLabel}` : ''}{a.accountNumber ? ` (${a.accountNumber})` : ''}</option>)}
         </select>
         <input type="number" placeholder="Amount *" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} className={input} />
@@ -1272,8 +1290,12 @@ function LogPropertyPaymentModal({ accounts, onClose, onSaved }: { accounts: Uti
         <select value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))} className={input}>
           {['PAID', 'PENDING', 'PARTIAL', 'FAILED'].map(st => <option key={st} value={st}>{PAYMENT_STATUS_LABELS[st]}</option>)}
         </select>
+        <BillPicker className="sm:col-span-2" statements={accountStatements} payments={accountPayments}
+          amount={parseFloat(form.amount) || 0} value={bill} onChange={setBill} />
+        <PaymentSourcePicker className="sm:col-span-2" inputClass="input-dark text-sm" accounts={bankAccounts} paymentMethod={form.paymentMethod}
+          value={bankAccountId} onChange={setBankAccountId} card={newCard} onCardChange={setNewCard} />
         <input placeholder="Confirmation #" value={form.confirmationNumber} onChange={e => setForm(f => ({ ...f, confirmationNumber: e.target.value }))} className={input} />
-        <input placeholder="Notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className={`${input} sm:col-span-2`} />
+        <input placeholder="Notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className={input} />
       </div>
       {error && <p className="text-xs text-red-400 mt-2">{error}</p>}
       <div className="flex justify-end gap-3 mt-4">
