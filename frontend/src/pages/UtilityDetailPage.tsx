@@ -17,7 +17,7 @@ import { CATEGORY_LABELS, CATEGORY_COLORS, LOAN_TYPE_LABELS,
 import type { BankAccount } from '../types';
 import { Pill, Skeleton, EmptyState } from '../components/ui';
 import { format, isAfter } from 'date-fns';
-import { monthKey, fmtDate, yearOf, todayISO } from '../lib/date';
+import { monthKey, fmtDate, yearOf, todayISO, billMonthLabel } from '../lib/date';
 import { operatingCost } from '../lib/operatingCost';
 import ChargeAnalyticsPanel from '../components/utility/ChargeAnalyticsPanel';
 
@@ -42,7 +42,7 @@ const CATEGORY_ICONS: Record<string, string> = {
  * period end.
  */
 function periodLabel(s: any): string {
-  return fmtDate(s.statementDate || s.billingPeriodEnd, 'MMM yyyy');
+  return billMonthLabel(s);
 }
 function fmtMoney(v?: number | string | null) {
   if (v == null) return '—';
@@ -891,7 +891,7 @@ export default function UtilityDetailPage() {
   // is kept even when the prior bill is paid; only carried arrears are.
   // Carried arrears are brought up to date with anything paid toward older
   // bills since the newest bill was printed; a credit is kept as printed.
-  const latestCarried = latestStmt?.pastDueCarried != null ? liveCarriedOf(latestStmt, payments) : null;
+  const latestCarried = latestStmt?.pastDueCarried != null ? liveCarriedOf(latestStmt, payments, statements) : null;
   const latestPastDue = latestCarried != null && (latestCarried < 0 || !priorToLatestPaid)
     ? latestCarried
     : null;
@@ -1259,12 +1259,16 @@ export default function UtilityDetailPage() {
                   const { color: sc, label: sl } = statementStatus(s, payments, filteredStatements[idx - 1], isLatest, resolvedByFuture, paidMap);
                   // Everything from the dedicated, editable columns — no
                   // rawDataJson fallback, so edits always show up.
-                  // The carried arrears less anything paid toward older bills
-                  // since this bill was printed — a snapshot brought up to date.
-                  const liveCarried = liveCarriedOf(s, payments);
+                  // Older rows read exactly as the statement printed them. Only
+                  // the newest bill is the account's live position, so only it
+                  // is brought up to date with money paid toward older bills
+                  // since it was printed.
+                  const printedCarried = s.pastDueCarried != null ? Number(s.pastDueCarried) : 0;
+                  const liveCarried = isLatest ? liveCarriedOf(s, payments, statements) : printedCarried;
+                  const paidSincePrinted = Number((printedCarried - liveCarried).toFixed(2));
                   const pastDue  = s.pastDueCarried != null ? liveCarried : null;
                   const rawOpen = openBalanceOf(s);
-                  const totalDue = rawOpen == null ? null : Number((rawOpen - (Number(s.pastDueCarried ?? 0) - liveCarried)).toFixed(2));
+                  const totalDue = rawOpen == null ? null : Number((rawOpen - paidSincePrinted).toFixed(2));
                   const isPaid = isEffectivelyPaid(s, payments, resolvedByFuture, paidMap);
                   const priorPaid = isPriorStatementPaid(s, statements, payments, resolvedByFuture, paidMap);
                   return (
@@ -1410,6 +1414,13 @@ export default function UtilityDetailPage() {
                               <p className="text-base font-semibold text-white">{fmtMoney(primary)}</p>
                               {showBillSubline && (
                                 <p className="text-xs text-gray-500">Bill: {fmtMoney(amt)}</p>
+                              )}
+                              {/* The newest bill as printed, and what has been
+                                  paid toward its arrears since. */}
+                              {!isFullyPaid && paidSincePrinted > 0.005 && rawOpen != null && (
+                                <p className="text-xs text-gray-500">
+                                  Statement total {fmtMoney(rawOpen)} · {fmtMoney(paidSincePrinted)} paid toward older bills since
+                                </p>
                               )}
                               {/* Net metering: the charge is this month's energy
                                   cost; most of it is deferred to the true-up and
@@ -1581,7 +1592,7 @@ export default function UtilityDetailPage() {
                         <p className="text-xs text-gray-500">from {bankAccountLabel(p.bankAccount as any)}</p>
                       )}
                       {p.statement && (
-                        <p className="text-xs text-gray-500">toward {fmtDate(p.statement.statementDate, 'MMM yyyy')} bill</p>
+                        <p className="text-xs text-gray-500">toward {billMonthLabel(p.statement)} bill</p>
                       )}
                       {Number((p as any).planApplied ?? 0) > 0 && (
                         <p className="text-xs text-amber-400">{fmtMoney(Number((p as any).planApplied))} applied to the payment plan</p>
