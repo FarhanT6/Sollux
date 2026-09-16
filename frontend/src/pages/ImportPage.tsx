@@ -382,7 +382,7 @@ function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed, onProgres
         signal: controller.signal,
       });
 
-      if (!response.ok || !response.body) throw new Error('Stream failed');
+      if (!response.ok || !response.body) throw await badResponseError(response);
 
       const reader  = response.body.getReader();
       const decoder = new TextDecoder();
@@ -1268,6 +1268,23 @@ function describeAccount(acct: {
   return base;
 }
 
+/**
+ * Say what the server actually answered. A 502/503 is the API mid-deploy
+ * (try again in a minute); a 401 is a lapsed sign-in; a 413 is a batch too
+ * large for one request. "Stream failed" told the reader none of that.
+ */
+async function badResponseError(response: Response): Promise<Error> {
+  const text = await response.text().catch(() => '');
+  let detail = '';
+  try { detail = JSON.parse(text)?.error ?? ''; } catch { detail = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160); }
+  const hint = response.status === 502 || response.status === 503 || response.status === 504
+    ? 'The server is restarting or deploying — try again in a minute.'
+    : response.status === 401 ? 'Your sign-in has lapsed — reload the page and try again.'
+    : response.status === 413 ? 'That batch is too large for one request — import fewer files at a time.'
+    : '';
+  return new Error(`The server answered ${response.status}${detail ? `: ${detail}` : ''}. ${hint}`.trim());
+}
+
 export default function ImportPage() {
   const [stage, setStage]                   = useState<Stage>('drop');
   const [bills, setBills]                   = useState<ParsedBill[]>([]);
@@ -1336,7 +1353,7 @@ export default function ImportPage() {
         body: JSON.stringify({ files: filePayloads, method: extractionMethod }),
       });
 
-      if (!response.ok || !response.body) throw new Error('Stream failed');
+      if (!response.ok || !response.body) throw await badResponseError(response);
 
       const reader  = response.body.getReader();
       const decoder = new TextDecoder();
@@ -1373,13 +1390,17 @@ export default function ImportPage() {
             setProgress('');
           } else if (event.type === 'error') {
             console.error('[Import] stream error:', event.message);
+            throw new Error(event.message || 'The server could not analyze one or more files.');
           }
         }
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setProgress('Error analyzing files. Please try again.');
-      setTimeout(() => { setStage('drop'); setBills([]); }, 3000);
+      const reason = err instanceof TypeError
+        ? 'Could not reach the server — check your connection, or it may be restarting; try again in a minute.'
+        : (err?.message || 'Please try again.');
+      setProgress(`Error analyzing files. ${reason}`);
+      setTimeout(() => { setStage('drop'); setBills([]); }, 8000);
     }
   };
 
