@@ -7,6 +7,7 @@ import type { Loan, Property, LoanType, PrepaymentPenalty, PrepaymentPenaltyTier
 import { bankAccountLabel } from '../lib/bankAccountLabel';
 import { format, addMonths } from 'date-fns';
 import { fmtDate } from '../lib/date';
+import { projectLoanBalance } from '../lib/loanMath';
 
 const money = (n: number | null | undefined) =>
   n == null ? '—' : n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
@@ -223,23 +224,11 @@ function EditModal({ loan, properties, onClose, onSave }: {
   useEffect(() => { getBankAccounts().then(setBankAccounts).catch(() => {}); }, []);
 
   function autoCalcBalance() {
-    const P = parseFloat(form.originalAmount);
-    const r = parseFloat(form.interestRate) / 12 / 100;
-    const PMT = parseFloat(form.monthlyPayment);
-    const origin = form.originationDate ? new Date(form.originationDate) : null;
-    if (!origin || isNaN(P) || isNaN(PMT) || P <= 0 || PMT <= 0) return;
-    const today = new Date();
-    const n = Math.max(0, Math.floor(
-      (today.getFullYear() - origin.getFullYear()) * 12 + (today.getMonth() - origin.getMonth())
-    ));
-    let balance: number;
-    if (!isNaN(r) && r > 0) {
-      const factor = Math.pow(1 + r, n);
-      balance = P * factor - PMT * (factor - 1) / r;
-    } else {
-      balance = P - PMT * n;
-    }
-    setForm(prev => ({ ...prev, currentBalance: String(Math.max(0, Math.round(balance * 100) / 100)) }));
+    const balance = projectLoanBalance({
+      originalAmount: form.originalAmount, downPayment: form.downPayment, interestRate: form.interestRate,
+      monthlyPayment: form.monthlyPayment, originationDate: form.originationDate,
+    });
+    if (balance != null) setForm(prev => ({ ...prev, currentBalance: String(balance) }));
   }
 
   function autoCalcPayment() {
