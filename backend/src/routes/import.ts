@@ -91,7 +91,10 @@ router.post('/analyze', async (req: Request, res: Response) => {
     send({ type: 'done', properties });
   } catch (err) {
     console.error('[Import] Analyze error:', err);
-    send({ type: 'error', message: 'Failed to analyze one or more PDFs' });
+    // The reason travels to the screen: "Cannot read x.pdf: it is a scan
+    // with no text" is actionable where "Failed to analyze" is not.
+    const message = err instanceof Error && err.message ? err.message.slice(0, 300) : 'Failed to analyze one or more files';
+    send({ type: 'error', message });
   } finally {
     res.end();
   }
