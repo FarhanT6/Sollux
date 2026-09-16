@@ -959,10 +959,41 @@ model Loan {
   loanPayments    LoanPayment[]
   loanExtensions  LoanExtension[]
   pendingOutflows PendingOutflow[]
+  // The individual loans a servicer bills together under one account
+  // (student loans: "Group AA — Direct Subsidized", "Group BB — Direct
+  // Unsubsidized"). When any exist, the parent's amounts are their totals.
+  components      LoanComponent[]
 
   @@index([propertyId])
   @@index([userId])
   @@map("loans")
+}
+
+// One loan within a serviced account. A federal student-loan servicer
+// bills several loans (subsidized, unsubsidized, PLUS) on one statement
+// with one payment; each has its own principal, rate and disbursement
+// date. The parent Loan carries the account-level totals, recomputed
+// from these whenever one changes (see services/loanComponents.ts).
+model LoanComponent {
+  id              String    @id @default(cuid())
+  loanId          String
+  loan            Loan      @relation(fields: [loanId], references: [id], onDelete: Cascade)
+  label           String // "Group AA", "Loan 1-01"
+  loanKind        String? // "Direct Subsidized", "Direct Unsubsidized", "Parent PLUS"
+  originalAmount  Decimal?  @db.Decimal(14, 2)
+  currentBalance  Decimal?  @db.Decimal(14, 2)
+  interestRate    Decimal?  @db.Decimal(6, 3)
+  monthlyPayment  Decimal?  @db.Decimal(10, 2)
+  accruedInterest Decimal?  @db.Decimal(12, 2) // unpaid interest outstanding, when the statement prints it
+  originationDate DateTime?
+  maturityDate    DateTime?
+  notes           String?
+  sortOrder       Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([loanId])
+  @@map("loan_components")
 }
 
 enum LoanType {

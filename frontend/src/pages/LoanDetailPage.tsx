@@ -8,6 +8,7 @@ import { bankAccountLabel } from '../lib/bankAccountLabel';
 import { format, addMonths } from 'date-fns';
 import { fmtDate } from '../lib/date';
 import { projectLoanBalance } from '../lib/loanMath';
+import LoanComponentsPanel from '../components/LoanComponentsPanel';
 
 const money = (n: number | null | undefined) =>
   n == null ? '—' : n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
@@ -691,6 +692,9 @@ export default function LoanDetailPage() {
     return Promise.all([getLoan(id), getLoanAmortization(id)])
       .then(([l, a]) => { setLoan(l); setAmort(a as AmortizationResponse); });
   };
+  // A component change comes back with the parent's refreshed totals but
+  // without its payments and property; keep those and re-run the schedule.
+  const onLoanChange = (l: Loan) => { setLoan(prev => ({ ...(prev ?? l), ...l })); reload(); };
 
   useEffect(() => {
     if (!id) return;
@@ -797,6 +801,10 @@ export default function LoanDetailPage() {
             <span className="font-medium">{moneyPrecise(amortization.totalDeferredInterest)}</span> of deferred interest added to the balance.</>
           )}
         </div>
+      )}
+
+      {(loan.loanType === 'STUDENT' || (loan.components?.length ?? 0) > 0) && (
+        <LoanComponentsPanel loan={loan} onChange={onLoanChange} />
       )}
 
       {amortization.isInterestOnly && (

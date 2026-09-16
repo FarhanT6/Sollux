@@ -26,7 +26,7 @@ export default api;
 
 import type {
   Property, UtilityAccount, Statement, StatementSummaryRow, Payment, AIInsight, DashboardSummary,
-  Unit, Tenant, LeaseTenant, Lease, LeaseDeposit, RentPayment, RentNotice, RentChange, ScheduledRentIncrease, LeaseUtilityCharge, Expense, Loan, LoanPayment,
+  Unit, Tenant, LeaseTenant, Lease, LeaseDeposit, RentPayment, RentNotice, RentChange, ScheduledRentIncrease, LeaseUtilityCharge, Expense, Loan, LoanComponent, LoanPayment,
   InsurancePolicy, TaxAssessment, Improvement, LegalMatter, PropertyPnL, MonthlyPnL,
   BankAccount, PendingOutflow, PendingOutflowKind, PayPlan, OtherIncome, BudgetSummary, DelinquencyTenant, BudgetForecast, IndexRate,
   ReconciliationProfile, ReconciliationStatement, ReconciliationLineItem,
@@ -501,6 +501,16 @@ export const updatePaymentPlan = (utilityAccountId: string, data: {
 }) => api.patch(`/utilities/${utilityAccountId}/payment-plan`, data).then(r => r.data);
 export const deletePaymentPlan = (utilityAccountId: string) =>
   api.delete(`/utilities/${utilityAccountId}/payment-plan`);
+
+// The individual loans under one serviced account. Each call returns the
+// parent loan with its components and refreshed totals.
+export type LoanComponentInput = Partial<Omit<LoanComponent, 'id' | 'loanId' | 'sortOrder'>> & { label: string };
+export const addLoanComponent = (loanId: string, data: LoanComponentInput) =>
+  api.post<Loan>(`/loans/${loanId}/components`, data).then(r => r.data);
+export const updateLoanComponent = (loanId: string, componentId: string, data: Partial<LoanComponentInput>) =>
+  api.patch<Loan>(`/loans/${loanId}/components/${componentId}`, data).then(r => r.data);
+export const deleteLoanComponent = (loanId: string, componentId: string) =>
+  api.delete<Loan>(`/loans/${loanId}/components/${componentId}`).then(r => r.data);
 
 // Loan linked to utility account
 export const upsertUtilityLoan = (utilityAccountId: string, data: Record<string, unknown>) =>

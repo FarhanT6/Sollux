@@ -4,6 +4,7 @@ import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { encryptOptional, decryptOptional } from '../crypto/encrypt';
 import { scrapeQueue } from '../workers/queues';
+import { syncLoanFromComponents } from '../services/loanComponents';
 
 const router = Router();
 router.use(attachDbUser);
@@ -344,11 +345,11 @@ router.get('/:id', async (req, res, next) => {
         payments: {
           orderBy: { paymentDate: 'desc' }, take: 200,
           include: {
-            statement: { select: { id: true, statementDate: true, amountDue: true } },
+            statement: { select: { id: true, statementDate: true, billingPeriodEnd: true, amountDue: true } },
             bankAccount: { select: { id: true, name: true, bank: true, last4: true } },
           },
         },
-        loan: true,
+        loan: { include: { components: { orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] } } },
       },
     });
     if (!account) return res.status(404).json({ error: 'Not found' });
@@ -631,7 +632,10 @@ router.put('/:id/loan', async (req, res, next) => {
           notes:          notes          ?? existing.notes,
         },
       });
-      return res.json(updated);
+      // Once the account lists its individual loans, the totals are theirs.
+      await syncLoanFromComponents(updated.id);
+      const withParts = await db.loan.findUnique({ where: { id: updated.id }, include: { components: { orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] } } });
+      return res.json(withParts ?? updated);
     }
 
     const created = await db.loan.create({
