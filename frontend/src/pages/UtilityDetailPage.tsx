@@ -1245,18 +1245,14 @@ export default function UtilityDetailPage() {
                   const { color: sc, label: sl } = statementStatus(s, payments, filteredStatements[idx - 1], isLatest, resolvedByFuture, paidMap);
                   // Everything from the dedicated, editable columns — no
                   // rawDataJson fallback, so edits always show up.
-                  // Older rows read exactly as the statement printed them. Only
-                  // the newest bill is the account's live position, so only it
-                  // is brought up to date with money paid toward older bills
-                  // since it was printed.
-                  const printedCarried = s.pastDueCarried != null ? Number(s.pastDueCarried) : 0;
-                  const liveCarried = isLatest ? liveCarriedOf(s, payments, statements) : printedCarried;
-                  const paidSincePrinted = Number((printedCarried - liveCarried).toFixed(2));
-                  const pastDue  = s.pastDueCarried != null ? liveCarried : null;
-                  const rawOpen = openBalanceOf(s);
-                  const totalDue = rawOpen == null ? null : Number((rawOpen - paidSincePrinted).toFixed(2));
+                  // Every row reads exactly as its statement printed it: the
+                  // charge, the balance carried in, and their total. Whether
+                  // it has since been paid is the pill's job; the account's
+                  // live position is the header's. Adjusting rows for later
+                  // payments made history disagree with the statements.
+                  const pastDue  = s.pastDueCarried != null ? Number(s.pastDueCarried) : null;
+                  const totalDue = openBalanceOf(s);
                   const isPaid = isEffectivelyPaid(s, payments, resolvedByFuture, paidMap);
-                  const priorPaid = isPriorStatementPaid(s, statements, payments, resolvedByFuture, paidMap);
                   return (
                     <div key={s.id} className="rounded-xl px-5 py-4 flex items-center gap-4"
                       style={{
@@ -1299,14 +1295,11 @@ export default function UtilityDetailPage() {
                             ? `${fmtDate(s.billingPeriodStart, 'MMM d')} – ${fmtDate(s.billingPeriodEnd, 'MMM d, yyyy')}`
                             : 'Billing period —'}
                         </p>
-                        {pastDue != null && pastDue > 0 && !priorPaid && (
-                          <p className="text-xs text-red-400 mt-0.5">⚠ Past due: {fmtMoney(pastDue)}</p>
+                        {pastDue != null && pastDue > 0 && (
+                          <p className={`text-xs mt-0.5 ${isPaid ? 'text-gray-500' : 'text-red-400'}`}>{isPaid ? '' : '⚠ '}Past due on statement: {fmtMoney(pastDue)}</p>
                         )}
                         {pastDue != null && pastDue < 0 && (
                           <p className="text-xs text-emerald-500 mt-0.5">✓ Credit applied: −{fmtMoney(-pastDue)}</p>
-                        )}
-                        {(pastDue ?? 0) > 0 && priorPaid && (
-                          <p className="text-xs text-green-500 mt-0.5">✓ Prior balance paid</p>
                         )}
                         {s.penaltyDate && !isPaid && (
                           <p className={`text-xs mt-0.5 ${new Date(s.penaltyDate) >= new Date() ? 'text-amber-400' : 'text-red-400'}`}>
@@ -1367,21 +1360,14 @@ export default function UtilityDetailPage() {
                        *    show "Bill: $X" so the per-period charge is still visible. */}
                       <div className="text-right flex-shrink-0 w-28">
                         {(() => {
-                          // A paid statement shows the bill amount (what was billed);
-                          // an unpaid one shows the open balance owed.
+                          // The statement's total, paid or not: the charge plus
+                          // whatever it carried in (or less a credit).
                           const isFullyPaid = isPaid || (totalDue === 0 && Number(s.amountDue ?? 0) > 0);
                           const amt = Number(s.amountDue ?? 0);
-                          // Once the bill before this one is settled, the balance
-                          // this bill carried in is history: what is owed is its
-                          // own charge (less any credit). The row said "Prior
-                          // balance paid" and still showed the charge plus that
-                          // balance — 1,042.48 for a 326.38 bill.
-                          const carriedIn = liveCarried;
-                          const owed = priorPaid && carriedIn > 0 ? amt : (totalDue ?? amt);
-                          const primary = isFullyPaid ? amt : owed;
+                          const primary = totalDue ?? amt;
                           // The subline explains a total that differs from the
                           // charge: arrears rolled in, or a credit taken off.
-                          const showBillSubline = !isFullyPaid && Math.abs(owed - amt) > 0.01 && amt > 0;
+                          const showBillSubline = Math.abs(primary - amt) > 0.01 && amt > 0;
                           // A negative amount is a credit memo: money the
                           // provider owes, offsetting the next bill. Rendering
                           // it like a charge reads as a payment demand.
@@ -1400,13 +1386,6 @@ export default function UtilityDetailPage() {
                               <p className="text-base font-semibold text-white">{fmtMoney(primary)}</p>
                               {showBillSubline && (
                                 <p className="text-xs text-gray-500">Bill: {fmtMoney(amt)}</p>
-                              )}
-                              {/* The newest bill as printed, and what has been
-                                  paid toward its arrears since. */}
-                              {!isFullyPaid && paidSincePrinted > 0.005 && rawOpen != null && (
-                                <p className="text-xs text-gray-500">
-                                  Statement total {fmtMoney(rawOpen)} · {fmtMoney(paidSincePrinted)} paid toward older bills since
-                                </p>
                               )}
                               {/* Net metering: the charge is this month's energy
                                   cost; most of it is deferred to the true-up and
