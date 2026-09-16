@@ -11,6 +11,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { providersLookAlike } from './providerMatch';
 import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';
+import { syncLoanFromComponents } from './loanComponents';
 
 // Read the API key directly from the .env file — reliable regardless of
 // process.cwd() or ESM vs CJS module context (dotenv uses cwd which can vary).
@@ -83,6 +84,20 @@ export interface ExtractedBillData {
     installmentsRemaining: number | null;
     renewedOn: string | null;       // date the renewal posted, when the statement says
   } | null;
+  /** The individual loans a servicer bills together on one statement
+   *  (a federal student-loan "Account Snapshot": Group AA Direct Subsidized,
+   *  Group BB Direct Unsubsidized), each with its own principal and rate. */
+  loanGroups?: {
+    label: string;                      // "Group AA"
+    loanKind: string | null;            // "DIRECT SUB"
+    originalPrincipal: number | null;
+    outstandingPrincipal: number | null;
+    interestRate: number | null;        // percent
+    monthlyPayment: number | null;
+    accruedInterest: number | null;     // unpaid interest outstanding
+    disbursedOn: string | null;         // YYYY-MM-DD
+    payoffDate: string | null;          // YYYY-MM-DD
+  }[] | null;
   /** A payment arrangement the bill itself reports, as SDG&E's "Pay
    *  Agreement Plan" box does. The remaining balance is owed but not due;
    *  one installment is billed each cycle inside the charges. */
@@ -186,6 +201,7 @@ Schema (use null for any field not present in the document):
   "isPaid": boolean — true ONLY if balance is $0.00 or document shows 'Paid in Full' / paid stamp. A bill-detail layout with columns Billed / Payments and adjustments / Due where Due and TOTAL DUE are $0.00 is paid: report currentCharges and amountDue as the Billed figure and isPaid true,
   "utilityType": "electric | gas | water | sewer | trash | solar | internet | phone | other",
   "insurance": object or null — ONLY for an insurance billing statement (carrier billing account: Nationwide, Safeco, Bamboo, State Farm…): {"policyNumber": "string", "coverageStart": "YYYY-MM-DD", "coverageEnd": "YYYY-MM-DD", "termPremium": n, "installment": n, "serviceCharge": n, "installmentsRemaining": n, "renewedOn": "YYYY-MM-DD"}. Read the policy table ("Policy / Coverage period / Balance / Installment"): the policy number is the alphanumeric code on that row, the coverage period is its two dates, termPremium is the policy balance at renewal (the "Renewal" line under Policy Activity, or the Full Balance when the term has just begun), installment is the per-policy installment on that row (before any service charge), serviceCharge the stated processing fee, installmentsRemaining the number of dated lines in "Your Installment Schedule", renewedOn the date on the "Renewal" activity line. A statement whose policy row shows a different policy number and a later coverage start than the account's previous statements is a renewal onto a new policy,
+  "loanGroups": array or null — ONLY for a loan servicer statement that lists MORE THAN ONE loan under the account (a federal student-loan "Account Snapshot" with columns Group AA / Group BB, or "Loan 1-01 / Loan 1-02"): one entry per loan column, [{"label": "Group AA", "loanKind": "DIRECT SUB", "originalPrincipal": n, "outstandingPrincipal": n, "interestRate": n, "monthlyPayment": n, "accruedInterest": n, "disbursedOn": "YYYY-MM-DD", "payoffDate": "YYYY-MM-DD"}]. Read each column: loanKind from the "Loan Type" row, originalPrincipal from "Original Principal Amount", outstandingPrincipal from "Outstanding Principal Balance", interestRate as a percent from "Interest Rate", monthlyPayment from "Regular Monthly Payment Amount" (the Monthly Payment section, not the Account Snapshot's zeros), accruedInterest from "Accrued Interest" / "Estimated Interest Outstanding", disbursedOn from "First Disbursement Date", payoffDate from "Estimated Payoff Date". A statement for a single loan reports null,
   "statedTotalDue": number or null — the ONE figure the bill asks to be paid now: its "Total Amount Due" / "Amount Due" box. Negative when the account is in credit ("No payment is due. Your account has a credit balance of $0.82" → -0.82). This is the grand total AFTER previous balance, payments, credits and any payment-arrangement deferral; report it exactly as printed,
   "totalAccountBalance": number or null — "Total Account Balance" when printed: everything owed including a balance a payment arrangement has deferred,
   "paymentPlan": object or null — when the bill prints a payment-arrangement box (SDG&E "Pay Agreement Plan": Original Pay Agreement, Down Payment, Installments Billed to Date, Remaining PA Balance, Agreement began, Agreement number, Total Installments, Remaining Installments, Installment amount), report {"original": n, "remaining": n, "installment": n, "installmentsTotal": n, "installmentsRemaining": n, "began": "YYYY-MM-DD", "agreementNumber": "string"}. On such a bill the account summary reads "Previous Balance / Payment Received / Remaining Pay Agreement Balance (subtracted) / Current Charges / Total Amount Due": the Remaining Pay Agreement Balance is NOT past due — it is deferred — so do NOT put it in previousBalance. Report currentCharges as the "Current Charges" line, paymentPlanAmount as the installment amount, statedTotalDue as the Total Amount Due, and leave previousBalance to be derived,
@@ -1764,6 +1780,95 @@ export async function syncInsurancePolicyFromBill(utilityAccountId: string, ex: 
   });
 }
 
+/**
+ * Read a multi-loan "Account Snapshot" from the statement text when the
+ * model did not. The table has one column per loan ("Group AA  Group BB")
+ * and one row per figure; pdf-parse keeps each row on its own line with the
+ * columns' values in order. Only tables with two or more loans count.
+ */
+export function applyLoanGroupsFromText(ex: ExtractedBillData, text: string): void {
+  if (ex.loanGroups && ex.loanGroups.length > 0) return;
+  const header = text.match(/((?:\bGroup\s+[A-Z]{1,3}\b[ \t]*){2,})/);
+  if (!header) return;
+  const labels = Array.from(header[1].matchAll(/Group\s+([A-Z]{1,3})/g)).map(m => `Group ${m[1]}`);
+  if (labels.length < 2) return;
+
+  const rowValues = (label: RegExp, kind: 'money' | 'pct' | 'date' | 'text'): (string | null)[] => {
+    const line = text.split(/\r?\n/).find(l => label.test(l));
+    if (!line) return labels.map(() => null);
+    const rest = line.replace(label, '');
+    const pattern = kind === 'money' ? /-?\$?\s*[\d,]+\.\d{2}/g
+      : kind === 'pct' ? /\d+(?:\.\d+)?\s*%/g
+      : kind === 'date' ? /\d{1,2}\/\d{1,2}\/\d{2,4}/g
+      : /DIRECT\s+(?:UNSUBSIDIZED|UNSUB|SUBSIDIZED|SUB|PLUS|CONSOLIDATION)\b|PARENT\s+PLUS|GRAD\s+PLUS|PERKINS|FFEL\S*|PRIVATE/gi;
+    const found = Array.from(rest.matchAll(pattern)).map(m => m[0].trim());
+    return labels.map((_, i) => found[i] ?? null);
+  };
+  const money = (s: string | null) => (s == null ? null : parseFloat(s.replace(/[$,\s]/g, '')));
+  const pct = (s: string | null) => (s == null ? null : parseFloat(s.replace(/[%\s]/g, '')));
+  const date = (s: string | null) => (s == null ? null : parseDate(s));
+
+  const kinds = rowValues(/^\s*Loan\s+Type/i, 'text');
+  const originals = rowValues(/^\s*Original\s+Principal\s+Amount/i, 'money');
+  const outstanding = rowValues(/^\s*Outstanding\s+Principal\s+Balance[^$]*/i, 'money');
+  const rates = rowValues(/^\s*Interest\s+Rate/i, 'pct');
+  const payments = rowValues(/^\s*Regular\s+Monthly\s+Payment\s+Amount/i, 'money');
+  const accrued = rowValues(/^\s*(?:Accrued|Estimated)\s+Interest\s+(?:Outstanding)?/i, 'money');
+  const disbursed = rowValues(/^\s*First\s+Disbursement\s+Date/i, 'date');
+  const payoff = rowValues(/^\s*Estimated\s+Payoff\s+Date/i, 'date');
+
+  const groups = labels.map((label, i) => ({
+    label,
+    loanKind: kinds[i] ? kinds[i]!.replace(/\s+/g, ' ').toUpperCase() : null,
+    originalPrincipal: money(originals[i] ?? null),
+    outstandingPrincipal: money(outstanding[i] ?? null),
+    interestRate: pct(rates[i] ?? null),
+    monthlyPayment: money(payments[i] ?? null),
+    accruedInterest: money(accrued[i] ?? null),
+    disbursedOn: date(disbursed[i] ?? null),
+    payoffDate: date(payoff[i] ?? null),
+  }));
+  if (groups.some(g => g.originalPrincipal != null || g.outstandingPrincipal != null)) ex.loanGroups = groups;
+}
+
+/**
+ * Keep the account's linked loan in step with the individual loans its
+ * statement lists. Each printed group becomes (or refreshes) a component,
+ * matched by label; the parent loan's totals are recomputed from them. An
+ * older statement never overwrites what a newer one has already set.
+ */
+export async function syncLoanComponentsFromBill(utilityAccountId: string, ex: ExtractedBillData): Promise<void> {
+  const groups = (ex.loanGroups ?? []).filter(g => g && g.label);
+  if (groups.length === 0) return;
+  const loan = await db.loan.findUnique({ where: { utilityAccountId }, select: { id: true, components: { select: { id: true, label: true, loanKind: true } } } });
+  if (!loan) return;
+  const billDate = ex.statementDate ? new Date(ex.statementDate) : new Date();
+  const newer = await db.statement.findFirst({ where: { utilityAccountId, statementDate: { gt: billDate }, isDownPayment: false }, select: { id: true } });
+  if (newer) return;
+
+  const norm = (s: string | null | undefined) => (s ?? '').replace(/[^a-z0-9]/gi, '').toLowerCase();
+  for (const [i, g] of groups.entries()) {
+    const figures = {
+      ...(g.loanKind ? { loanKind: g.loanKind } : {}),
+      ...(g.originalPrincipal != null ? { originalAmount: g.originalPrincipal } : {}),
+      ...(g.outstandingPrincipal != null ? { currentBalance: g.outstandingPrincipal } : {}),
+      ...(g.interestRate != null ? { interestRate: g.interestRate } : {}),
+      ...(g.monthlyPayment != null ? { monthlyPayment: g.monthlyPayment } : {}),
+      ...(g.accruedInterest != null ? { accruedInterest: g.accruedInterest } : {}),
+      ...(g.disbursedOn ? { originationDate: new Date(g.disbursedOn) } : {}),
+      ...(g.payoffDate ? { maturityDate: new Date(g.payoffDate) } : {}),
+    };
+    const existing = loan.components.find(c => norm(c.label) === norm(g.label))
+      ?? loan.components.find(c => g.loanKind && norm(c.loanKind) === norm(g.loanKind) && !groups.some(o => o !== g && norm(o.loanKind) === norm(c.loanKind)));
+    if (existing) {
+      await db.loanComponent.update({ where: { id: existing.id }, data: figures });
+    } else {
+      await db.loanComponent.create({ data: { loanId: loan.id, label: g.label, sortOrder: loan.components.length + i, ...figures } });
+    }
+  }
+  await syncLoanFromComponents(loan.id);
+}
+
 export function sanitiseLateFee(ex: ExtractedBillData): void {
   const FEE_LINE = /late\s*(?:fee|charge|payment\s*(?:fee|charge|penalty))|penalt|overdue\s*charge|nsf|returned\s*(?:check|payment)|finance\s*charge|interest\s*charge/i;
   if (ex.chargeBreakdown) {
@@ -2185,6 +2290,7 @@ export async function parseBill(
       applyLedgerFromText(text, extracted);
       applyNetMeteringFromText(text, extracted);
       applyCreditFromText(text, extracted);
+      applyLoanGroupsFromText(extracted, text);
     } catch { /* an unreadable text layer changes nothing */ }
     reconcileWithStatedTotal(extracted);
     sanitiseLateFee(extracted);

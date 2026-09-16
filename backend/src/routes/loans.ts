@@ -5,6 +5,7 @@ import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { calculateCurrentBalance, buildAmortizationSchedule } from '../lib/amortization';
 import { encryptOptional, decryptOptional } from '../crypto/encrypt';
+import { syncLoanFromComponents, serializeLoanComponent } from '../services/loanComponents';
 
 const router = Router();
 router.use(attachDbUser);
@@ -26,8 +27,11 @@ function serializeLoan(l: any) {
   const { accountNumberEnc, ...out } = l;
   for (const f of DECIMAL_LOAN_FIELDS) if (out[f] != null) out[f] = Number(out[f]);
   if (Array.isArray(out.loanPayments)) out.loanPayments = out.loanPayments.map(serializeLoanPayment);
+  if (Array.isArray(out.components)) out.components = out.components.map(serializeLoanComponent);
   return out;
 }
+
+const COMPONENTS_INCLUDE = { orderBy: [{ sortOrder: 'asc' as const }, { createdAt: 'asc' as const }] };
 
 const PrepaymentTierSchema = z.object({
   startMonth: z.number().int().min(0),
@@ -134,6 +138,7 @@ router.get('/', async (req, res, next) => {
       include: {
         property: { select: { id: true, address: true, nickname: true } },
         loanPayments: { orderBy: { date: 'desc' }, take: 12 },
+        components: COMPONENTS_INCLUDE,
       },
       orderBy: { createdAt: 'asc' },
     });
@@ -201,6 +206,7 @@ router.get('/:id', async (req, res, next) => {
         loanPayments: { orderBy: { date: 'desc' } },
         utilityAccount: { select: { id: true, providerName: true, category: true } },
         loanExtensions: { orderBy: { extendedAt: 'desc' } },
+        components: COMPONENTS_INCLUDE,
       },
     });
     if (!rawLoan) return res.status(404).json({ error: 'Loan not found' });
@@ -335,6 +341,78 @@ router.delete('/:id', async (req, res, next) => {
     if (!existing) return res.status(404).json({ error: 'Loan not found' });
     await db.loan.delete({ where: { id: req.params.id } });
     res.status(204).send();
+  } catch (err) { next(err); }
+});
+
+// ── Loans within the account ─────────────────────────────────────────────────
+// A student-loan servicer bills several loans on one statement. Each is a
+// component; the parent loan's figures are recomputed from them on every
+// change (services/loanComponents.ts).
+
+const LoanComponentSchema = z.object({
+  label: z.string().min(1),
+  loanKind: z.string().optional().nullable(),
+  originalAmount: z.number().min(0).optional().nullable(),
+  currentBalance: z.number().min(0).optional().nullable(),
+  interestRate: z.number().min(0).optional().nullable(),
+  monthlyPayment: z.number().min(0).optional().nullable(),
+  accruedInterest: z.number().min(0).optional().nullable(),
+  originationDate: z.string().transform(s => new Date(s)).optional().nullable(),
+  maturityDate: z.string().transform(s => new Date(s)).optional().nullable(),
+  notes: z.string().optional().nullable(),
+  sortOrder: z.number().int().optional(),
+});
+
+async function ownedLoan(id: string, userId: string) {
+  return db.loan.findFirst({ where: { id, userId }, select: { id: true } });
+}
+
+async function loanWithComponents(id: string) {
+  const loan = await db.loan.findUnique({ where: { id }, include: { components: COMPONENTS_INCLUDE } });
+  return loan ? serializeLoan(loan) : null;
+}
+
+router.get('/:id/components', async (req, res, next) => {
+  try {
+    if (!await ownedLoan(req.params.id, req.dbUserId!)) return res.status(404).json({ error: 'Loan not found' });
+    const parts = await db.loanComponent.findMany({ where: { loanId: req.params.id }, ...COMPONENTS_INCLUDE });
+    res.json(parts.map(serializeLoanComponent));
+  } catch (err) { next(err); }
+});
+
+// Returns the parent loan with its components and refreshed totals, so the
+// caller can replace what it holds in one go.
+router.post('/:id/components', async (req, res, next) => {
+  try {
+    if (!await ownedLoan(req.params.id, req.dbUserId!)) return res.status(404).json({ error: 'Loan not found' });
+    const data = LoanComponentSchema.parse(req.body);
+    const count = await db.loanComponent.count({ where: { loanId: req.params.id } });
+    await db.loanComponent.create({ data: { ...data, sortOrder: data.sortOrder ?? count, loanId: req.params.id } });
+    await syncLoanFromComponents(req.params.id);
+    res.status(201).json(await loanWithComponents(req.params.id));
+  } catch (err) { next(err); }
+});
+
+router.patch('/:id/components/:cid', async (req, res, next) => {
+  try {
+    if (!await ownedLoan(req.params.id, req.dbUserId!)) return res.status(404).json({ error: 'Loan not found' });
+    const data = LoanComponentSchema.partial().parse(req.body);
+    const existing = await db.loanComponent.findFirst({ where: { id: req.params.cid, loanId: req.params.id } });
+    if (!existing) return res.status(404).json({ error: 'Loan component not found' });
+    await db.loanComponent.update({ where: { id: existing.id }, data });
+    await syncLoanFromComponents(req.params.id);
+    res.json(await loanWithComponents(req.params.id));
+  } catch (err) { next(err); }
+});
+
+router.delete('/:id/components/:cid', async (req, res, next) => {
+  try {
+    if (!await ownedLoan(req.params.id, req.dbUserId!)) return res.status(404).json({ error: 'Loan not found' });
+    const existing = await db.loanComponent.findFirst({ where: { id: req.params.cid, loanId: req.params.id } });
+    if (!existing) return res.status(404).json({ error: 'Loan component not found' });
+    await db.loanComponent.delete({ where: { id: existing.id } });
+    await syncLoanFromComponents(req.params.id);
+    res.json(await loanWithComponents(req.params.id));
   } catch (err) { next(err); }
 });
 

@@ -505,8 +505,28 @@ export interface Loan {
   property?: Pick<Property, 'id' | 'address' | 'nickname'>;
   loanPayments?: LoanPayment[];
   loanExtensions?: LoanExtension[];
+  /** The individual loans a servicer bills together under this account
+   *  (student loans: subsidized + unsubsidized). When any exist, the
+   *  parent's amounts are their totals. */
+  components?: LoanComponent[];
   interestPaidToDate?: number;
   totalInterestLifetime?: number | null;
+}
+
+export interface LoanComponent {
+  id: string;
+  loanId: string;
+  label: string;              // "Group AA"
+  loanKind?: string | null;   // "Direct Subsidized"
+  originalAmount?: number | null;
+  currentBalance?: number | null;
+  interestRate?: number | null;
+  monthlyPayment?: number | null;
+  accruedInterest?: number | null;
+  originationDate?: string | null;
+  maturityDate?: string | null;
+  notes?: string | null;
+  sortOrder: number;
 }
 
 export interface LoanPayment {

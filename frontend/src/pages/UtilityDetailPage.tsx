@@ -19,6 +19,7 @@ import { Pill, Skeleton, EmptyState } from '../components/ui';
 import { format, isAfter } from 'date-fns';
 import { monthKey, fmtDate, yearOf, todayISO, billMonthLabel } from '../lib/date';
 import { projectLoanBalance } from '../lib/loanMath';
+import LoanComponentsPanel from '../components/LoanComponentsPanel';
 import { operatingCost } from '../lib/operatingCost';
 import ChargeAnalyticsPanel from '../components/utility/ChargeAnalyticsPanel';
 
@@ -379,6 +380,7 @@ function LoanCard({ loan, accountId, arrears, onUpdate, onDelete }: {
           {originationDate != null && <div><span className="text-gray-500">Originated: </span><span className="text-gray-300">{format(originationDate, 'MMM d, yyyy')}</span></div>}
         </div>
         {loan.notes && <p className="text-xs text-gray-500 mt-2 italic">{loan.notes}</p>}
+        {loan.id && <LoanComponentsPanel loan={loan} onChange={onUpdate} compact />}
       </div>
     </>
   );

@@ -4,7 +4,7 @@
  */
 import { Router, Request, Response } from 'express';
 import { Prisma } from '@prisma/client';
-import { parseBill, applyPastDueNotice, recordConfirmedPayment, syncPaymentPlanFromBill, syncInsurancePolicyFromBill, normalizeAcct, ExtractedBillData, MatchResult } from '../services/pdfImportService';
+import { parseBill, applyPastDueNotice, recordConfirmedPayment, syncPaymentPlanFromBill, syncInsurancePolicyFromBill, syncLoanComponentsFromBill, normalizeAcct, ExtractedBillData, MatchResult } from '../services/pdfImportService';
 import { encrypt, decrypt } from '../crypto/encrypt';
 import { uploadDocument, buildStatementKey } from '../services/s3Service';
 import { attachDbUser } from '../middleware/requireAuth';
@@ -502,6 +502,7 @@ router.post('/confirm', async (req: Request, res: Response) => {
           await recordConfirmedPayment(utilityAccountId, existing.id, ex);
           await syncPaymentPlanFromBill(utilityAccountId, ex);
           await syncInsurancePolicyFromBill(utilityAccountId, ex);
+          await syncLoanComponentsFromBill(utilityAccountId, ex);
           await syncTrueUpFromBill(utilityAccountId, ex);
           skipped++;
         } else {
@@ -534,6 +535,7 @@ router.post('/confirm', async (req: Request, res: Response) => {
           await recordConfirmedPayment(utilityAccountId, created.id, ex);
           await syncPaymentPlanFromBill(utilityAccountId, ex);
           await syncInsurancePolicyFromBill(utilityAccountId, ex);
+          await syncLoanComponentsFromBill(utilityAccountId, ex);
           await syncTrueUpFromBill(utilityAccountId, ex);
           imported++;
         }
