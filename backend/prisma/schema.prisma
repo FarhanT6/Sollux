@@ -369,6 +369,9 @@ model Payment {
   // the account (an installment contract billed like a utility). Kept so
   // an edit or deletion puts it back.
   loanApplied        Decimal?       @db.Decimal(12, 2)
+  // One real payment split across several bills is stored as one row per
+  // bill, all sharing this id, so the parts read as one payment.
+  splitGroupId       String?
   paymentDate        DateTime
   confirmationNumber String?
   paymentMethod      String?

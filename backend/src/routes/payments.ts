@@ -126,6 +126,60 @@ async function ownAccount(userId: string, utilityAccountId: string) {
   });
 }
 
+// POST /api/payments/split — one real payment covering several bills. Stored
+// as one row per bill (so each bill's paid state, plan and loan application
+// keep working per statement), all sharing a splitGroupId so the parts read
+// as one payment. The allocations must add up to the amount.
+const SplitPaymentSchema = PaymentSchema.omit({ statementId: true }).extend({
+  allocations: z.array(z.object({ statementId: z.string(), amount: z.number().positive() })).min(2),
+});
+
+router.post('/split', async (req, res, next) => {
+  try {
+    const data = SplitPaymentSchema.parse(req.body);
+    const account = await ownAccount(req.dbUserId!, data.utilityAccountId);
+    if (!account) return res.status(404).json({ error: 'Utility account not found' });
+
+    const allocated = Number(data.allocations.reduce((a, x) => a + x.amount, 0).toFixed(2));
+    if (Math.abs(allocated - data.amount) > 0.01) {
+      return res.status(400).json({ error: `The amounts per bill add up to ${allocated.toFixed(2)}, not the ${data.amount.toFixed(2)} paid.` });
+    }
+    const ids = data.allocations.map(a => a.statementId);
+    if (new Set(ids).size !== ids.length) return res.status(400).json({ error: 'Each bill can appear once.' });
+    const stmts = await db.statement.findMany({ where: { id: { in: ids }, utilityAccountId: data.utilityAccountId }, select: { id: true } });
+    if (stmts.length !== ids.length) return res.status(404).json({ error: 'Statement not found on this account' });
+    if (data.bankAccountId) {
+      const bank = await db.bankAccount.findFirst({ where: { id: data.bankAccountId, userId: req.dbUserId! } });
+      if (!bank) return res.status(404).json({ error: 'Bank account not found' });
+    }
+
+    const { allocations, amount: _total, feeAmount, ...shared } = data;
+    const splitGroupId = `split_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const created: any[] = [];
+    for (const [i, alloc] of allocations.entries()) {
+      const payment = await db.payment.create({
+        data: {
+          ...shared,
+          statementId: alloc.statementId,
+          amount: alloc.amount,
+          // The fee was paid once; it sits on the first part so totals stay right.
+          feeAmount: i === 0 ? feeAmount ?? null : null,
+          splitGroupId,
+          paymentDate: new Date(shared.paymentDate),
+        },
+        include: { bankAccount: { select: { id: true, name: true, bank: true, last4: true, accountType: true, ownerLabel: true, cardNetwork: true } } },
+      });
+      await syncStatementPaid(alloc.statementId);
+      const planApplied = await applyPaymentToPlan(payment.id);
+      const loanApplied = await applyPaymentToLoan(payment.id);
+      created.push({ ...payment, planApplied: planApplied > 0 ? planApplied : null, loanApplied: loanApplied > 0 ? loanApplied : null });
+    }
+    res.status(201).json(created);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /api/payments — record a payment against a utility account, optionally
 // against one specific statement.
 router.post('/', async (req, res, next) => {

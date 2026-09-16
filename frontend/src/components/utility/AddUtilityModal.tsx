@@ -53,6 +53,56 @@ interface Props {
   onSuccess: () => void;
 }
 
+type LoanDetailsForm = {
+  interestRate: string; monthlyPayment: string; originalAmount: string; downPayment: string;
+  currentBalance: string; originationDate: string; maturityDate: string;
+};
+
+// The same terms the account's "Loan Details" editor takes, so a loan can
+// be entered in full the moment the account is created.
+function LoanDetailFields({ details, onChange }: { details: LoanDetailsForm; onChange: (key: keyof LoanDetailsForm, value: string) => void }) {
+  const original = parseFloat(details.originalAmount);
+  const down = parseFloat(details.downPayment);
+  return (
+    <div className="mt-3">
+      <p className="text-xs text-gray-400 mb-2">Loan details <span className="text-gray-600">(optional — can be filled in later)</span></p>
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="text-xs text-gray-500 block mb-1">Interest rate (%)</label>
+          <Input type="number" step="0.001" value={details.interestRate} onChange={e => onChange('interestRate', e.target.value)} placeholder="e.g. 6.5" />
+        </div>
+        <div>
+          <label className="text-xs text-gray-500 block mb-1">Monthly payment ($)</label>
+          <Input type="number" step="0.01" value={details.monthlyPayment} onChange={e => onChange('monthlyPayment', e.target.value)} placeholder="0.00" />
+        </div>
+        <div>
+          <label className="text-xs text-gray-500 block mb-1">Original loan amount ($)</label>
+          <Input type="number" step="0.01" value={details.originalAmount} onChange={e => onChange('originalAmount', e.target.value)} placeholder="0.00" />
+        </div>
+        <div>
+          <label className="text-xs text-gray-500 block mb-1">Down payment ($)</label>
+          <Input type="number" step="0.01" value={details.downPayment} onChange={e => onChange('downPayment', e.target.value)} placeholder="0" />
+          {original > 0 && down > 0 && (
+            <p className="text-xs text-gray-600 mt-1">Financed: ${(original - down).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+          )}
+        </div>
+        <div>
+          <label className="text-xs text-gray-500 block mb-1">Current balance ($)</label>
+          <Input type="number" step="0.01" value={details.currentBalance} onChange={e => onChange('currentBalance', e.target.value)} placeholder="0.00" />
+        </div>
+        <div>
+          <label className="text-xs text-gray-500 block mb-1">Origination date</label>
+          <Input type="date" value={details.originationDate} onChange={e => onChange('originationDate', e.target.value)} />
+        </div>
+        <div>
+          <label className="text-xs text-gray-500 block mb-1">Maturity date</label>
+          <Input type="date" value={details.maturityDate} onChange={e => onChange('maturityDate', e.target.value)} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Props) {
   const [step, setStep] = useState<'provider' | 'credentials'>('provider');
   const [loading, setLoading] = useState(false);
@@ -73,6 +123,25 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
   const [customProviders, setCustomProviders] = useState<Record<string, { slug: string; category: string }>>({});
   const [isLoan, setIsLoan] = useState(false);
   const [loanType, setLoanType] = useState('OTHER');
+  // The loan's terms, taken here rather than on a second screen after the
+  // account exists. Anything left blank can be filled in from the account.
+  const [loanDetails, setLoanDetails] = useState({
+    interestRate: '', monthlyPayment: '', originalAmount: '', downPayment: '',
+    currentBalance: '', originationDate: '', maturityDate: '',
+  });
+  const setLoanDetail = (key: keyof typeof loanDetails, value: string) => setLoanDetails(prev => ({ ...prev, [key]: value }));
+  const loanDetailPayload = () => {
+    const num = (s: string) => (s.trim() === '' ? null : parseFloat(s));
+    return {
+      lender: form.providerName, loanType,
+      accountLast4: form.accountNumber ? form.accountNumber.replace(/\D/g, '').slice(-4) || null : null,
+      interestRate: num(loanDetails.interestRate), monthlyPayment: num(loanDetails.monthlyPayment),
+      originalAmount: num(loanDetails.originalAmount), downPayment: num(loanDetails.downPayment),
+      currentBalance: num(loanDetails.currentBalance),
+      originationDate: loanDetails.originationDate || null, maturityDate: loanDetails.maturityDate || null,
+    };
+  };
+  const hasLoanDetails = () => Object.values(loanDetails).some(v => v.trim() !== '');
   const [insuranceType, setInsuranceType] = useState('PROPERTY');
   // How this account bills. Defaults differ by category because the common
   // case does: a utility bills monthly, a policy usually once a term.
@@ -185,8 +254,11 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
       // LOAN/CREDIT_CARD categories auto-link on the backend; the checkbox
       // below only applies to other categories that also happen to be a loan (e.g. a
       // solar financing account still categorized as SOLAR).
-      if (isLoan && form.category !== 'LOAN' && form.category !== 'CREDIT_CARD') {
-        await upsertUtilityLoan(account.id, { lender: form.providerName, loanType });
+      const linksLoan = form.category === 'LOAN' || form.category === 'CREDIT_CARD' || isLoan;
+      if (linksLoan && (hasLoanDetails() || (isLoan && form.category !== 'LOAN' && form.category !== 'CREDIT_CARD'))) {
+        // LOAN/CREDIT_CARD accounts get their loan created server-side; this
+        // fills in its terms. Other categories create the link here.
+        await upsertUtilityLoan(account.id, loanDetailPayload());
       }
       onSuccess();
       onClose();
@@ -374,6 +446,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
                   <option key={v} value={v}>{l}</option>
                 ))}
               </Select>
+              <LoanDetailFields details={loanDetails} onChange={setLoanDetail} />
             </div>
           ) : (
             /* Loan link on a non-LOAN/CREDIT_CARD category — e.g. a solar financing account still categorized as SOLAR */
@@ -397,6 +470,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
                       <option key={v} value={v}>{l}</option>
                     ))}
                   </Select>
+                  <LoanDetailFields details={loanDetails} onChange={setLoanDetail} />
                 </div>
               )}
             </div>

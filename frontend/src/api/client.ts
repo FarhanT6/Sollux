@@ -448,6 +448,9 @@ export const deletePayment = (id: string) =>
   api.delete(`/payments/${id}`);
 export const createPayment = (data: any) =>
   api.post<Payment>('/payments', data).then(r => r.data);
+// One real payment covering several bills: one row per bill, sharing a splitGroupId.
+export const createSplitPayment = (data: any & { allocations: { statementId: string; amount: number }[] }) =>
+  api.post<Payment[]>('/payments/split', data).then(r => r.data);
 
 // Insights
 export const getInsights = (params?: { propertyId?: string; severity?: string; type?: string; unread?: boolean }) =>
