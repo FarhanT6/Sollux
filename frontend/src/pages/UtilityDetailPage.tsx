@@ -18,6 +18,7 @@ import type { BankAccount } from '../types';
 import { Pill, Skeleton, EmptyState } from '../components/ui';
 import { format, isAfter } from 'date-fns';
 import { monthKey, fmtDate, yearOf, todayISO, billMonthLabel } from '../lib/date';
+import { projectLoanBalance } from '../lib/loanMath';
 import { operatingCost } from '../lib/operatingCost';
 import ChargeAnalyticsPanel from '../components/utility/ChargeAnalyticsPanel';
 
@@ -175,8 +176,8 @@ function PaymentPlanModal({
 
 // ── Loan Card ────────────────────────────────────────────────────────────────
 
-function LoanModal({ accountId, existing, onClose, onSave }: {
-  accountId: string; existing: any | null; onClose: () => void; onSave: (l: any) => void;
+function LoanModal({ accountId, existing, arrears, onClose, onSave }: {
+  accountId: string; existing: any | null; arrears?: number | null; onClose: () => void; onSave: (l: any) => void;
 }) {
   const [lender,          setLender]          = useState(existing?.lender || '');
   const [loanType,        setLoanType]        = useState(existing?.loanType || 'OTHER');
@@ -192,23 +193,8 @@ function LoanModal({ accountId, existing, onClose, onSave }: {
   const [saving,          setSaving]          = useState(false);
 
   function autoCalcBalance() {
-    const P = parseFloat(originalAmount);
-    const r = parseFloat(interestRate) / 12 / 100;
-    const PMT = parseFloat(monthlyPayment);
-    const origin = originationDate ? new Date(originationDate) : null;
-    if (!origin || isNaN(P) || isNaN(PMT) || P <= 0 || PMT <= 0) return;
-    const today = new Date();
-    const n = Math.max(0, Math.floor(
-      (today.getFullYear() - origin.getFullYear()) * 12 + (today.getMonth() - origin.getMonth())
-    ));
-    let balance: number;
-    if (!isNaN(r) && r > 0) {
-      const factor = Math.pow(1 + r, n);
-      balance = P * factor - PMT * (factor - 1) / r;
-    } else {
-      balance = P - PMT * n;
-    }
-    setCurrentBalance(String(Math.max(0, Math.round(balance * 100) / 100)));
+    const balance = projectLoanBalance({ originalAmount, downPayment, interestRate, monthlyPayment, originationDate, arrears });
+    if (balance != null) setCurrentBalance(String(balance));
   }
 
   async function handleSave() {
@@ -308,8 +294,8 @@ function LoanModal({ accountId, existing, onClose, onSave }: {
   );
 }
 
-function LoanCard({ loan, accountId, onUpdate, onDelete }: {
-  loan: any; accountId: string; onUpdate: (l: any) => void; onDelete: () => void;
+function LoanCard({ loan, accountId, arrears, onUpdate, onDelete }: {
+  loan: any; accountId: string; arrears?: number | null; onUpdate: (l: any) => void; onDelete: () => void;
 }) {
   const [showEdit, setShowEdit] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -343,7 +329,7 @@ function LoanCard({ loan, accountId, onUpdate, onDelete }: {
 
   return (
     <>
-      {showEdit && <LoanModal accountId={accountId} existing={loan} onClose={() => setShowEdit(false)} onSave={onUpdate} />}
+      {showEdit && <LoanModal accountId={accountId} existing={loan} arrears={arrears} onClose={() => setShowEdit(false)} onSave={onUpdate} />}
       <div className="rounded-xl px-5 py-4 mb-4" style={{ background: '#1e1e1e', border: '1px solid rgba(99,102,241,0.3)' }}>
         <div className="flex items-start justify-between mb-3">
           <div>
@@ -926,7 +912,7 @@ export default function UtilityDetailPage() {
           onSave={p => { setPlan(p); setShowPlanModal(false); }} />
       )}
       {showLoanModal && (
-        <LoanModal accountId={accountId!} existing={loan}
+        <LoanModal accountId={accountId!} existing={loan} arrears={latestPastDue}
           onClose={() => setShowLoanModal(false)}
           onSave={l => { setLoan(l); setShowLoanModal(false); }} />
       )}
@@ -1144,7 +1130,7 @@ export default function UtilityDetailPage() {
         {/* Payment Plan section */}
         {/* Loan Details */}
         {loan ? (
-          <LoanCard loan={loan} accountId={accountId!}
+          <LoanCard loan={loan} accountId={accountId!} arrears={latestPastDue}
             onUpdate={setLoan} onDelete={() => setLoan(null)} />
         ) : (
           <button
