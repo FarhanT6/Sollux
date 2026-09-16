@@ -8,6 +8,22 @@ import { format } from 'date-fns';
 // for anyone west of UTC (May 1 → Apr 30 in US timezones). We take just the
 // YYYY-MM-DD portion and rebuild a local Date from those parts, so the
 // calendar date the user entered is what shows — no shift.
+/**
+ * The month a bill is filed under: the later of the month it was issued and
+ * the month it covers. A bill sent after its service month (CR&R's Sep 1
+ * bill for August) files under the issue month; one sent ahead of it
+ * (Blueshield's Aug 17 bill for Sep 1–30) files under the month it covers.
+ * Either way a bill sits in the latest month it touches.
+ */
+export function billMonthLabel(s: { statementDate?: string | null; billingPeriodEnd?: string | null } | null | undefined): string {
+  if (!s) return '—';
+  const key = (d?: string | null) => (d ? d.slice(0, 7) : '');
+  const issued = key(s.statementDate);
+  const covers = key(s.billingPeriodEnd);
+  const pick = issued && covers ? (covers > issued ? s.billingPeriodEnd : s.statementDate) : (s.statementDate || s.billingPeriodEnd);
+  return fmtDate(pick, 'MMM yyyy');
+}
+
 export function fmtDate(d?: string | Date | null, fmtStr = 'MMM d, yyyy'): string {
   if (!d) return '—';
   const iso = typeof d === 'string' ? d : d.toISOString();

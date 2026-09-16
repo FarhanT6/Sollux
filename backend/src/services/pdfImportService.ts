@@ -1664,15 +1664,31 @@ export async function syncPaymentPlanFromBill(utilityAccountId: string, ex: Extr
  */
 export async function syncInsurancePolicyFromBill(utilityAccountId: string, ex: ExtractedBillData): Promise<void> {
   const ins = ex.insurance;
-  if (!ins || (!ins.policyNumber && !ins.coverageStart)) return;
   const account = await db.utilityAccount.findUnique({
     where: { id: utilityAccountId },
-    select: { id: true, propertyId: true, providerName: true, category: true, insurancePolicy: { select: { id: true, policyNumber: true, effectiveDate: true, expirationDate: true } } },
+    select: { id: true, propertyId: true, providerName: true, category: true, insurancePolicy: { select: { id: true, policyNumber: true, effectiveDate: true, expirationDate: true, premiumAmount: true } } },
   });
   if (!account || account.category !== 'INSURANCE') return;
   const billDate = ex.statementDate ? new Date(ex.statementDate) : new Date();
   const newer = await db.statement.findFirst({ where: { utilityAccountId, statementDate: { gt: billDate }, isDownPayment: false }, select: { id: true } });
   if (newer) return;
+
+  if (!ins || (!ins.policyNumber && !ins.coverageStart)) {
+    // A plain premium bill (Blue Shield's monthly dental/health invoice) names
+    // no policy number or term. It still says what one payment is and how
+    // long it covers, which is all the policy card needs; fill a premium the
+    // policy doesn't yet have rather than leaving "$0.00 / annual".
+    const current = account.insurancePolicy;
+    if (!current || Number(current.premiumAmount) !== 0) return;
+    const charge = ex.currentCharges ?? ex.amountDue;
+    if (charge == null || charge <= 0) return;
+    const s = ex.billingPeriodStart ? new Date(ex.billingPeriodStart) : null;
+    const e = ex.billingPeriodEnd ? new Date(ex.billingPeriodEnd) : null;
+    const days = s && e ? (e.getTime() - s.getTime()) / 86400000 : null;
+    const premiumFrequency = days == null || days <= 45 ? 'MONTHLY' : days <= 200 ? 'SEMI_ANNUAL' : 'ANNUAL';
+    await db.insurancePolicy.update({ where: { id: current.id }, data: { premiumAmount: charge, premiumFrequency } });
+    return;
+  }
 
   // Carriers' policy numbers are read with drifting letters ("ACP BP01" vs
   // "ACP EP01"); the digits are the identity. The billing account number is
