@@ -1680,6 +1680,26 @@ export async function syncPaymentPlanFromBill(utilityAccountId: string, ex: Extr
 }
 
 /**
+ * How often an installment is paid: from the schedule's spacing when there
+ * are several, else from the term when there is one payment for the whole
+ * of it. A single $5,069.67 payment on a 12-month policy is annual, not
+ * "monthly" as every installment used to be labelled.
+ */
+function cadenceOf(ins: NonNullable<ExtractedBillData['insurance']>, start: Date | null, end: Date | null): 'MONTHLY' | 'SEMI_ANNUAL' | 'ANNUAL' {
+  const sched = (ins.paymentSchedule ?? []).map(p => new Date(p.date).getTime()).sort((a, b) => a - b);
+  if (sched.length >= 2) {
+    const gaps = sched.slice(1).map((t, i) => (t - sched[i]!) / 86400000);
+    const typical = gaps.sort((a, b) => a - b)[Math.floor(gaps.length / 2)]!;
+    return typical <= 45 ? 'MONTHLY' : typical <= 200 ? 'SEMI_ANNUAL' : 'ANNUAL';
+  }
+  const termDays = start && end ? (end.getTime() - start.getTime()) / 86400000 : null;
+  if (sched.length === 1 || (ins.installmentsRemaining ?? 0) <= 1) {
+    return termDays != null && termDays <= 200 ? 'SEMI_ANNUAL' : 'ANNUAL';
+  }
+  return 'MONTHLY';
+}
+
+/**
  * Keep the account's insurance policy in step with what its billing
  * statements say. A carrier's billing account outlives any one policy: the
  * April statement bills the last installment of policy …3130444825
@@ -1733,7 +1753,7 @@ export async function syncInsurancePolicyFromBill(utilityAccountId: string, ex: 
     ...(start ? { effectiveDate: start } : {}),
     ...(end ? { expirationDate: end } : {}),
     ...(ins.termPremium != null ? { termPremium: ins.termPremium } : {}),
-    ...(perInstallment != null ? { premiumAmount: perInstallment, premiumFrequency: 'MONTHLY' as const } : {}),
+    ...(perInstallment != null ? { premiumAmount: perInstallment, premiumFrequency: cadenceOf(ins, start, end) } : {}),
     ...(ins.insuranceType ? { policyType: ins.insuranceType as any } : {}),
     isActive: true,
   };
@@ -1786,7 +1806,7 @@ export async function syncInsurancePolicyFromBill(utilityAccountId: string, ex: 
       carrier: account.providerName,
       policyType: (ins.insuranceType as any) ?? 'PROPERTY',
       premiumAmount: perInstallment ?? ins.termPremium ?? 0,
-      premiumFrequency: perInstallment != null ? 'MONTHLY' : 'ANNUAL',
+      premiumFrequency: perInstallment != null ? cadenceOf(ins, start, end) : 'ANNUAL',
       ...figures,
       notes: `Created from the ${ex.statementDate ?? ''} billing statement${ins.installmentsRemaining != null ? ` · ${ins.installmentsRemaining} installments remaining` : ''}`,
     },

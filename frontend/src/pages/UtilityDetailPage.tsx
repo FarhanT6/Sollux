@@ -8,7 +8,7 @@ import {
   getPaymentPlan, createPaymentPlan, updatePaymentPlan, deletePaymentPlan,
   upsertUtilityLoan, deleteUtilityLoan, patchStatement, createStatement, deleteStatement, markStatementUnpaid,
   revealUtilityAccountNumber, createPayment, createSplitPayment, updatePayment, deletePayment,
-  getBankAccounts, getCostSettings, updateCostSettings, getLoans,
+  getBankAccounts, getCostSettings, updateCostSettings, getLoans, getLoanPayments,
   getInsurancePolicies,
 } from '../api/client';
 import { CADENCE_LABELS } from '../lib/cadence';
@@ -443,6 +443,97 @@ function EscrowControl({ account, onChange, onReload }: {
         </div>
       )}
     </span>
+  );
+}
+
+// ── Escrow funding ───────────────────────────────────────────────────────────
+// The lender pays the carrier the whole premium at renewal; the owner funds
+// it a payment at a time inside the mortgage. This is the premium being paid
+// down that way: how much each mortgage payment carries toward it, how many
+// have gone in since the term began, and what is still to be funded.
+function EscrowFunding({ account, policy, onAccountChange }: {
+  account: any; policy: any; onAccountChange: (patch: Record<string, unknown>) => void;
+}) {
+  const [loanPayments, setLoanPayments] = useState<any[] | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    if (!account.escrowLoanId) return;
+    getLoanPayments(account.escrowLoanId).then(setLoanPayments).catch(() => setLoanPayments([]));
+  }, [account.escrowLoanId]);
+
+  const premium = policy.termPremium != null ? Number(policy.termPremium) : (policy.premiumAmount != null ? Number(policy.premiumAmount) : null);
+  const start = policy.effectiveDate ? new Date(policy.effectiveDate) : null;
+  const end = policy.expirationDate ? new Date(policy.expirationDate) : null;
+  const termMonths = start && end ? Math.max(1, Math.round((end.getTime() - start.getTime()) / (30.44 * 86400000))) : 12;
+  const suggested = premium != null ? Number((premium / termMonths).toFixed(2)) : null;
+  const perPayment = account.escrowMonthlyAmount != null ? Number(account.escrowMonthlyAmount) : suggested;
+
+  // Mortgage payments that have gone in since the term began. Escrow for a
+  // term is collected in the year leading up to it, so the count also
+  // accepts the twelve months before the term when none fall inside it.
+  const paid = (loanPayments ?? []).filter(p => p.status !== 'UNPAID' && p.status !== 'PAST_DUE');
+  const since = start ? new Date(start.getFullYear(), start.getMonth() - termMonths, start.getDate()) : null;
+  const inTerm = start ? paid.filter(p => new Date(p.date) >= start) : [];
+  const counted = inTerm.length > 0 ? inTerm : (since ? paid.filter(p => new Date(p.date) >= since) : paid);
+  const logged = counted.length;
+  // With no mortgage payments logged, fall back to the months elapsed.
+  const elapsed = start ? Math.max(0, Math.min(termMonths, Math.floor((Date.now() - start.getTime()) / (30.44 * 86400000)) + 1)) : 0;
+  const usingElapsed = loanPayments != null && logged === 0;
+  const n = Math.min(termMonths, usingElapsed ? elapsed : logged);
+  const funded = perPayment != null ? Math.min(premium ?? Infinity, Number((n * perPayment).toFixed(2))) : null;
+  const remaining = premium != null && funded != null ? Math.max(0, Number((premium - funded).toFixed(2))) : null;
+  const pct = premium && funded != null ? Math.min(100, (funded / premium) * 100) : 0;
+
+  async function save() {
+    const v = draft.trim() === '' ? null : parseFloat(draft);
+    if (v != null && !(v >= 0)) return;
+    setSaving(true);
+    try {
+      await updateUtility(account.id, { escrowMonthlyAmount: v } as any);
+      onAccountChange({ escrowMonthlyAmount: v });
+      setEditing(false);
+    } catch { alert('Could not save the escrow amount.'); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div className="mt-3 pt-3" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+      <div className="flex items-center justify-between mb-1">
+        <p className="text-xs text-gray-400">
+          Funded through escrow · {account.escrowLoan?.lender ?? 'the lender'} pays the carrier; each mortgage payment carries
+          {' '}
+          {editing ? (
+            <span className="inline-flex items-center gap-1">
+              $<input type="number" step="0.01" value={draft} onChange={e => setDraft(e.target.value)} className="input-dark text-xs w-24 py-0.5" placeholder={suggested != null ? suggested.toFixed(2) : '0.00'} />
+              <button onClick={save} disabled={saving} className="text-amber-400 hover:text-amber-300">Save</button>
+              <button onClick={() => setEditing(false)} className="text-gray-500 hover:text-gray-300">Cancel</button>
+            </span>
+          ) : (
+            <button onClick={() => { setDraft(perPayment != null ? String(perPayment) : ''); setEditing(true); }}
+              className="text-white hover:text-amber-300" title="Set how much of each mortgage payment goes toward this policy (from the lender's escrow analysis)">
+              {perPayment != null ? fmtMoney(perPayment) : 'an amount not yet set'}
+              {account.escrowMonthlyAmount == null && suggested != null ? <span className="text-gray-500"> (premium ÷ {termMonths}, click to set)</span> : null}
+            </button>
+          )}
+          {' '}toward it.
+        </p>
+      </div>
+      {premium != null && funded != null ? (
+        <>
+          <div className="flex justify-between text-xs text-gray-400 mb-1">
+            <span>Funded: <span className="text-white">{fmtMoney(funded)}</span> · {n} of {termMonths} payments{usingElapsed ? ' (by months elapsed — no mortgage payments logged)' : ''}</span>
+            <span>Remaining: <span className="text-amber-300 font-medium">{fmtMoney(remaining ?? 0)}</span> of {fmtMoney(premium)}</span>
+          </div>
+          <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.08)' }}>
+            <div className="h-full rounded-full" style={{ width: `${pct}%`, background: 'linear-gradient(90deg,#10b981,#6ee7b7)' }} />
+          </div>
+        </>
+      ) : (
+        <p className="text-xs text-gray-600">Add the term premium to the policy to see it being funded.</p>
+      )}
+    </div>
   );
 }
 
@@ -1220,7 +1311,10 @@ export default function UtilityDetailPage() {
           </button>
         )}
 
-        {account.category === 'INSURANCE' && <PolicyCard accountId={accountId!} propertyId={propertyId!} carrier={account.providerName} />}
+        {account.category === 'INSURANCE' && (
+          <PolicyCard accountId={accountId!} propertyId={propertyId!} carrier={account.providerName} account={account}
+            onAccountChange={patch => setAccount((prev: any) => prev ? { ...prev, ...patch } : prev)} />
+        )}
 
         {/* Payment Plan */}
         {plan ? (
@@ -1902,7 +1996,9 @@ function StatementModal({ accountId, statement, onClose, onSaved }: {
  * account outlives any one policy, so the previous policy stays listed as
  * history once a renewal statement has replaced it.
  */
-function PolicyCard({ accountId, propertyId, carrier }: { accountId: string; propertyId: string; carrier: string }) {
+function PolicyCard({ accountId, propertyId, carrier, account, onAccountChange }: {
+  accountId: string; propertyId: string; carrier: string; account: any; onAccountChange: (patch: Record<string, unknown>) => void;
+}) {
   const [policies, setPolicies] = useState<any[] | null>(null);
   useEffect(() => { getInsurancePolicies({ propertyId }).then(setPolicies).catch(() => setPolicies([])); }, [propertyId, accountId]);
   if (!policies) return null;
@@ -1928,6 +2024,9 @@ function PolicyCard({ accountId, propertyId, carrier }: { accountId: string; pro
           {current.notes && <p className="col-span-2 md:col-span-4 text-xs text-gray-500">{current.notes}</p>}
         </div>
       ) : <p className="text-xs text-gray-500">No current policy linked to this account.</p>}
+      {current && account?.escrowLoanId && (
+        <EscrowFunding account={account} policy={current} onAccountChange={onAccountChange} />
+      )}
       {previous.length > 0 && (
         <div className="mt-3 pt-2" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
           <p className="text-xs text-gray-500 mb-1">Previous</p>

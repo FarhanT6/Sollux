@@ -214,6 +214,11 @@ model UtilityAccount {
   // counting them as well would count it twice. The mortgage wins.
   escrowLoanId     String?
   escrowLoan       Loan?           @relation("EscrowedAccounts", fields: [escrowLoanId], references: [id], onDelete: SetNull)
+  // How much of each mortgage payment goes toward this account (the
+  // insurance share of the escrow). The lender pays the carrier in full at
+  // renewal; the owner funds it a twelfth at a time, and this is what shows
+  // the premium being paid down payment by payment.
+  escrowMonthlyAmount Decimal?     @db.Decimal(10, 2)
   syncEnabled      Boolean         @default(true)
   isActive         Boolean         @default(true)
   lastSyncedAt     DateTime?
