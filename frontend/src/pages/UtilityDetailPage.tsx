@@ -1364,6 +1364,9 @@ export default function UtilityDetailPage() {
                           <p className="text-xs text-gray-600">billed {fmtDate(s.statementDate, 'MMM d')}</p>
                         )}
                         {isLatest && <p className="text-xs text-amber-500 mt-0.5">Latest</p>}
+                        {s.isScheduled && (
+                          <p className="text-xs text-sky-400 mt-0.5" title="From the policy's payment schedule; the carrier's bill replaces it when imported.">Scheduled</p>
+                        )}
                       </div>
 
                       {/* Billing period + flags */}

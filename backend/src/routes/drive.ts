@@ -5,6 +5,7 @@ import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { getSignedDocumentUrl, downloadDocument, uploadDocument, buildStatementKey } from '../services/s3Service';
 import { markEscrowedStatements } from '../services/escrow';
+import { applyPolicyDocument } from '../services/pdfImportService';
 import { applyPastDueNotice, parseBill, recordConfirmedPayment, syncPaymentPlanFromBill, syncInsurancePolicyFromBill, syncLoanComponentsFromBill } from '../services/pdfImportService';
 import { findOrCreateUtilityAccount } from '../services/utilityAccountResolver';
 
@@ -270,6 +271,14 @@ router.post('/stream', attachDbUser, async (req, res) => {
           } else {
             send({ type: 'error', filename: file.name, message: 'past-due notice, but the account has no statement to attach it to — import the bills first' });
           }
+          return;
+        }
+        // A renewal offer / welcome letter / declarations page: update the
+        // policy and file its scheduled installments; it bills nothing itself.
+        if (utilityAccountId && ex.documentKind === 'policy_document') {
+          const filed = await applyPolicyDocument(utilityAccountId, ex);
+          autoImported++;
+          send({ type: 'auto_imported', filename: file.name, note: `policy document · ${filed} scheduled installment${filed === 1 ? '' : 's'} filed` });
           return;
         }
 

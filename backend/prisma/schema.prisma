@@ -340,6 +340,10 @@ model Statement {
   // month a policy starts looks like a cost spike and every average built on
   // it is wrong.
   isDownPayment        Boolean         @default(false)
+  // An installment taken from a policy's payment schedule (a renewal offer
+  // or welcome letter) before the bill itself has arrived. It shows what is
+  // coming and when; the real bill, when imported, takes its place.
+  isScheduled          Boolean         @default(false)
   sourceType           StatementSource @default(SCRAPER)
   createdAt            DateTime        @default(now())
 
@@ -1236,6 +1240,13 @@ enum InsuranceType {
   LIABILITY
   FLOOD
   UMBRELLA
+  AUTO
+  RENTERS
+  HEALTH
+  DENTAL
+  VISION
+  LIFE
+  BUSINESS
   OTHER
 }
 
