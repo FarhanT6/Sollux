@@ -817,6 +817,8 @@ export interface Statement {
   // A deposit taken at the start of a term rather than a period's charge —
   // on file, but excluded from monthly totals and averages.
   isDownPayment?: boolean;
+  /** An installment from a policy's payment schedule, ahead of its bill. */
+  isScheduled?: boolean;
   // An arrears installment charged inside this bill: repayment of old debt,
   // not this period's service. Excluded from operating cost by default.
   paymentPlanAmount?: number | string | null;
@@ -957,7 +959,8 @@ export const LOAN_TYPE_LABELS: Record<string, string> = {
 };
 
 export const INSURANCE_TYPE_LABELS: Record<string, string> = {
-  PROPERTY: 'Property', LIABILITY: 'Liability', FLOOD: 'Flood', UMBRELLA: 'Umbrella', OTHER: 'Other',
+  PROPERTY: 'Property / homeowners', AUTO: 'Auto', RENTERS: 'Renters', LIABILITY: 'Liability', FLOOD: 'Flood', UMBRELLA: 'Umbrella',
+  HEALTH: 'Health / medical', DENTAL: 'Dental', VISION: 'Vision', LIFE: 'Life', BUSINESS: 'Business', OTHER: 'Other',
 };
 
 export const PROPERTY_TYPE_LABELS: Record<PropertyType, string> = {

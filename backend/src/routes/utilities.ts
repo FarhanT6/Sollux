@@ -218,7 +218,7 @@ const UtilitySchema = z.object({
   expectedAmount: z.number().nonnegative().optional(),
   // Only relevant when category is INSURANCE — passed through to the linked
   // InsurancePolicy's policyType, not stored on the utility account itself.
-  insuranceType: z.enum(['PROPERTY', 'LIABILITY', 'FLOOD', 'UMBRELLA', 'OTHER']).optional(),
+  insuranceType: z.enum(['PROPERTY', 'AUTO', 'RENTERS', 'LIABILITY', 'FLOOD', 'UMBRELLA', 'HEALTH', 'DENTAL', 'VISION', 'LIFE', 'BUSINESS', 'OTHER']).optional(),
   // Only relevant when category is LOAN — passed through to the linked
   // Loan's loanType, not stored on the utility account itself.
   loanType: z.enum(['MORTGAGE', 'HELOC', 'AUTO', 'PERSONAL', 'STUDENT', 'INSTALLMENT_PLAN',

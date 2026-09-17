@@ -5,6 +5,7 @@ import { guardWorker } from './redisGuard';
 import { createWorkerConnection, workerTuning } from './queues';
 import { db } from '../config/db';
 import { markEscrowedStatements } from '../services/escrow';
+import { applyPolicyDocument } from '../services/pdfImportService';
 import { recordConfirmedPayment, syncPaymentPlanFromBill, syncInsurancePolicyFromBill, syncLoanComponentsFromBill, applyPastDueNotice, parseBill } from '../services/pdfImportService';
 import { findOrCreateUtilityAccount } from '../services/utilityAccountResolver';
 import { uploadDocument, buildStatementKey } from '../services/s3Service';
@@ -204,6 +205,12 @@ const worker = new Worker<DriveImportJobData>(
             // statement rather than minting a fake month of spending.
             const attached = await applyPastDueNotice(utilityAccountId, ex);
             if (!attached) errors.push(`${file.name}: past-due notice, but the account has no statement to attach it to`);
+            processed++;
+            continue;
+          }
+          if (utilityAccountId && ex.documentKind === 'policy_document') {
+            // Describes the policy and its payment schedule; bills nothing.
+            await applyPolicyDocument(utilityAccountId, ex);
             processed++;
             continue;
           }

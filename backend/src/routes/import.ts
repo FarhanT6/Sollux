@@ -5,6 +5,7 @@
 import { Router, Request, Response } from 'express';
 import { Prisma } from '@prisma/client';
 import { markEscrowedStatements } from '../services/escrow';
+import { applyPolicyDocument } from '../services/pdfImportService';
 import { parseBill, applyPastDueNotice, recordConfirmedPayment, syncPaymentPlanFromBill, syncInsurancePolicyFromBill, syncLoanComponentsFromBill, normalizeAcct, ExtractedBillData, MatchResult } from '../services/pdfImportService';
 import { encrypt, decrypt } from '../crypto/encrypt';
 import { uploadDocument, buildStatementKey } from '../services/s3Service';
@@ -327,6 +328,22 @@ router.post('/confirm', async (req: Request, res: Response) => {
           }
           continue;
         }
+        // An insurance renewal offer, welcome letter or declarations page
+        // describes the policy and its payment schedule; it bills nothing
+        // itself. Filed as a bill it became a fake statement for the whole
+        // term. Instead the policy is brought up to date and each scheduled
+        // installment goes on the account as a bill-to-come.
+        if (ex.documentKind === 'policy_document') {
+          let docKey: string | undefined;
+          if (item.fileData) {
+            const docDate = ex.statementDate ? new Date(ex.statementDate) : new Date();
+            docKey = await uploadDocument(buildStatementKey(userId, acct.property.id, acct.id, docDate, sanitizeFilename(item.filename)), Buffer.from(item.fileData, 'base64'));
+          }
+          const filed = await applyPolicyDocument(utilityAccountId, ex, docKey);
+          notices++;
+          imported += filed;
+          continue;
+        }
         const filenameDate   = parseDateFromFilename(item.filename);
         const hasReliableDate = !!(ex.statementDate || filenameDate);
         const statementDate  = ex.statementDate
@@ -371,6 +388,16 @@ router.post('/confirm', async (req: Request, res: Response) => {
                   lte: new Date(start.getTime() + window),
                 },
               },
+            });
+          }
+          // The carrier's bill for an installment that was filed ahead of
+          // time from the policy's payment schedule: the real bill takes the
+          // scheduled row's place rather than sitting beside it.
+          if (!existing && ex.dueDate) {
+            const due = new Date(ex.dueDate);
+            const w = 5 * 86400000;
+            existing = await db.statement.findFirst({
+              where: { utilityAccountId, isScheduled: true, dueDate: { gte: new Date(due.getTime() - w), lte: new Date(due.getTime() + w) } },
             });
           }
           if (!existing) {
@@ -495,6 +522,8 @@ router.post('/confirm', async (req: Request, res: Response) => {
               amountAfterDueDate: ex.amountAfterDueDate ?? existing.amountAfterDueDate,
               ...(aging ? { agingBuckets: aging as any } : {}),
               pastDueCarried: ex.previousBalance ?? existing.pastDueCarried,
+              // A real bill now stands where a scheduled installment was.
+              isScheduled: false,
               usageValue:  ex.usageValue ?? existing.usageValue,
               usageUnit:   ex.usageUnit  ?? existing.usageUnit,
               ratePlan:    ex.ratePlan   ?? existing.ratePlan,

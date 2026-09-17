@@ -935,6 +935,20 @@ function BillCard({
                 Past-due notice, not a bill — will attach its aging and shut-off date to the account instead of creating a statement
               </p>
             )}
+            {(bill.extracted as any)?.documentKind === 'policy_document' && (() => {
+              const ins = (bill.extracted as any).insurance ?? {};
+              const sched: { date: string; amount: number }[] = ins.paymentSchedule ?? [];
+              const span = ins.coverageStart && ins.coverageEnd
+                ? `${format(new Date(ins.coverageStart + 'T12:00:00'), 'MMM d, yyyy')} – ${format(new Date(ins.coverageEnd + 'T12:00:00'), 'MMM d, yyyy')}` : null;
+              return (
+                <p className="text-xs mt-1 text-sky-300">
+                  Policy document, not a bill{ins.insuranceType ? ` · ${String(ins.insuranceType).toLowerCase()} insurance` : ''}{ins.policyNumber ? ` · policy ${ins.policyNumber}` : ''}
+                  {span ? ` · term ${span}` : ''}{ins.termPremium != null ? ` · ${fmt$(ins.termPremium)} premium` : ''}
+                  {sched.length ? ` · ${sched.length} scheduled payment${sched.length === 1 ? '' : 's'} (${fmt$(sched[0]!.amount)} on ${format(new Date(sched[0]!.date + 'T12:00:00'), 'MMM d')}${sched.length > 1 ? ` … ${format(new Date(sched[sched.length - 1]!.date + 'T12:00:00'), 'MMM d, yyyy')}` : ''})` : ''}
+                  {ins.autoPay ? ' · auto-pay' : ''}. Updates the policy and files each installment as a bill to come; the carrier's real bill replaces it when imported.
+                </p>
+              );
+            })()}
             {bill.extractedBy === 'text' && (
               <p className="text-xs mt-1" style={{ color: '#F5A623' }}>
                 Read as text, not by AI — no charge breakdown, and the billing

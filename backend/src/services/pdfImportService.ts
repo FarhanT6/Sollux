@@ -12,6 +12,7 @@ import { providersLookAlike } from './providerMatch';
 import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';
 import { syncLoanFromComponents } from './loanComponents';
+import { Prisma } from '@prisma/client';
 
 // Read the API key directly from the .env file — reliable regardless of
 // process.cwd() or ESM vs CJS module context (dotenv uses cwd which can vary).
@@ -83,6 +84,17 @@ export interface ExtractedBillData {
     serviceCharge: number | null;
     installmentsRemaining: number | null;
     renewedOn: string | null;       // date the renewal posted, when the statement says
+    /** What is insured — the same shape for every carrier and every kind of
+     *  cover, read off a bill, a renewal offer, a declarations page, a
+     *  welcome letter or an ID card alike. */
+    insuranceType?: 'PROPERTY' | 'AUTO' | 'RENTERS' | 'LIABILITY' | 'FLOOD' | 'UMBRELLA' | 'HEALTH' | 'DENTAL' | 'VISION' | 'LIFE' | 'BUSINESS' | 'OTHER' | null;
+    carrier?: string | null;        // the underwriter when it differs from the brand
+    autoPay?: boolean | null;       // payments are taken automatically on the dates below
+    totalCost?: number | null;      // term premium plus billing fees, when printed
+    /** Every installment the document lists, date and amount. */
+    paymentSchedule?: { date: string; amount: number }[] | null;
+    /** Vehicles, addresses or people covered, as printed. */
+    insuredItems?: string[] | null;
   } | null;
   /** The individual loans a servicer bills together on one statement
    *  (a federal student-loan "Account Snapshot": Group AA Direct Subsidized,
@@ -133,7 +145,7 @@ export interface ExtractedBillData {
   /** 'past_due_notice' when the document is a dunning/disconnection notice
    *  rather than a bill — it demands an existing balance and bills nothing
    *  new, so it must never become a statement row. */
-  documentKind?:      'bill' | 'past_due_notice';
+  documentKind?:      'bill' | 'past_due_notice' | 'policy_document';
   lateFee:            number | null;
   usageValue:         number | null;
   usageUnit:          string | null;   // kWh, CCF, therms, gallons, etc.
@@ -200,7 +212,7 @@ Schema (use null for any field not present in the document):
   "ratePlan": "string or null — rate schedule, plan name, or tier",
   "isPaid": boolean — true ONLY if balance is $0.00 or document shows 'Paid in Full' / paid stamp. A bill-detail layout with columns Billed / Payments and adjustments / Due where Due and TOTAL DUE are $0.00 is paid: report currentCharges and amountDue as the Billed figure and isPaid true,
   "utilityType": "electric | gas | water | sewer | trash | solar | internet | phone | other",
-  "insurance": object or null — ONLY for an insurance billing statement (carrier billing account: Nationwide, Safeco, Bamboo, State Farm…): {"policyNumber": "string", "coverageStart": "YYYY-MM-DD", "coverageEnd": "YYYY-MM-DD", "termPremium": n, "installment": n, "serviceCharge": n, "installmentsRemaining": n, "renewedOn": "YYYY-MM-DD"}. Read the policy table ("Policy / Coverage period / Balance / Installment"): the policy number is the alphanumeric code on that row, the coverage period is its two dates, termPremium is the policy balance at renewal (the "Renewal" line under Policy Activity, or the Full Balance when the term has just begun), installment is the per-policy installment on that row (before any service charge), serviceCharge the stated processing fee, installmentsRemaining the number of dated lines in "Your Installment Schedule", renewedOn the date on the "Renewal" activity line. A statement whose policy row shows a different policy number and a later coverage start than the account's previous statements is a renewal onto a new policy,
+  "insurance": object or null — for ANY insurance document, whatever the carrier or kind of cover (auto, homeowners, renters, health, dental, vision, life, umbrella, flood, business) and whatever the document is (billing statement, renewal offer, declarations page, welcome letter, ID card, payment schedule): {"policyNumber": "string", "insuranceType": "PROPERTY | AUTO | RENTERS | LIABILITY | FLOOD | UMBRELLA | HEALTH | DENTAL | VISION | LIFE | BUSINESS | OTHER", "carrier": "underwriter when it differs from the brand, else null", "coverageStart": "YYYY-MM-DD", "coverageEnd": "YYYY-MM-DD", "termPremium": n, "installment": n, "serviceCharge": n, "installmentsRemaining": n, "renewedOn": "YYYY-MM-DD", "autoPay": boolean, "totalCost": n, "paymentSchedule": [{"date": "YYYY-MM-DD", "amount": n}], "insuredItems": ["2022 Land Rover Discovery Sport", ...]}. insuranceType from what is covered (vehicles/VINs → AUTO; a dwelling → PROPERTY; medical/dental/vision plan → HEALTH/DENTAL/VISION). coverageStart/End are the "Policy Period" / "Coverage period" dates. termPremium is the premium for the whole term excluding billing fees ("Your 6-month policy premium excluding billing fees is $2,752.28"; on a billing statement the "Renewal" line or Full Balance). installment is one regular payment; serviceCharge the per-payment installment/billing fee ("We included an installment fee of $4.00 in each payment"); totalCost the term total including fees ("$2,776.28 Total Cost"). paymentSchedule is EVERY dated payment line the document prints ("Automatic Payments Schedule", "Payment schedule", "Your Installment Schedule"), in order, including ones already past. autoPay true when payments are drafted automatically. On a billing statement's policy table ("Policy / Coverage period / Balance / Installment") the policy number is the alphanumeric code on that row. A different policy number with a later coverage start than earlier documents is a renewal onto a new policy,
   "loanGroups": array or null — ONLY for a loan servicer statement that lists MORE THAN ONE loan under the account (a federal student-loan "Account Snapshot" with columns Group AA / Group BB, or "Loan 1-01 / Loan 1-02"): one entry per loan column, [{"label": "Group AA", "loanKind": "DIRECT SUB", "originalPrincipal": n, "outstandingPrincipal": n, "interestRate": n, "monthlyPayment": n, "accruedInterest": n, "disbursedOn": "YYYY-MM-DD", "payoffDate": "YYYY-MM-DD"}]. Read each column: loanKind from the "Loan Type" row, originalPrincipal from "Original Principal Amount", outstandingPrincipal from "Outstanding Principal Balance", interestRate as a percent from "Interest Rate", monthlyPayment from "Regular Monthly Payment Amount" (the Monthly Payment section, not the Account Snapshot's zeros), accruedInterest from "Accrued Interest" / "Estimated Interest Outstanding", disbursedOn from "First Disbursement Date", payoffDate from "Estimated Payoff Date". A statement for a single loan reports null,
   "statedTotalDue": number or null — the ONE figure the bill asks to be paid now: its "Total Amount Due" / "Amount Due" box. Negative when the account is in credit ("No payment is due. Your account has a credit balance of $0.82" → -0.82). This is the grand total AFTER previous balance, payments, credits and any payment-arrangement deferral; report it exactly as printed,
   "totalAccountBalance": number or null — "Total Account Balance" when printed: everything owed including a balance a payment arrangement has deferred,
@@ -209,7 +221,7 @@ Schema (use null for any field not present in the document):
   "penaltyDate": "YYYY-MM-DD" or null — the date a penalty or late fee applies if the bill is unpaid, when the bill states one ("Penalty Date", "Late after", "Penalty applies after"). This is often a day or two later than the due date; report what the bill says, not the due date,
   "amountAfterDueDate": number or null — what the bill says is payable if paid after the due date ("Amount due after 09/15/2026", "After Due Date Pay"). The difference between this and the amount due is the late fee this provider will charge,
   "agingBuckets": object or null — when the bill prints an aging table (commonly "Past Due | 30 Days | 60 Days | 90+ Days"), report it as {"current": n, "days30": n, "days60": n, "days90plus": n}, omitting any bucket the bill does not show. Report each bucket's own figure, not a running total,
-  "documentKind": "bill | past_due_notice — 'past_due_notice' ONLY when the document bills nothing new: it demands an already-overdue balance, shows no service period and no new charges. A regular invoice that carries a PAST DUE or suspension banner but also bills a new period's service is a 'bill', never a notice ('PAST DUE STATEMENT', 'FINAL NOTICE', 'service will be locked/disconnected'). For a notice: the demanded amount goes in previousBalance, currentCharges is null, any stated lock-up/disconnection or penalty date goes in penaltyDate, and its aging table in agingBuckets. Everything else is 'bill'",
+  "documentKind": "bill | past_due_notice | policy_document — 'policy_document' when the document describes an insurance policy and how it will be billed but does not itself bill a period: a renewal offer ('Your Auto Renewal Is All Set Up'), a welcome letter, a declarations page, an ID card, a payment-schedule notice. For it: fill 'insurance' (above) in full, put the document's own date in statementDate, and leave amountDue, currentCharges, previousBalance and dueDate null — its installments are in insurance.paymentSchedule. 'past_due_notice' ONLY when the document bills nothing new: it demands an already-overdue balance, shows no service period and no new charges. A regular invoice that carries a PAST DUE or suspension banner but also bills a new period's service is a 'bill', never a notice ('PAST DUE STATEMENT', 'FINAL NOTICE', 'service will be locked/disconnected'). For a notice: the demanded amount goes in previousBalance, currentCharges is null, any stated lock-up/disconnection or penalty date goes in penaltyDate, and its aging table in agingBuckets. Everything else is 'bill'",
   "chargeBreakdown": { "line item name": dollar_amount, ... } or null — every individual charge the bill itemises, using the bill's own wording as the key ({"Water": 118.53, "Sewer": 121.50} for a bill splitting the two). Include credits and discounts as negative values. This is how a total is explained later, so itemise whenever the bill does,
   "alerts": ["string", ...] — notable flags: past due, late fees, NSF, payment plan, high usage, leak, outage credit, SCRA, debt collection notice, legal action warning, etc.
 }
@@ -1722,6 +1734,7 @@ export async function syncInsurancePolicyFromBill(utilityAccountId: string, ex: 
     ...(end ? { expirationDate: end } : {}),
     ...(ins.termPremium != null ? { termPremium: ins.termPremium } : {}),
     ...(perInstallment != null ? { premiumAmount: perInstallment, premiumFrequency: 'MONTHLY' as const } : {}),
+    ...(ins.insuranceType ? { policyType: ins.insuranceType as any } : {}),
     isActive: true,
   };
 
@@ -1771,7 +1784,7 @@ export async function syncInsurancePolicyFromBill(utilityAccountId: string, ex: 
       propertyId: account.propertyId,
       utilityAccountId: account.id,
       carrier: account.providerName,
-      policyType: 'PROPERTY',
+      policyType: (ins.insuranceType as any) ?? 'PROPERTY',
       premiumAmount: perInstallment ?? ins.termPremium ?? 0,
       premiumFrequency: perInstallment != null ? 'MONTHLY' : 'ANNUAL',
       ...figures,
@@ -1867,6 +1880,186 @@ export async function syncLoanComponentsFromBill(utilityAccountId: string, ex: E
     }
   }
   await syncLoanFromComponents(loan.id);
+}
+
+// ── Insurance policy documents ───────────────────────────────────────────────
+// Insurance arrives as more than bills: renewal offers, welcome letters,
+// declarations pages, ID cards. They all say the same few things — which
+// policy, what it covers, the term, the premium, and when each installment is
+// taken — in different words. One reader for all of them, whatever the
+// carrier or the kind of cover.
+
+const INSURANCE_KIND_HINTS: [RegExp, NonNullable<NonNullable<ExtractedBillData['insurance']>['insuranceType']>][] = [
+  [/\b(?:dental|orthodont)/i, 'DENTAL'],
+  [/\bvision\b|\beyewear\b/i, 'VISION'],
+  [/\b(?:health|medical)\s+(?:plan|insurance|coverage)|\bhmo\b|\bppo\b|blue\s*shield|kaiser|anthem|aetna|cigna|united\s*health/i, 'HEALTH'],
+  [/\blife\s+insurance\b|\bterm\s+life\b|\bwhole\s+life\b|\bbeneficiar/i, 'LIFE'],
+  [/\bumbrella\b/i, 'UMBRELLA'],
+  [/\bflood\b/i, 'FLOOD'],
+  [/\brenters?\b/i, 'RENTERS'],
+  [/\bauto\b|\bvehicle|\bvin\b|\bdriver|\bcollision\b|\bcomprehensive\b/i, 'AUTO'],
+  [/\bhomeowner|\bdwelling\b|\bhome\s+insurance|\bcondo\b|\blandlord\b|\bDP-?[13]\b|\bHO-?[3568]\b/i, 'PROPERTY'],
+  [/\bgeneral\s+liability\b|\bliability\s+policy\b/i, 'LIABILITY'],
+  [/\bbusiness\s+owner|\bcommercial\s+(?:package|property)\b|\bBOP\b/i, 'BUSINESS'],
+];
+
+/** The kind of cover a document describes, from its wording. */
+export function inferInsuranceType(text: string): NonNullable<NonNullable<ExtractedBillData['insurance']>['insuranceType']> | null {
+  for (const [re, kind] of INSURANCE_KIND_HINTS) if (re.test(text)) return kind;
+  return null;
+}
+
+/**
+ * Fill in the policy from the text when the model did not, or did only in
+ * part — and recognise a document that describes the policy rather than
+ * billing a period. A Progressive renewal offer reads "Policy Period: Sep 27,
+ * 2026 - Mar 27, 2027 … 6-month policy premium excluding billing fees is
+ * $2,752.28 … Automatic Payments Schedule … Sep 27, 2026 $467.21 …
+ * installment fee of $4.00 in each payment".
+ */
+export function applyInsuranceFromText(ex: ExtractedBillData, text: string): void {
+  const looksInsurance = /\bpolicy\s*(?:number|no\.?|#|period)\b|\bcoverage\s*period\b|\bpremium\b|\bunderwritten\s+by\b|\bdeclarations?\b|\binsured\b/i.test(text);
+  if (!looksInsurance) return;
+  const ins: NonNullable<ExtractedBillData['insurance']> = {
+    policyNumber: null, coverageStart: null, coverageEnd: null, termPremium: null, installment: null,
+    serviceCharge: null, installmentsRemaining: null, renewedOn: null,
+    ...(ex.insurance ?? {}),
+  };
+  const money = (s: string) => parseFloat(s.replace(/[$,\s]/g, ''));
+
+  ins.policyNumber ??= text.match(/policy\s*(?:number|no\.?|#)\s*[:\-]?\s*([A-Z0-9][A-Z0-9\- ]{5,24}?)(?=\s*(?:\n|underwritten|policy\s+period|$))/i)?.[1]?.trim() ?? null;
+  const period = text.match(/(?:policy|coverage)\s*period\s*[:\-]?\s*([A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})\s*(?:-|–|to|through)\s*([A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})/i)
+    ?? text.match(/(?:renewal offer is\s+for the policy period|for the policy period)\s+([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})\s+through\s+([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})/i);
+  if (period) { ins.coverageStart ??= parseDate(period[1]); ins.coverageEnd ??= parseDate(period[2]); }
+  ins.carrier ??= text.match(/underwritten\s+by\s*[:\-]?\s*([A-Z][A-Za-z&.,' ]{3,60}?)(?=\s*\n)/i)?.[1]?.trim() ?? null;
+  ins.termPremium ??= (() => {
+    const m = text.match(/(\d{1,2})-?\s*month\s+(?:policy\s+)?premium[^$\n]{0,60}\$\s*([\d,]+\.\d{2})/i)
+      ?? text.match(/(?:total|term|policy)\s+premium[^$\n]{0,40}\$\s*([\d,]+\.\d{2})/i);
+    return m ? money(m[m.length - 1]!) : null;
+  })();
+  ins.totalCost ??= (() => { const m = text.match(/\$\s*([\d,]+\.\d{2})\s*total\s+cost/i) ?? text.match(/total\s+cost[^$\n]{0,20}\$\s*([\d,]+\.\d{2})/i); return m ? money(m[1]!) : null; })();
+  ins.serviceCharge ??= (() => { const m = text.match(/(?:installment|billing|service)\s+fee\s+of\s+\$\s*([\d,]+\.\d{2})/i); return m ? money(m[1]!) : null; })();
+  ins.autoPay ??= /\bautomatic\s+payments?\b|\bauto-?pay\b|\bEFT\b|\bwill be (?:drafted|withdrawn|deducted)\b/i.test(text) ? true : null;
+  ins.insuranceType ??= inferInsuranceType(text);
+
+  if (!ins.paymentSchedule || ins.paymentSchedule.length === 0) {
+    // Dated payment lines: "Sep 27, 2026 $467.21", "Oct 27, 2025 .......$408.80",
+    // "10/27/2025 $408.80". Read from the schedule block when the document
+    // has one, so "$467.21 on September 27, 2026 / $2,776.28 Total Cost" in
+    // the prose above it is not taken for a second payment on that date.
+    const block = text.match(/(?:automatic\s+)?payments?\s+schedule[\s\S]{0,2500}?(?=installment\s+fee|you may avoid|form\s+[A-Z0-9]+\s*\(|$)/i)?.[0]
+      ?? text.match(/installment\s+schedule[\s\S]{0,2500}/i)?.[0]
+      ?? text;
+    const lines = Array.from(block.matchAll(/([A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})\s*[.\s…:-]*\$\s*([\d,]+\.\d{2})/g));
+    const seen = new Set<string>();
+    const schedule = lines
+      .map(m => ({ date: parseDate(m[1]!), amount: money(m[2]!) }))
+      .filter((x): x is { date: string; amount: number } => !!x.date && x.amount > 0)
+      .filter(x => ins.totalCost == null || Math.abs(x.amount - ins.totalCost) > 0.005)
+      .filter(x => (seen.has(x.date) ? false : (seen.add(x.date), true)));
+    // Keep only a run of at least two — a lone "date $amount" is a due line
+    // on a bill, not a schedule.
+    if (schedule.length >= 2) ins.paymentSchedule = schedule;
+  }
+  if (ins.installment == null && ins.paymentSchedule && ins.paymentSchedule.length) {
+    // The regular installment is the amount most of the schedule repeats.
+    // Schedule amounts include the per-payment fee; `installment` is kept
+    // before the fee, as a billing statement's policy row prints it.
+    const counts = new Map<number, number>();
+    for (const p of ins.paymentSchedule) counts.set(p.amount, (counts.get(p.amount) ?? 0) + 1);
+    const usual = [...counts.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0])[0]![0];
+    ins.installment = Number((usual - (ins.serviceCharge ?? 0)).toFixed(2));
+  }
+  if (ins.installmentsRemaining == null && ins.paymentSchedule) {
+    const today = new Date().toISOString().slice(0, 10);
+    ins.installmentsRemaining = ins.paymentSchedule.filter(p => p.date >= today).length || null;
+  }
+  const vehicles = Array.from(text.matchAll(/\b((?:19|20)\d{2}\s+[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z0-9-]+){1,4})\s+[A-HJ-NPR-Z0-9]{17}\b/g)).map(m => m[1]!.trim());
+  if ((!ins.insuredItems || ins.insuredItems.length === 0) && vehicles.length) ins.insuredItems = [...new Set(vehicles)];
+
+  if (!ins.policyNumber && !ins.coverageStart && !ins.paymentSchedule) return;
+  ex.insurance = ins;
+
+  // A document with a term and a payment schedule but no "amount due" of its
+  // own describes the policy; it is not a bill for a period.
+  // A bill prints a figure against its demand ("Amount Due $463.54"); a
+  // letter that merely mentions "the amount due" in passing does not.
+  const billsSomething = /\b(?:total\s+)?amount\s+(?:now\s+)?due\b[^$\n]{0,12}\$\s*[\d,]+\.\d{2}|\bminimum\s+(?:amount\s+)?due\b[^$\n]{0,12}\$|\bplease\s+pay\b|\bpay\s+this\s+amount\b|\bbalance\s+due\b[^$\n]{0,12}\$/i.test(text);
+  const describesPolicy = /renewal|welcome|declarations?\s+page|id\s+cards?|payment\s+schedule|your\s+policy\s+documents/i.test(text);
+  if ((ex.documentKind == null || ex.documentKind === 'bill') && ins.paymentSchedule && ins.paymentSchedule.length >= 2 && describesPolicy && !billsSomething) {
+    ex.documentKind = 'policy_document';
+  }
+  if (ex.documentKind === 'policy_document') {
+    // The document's own date, not a bill date; nothing is billed by it.
+    ex.amountDue = null; ex.currentCharges = null; ex.previousBalance = null; ex.dueDate = null;
+    ex.statedTotalDue = null; ex.paymentsReceived = null; ex.lateFee = null;
+    ex.billingPeriodStart = ins.coverageStart ?? ex.billingPeriodStart;
+    ex.billingPeriodEnd = ins.coverageEnd ?? ex.billingPeriodEnd;
+    ex.isPaid = false;
+  }
+}
+
+/**
+ * File a policy document: bring the policy up to date and put each
+ * scheduled installment on the account as a bill-to-come, so the account
+ * shows what is due and when before the carrier's own statement arrives.
+ * A real bill later takes the scheduled row's place (routes/import.ts).
+ * Installments already taken by auto-pay read as paid. Returns how many
+ * installments were filed.
+ */
+export async function applyPolicyDocument(utilityAccountId: string, ex: ExtractedBillData, pdfS3Key?: string | null): Promise<number> {
+  const ins = ex.insurance;
+  if (!ins) return 0;
+  const account = await db.utilityAccount.findUnique({ where: { id: utilityAccountId }, select: { id: true, category: true } });
+  if (!account) return 0;
+  await syncInsurancePolicyFromBill(utilityAccountId, ex);
+
+  const schedule = (ins.paymentSchedule ?? []).filter(p => p.date && p.amount > 0);
+  if (schedule.length === 0) return 0;
+  const sorted = [...schedule].sort((a, b) => a.date.localeCompare(b.date));
+  const today = new Date().toISOString().slice(0, 10);
+  const docDate = ex.statementDate ? new Date(ex.statementDate) : new Date();
+  let filed = 0;
+  for (const [i, p] of sorted.entries()) {
+    const due = new Date(p.date);
+    const window = 5 * 86400000;
+    const existing = await db.statement.findFirst({
+      where: { utilityAccountId, dueDate: { gte: new Date(due.getTime() - window), lte: new Date(due.getTime() + window) }, isDownPayment: false },
+      select: { id: true, isScheduled: true },
+    });
+    // The carrier's own bill for this installment is already here; leave it.
+    if (existing && !existing.isScheduled) continue;
+    // The installment covers the stretch to the next one (or the term's end).
+    const periodStart = due;
+    const next = sorted[i + 1]?.date ? new Date(sorted[i + 1]!.date) : (ins.coverageEnd ? new Date(ins.coverageEnd) : null);
+    const periodEnd = next ? new Date(next.getTime() - 86400000) : new Date(due.getFullYear(), due.getMonth() + 1, due.getDate() - 1);
+    // An installment already taken by auto-pay is paid. One well in the past
+    // on a schedule that says nothing about auto-pay is assumed paid too —
+    // the policy continued, so it was — and "↺ Unpaid" is there if not.
+    const longPast = new Date(Date.now() - 45 * 86400000).toISOString().slice(0, 10);
+    const taken = p.date < today && (ins.autoPay === true || p.date < longPast);
+    const data = {
+      statementDate: docDate < due ? docDate : due,
+      dueDate: due,
+      billingPeriodStart: periodStart,
+      billingPeriodEnd: periodEnd,
+      amountDue: p.amount,
+      balance: p.amount,
+      chargesExcludingFees: ins.serviceCharge != null ? Number((p.amount - ins.serviceCharge).toFixed(2)) : p.amount,
+      penaltiesFees: null,
+      amountPaid: taken ? p.amount : null,
+      pastDueCarried: null,
+      isScheduled: true,
+      sourceType: 'MANUAL' as const,
+      notes: `Installment ${i + 1} of ${sorted.length} from the ${ex.statementDate ?? ''} ${ins.autoPay ? 'automatic payments schedule' : 'payment schedule'}${ins.serviceCharge != null ? ` (includes ${ins.serviceCharge.toFixed(2)} installment fee)` : ''}`,
+      rawDataJson: { scheduled: true, fromDocument: ex.statementDate ?? null, installmentFee: ins.serviceCharge ?? null, chargeBreakdown: ins.serviceCharge != null ? { Premium: Number((p.amount - ins.serviceCharge).toFixed(2)), 'Installment fee': ins.serviceCharge } : { Premium: p.amount } } as Prisma.InputJsonValue,
+      ...(pdfS3Key ? { pdfS3Key } : {}),
+    };
+    if (existing) await db.statement.update({ where: { id: existing.id }, data });
+    else await db.statement.create({ data: { utilityAccountId, ...data } });
+    filed++;
+  }
+  return filed;
 }
 
 export function sanitiseLateFee(ex: ExtractedBillData): void {
@@ -2291,6 +2484,7 @@ export async function parseBill(
       applyNetMeteringFromText(text, extracted);
       applyCreditFromText(text, extracted);
       applyLoanGroupsFromText(extracted, text);
+      applyInsuranceFromText(extracted, text);
     } catch { /* an unreadable text layer changes nothing */ }
     reconcileWithStatedTotal(extracted);
     sanitiseLateFee(extracted);

@@ -13,7 +13,7 @@ const PolicySchema = z.object({
   propertyId: z.string(),
   carrier: z.string().min(1),
   policyNumber: z.string().optional().nullable(),
-  policyType: z.enum(['PROPERTY','LIABILITY','FLOOD','UMBRELLA','OTHER']).default('PROPERTY'),
+  policyType: z.enum(['PROPERTY','AUTO','RENTERS','LIABILITY','FLOOD','UMBRELLA','HEALTH','DENTAL','VISION','LIFE','BUSINESS','OTHER']).default('PROPERTY'),
   premiumAmount: z.number().positive(),
   premiumFrequency: z.enum(['MONTHLY','ANNUAL','SEMI_ANNUAL']).default('ANNUAL'),
   effectiveDate: z.string().transform(s => new Date(s)).optional().nullable(),
