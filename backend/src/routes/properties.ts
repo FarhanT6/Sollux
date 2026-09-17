@@ -108,7 +108,10 @@ router.get('/', async (req, res, next) => {
             payments: {
               orderBy: [{ paymentDate: 'desc' }, { createdAt: 'desc' }],
               take: 12,
-              select: { id: true, paymentDate: true, amount: true, statementId: true, status: true, notes: true, createdAt: true },
+              // The bill a payment was logged toward may be older than the
+              // few statements sent here; its date travels with the payment so
+              // the card can still tell it reduced the newest bill's arrears.
+              select: { id: true, paymentDate: true, amount: true, statementId: true, status: true, notes: true, createdAt: true, statement: { select: { id: true, statementDate: true } } },
             },
           },
         },
@@ -163,7 +166,7 @@ router.get('/:id', async (req, res, next) => {
             statements: { orderBy: { statementDate: 'desc' }, take: 6 },
             // createdAt breaks a same-day tie so "the latest payment" is the
             // one logged last, not whichever row the database returns first.
-            payments: { orderBy: [{ paymentDate: 'desc' }, { createdAt: 'desc' }], take: 6 },
+            payments: { orderBy: [{ paymentDate: 'desc' }, { createdAt: 'desc' }], take: 12, include: { statement: { select: { id: true, statementDate: true } } } },
           },
         },
         insights: {

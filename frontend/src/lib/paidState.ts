@@ -36,7 +36,7 @@ export function openBalanceOf(s: any): number | null {
  * "$5,483.70 past due" untouched.
  */
 export function arrearsPaidSince(s: any, payments: any[] = [], statements: any[] = []): number {
-  if (!s?.statementDate || statements.length === 0) return 0;
+  if (!s?.statementDate) return 0;
   const since = new Date(s.statementDate).getTime();
   const issued = new Map(statements.map(x => [x.id, new Date(x.statementDate).getTime()]));
   return payments
@@ -44,8 +44,10 @@ export function arrearsPaidSince(s: any, payments: any[] = [], statements: any[]
       if (p.status === 'FAILED' || p.status === 'PENDING') return false;
       if (!p.statementId || p.statementId === s.id) return false;
       // Only bills OLDER than this one make up its arrears; a payment toward
-      // a newer bill is that bill's own money.
-      const at = issued.get(p.statementId);
+      // a newer bill is that bill's own money. A caller holding only the
+      // newest few statements (the property cards) reads the bill's date off
+      // the payment itself, so the card and the account page agree.
+      const at = issued.get(p.statementId) ?? (p.statement?.statementDate ? new Date(p.statement.statementDate).getTime() : undefined);
       if (at == null || at >= since) return false;
       return new Date(p.paymentDate).getTime() >= since;
     })
