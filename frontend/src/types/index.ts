@@ -795,6 +795,8 @@ export interface UtilityAccount {
    *  Its bills read as paid and are left out of what is owed or spent. */
   escrowLoanId?: string | null;
   escrowLoan?: { id?: string; lender: string; loanType?: string; monthlyPayment?: number | string | null; escrowAmount?: number | string | null } | null;
+  /** The share of each mortgage payment that goes toward this account. */
+  escrowMonthlyAmount?: number | string | null;
   syncEnabled: boolean;
   hasCredentials?: boolean;
   isActive: boolean;

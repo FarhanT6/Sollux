@@ -210,6 +210,8 @@ const UtilitySchema = z.object({
   // Paid by the lender from the mortgage escrow (home insurance, property
   // tax): the loan that carries it. Null clears it.
   escrowLoanId: z.string().nullable().optional().transform(v => v === '' ? null : v),
+  // The share of each mortgage payment that goes toward this account.
+  escrowMonthlyAmount: z.number().nonnegative().nullable().optional(),
   // Net-metering (solar) account with an annual true-up. Set on import when
   // a bill shows a net-metering summary; editable by hand.
   hasTrueUp: z.boolean().optional(),
