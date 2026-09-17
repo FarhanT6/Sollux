@@ -2014,6 +2014,24 @@ export async function applyPolicyDocument(utilityAccountId: string, ex: Extracte
   if (!account) return 0;
   await syncInsurancePolicyFromBill(utilityAccountId, ex);
 
+  // This same document, imported earlier as if it were a bill, left a
+  // statement dated the day the letter was written and covering the whole
+  // term. Nothing was ever paid against it — it was never a bill — so it
+  // goes, and the schedule below stands in its place.
+  if (ex.statementDate) {
+    const docDay = new Date(ex.statementDate);
+    await db.statement.deleteMany({
+      where: {
+        utilityAccountId,
+        isScheduled: false,
+        isDownPayment: false,
+        statementDate: { gte: docDay, lt: new Date(docDay.getTime() + 86400000) },
+        payments: { none: {} },
+        ...(ins.coverageStart ? { billingPeriodStart: { gte: new Date(new Date(ins.coverageStart).getTime() - 3 * 86400000), lte: new Date(new Date(ins.coverageStart).getTime() + 3 * 86400000) } } : {}),
+      },
+    });
+  }
+
   const schedule = (ins.paymentSchedule ?? []).filter(p => p.date && p.amount > 0);
   if (schedule.length === 0) return 0;
   const sorted = [...schedule].sort((a, b) => a.date.localeCompare(b.date));
