@@ -139,6 +139,8 @@ export async function getPaymentPriorities(userId: string, propertyId?: string):
   const accounts = await db.utilityAccount.findMany({
     where: {
       isActive: true,
+      // Paid by the lender from escrow: nothing to pay here, the mortgage carries it.
+      escrowLoanId: null,
       property: propertyId ? { id: propertyId, userId } : { userId },
     },
     include: {

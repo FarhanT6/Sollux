@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { guardWorker } from './redisGuard';
 import { createWorkerConnection, workerTuning } from './queues';
 import { db } from '../config/db';
+import { markEscrowedStatements } from '../services/escrow';
 import { recordConfirmedPayment, syncPaymentPlanFromBill, syncInsurancePolicyFromBill, syncLoanComponentsFromBill, applyPastDueNotice, parseBill } from '../services/pdfImportService';
 import { findOrCreateUtilityAccount } from '../services/utilityAccountResolver';
 import { uploadDocument, buildStatementKey } from '../services/s3Service';
@@ -282,6 +283,7 @@ const worker = new Worker<DriveImportJobData>(
               await syncPaymentPlanFromBill(acct.id, ex);
               await syncInsurancePolicyFromBill(acct.id, ex);
               await syncLoanComponentsFromBill(acct.id, ex);
+              await markEscrowedStatements(acct.id);
             } else {
               const created = await db.statement.create({
                 data: {
@@ -305,6 +307,7 @@ const worker = new Worker<DriveImportJobData>(
             await syncPaymentPlanFromBill(acct.id, ex);
             await syncInsurancePolicyFromBill(acct.id, ex);
             await syncLoanComponentsFromBill(acct.id, ex);
+            await markEscrowedStatements(acct.id);
           }
 
             autoImported++;

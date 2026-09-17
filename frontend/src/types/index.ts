@@ -791,6 +791,10 @@ export interface UtilityAccount {
   /** Net-metering (solar) account: charges settle once a year at the true-up. */
   hasTrueUp?: boolean;
   trueUpDate?: string | null;
+  /** Paid by the lender from the mortgage escrow: the loan that carries it.
+   *  Its bills read as paid and are left out of what is owed or spent. */
+  escrowLoanId?: string | null;
+  escrowLoan?: { id?: string; lender: string; loanType?: string; monthlyPayment?: number | string | null; escrowAmount?: number | string | null } | null;
   syncEnabled: boolean;
   hasCredentials?: boolean;
   isActive: boolean;

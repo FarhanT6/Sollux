@@ -59,7 +59,7 @@ router.get('/spend-data', async (req, res, next) => {
         utilityAccounts: {
           select: {
             id: true, providerName: true, serviceLabel: true, category: true, isActive: true,
-            billingCadence: true, termMonths: true, expectedAmount: true,
+            billingCadence: true, termMonths: true, expectedAmount: true, escrowLoanId: true,
             statements: {
               where: { statementDate: { gte: since } },
               orderBy: { statementDate: 'desc' },
@@ -92,6 +92,8 @@ router.get('/', async (req, res, next) => {
             providerName: true,
             category: true,
             isActive: true,
+            escrowLoanId: true,
+            escrowLoan: { select: { lender: true } },
             lastSyncStatus: true,
             lastSyncedAt: true,
             // The newest few bills, not one: whether the newest is paid

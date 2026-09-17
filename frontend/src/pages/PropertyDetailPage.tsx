@@ -987,6 +987,7 @@ function UtilityAccountCard({
   // Otherwise: paid > past due > due soon > sync status, since bill state
   // takes priority over sync state (the user cares about whether they owe money).
   const statusLabel = account.isActive === false ? 'Inactive'
+    : account.escrowLoanId ? 'Escrow'
     : isPaid ? 'Paid'
     : isPastDue ? 'Past due'
     : isDueSoon ? 'Due soon'
@@ -996,6 +997,7 @@ function UtilityAccountCard({
     : 'Not synced';
 
   const pillColor: any = account.isActive === false ? 'gray'
+    : account.escrowLoanId ? 'green'
     : isPaid ? 'green'
     : isPastDue ? 'red'
     : isDueSoon ? 'amber'
@@ -1033,6 +1035,11 @@ function UtilityAccountCard({
             {(account.serviceLabel || account.unit?.unitLabel) && (
               <p className="text-xs text-[#F5A623]/80 truncate">
                 {account.serviceLabel || account.unit?.unitLabel}
+              </p>
+            )}
+            {account.escrowLoanId && (
+              <p className="text-xs text-emerald-500/80 truncate" title="The mortgage payment carries this; nothing is owed here and it is not counted in the property's costs.">
+                Paid by {account.escrowLoan?.lender ?? 'the lender'} from escrow
               </p>
             )}
             {account.accountNumber ? (

@@ -5,6 +5,7 @@ import { attachDbUser } from '../middleware/requireAuth';
 import { encryptOptional, decryptOptional } from '../crypto/encrypt';
 import { scrapeQueue } from '../workers/queues';
 import { syncLoanFromComponents } from '../services/loanComponents';
+import { markEscrowedStatements, unmarkEscrowedStatements } from '../services/escrow';
 
 const router = Router();
 router.use(attachDbUser);
@@ -80,6 +81,13 @@ async function syncInsurancePolicyForUtility(
       },
     });
   }
+}
+
+// The loan an account is escrowed under must be the owner's own.
+async function assertEscrowLoanOwned(escrowLoanId: string | null | undefined, userId: string) {
+  if (!escrowLoanId) return;
+  const loan = await db.loan.findFirst({ where: { id: escrowLoanId, userId }, select: { id: true } });
+  if (!loan) { const err: any = new Error('Loan not found'); err.status = 404; throw err; }
 }
 
 // Keeps a linked Loan (created via the "Link a loan" flow — see
@@ -199,6 +207,9 @@ const UtilitySchema = z.object({
   lateFeePercent: z.number().min(0).max(100).nullable().optional(),
   shutoffAfterDays: z.number().int().min(0).max(730).nullable().optional(),
   paymentRuleNotes: z.string().nullable().optional(),
+  // Paid by the lender from the mortgage escrow (home insurance, property
+  // tax): the loan that carries it. Null clears it.
+  escrowLoanId: z.string().nullable().optional().transform(v => v === '' ? null : v),
   // Net-metering (solar) account with an annual true-up. Set on import when
   // a bill shows a net-metering summary; editable by hand.
   hasTrueUp: z.boolean().optional(),
@@ -269,6 +280,7 @@ router.post('/', async (req, res, next) => {
     if (!property) return res.status(403).json({ error: 'Property not found' });
 
     await assertUnitBelongsToProperty(rest.unitId, propertyId);
+    await assertEscrowLoanOwned(rest.escrowLoanId, req.dbUserId!);
 
     // A property can legitimately hold two accounts with the same provider and
     // category — two water meters, a second trash bin — so the guard is the
@@ -350,6 +362,7 @@ router.get('/:id', async (req, res, next) => {
           },
         },
         loan: { include: { components: { orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] } } },
+        escrowLoan: { select: { id: true, lender: true, loanType: true, monthlyPayment: true, escrowAmount: true } },
       },
     });
     if (!account) return res.status(404).json({ error: 'Not found' });
@@ -445,6 +458,7 @@ router.patch('/:id', async (req, res, next) => {
     if (!existing) return res.status(404).json({ error: 'Utility account not found' });
 
     await assertUnitBelongsToProperty(rest.unitId, existing.propertyId);
+    await assertEscrowLoanOwned(rest.escrowLoanId, req.dbUserId!);
 
     const updated = await db.utilityAccount.update({
       where: { id: req.params.id },
@@ -466,6 +480,10 @@ router.patch('/:id', async (req, res, next) => {
     await syncInsurancePolicyForUtility(updated, { policyNumber: accountNumber, policyType: insuranceType });
     await syncLoanForUtility(updated, req.dbUserId!, { loanType });
     await syncLoanActiveForUtility(updated);
+    if (rest.escrowLoanId !== undefined) {
+      if (updated.escrowLoanId) await markEscrowedStatements(updated.id);
+      else if (existing.escrowLoanId) await unmarkEscrowedStatements(updated.id);
+    }
 
     const { accountNumberEnc, usernameEnc, passwordEnc, ...sanitized } = updated;
     res.json(sanitized);

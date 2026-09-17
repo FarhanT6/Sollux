@@ -135,7 +135,8 @@ export async function getPropertyPnL(propertyId: string, range: DateRange, userI
     db.expense.findMany({
       where: { propertyId, date: { gte: range.start, lt: range.end }, isCapEx: false, isPersonal: false },
     }),
-    db.insurancePolicy.findMany({ where: { propertyId, isPersonal: false, isActive: true } }),
+    // A policy the lender pays from escrow is inside the mortgage payment already.
+    db.insurancePolicy.findMany({ where: { propertyId, isPersonal: false, isActive: true, OR: [{ utilityAccountId: null }, { utilityAccount: { escrowLoanId: null } }] } }),
     db.taxAssessment.findMany({ where: { propertyId } }),
     db.loan.findMany({ where: { propertyId, isPersonal: false, isActive: true }, include: { loanPayments: true } }),
     db.statement.findMany({
@@ -144,7 +145,9 @@ export async function getPropertyPnL(propertyId: string, range: DateRange, userI
       include: { utilityAccount: { select: { category: true, insurancePolicy: { select: { id: true } } } } },
       where: {
         amountDue: { not: null },
-        utilityAccount: { propertyId },
+        // An account the lender pays from escrow is already inside the
+        // mortgage payment; its bills would count the same money twice.
+        utilityAccount: { propertyId, escrowLoanId: null },
         OR: [
           { dueDate: { gte: range.start, lt: range.end } },
           { dueDate: null, statementDate: { gte: range.start, lt: range.end } },

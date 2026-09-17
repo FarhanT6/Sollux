@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { createUtility, getUtilities, getUnits, upsertUtilityLoan } from '../../api/client';
+import { createUtility, getUtilities, getUnits, upsertUtilityLoan, getLoans } from '../../api/client';
 import { Modal, Field, Input, Select } from '../ui';
-import type { UtilityCategory, Unit } from '../../types';
+import type { UtilityCategory, Unit, Loan } from '../../types';
 import { CATEGORY_LABELS, LOAN_TYPE_LABELS, INSURANCE_TYPE_LABELS } from '../../types';
 import { describeApiError, normalizeUrlInput } from '../../lib/apiError';
 import { CADENCE_LABELS, describeCadenceAmount, type Cadence } from '../../lib/cadence';
@@ -143,6 +143,15 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
   };
   const hasLoanDetails = () => Object.values(loanDetails).some(v => v.trim() !== '');
   const [insuranceType, setInsuranceType] = useState('PROPERTY');
+  // Paid by the lender from the mortgage escrow (home insurance, property
+  // tax): which loan. The bills are kept for the record but nothing is owed
+  // on them here — the mortgage payment carries it, so it counts once.
+  const [propertyLoans, setPropertyLoans] = useState<Loan[]>([]);
+  const [escrowLoanId, setEscrowLoanId] = useState('');
+  useEffect(() => {
+    getLoans({ propertyId, isActive: true }).then(ls => setPropertyLoans(ls.filter(l => !l.isPersonal))).catch(() => {});
+  }, [propertyId]);
+  const escrowEligible = form.category === 'INSURANCE' || form.category === 'TAXES';
   // How this account bills. Defaults differ by category because the common
   // case does: a utility bills monthly, a policy usually once a term.
   const [billingCadence, setBillingCadence] = useState('MONTHLY');
@@ -249,6 +258,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
         termMonths: billingCadence === 'TERM' && termMonths ? parseInt(termMonths, 10) : undefined,
         expectedAmount: expectedAmount ? parseFloat(expectedAmount) : undefined,
         insuranceType: form.category === 'INSURANCE' ? insuranceType : undefined,
+        escrowLoanId: escrowEligible && escrowLoanId ? escrowLoanId : undefined,
         loanType: (form.category === 'LOAN' || form.category === 'CREDIT_CARD') ? loanType : undefined,
       });
       // LOAN/CREDIT_CARD categories auto-link on the backend; the checkbox
@@ -432,6 +442,33 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
                   <option key={v} value={v}>{l}</option>
                 ))}
               </Select>
+            </div>
+          )}
+
+          {escrowEligible && (
+            <div className="mb-4 p-3 bg-white/5 rounded-lg">
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input type="checkbox" checked={!!escrowLoanId || escrowLoanId === 'pick'} className="mt-0.5"
+                  onChange={e => setEscrowLoanId(e.target.checked ? (propertyLoans[0]?.id ?? 'pick') : '')} />
+                <span className="text-xs text-gray-300">
+                  <span className="font-medium">Paid by the lender from escrow</span> — the mortgage payment already includes this, so the bills here are kept for the record and read as paid. Nothing is owed on them and they are left out of the property's costs; the mortgage carries it.
+                </span>
+              </label>
+              {escrowLoanId && (
+                <div className="mt-2">
+                  <label className="text-xs text-gray-400 block mb-1">Which mortgage pays it</label>
+                  {propertyLoans.length === 0 ? (
+                    <p className="text-xs text-amber-400">No loan on this property yet — add the mortgage under Portfolio → Loans first, then set this on the account.</p>
+                  ) : (
+                    <Select value={escrowLoanId === 'pick' ? '' : escrowLoanId} onChange={e => setEscrowLoanId(e.target.value || 'pick')}>
+                      <option value="">Choose a loan…</option>
+                      {propertyLoans.map(l => (
+                        <option key={l.id} value={l.id}>{l.lender}{l.accountLast4 ? ` ····${l.accountLast4}` : ''}{l.escrowAmount ? ` · escrow $${Number(l.escrowAmount).toFixed(2)}/mo` : ''}</option>
+                      ))}
+                    </Select>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

@@ -208,6 +208,12 @@ model UtilityAccount {
   // net-metering summary; can be set by hand.
   hasTrueUp        Boolean         @default(false)
   trueUpDate       DateTime?       // next true-up (settlement) date
+  // Paid by the lender out of the mortgage escrow (home insurance, property
+  // tax). The bills still arrive and are kept for the record, but nothing is
+  // owed on them here: the money goes out inside the mortgage payment, so
+  // counting them as well would count it twice. The mortgage wins.
+  escrowLoanId     String?
+  escrowLoan       Loan?           @relation("EscrowedAccounts", fields: [escrowLoanId], references: [id], onDelete: SetNull)
   syncEnabled      Boolean         @default(true)
   isActive         Boolean         @default(true)
   lastSyncedAt     DateTime?
@@ -966,6 +972,8 @@ model Loan {
   // (student loans: "Group AA — Direct Subsidized", "Group BB — Direct
   // Unsubsidized"). When any exist, the parent's amounts are their totals.
   components      LoanComponent[]
+  // Insurance / tax accounts this mortgage pays from escrow.
+  escrowedAccounts UtilityAccount[] @relation("EscrowedAccounts")
 
   @@index([propertyId])
   @@index([userId])

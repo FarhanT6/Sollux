@@ -104,7 +104,8 @@ router.get('/monthly', async (req, res, next) => {
     // ── Utility bills (statements due/issued this month) ──
     const utilityStatements = await db.statement.findMany({
       where: {
-        utilityAccount: { property: { userId } },
+        // Escrowed accounts are paid inside the mortgage; not a bill to budget for.
+        utilityAccount: { property: { userId }, escrowLoanId: null },
         OR: [
           { dueDate: { gte: monthStart, lte: monthEnd } },
           { dueDate: null, statementDate: { gte: monthStart, lte: monthEnd } },
