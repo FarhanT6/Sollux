@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { getSignedDocumentUrl, downloadDocument, uploadDocument, buildStatementKey } from '../services/s3Service';
+import { markEscrowedStatements } from '../services/escrow';
 import { applyPastDueNotice, parseBill, recordConfirmedPayment, syncPaymentPlanFromBill, syncInsurancePolicyFromBill, syncLoanComponentsFromBill } from '../services/pdfImportService';
 import { findOrCreateUtilityAccount } from '../services/utilityAccountResolver';
 
@@ -396,6 +397,7 @@ router.post('/stream', attachDbUser, async (req, res) => {
               await syncPaymentPlanFromBill(acct.id, ex);
               await syncInsurancePolicyFromBill(acct.id, ex);
               await syncLoanComponentsFromBill(acct.id, ex);
+              await markEscrowedStatements(acct.id);
               if (nem) await db.utilityAccount.update({ where: { id: acct.id }, data: { hasTrueUp: true, ...(nem.trueUpDate ? { trueUpDate: new Date(nem.trueUpDate) } : {}) } });
             } else {
               const created = await db.statement.create({ data: {
@@ -418,6 +420,7 @@ router.post('/stream', attachDbUser, async (req, res) => {
               await syncPaymentPlanFromBill(acct.id, ex);
               await syncInsurancePolicyFromBill(acct.id, ex);
               await syncLoanComponentsFromBill(acct.id, ex);
+              await markEscrowedStatements(acct.id);
               if (nem) await db.utilityAccount.update({ where: { id: acct.id }, data: { hasTrueUp: true, ...(nem.trueUpDate ? { trueUpDate: new Date(nem.trueUpDate) } : {}) } });
             }
             autoImported++;

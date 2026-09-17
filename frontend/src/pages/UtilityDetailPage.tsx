@@ -8,7 +8,7 @@ import {
   getPaymentPlan, createPaymentPlan, updatePaymentPlan, deletePaymentPlan,
   upsertUtilityLoan, deleteUtilityLoan, patchStatement, createStatement, deleteStatement, markStatementUnpaid,
   revealUtilityAccountNumber, createPayment, createSplitPayment, updatePayment, deletePayment,
-  getBankAccounts, getCostSettings, updateCostSettings,
+  getBankAccounts, getCostSettings, updateCostSettings, getLoans,
   getInsurancePolicies,
 } from '../api/client';
 import { CADENCE_LABELS } from '../lib/cadence';
@@ -385,6 +385,64 @@ function LoanCard({ loan, accountId, arrears, onUpdate, onDelete }: {
         {loan.id && <LoanComponentsPanel loan={loan} onChange={onUpdate} compact />}
       </div>
     </>
+  );
+}
+
+// ── Escrow ───────────────────────────────────────────────────────────────────
+// Home insurance or property tax the lender pays out of the mortgage escrow.
+// Setting it marks every bill on the account paid (present and future) and
+// takes the account out of what is owed and what the property costs, since
+// the mortgage payment already carries the money.
+function EscrowControl({ account, onChange, onReload }: {
+  account: any; onChange: (patch: Record<string, unknown>) => void; onReload: () => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [loans, setLoans] = useState<any[]>([]);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    if (!open || loans.length) return;
+    getLoans({ propertyId: account.propertyId, isActive: true }).then(ls => setLoans(ls.filter(l => !l.isPersonal && l.id !== account.loan?.id))).catch(() => {});
+  }, [open, loans.length, account.propertyId, account.loan?.id]);
+
+  async function apply(escrowLoanId: string | null) {
+    setSaving(true);
+    try {
+      await updateUtility(account.id, { escrowLoanId } as any);
+      const lender = loans.find(l => l.id === escrowLoanId) ?? null;
+      onChange({ escrowLoanId, escrowLoan: lender ? { id: lender.id, lender: lender.lender, escrowAmount: lender.escrowAmount } : null });
+      setOpen(false);
+      await onReload();
+    } catch { alert('Could not update the escrow setting.'); }
+    finally { setSaving(false); }
+  }
+
+  const on = !!account.escrowLoanId;
+  return (
+    <span className="relative">
+      <button onClick={() => setOpen(v => !v)} disabled={saving}
+        title={on ? `Paid by ${account.escrowLoan?.lender ?? 'the lender'} out of the mortgage escrow. Click to change.` : 'Paid by the lender out of the mortgage escrow?'}
+        className={`text-xs px-1.5 py-0.5 rounded-full border transition-colors ${on ? 'text-emerald-400 border-emerald-500/40 bg-emerald-500/10' : 'text-gray-600 border-white/10 hover:text-gray-400'}`}>
+        {on ? `🏦 Escrow · ${account.escrowLoan?.lender ?? 'lender'}` : '🏦 Paid via escrow?'}
+      </button>
+      {open && (
+        <div className="absolute left-0 top-7 z-20 w-72 rounded-xl p-3 shadow-xl space-y-2" style={{ background: '#252525', border: '1px solid rgba(255,255,255,0.1)' }}>
+          <p className="text-xs text-gray-400">Which mortgage pays this from escrow?</p>
+          {loans.length === 0 ? (
+            <p className="text-xs text-amber-400">No loan on this property yet — add the mortgage under Portfolio → Loans first.</p>
+          ) : loans.map(l => (
+            <button key={l.id} onClick={() => apply(l.id)} disabled={saving}
+              className={`w-full text-left text-xs px-2 py-1.5 rounded-lg transition-colors ${account.escrowLoanId === l.id ? 'bg-emerald-500/10 text-emerald-300' : 'text-gray-300 hover:bg-white/5'}`}>
+              {l.lender}{l.accountLast4 ? ` ····${l.accountLast4}` : ''}{l.escrowAmount ? <span className="text-gray-500"> · escrow {fmtMoney(Number(l.escrowAmount))}/mo</span> : null}
+            </button>
+          ))}
+          <p className="text-xs text-gray-600">Bills here will read as paid and be left out of what is owed and what the property costs — the mortgage payment already carries them.</p>
+          <div className="flex justify-between pt-1">
+            {on ? <button onClick={() => apply(null)} disabled={saving} className="text-xs text-red-400 hover:text-red-300">Not paid via escrow</button> : <span />}
+            <button onClick={() => setOpen(false)} className="text-xs text-gray-500 hover:text-gray-300">Close</button>
+          </div>
+        </div>
+      )}
+    </span>
   );
 }
 
@@ -996,6 +1054,11 @@ export default function UtilityDetailPage() {
             >
               {account.hasTrueUp ? `☀ True-up${account.trueUpDate ? ` ${fmtDate(account.trueUpDate, 'MMM d, yyyy')}` : ''}` : '☀ Set true-up'}
             </button>
+            {/* Paid by the lender from the mortgage escrow: bills kept for the
+                record, nothing owed here, left out of costs. The mortgage wins. */}
+            {(account.category === 'INSURANCE' || account.category === 'TAXES' || account.escrowLoanId) && (
+              <EscrowControl account={account} onChange={patch => setAccount((prev: any) => prev ? { ...prev, ...patch } : prev)} onReload={reloadAccount} />
+            )}
             {account.accountNumber && (
               <span className="flex items-center gap-1">
                 <span className="font-mono text-xs text-gray-600">

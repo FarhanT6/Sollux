@@ -41,6 +41,7 @@ export interface SpendAccount extends CadenceAccount {
   serviceLabel?: string | null;
   category: string;
   isActive?: boolean;
+  escrowLoanId?: string | null;
   statements?: SpendStatement[];
 }
 
@@ -92,7 +93,9 @@ export function computeMonthlySpend(
   opts: OperatingCostOptions = {},
   months = 12,
 ): MonthlySpend {
-  const active = accounts.filter(a => a.isActive !== false);
+  // An account the lender pays from escrow is inside the mortgage payment
+  // already; counting its bills too would count the same money twice.
+  const active = accounts.filter(a => a.isActive !== false && !a.escrowLoanId);
 
   // The month the figure describes: the most recent one any account billed in.
   // Taken from the data rather than from today's date, so a property whose
