@@ -3,8 +3,35 @@ import { Link } from 'react-router-dom';
 import { getLoans, createLoan, updateLoan, deleteLoan, getProperties } from '../api/client';
 import type { Loan, Property, LoanType } from '../types';
 import { format } from 'date-fns';
+import { projectLoanBalance } from '../lib/loanMath';
 
 const money = (n: number | string | undefined) => n == null ? '—' : Number(n).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+
+/**
+ * What a loan stands at today. A balance entered by hand is taken as is —
+ * unless it still equals the original amount on a loan that has been
+ * running for months, which is the untouched default, not a fact. Then,
+ * and when no balance was entered at all, the balance is projected from the
+ * schedule (rate, payment, origination), the way Auto-calc does, and marked
+ * as an estimate. A 2019 mortgage does not still owe every dollar it began
+ * with.
+ */
+function effectiveBalance(loan: Loan): { balance: number | null; estimated: boolean } {
+  const entered = loan.currentBalance != null ? Number(loan.currentBalance) : null;
+  const original = loan.originalAmount != null ? Number(loan.originalAmount) : null;
+  const originated = loan.originationDate ? new Date(loan.originationDate) : null;
+  const monthsRunning = originated ? (Date.now() - originated.getTime()) / (30.44 * 86400000) : 0;
+  const untouchedDefault = entered != null && original != null && Math.abs(entered - original) < 0.01 && monthsRunning > 1.5;
+  if (entered != null && !untouchedDefault) return { balance: entered, estimated: false };
+  const projected = projectLoanBalance({
+    originalAmount: loan.originalAmount, downPayment: loan.downPayment, interestRate: loan.interestRate,
+    monthlyPayment: loan.monthlyPayment, originationDate: loan.originationDate,
+  });
+  if (projected != null) return { balance: projected, estimated: true };
+  return { balance: entered, estimated: false };
+}
+
+const monthlyOf = (l: Loan) => Number(l.monthlyPayment ?? 0) + Number(l.escrowAmount ?? 0);
 
 const LOAN_TYPES: LoanType[] = ['MORTGAGE','HELOC','AUTO','PERSONAL','STUDENT','INSTALLMENT_PLAN','CREDIT_LINE','SELLER_FINANCING','DSCR','COMMERCIAL','HARD_MONEY','OTHER'];
 
@@ -23,8 +50,8 @@ function LoanTable({ title, loans, setLoans }: {
   // group subtotal that included them while the portfolio total didn't
   // would show a bigger group number than the total it's part of.
   const activeLoans = loans.filter(l => l.isActive && !l.isPersonal);
-  const balanceTotal = activeLoans.reduce((s, l) => s + Number(l.currentBalance ?? 0), 0);
-  const monthlyTotal = activeLoans.reduce((s, l) => s + Number(l.monthlyPayment ?? 0) + Number(l.escrowAmount ?? 0), 0);
+  const balanceTotal = activeLoans.reduce((s, l) => s + (effectiveBalance(l).balance ?? 0), 0);
+  const monthlyTotal = activeLoans.reduce((s, l) => s + monthlyOf(l), 0);
 
   return (
     <div className="mb-6">
@@ -62,7 +89,16 @@ function LoanTable({ title, loans, setLoans }: {
                 <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">{loan.property?.nickname || loan.property?.address || <span className="text-gray-600">Unattached</span>}</td>
                 <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">{loan.loanType.replace('_', ' ')}</td>
                 <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(loan.originalAmount ?? undefined)}</td>
-                <td className="px-4 py-3 text-right text-red-400 text-xs font-medium">{money(loan.currentBalance ?? undefined)}</td>
+                <td className="px-4 py-3 text-right text-red-400 text-xs font-medium whitespace-nowrap">
+                  {(() => {
+                    const { balance, estimated } = effectiveBalance(loan);
+                    return (
+                      <span title={estimated ? 'Projected from the schedule — no balance has been entered (or it still equals the original). Open the loan and set the balance from a statement to replace it.' : undefined}>
+                        {money(balance ?? undefined)}{estimated && <span className="text-gray-500 font-normal ml-1">est.</span>}
+                      </span>
+                    );
+                  })()}
+                </td>
                 <td className="px-4 py-3 text-right text-gray-300 text-xs" title={loan.escrowAmount ? `${money(loan.monthlyPayment)} P&I + ${money(loan.escrowAmount)} escrow` : undefined}>
                   {money(loan.monthlyPayment != null || loan.escrowAmount != null ? Number(loan.monthlyPayment ?? 0) + Number(loan.escrowAmount ?? 0) : undefined)}
                 </td>
@@ -183,11 +219,21 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
       }
     });
 
-  const activeLoans = loans.filter(l => l.isActive && !l.isPersonal);
-  const totalDebt = activeLoans.reduce((s, l) => s + Number(l.currentBalance ?? 0), 0);
-  const monthlyDebt = activeLoans.reduce((s, l) => s + Number(l.monthlyPayment ?? 0) + Number(l.escrowAmount ?? 0), 0);
-  const ratesWithValue = activeLoans.filter(l => l.interestRate != null);
-  const avgRate = ratesWithValue.length ? ratesWithValue.reduce((s, l) => s + Number(l.interestRate), 0) / ratesWithValue.length : null;
+  // The headline is real-estate debt: the mortgages group, active and not
+  // personal, the same set its own footer adds up — so the two agree.
+  // Consumer debt (auto, student, solar, cards) is shown beside it.
+  const activeLoans = loans.filter(l => l.isActive && !l.isPersonal && MORTGAGE_PERSONAL_TYPES.includes(l.loanType));
+  const consumerLoans = loans.filter(l => l.isActive && !l.isPersonal && CONSUMER_LOAN_TYPES.includes(l.loanType));
+  const totalDebt = activeLoans.reduce((s, l) => s + (effectiveBalance(l).balance ?? 0), 0);
+  const monthlyDebt = activeLoans.reduce((s, l) => s + monthlyOf(l), 0);
+  const consumerDebt = consumerLoans.reduce((s, l) => s + (effectiveBalance(l).balance ?? 0), 0);
+  const consumerMonthly = consumerLoans.reduce((s, l) => s + monthlyOf(l), 0);
+  const estimatedCount = activeLoans.filter(l => effectiveBalance(l).estimated).length;
+  // Weighted by balance: a 12% loan of 200,000 is not the same as a 6.5%
+  // loan of 1.4 million, and a plain average of the rates said it was.
+  const rated = activeLoans.map(l => ({ rate: l.interestRate != null ? Number(l.interestRate) : null, w: effectiveBalance(l).balance ?? 0 })).filter((x): x is { rate: number; w: number } => x.rate != null && x.w > 0);
+  const weight = rated.reduce((s, x) => s + x.w, 0);
+  const avgRate = weight > 0 ? rated.reduce((s, x) => s + x.rate * x.w, 0) / weight : null;
 
   return (
     <div className={embedded ? '' : 'p-6'}>
@@ -206,19 +252,25 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
           {/* Summary stats */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
             <div className="rounded-xl px-4 py-3" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
-              <p className="text-xs text-gray-400 mb-0.5">Total balance</p>
+              <p className="text-xs text-gray-400 mb-0.5">Mortgage balance</p>
               <p className="text-base font-semibold text-red-400">{money(totalDebt)}</p>
-              <p className="text-xs text-gray-500">{activeLoans.length} active loans</p>
+              <p className="text-xs text-gray-500">
+                {activeLoans.length} active mortgages{estimatedCount > 0 ? ` · ${estimatedCount} est.` : ''}
+                {consumerLoans.length > 0 && <span className="text-gray-600"> · + {money(consumerDebt)} consumer</span>}
+              </p>
             </div>
             <div className="rounded-xl px-4 py-3" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
-              <p className="text-xs text-gray-400 mb-0.5">Monthly payments</p>
+              <p className="text-xs text-gray-400 mb-0.5">Mortgage payments</p>
               <p className="text-base font-semibold text-white">{money(monthlyDebt)}/mo</p>
-              <p className="text-xs text-gray-500">Debt service</p>
+              <p className="text-xs text-gray-500">
+                P&amp;I + escrow, personal loans excluded
+                {consumerLoans.length > 0 && <span className="text-gray-600"> · + {money(consumerMonthly)}/mo consumer</span>}
+              </p>
             </div>
             <div className="rounded-xl px-4 py-3" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
               <p className="text-xs text-gray-400 mb-0.5">Avg interest rate</p>
               <p className="text-base font-semibold text-white">{avgRate != null ? `${avgRate.toFixed(2)}%` : '—'}</p>
-              <p className="text-xs text-gray-500">Across active loans</p>
+              <p className="text-xs text-gray-500">Weighted by mortgage balance</p>
             </div>
           </div>
           <div className="flex items-center justify-between">
