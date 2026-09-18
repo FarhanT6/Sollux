@@ -102,6 +102,19 @@ setTimeout(() => {
   setInterval(scheduleAllInsights, 24 * 60 * 60 * 1000);
 }, msUntilNightly);
 
+// The bookkeeper goes over every account, bill, policy and loan nightly at
+// 5am (after the 2am insights and any overnight imports) and raises what
+// needs a hand as insights. One job; it walks every owner itself.
+(function scheduleBookkeeper() {
+  const queueIt = () => insightQueue.add('bookkeeper', {}, { attempts: 2, removeOnComplete: { count: 20 }, removeOnFail: { count: 20 } })
+    .catch(err => console.warn('[Bookkeeper] could not queue:', err instanceof Error ? err.message : err));
+  const first = new Date();
+  first.setHours(5, 0, 0, 0);
+  if (first <= new Date()) first.setDate(first.getDate() + 1);
+  setTimeout(() => { queueIt(); setInterval(queueIt, 24 * 60 * 60 * 1000); }, first.getTime() - Date.now());
+  console.log(`[Bookkeeper] Scheduled — next run at ${first.toLocaleString()}`);
+})();
+
 // NOTE: Removed startup auto-scrape. Scrapes run every 6 hours via setInterval above,
 // or on demand via the Sync button / POST /api/utilities/:id/sync.
 

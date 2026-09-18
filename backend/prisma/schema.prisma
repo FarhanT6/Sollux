@@ -425,8 +425,14 @@ model AIInsight {
   isRead           Boolean         @default(false)
   isDismissed      Boolean         @default(false)
   expiresAt        DateTime?
+  // The bookkeeper's stable key for a finding ("overdue:<accountId>"), so
+  // a nightly run refreshes the one it raised before rather than raising it
+  // again, and clears it once the condition has gone.
+  dedupeKey        String?
+  updatedAt        DateTime        @default(now()) @updatedAt
   createdAt        DateTime        @default(now())
 
+  @@index([dedupeKey])
   @@map("ai_insights")
 }
 

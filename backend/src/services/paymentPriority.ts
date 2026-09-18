@@ -146,6 +146,8 @@ export async function getPaymentPriorities(userId: string, propertyId?: string):
     include: {
       property: { select: { id: true, address: true, nickname: true } },
       statements: {
+        // A scheduled installment still in the future is not a bill yet.
+        where: { OR: [{ isScheduled: false }, { dueDate: { lte: new Date() } }] },
         orderBy: { statementDate: 'desc' },
         take: 36,
         select: {
