@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import PaymentBreakdownLine from '../components/utility/PaymentBreakdownLine';
-import { openBalanceOf, isStatementPaid, computeResolvedByFutureCheckpoint, computePaidMap, isEffectivelyPaid, isPriorStatementPaid, statementStatus, coveredByCredit, liveCarriedOf } from '../lib/paidState';
+import { openBalanceOf, isStatementPaid, computeResolvedByFutureCheckpoint, computePaidMap, isEffectivelyPaid, isPriorStatementPaid, statementStatus, coveredByCredit, liveCarriedOf, newestIssued } from '../lib/paidState';
 import { bankAccountLabel } from '../lib/bankAccountLabel';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
@@ -1033,7 +1033,9 @@ export default function UtilityDetailPage() {
 
   // Past due from latest statement — all from the dedicated, editable columns
   // so edits show up here immediately.
-  const latestStmt = statements[0];
+  // The newest bill that has fallen due; scheduled installments still in
+  // the future sit above it in the list but are not the account's position.
+  const latestStmt = newestIssued(statements);
   // If the prior (older) statement is paid, the balance carried into this one
   // is stale — suppress it. See isPriorStatementPaid.
   const priorToLatestPaid = latestStmt ? isPriorStatementPaid(latestStmt, statements, payments, resolvedByFuture, paidMap) : false;
@@ -1413,7 +1415,7 @@ export default function UtilityDetailPage() {
               <div className="space-y-2 pb-8">
                 {filteredStatements.map((s, idx) => {
                   // filteredStatements sorted DESC; [idx-1] is more recent; idx===0 is latest
-                  const isLatest = idx === 0 && yearFilter === 'all' && !search;
+                  const isLatest = latestStmt?.id === s.id && yearFilter === 'all' && !search;
                   const { color: sc, label: sl } = statementStatus(s, payments, filteredStatements[idx - 1], isLatest, resolvedByFuture, paidMap);
                   // Everything from the dedicated, editable columns — no
                   // rawDataJson fallback, so edits always show up.

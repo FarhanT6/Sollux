@@ -8,7 +8,7 @@ import type { Property, Statement, Payment, AIInsight, UtilityAccount } from '..
 import { CATEGORY_LABELS, CATEGORY_COLORS, INSURANCE_TYPE_LABELS, LOAN_TYPE_LABELS, UTILITY_PAYMENT_METHODS, PAYMENT_STATUS_LABELS } from '../types';
 import PaymentBreakdownLine from '../components/utility/PaymentBreakdownLine';
 import { todayISO } from '../lib/date';
-import { accountView } from '../lib/paidState';
+import { accountView, newestIssued } from '../lib/paidState';
 import { PageHeader, StatCard, InsightCard, Skeleton, EmptyState, Pill, Modal } from '../components/ui';
 import { format } from 'date-fns';
 import AddUtilityModal from '../components/utility/AddUtilityModal';
@@ -933,7 +933,7 @@ function UtilityAccountCard({
     }
   }
 
-  const latest = account.statements?.[0];
+  const latest = newestIssued(account.statements ?? []) ?? undefined;
   const dueDate = latest?.dueDate ? new Date(latest.dueDate) : null;
   const color = CATEGORY_COLORS[account.category] || '#888';
 
