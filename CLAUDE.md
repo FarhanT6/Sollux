@@ -21,6 +21,26 @@ sollux/
 - BullMQ queues: `scrape`, `insights`, `notifications`, `gmail`
 - AI insights use `claude-sonnet-4-6` via the Anthropic SDK
 
+## Agent workflow (scheduled Claude Code sessions and PRs)
+A scheduled Claude Code Routine picks up GitHub issues labelled `claude-build` and turns each into a PR.
+Whether you are that Routine or an interactive session, ship changes the same way:
+1. Branch from the latest `main`: `git fetch origin main && git checkout -B claude/<short-slug> origin/main`.
+2. Type-check both sides before committing; nothing ships red:
+   `cd backend && npx prisma generate && npx tsc --noEmit -p .` and `cd frontend && npx tsc --noEmit -p .`
+3. Schema changes: edit `backend/prisma/schema.prisma` AND add a hand-written migration under
+   `backend/prisma/migrations/<YYYYMMDDHHMMSS>_<name>/migration.sql` using `IF NOT EXISTS` guards. Render runs
+   `prisma migrate deploy` on every build for both the API and the workers.
+4. Verify extraction changes against real statements when any are available (`/root/.claude/uploads/...` in a
+   session, or PDFs attached to the issue) with a scratch `npx tsx` script — never guess at a bill's layout.
+5. Commit with a message that says what was wrong and what changed. Push with `git push -u origin <branch>`.
+6. Open a PR against `main` whose body says what was wrong, what changed and which files; do NOT merge it
+   unless the person asked for that in the issue. Comment on the issue with the PR link.
+7. If the issue is unclear or would need a decision only the owner can make, comment the question on the issue
+   and stop — do not build a guess.
+Conventions the code follows: dark UI (`#1e1e1e` cards, amber `#F5A623` accent), money via `fmtMoney`, dates via
+`lib/date.ts` helpers (never `new Date(...)` on a date-only string — timezone shift), paid state via
+`frontend/src/lib/paidState.ts` (one rule for cards and pages), statement rows show what the statement printed.
+
 ## When adding a new scraper
 1. Create `backend/src/scrapers/providers/{slug}.ts`
 2. Extend `BaseScraperProvider`, implement `login()`, `scrapeStatements()`, `scrapePayments()`
