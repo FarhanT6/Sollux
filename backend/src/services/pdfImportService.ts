@@ -95,6 +95,9 @@ export interface ExtractedBillData {
     paymentSchedule?: { date: string; amount: number }[] | null;
     /** Vehicles, addresses or people covered, as printed. */
     insuredItems?: string[] | null;
+    /** The number was printed under a "Policy Number" label, so it stands
+     *  even when it is also the billing account number (Progressive). */
+    policyNumberExplicit?: boolean;
   } | null;
   /** The individual loans a servicer bills together on one statement
    *  (a federal student-loan "Account Snapshot": Group AA Direct Subsidized,
@@ -1743,7 +1746,7 @@ export async function syncInsurancePolicyFromBill(utilityAccountId: string, ex: 
   // never a policy number, and a policy needs a coverage term to be one.
   const norm = (v: string | null | undefined) => (v ?? '').replace(/[^0-9]/g, '');
   const acctDigits = (ex.accountNumber ?? '').replace(/[^0-9]/g, '');
-  if (ins.policyNumber && acctDigits && norm(ins.policyNumber) === acctDigits) ins.policyNumber = null;
+  if (ins.policyNumber && acctDigits && norm(ins.policyNumber) === acctDigits && !ins.policyNumberExplicit) ins.policyNumber = null;
   if (!ins.coverageStart) return;
   const start = ins.coverageStart ? new Date(ins.coverageStart) : null;
   const end = ins.coverageEnd ? new Date(ins.coverageEnd) : null;
@@ -1914,13 +1917,14 @@ const INSURANCE_KIND_HINTS: [RegExp, NonNullable<NonNullable<ExtractedBillData['
   [/\bvision\b|\beyewear\b/i, 'VISION'],
   [/\b(?:health|medical)\s+(?:plan|insurance|coverage)|\bhmo\b|\bppo\b|blue\s*shield|kaiser|anthem|aetna|cigna|united\s*health/i, 'HEALTH'],
   [/\blife\s+insurance\b|\bterm\s+life\b|\bwhole\s+life\b|\bbeneficiar/i, 'LIFE'],
+  [/business\s*owners?|\bBOP\b/i, 'BUSINESS'],
   [/\bumbrella\b/i, 'UMBRELLA'],
   [/\bflood\b/i, 'FLOOD'],
   [/\brenters?\b/i, 'RENTERS'],
   [/\bauto\b|\bvehicle|\bvin\b|\bdriver|\bcollision\b|\bcomprehensive\b/i, 'AUTO'],
   [/\bhomeowner|\bdwelling\b|\bhome\s+insurance|\bcondo\b|\blandlord\b|\bDP-?[13]\b|\bHO-?[3568]\b/i, 'PROPERTY'],
   [/\bgeneral\s+liability\b|\bliability\s+policy\b/i, 'LIABILITY'],
-  [/\bbusiness\s+owner|\bcommercial\s+(?:package|property)\b|\bBOP\b/i, 'BUSINESS'],
+  [/business\s*owners?|\bcommercial\s+(?:package|property)\b|\bBOP\b|general\s*liability/i, 'BUSINESS'],
 ];
 
 /** The kind of cover a document describes, from its wording. */
@@ -1958,7 +1962,12 @@ export function applyInsuranceFromText(ex: ExtractedBillData, text: string): voi
     return m ? money(m[m.length - 1]!) : null;
   })();
   ins.totalCost ??= (() => { const m = text.match(/\$\s*([\d,]+\.\d{2})\s*total\s+cost/i) ?? text.match(/total\s+cost[^$\n]{0,20}\$\s*([\d,]+\.\d{2})/i); return m ? money(m[1]!) : null; })();
-  ins.serviceCharge ??= (() => { const m = text.match(/(?:installment|billing|service)\s+fee\s+of\s+\$\s*([\d,]+\.\d{2})/i); return m ? money(m[1]!) : null; })();
+  ins.serviceCharge ??= (() => {
+    const m = text.match(/(?:installment|billing|service)\s*fee\s*of\s*\$\s*([\d,]+\.\d{2})/i)
+      ?? text.match(/includes\s*a\s*\$\s*([\d,]+\.\d{2})\s*(?:installment|billing|service)\s*fee/i)
+      ?? text.match(/\d{1,2}\/\d{1,2}\/\d{2,4}\s*\$\s*([\d,]+\.\d{2})\s*installment\s*fee/i);
+    return m ? money(m[1]!) : null;
+  })();
   ins.autoPay ??= /\bautomatic\s+payments?\b|\bauto-?pay\b|\bEFT\b|\bwill be (?:drafted|withdrawn|deducted)\b/i.test(text) ? true : null;
   ins.insuranceType ??= inferInsuranceType(text);
 
@@ -1967,10 +1976,14 @@ export function applyInsuranceFromText(ex: ExtractedBillData, text: string): voi
     // "10/27/2025 $408.80". Read from the schedule block when the document
     // has one, so "$467.21 on September 27, 2026 / $2,776.28 Total Cost" in
     // the prose above it is not taken for a second payment on that date.
-    const block = text.match(/(?:automatic\s+)?payments?\s+schedule[\s\S]{0,2500}?(?=installment\s+fee|you may avoid|form\s+[A-Z0-9]+\s*\(|$)/i)?.[0]
-      ?? text.match(/installment\s+schedule[\s\S]{0,2500}/i)?.[0]
+    // The block ends at the fee footnote ("*Includes a $8.00 Installment
+    // fee", "We included an installment fee") — not at a parenthetical
+    // like "(Includes amount from current policy)" under the heading.
+    const block = text.match(/(?:automatic\s*)?payments?\s*schedule[\s\S]{0,2500}?(?=\*\s*includes|we\s*included|installment\s*fee|you\s*may\s*avoid|form\s+[A-Z0-9]+\s*\(|$)/i)?.[0]
+      ?? text.match(/(?:installment\s*schedule|upcoming\s*bill\s*installments)[\s\S]{0,2500}?(?=\*\s*includes|installment\s*fee|you\s*may\s*avoid|important\s*messages|$)/i)?.[0]
       ?? text;
-    const lines = Array.from(block.matchAll(/([A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})\s*[.\s…:-]*\$\s*([\d,]+\.\d{2})/g));
+    // A leading minus is a payment received, not a payment to come.
+    const lines = Array.from(block.matchAll(/([A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})\s*[.\s…:]*\$\s*([\d,]+\.\d{2})/g));
     const seen = new Set<string>();
     const schedule = lines
       .map(m => ({ date: parseDate(m[1]!), amount: money(m[2]!) }))
@@ -1997,8 +2010,87 @@ export function applyInsuranceFromText(ex: ExtractedBillData, text: string): voi
   const vehicles = Array.from(text.matchAll(/\b((?:19|20)\d{2}\s+[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z0-9-]+){1,4})\s+[A-HJ-NPR-Z0-9]{17}\b/g)).map(m => m[1]!.trim());
   if ((!ins.insuredItems || ins.insuredItems.length === 0) && vehicles.length) ins.insuredItems = [...new Set(vehicles)];
 
+  // A policy number has letters and digits; "PolicyNumberPolicyType" (a
+  // table header read with no spaces) and the billing account number are
+  // not it. The policy table row reads "$2,137.50 03/20/26-03/20/27 $213.75
+  // 57SBAAZ9S8E Active 12Pay", spaces or not.
+  const acctDigits = (ex.accountNumber ?? '').replace(/\D/g, '');
+  const wellFormed = (v: string | null | undefined) => !!v && v.length >= 6 && /\d{2}/.test(v) && !/^policy/i.test(v);
+  // Printed under its own label ("Policy Number: 863646930") it stands, even
+  // when the carrier bills under the same number; found anywhere else, a
+  // number that is the billing account's is not the policy's.
+  const labelled = text.match(/policy\s*(?:number|no\.?|#)\s*[:\-]?\s*([A-Z0-9][A-Z0-9-]{5,20})(?![A-Za-z])/i)?.[1] ?? null;
+  const plausible = (v: string | null | undefined) => wellFormed(v) && v!.replace(/\D/g, '') !== acctDigits;
+  if (wellFormed(labelled)) {
+    ins.policyNumber = labelled!;
+    ins.policyNumberExplicit = true;
+  } else if (!plausible(ins.policyNumber)) {
+    const row = text.match(/\$[\d,]+\.\d{2}\s*(\d{1,2}\/\d{1,2}\/\d{2,4})\s*-\s*(\d{1,2}\/\d{1,2}\/\d{2,4})\s*\$[\d,]+\.\d{2}\s*([0-9A-Z]{7,16})\s*(?:Active|Past\s*Due|Cancel|Pending|Expired)/i);
+    ins.policyNumber = row && plausible(row[3]) ? row[3]! : (plausible(ins.policyNumber) ? ins.policyNumber : null);
+    if (row) { ins.coverageStart ??= parseDate(row[1]!); ins.coverageEnd ??= parseDate(row[2]!); }
+  }
+  {
+    const row = text.match(/\$[\d,]+\.\d{2}\s*(\d{1,2}\/\d{1,2}\/\d{2,4})\s*-\s*(\d{1,2}\/\d{1,2}\/\d{2,4})\s*\$[\d,]+\.\d{2}\s*[0-9A-Z]{7,16}\s*(?:Active|Past\s*Due|Cancel|Pending|Expired)/i);
+    if (row) { ins.coverageStart ??= parseDate(row[1]!); ins.coverageEnd ??= parseDate(row[2]!); }
+  }
+
+  // An installment bill on a policy billed in equal payments (The Hartford's
+  // "12Pay"): "Minimum Due" is what this bill asks for, "Balance" is what is
+  // left of the policy — owed over the term, not now. Read with no spaces
+  // ("MinimumDue", "PayTheMinimumByTheDueDate") as pdf-parse renders it.
+  const totals = text.match(/TOTALS\s*\$\s*([\d,]+\.\d{2})\s*\$\s*([\d,]+\.\d{2})/i);
+  const stub = text.match(/pay\s*the\s*minimum\s*by\s*the\s*due\s*date\s*\$\s*([\d,]+\.\d{2})\s*(\d{1,2}\/\d{1,2}\/\d{2,4})\s*(\d{6,12})?\s*\$\s*([\d,]+\.\d{2})/i);
+  const installmentBill = /minimum\s*due/i.test(text) && /upcoming\s*bill\s*installments|bill\s*plan|installment\s*fee/i.test(text) && (totals || stub);
+  if (installmentBill) {
+    const minimumDue = money(totals ? totals[2]! : stub![1]!);
+    const balance = money(totals ? totals[1]! : stub![4]!);
+    const due = stub ? parseDate(stub[2]!) : findDateNear(text, [/due\s*date\s*:?/i]);
+    const fee = ins.serviceCharge ?? 0;
+    const sched = ins.paymentSchedule ?? [];
+    // The regular installment is the amount the upcoming schedule repeats;
+    // a past-due bill's minimum is that plus the missed one and its fees.
+    const counts = new Map<number, number>();
+    for (const p of sched) counts.set(p.amount, (counts.get(p.amount) ?? 0) + 1);
+    const regular = counts.size ? [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0]![0] : minimumDue;
+    // A late fee actually charged is a dated transaction line ("05/27/26
+    // $35.00 Late Fee"); "you'll be charged a $35.00 late fee" is a warning.
+    const lateFee = (() => { const m = text.match(/\d{1,2}\/\d{1,2}\/\d{2,4}\s*\$\s*([\d,]+\.\d{2})\s*late\s*fee/i); return m ? money(m[1]!) : null; })();
+    // Payments received, less any that bounced ("Protested Payment").
+    const received = Array.from(text.matchAll(/-\s*\$\s*([\d,]+\.\d{2})\s*payment\s*received/gi)).reduce((t, m) => t + money(m[1]!), 0)
+      - Array.from(text.matchAll(/\$\s*([\d,]+\.\d{2})\s*(?:protested|returned|reversed|nsf)\s*payment/gi)).reduce((t, m) => t + money(m[1]!), 0);
+    if (stub?.[3]) ex.accountNumber = stub[3];
+    const arrears = minimumDue > regular + 0.01 ? Number((minimumDue - regular).toFixed(2)) : 0;
+    ex.documentKind = 'bill';
+    ex.statedTotalDue = minimumDue;
+    ex.totalAccountBalance = balance;
+    ex.currentCharges = regular;
+    ex.amountDue = regular;
+    // Zero, not null: a re-import must clear a carried figure an earlier
+    // read put there (the policy balance, taken for arrears).
+    ex.previousBalance = arrears > 0 ? arrears : 0;
+    ex.lateFee = lateFee;
+    ex.paymentsReceived = received > 0 ? Number(received.toFixed(2)) : ex.paymentsReceived ?? null;
+    if (due) ex.dueDate = due;
+    ex.isPaid = false;
+    // One installment covers a month, not the policy's whole term; the bill
+    // is filed under the month it was issued, like any other monthly bill.
+    ex.billingPeriodStart = null;
+    ex.billingPeriodEnd = null;
+    ins.installment = Number((regular - fee).toFixed(2));
+    ins.installmentsRemaining = sched.length || ins.installmentsRemaining;
+    if (!ex.chargeBreakdown || Object.keys(ex.chargeBreakdown).length === 0) {
+      ex.chargeBreakdown = {
+        'Premium installment': Number((regular - fee).toFixed(2)),
+        ...(fee ? { 'Installment fee': fee } : {}),
+        ...(arrears > 0 ? { 'Past due installment': Number((arrears - (lateFee ?? 0)).toFixed(2)) } : {}),
+        ...(lateFee ? { 'Late fee': lateFee } : {}),
+      };
+    }
+  }
+
   if (!ins.policyNumber && !ins.coverageStart && !ins.paymentSchedule) return;
   ex.insurance = ins;
+  if (installmentBill) return;
 
   // A document with a term and a payment schedule but no "amount due" of its
   // own describes the policy; it is not a bill for a period.

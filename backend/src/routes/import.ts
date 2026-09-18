@@ -390,6 +390,16 @@ router.post('/confirm', async (req: Request, res: Response) => {
               },
             });
           }
+          // Same account, same issue date: the same bill, whatever period an
+          // earlier read gave it. An insurance installment bill re-imported
+          // after its period was corrected from the policy's whole term to
+          // its own month must update that row, not sit beside it.
+          if (!existing && ex.statementDate) {
+            const day = 86400000;
+            existing = await db.statement.findFirst({
+              where: { utilityAccountId, isScheduled: false, isDownPayment: false, statementDate: { gte: new Date(statementDate.getTime() - day), lte: new Date(statementDate.getTime() + day) } },
+            });
+          }
           // The carrier's bill for an installment that was filed ahead of
           // time from the policy's payment schedule: the real bill takes the
           // scheduled row's place rather than sitting beside it.
