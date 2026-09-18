@@ -453,6 +453,9 @@ export const createSplitPayment = (data: any & { allocations: { statementId: str
   api.post<Payment[]>('/payments/split', data).then(r => r.data);
 
 // Insights
+// Run the nightly bookkeeper now; findings land as insights.
+export const runBookkeeper = () =>
+  api.post<{ raised: number; refreshed: number; cleared: number; count: number }>('/insights/bookkeeper/run').then(r => r.data);
 export const getInsights = (params?: { propertyId?: string; severity?: string; type?: string; unread?: boolean }) =>
   api.get<AIInsight[]>('/insights', { params }).then(r => r.data);
 export const markInsightRead = (id: string) =>

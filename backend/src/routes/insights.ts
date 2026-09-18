@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
+import { runBookkeeperForUser } from '../ai/bookkeeper';
 
 const router = Router();
 router.use(attachDbUser);
@@ -35,6 +36,17 @@ router.get('/', async (req, res, next) => {
     });
 
     res.json(insights);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/insights/bookkeeper/run — run the nightly bookkeeper now for
+// this owner and return what it found.
+router.post('/bookkeeper/run', async (req, res, next) => {
+  try {
+    const result = await runBookkeeperForUser(req.dbUserId!);
+    res.json({ raised: result.raised, refreshed: result.refreshed, cleared: result.cleared, count: result.findings.length });
   } catch (err) {
     next(err);
   }

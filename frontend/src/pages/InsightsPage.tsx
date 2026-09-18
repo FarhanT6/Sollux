@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getInsights, markInsightRead, dismissInsight } from '../api/client';
+import { getInsights, markInsightRead, dismissInsight, runBookkeeper } from '../api/client';
 import type { AIInsight } from '../types';
 import { PageHeader, InsightCard, EmptyState, Skeleton } from '../components/ui';
 
@@ -9,10 +9,23 @@ export default function InsightsPage() {
   const [search, setSearch] = useState('');
   const [propFilter, setPropFilter] = useState('');
   const [loading, setLoading] = useState(true);
+  const [running, setRunning] = useState(false);
+  const [runNote, setRunNote] = useState<string | null>(null);
 
   useEffect(() => {
     getInsights().then(data => setInsights(data.filter(i => !i.isDismissed))).finally(() => setLoading(false));
   }, []);
+
+  // The bookkeeper runs nightly at 5am; this runs it now.
+  async function handleRunBookkeeper() {
+    setRunning(true); setRunNote(null);
+    try {
+      const r = await runBookkeeper();
+      setRunNote(`${r.count} item${r.count === 1 ? '' : 's'} · ${r.raised} new, ${r.refreshed} refreshed, ${r.cleared} cleared`);
+      setInsights((await getInsights()).filter(i => !i.isDismissed));
+    } catch { setRunNote('The bookkeeper could not run.'); }
+    finally { setRunning(false); }
+  }
 
   // Unique property options from loaded insights
   const propertyOptions = Array.from(
@@ -80,6 +93,13 @@ export default function InsightsPage() {
               ))}
             </select>
           )}
+
+          <button onClick={handleRunBookkeeper} disabled={running}
+            className="text-xs px-3 py-1.5 rounded-full border border-white/10 text-gray-300 hover:border-amber-500/40 hover:text-amber-400 disabled:opacity-50 transition-colors"
+            title="Goes over every bill, payment, policy and loan and raises what needs a hand. Runs on its own every night at 5am.">
+            {running ? 'Bookkeeper running…' : '🧾 Run bookkeeper now'}
+          </button>
+          {runNote && <span className="text-xs text-gray-500">{runNote}</span>}
 
           {/* Keyword search */}
           <div className="relative ml-auto">

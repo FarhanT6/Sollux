@@ -1,11 +1,17 @@
 import { Worker, Job } from 'bullmq';
 import { generateInsightsForProperty } from '../ai/insightEngine';
+import { runBookkeeperForEveryone } from '../ai/bookkeeper';
 import { guardWorker } from './redisGuard';
 import { createWorkerConnection, workerTuning } from './queues';
 
 const worker = new Worker(
   'insights',
   async (job: Job) => {
+    if (job.name === 'bookkeeper') {
+      console.log('[InsightWorker] Running the bookkeeper');
+      await runBookkeeperForEveryone();
+      return;
+    }
     const { propertyId } = job.data;
     console.log(`[InsightWorker] Generating insights for property ${propertyId}`);
     await generateInsightsForProperty(propertyId);
