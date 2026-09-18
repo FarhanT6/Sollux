@@ -6,6 +6,8 @@ import { format } from 'date-fns';
 import { projectLoanBalance } from '../lib/loanMath';
 
 const money = (n: number | string | undefined) => n == null ? '—' : Number(n).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+// To the cent, for a figure that is checked against the rows it adds up.
+const moneyExact = (n: number | string | undefined) => n == null ? '—' : Number(n).toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /**
  * What a loan stands at today. A balance entered by hand is taken as is —
@@ -46,10 +48,9 @@ function LoanTable({ title, loans, setLoans }: {
   title: string; loans: Loan[]; setLoans: (updater: (prev: Loan[]) => Loan[]) => void;
 }) {
   if (loans.length === 0) return null;
-  // Excludes isPersonal loans, same as the page-level summary tiles — a
-  // group subtotal that included them while the portfolio total didn't
-  // would show a bigger group number than the total it's part of.
-  const activeLoans = loans.filter(l => l.isActive && !l.isPersonal);
+  // Every active loan in the group, personal ones included — the same set
+  // the page-level cards add up, so the two agree to the cent.
+  const activeLoans = loans.filter(l => l.isActive);
   const balanceTotal = activeLoans.reduce((s, l) => s + (effectiveBalance(l).balance ?? 0), 0);
   const monthlyTotal = activeLoans.reduce((s, l) => s + monthlyOf(l), 0);
 
@@ -57,7 +58,7 @@ function LoanTable({ title, loans, setLoans }: {
     <div className="mb-6">
       <div className="flex items-center justify-between mb-2">
         <p className="section-label mb-0">{title} · {loans.length}</p>
-        <p className="text-xs text-gray-500">{money(balanceTotal)} balance · {money(monthlyTotal)}/mo</p>
+        <p className="text-xs text-gray-500">{money(balanceTotal)} balance · {moneyExact(monthlyTotal)}/mo</p>
       </div>
       <div className="rounded-xl overflow-x-auto" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
         <table className="w-full text-sm">
@@ -100,7 +101,7 @@ function LoanTable({ title, loans, setLoans }: {
                   })()}
                 </td>
                 <td className="px-4 py-3 text-right text-gray-300 text-xs" title={loan.escrowAmount ? `${money(loan.monthlyPayment)} P&I + ${money(loan.escrowAmount)} escrow` : undefined}>
-                  {money(loan.monthlyPayment != null || loan.escrowAmount != null ? Number(loan.monthlyPayment ?? 0) + Number(loan.escrowAmount ?? 0) : undefined)}
+                  {moneyExact(loan.monthlyPayment != null || loan.escrowAmount != null ? Number(loan.monthlyPayment ?? 0) + Number(loan.escrowAmount ?? 0) : undefined)}
                 </td>
                 <td className="px-4 py-3 text-right text-gray-400 text-xs">{loan.interestRate != null ? `${loan.interestRate}%` : '—'}</td>
                 <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(loan.totalInterestLifetime ?? undefined)}</td>
@@ -222,8 +223,10 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
   // The headline is real-estate debt: the mortgages group, active and not
   // personal, the same set its own footer adds up — so the two agree.
   // Consumer debt (auto, student, solar, cards) is shown beside it.
-  const activeLoans = loans.filter(l => l.isActive && !l.isPersonal && MORTGAGE_PERSONAL_TYPES.includes(l.loanType));
-  const consumerLoans = loans.filter(l => l.isActive && !l.isPersonal && CONSUMER_LOAN_TYPES.includes(l.loanType));
+  // Every active loan in the group counts, personal ones included: a loan
+  // flagged personal is still a payment that goes out each month.
+  const activeLoans = loans.filter(l => l.isActive && MORTGAGE_PERSONAL_TYPES.includes(l.loanType));
+  const consumerLoans = loans.filter(l => l.isActive && CONSUMER_LOAN_TYPES.includes(l.loanType));
   const totalDebt = activeLoans.reduce((s, l) => s + (effectiveBalance(l).balance ?? 0), 0);
   const monthlyDebt = activeLoans.reduce((s, l) => s + monthlyOf(l), 0);
   const consumerDebt = consumerLoans.reduce((s, l) => s + (effectiveBalance(l).balance ?? 0), 0);
@@ -261,10 +264,10 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
             </div>
             <div className="rounded-xl px-4 py-3" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
               <p className="text-xs text-gray-400 mb-0.5">Mortgage payments</p>
-              <p className="text-base font-semibold text-white">{money(monthlyDebt)}/mo</p>
+              <p className="text-base font-semibold text-white">{moneyExact(monthlyDebt)}/mo</p>
               <p className="text-xs text-gray-500">
-                P&amp;I + escrow, personal loans excluded
-                {consumerLoans.length > 0 && <span className="text-gray-600"> · + {money(consumerMonthly)}/mo consumer</span>}
+                P&amp;I + escrow on every active mortgage
+                {consumerLoans.length > 0 && <span className="text-gray-600"> · + {moneyExact(consumerMonthly)}/mo consumer</span>}
               </p>
             </div>
             <div className="rounded-xl px-4 py-3" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
