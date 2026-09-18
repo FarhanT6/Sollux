@@ -993,10 +993,21 @@ export default function UtilityDetailPage() {
 
   // Fees/penalties aggregated across all statements — sourced from the
   // editable penaltiesFees column so it matches what Edit shows and writes.
+  // The fee lines themselves, from the bill's itemised charges, matched the
+  // same way the importer decides what counts as a fee (sanitiseLateFee).
+  const FEE_LINE = /late\s*(?:fee|charge|payment\s*(?:fee|charge|penalty))|penalt|overdue\s*charge|nsf|returned\s*(?:check|payment)|finance\s*charge|interest\s*charge|installment\s*fee|service\s*charge|convenience\s*fee|processing\s*fee|reconnect|disconnect|shut-?off|delinquen/i;
   const feesData = useMemo(() => statements.map(s => {
     const penalties = s.penaltiesFees != null ? Number(s.penaltiesFees) : null;
     if (penalties == null || penalties === 0) return null;
-    return { id: s.id, date: s.statementDate, penalties, total: penalties };
+    const breakdown = ((s.rawDataJson as any)?.chargeBreakdown ?? {}) as Record<string, number>;
+    const lines = Object.entries(breakdown)
+      .filter(([label, v]) => FEE_LINE.test(label) && Number(v) !== 0)
+      .map(([label, v]) => ({ label, amount: Number(v) }));
+    const linesTotal = lines.reduce((t, l) => t + l.amount, 0);
+    // A fee figure the lines do not account for (entered by hand, or read
+    // from a total rather than a line) is shown as its own remainder.
+    const unexplained = Number((penalties - linesTotal).toFixed(2));
+    return { id: s.id, date: s.statementDate, dueDate: s.dueDate, penaltyDate: s.penaltyDate, penalties, total: penalties, lines, unexplained };
   }).filter(Boolean), [statements]);
 
   const totalFees = feesData.reduce((s, r: any) => s + (r?.total || 0), 0);
@@ -1839,11 +1850,24 @@ export default function UtilityDetailPage() {
                       <p className="text-sm font-semibold text-orange-400">{fmtMoney(r.total)}</p>
                     </div>
                     <div className="grid grid-cols-2 gap-x-8 gap-y-1.5">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs text-gray-500">Penalties / fees</span>
-                        <span className="text-xs font-medium text-red-400">{fmtMoney(Number(r.penalties))}</span>
-                      </div>
+                      {(r.lines as { label: string; amount: number }[]).map(l => (
+                        <div key={l.label} className="flex items-center justify-between">
+                          <span className="text-xs text-gray-400">{l.label}</span>
+                          <span className="text-xs font-medium text-red-400">{fmtMoney(l.amount)}</span>
+                        </div>
+                      ))}
+                      {Math.abs(r.unexplained) > 0.005 && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-gray-500">{r.lines.length ? 'Other penalties / fees' : 'Penalties / fees'}{r.lines.length === 0 ? ' (the bill itemises no fee line)' : ''}</span>
+                          <span className="text-xs font-medium text-red-400">{fmtMoney(Number(r.unexplained))}</span>
+                        </div>
+                      )}
                     </div>
+                    {(r.dueDate || r.penaltyDate) && (
+                      <p className="text-xs text-gray-600 mt-2">
+                        {r.dueDate ? `Bill due ${fmtDate(r.dueDate, 'MMM d, yyyy')}` : ''}{r.penaltyDate ? `${r.dueDate ? ' · ' : ''}penalty after ${fmtDate(r.penaltyDate, 'MMM d, yyyy')}` : ''}
+                      </p>
+                    )}
                   </div>
                 ))}
               </div>
