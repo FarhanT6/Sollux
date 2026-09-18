@@ -108,6 +108,23 @@ export function isStatementPaid(s: any, payments: any[] = [], priorSettled = fal
 // one statement ahead meant Dec would show "Overdue" forever the moment Jan
 // didn't fully clear it, even though Feb proves it eventually did.
 // `statements` must be sorted newest-first (as the API already returns it).
+/**
+ * An installment filed ahead of time from a policy's payment schedule whose
+ * due date has not arrived. It is not a bill yet: it proves nothing about
+ * older bills, cannot be paid by inference, and is never "the latest bill".
+ */
+export function isUpcoming(s: any): boolean {
+  if (!s?.isScheduled || !s.dueDate) return false;
+  const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999);
+  return new Date(s.dueDate) > endOfToday;
+}
+
+/** The newest bill that has actually fallen due — statements newest-first. */
+export function newestIssued<T extends { statementDate?: string | null }>(statements: T[]): T | null {
+  const sorted = [...(statements ?? [])].sort((a, b) => new Date(b.statementDate ?? 0).getTime() - new Date(a.statementDate ?? 0).getTime());
+  return sorted.find(s => !isUpcoming(s)) ?? sorted[0] ?? null;
+}
+
 export function computeResolvedByFutureCheckpoint(statements: any[]): Set<string> {
   const resolved = new Set<string>();
   let sawZeroCheckpoint = false;
@@ -115,6 +132,8 @@ export function computeResolvedByFutureCheckpoint(statements: any[]): Set<string
   // strictly newer than the current one carried in a zero balance (its
   // pastDueCarried is 0/empty), proving the prior bill was cleared.
   for (const s of statements) {
+    // A scheduled installment still in the future says nothing about the past.
+    if (isUpcoming(s)) continue;
     if (sawZeroCheckpoint) resolved.add(s.id);
     // A missing past-due figure is not evidence of a zero one — an extractor
     // that found no such line proves nothing about the balance. A bill only
@@ -142,10 +161,12 @@ export function computeResolvedByFutureCheckpoint(statements: any[]): Set<string
   // resolved. Attribution is newest-debt-first, which matches how providers
   // roll balances forward.
   for (let k = 0; k < statements.length; k++) {
+    if (isUpcoming(statements[k])) continue;
     const carried = statements[k].pastDueCarried != null ? Number(statements[k].pastDueCarried) : null;
     if (carried == null || carried <= 0) continue;
     let accounted = 0;
     for (let j = k + 1; j < statements.length; j++) {
+      if (isUpcoming(statements[j])) continue;
       if (accounted >= carried - 0.01) {
         resolved.add(statements[j].id);
       } else {
@@ -178,6 +199,12 @@ export function computePaidMap(statements: any[], payments: any[], resolvedByFut
     // The owner's word beats every inference.
     if (s.paidOverride === 'UNPAID') { paid.set(s.id, false); continue; }
     if (s.paidOverride === 'PAID') { paid.set(s.id, true); continue; }
+    // An installment not yet due is paid only by money logged against it.
+    if (isUpcoming(s)) {
+      const toIt = payments.filter(p => counted(p) && p.statementId === s.id).reduce((t, p) => t + Number(p.amount ?? 0), 0);
+      paid.set(s.id, toIt >= Number(s.amountDue ?? 0) - 0.01 && toIt > 0);
+      continue;
+    }
     if (resolvedByFuture.has(s.id)) { paid.set(s.id, true); continue; }
     const carried = liveCarriedOf(s, payments, statements);
     if (s.amountDue == null && s.pastDueCarried == null) {
@@ -231,6 +258,8 @@ export function statementStatus(s: any, payments: any[] = [], newerStmt?: any, i
   // than "Paid", which reads as money having gone out.
   if (s?.paidOverride !== 'UNPAID' && coveredByCredit(s)) return { color: 'green', label: 'Credit' };
   if (isEffectivelyPaid(s, payments, resolvedByFuture, paidMap)) return { color: 'green', label: 'Paid' };
+  // A scheduled installment whose date has not come: nothing owed yet.
+  if (isUpcoming(s)) return { color: 'amber', label: 'Upcoming' };
 
   // The next bill's carried-in balance tells us whether this one was paid:
   // 0 carried in = this bill was cleared before the next was issued. Only
@@ -275,7 +304,9 @@ export interface AccountView {
  * newest, the prior bill is treated as unsettled, as before.
  */
 export function accountView(statements: any[], payments: any[] = []): AccountView {
-  const sorted = [...(statements ?? [])].sort((a, b) => new Date(b.statementDate).getTime() - new Date(a.statementDate).getTime());
+  // Installments still in the future are not the account's position; the
+  // newest bill is the newest one that has fallen due.
+  const sorted = [...(statements ?? [])].filter(s => !isUpcoming(s)).sort((a, b) => new Date(b.statementDate).getTime() - new Date(a.statementDate).getTime());
   const latest = sorted[0] ?? null;
   if (!latest) return { latest: null, isPaid: false, priorSettled: false, pastDue: 0, credit: 0, current: 0, owed: 0 };
   const resolved = computeResolvedByFutureCheckpoint(sorted);

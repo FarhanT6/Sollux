@@ -2159,17 +2159,24 @@ export async function applyPolicyDocument(utilityAccountId: string, ex: Extracte
     });
     // The carrier's own bill for this installment is already here; leave it.
     if (existing && !existing.isScheduled) continue;
-    // The installment covers the stretch to the next one (or the term's end).
-    const periodStart = due;
-    const next = sorted[i + 1]?.date ? new Date(sorted[i + 1]!.date) : (ins.coverageEnd ? new Date(ins.coverageEnd) : null);
-    const periodEnd = next ? new Date(next.getTime() - 86400000) : new Date(due.getFullYear(), due.getMonth() + 1, due.getDate() - 1);
+    // An installment is the payment for the month that ends on its due date
+    // (the Sep 27 payment is September's), so its period runs from the day
+    // after the previous due date to this one, and it is filed under the
+    // month it falls due. Each row is "issued" at the start of its period,
+    // so the rows stagger a month apart and the next one due is the newest
+    // that is not still in the future.
+    const prev = sorted[i - 1]?.date ? new Date(sorted[i - 1]!.date) : null;
+    const periodStart = prev
+      ? new Date(prev.getTime() + 86400000)
+      : (ins.coverageStart && new Date(ins.coverageStart) < due ? new Date(ins.coverageStart) : new Date(due.getFullYear(), due.getMonth() - 1, due.getDate() + 1));
+    const periodEnd = due;
     // An installment already taken by auto-pay is paid. One well in the past
     // on a schedule that says nothing about auto-pay is assumed paid too —
     // the policy continued, so it was — and "↺ Unpaid" is there if not.
     const longPast = new Date(Date.now() - 45 * 86400000).toISOString().slice(0, 10);
     const taken = p.date < today && (ins.autoPay === true || p.date < longPast);
     const data = {
-      statementDate: docDate < due ? docDate : due,
+      statementDate: periodStart,
       dueDate: due,
       billingPeriodStart: periodStart,
       billingPeriodEnd: periodEnd,
