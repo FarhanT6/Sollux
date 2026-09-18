@@ -1427,6 +1427,12 @@ export default function UtilityDetailPage() {
                   const pastDue  = s.pastDueCarried != null ? Number(s.pastDueCarried) : null;
                   const totalDue = openBalanceOf(s);
                   const isPaid = isEffectivelyPaid(s, payments, resolvedByFuture, paidMap);
+                  // What has been paid toward the older bills that make up
+                  // this bill's arrears since it printed. The row keeps the
+                  // statement's figures; this says how they stand today.
+                  const liveCarried = liveCarriedOf(s, payments, statements);
+                  const arrearsPaid = pastDue != null && pastDue > 0 ? Number((pastDue - liveCarried).toFixed(2)) : 0;
+                  const owedNow = totalDue != null && arrearsPaid > 0.005 ? Number((totalDue - arrearsPaid).toFixed(2)) : null;
                   return (
                     <div key={s.id} className="rounded-xl px-5 py-4 flex items-center gap-4"
                       style={{
@@ -1473,7 +1479,13 @@ export default function UtilityDetailPage() {
                             : 'Billing period —'}
                         </p>
                         {pastDue != null && pastDue > 0 && (
-                          <p className={`text-xs mt-0.5 ${isPaid ? 'text-gray-500' : 'text-red-400'}`}>{isPaid ? '' : '⚠ '}Past due on statement: {fmtMoney(pastDue)}</p>
+                          arrearsPaid > 0.005 && !isPaid ? (
+                            <p className="text-xs mt-0.5 text-emerald-500">
+                              ✓ Past due on statement {fmtMoney(pastDue)} · {liveCarried <= 0.01 ? 'paid since' : `${fmtMoney(arrearsPaid)} paid since, ${fmtMoney(liveCarried)} still owed`}
+                            </p>
+                          ) : (
+                            <p className={`text-xs mt-0.5 ${isPaid ? 'text-gray-500' : 'text-red-400'}`}>{isPaid ? '' : '⚠ '}Past due on statement: {fmtMoney(pastDue)}</p>
+                          )
                         )}
                         {pastDue != null && pastDue < 0 && (
                           <p className="text-xs text-emerald-500 mt-0.5">✓ Credit applied: −{fmtMoney(-pastDue)}</p>
@@ -1563,6 +1575,11 @@ export default function UtilityDetailPage() {
                               <p className="text-base font-semibold text-white">{fmtMoney(primary)}</p>
                               {showBillSubline && (
                                 <p className="text-xs text-gray-500">Bill: {fmtMoney(amt)}</p>
+                              )}
+                              {/* The statement's total stands above; what is
+                                  left of it after payments toward its arrears. */}
+                              {!isFullyPaid && owedNow != null && (
+                                <p className="text-xs text-emerald-500">Owed now: {fmtMoney(Math.max(0, owedNow))}</p>
                               )}
                               {/* Net metering: the charge is this month's energy
                                   cost; most of it is deferred to the true-up and
