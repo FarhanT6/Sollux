@@ -4,8 +4,12 @@ import { ClerkProvider } from '@clerk/clerk-react';
 import App from './App';
 import './styles/globals.css';
 import { initNative, hideSplash } from './lib/native';
+import { installErrorReporting } from './lib/telemetry';
 
 const CLERK_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
+
+// Crashes report themselves, so the nightly auditor sees what broke.
+installErrorReporting();
 
 // Shown when the app is built without a Clerk key. Deliberately plain — it
 // must not depend on anything that could itself be missing at this point.

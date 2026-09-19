@@ -1,0 +1,74 @@
+# The Sollux auditor.
+#
+# Every morning it reads the app's own quality report — bills read wrong,
+# imports that fell back to text, duplicates, syncs that keep failing,
+# accounts gone silent, browser crashes — decides what is a code defect, and
+# files a "Proposed:" issue for each, with the evidence and a plan. Nothing is
+# built until the owner relabels a proposal `claude-build`; the build agent
+# takes it from there.
+#
+# One-time setup, in the repo's Settings → Secrets and variables → Actions:
+#   SOLLUX_API_URL          — the API's base URL, e.g. https://sollux-api.onrender.com
+#   AUDIT_TOKEN             — the same value as the AUDIT_TOKEN env var on Render
+#   CLAUDE_CODE_OAUTH_TOKEN — already set for the build agent
+name: Sollux auditor
+
+on:
+  schedule:
+    - cron: '30 13 * * *'   # 6:30am Pacific
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  id-token: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the quality report
+        env:
+          SOLLUX_API_URL: ${{ secrets.SOLLUX_API_URL }}
+          AUDIT_TOKEN: ${{ secrets.AUDIT_TOKEN }}
+        run: |
+          set -e
+          test -n "$SOLLUX_API_URL" || { echo "SOLLUX_API_URL secret is not set"; exit 1; }
+          test -n "$AUDIT_TOKEN" || { echo "AUDIT_TOKEN secret is not set"; exit 1; }
+          curl -sS --fail -H "x-audit-token: $AUDIT_TOKEN" "$SOLLUX_API_URL/api/audit/report" -o audit.json
+          echo "Report: $(wc -c < audit.json) bytes"
+
+      - name: Make sure the labels exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create proposed --color 5319E7 --description "Found by the auditor; relabel claude-build to build it" --force
+          gh label create claude-build --color 0E8A16 --description "The build agent picks this up" --force
+
+      - name: Triage and file proposals
+        uses: anthropics/claude-code-action@v1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: "--allowedTools Bash,Read,Glob,Grep --max-turns 60"
+          prompt: |
+            You are the Sollux auditor. `audit.json` in the repo root is this morning's quality report from the running app (schema and meaning: read `backend/src/routes/audit.ts`). Read `CLAUDE.md` for how the app is meant to behave.
+
+            Your job is to notice what is wrong or missing and propose the fix — the owner should never have to describe a defect. Work through the report and decide, for each signal, whether it is:
+              (a) a CODE DEFECT or MISSING CAPABILITY — bills from a provider read wrong or falling back to text (a layout the extractor does not handle), duplicates being created, a sync failing the same way across accounts, a browser crash, a figure the app computes inconsistently; or
+              (b) a DATA CHORE for the owner — a single unpaid bill, a balance not entered, a payment not filed. The nightly bookkeeper already surfaces those inside the app. Do NOT file issues for (b).
+
+            For each (a), first check it is not already filed: `gh issue list --state open --search "<key words>" --json number,title,labels`. If an open issue covers it, add ONE short comment with today's evidence (only if the numbers changed) and move on.
+
+            Otherwise file an issue with `gh issue create --label proposed --title "Proposed: <one line>" --body-file <file>`. The body must have these sections:
+              **What the app is doing wrong** — the evidence from audit.json, with the actual figures (provider, dates, amounts, counts, error text).
+              **Why I think it happens** — point at the code: file paths and function names you read (Grep/Read the repo; do not guess).
+              **Proposed fix** — concrete, in the same style CLAUDE.md describes, small enough for one PR.
+              **How to verify** — what the report or the page should show afterwards.
+            File at most 3 issues per run; pick the ones affecting the most bills or money. Never include credentials, account numbers, tokens or personal data in an issue. Do not modify any file, do not open PRs, do not push.
+
+            End with a short report: what you filed (numbers), what you commented on, and what you decided was a data chore and why.

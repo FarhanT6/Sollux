@@ -51,6 +51,8 @@ import aiRouter from './routes/ai';
 import plaidRouter from './routes/plaid';
 import { errorHandler } from './middleware/errorHandler';
 import { requireAuth, clerkMiddleware } from './middleware/requireAuth';
+import auditRouter from './routes/audit';
+import telemetryRouter from './routes/telemetry';
 
 // Run the Drive-import and Gmail workers in the API process. Ideally these
 // live in a separate Render service, but a Background Worker costs extra —
@@ -144,6 +146,9 @@ app.use('/api/settings', settingsRouter);
 app.use('/api/priorities', prioritiesRouter);
 app.use('/api/analytics', analyticsRouter);
 app.use('/api/stripe', stripeRouter);
+// The auditor's quality report: a job, not a person, so it carries a shared
+// secret (x-audit-token) instead of a login. See routes/audit.ts.
+app.use('/api/audit', auditRouter);
 
 // ─── Protected routes ─────────────────────────────────────
 // requireAuth() redirects unauthed requests to "/" — Google's redirect back
@@ -161,6 +166,7 @@ app.use('/api/utilities', utilitiesRouter);
 app.use('/api/statements', statementsRouter);
 app.use('/api/payments', paymentsRouter);
 app.use('/api/insights', insightsRouter);
+app.use('/api/telemetry', telemetryRouter);
 app.use('/api/account', accountRouter);
 app.use('/api/documents', documentsRouter);
 app.use('/api/gmail', gmailRouter);

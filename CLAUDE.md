@@ -21,9 +21,18 @@ sollux/
 - BullMQ queues: `scrape`, `insights`, `notifications`, `gmail`
 - AI insights use `claude-sonnet-4-6` via the Anthropic SDK
 
-## Agent workflow (scheduled Claude Code sessions and PRs)
-A scheduled Claude Code Routine picks up GitHub issues labelled `claude-build` and turns each into a PR.
-Whether you are that Routine or an interactive session, ship changes the same way:
+## Agent workflow (the auditor, the build agent, and PRs)
+Two GitHub Actions keep the app improving without the owner having to describe defects:
+- **Auditor** (`.github/workflows/sollux-auditor.yml`, every morning): reads the app's own quality report
+  (`GET /api/audit/report`, `backend/src/routes/audit.ts` — bills read wrong, text fallbacks, duplicates,
+  failing syncs, silent accounts, browser crashes from `POST /api/telemetry/error`) and files
+  `Proposed: …` issues labelled `proposed`, each with evidence, a root-cause pointer into the code, and a plan.
+  Data chores (an unpaid bill, a balance not entered) are the nightly bookkeeper's job, not issues.
+- **Build agent** (`.github/workflows/claude-build.yml`): when the owner relabels a proposal `claude-build`
+  (or files an issue titled `Build: …`, or mentions `@claude` in a thread), it builds the change on a branch,
+  type-checks both sides, opens a PR against `main`, and comments the link. The owner's approval points are
+  the relabel and the merge; "merge it" in the issue lets the agent merge itself.
+Whether you are one of those agents or an interactive session, ship changes the same way:
 1. Branch from the latest `main`: `git fetch origin main && git checkout -B claude/<short-slug> origin/main`.
 2. Type-check both sides before committing; nothing ships red:
    `cd backend && npx prisma generate && npx tsc --noEmit -p .` and `cd frontend && npx tsc --noEmit -p .`
