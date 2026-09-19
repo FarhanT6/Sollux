@@ -450,6 +450,22 @@ enum InsightSeverity {
   ALERT
 }
 
+// ─── CLIENT ERRORS ───────────────────────────────────────
+// A crash or unhandled rejection in the browser, reported by the app itself
+// so the auditor can see what broke for the owner without being told.
+model ClientError {
+  id        String   @id @default(cuid())
+  userId    String?
+  message   String
+  stack     String?
+  url       String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("client_errors")
+}
+
 // ─── NOTIFICATION PREFERENCES ────────────────────────────
 model NotificationPreference {
   id            String       @id @default(cuid())
