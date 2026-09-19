@@ -52,6 +52,42 @@ router.post('/bookkeeper/run', async (req, res, next) => {
   }
 });
 
+// PATCH /api/insights/read-all — mark every unread, non-dismissed insight
+// owned by this user as read.
+router.patch('/read-all', async (req, res, next) => {
+  try {
+    const userProperties = await db.property.findMany({
+      where: { userId: req.dbUserId! },
+      select: { id: true },
+    });
+    const result = await db.aIInsight.updateMany({
+      where: { propertyId: { in: userProperties.map(p => p.id) }, isDismissed: false, isRead: false },
+      data: { isRead: true },
+    });
+    res.json({ count: result.count });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /api/insights/dismiss-info — dismiss every INFO-severity insight
+// owned by this user.
+router.patch('/dismiss-info', async (req, res, next) => {
+  try {
+    const userProperties = await db.property.findMany({
+      where: { userId: req.dbUserId! },
+      select: { id: true },
+    });
+    const result = await db.aIInsight.updateMany({
+      where: { propertyId: { in: userProperties.map(p => p.id) }, isDismissed: false, severity: 'INFO' },
+      data: { isDismissed: true },
+    });
+    res.json({ count: result.count });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // PATCH /api/insights/:id/read
 router.patch('/:id/read', async (req, res, next) => {
   try {

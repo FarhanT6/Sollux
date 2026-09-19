@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
-import { getInsights, markInsightRead, dismissInsight, runBookkeeper } from '../api/client';
-import type { AIInsight } from '../types';
+import { getInsights, markInsightRead, dismissInsight, markAllInsightsRead, dismissAllInfoInsights, runBookkeeper } from '../api/client';
+import type { AIInsight, InsightSeverity } from '../types';
 import { PageHeader, InsightCard, EmptyState, Skeleton } from '../components/ui';
+
+const SEVERITY_RANK: Record<InsightSeverity, number> = { ALERT: 3, WARNING: 2, INFO: 1 };
 
 export default function InsightsPage() {
   const [insights, setInsights] = useState<AIInsight[]>([]);
@@ -57,12 +59,53 @@ export default function InsightsPage() {
     await dismissInsight(id);
     setInsights(prev => prev.filter(i => i.id !== id));
   }
+  async function handleMarkAllRead() {
+    await markAllInsightsRead();
+    setInsights(prev => prev.map(i => ({ ...i, isRead: true })));
+  }
+  async function handleDismissAllInfo() {
+    await dismissAllInfoInsights();
+    setInsights(prev => prev.filter(i => i.severity !== 'INFO'));
+  }
+
+  // Group the filtered insights by property, most urgent property first
+  // (highest severity present, then most unread, then name).
+  const groups = new Map<string, { id: string; name: string; items: AIInsight[] }>();
+  filtered.forEach(i => {
+    const key = i.propertyId || 'unknown';
+    const name = i.property?.nickname || i.property?.address || 'Unknown property';
+    if (!groups.has(key)) groups.set(key, { id: key, name, items: [] });
+    groups.get(key)!.items.push(i);
+  });
+  const grouped = Array.from(groups.values()).sort((a, b) => {
+    const rankA = Math.max(...a.items.map(i => SEVERITY_RANK[i.severity]));
+    const rankB = Math.max(...b.items.map(i => SEVERITY_RANK[i.severity]));
+    if (rankA !== rankB) return rankB - rankA;
+    const unreadA = a.items.filter(i => !i.isRead).length;
+    const unreadB = b.items.filter(i => !i.isRead).length;
+    if (unreadA !== unreadB) return unreadB - unreadA;
+    return a.name.localeCompare(b.name);
+  });
 
   return (
     <div>
       <PageHeader
         title="AI insights"
         subtitle={`${unread} unread · ${insights.length} total${totalSavings > 0 ? ` · $${totalSavings.toLocaleString('en-US', { maximumFractionDigits: 0 })} potential savings` : ''}`}
+        action={
+          <div className="flex items-center gap-2">
+            <button onClick={handleMarkAllRead} disabled={unread === 0} className="btn text-xs disabled:opacity-50">
+              Mark all read
+            </button>
+            <button
+              onClick={handleDismissAllInfo}
+              disabled={!insights.some(i => i.severity === 'INFO')}
+              className="btn text-xs disabled:opacity-50"
+            >
+              Dismiss all info
+            </button>
+          </div>
+        }
       />
       <div className="px-6 py-5">
         {/* Controls row */}
@@ -132,7 +175,15 @@ export default function InsightsPage() {
 
         {loading ? Array(4).fill(0).map((_, i) => <Skeleton key={i} className="h-28 mb-3" />) :
           filtered.length === 0 ? <EmptyState icon="✨" title="No insights" body="Sollux is monitoring your accounts." /> :
-          filtered.map(i => <InsightCard key={i.id} insight={i} onRead={handleRead} onDismiss={handleDismiss} />)
+          grouped.map(g => (
+            <div key={g.id} className="mb-6">
+              <div className="flex items-center gap-3 mb-3">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{g.name}</p>
+                <span className="text-xs text-gray-600">{g.items.length} insight{g.items.length !== 1 ? 's' : ''}</span>
+              </div>
+              {g.items.map(i => <InsightCard key={i.id} insight={i} onRead={handleRead} onDismiss={handleDismiss} />)}
+            </div>
+          ))
         }
       </div>
     </div>
