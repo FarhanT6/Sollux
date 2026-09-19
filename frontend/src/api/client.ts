@@ -462,6 +462,10 @@ export const markInsightRead = (id: string) =>
   api.patch<AIInsight>(`/insights/${id}/read`).then(r => r.data);
 export const dismissInsight = (id: string) =>
   api.patch<AIInsight>(`/insights/${id}/dismiss`).then(r => r.data);
+export const markAllInsightsRead = () =>
+  api.patch<{ count: number }>('/insights/read-all').then(r => r.data);
+export const dismissAllInfoInsights = () =>
+  api.patch<{ count: number }>('/insights/dismiss-info').then(r => r.data);
 
 // Notifications
 export const getNotificationPreferences = () =>
