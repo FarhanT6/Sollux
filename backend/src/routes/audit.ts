@@ -66,6 +66,9 @@ router.get('/report', async (req, res, next) => {
       && s.utilityAccount.category !== 'INSURANCE');
     const byDayKey = new Map<string, any[]>();
     for (const s of recent) {
+      // Installments filed from one policy document legitimately share its
+      // date; they are a schedule, not duplicates of one bill.
+      if (s.isScheduled) continue;
       const k = `${s.utilityAccount.id}:${new Date(s.statementDate).toISOString().slice(0, 10)}`;
       byDayKey.set(k, [...(byDayKey.get(k) ?? []), s]);
     }
