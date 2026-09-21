@@ -1942,7 +1942,9 @@ export function inferInsuranceType(text: string): NonNullable<NonNullable<Extrac
  * installment fee of $4.00 in each payment".
  */
 export function applyInsuranceFromText(ex: ExtractedBillData, text: string): void {
-  const looksInsurance = /\bpolicy\s*(?:number|no\.?|#|period)\b|\bcoverage\s*period\b|\bpremium\b|\bunderwritten\s+by\b|\bdeclarations?\b|\binsured\b/i.test(text);
+  // No word boundaries: pdf-parse renders some carriers' statements with the
+  // spaces stripped ("PolicyCoverageperiodBalanceInstallment").
+  const looksInsurance = /policy\s*(?:number|no\.?|#|period|type)|coverage\s*period|premium|underwritten\s*by|declarations?|insured\b|insuring\s*company|installment\s*schedule/i.test(text);
   if (!looksInsurance) return;
   const ins: NonNullable<ExtractedBillData['insurance']> = {
     policyNumber: null, coverageStart: null, coverageEnd: null, termPremium: null, installment: null,
@@ -1979,14 +1981,21 @@ export function applyInsuranceFromText(ex: ExtractedBillData, text: string): voi
     // The block ends at the fee footnote ("*Includes a $8.00 Installment
     // fee", "We included an installment fee") — not at a parenthetical
     // like "(Includes amount from current policy)" under the heading.
+    // Only a schedule block counts. Without one, the dated amounts on a
+    // bill are its due line, a late-fee line and a payment received — a
+    // "schedule" read off those made the $10 late fee the regular installment.
     const block = text.match(/(?:automatic\s*)?payments?\s*schedule[\s\S]{0,2500}?(?=\*\s*includes|we\s*included|installment\s*fee|you\s*may\s*avoid|form\s+[A-Z0-9]+\s*\(|$)/i)?.[0]
       ?? text.match(/(?:installment\s*schedule|upcoming\s*bill\s*installments)[\s\S]{0,2500}?(?=\*\s*includes|installment\s*fee|you\s*may\s*avoid|important\s*messages|$)/i)?.[0]
-      ?? text;
-    // A leading minus is a payment received, not a payment to come.
-    const lines = Array.from(block.matchAll(/([A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})\s*[.\s…:]*\$\s*([\d,]+\.\d{2})/g));
+      ?? '';
+    // A leading minus is a payment received, not a payment to come. Dates
+    // come before amounts ("Sep 27, 2026 $467.21") or after ("$283.34
+    // 03/21/2026", Nationwide's schedule).
+    const dateFirst = Array.from(block.matchAll(/([A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})\s*[.\s…:]*\$\s*([\d,]+\.\d{2})/g)).map(m => ({ d: m[1]!, a: m[2]! }));
+    const amountFirst = Array.from(block.matchAll(/\$\s*([\d,]+\.\d{2})\s*(\d{1,2}\/\d{1,2}\/\d{4}|[A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4})/g)).map(m => ({ d: m[2]!, a: m[1]! }));
+    const lines = dateFirst.length >= 2 ? dateFirst : amountFirst;
     const seen = new Set<string>();
     const schedule = lines
-      .map(m => ({ date: parseDate(m[1]!), amount: money(m[2]!) }))
+      .map(m => ({ date: parseDate(m.d), amount: money(m.a) }))
       .filter((x): x is { date: string; amount: number } => !!x.date && x.amount > 0)
       .filter(x => ins.totalCost == null || Math.abs(x.amount - ins.totalCost) > 0.005)
       .filter(x => (seen.has(x.date) ? false : (seen.add(x.date), true)));
@@ -2030,7 +2039,10 @@ export function applyInsuranceFromText(ex: ExtractedBillData, text: string): voi
     if (row) { ins.coverageStart ??= parseDate(row[1]!); ins.coverageEnd ??= parseDate(row[2]!); }
   }
   {
-    const row = text.match(/\$[\d,]+\.\d{2}\s*(\d{1,2}\/\d{1,2}\/\d{2,4})\s*-\s*(\d{1,2}\/\d{1,2}\/\d{2,4})\s*\$[\d,]+\.\d{2}\s*[0-9A-Z]{7,16}\s*(?:Active|Past\s*Due|Cancel|Pending|Expired)/i);
+    // Hartford: "$2,137.50 03/20/26-03/20/27 $213.75 57SBAAZ9S8E Active";
+    // Nationwide / Safeco: "05/21/25- 05/21/26 $832.02 $277.34".
+    const row = text.match(/\$[\d,]+\.\d{2}\s*(\d{1,2}\/\d{1,2}\/\d{2,4})\s*-\s*(\d{1,2}\/\d{1,2}\/\d{2,4})\s*\$[\d,]+\.\d{2}\s*[0-9A-Z]{7,16}\s*(?:Active|Past\s*Due|Cancel|Pending|Expired)/i)
+      ?? text.match(/(\d{1,2}\/\d{1,2}\/\d{2,4})\s*-\s*(\d{1,2}\/\d{1,2}\/\d{2,4})\s*\$\s*[\d,]+\.\d{2}\s*\$\s*[\d,]+\.\d{2}/);
     if (row) { ins.coverageStart ??= parseDate(row[1]!); ins.coverageEnd ??= parseDate(row[2]!); }
   }
 
@@ -2038,36 +2050,73 @@ export function applyInsuranceFromText(ex: ExtractedBillData, text: string): voi
   // "12Pay"): "Minimum Due" is what this bill asks for, "Balance" is what is
   // left of the policy — owed over the term, not now. Read with no spaces
   // ("MinimumDue", "PayTheMinimumByTheDueDate") as pdf-parse renders it.
+  // The same three figures under different words:
+  //   Hartford:   "TOTALS $2,145.50 $221.75" / "Pay The Minimum By The Due Date $221.75 05/20/26 15106186 $2,145.50"
+  //   Nationwide: "Please pay $283.34 by 02/21/26." / "Current full account balance $838.02" / "Minimum amount due $283.34"
+  const first = (...res: RegExp[]) => { for (const re of res) { const m = text.match(re); if (m) return m; } return null; };
   const totals = text.match(/TOTALS\s*\$\s*([\d,]+\.\d{2})\s*\$\s*([\d,]+\.\d{2})/i);
   const stub = text.match(/pay\s*the\s*minimum\s*by\s*the\s*due\s*date\s*\$\s*([\d,]+\.\d{2})\s*(\d{1,2}\/\d{1,2}\/\d{2,4})\s*(\d{6,12})?\s*\$\s*([\d,]+\.\d{2})/i);
-  const installmentBill = /minimum\s*due/i.test(text) && /upcoming\s*bill\s*installments|bill\s*plan|installment\s*fee/i.test(text) && (totals || stub);
+  const minM = totals ? { v: totals[2]! } : stub ? { v: stub[1]! } : (() => {
+    // "Please pay $449.58 by" first; "Minimum amount due (includes a $6.00
+    // Service Charge) $449.58" names the fee before the figure.
+    const m = first(/please\s*pay\s*\$\s*([\d,]+\.\d{2})\s*by/i, /minimum\s*(?:amount\s*)?due\s*(?:\([^)]{0,80}\))?\s*:?\s*\$\s*([\d,]+\.\d{2})/i);
+    return m ? { v: m[1]! } : null;
+  })();
+  const balM = totals ? { v: totals[1]! } : stub ? { v: stub[4]! } : (() => {
+    const m = first(/current\s*full\s*account\s*balance\s*\$?\s*([\d,]+\.\d{2})/i, /full\s*balance\s*\$?\s*([\d,]+\.\d{2})/i, /account\s*balance\s*\$?\s*([\d,]+\.\d{2})/i);
+    return m ? { v: m[1]! } : null;
+  })();
+  const installmentBill = /minimum\s*(?:amount\s*)?due/i.test(text)
+    && /upcoming\s*bill\s*installments|bill\s*plan|installment\s*fee|installment\s*schedule|service\s*charge|monthly\s*installment/i.test(text)
+    && minM && balM;
   if (installmentBill) {
-    const minimumDue = money(totals ? totals[2]! : stub![1]!);
-    const balance = money(totals ? totals[1]! : stub![4]!);
-    const due = stub ? parseDate(stub[2]!) : findDateNear(text, [/due\s*date\s*:?/i]);
+    const minimumDue = money(minM!.v);
+    const balance = money(balM!.v);
+    const due = stub ? parseDate(stub[2]!) : (() => {
+      const m = first(/please\s*pay\s*\$\s*[\d,]+\.\d{2}\s*by\s*(?:payment\s*options\s*)?\.?\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i, /please\s*pay\s*by\s*([A-Za-z]{3,9}\s*\d{1,2},?\s*\d{4})/i);
+      return m ? parseDate(m[1]!) : findDateNear(text, [/due\s*date\s*:?/i]);
+    })();
     const fee = ins.serviceCharge ?? 0;
     const sched = ins.paymentSchedule ?? [];
+    // A late fee actually charged: a dated transaction line ("05/27/26
+    // $35.00 Late Fee") or "Late Fee for Last Payment Due on 02/21/26 …
+    // $10.00". "You'll be charged a $35.00 late fee" is a warning, not a fee.
+    const lateFee = (() => {
+      const m = first(/\d{1,2}\/\d{1,2}\/\d{2,4}\s*\$\s*([\d,]+\.\d{2})\s*late\s*fee/i, /late\s*fee\s*for[^$]{0,120}\$\s*([\d,]+\.\d{2})/i);
+      return m ? money(m[1]!) : null;
+    })();
     // The regular installment is the amount the upcoming schedule repeats;
-    // a past-due bill's minimum is that plus the missed one and its fees.
+    // with no schedule left (the last installment), the minimum less any
+    // late fee. A past-due bill's minimum is that plus the missed one.
     const counts = new Map<number, number>();
     for (const p of sched) counts.set(p.amount, (counts.get(p.amount) ?? 0) + 1);
-    const regular = counts.size ? [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0]![0] : minimumDue;
-    // A late fee actually charged is a dated transaction line ("05/27/26
-    // $35.00 Late Fee"); "you'll be charged a $35.00 late fee" is a warning.
-    const lateFee = (() => { const m = text.match(/\d{1,2}\/\d{1,2}\/\d{2,4}\s*\$\s*([\d,]+\.\d{2})\s*late\s*fee/i); return m ? money(m[1]!) : null; })();
+    const regular = counts.size ? [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0]![0] : Number((minimumDue - (lateFee ?? 0)).toFixed(2));
     // Payments received, less any that bounced ("Protested Payment").
     const received = Array.from(text.matchAll(/-\s*\$\s*([\d,]+\.\d{2})\s*payment\s*received/gi)).reduce((t, m) => t + money(m[1]!), 0)
+      + Array.from(text.matchAll(/payment\(?s?\)?\s*of\s*\$\s*([\d,]+\.\d{2})\s*received/gi)).reduce((t, m) => t + money(m[1]!), 0)
       - Array.from(text.matchAll(/\$\s*([\d,]+\.\d{2})\s*(?:protested|returned|reversed|nsf)\s*payment/gi)).reduce((t, m) => t + money(m[1]!), 0);
-    if (stub?.[3]) ex.accountNumber = stub[3];
-    const arrears = minimumDue > regular + 0.01 ? Number((minimumDue - regular).toFixed(2)) : 0;
+    // The billing account, not the bill's serial number from the remittance
+    // line: "Bill Account Number … 15106186", "Billing account 288454435".
+    const acct = stub?.[3] ?? first(/billing\s*account\s*(?:number)?\s*:?\s*(\d{6,12})\b/i, /account\s*number\s*:?\s*(\d{6,12})\b/i)?.[1] ?? null;
+    if (acct) ex.accountNumber = acct;
+    // A term premium is what the policy costs for the term ("Renewal
+    // $5,323.00"); the running full balance an earlier read took for it is not.
+    const renewal = text.match(/renewal\s*\$?\s*([\d,]+\.\d{2})/i);
+    ins.termPremium = renewal ? money(renewal[1]!) : null;
+    // What the minimum asks beyond a regular installment is arrears: a missed
+    // installment, and the late fee it drew. The fee is this bill's own
+    // charge; the missed installment is carried from the bill before.
+    const extra = Math.max(0, Number((minimumDue - regular).toFixed(2)));
+    const carried = Math.max(0, Number((extra - (lateFee ?? 0)).toFixed(2)));
+    const thisBill = Number((minimumDue - carried).toFixed(2));
     ex.documentKind = 'bill';
     ex.statedTotalDue = minimumDue;
     ex.totalAccountBalance = balance;
     ex.currentCharges = regular;
-    ex.amountDue = regular;
+    ex.amountDue = thisBill;
     // Zero, not null: a re-import must clear a carried figure an earlier
     // read put there (the policy balance, taken for arrears).
-    ex.previousBalance = arrears > 0 ? arrears : 0;
+    ex.previousBalance = carried;
     ex.lateFee = lateFee;
     ex.paymentsReceived = received > 0 ? Number(received.toFixed(2)) : ex.paymentsReceived ?? null;
     if (due) ex.dueDate = due;
@@ -2076,13 +2125,15 @@ export function applyInsuranceFromText(ex: ExtractedBillData, text: string): voi
     // is filed under the month it was issued, like any other monthly bill.
     ex.billingPeriodStart = null;
     ex.billingPeriodEnd = null;
+    // The regular installment before the fee — not "Monthly Installment
+    // $293.34" on a past-due bill, which has the late fee inside it.
     ins.installment = Number((regular - fee).toFixed(2));
     ins.installmentsRemaining = sched.length || ins.installmentsRemaining;
     if (!ex.chargeBreakdown || Object.keys(ex.chargeBreakdown).length === 0) {
       ex.chargeBreakdown = {
         'Premium installment': Number((regular - fee).toFixed(2)),
         ...(fee ? { 'Installment fee': fee } : {}),
-        ...(arrears > 0 ? { 'Past due installment': Number((arrears - (lateFee ?? 0)).toFixed(2)) } : {}),
+        ...(carried > 0 ? { 'Past due installment': carried } : {}),
         ...(lateFee ? { 'Late fee': lateFee } : {}),
       };
     }
