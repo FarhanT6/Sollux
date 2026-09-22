@@ -390,6 +390,42 @@ router.post('/confirm', async (req: Request, res: Response) => {
               },
             });
           }
+          // An insurance installment bill is identified by the installment it
+          // asks for — its due date — and states no period of its own. Earlier
+          // reads of the same bill carried the policy's whole term as the
+          // period and sometimes a shifted issue date, so a re-import found
+          // nothing to update and filed a second copy: a Nationwide account
+          // showed March's bill twice, once labelled "May" by the term it
+          // carried. Every row on the account for this installment — same
+          // due date, or same issue date — is one bill: keep one (the one
+          // with payments on it, else the oldest), move the others' payments
+          // onto it, and let the new read overwrite it below.
+          const installmentBill = !!ex.insurance && !ex.billingPeriodStart && !!ex.dueDate;
+          if (!existing && installmentBill) {
+            const due = new Date(ex.dueDate!);
+            const w = 5 * 86400000;
+            const day = 86400000;
+            const twins = await db.statement.findMany({
+              where: {
+                utilityAccountId, isScheduled: false, isDownPayment: false,
+                OR: [
+                  { dueDate: { gte: new Date(due.getTime() - w), lte: new Date(due.getTime() + w) } },
+                  { statementDate: { gte: new Date(statementDate.getTime() - day), lte: new Date(statementDate.getTime() + day) } },
+                ],
+              },
+              include: { _count: { select: { payments: true } } },
+              orderBy: { createdAt: 'asc' },
+            });
+            if (twins.length) {
+              const survivor = [...twins].sort((a, b) => b._count.payments - a._count.payments)[0]!;
+              for (const t of twins) {
+                if (t.id === survivor.id) continue;
+                await db.payment.updateMany({ where: { statementId: t.id }, data: { statementId: survivor.id } });
+                await db.statement.delete({ where: { id: t.id } });
+              }
+              existing = survivor;
+            }
+          }
           // Same account, same issue date: the same bill, whatever period an
           // earlier read gave it. An insurance installment bill re-imported
           // after its period was corrected from the policy's whole term to

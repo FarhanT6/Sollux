@@ -1722,7 +1722,19 @@ export async function syncInsurancePolicyFromBill(utilityAccountId: string, ex: 
   if (!account || account.category !== 'INSURANCE') return;
   const billDate = ex.statementDate ? new Date(ex.statementDate) : new Date();
   const newer = await db.statement.findFirst({ where: { utilityAccountId, statementDate: { gt: billDate }, isDownPayment: false }, select: { id: true } });
-  if (newer) return;
+  if (newer) {
+    // An older bill of the current term still knows what the term costs:
+    // only the renewal bill prints "Renewal $5,323.00", and a later bill
+    // read before that line was understood left the running balance
+    // ($4,879.42) standing as the premium. The term premium does not change
+    // within a term, so the older bill may correct it.
+    const cur = account.insurancePolicy;
+    const start = ins?.coverageStart ? new Date(ins.coverageStart) : null;
+    if (ins?.termPremium != null && cur?.effectiveDate && start && Math.abs(cur.effectiveDate.getTime() - start.getTime()) < 45 * 86400000) {
+      await db.insurancePolicy.update({ where: { id: cur.id }, data: { termPremium: ins.termPremium } });
+    }
+    return;
+  }
 
   if (!ins || (!ins.policyNumber && !ins.coverageStart)) {
     // A plain premium bill (Blue Shield's monthly dental/health invoice) names
@@ -2112,7 +2124,11 @@ export function applyInsuranceFromText(ex: ExtractedBillData, text: string): voi
     ex.documentKind = 'bill';
     ex.statedTotalDue = minimumDue;
     ex.totalAccountBalance = balance;
-    ex.currentCharges = regular;
+    // The row is filed under its period charge, and the late fee is this
+    // bill's own charge: "Please pay $293.34" is the installment plus the
+    // fee. Filing the installment alone showed $283.34 for a bill that
+    // asked $293.34, and the fee was only ever visible on the fees tab.
+    ex.currentCharges = thisBill;
     ex.amountDue = thisBill;
     // Zero, not null: a re-import must clear a carried figure an earlier
     // read put there (the policy balance, taken for arrears).
