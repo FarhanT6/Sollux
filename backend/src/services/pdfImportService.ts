@@ -2096,15 +2096,18 @@ export function applyInsuranceFromText(ex: ExtractedBillData, text: string): voi
   const minM = totals ? { v: totals[2]! } : stub ? { v: stub[1]! } : (() => {
     // "Please pay $449.58 by" first; "Minimum amount due (includes a $6.00
     // Service Charge) $449.58" names the fee before the figure.
-    const m = first(/please\s*pay\s*\$\s*([\d,]+\.\d{2})\s*by/i, /minimum\s*(?:amount\s*)?due\s*(?:\([^)]{0,80}\))?\s*:?\s*\$\s*([\d,]+\.\d{2})/i);
+    // Older layouts: "Amount due $283.33", or only the stub's "Monthly
+    // Installment $283.33".
+    const m = first(/please\s*pay\s*\$\s*([\d,]+\.\d{2})\s*by/i, /minimum\s*(?:amount\s*)?due\s*(?:\([^)]{0,80}\))?\s*:?\s*\$\s*([\d,]+\.\d{2})/i,
+      /(?:total\s*)?amount\s*(?:now\s*)?due\s*(?:\([^)]{0,80}\))?\s*:?\s*\$\s*([\d,]+\.\d{2})/i, /monthly\s*installment\s*:?\s*\$\s*([\d,]+\.\d{2})/i);
     return m ? { v: m[1]! } : null;
   })();
   const balM = totals ? { v: totals[1]! } : stub ? { v: stub[4]! } : (() => {
-    const m = first(/current\s*full\s*account\s*balance\s*\$?\s*([\d,]+\.\d{2})/i, /full\s*balance\s*\$?\s*([\d,]+\.\d{2})/i, /account\s*balance\s*\$?\s*([\d,]+\.\d{2})/i);
+    const m = first(/current\s*full\s*account\s*balance\s*\$?\s*([\d,]+\.\d{2})/i, /full\s*balance\s*\$?\s*([\d,]+\.\d{2})/i, /account\s*balance\s*\$?\s*([\d,]+\.\d{2})/i, /(?:total|remaining|policy)\s*balance\s*\$?\s*([\d,]+\.\d{2})/i);
     return m ? { v: m[1]! } : null;
   })();
-  const installmentBill = /minimum\s*(?:amount\s*)?due/i.test(text)
-    && /upcoming\s*bill\s*installments|bill\s*plan|installment\s*fee|installment\s*schedule|service\s*charge|monthly\s*installment/i.test(text)
+  const installmentBill = /minimum\s*(?:amount\s*)?due|monthly\s*installment|installment\s*(?:amount|due)/i.test(text)
+    && /upcoming\s*bill\s*installments|bill\s*plan|installment\s*fee|installment\s*schedule|service\s*charge|monthly\s*installment|coverage\s*period.{0,40}installment/i.test(text)
     && minM && balM;
   if (installmentBill) {
     const minimumDue = money(minM!.v);
@@ -2183,6 +2186,18 @@ export function applyInsuranceFromText(ex: ExtractedBillData, text: string): voi
   if (!ins.policyNumber && !ins.coverageStart && !ins.paymentSchedule) return;
   ex.insurance = ins;
   if (installmentBill) return;
+
+  // A bill's "period" that is the policy's term is not a billing period.
+  // Every monthly bill of the term carried it, the importer took "same
+  // period" for "same bill", and a year of statements collapsed into one
+  // row. A monthly bill is filed under the month it was issued.
+  if (ex.documentKind !== 'policy_document' && ex.billingPeriodStart && ex.billingPeriodEnd) {
+    const span = (new Date(ex.billingPeriodEnd).getTime() - new Date(ex.billingPeriodStart).getTime()) / 86400000;
+    const isTerm = ins.coverageStart && ins.coverageEnd
+      && Math.abs(new Date(ex.billingPeriodStart).getTime() - new Date(ins.coverageStart).getTime()) < 4 * 86400000
+      && Math.abs(new Date(ex.billingPeriodEnd).getTime() - new Date(ins.coverageEnd).getTime()) < 4 * 86400000;
+    if (span > 45 || isTerm) { ex.billingPeriodStart = null; ex.billingPeriodEnd = null; }
+  }
 
   // A document with a term and a payment schedule but no "amount due" of its
   // own describes the policy; it is not a bill for a period.

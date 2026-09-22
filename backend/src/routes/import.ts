@@ -379,8 +379,12 @@ router.post('/confirm', async (req: Request, res: Response) => {
         // So: match on the billing period when the bill states one, and fall
         // back to the issue month only when it does not.
         let existing = null;
+        // An insurance bill is never identified by a period: whatever period
+        // it states is the policy's term, shared by every bill of the term,
+        // and matching on it collapsed a year of statements into one row.
+        const insuranceBill = !!ex.insurance || acct.category === 'INSURANCE';
         if (hasReliableDate) {
-          if (ex.billingPeriodStart) {
+          if (ex.billingPeriodStart && !insuranceBill) {
             // Periods shift by a day or two between cycles, so an exact match
             // is too strict: treat periods starting within a week of each
             // other as the same bill.
@@ -406,7 +410,7 @@ router.post('/confirm', async (req: Request, res: Response) => {
           // due date, or same issue date — is one bill: keep one (the one
           // with payments on it, else the oldest), move the others' payments
           // onto it, and let the new read overwrite it below.
-          const installmentBill = !!ex.insurance && !ex.billingPeriodStart && !!ex.dueDate;
+          const installmentBill = insuranceBill && !!ex.dueDate;
           if (!existing && installmentBill) {
             const due = new Date(ex.dueDate!);
             const w = 5 * 86400000;
