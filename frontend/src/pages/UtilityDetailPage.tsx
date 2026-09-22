@@ -995,7 +995,7 @@ export default function UtilityDetailPage() {
   // editable penaltiesFees column so it matches what Edit shows and writes.
   // The fee lines themselves, from the bill's itemised charges, matched the
   // same way the importer decides what counts as a fee (sanitiseLateFee).
-  const FEE_LINE = /late\s*(?:fee|charge|payment\s*(?:fee|charge|penalty))|penalt|overdue\s*charge|nsf|returned\s*(?:check|payment)|finance\s*charge|interest\s*charge|installment\s*fee|service\s*charge|convenience\s*fee|processing\s*fee|reconnect|disconnect|shut-?off|delinquen/i;
+  const FEE_LINE = /late\s*(?:fee|charge|payment\s*(?:fee|charge|penalty))|penalt|overdue\s*charge|nsf|returned\s*(?:check|payment)|finance\s*charge|interest\s*charge|installment\s*fee|service\s*charge|convenience\s*fee|processing\s*fee|reconnect|disconnect|shut-?off|delinquen|reinstatement/i;
   const feesData = useMemo(() => statements.map(s => {
     const penalties = s.penaltiesFees != null ? Number(s.penaltiesFees) : null;
     if (penalties == null || penalties === 0) return null;

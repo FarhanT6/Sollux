@@ -572,6 +572,26 @@ router.post('/confirm', async (req: Request, res: Response) => {
             const carried = Number((ex.statedTotalDue - own).toFixed(2));
             ex.currentCharges = own; ex.amountDue = own; ex.previousBalance = carried > 0.005 ? carried : 0;
             if (paidSince > 0.005) ex.paymentsReceived = paidSince;
+            // What was billed since, beyond whole installments, is fees: a
+            // $20 late fee, a $50 reinstatement fee. The installment is the
+            // smallest "Currently Due" any bill of the account has shown.
+            const earlier = await db.statement.findMany({
+              where: { utilityAccountId, isScheduled: false, isDownPayment: false, statementDate: { lt: statementDate } },
+              orderBy: { statementDate: 'desc' }, take: 12, select: { rawDataJson: true },
+            });
+            const dues = [ins.currentlyDue, ...earlier.map(e => (e.rawDataJson as any)?.insurance?.currentlyDue)].filter((v): v is number => typeof v === 'number' && v > 0);
+            const installment = dues.length ? Math.min(...dues) : null;
+            if (installment) {
+              const fees = Number((billedSince - Math.floor(billedSince / installment + 1e-6) * installment).toFixed(2));
+              const premium = Number((billedSince - fees).toFixed(2));
+              ex.lateFee = fees > 0.005 ? fees : null;
+              const label = fees === 20 ? 'Late fee' : fees === 50 ? 'Reinstatement fee' : fees === 70 ? 'Late fee and reinstatement fee' : 'Late / reinstatement fees';
+              ex.chargeBreakdown = {
+                ...(premium > 0.005 ? { 'Premium installment': premium } : {}),
+                ...(fee ? { 'Installment fee': fee } : {}),
+                ...(fees > 0.005 ? { [label]: fees } : {}),
+              };
+            }
           }
           // A scheduled row for the whole term premium (from a policy package)
           // has no place on an account billed by the month.
