@@ -30,6 +30,7 @@
     "helmet": "^7.1.0",
     "ioredis": "^5.3.2",
     "jsonwebtoken": "^9.0.2",
+    "pdf-lib": "^1.17.1",
     "pdf-parse": "^1.1.1",
     "plaid": "^45.0.0",
     "playwright": "^1.43.0",
