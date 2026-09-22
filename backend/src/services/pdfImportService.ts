@@ -2797,7 +2797,7 @@ export function applyCancellationNoticeFromText(ex: ExtractedBillData, text: str
 }
 
 export function sanitiseLateFee(ex: ExtractedBillData): void {
-  const FEE_LINE = /late\s*(?:fee|charge|payment\s*(?:fee|charge|penalty))|penalt|overdue\s*charge|nsf|returned\s*(?:check|payment)|finance\s*charge|interest\s*charge/i;
+  const FEE_LINE = /late\s*(?:fee|charge|payment\s*(?:fee|charge|penalty))|penalt|overdue\s*charge|nsf|returned\s*(?:check|payment)|finance\s*charge|interest\s*charge|reinstatement\s*fee/i;
   if (ex.chargeBreakdown) {
     let fromLines = 0, seen = false;
     for (const [label, value] of Object.entries(ex.chargeBreakdown)) {
