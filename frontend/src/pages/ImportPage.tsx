@@ -2,7 +2,8 @@ import { useCallback, useState, useRef, useEffect } from 'react';
 import { format } from 'date-fns';
 import { PageHeader } from '../components/ui';
 import api, { getDriveStatus, getDriveConnectUrl, getDriveAccessToken, startDriveImport, getDriveImportJob, getProperties } from '../api/client';
-import type { Property } from '../types';
+import type { Property, UtilityCategory } from '../types';
+import { CATEGORY_LABELS } from '../types';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -518,7 +519,9 @@ function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed, onProgres
 // ── New-property mini-form ─────────────────────────────────────────────────────
 
 const PROPERTY_TYPES = ['RENTAL', 'PRIMARY', 'COMMERCIAL', 'VACATION'];
-const CATEGORIES     = ['ELECTRIC', 'GAS', 'WATER', 'SEWER', 'TRASH', 'SOLAR', 'INTERNET', 'PHONE', 'OTHER'];
+// The app's own category list — this page kept a short one of its own,
+// so an insurance or loan account could not be created from an import.
+const CATEGORIES     = Object.keys(CATEGORY_LABELS) as UtilityCategory[];
 
 function NewPropertyForm({
   propForm,
@@ -638,7 +641,7 @@ function NewPropertyForm({
               onChange={e => onChangeAcct({ ...acctForm, category: e.target.value })}
             >
               {CATEGORIES.map(c => (
-                <option key={c} value={c}>{c.charAt(0) + c.slice(1).toLowerCase()}</option>
+                <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>
               ))}
             </select>
           </div>
@@ -728,7 +731,7 @@ function AddAccountForm({
               onChange={e => onChangeAcct({ ...acctForm, category: e.target.value })}
             >
               {CATEGORIES.map(c => (
-                <option key={c} value={c}>{c.charAt(0) + c.slice(1).toLowerCase()}</option>
+                <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>
               ))}
             </select>
           </div>
