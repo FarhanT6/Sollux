@@ -98,6 +98,14 @@ export interface ExtractedBillData {
     /** The number was printed under a "Policy Number" label, so it stands
      *  even when it is also the billing account number (Progressive). */
     policyNumberExplicit?: boolean;
+    /** Running totals an installment invoice prints (AmTrust: "Total Policy
+     *  Cost / Total Billed To Date / Total Paid To Date / Currently Due").
+     *  The difference between two bills' figures says what was billed and
+     *  paid between them. */
+    policyCost?: number | null;
+    billedToDate?: number | null;
+    paidToDate?: number | null;
+    currentlyDue?: number | null;
   } | null;
   /** A premium finance agreement: a lender (Capital Premium Financing,
    *  IPFS, First Insurance Funding) pays the carrier the term premium and is
@@ -504,7 +512,9 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
     for (const line of lines.slice(0, 20)) {
       if (line.length < 3 || line.length > 100) continue;
       if (/^\d/.test(line)) continue;
-      if (/^(account|invoice|statement|bill|date|customer|service|payment|page\s+\d)/i.test(line)) continue;
+      if (/^(account|invoice|statement|bill|date|customer|service|payment|policy|page\s+\d)/i.test(line)) continue;
+      // A bare column heading is not a name.
+      if (/^(policy|number|coverage|description|totals?|status|amount|due|minimum|effective\s+date|due\s+date|date\s+of\s+notice|account\s+number)$/i.test(line)) continue;
       providerName = line;
       break;
     }
@@ -536,6 +546,7 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
       'Service Finance','Sunrun','SunPower','Vivint Solar','Sunnova',
       // Insurance
       'Safeco','Bamboo','Lemonade','State Farm','Allstate','Farmers',
+      'AmTrust','Wesco Insurance',
       // Premium finance
       'Capital Premium Financing','IPFS','First Insurance Funding',
       // HOA
@@ -2080,6 +2091,22 @@ export function applyInsuranceFromText(ex: ExtractedBillData, text: string): voi
       ?? text.match(/(?:total|term|policy)\s+premium[^$\n]{0,40}\$\s*([\d,]+\.\d{2})/i);
     return m ? money(m[m.length - 1]!) : null;
   })();
+  // AmTrust's invoice: a policy row "WBP2036370 02 · Business Owners ·
+  // 2/23/2026 · In Effect · Total Policy Cost · Total Billed To Date · Total
+  // Paid To Date · Currently Due", then an "Installment Fee" row.
+  {
+    // pdf-parse joins the row: "2/23/2026In Effect$2,349.00$469.80…".
+    const row = text.match(/(?<![A-Za-z])(In\s*Effect|Cancelled|Canceled|Pending|Expired|Active)\s*\$\s*([\d,]+\.\d{2})\s*\$\s*([\d,]+\.\d{2})\s*\$\s*([\d,]+\.\d{2})\s*\$\s*([\d,]+\.\d{2})(?:\s*installment\s*fee\s*\$\s*([\d,]+\.\d{2}))?/i);
+    if (row && /total\s*policy\s*cost/i.test(text) && /total\s*billed\s*to\s*date/i.test(text)) {
+      ins.policyCost = money(row[2]!); ins.billedToDate = money(row[3]!); ins.paidToDate = money(row[4]!); ins.currentlyDue = money(row[5]!);
+      if (row[6]) ins.serviceCharge ??= money(row[6]!);
+      ins.termPremium ??= ins.policyCost;
+      if (/amtrust/i.test(text)) ex.providerName = 'AmTrust';
+    }
+    // The header labels come first and the values a block later.
+    const eff = text.match(/policy\s*effective\s*date[\s\S]{0,1500}?(\d{1,2}\/\d{1,2}\/\d{4})/i);
+    if (eff && !ins.coverageStart) ins.coverageStart = parseDate(eff[1]!);
+  }
   ins.totalCost ??= (() => { const m = text.match(/\$\s*([\d,]+\.\d{2})\s*total\s+cost/i) ?? text.match(/total\s+cost[^$\n]{0,20}\$\s*([\d,]+\.\d{2})/i); return m ? money(m[1]!) : null; })();
   ins.serviceCharge ??= (() => {
     const m = text.match(/(?:installment|billing|service)\s*fee\s*of\s*\$\s*([\d,]+\.\d{2})/i)
@@ -2177,26 +2204,33 @@ export function applyInsuranceFromText(ex: ExtractedBillData, text: string): voi
   const first = (...res: RegExp[]) => { for (const re of res) { const m = text.match(re); if (m) return m; } return null; };
   const totals = text.match(/TOTALS\s*\$\s*([\d,]+\.\d{2})\s*\$\s*([\d,]+\.\d{2})/i);
   const stub = text.match(/pay\s*the\s*minimum\s*by\s*the\s*due\s*date\s*\$\s*([\d,]+\.\d{2})\s*(\d{1,2}\/\d{1,2}\/\d{2,4})\s*(\d{6,12})?\s*\$\s*([\d,]+\.\d{2})/i);
-  const minM = totals ? { v: totals[2]! } : stub ? { v: stub[1]! } : (() => {
+  // AmTrust's coupon: account number, minimum payment due and due date on
+  // three bare lines ("32566656 / $249.90 / 3/23/2026").
+  const coupon = text.match(/^\s*(\d{7,12})\s*\n\s*\$\s*([\d,]+\.\d{2})\s*\n\s*(\d{1,2}\/\d{1,2}\/\d{4})\s*$/m);
+  const minM = totals ? { v: totals[2]! } : stub ? { v: stub[1]! } : coupon ? { v: coupon[2]! } : (() => {
     // "Please pay $449.58 by" first; "Minimum amount due (includes a $6.00
     // Service Charge) $449.58" names the fee before the figure.
     // Older layouts: "Amount due $283.33", or only the stub's "Monthly
     // Installment $283.33".
     const m = first(/please\s*pay\s*\$\s*([\d,]+\.\d{2})\s*by/i, /minimum\s*(?:amount\s*)?due\s*(?:\([^)]{0,80}\))?\s*:?\s*\$\s*([\d,]+\.\d{2})/i,
+      /minimum\s*payment\s*due\s*:?\s*\$\s*([\d,]+\.\d{2})/i,
       /(?:total\s*)?amount\s*(?:now\s*)?due\s*(?:\([^)]{0,80}\))?\s*:?\s*\$\s*([\d,]+\.\d{2})/i, /monthly\s*installment\s*:?\s*\$\s*([\d,]+\.\d{2})/i);
     return m ? { v: m[1]! } : null;
   })();
-  const balM = totals ? { v: totals[1]! } : stub ? { v: stub[4]! } : (() => {
-    const m = first(/current\s*full\s*account\s*balance\s*\$?\s*([\d,]+\.\d{2})/i, /full\s*balance\s*\$?\s*([\d,]+\.\d{2})/i, /account\s*balance\s*\$?\s*([\d,]+\.\d{2})/i, /(?:total|remaining|policy)\s*balance\s*\$?\s*([\d,]+\.\d{2})/i);
+  // "Payment In Full" is the policy cost less what has been paid, plus the fee.
+  const balM = totals ? { v: totals[1]! } : stub ? { v: stub[4]! }
+    : ins.policyCost != null && ins.paidToDate != null ? { v: (ins.policyCost - ins.paidToDate + (ins.serviceCharge ?? 0)).toFixed(2) } : (() => {
+    const m = first(/current\s*full\s*account\s*balance\s*\$?\s*([\d,]+\.\d{2})/i, /full\s*balance\s*\$?\s*([\d,]+\.\d{2})/i, /account\s*balance\s*\$?\s*([\d,]+\.\d{2})/i, /(?:total|remaining|policy)\s*balance\s*\$?\s*([\d,]+\.\d{2})/i,
+      /payment\s*in\s*full\s*:?\s*\$\s*([\d,]+\.\d{2})/i);
     return m ? { v: m[1]! } : null;
   })();
-  const installmentBill = /minimum\s*(?:amount\s*)?due|monthly\s*installment|installment\s*(?:amount|due)/i.test(text)
+  const installmentBill = /minimum\s*(?:amount\s*|payment\s*)?due|monthly\s*installment|installment\s*(?:amount|due)/i.test(text)
     && /upcoming\s*bill\s*installments|bill\s*plan|installment\s*fee|installment\s*schedule|service\s*charge|monthly\s*installment|coverage\s*period.{0,40}installment/i.test(text)
     && minM && balM;
   if (installmentBill) {
     const minimumDue = money(minM!.v);
     const balance = money(balM!.v);
-    const due = stub ? parseDate(stub[2]!) : (() => {
+    const due = stub ? parseDate(stub[2]!) : coupon ? parseDate(coupon[3]!) : (() => {
       const m = first(/please\s*pay\s*\$\s*[\d,]+\.\d{2}\s*by\s*(?:payment\s*options\s*)?\.?\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i, /please\s*pay\s*by\s*([A-Za-z]{3,9}\s*\d{1,2},?\s*\d{4})/i);
       return m ? parseDate(m[1]!) : findDateNear(text, [/due\s*date\s*:?/i]);
     })();
@@ -2221,12 +2255,14 @@ export function applyInsuranceFromText(ex: ExtractedBillData, text: string): voi
       - Array.from(text.matchAll(/\$\s*([\d,]+\.\d{2})\s*(?:protested|returned|reversed|nsf)\s*payment/gi)).reduce((t, m) => t + money(m[1]!), 0);
     // The billing account, not the bill's serial number from the remittance
     // line: "Bill Account Number … 15106186", "Billing account 288454435".
-    const acct = stub?.[3] ?? first(/billing\s*account\s*(?:number)?\s*:?\s*(\d{6,12})\b/i, /account\s*number\s*:?\s*(\d{6,12})\b/i)?.[1] ?? null;
+    // AmTrust prints "Account Number:" and, a block later, the value on a
+    // line of its own.
+    const acct = stub?.[3] ?? coupon?.[1] ?? first(/billing\s*account\s*(?:number)?\s*:?\s*(\d{6,12})\b/i, /account\s*number\s*:?\s*(\d{6,12})\b/i, /account\s*number\s*:?[\s\S]{0,600}?^\s*(\d{7,12})\s*$/im)?.[1] ?? null;
     if (acct) ex.accountNumber = acct;
     // A term premium is what the policy costs for the term ("Renewal
     // $5,323.00"); the running full balance an earlier read took for it is not.
     const renewal = text.match(/renewal\s*\$?\s*([\d,]+\.\d{2})/i);
-    ins.termPremium = renewal ? money(renewal[1]!) : null;
+    ins.termPremium = renewal ? money(renewal[1]!) : (ins.policyCost ?? null);
     // What the minimum asks beyond a regular installment is arrears: a missed
     // installment, and the late fee it drew. The fee is this bill's own
     // charge; the missed installment is carried from the bill before.
@@ -2256,7 +2292,8 @@ export function applyInsuranceFromText(ex: ExtractedBillData, text: string): voi
     // The regular installment before the fee — not "Monthly Installment
     // $293.34" on a past-due bill, which has the late fee inside it.
     ins.installment = Number((regular - fee).toFixed(2));
-    ins.installmentsRemaining = sched.length || ins.installmentsRemaining;
+    // No schedule printed: what is left, in installments of this size.
+    ins.installmentsRemaining = sched.length || ins.installmentsRemaining || (regular > 0 && balance > regular ? Math.round(balance / regular) : null);
     if (!ex.chargeBreakdown || Object.keys(ex.chargeBreakdown).length === 0) {
       ex.chargeBreakdown = {
         'Premium installment': Number((regular - fee).toFixed(2)),
@@ -2267,7 +2304,17 @@ export function applyInsuranceFromText(ex: ExtractedBillData, text: string): voi
     }
   }
 
-  if (!ins.policyNumber && !ins.coverageStart && !ins.paymentSchedule) return;
+  // A policy number printed on its own line ("WBP2036370 02" — the suffix
+  // is the term's endorsement number, not part of the policy's identity).
+  if (!wellFormed(ins.policyNumber)) {
+    const lone = text.match(/(?<![A-Za-z0-9])([A-Z]{2,4}\d{6,})(?:\s+\d{2})?(?=[A-Z][a-z]|\s|$)/)?.[1] ?? null;
+    if (lone) { ins.policyNumber = lone; ins.policyNumberExplicit = true; }
+  }
+  if (!ins.policyNumber && !ins.coverageStart && !ins.paymentSchedule && ins.policyCost == null) return;
+  if (ins.coverageStart && !ins.coverageEnd && ins.policyCost != null) {
+    const [y, m, d] = ins.coverageStart.split('-').map(Number) as [number, number, number];
+    ins.coverageEnd = new Date(Date.UTC(y + 1, m - 1, d)).toISOString().slice(0, 10);
+  }
   ex.insurance = ins;
   if (installmentBill) return;
 

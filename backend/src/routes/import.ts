@@ -156,6 +156,10 @@ router.post('/confirm', async (req: Request, res: Response) => {
     const acctKey = (propId: string, providerName: string) =>
       `${propId}:${providerName.toLowerCase().trim()}`;
 
+    // Oldest first: a bill that reads its running totals against the bill
+    // before it (AmTrust) needs that bill on file already.
+    items.sort((a, b) => (a.extracted?.statementDate ?? '9999').localeCompare(b.extracted?.statementDate ?? '9999'));
+
     for (const item of items) {
       try {
         let utilityAccountId = item.utilityAccountId;
@@ -545,6 +549,36 @@ router.post('/confirm', async (req: Request, res: Response) => {
         // had done nothing. The period's charge is currentCharges; amountDue
         // is only the fallback. Matches scripts/import-local-statements.ts so
         // both import paths produce the same numbers.
+        // An AmTrust invoice prints no "previous balance": its Minimum Payment
+        // Due is everything unpaid — this month's installment, any fee added,
+        // and whatever earlier bills asked for and did not get. The running
+        // totals on the bill before it say which is which: what was billed
+        // since is this bill's own charge, the rest is carried; what was paid
+        // since is a payment received. (Without an earlier bill on file the
+        // whole minimum is this bill's.)
+        const ins = ex.insurance;
+        if (ins?.billedToDate != null && ins.paidToDate != null && ex.statedTotalDue != null && !ex.previousBalance) {
+          const prior = await db.statement.findFirst({
+            where: { utilityAccountId, isScheduled: false, isDownPayment: false, statementDate: { lt: statementDate }, ...(existing ? { id: { not: existing.id } } : {}) },
+            orderBy: { statementDate: 'desc' },
+            select: { rawDataJson: true },
+          });
+          const prev = (prior?.rawDataJson as any)?.insurance ?? null;
+          if (prev && prev.billedToDate != null && prev.paidToDate != null) {
+            const fee = ins.serviceCharge ?? 0;
+            const billedSince = Number((ins.billedToDate - prev.billedToDate).toFixed(2));
+            const paidSince = Number((ins.paidToDate - prev.paidToDate).toFixed(2));
+            const own = Math.min(ex.statedTotalDue, Math.max(0, Number((billedSince + fee).toFixed(2))));
+            const carried = Number((ex.statedTotalDue - own).toFixed(2));
+            ex.currentCharges = own; ex.amountDue = own; ex.previousBalance = carried > 0.005 ? carried : 0;
+            if (paidSince > 0.005) ex.paymentsReceived = paidSince;
+          }
+          // A scheduled row for the whole term premium (from a policy package)
+          // has no place on an account billed by the month.
+          await db.statement.deleteMany({
+            where: { utilityAccountId, isScheduled: true, payments: { none: {} }, amountDue: { gt: ex.statedTotalDue * 3 } },
+          });
+        }
         const periodCharge = ex.currentCharges ?? ex.amountDue ?? null;
         const totalDue = (ex.currentCharges != null || ex.previousBalance != null)
           ? (ex.currentCharges ?? 0) + (ex.previousBalance ?? 0)
