@@ -1196,6 +1196,32 @@ export function imageMediaType(buffer: Buffer): 'image/jpeg' | 'image/png' | 'im
   return null;
 }
 
+/**
+ * The API reads at most 100 pages. A full commercial policy package runs
+ * past that and was refused outright ("A maximum of 100 PDF pages may be
+ * provided"), so the bill, binder or invoice at its front was never read.
+ * Everything that identifies and prices a document is in its first pages;
+ * the rest is policy wording. Over the limit, the first pages are sent.
+ */
+const CLAUDE_PAGE_LIMIT = 100;
+const CLAUDE_PAGES_SENT = 40;
+async function trimPdfForClaude(pdfBuffer: Buffer, filename: string): Promise<Buffer> {
+  try {
+    const { PDFDocument } = await import('pdf-lib');
+    const src = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true, updateMetadata: false });
+    const pages = src.getPageCount();
+    if (pages <= CLAUDE_PAGE_LIMIT) return pdfBuffer;
+    console.log(`[PDFImport] ${filename}: ${pages} pages — sending the first ${CLAUDE_PAGES_SENT}`);
+    const out = await PDFDocument.create();
+    const copied = await out.copyPages(src, Array.from({ length: CLAUDE_PAGES_SENT }, (_, i) => i));
+    for (const p of copied) out.addPage(p);
+    return Buffer.from(await out.save());
+  } catch (e) {
+    console.warn(`[PDFImport] ${filename}: could not trim (${e instanceof Error ? e.message : e}); sending as is`);
+    return pdfBuffer;
+  }
+}
+
 async function extractWithClaude(pdfBuffer: Buffer, filename: string): Promise<ExtractedBillData> {
   const anthropic = getAnthropic();
 
@@ -1231,6 +1257,7 @@ async function extractWithClaude(pdfBuffer: Buffer, filename: string): Promise<E
   // header before sending.
   const headerAt = pdfBuffer.indexOf('%PDF-');
   if (headerAt > 0) pdfBuffer = pdfBuffer.subarray(headerAt);
+  pdfBuffer = await trimPdfForClaude(pdfBuffer, filename);
 
   // Send every PDF as a native document — Claude reads the actual layout,
   // not a text dump that loses column relationships.
@@ -1277,6 +1304,7 @@ async function transcribeWithClaude(pdfBuffer: Buffer, filename: string): Promis
   const anthropic = getAnthropic();
   const headerAt = pdfBuffer.indexOf('%PDF-');
   if (headerAt > 0) pdfBuffer = pdfBuffer.subarray(headerAt);
+  pdfBuffer = await trimPdfForClaude(pdfBuffer, filename);
   console.log(`[PDFImport] ${filename}: no text layer — transcribing`);
   const response = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
@@ -2665,6 +2693,58 @@ export async function syncLoanFromPremiumFinance(utilityAccountId: string, ex: E
   });
 }
 
+// ── Cancellation / reinstatement notices ─────────────────────────────────────
+// A commercial carrier (AmTrust / Wesco) sends a "Notice of Cancellation"
+// when an installment is missed — the unpaid balance, a late fee, a
+// reinstatement fee, their total, and the date coverage ends — and a
+// "Notice of Reinstatement" once it is paid. Neither bills a period. The
+// first is a past-due notice with a shut-off date; the second is a note
+// that the shut-off did not happen. The values print as a label column
+// followed by a value column, so they are read in sequence.
+export function applyCancellationNoticeFromText(ex: ExtractedBillData, text: string): void {
+  const kind = text.match(/notice\s+of\s+(cancellation|reinstatement|nonrenewal)/i)?.[1]?.toLowerCase() ?? null;
+  if (!kind || !/policy\s*number\s*:/i.test(text)) return;
+  const policy = text.match(/\n([A-Z]{2,4}\d{6,}(?:\s+\d{2})?)\s*\n/)?.[1]?.trim() ?? null;
+  const period = text.match(/(\d{1,2}\/\d{1,2}\/\d{4})\s*-\s*(\d{1,2}\/\d{1,2}\/\d{4})/);
+  // phone · date of notice · type · effective date · endorsement · reason · [unpaid · late · reinstatement · total]
+  const seq = text.match(/\(?\d{3}\)?[\s-]*\d{3}[\s-]\d{4}\s*\n\s*(\d{1,2}\/\d{1,2}\/\d{4})\s*\n\s*(Cancellation|Reinstatement|Nonrenewal)\s*\n\s*(\d{1,2}\/\d{1,2}\/\d{4})\s*\n\s*(\d+)\s*\n\s*([^\n]+?)\s*\n(?:\s*\$\s*([\d,]+\.\d{2})\s*\n\s*\$\s*([\d,]+\.\d{2})\s*\n\s*\$\s*([\d,]+\.\d{2})\s*\n\s*\$\s*([\d,]+\.\d{2}))?/i);
+  const money = (v: string | undefined) => (v ? parseFloat(v.replace(/,/g, '')) : null);
+  const noticeDate = seq ? parseDate(seq[1]!) : findDateNear(text, [/date\s+of\s+notice\s*:?/i]);
+  const effective = seq ? parseDate(seq[3]!) : null;
+  const reason = seq?.[5]?.trim() ?? null;
+  const unpaid = money(seq?.[6]), late = money(seq?.[7]), reinst = money(seq?.[8]), total = money(seq?.[9]);
+  const fmt = (n: number | null) => (n == null ? '' : `$${n.toFixed(2)}`);
+
+  // The reinstatement notice never names the carrier; its service line does.
+  if (/amtrust|877-528-7878/i.test(text)) ex.providerName = 'AmTrust';
+  else if (/^important information/i.test(ex.providerName ?? '')) ex.providerName = null;
+  if (policy) ex.accountNumber = policy.replace(/\s+\d{2}$/, '');
+  ex.insurance = {
+    policyNumber: policy ? policy.replace(/\s+\d{2}$/, '') : null, policyNumberExplicit: !!policy,
+    coverageStart: period ? parseDate(period[1]!) : null, coverageEnd: period ? parseDate(period[2]!) : null,
+    termPremium: null, installment: null, serviceCharge: null, installmentsRemaining: null, renewedOn: null,
+    insuranceType: /commercial\s+lines|business/i.test(text) ? 'BUSINESS' : ex.insurance?.insuranceType ?? null,
+    ...(ex.insurance?.policyNumber && !policy ? { policyNumber: ex.insurance.policyNumber } : {}),
+  };
+  ex.documentKind = 'past_due_notice';
+  ex.statementDate = noticeDate ?? ex.statementDate;
+  ex.billingPeriodStart = null; ex.billingPeriodEnd = null;
+  ex.amountDue = null; ex.currentCharges = null; ex.paymentsReceived = null; ex.isPaid = false;
+  ex.alerts = ex.alerts ?? [];
+  if (kind === 'cancellation' || kind === 'nonrenewal') {
+    ex.previousBalance = total ?? unpaid ?? ex.previousBalance;
+    ex.statedTotalDue = total ?? unpaid ?? null;
+    ex.lateFee = late != null || reinst != null ? Number(((late ?? 0) + (reinst ?? 0)).toFixed(2)) : null;
+    ex.dueDate = effective ?? ex.dueDate;
+    ex.penaltyDate = effective ?? ex.penaltyDate;
+    const fees = [late ? `${fmt(late)} late fee` : '', reinst ? `${fmt(reinst)} reinstatement fee` : ''].filter(Boolean).join(' and ');
+    ex.alerts.push(`Notice of ${kind} ${noticeDate ?? ''}: ${total != null ? `${fmt(total)} due` : 'payment due'}${effective ? ` by ${effective}` : ''} or coverage ends${reason ? ` (${reason.toLowerCase()})` : ''}${fees ? ` — includes ${fees}` : ''}`.replace(/\s+/g, ' ').trim());
+  } else {
+    ex.previousBalance = null; ex.statedTotalDue = null; ex.lateFee = null; ex.dueDate = null; ex.penaltyDate = null;
+    ex.alerts.push(`Reinstated ${noticeDate ?? ''}: the cancellation effective ${effective ?? '—'} was superseded; coverage continued without lapse`.replace(/\s+/g, ' ').trim());
+  }
+}
+
 export function sanitiseLateFee(ex: ExtractedBillData): void {
   const FEE_LINE = /late\s*(?:fee|charge|payment\s*(?:fee|charge|penalty))|penalt|overdue\s*charge|nsf|returned\s*(?:check|payment)|finance\s*charge|interest\s*charge/i;
   if (ex.chargeBreakdown) {
@@ -3062,7 +3142,7 @@ export async function parseBill(
         // rather than fail. Errors that are about credentials or quota are
         // rethrown — retrying those as regex would silently mask a broken key.
         const message = aiErr instanceof Error ? aiErr.message : String(aiErr);
-        if (!/not valid|Cannot read |could not be processed|unsupported/i.test(message)) throw aiErr;
+        if (!/not valid|Cannot read |could not be processed|unsupported|maximum of \d+ PDF pages/i.test(message)) throw aiErr;
         console.warn(`[PDFImport] ${filename}: AI extraction unavailable (${message}) — falling back to text extraction.`);
         // Record the downgrade rather than only logging it. Until now this was
         // a server-side console line, so an import run with AI extraction on
@@ -3107,6 +3187,7 @@ export async function parseBill(
         applyCreditFromText(text, extracted);
         applyLoanGroupsFromText(extracted, text);
         applyInsuranceFromText(extracted, text);
+        applyCancellationNoticeFromText(extracted, text);
         applyPremiumFinanceFromText(extracted, text);
       } catch { /* an unreadable text layer changes nothing */ }
     }
