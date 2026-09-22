@@ -323,10 +323,22 @@ router.post('/confirm', async (req: Request, res: Response) => {
           const attached = await applyPastDueNotice(utilityAccountId, ex);
           if (attached) {
             notices++;
+            continue;
+          }
+          // Nothing to attach it to. A carrier's cancellation notice that
+          // names what is owed and by when is the only record of that money
+          // on an account whose invoices never came, so it stands as the
+          // bill for it: the total demanded, its fees, its cut-off date.
+          if (ex.previousBalance != null && ex.previousBalance > 0 && ex.dueDate && ex.insurance) {
+            ex.documentKind = 'bill';
+            ex.amountDue = ex.previousBalance;
+            ex.currentCharges = ex.previousBalance;
+            ex.statedTotalDue = ex.previousBalance;
+            ex.previousBalance = null;
           } else {
             errors.push(`${item.filename}: past-due notice, but the account has no statement to attach it to — import the bills first`);
+            continue;
           }
-          continue;
         }
         // An insurance renewal offer, welcome letter or declarations page
         // describes the policy and its payment schedule; it bills nothing
