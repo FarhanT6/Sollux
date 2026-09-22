@@ -92,7 +92,7 @@ export interface ExtractedBillData {
     autoPay?: boolean | null;       // payments are taken automatically on the dates below
     totalCost?: number | null;      // term premium plus billing fees, when printed
     /** Every installment the document lists, date and amount. */
-    paymentSchedule?: { date: string; amount: number }[] | null;
+    paymentSchedule?: { date: string; amount: number; principal?: number | null; interest?: number | null }[] | null;
     /** Vehicles, addresses or people covered, as printed. */
     insuredItems?: string[] | null;
     /** The number was printed under a "Policy Number" label, so it stands
@@ -116,6 +116,9 @@ export interface ExtractedBillData {
     effectiveDate: string | null;     // YYYY-MM-DD
     firstDueDate: string | null;      // YYYY-MM-DD
     loanBalance: number | null;       // payments still to come, as stated
+    /** Fees the lender's ledger charged (late fee, convenience fee), each
+     *  on its date; a waived fee is listed with a negative amount. */
+    fees?: { date: string; amount: number; label: string }[] | null;
   } | null;
   /** The individual loans a servicer bills together on one statement
    *  (a federal student-loan "Account Snapshot": Group AA Direct Subsidized,
@@ -234,7 +237,8 @@ Schema (use null for any field not present in the document):
   "isPaid": boolean — true ONLY if balance is $0.00 or document shows 'Paid in Full' / paid stamp. A bill-detail layout with columns Billed / Payments and adjustments / Due where Due and TOTAL DUE are $0.00 is paid: report currentCharges and amountDue as the Billed figure and isPaid true,
   "utilityType": "electric | gas | water | sewer | trash | solar | internet | phone | other",
   "insurance": object or null — for ANY insurance document, whatever the carrier or kind of cover (auto, homeowners, renters, health, dental, vision, life, umbrella, flood, business) and whatever the document is (billing statement, renewal offer, declarations page, welcome letter, ID card, payment schedule): {"policyNumber": "string", "insuranceType": "PROPERTY | AUTO | RENTERS | LIABILITY | FLOOD | UMBRELLA | HEALTH | DENTAL | VISION | LIFE | BUSINESS | OTHER", "carrier": "underwriter when it differs from the brand, else null", "coverageStart": "YYYY-MM-DD", "coverageEnd": "YYYY-MM-DD", "termPremium": n, "installment": n, "serviceCharge": n, "installmentsRemaining": n, "renewedOn": "YYYY-MM-DD", "autoPay": boolean, "totalCost": n, "paymentSchedule": [{"date": "YYYY-MM-DD", "amount": n}], "insuredItems": ["2022 Land Rover Discovery Sport", ...]}. insuranceType from what is covered (vehicles/VINs → AUTO; a dwelling → PROPERTY; medical/dental/vision plan → HEALTH/DENTAL/VISION). coverageStart/End are the "Policy Period" / "Coverage period" dates. termPremium is the premium for the whole term excluding billing fees ("Your 6-month policy premium excluding billing fees is $2,752.28"; on a billing statement the "Renewal" line or Full Balance). installment is one regular payment; serviceCharge the per-payment installment/billing fee ("We included an installment fee of $4.00 in each payment"); totalCost the term total including fees ("$2,776.28 Total Cost"). paymentSchedule is EVERY dated payment line the document prints ("Automatic Payments Schedule", "Payment schedule", "Your Installment Schedule"), in order, including ones already past. autoPay true when payments are drafted automatically. On a billing statement's policy table ("Policy / Coverage period / Balance / Installment") the policy number is the alphanumeric code on that row. A different policy number with a later coverage start than earlier documents is a renewal onto a new policy,
-  "premiumFinance": object or null — ONLY for a premium finance agreement or its notices (a lender such as Capital Premium Financing, IPFS or First Insurance Funding pays the carrier and is repaid monthly with interest; the document has a "Loan Summary" with Amount Financed, Finance Charge, Annual % Rate): {"lender": "Capital Premium Financing", "loanNumber": "string", "totalPremiums": n, "amountFinanced": n, "downPayment": n, "financeCharge": n, "payment": n, "apr": n, "numberOfPayments": n, "effectiveDate": "YYYY-MM-DD", "firstDueDate": "YYYY-MM-DD", "loanBalance": n}. Put the loan number in accountNumber and the lender in providerName. A "Notice of Acceptance" or the agreement itself bills nothing: documentKind 'policy_document', the notice date in statementDate, amountDue and dueDate null,
+  "premiumFinance": object or null — ONLY for a premium finance agreement or its notices (a lender such as Capital Premium Financing, IPFS or First Insurance Funding pays the carrier and is repaid monthly with interest; the document has a "Loan Summary" with Amount Financed, Finance Charge, Annual % Rate): {"lender": "Capital Premium Financing", "loanNumber": "string", "totalPremiums": n, "amountFinanced": n, "downPayment": n, "financeCharge": n, "payment": n, "apr": n, "numberOfPayments": n, "effectiveDate": "YYYY-MM-DD", "firstDueDate": "YYYY-MM-DD", "loanBalance": n}. Put the loan number in accountNumber and the lender in providerName. A "Notice of Acceptance" or the agreement itself bills nothing: documentKind 'policy_document', the notice date in statementDate, amountDue and dueDate null. A screenshot of the lender's portal ("Payment Schedule & History" / "Payment History" table with Date, Pmt #, Description, Total, Principal, Interest, Late Charge columns) is the same thing read off a ledger: documentKind 'policy_document'; loanNumber from "Account #"; lender from the page header (Capital Premium Financing); EVERY "Scheduled Payment Due" row into insurance.paymentSchedule as {"date", "amount", "principal", "interest"}; every payment received ("Insured: Installment eCheck", "Installment Credit Card") into ledgerPayments as {"date", "amount", "description"}; every fee row (Late Fee, Convenience Fee, Cancel Fee, NSF Fee) into premiumFinance.fees as {"date", "amount", "label"}, a waived or reversed fee ("($50.00)") as a negative amount; leave amountFinanced, apr and numberOfPayments null when the page does not print them (they are derived from the columns); statementDate is the page's own date if shown, else null,
+  "ledgerPayments": array or null — ONLY for a document that lists payments received one by one on their own dates (an HOA ledger, a premium finance portal's payment history): [{"date": "YYYY-MM-DD", "amount": n, "description": "as printed"}]. A single "payments received" figure on an ordinary bill goes in paymentsReceived instead,
   "loanGroups": array or null — ONLY for a loan servicer statement that lists MORE THAN ONE loan under the account (a federal student-loan "Account Snapshot" with columns Group AA / Group BB, or "Loan 1-01 / Loan 1-02"): one entry per loan column, [{"label": "Group AA", "loanKind": "DIRECT SUB", "originalPrincipal": n, "outstandingPrincipal": n, "interestRate": n, "monthlyPayment": n, "accruedInterest": n, "disbursedOn": "YYYY-MM-DD", "payoffDate": "YYYY-MM-DD"}]. Read each column: loanKind from the "Loan Type" row, originalPrincipal from "Original Principal Amount", outstandingPrincipal from "Outstanding Principal Balance", interestRate as a percent from "Interest Rate", monthlyPayment from "Regular Monthly Payment Amount" (the Monthly Payment section, not the Account Snapshot's zeros), accruedInterest from "Accrued Interest" / "Estimated Interest Outstanding", disbursedOn from "First Disbursement Date", payoffDate from "Estimated Payoff Date". A statement for a single loan reports null,
   "statedTotalDue": number or null — the ONE figure the bill asks to be paid now: its "Total Amount Due" / "Amount Due" box. Negative when the account is in credit ("No payment is due. Your account has a credit balance of $0.82" → -0.82). This is the grand total AFTER previous balance, payments, credits and any payment-arrangement deferral; report it exactly as printed,
   "totalAccountBalance": number or null — "Total Account Balance" when printed: everything owed including a balance a payment arrangement has deferred,
@@ -2250,6 +2254,20 @@ export async function applyPolicyDocument(utilityAccountId: string, ex: Extracte
   const sorted = [...schedule].sort((a, b) => a.date.localeCompare(b.date));
   const today = new Date().toISOString().slice(0, 10);
   const docDate = ex.statementDate ? new Date(ex.statementDate) : new Date();
+  // A lender's ledger says exactly which installments were paid and what
+  // fees were charged. Each fee belongs to the last installment due on or
+  // before its date; a waived fee (negative) nets against that one.
+  const ledger = ex.ledgerPayments ?? [];
+  const fromLedger = ledger.length > 0 || (ex.premiumFinance?.fees?.length ?? 0) > 0;
+  const feesByRow = new Map<number, { label: string; amount: number }[]>();
+  for (const f of ex.premiumFinance?.fees ?? []) {
+    if (!f.date || !f.amount) continue;
+    let idx = -1;
+    for (const [j, p] of sorted.entries()) if (p.date <= f.date) idx = j;
+    if (idx < 0) idx = 0;
+    feesByRow.set(idx, [...(feesByRow.get(idx) ?? []), { label: f.label || 'Fee', amount: f.amount }]);
+  }
+  const rowIds: { idx: number; id: string; due: string; amount: number }[] = [];
   let filed = 0;
   for (const [i, p] of sorted.entries()) {
     const due = new Date(p.date);
@@ -2259,7 +2277,16 @@ export async function applyPolicyDocument(utilityAccountId: string, ex: Extracte
       select: { id: true, isScheduled: true },
     });
     // The carrier's own bill for this installment is already here; leave it.
-    if (existing && !existing.isScheduled) continue;
+    if (existing && !existing.isScheduled) { rowIds.push({ idx: i, id: existing.id, due: p.date, amount: p.amount }); continue; }
+    // What the ledger charged on top of this installment, netted.
+    const feeLines = (feesByRow.get(i) ?? []).reduce<Record<string, number>>((acc, f) => { acc[f.label] = Number(((acc[f.label] ?? 0) + f.amount).toFixed(2)); return acc; }, {});
+    for (const k of Object.keys(feeLines)) if (Math.abs(feeLines[k]!) < 0.005) delete feeLines[k];
+    const feeTotal = Number(Object.values(feeLines).reduce((t, v) => t + v, 0).toFixed(2));
+    const rowTotal = Number((p.amount + feeTotal).toFixed(2));
+    const breakdown: Record<string, number> = p.principal != null && p.interest != null
+      ? { Principal: p.principal, Interest: p.interest }
+      : ins.serviceCharge != null ? { Premium: Number((p.amount - ins.serviceCharge).toFixed(2)), 'Installment fee': ins.serviceCharge } : { Premium: p.amount };
+    Object.assign(breakdown, feeLines);
     // An installment is the payment for the month that ends on its due date
     // (the Sep 27 payment is September's), so its period runs from the day
     // after the previous due date to this one, and it is filed under the
@@ -2274,28 +2301,77 @@ export async function applyPolicyDocument(utilityAccountId: string, ex: Extracte
     // An installment already taken by auto-pay is paid. One well in the past
     // on a schedule that says nothing about auto-pay is assumed paid too —
     // the policy continued, so it was — and "↺ Unpaid" is there if not.
+    // A ledger is the record: an installment is paid when it lists the
+    // payment (recorded below), and nothing is assumed.
     const longPast = new Date(Date.now() - 45 * 86400000).toISOString().slice(0, 10);
-    const taken = p.date < today && (ins.autoPay === true || p.date < longPast);
+    const taken = !fromLedger && p.date < today && (ins.autoPay === true || p.date < longPast);
     const data = {
       statementDate: periodStart,
       dueDate: due,
       billingPeriodStart: periodStart,
       billingPeriodEnd: periodEnd,
-      amountDue: p.amount,
-      balance: p.amount,
+      amountDue: rowTotal,
+      balance: rowTotal,
       chargesExcludingFees: ins.serviceCharge != null ? Number((p.amount - ins.serviceCharge).toFixed(2)) : p.amount,
-      penaltiesFees: null,
-      amountPaid: taken ? p.amount : null,
+      penaltiesFees: feeTotal > 0 ? feeTotal : null,
+      amountPaid: taken ? rowTotal : null,
       pastDueCarried: null,
       isScheduled: true,
       sourceType: 'MANUAL' as const,
-      notes: `Installment ${i + 1} of ${sorted.length} from the ${ex.statementDate ?? ''} ${ins.autoPay ? 'automatic payments schedule' : 'payment schedule'}${ins.serviceCharge != null ? ` (includes ${ins.serviceCharge.toFixed(2)} installment fee)` : ''}`,
-      rawDataJson: { scheduled: true, fromDocument: ex.statementDate ?? null, installmentFee: ins.serviceCharge ?? null, chargeBreakdown: ins.serviceCharge != null ? { Premium: Number((p.amount - ins.serviceCharge).toFixed(2)), 'Installment fee': ins.serviceCharge } : { Premium: p.amount } } as Prisma.InputJsonValue,
+      notes: `Installment ${i + 1} of ${sorted.length} from the ${ex.statementDate ?? ''} ${fromLedger ? "lender's payment history" : ins.autoPay ? 'automatic payments schedule' : 'payment schedule'}${ins.serviceCharge != null ? ` (includes ${ins.serviceCharge.toFixed(2)} installment fee)` : ''}`,
+      rawDataJson: { scheduled: true, fromDocument: ex.statementDate ?? null, installmentFee: ins.serviceCharge ?? null, chargeBreakdown: breakdown } as Prisma.InputJsonValue,
       ...(pdfS3Key ? { pdfS3Key } : {}),
     };
-    if (existing) await db.statement.update({ where: { id: existing.id }, data });
-    else await db.statement.create({ data: { utilityAccountId, ...data } });
+    const row = existing
+      ? await db.statement.update({ where: { id: existing.id }, data, select: { id: true } })
+      : await db.statement.create({ data: { utilityAccountId, ...data }, select: { id: true } });
+    rowIds.push({ idx: i, id: row.id, due: p.date, amount: rowTotal });
     filed++;
+  }
+
+  // The ledger's payments, each against the installment it settled: the
+  // last one due on or before the payment date (a payment made early, before
+  // its own due date, goes to the next one still open).
+  if (ledger.length) {
+    const DAY = 86400000;
+    const key = ex.premiumFinance?.loanNumber ?? ex.accountNumber ?? 'ledger';
+    const paidSoFar = new Map<string, number>();
+    for (const [n, l] of ledger.entries()) {
+      if (!l.date || !(l.amount > 0)) continue;
+      const paymentDate = new Date(`${l.date}T12:00:00Z`);
+      let target = [...rowIds].filter(r => r.due <= l.date).sort((a, b) => b.due.localeCompare(a.due))
+        .find(r => (paidSoFar.get(r.id) ?? 0) < r.amount - 0.01)
+        ?? [...rowIds].filter(r => r.due > l.date).sort((a, b) => a.due.localeCompare(b.due))[0]
+        ?? null;
+      if (!target) continue;
+      const marker = `[ledger:${key}#${n + 1}]`;
+      const existingPay = await db.payment.findFirst({ where: { utilityAccountId, notes: { contains: marker } }, select: { id: true } });
+      const dup = existingPay ? null : await db.payment.findFirst({
+        where: {
+          utilityAccountId,
+          amount: { gte: l.amount - 0.01, lte: l.amount + 0.01 },
+          paymentDate: { gte: new Date(paymentDate.getTime() - 3 * DAY), lte: new Date(paymentDate.getTime() + 3 * DAY) },
+        },
+        select: { id: true, statementId: true },
+      });
+      const payData = {
+        amount: l.amount,
+        paymentDate,
+        status: 'PAID' as const,
+        statementId: target.id,
+        paymentMethod: /e-?check|ach/i.test(l.description ?? '') ? 'CHECK' : /credit\s*card|card/i.test(l.description ?? '') ? 'CREDIT_CARD' : undefined,
+        notes: `${l.description ?? 'Payment'} — from the lender's payment history. ${marker}`,
+      };
+      if (existingPay) await db.payment.update({ where: { id: existingPay.id }, data: payData });
+      else if (dup) { if (!dup.statementId) await db.payment.update({ where: { id: dup.id }, data: { statementId: target.id } }); }
+      else await db.payment.create({ data: { utilityAccountId, ...payData } });
+      paidSoFar.set(target.id, (paidSoFar.get(target.id) ?? 0) + l.amount);
+    }
+    // An installment the ledger shows settled reads as paid.
+    for (const r of rowIds) {
+      const paid = paidSoFar.get(r.id) ?? 0;
+      if (paid >= r.amount - 0.01) await db.statement.update({ where: { id: r.id }, data: { amountPaid: Number(paid.toFixed(2)) } });
+    }
   }
   return filed;
 }
@@ -2345,12 +2421,6 @@ export function applyPremiumFinanceFromText(ex: ExtractedBillData, text: string)
   pf.loanBalance ??= money(/loan\s*balance\s*:?\s*\$?\s*([\d,]+\.\d{2})/i);
   if (pf.amountFinanced == null && pf.payment == null) return;
   ex.premiumFinance = pf;
-
-  // The lender is the account's provider and the loan number its account
-  // number — not the agent's name at the top of the page.
-  if (pf.lender) ex.providerName = pf.lender;
-  if (pf.loanNumber) ex.accountNumber = pf.loanNumber;
-  ex.utilityType = 'other';
   const noticeDate = date(/(?:notice|statement|agreement)\s*date\s*:?\s*(\d{1,2}\/\d{1,2}\/\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})/i);
   if (noticeDate) ex.statementDate = noticeDate;
 
@@ -2358,30 +2428,85 @@ export function applyPremiumFinanceFromText(ex: ExtractedBillData, text: string)
   // the schedule. A monthly billing statement from the lender ("Amount Due",
   // "Please pay") is a bill and is left as one.
   const billsSomething = /\b(?:total\s+)?amount\s+(?:now\s+)?due\b[^$\n]{0,12}\$\s*[\d,]+\.\d{2}|\bplease\s+pay\b|\bpay\s+this\s+amount\b|\bminimum\s+(?:amount\s+)?due\b[^$\n]{0,12}\$/i.test(text);
-  const describesLoan = /notice\s*of\s*acceptance|premium\s*finance\s*agreement|loan\s*summary|welcome/i.test(text);
-  if (!(describesLoan && !billsSomething)) return;
+  const describesLoan = /notice\s*of\s*acceptance|premium\s*finance\s*agreement|loan\s*summary|welcome|payment\s*(?:schedule\s*&?\s*)?history/i.test(text);
+  shapePremiumFinance(ex, describesLoan && !billsSomething);
+}
 
-  // Equal payments a month apart from the first due date.
-  const schedule: { date: string; amount: number }[] = [];
-  if (pf.firstDueDate && pf.payment && pf.numberOfPayments) {
+/**
+ * Shapes an extraction that carries a premium finance loan, whether the
+ * loan summary came off a PDF's text or Claude read it from a screenshot
+ * of the lender's portal (which has no text layer at all). Fills what the
+ * document implied but did not print, and, when it bills nothing, files it
+ * as a schedule rather than a bill.
+ */
+export function shapePremiumFinance(ex: ExtractedBillData, isSchedule?: boolean): void {
+  const pf = ex.premiumFinance;
+  if (!pf) return;
+  const listed = (ex.insurance?.paymentSchedule ?? []).filter(p => p.date && p.amount > 0).sort((a, b) => a.date.localeCompare(b.date));
+
+  // The portal's ledger lists every scheduled payment with its principal
+  // and interest: the loan is the sum of those columns, and the rate is
+  // what the first month's interest says it is.
+  const principal = listed.reduce((t, p) => t + (p.principal ?? 0), 0);
+  const interest = listed.reduce((t, p) => t + (p.interest ?? 0), 0);
+  if (pf.amountFinanced == null && principal > 0) pf.amountFinanced = Number(principal.toFixed(2));
+  if (pf.financeCharge == null && interest > 0) pf.financeCharge = Number(interest.toFixed(2));
+  if (pf.payment == null && listed.length) {
+    const counts = new Map<number, number>();
+    for (const p of listed) counts.set(p.amount, (counts.get(p.amount) ?? 0) + 1);
+    pf.payment = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]![0];
+  }
+  if (pf.numberOfPayments == null && listed.length) pf.numberOfPayments = listed.length;
+  if (pf.firstDueDate == null && listed.length) pf.firstDueDate = listed[0]!.date;
+  if (pf.apr == null && listed[0]?.interest != null && pf.amountFinanced) {
+    pf.apr = Number(((listed[0].interest * 12) / pf.amountFinanced * 100).toFixed(2));
+  }
+  if (pf.totalPremiums == null && pf.amountFinanced != null && pf.downPayment != null) pf.totalPremiums = Number((pf.amountFinanced + pf.downPayment).toFixed(2));
+  // A ledger prints no effective date; the loan began a month before its
+  // first payment, which is where the balance projection needs to start.
+  if (pf.effectiveDate == null && pf.firstDueDate) {
+    const [y, m, d] = pf.firstDueDate.split('-').map(Number) as [number, number, number];
+    pf.effectiveDate = new Date(Date.UTC(y, m - 2, d)).toISOString().slice(0, 10);
+  }
+
+  // The lender is the account's provider and the loan number its account
+  // number — not the agent's name at the top of the page.
+  if (pf.lender) ex.providerName = pf.lender;
+  if (pf.loanNumber) ex.accountNumber = pf.loanNumber;
+  ex.utilityType = 'other';
+
+  const schedule = isSchedule ?? ex.documentKind === 'policy_document';
+  if (!schedule) return;
+
+  // Equal payments a month apart from the first due date, when the document
+  // states the terms but lists no dates.
+  const generated: { date: string; amount: number }[] = [];
+  if (!listed.length && pf.firstDueDate && pf.payment && pf.numberOfPayments) {
     const [y, m, d] = pf.firstDueDate.split('-').map(Number) as [number, number, number];
     for (let i = 0; i < pf.numberOfPayments; i++) {
       const due = new Date(Date.UTC(y, m - 1 + i, 1));
       const last = new Date(Date.UTC(due.getUTCFullYear(), due.getUTCMonth() + 1, 0)).getUTCDate();
       due.setUTCDate(Math.min(d, last));
-      schedule.push({ date: due.toISOString().slice(0, 10), amount: pf.payment });
+      generated.push({ date: due.toISOString().slice(0, 10), amount: pf.payment });
     }
   }
   const effective = pf.effectiveDate;
   const termEnd = effective ? (() => { const [y, m, d] = effective.split('-').map(Number) as [number, number, number]; return new Date(Date.UTC(y + 1, m - 1, d)).toISOString().slice(0, 10); })() : null;
   ex.documentKind = 'policy_document';
+  const prior = ex.insurance ?? ({} as Partial<NonNullable<ExtractedBillData['insurance']>>);
   ex.insurance = {
-    policyNumber: null, coverageStart: effective, coverageEnd: termEnd,
-    termPremium: pf.totalPremiums, installment: pf.payment, serviceCharge: null,
-    installmentsRemaining: pf.numberOfPayments, renewedOn: null,
-    ...(ex.insurance ?? {}),
-    paymentSchedule: schedule.length ? schedule : ex.insurance?.paymentSchedule ?? null,
-    autoPay: ex.insurance?.autoPay ?? null,
+    policyNumber: prior.policyNumber ?? null,
+    coverageStart: prior.coverageStart ?? effective,
+    coverageEnd: prior.coverageEnd ?? termEnd,
+    termPremium: prior.termPremium ?? pf.totalPremiums ?? pf.amountFinanced,
+    installment: prior.installment ?? pf.payment,
+    serviceCharge: prior.serviceCharge ?? null,
+    installmentsRemaining: pf.numberOfPayments ?? prior.installmentsRemaining ?? null,
+    renewedOn: prior.renewedOn ?? null,
+    insuranceType: prior.insuranceType ?? null,
+    carrier: prior.carrier ?? null,
+    paymentSchedule: listed.length ? listed : generated.length ? generated : null,
+    autoPay: prior.autoPay ?? null,
   };
   ex.amountDue = null; ex.currentCharges = null; ex.previousBalance = null; ex.dueDate = null;
   ex.statedTotalDue = null; ex.paymentsReceived = null; ex.lateFee = null; ex.totalAccountBalance = null;
@@ -2874,6 +2999,9 @@ export async function parseBill(
       applyInsuranceFromText(extracted, text);
       applyPremiumFinanceFromText(extracted, text);
     } catch { /* an unreadable text layer changes nothing */ }
+    // A screenshot has no text layer; what Claude read of a premium finance
+    // ledger is shaped here.
+    shapePremiumFinance(extracted);
     reconcileWithStatedTotal(extracted);
     sanitiseLateFee(extracted);
     sanitiseCurrentCharges(extracted);
