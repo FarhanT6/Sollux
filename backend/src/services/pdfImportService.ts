@@ -220,7 +220,7 @@ Schema (use null for any field not present in the document):
 
 {
   "providerName": "string — company or organization name sending this bill",
-  "serviceAddress": "string — the property/service address (NOT the mailing/remittance address)",
+  "serviceAddress": "string — the property/service address (NOT the mailing/remittance address). On an insurance document it is the insured property ('Property at:', 'Described location', 'Residence premises', 'Insured location'), never the policyholder's mailing address at the top of the letter",
   "accountNumber": "string or null — the ACCOUNT or customer number. A 'Bill number', 'Statement #' or 'Invoice #' is the bill's own serial and is NOT the account number; if the bill prints no account number, return null rather than the bill number",
   "statementDate": "YYYY-MM-DD — the date the bill itself carries: 'Bill Date', 'Statement Date', 'Invoice Date', 'Date Mailed'. NOT an 'As of' or 'Printed' date — that is the day the copy was generated, often months after the bill (a Tyler 'Bill Detail' reading 'As of 08/13/2026 / Bill Date 6/25/2026' has statementDate 2026-06-25)",
   "dueDate": "YYYY-MM-DD — the date payment for THIS bill is due. Bills often print several other dates: a next meter-read date, a service-period end, a solar/net-metering true-up date, an autopay draft date. None of those are the due date — use only a date explicitly labelled as when payment is due,
@@ -509,6 +509,9 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
       break;
     }
   }
+  // An insurance package leads with the agent's name and address; the
+  // carrier named in the text is the provider.
+  if (providerName && /insurance\s+agency|\bagency\b|\bbrokers?\b/i.test(providerName)) providerName = null;
   if (!providerName) {
     const knownProviders = [
       // Auto/financial
@@ -543,7 +546,9 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
       'Carrington','Rushmore','Citadel','SPS','Select Portfolio Servicing',
     ];
     for (const p of knownProviders) {
-      if (text.toLowerCase().includes(p.toLowerCase())) { providerName = p; break; }
+      // Whole words: "Citi" is not in "Citizens", nor "Cox" in "Coxswain".
+      const re = new RegExp(`(?<![A-Za-z])${p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z])`, 'i');
+      if (re.test(text)) { providerName = p; break; }
     }
   }
 
@@ -1995,8 +2000,19 @@ const INSURANCE_KIND_HINTS: [RegExp, NonNullable<NonNullable<ExtractedBillData['
 
 /** The kind of cover a document describes, from its wording. */
 export function inferInsuranceType(text: string): NonNullable<NonNullable<ExtractedBillData['insurance']>['insuranceType']> | null {
+  // The cover letter says what the policy is; a 26-page package's privacy
+  // notice mentions "health insurance data" and made a landlord policy HEALTH.
+  const head = text.slice(0, 4000);
+  for (const [re, kind] of INSURANCE_KIND_HINTS) if (re.test(head)) return kind;
   for (const [re, kind] of INSURANCE_KIND_HINTS) if (re.test(text)) return kind;
   return null;
+}
+
+/** The insured property's address on an insurance document, when it
+ *  names one apart from the policyholder's mailing address. */
+function insuredLocationFromText(text: string): string | null {
+  const m = text.match(/(?:property\s+at|described\s+location|residence\s+premises|insured\s+location|location\s+of\s+(?:premises|property)|premises\s+insured|property\s+address)\s*[:\-]?\s*\n?\s*([0-9]{1,6}\s+[A-Z0-9][A-Za-z0-9 .'#-]{3,60}?(?:,?\s+[A-Z][A-Za-z .]{2,30})?,?\s+[A-Z]{2}\s+\d{5}(?:-\d{4})?)/i);
+  return m ? m[1]!.replace(/\s+/g, ' ').trim() : null;
 }
 
 /**
@@ -2020,9 +2036,16 @@ export function applyInsuranceFromText(ex: ExtractedBillData, text: string): voi
   const money = (s: string) => parseFloat(s.replace(/[$,\s]/g, ''));
 
   ins.policyNumber ??= text.match(/policy\s*(?:number|no\.?|#)\s*[:\-]?\s*([A-Z0-9][A-Z0-9\- ]{5,24}?)(?=\s*(?:\n|underwritten|policy\s+period|$))/i)?.[1]?.trim() ?? null;
+  // Safeco: "for the JUNE 6 2026 to JUNE 6 2027 policy term".
   const period = text.match(/(?:policy|coverage)\s*period\s*[:\-]?\s*([A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})\s*(?:-|–|to|through)\s*([A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})/i)
-    ?? text.match(/(?:renewal offer is\s+for the policy period|for the policy period)\s+([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})\s+through\s+([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})/i);
+    ?? text.match(/(?:renewal offer is\s+for the policy period|for the policy period)\s+([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})\s+through\s+([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})/i)
+    ?? text.match(/([A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4})\s+(?:to|through|-|–)\s+([A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4})\s+policy\s+term/i);
   if (period) { ins.coverageStart ??= parseDate(period[1]); ins.coverageEnd ??= parseDate(period[2]); }
+  // The insured property, not the policyholder's mailing address: a Safeco
+  // renewal is posted to the owner's home and insures "Property at: 206
+  // ROBELINI DR", and the mailing address made a new property of the home.
+  const insured = insuredLocationFromText(text);
+  if (insured) ex.serviceAddress = insured;
   ins.carrier ??= text.match(/underwritten\s+by\s*[:\-]?\s*([A-Z][A-Za-z&.,' ]{3,60}?)(?=\s*\n)/i)?.[1]?.trim() ?? null;
   ins.termPremium ??= (() => {
     const m = text.match(/(\d{1,2})-?\s*month\s+(?:policy\s+)?premium[^$\n]{0,60}\$\s*([\d,]+\.\d{2})/i)
@@ -2090,11 +2113,15 @@ export function applyInsuranceFromText(ex: ExtractedBillData, text: string): voi
   // not it. The policy table row reads "$2,137.50 03/20/26-03/20/27 $213.75
   // 57SBAAZ9S8E Active 12Pay", spaces or not.
   const acctDigits = (ex.accountNumber ?? '').replace(/\D/g, '');
-  const wellFormed = (v: string | null | undefined) => !!v && v.length >= 6 && /\d{2}/.test(v) && !/^policy/i.test(v);
+  // At least three digits: "24-Hour" (from "Policy Number: / 24-Hour Claims:"
+  // on a Safeco letter) is not a policy number.
+  const wellFormed = (v: string | null | undefined) => !!v && v.length >= 6 && (v.match(/\d/g) ?? []).length >= 3 && !/^policy/i.test(v) && !/hour|claim|service/i.test(v);
   // Printed under its own label ("Policy Number: 863646930") it stands, even
   // when the carrier bills under the same number; found anywhere else, a
   // number that is the billing account's is not the policy's.
-  const labelled = text.match(/policy\s*(?:number|no\.?|#)\s*[:\-]?\s*([A-Z0-9][A-Z0-9-]{5,20})(?![A-Za-z])/i)?.[1] ?? null;
+  // The first labelled value that is a number; a package prints the label
+  // several times and the first may sit above a phone-line heading.
+  const labelled = Array.from(text.matchAll(/policy\s*(?:number|no\.?|#)\s*[:\-]?\s*\n?\s*([A-Z0-9][A-Z0-9-]{5,20})(?![A-Za-z])/gi)).map(m => m[1]!).find(v => wellFormed(v)) ?? null;
   const plausible = (v: string | null | undefined) => wellFormed(v) && v!.replace(/\D/g, '') !== acctDigits;
   if (wellFormed(labelled)) {
     ins.policyNumber = labelled!;
@@ -2237,6 +2264,16 @@ export function applyInsuranceFromText(ex: ExtractedBillData, text: string): voi
   if ((ex.documentKind == null || ex.documentKind === 'bill') && ins.paymentSchedule && ins.paymentSchedule.length >= 2 && describesPolicy && !billsSomething) {
     ex.documentKind = 'policy_document';
   }
+  // "THIS IS NOT A BILL" with a term and a premium is a policy document
+  // even when it lists no schedule — Safeco's renewal says the bill comes
+  // separately. Read as a bill it became a charge for a random figure.
+  if ((ex.documentKind == null || ex.documentKind === 'bill') && describesPolicy && !billsSomething
+      && (/this\s+is\s+not\s+a\s+bill/i.test(text) || (ins.termPremium != null && ins.coverageStart))) {
+    ex.documentKind = 'policy_document';
+  }
+  // A billing document names the policy; an insurance account is known by
+  // it when the text reader took a phone-line heading for the account.
+  if (ins.policyNumber && !/\d{3}/.test(ex.accountNumber ?? '')) ex.accountNumber = ins.policyNumber;
   if (ex.documentKind === 'policy_document') {
     // The document's own date, not a bill date; nothing is billed by it.
     ex.amountDue = null; ex.currentCharges = null; ex.previousBalance = null; ex.dueDate = null;
@@ -2297,6 +2334,13 @@ export async function applyPolicyDocument(utilityAccountId: string, ex: Extracte
 
   const schedule = (ins.paymentSchedule ?? []).filter(p => p.date && p.amount > 0);
   console.log(`[PolicyDoc] account ${utilityAccountId}: ${ex.premiumFinance ? `premium finance loan ${ex.premiumFinance.loanNumber ?? '?'}` : `policy ${ins.policyNumber ?? '?'}`}, ${schedule.length} scheduled payment(s), ${ex.ledgerPayments?.length ?? 0} ledger payment(s), ${ex.premiumFinance?.fees?.length ?? 0} fee line(s)`);
+  // A policy billed in full — or whose bill "will be sent separately" —
+  // lists no schedule but states what the term costs and when it begins.
+  // That is one bill to come: the term premium, due at the start of the
+  // term. The carrier's bill replaces it when it arrives.
+  if (schedule.length === 0 && ins.termPremium != null && ins.termPremium > 0 && (ins.coverageStart || ex.statementDate)) {
+    schedule.push({ date: (ins.coverageStart ?? ex.statementDate)!, amount: ins.termPremium });
+  }
   if (schedule.length === 0) return 0;
   const sorted = [...schedule].sort((a, b) => a.date.localeCompare(b.date));
   const today = new Date().toISOString().slice(0, 10);
