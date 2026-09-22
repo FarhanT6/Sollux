@@ -2719,6 +2719,10 @@ export function applyCancellationNoticeFromText(ex: ExtractedBillData, text: str
   if (/amtrust|877-528-7878/i.test(text)) ex.providerName = 'AmTrust';
   else if (/^important information/i.test(ex.providerName ?? '')) ex.providerName = null;
   if (policy) ex.accountNumber = policy.replace(/\s+\d{2}$/, '');
+  // The notice prints the insured's mailing address (a trust's, at the
+  // owner's home), not the property it covers; taken as the service address
+  // it offered the wrong property. The policy number is what matches.
+  ex.serviceAddress = null;
   ex.insurance = {
     policyNumber: policy ? policy.replace(/\s+\d{2}$/, '') : null, policyNumberExplicit: !!policy,
     coverageStart: period ? parseDate(period[1]!) : null, coverageEnd: period ? parseDate(period[2]!) : null,
