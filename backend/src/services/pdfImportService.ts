@@ -1260,6 +1260,35 @@ async function extractWithClaude(pdfBuffer: Buffer, filename: string): Promise<E
   return normaliseExtracted(JSON.parse(jsonMatch[0]), filename);
 }
 
+/**
+ * The text of a PDF that has no text layer. Nationwide's 2024 statements
+ * are the same layout as 2026's, but every word on the page is a tiny
+ * image, so pdf-parse returns 121 characters of phone numbers and the
+ * installment logic that reads the bill's own arithmetic never ran. Claude
+ * reads the rendered page and gives the text back; the same readers then
+ * run on it as on any other bill.
+ */
+async function transcribeWithClaude(pdfBuffer: Buffer, filename: string): Promise<string> {
+  const anthropic = getAnthropic();
+  const headerAt = pdfBuffer.indexOf('%PDF-');
+  if (headerAt > 0) pdfBuffer = pdfBuffer.subarray(headerAt);
+  console.log(`[PDFImport] ${filename}: no text layer — transcribing`);
+  const response = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 8192,
+    messages: [{ role: 'user', content: [
+      { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfBuffer.toString('base64') } } as Anthropic.DocumentBlockParam,
+      { type: 'text', text: 'Transcribe every line of text on this document exactly as printed, top to bottom and left to right, one printed line per output line, keeping each table row on one line with its figures. Include every dollar amount, date, label and number. Output the text only — no commentary, no markdown.' },
+    ] }],
+  });
+  return response.content.map(c => (c.type === 'text' ? c.text : '')).join('\n');
+}
+
+/** True when the PDF's text layer is too thin to have read the bill from. */
+function noTextLayer(text: string): boolean {
+  return text.replace(/\s/g, '').length < 200;
+}
+
 function normaliseExtracted(data: ExtractedBillData, _filename: string): ExtractedBillData {
   // Normalise alerts: ensure it's always an array
   if (!Array.isArray(data.alerts)) data.alerts = [];
@@ -2960,12 +2989,24 @@ export async function parseBill(
     // A photo or scan has no text layer to parse: it is always read by
     // Claude, whatever extraction method was chosen.
     const isImage = imageMediaType(buffer) != null;
+    // A PDF whose pages are pictures of text (a scan, or a portal export
+    // that draws each word as an image) has nothing for the text reader.
+    // It is read by Claude whatever method was chosen, and its text is
+    // transcribed so the readers that work off the bill's own wording
+    // still run.
+    let layerText = '';
+    if (!isImage) { try { layerText = (await pdfParse(buffer)).text; } catch { /* no text layer */ } }
+    const scanned = !isImage && noTextLayer(layerText);
     if (isImage) {
       extractedBy = 'ai';
       if (method === 'regex') extractionNote = 'Images are always read by Claude; text extraction needs a PDF.';
       extracted = await extractWithClaude(buffer, filename);
-    } else if (method === 'regex') {
+    } else if (method === 'regex' && !scanned) {
       extracted = await extractWithRegex(buffer, filename);
+    } else if (scanned) {
+      extractedBy = 'ai';
+      if (method === 'regex') extractionNote = 'No text layer (a scanned bill) — read by Claude.';
+      extracted = await extractWithClaude(buffer, filename);
     } else {
       try {
         extracted = await extractWithClaude(buffer, filename);
@@ -3008,15 +3049,23 @@ export async function parseBill(
     }
     repairMisreadPeriodYear(extracted);
     // The text layer settles what the figures cannot: a bill in credit.
-    try {
-      const { text } = await pdfParse(buffer);
-      applyLedgerFromText(text, extracted);
-      applyNetMeteringFromText(text, extracted);
-      applyCreditFromText(text, extracted);
-      applyLoanGroupsFromText(extracted, text);
-      applyInsuranceFromText(extracted, text);
-      applyPremiumFinanceFromText(extracted, text);
-    } catch { /* an unreadable text layer changes nothing */ }
+    // A scanned PDF's text is transcribed by Claude; if that fails, the
+    // figures stand as read.
+    let text = layerText;
+    if (scanned) {
+      try { text = await transcribeWithClaude(buffer, filename); }
+      catch (e) { console.warn(`[PDFImport] ${filename}: transcription failed (${e instanceof Error ? e.message : e})`); text = ''; }
+    }
+    if (text) {
+      try {
+        applyLedgerFromText(text, extracted);
+        applyNetMeteringFromText(text, extracted);
+        applyCreditFromText(text, extracted);
+        applyLoanGroupsFromText(extracted, text);
+        applyInsuranceFromText(extracted, text);
+        applyPremiumFinanceFromText(extracted, text);
+      } catch { /* an unreadable text layer changes nothing */ }
+    }
     // A screenshot has no text layer; what Claude read of a premium finance
     // ledger is shaped here.
     shapePremiumFinance(extracted);
