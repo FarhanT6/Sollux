@@ -342,6 +342,12 @@ router.post('/confirm', async (req: Request, res: Response) => {
           const filed = await applyPolicyDocument(utilityAccountId, ex, docKey);
           notices++;
           imported += filed;
+          // A document that bills nothing and lists no payments files
+          // nothing — which looked like a successful import of nothing.
+          if (filed === 0) {
+            const listed = ex.insurance?.paymentSchedule?.length ?? 0;
+            errors.push(`${item.filename}: read as a ${ex.premiumFinance ? 'premium finance agreement' : 'policy document'} but ${listed === 0 ? 'no payment schedule could be read from it' : 'every listed payment already has a real bill on the account'}, so no statements were filed. ${listed === 0 ? 'Make sure the whole payment table (dates and amounts) is in the image, then import it again.' : ''}`.trim());
+          }
           continue;
         }
         const filenameDate   = parseDateFromFilename(item.filename);

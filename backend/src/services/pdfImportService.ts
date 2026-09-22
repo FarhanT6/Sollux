@@ -2216,8 +2216,10 @@ export async function applyPolicyDocument(utilityAccountId: string, ex: Extracte
   if (!ins) return 0;
   const account = await db.utilityAccount.findUnique({ where: { id: utilityAccountId }, select: { id: true, category: true } });
   if (!account) return 0;
-  await syncInsurancePolicyFromBill(utilityAccountId, ex);
-  await syncLoanFromPremiumFinance(utilityAccountId, ex);
+  // A premium finance agreement is a loan, not a policy: the account's loan
+  // carries its figures. Written up as a policy it read "$493.99 / annual".
+  if (ex.premiumFinance) await syncLoanFromPremiumFinance(utilityAccountId, ex);
+  else await syncInsurancePolicyFromBill(utilityAccountId, ex);
 
   // A premium finance notice read as a bill earlier filed the whole
   // premium as one charge. Nothing was ever paid against it; it goes.
@@ -2250,6 +2252,7 @@ export async function applyPolicyDocument(utilityAccountId: string, ex: Extracte
   }
 
   const schedule = (ins.paymentSchedule ?? []).filter(p => p.date && p.amount > 0);
+  console.log(`[PolicyDoc] account ${utilityAccountId}: ${ex.premiumFinance ? `premium finance loan ${ex.premiumFinance.loanNumber ?? '?'}` : `policy ${ins.policyNumber ?? '?'}`}, ${schedule.length} scheduled payment(s), ${ex.ledgerPayments?.length ?? 0} ledger payment(s), ${ex.premiumFinance?.fees?.length ?? 0} fee line(s)`);
   if (schedule.length === 0) return 0;
   const sorted = [...schedule].sort((a, b) => a.date.localeCompare(b.date));
   const today = new Date().toISOString().slice(0, 10);
