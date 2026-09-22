@@ -946,7 +946,9 @@ function BillCard({
                   {pf.totalPremiums != null ? ` · ${fmt$(pf.totalPremiums)} premiums` : ''}{pf.downPayment != null ? `, ${fmt$(pf.downPayment)} down` : ''}
                   {pf.amountFinanced != null ? ` · ${fmt$(pf.amountFinanced)} financed` : ''}{pf.apr != null ? ` at ${pf.apr}% APR` : ''}
                   {sched.length ? ` · ${sched.length} × ${fmt$(sched[0]!.amount)} from ${format(new Date(sched[0]!.date + 'T12:00:00'), 'MMM d, yyyy')}` : ''}
-                  . Sets up the account's loan and files each payment as a bill to come; the lender's monthly statement replaces it when imported.
+                  {((bill.extracted as any).ledgerPayments?.length ?? 0) > 0 ? ` · ${(bill.extracted as any).ledgerPayments.length} payment${(bill.extracted as any).ledgerPayments.length === 1 ? '' : 's'} on record` : ''}
+                  {(pf.fees?.length ?? 0) > 0 ? ` · ${pf.fees.length} fee line${pf.fees.length === 1 ? '' : 's'}` : ''}
+                  . Sets up the account's loan and files each payment as a bill to come, paid where the ledger says so; the lender's monthly statement replaces it when imported.
                 </p>
               );
             })()}
