@@ -840,7 +840,9 @@ function BillCard({
   const [acctForm, setAcctForm] = useState<NewAccountPayload>({
     providerName:  ex.providerName  || '',
     providerSlug:  toSlug(ex.providerName || ''),
-    category:      UTILITY_TYPE_TO_CATEGORY[ex.utilityType] || 'OTHER',
+    // A premium finance agreement is a loan; a policy document is insurance.
+    // Neither reads as a utility type, and "other" made the owner pick.
+    category:      (ex as any).premiumFinance ? 'LOAN' : (ex as any).insurance ? 'INSURANCE' : (UTILITY_TYPE_TO_CATEGORY[ex.utilityType] || 'OTHER'),
     accountNumber: ex.accountNumber || '',
   });
 
@@ -935,7 +937,20 @@ function BillCard({
                 Past-due notice, not a bill — will attach its aging and shut-off date to the account instead of creating a statement
               </p>
             )}
-            {(bill.extracted as any)?.documentKind === 'policy_document' && (() => {
+            {(bill.extracted as any)?.documentKind === 'policy_document' && (bill.extracted as any).premiumFinance && (() => {
+              const pf = (bill.extracted as any).premiumFinance;
+              const sched: { date: string; amount: number }[] = (bill.extracted as any).insurance?.paymentSchedule ?? [];
+              return (
+                <p className="text-xs mt-1 text-sky-300">
+                  Premium finance agreement, not a bill{pf.loanNumber ? ` · loan ${pf.loanNumber}` : ''}
+                  {pf.totalPremiums != null ? ` · ${fmt$(pf.totalPremiums)} premiums` : ''}{pf.downPayment != null ? `, ${fmt$(pf.downPayment)} down` : ''}
+                  {pf.amountFinanced != null ? ` · ${fmt$(pf.amountFinanced)} financed` : ''}{pf.apr != null ? ` at ${pf.apr}% APR` : ''}
+                  {sched.length ? ` · ${sched.length} × ${fmt$(sched[0]!.amount)} from ${format(new Date(sched[0]!.date + 'T12:00:00'), 'MMM d, yyyy')}` : ''}
+                  . Sets up the account's loan and files each payment as a bill to come; the lender's monthly statement replaces it when imported.
+                </p>
+              );
+            })()}
+            {(bill.extracted as any)?.documentKind === 'policy_document' && !(bill.extracted as any).premiumFinance && (() => {
               const ins = (bill.extracted as any).insurance ?? {};
               const sched: { date: string; amount: number }[] = ins.paymentSchedule ?? [];
               const span = ins.coverageStart && ins.coverageEnd

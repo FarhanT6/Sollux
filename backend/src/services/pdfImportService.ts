@@ -99,6 +99,24 @@ export interface ExtractedBillData {
      *  even when it is also the billing account number (Progressive). */
     policyNumberExplicit?: boolean;
   } | null;
+  /** A premium finance agreement: a lender (Capital Premium Financing,
+   *  IPFS, First Insurance Funding) pays the carrier the term premium and is
+   *  repaid in equal monthly payments with interest. Its "Loan Summary"
+   *  describes the loan; a "Notice of Acceptance" bills nothing itself. */
+  premiumFinance?: {
+    lender: string | null;
+    loanNumber: string | null;
+    totalPremiums: number | null;     // the premiums financed plus the down payment
+    amountFinanced: number | null;
+    downPayment: number | null;
+    financeCharge: number | null;     // total interest over the term
+    payment: number | null;           // one monthly payment
+    apr: number | null;               // percent
+    numberOfPayments: number | null;
+    effectiveDate: string | null;     // YYYY-MM-DD
+    firstDueDate: string | null;      // YYYY-MM-DD
+    loanBalance: number | null;       // payments still to come, as stated
+  } | null;
   /** The individual loans a servicer bills together on one statement
    *  (a federal student-loan "Account Snapshot": Group AA Direct Subsidized,
    *  Group BB Direct Unsubsidized), each with its own principal and rate. */
@@ -216,6 +234,7 @@ Schema (use null for any field not present in the document):
   "isPaid": boolean — true ONLY if balance is $0.00 or document shows 'Paid in Full' / paid stamp. A bill-detail layout with columns Billed / Payments and adjustments / Due where Due and TOTAL DUE are $0.00 is paid: report currentCharges and amountDue as the Billed figure and isPaid true,
   "utilityType": "electric | gas | water | sewer | trash | solar | internet | phone | other",
   "insurance": object or null — for ANY insurance document, whatever the carrier or kind of cover (auto, homeowners, renters, health, dental, vision, life, umbrella, flood, business) and whatever the document is (billing statement, renewal offer, declarations page, welcome letter, ID card, payment schedule): {"policyNumber": "string", "insuranceType": "PROPERTY | AUTO | RENTERS | LIABILITY | FLOOD | UMBRELLA | HEALTH | DENTAL | VISION | LIFE | BUSINESS | OTHER", "carrier": "underwriter when it differs from the brand, else null", "coverageStart": "YYYY-MM-DD", "coverageEnd": "YYYY-MM-DD", "termPremium": n, "installment": n, "serviceCharge": n, "installmentsRemaining": n, "renewedOn": "YYYY-MM-DD", "autoPay": boolean, "totalCost": n, "paymentSchedule": [{"date": "YYYY-MM-DD", "amount": n}], "insuredItems": ["2022 Land Rover Discovery Sport", ...]}. insuranceType from what is covered (vehicles/VINs → AUTO; a dwelling → PROPERTY; medical/dental/vision plan → HEALTH/DENTAL/VISION). coverageStart/End are the "Policy Period" / "Coverage period" dates. termPremium is the premium for the whole term excluding billing fees ("Your 6-month policy premium excluding billing fees is $2,752.28"; on a billing statement the "Renewal" line or Full Balance). installment is one regular payment; serviceCharge the per-payment installment/billing fee ("We included an installment fee of $4.00 in each payment"); totalCost the term total including fees ("$2,776.28 Total Cost"). paymentSchedule is EVERY dated payment line the document prints ("Automatic Payments Schedule", "Payment schedule", "Your Installment Schedule"), in order, including ones already past. autoPay true when payments are drafted automatically. On a billing statement's policy table ("Policy / Coverage period / Balance / Installment") the policy number is the alphanumeric code on that row. A different policy number with a later coverage start than earlier documents is a renewal onto a new policy,
+  "premiumFinance": object or null — ONLY for a premium finance agreement or its notices (a lender such as Capital Premium Financing, IPFS or First Insurance Funding pays the carrier and is repaid monthly with interest; the document has a "Loan Summary" with Amount Financed, Finance Charge, Annual % Rate): {"lender": "Capital Premium Financing", "loanNumber": "string", "totalPremiums": n, "amountFinanced": n, "downPayment": n, "financeCharge": n, "payment": n, "apr": n, "numberOfPayments": n, "effectiveDate": "YYYY-MM-DD", "firstDueDate": "YYYY-MM-DD", "loanBalance": n}. Put the loan number in accountNumber and the lender in providerName. A "Notice of Acceptance" or the agreement itself bills nothing: documentKind 'policy_document', the notice date in statementDate, amountDue and dueDate null,
   "loanGroups": array or null — ONLY for a loan servicer statement that lists MORE THAN ONE loan under the account (a federal student-loan "Account Snapshot" with columns Group AA / Group BB, or "Loan 1-01 / Loan 1-02"): one entry per loan column, [{"label": "Group AA", "loanKind": "DIRECT SUB", "originalPrincipal": n, "outstandingPrincipal": n, "interestRate": n, "monthlyPayment": n, "accruedInterest": n, "disbursedOn": "YYYY-MM-DD", "payoffDate": "YYYY-MM-DD"}]. Read each column: loanKind from the "Loan Type" row, originalPrincipal from "Original Principal Amount", outstandingPrincipal from "Outstanding Principal Balance", interestRate as a percent from "Interest Rate", monthlyPayment from "Regular Monthly Payment Amount" (the Monthly Payment section, not the Account Snapshot's zeros), accruedInterest from "Accrued Interest" / "Estimated Interest Outstanding", disbursedOn from "First Disbursement Date", payoffDate from "Estimated Payoff Date". A statement for a single loan reports null,
   "statedTotalDue": number or null — the ONE figure the bill asks to be paid now: its "Total Amount Due" / "Amount Due" box. Negative when the account is in credit ("No payment is due. Your account has a credit balance of $0.82" → -0.82). This is the grand total AFTER previous balance, payments, credits and any payment-arrangement deferral; report it exactly as printed,
   "totalAccountBalance": number or null — "Total Account Balance" when printed: everything owed including a balance a payment arrangement has deferred,
@@ -510,6 +529,8 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
       'Service Finance','Sunrun','SunPower','Vivint Solar','Sunnova',
       // Insurance
       'Safeco','Bamboo','Lemonade','State Farm','Allstate','Farmers',
+      // Premium finance
+      'Capital Premium Financing','IPFS','First Insurance Funding',
       // HOA
       'Keystone','First Service','HOA Management',
       // City utilities
@@ -2192,6 +2213,19 @@ export async function applyPolicyDocument(utilityAccountId: string, ex: Extracte
   const account = await db.utilityAccount.findUnique({ where: { id: utilityAccountId }, select: { id: true, category: true } });
   if (!account) return 0;
   await syncInsurancePolicyFromBill(utilityAccountId, ex);
+  await syncLoanFromPremiumFinance(utilityAccountId, ex);
+
+  // A premium finance notice read as a bill earlier filed the whole
+  // premium as one charge. Nothing was ever paid against it; it goes.
+  const pf = ex.premiumFinance;
+  if (pf && (pf.totalPremiums != null || pf.amountFinanced != null)) {
+    await db.statement.deleteMany({
+      where: {
+        utilityAccountId, isScheduled: false, isDownPayment: false, payments: { none: {} },
+        amountDue: { in: [pf.totalPremiums, pf.amountFinanced].filter((v): v is number => v != null) },
+      },
+    });
+  }
 
   // This same document, imported earlier as if it were a bill, left a
   // statement dated the day the letter was written and covering the whole
@@ -2264,6 +2298,155 @@ export async function applyPolicyDocument(utilityAccountId: string, ex: Extracte
     filed++;
   }
   return filed;
+}
+
+// ── Premium finance agreements ───────────────────────────────────────────────
+// A carrier that wants the term premium up front is paid by a premium
+// finance company, which then bills the owner monthly with interest. The
+// agreement's "Notice of Acceptance" reads like a loan, because it is one:
+//
+//   Notice Date: 4/24/2026        Loan Number: 6547326
+//   Total Premiums: $5,769.34     Amount Financed: $4,064.34
+//   Down Payment: $1,705.00       Finance Charge: $381.57
+//   Payment: $493.99              Annual % Rate: 22%
+//   Number of Payments: 8         Effective Date: 3/15/2026
+//   First Due Date: 5/15/2026     Loan Balance: $3,951.92
+//
+// Read as a bill it became a $5,769.34 charge from "NOTICE OF ACCEPTANCE".
+// It is filed instead the way a policy's payment schedule is: nothing is
+// billed by it, each monthly payment goes on the account as a bill to come,
+// and the account's loan carries the amount, rate, term and balance.
+
+/** Reads the loan summary off a premium finance document into
+ *  `ex.premiumFinance`, and shapes the rest of the extraction around it. */
+export function applyPremiumFinanceFromText(ex: ExtractedBillData, text: string): void {
+  const isFinance = /premium\s*financ|insurance\s*premium\s*finance\s*agreement|financing\s*your\s*insurance\s*premiums/i.test(text);
+  const hasSummary = /amount\s*financed/i.test(text) && /(?:annual\s*%?\s*rate|APR|finance\s*charge)/i.test(text);
+  if (!isFinance && !(hasSummary && /premium/i.test(text))) return;
+  const money = (re: RegExp) => { const m = text.match(re); return m ? parseFloat(m[1]!.replace(/[$,\s]/g, '')) : null; };
+  const date = (re: RegExp) => { const m = text.match(re); return m ? parseDate(m[1]!) : null; };
+  const pf: NonNullable<ExtractedBillData['premiumFinance']> = {
+    lender: null, loanNumber: null, totalPremiums: null, amountFinanced: null, downPayment: null, financeCharge: null,
+    payment: null, apr: null, numberOfPayments: null, effectiveDate: null, firstDueDate: null, loanBalance: null,
+    ...(ex.premiumFinance ?? {}),
+  };
+  pf.lender ??= text.match(/(?:financing\s*your\s*insurance\s*premiums?\s*through|thank\s*you\s*for\s*choosing)\s*([A-Z][A-Za-z&' ]{3,50}?)(?:,?\s*(?:LLC|Inc\.?|Corp\.?|Company))?\s*(?:\n|$)/im)?.[1]?.trim()
+    ?? text.match(/\b(Capital\s+Premium\s+Financing|IPFS|First\s+Insurance\s+Funding|Imperial\s+PFS|AFCO|BankDirect)\b/i)?.[1]?.replace(/\s+/g, ' ') ?? null;
+  pf.loanNumber ??= text.match(/(?:loan|account)\s*(?:number|no\.?|#)\s*:?\s*([A-Z0-9-]{5,16})\b/i)?.[1] ?? null;
+  pf.totalPremiums ??= money(/total\s*premiums?\s*:?\s*\$?\s*([\d,]+\.\d{2})/i);
+  pf.amountFinanced ??= money(/amount\s*financed\s*:?\s*\$?\s*([\d,]+\.\d{2})/i);
+  pf.downPayment ??= money(/down\s*payment\s*:?\s*\$?\s*([\d,]+\.\d{2})/i);
+  pf.financeCharge ??= money(/finance\s*charge\s*:?\s*\$?\s*([\d,]+\.\d{2})/i);
+  pf.payment ??= money(/(?:^|\n)\s*(?:monthly\s*)?payment\s*(?:amount)?\s*:?\s*\$?\s*([\d,]+\.\d{2})/i);
+  pf.apr ??= (() => { const m = text.match(/annual\s*(?:%|percentage)\s*rate\s*:?\s*([\d.]+)\s*%/i) ?? text.match(/\bAPR\s*:?\s*([\d.]+)\s*%/i); return m ? parseFloat(m[1]!) : null; })();
+  pf.numberOfPayments ??= (() => { const m = text.match(/number\s*of\s*payments\s*:?\s*(\d{1,3})\b/i); return m ? parseInt(m[1]!, 10) : null; })();
+  pf.effectiveDate ??= date(/effective\s*date\s*:?\s*(\d{1,2}\/\d{1,2}\/\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})/i);
+  pf.firstDueDate ??= date(/first\s*(?:payment\s*)?due\s*(?:date)?\s*:?\s*(\d{1,2}\/\d{1,2}\/\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})/i);
+  pf.loanBalance ??= money(/loan\s*balance\s*:?\s*\$?\s*([\d,]+\.\d{2})/i);
+  if (pf.amountFinanced == null && pf.payment == null) return;
+  ex.premiumFinance = pf;
+
+  // The lender is the account's provider and the loan number its account
+  // number — not the agent's name at the top of the page.
+  if (pf.lender) ex.providerName = pf.lender;
+  if (pf.loanNumber) ex.accountNumber = pf.loanNumber;
+  ex.utilityType = 'other';
+  const noticeDate = date(/(?:notice|statement|agreement)\s*date\s*:?\s*(\d{1,2}\/\d{1,2}\/\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})/i);
+  if (noticeDate) ex.statementDate = noticeDate;
+
+  // The agreement and its acceptance notice bill nothing: the payments are
+  // the schedule. A monthly billing statement from the lender ("Amount Due",
+  // "Please pay") is a bill and is left as one.
+  const billsSomething = /\b(?:total\s+)?amount\s+(?:now\s+)?due\b[^$\n]{0,12}\$\s*[\d,]+\.\d{2}|\bplease\s+pay\b|\bpay\s+this\s+amount\b|\bminimum\s+(?:amount\s+)?due\b[^$\n]{0,12}\$/i.test(text);
+  const describesLoan = /notice\s*of\s*acceptance|premium\s*finance\s*agreement|loan\s*summary|welcome/i.test(text);
+  if (!(describesLoan && !billsSomething)) return;
+
+  // Equal payments a month apart from the first due date.
+  const schedule: { date: string; amount: number }[] = [];
+  if (pf.firstDueDate && pf.payment && pf.numberOfPayments) {
+    const [y, m, d] = pf.firstDueDate.split('-').map(Number) as [number, number, number];
+    for (let i = 0; i < pf.numberOfPayments; i++) {
+      const due = new Date(Date.UTC(y, m - 1 + i, 1));
+      const last = new Date(Date.UTC(due.getUTCFullYear(), due.getUTCMonth() + 1, 0)).getUTCDate();
+      due.setUTCDate(Math.min(d, last));
+      schedule.push({ date: due.toISOString().slice(0, 10), amount: pf.payment });
+    }
+  }
+  const effective = pf.effectiveDate;
+  const termEnd = effective ? (() => { const [y, m, d] = effective.split('-').map(Number) as [number, number, number]; return new Date(Date.UTC(y + 1, m - 1, d)).toISOString().slice(0, 10); })() : null;
+  ex.documentKind = 'policy_document';
+  ex.insurance = {
+    policyNumber: null, coverageStart: effective, coverageEnd: termEnd,
+    termPremium: pf.totalPremiums, installment: pf.payment, serviceCharge: null,
+    installmentsRemaining: pf.numberOfPayments, renewedOn: null,
+    ...(ex.insurance ?? {}),
+    paymentSchedule: schedule.length ? schedule : ex.insurance?.paymentSchedule ?? null,
+    autoPay: ex.insurance?.autoPay ?? null,
+  };
+  ex.amountDue = null; ex.currentCharges = null; ex.previousBalance = null; ex.dueDate = null;
+  ex.statedTotalDue = null; ex.paymentsReceived = null; ex.lateFee = null; ex.totalAccountBalance = null;
+  ex.billingPeriodStart = effective; ex.billingPeriodEnd = termEnd;
+  ex.isPaid = false;
+  ex.chargeBreakdown = null;
+}
+
+/**
+ * Keep the account's loan in step with the premium finance agreement: the
+ * premiums as the original amount (the amount financed is that less the
+ * down payment, which is how the loan projection reads it), the rate, the
+ * payment, the term and the balance. The loan is created when the account
+ * has none — an account made by the importer has no loan yet, and an
+ * INSTALLMENT_PLAN loan is what a premium finance agreement is.
+ */
+export async function syncLoanFromPremiumFinance(utilityAccountId: string, ex: ExtractedBillData): Promise<void> {
+  const pf = ex.premiumFinance;
+  if (!pf) return;
+  const account = await db.utilityAccount.findUnique({
+    where: { id: utilityAccountId },
+    select: { id: true, propertyId: true, providerName: true, isActive: true, property: { select: { userId: true } } },
+  });
+  if (!account) return;
+  const schedule = ex.insurance?.paymentSchedule ?? [];
+  const lastDue = schedule.length ? [...schedule].sort((a, b) => a.date.localeCompare(b.date))[schedule.length - 1]!.date : null;
+  const dueDay = pf.firstDueDate ? Number(pf.firstDueDate.slice(8, 10)) : null;
+  const figures = {
+    ...(pf.totalPremiums != null ? { originalAmount: pf.totalPremiums } : pf.amountFinanced != null ? { originalAmount: Number((pf.amountFinanced + (pf.downPayment ?? 0)).toFixed(2)) } : {}),
+    ...(pf.downPayment != null ? { downPayment: pf.downPayment } : {}),
+    ...(pf.apr != null ? { interestRate: pf.apr } : {}),
+    ...(pf.payment != null ? { monthlyPayment: pf.payment } : {}),
+    ...(pf.effectiveDate ? { originationDate: new Date(pf.effectiveDate) } : {}),
+    ...(lastDue ? { maturityDate: new Date(lastDue) } : {}),
+    ...(dueDay ? { dueDay } : {}),
+    ...(pf.loanNumber ? { accountLast4: pf.loanNumber.slice(-4) } : {}),
+  };
+  const existing = await db.loan.findUnique({ where: { utilityAccountId }, select: { id: true, currentBalance: true, loanType: true } });
+  if (existing) {
+    await db.loan.update({
+      where: { id: existing.id },
+      data: {
+        ...figures,
+        ...(existing.loanType === 'OTHER' ? { loanType: 'INSTALLMENT_PLAN' } : {}),
+        // The stated balance only fills a blank; payments logged since the
+        // notice have moved it on, and the projection tracks that.
+        ...(existing.currentBalance == null && pf.loanBalance != null ? { currentBalance: pf.loanBalance } : {}),
+      },
+    });
+    return;
+  }
+  await db.loan.create({
+    data: {
+      userId: account.property.userId,
+      propertyId: account.propertyId,
+      utilityAccountId,
+      lender: pf.lender ?? account.providerName,
+      loanType: 'INSTALLMENT_PLAN',
+      isActive: account.isActive,
+      isPersonal: false,
+      ...(pf.loanBalance != null ? { currentBalance: pf.loanBalance } : {}),
+      notes: `Premium finance agreement${pf.loanNumber ? ` #${pf.loanNumber}` : ''}${pf.financeCharge != null ? ` — finance charge $${pf.financeCharge.toFixed(2)} over the term` : ''}`,
+      ...figures,
+    },
+  });
 }
 
 export function sanitiseLateFee(ex: ExtractedBillData): void {
@@ -2689,6 +2872,7 @@ export async function parseBill(
       applyCreditFromText(text, extracted);
       applyLoanGroupsFromText(extracted, text);
       applyInsuranceFromText(extracted, text);
+      applyPremiumFinanceFromText(extracted, text);
     } catch { /* an unreadable text layer changes nothing */ }
     reconcileWithStatedTotal(extracted);
     sanitiseLateFee(extracted);
