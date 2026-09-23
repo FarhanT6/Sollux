@@ -54,6 +54,22 @@ export function arrearsPaidSince(s: any, payments: any[] = [], statements: any[]
     .reduce((t, p) => t + Number(p.amount ?? 0), 0);
 }
 
+/**
+ * Money paid since a bill was printed that was not filed against any bill.
+ * It pays the account's running balance, oldest debt first — the way the
+ * provider applies it — so it comes off what this bill's figures still
+ * represent: its arrears first, then its own charge. A $2,000 payment
+ * logged "not against a specific bill" used to change nothing but the
+ * total paid.
+ */
+export function unlinkedPaidSince(s: any, payments: any[] = []): number {
+  if (!s?.statementDate) return 0;
+  const since = new Date(s.statementDate).getTime() - 86400000;
+  return payments
+    .filter(p => !p.statementId && p.status !== 'FAILED' && p.status !== 'PENDING' && new Date(p.paymentDate).getTime() >= since)
+    .reduce((t, p) => t + Number(p.amount ?? 0), 0);
+}
+
 /** What a bill carried in that is still owed: the carried arrears less what has been paid toward older bills since. */
 export function liveCarriedOf(s: any, payments: any[] = [], statements: any[] = []): number {
   const carried = s?.pastDueCarried != null ? Number(s.pastDueCarried) : 0;
@@ -316,8 +332,11 @@ export function accountView(statements: any[], payments: any[] = []): AccountVie
   const carried = liveCarriedOf(latest, payments, sorted);
   // Only the part of the charge not deferred to a true-up is payable now.
   const current = Number(latest.amountDue ?? 0) - deferredOf(latest);
-  const pastDue = carried > 0 && !priorSettled ? carried : 0;
+  // Unfiled money paid since the newest bill comes off its arrears first,
+  // then its own charge.
+  const unlinked = unlinkedPaidSince(latest, payments);
+  const pastDue = carried > 0 && !priorSettled ? Math.max(0, Number((carried - unlinked).toFixed(2))) : 0;
   const credit = carried < 0 ? -carried : 0;
-  const owed = isPaid ? 0 : Math.max(current + pastDue - credit, 0);
+  const owed = isPaid ? 0 : Math.max(Number((current + (carried > 0 && !priorSettled ? carried : 0) - credit - unlinked).toFixed(2)), 0);
   return { latest, isPaid, priorSettled, pastDue, credit, current, owed };
 }
