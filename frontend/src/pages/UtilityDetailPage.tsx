@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import PaymentBreakdownLine from '../components/utility/PaymentBreakdownLine';
-import { openBalanceOf, isStatementPaid, computeResolvedByFutureCheckpoint, computePaidMap, isEffectivelyPaid, isPriorStatementPaid, statementStatus, coveredByCredit, liveCarriedOf, newestIssued } from '../lib/paidState';
+import { openBalanceOf, isStatementPaid, computeResolvedByFutureCheckpoint, computePaidMap, isEffectivelyPaid, isPriorStatementPaid, statementStatus, coveredByCredit, liveCarriedOf, newestIssued, arrearsPaidSince, unlinkedPaidSince } from '../lib/paidState';
 import { bankAccountLabel } from '../lib/bankAccountLabel';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
@@ -1054,7 +1054,11 @@ export default function UtilityDetailPage() {
   // is kept even when the prior bill is paid; only carried arrears are.
   // Carried arrears are brought up to date with anything paid toward older
   // bills since the newest bill was printed; a credit is kept as printed.
-  const latestCarried = latestStmt?.pastDueCarried != null ? liveCarriedOf(latestStmt, payments, statements) : null;
+  // Money paid since the newest bill that was filed against no bill pays
+  // the running balance: its arrears first, then the bill's own charge.
+  const unlinkedSince = latestStmt ? unlinkedPaidSince(latestStmt, payments) : 0;
+  const latestCarriedRaw = latestStmt?.pastDueCarried != null ? liveCarriedOf(latestStmt, payments, statements) : null;
+  const latestCarried = latestCarriedRaw != null && latestCarriedRaw > 0 ? Math.max(0, Number((latestCarriedRaw - unlinkedSince).toFixed(2))) : latestCarriedRaw;
   const latestPastDue = latestCarried != null && (latestCarried < 0 || !priorToLatestPaid)
     ? latestCarried
     : null;
@@ -1069,9 +1073,16 @@ export default function UtilityDetailPage() {
   const isLatestPaid = latestStmt ? isEffectivelyPaid(latestStmt, payments, resolvedByFuture, paidMap) : false;
   const latestTotalDue = isLatestPaid
     ? 0
-    : (priorToLatestPaid && latestChargesExclFees != null && !(latestCarried != null && latestCarried < 0))
-      ? latestChargesExclFees
-      : latestOwed;
+    : (() => {
+      const base = (priorToLatestPaid && latestChargesExclFees != null && !(latestCarried != null && latestCarried < 0))
+        ? latestChargesExclFees
+        : latestOwed;
+      if (base == null) return base;
+      // latestOwed already reflects the arrears reduction; what is left of
+      // the unfiled money beyond the arrears comes off the charge.
+      const beyondArrears = Math.max(0, Number((unlinkedSince - Math.max(0, latestCarriedRaw ?? 0)).toFixed(2)));
+      return Math.max(0, Number((base - beyondArrears).toFixed(2)));
+    })();
 
   if (loading) return <div className="p-6 space-y-4"><Skeleton className="h-24" /><Skeleton className="h-64" /></div>;
   if (!account) return <div className="p-6 text-gray-400">Account not found</div>;
@@ -1441,9 +1452,12 @@ export default function UtilityDetailPage() {
                   // What has been paid toward the older bills that make up
                   // this bill's arrears since it printed. The row keeps the
                   // statement's figures; this says how they stand today.
-                  const liveCarried = liveCarriedOf(s, payments, statements);
-                  const arrearsPaid = pastDue != null && pastDue > 0 ? Number((pastDue - liveCarried).toFixed(2)) : 0;
-                  const owedNow = totalDue != null && arrearsPaid > 0.005 ? Number((totalDue - arrearsPaid).toFixed(2)) : null;
+                  // Toward the older bills in its arrears, plus unfiled money
+                  // on the account, which pays the running balance oldest first.
+                  const paidSince = Number((arrearsPaidSince(s, payments, statements) + unlinkedPaidSince(s, payments)).toFixed(2));
+                  const arrearsPaid = pastDue != null && pastDue > 0 ? Math.min(pastDue, paidSince) : 0;
+                  const liveCarried = pastDue != null && pastDue > 0 ? Number((pastDue - arrearsPaid).toFixed(2)) : liveCarriedOf(s, payments, statements);
+                  const owedNow = totalDue != null && paidSince > 0.005 ? Math.max(0, Number((totalDue - Math.min(totalDue, paidSince)).toFixed(2))) : null;
                   return (
                     <div key={s.id} className="rounded-xl px-5 py-4 flex items-center gap-4"
                       style={{
