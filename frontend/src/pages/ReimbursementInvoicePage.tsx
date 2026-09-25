@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import BackLink from '../components/ui/BackLink';
-import { getReimbursementInvoice, setReimbursementInvoiceStatus } from '../api/client';
+import { getReimbursementInvoice, setReimbursementInvoiceStatus, updateReimbursementInvoiceTerms } from '../api/client';
 import { fmtDate } from '../lib/date';
 
 /**
@@ -17,7 +17,6 @@ const money = (v: number | string | null | undefined) => `$${Number(v ?? 0).toLo
 const num = (v: unknown) => Number(v ?? 0) || 0;
 const monthOf = (iso: string) => iso.slice(0, 7);
 const monthName = (ym: string) => new Date(`${ym}-15T00:00:00Z`).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
-const DUE_DAYS = 14;
 
 const INK = '#1c2230';
 const MUTED = '#6b7280';
@@ -56,6 +55,9 @@ export default function ReimbursementInvoicePage() {
   const { id } = useParams<{ id: string }>();
   const [inv, setInv] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  const [editingTerms, setEditingTerms] = useState(false);
+  const [savingTerms, setSavingTerms] = useState(false);
+  const [termsForm, setTermsForm] = useState({ dueDate: '', payableTo: '', paymentInstructions: '' });
 
   useEffect(() => {
     if (!id) return;
@@ -81,14 +83,37 @@ export default function ReimbursementInvoicePage() {
   const tenants = (lease.leaseTenants ?? []).map((lt: any) => lt.tenant.fullName).join(', ');
   const total = num(inv.total), paid = num(inv.paidAmount), balance = total - paid;
   const issued = new Date(inv.createdAt);
-  const due = new Date(issued.getTime() + DUE_DAYS * 86400000);
+  // A due date is printed only when the owner set one, and the payment
+  // details block goes with it: no date, no block.
+  const due = inv.dueDate ? new Date(inv.dueDate) : null;
   const lh = inv.letterhead ?? {};
   const fromName = lh.name || 'Sollux';
+  const payableTo = inv.payableTo || fromName;
   const multiMonth = months.length > 1;
 
   async function markSent() {
     await setReimbursementInvoiceStatus(inv.id, 'SENT');
     setInv({ ...inv, status: 'SENT' });
+  }
+
+  function openTerms() {
+    setTermsForm({
+      dueDate: inv.dueDate ? String(inv.dueDate).slice(0, 10) : '',
+      payableTo: inv.payableTo ?? '',
+      paymentInstructions: inv.paymentInstructions ?? '',
+    });
+    setEditingTerms(true);
+  }
+
+  async function saveTerms() {
+    setSavingTerms(true);
+    try {
+      const updated = await updateReimbursementInvoiceTerms(inv.id, {
+        dueDate: termsForm.dueDate || null, payableTo: termsForm.payableTo || null, paymentInstructions: termsForm.paymentInstructions || null,
+      });
+      setInv({ ...inv, dueDate: updated.dueDate, payableTo: updated.payableTo, paymentInstructions: updated.paymentInstructions });
+      setEditingTerms(false);
+    } finally { setSavingTerms(false); }
   }
 
   const th: React.CSSProperties = { fontSize: 11, letterSpacing: 1.6, textTransform: 'uppercase', color: MUTED, fontWeight: 600, padding: '12px 16px', textAlign: 'left', background: TINT };
@@ -110,9 +135,33 @@ export default function ReimbursementInvoicePage() {
         <BackLink fallback="/tenants" className="text-xs" style={{ color: MUTED }}>← Back</BackLink>
         <div className="flex-1" />
         <span className="text-xs" style={{ color: MUTED }}>Status: {inv.status}</span>
+        <button onClick={openTerms} className="text-xs px-3 py-1 rounded" style={{ border: `1px solid ${RULE}`, color: INK }}>Payment terms</button>
         {inv.status === 'DRAFT' && <button onClick={markSent} className="text-xs px-3 py-1 rounded" style={{ border: `1px solid ${RULE}`, color: INK }}>Mark as sent</button>}
         <button onClick={() => window.print()} className="text-xs px-3 py-1 rounded" style={{ background: ACCENT, color: '#fff', fontWeight: 600 }}>Print / Save PDF</button>
       </div>
+
+      {editingTerms && (
+        <div className="no-print px-6 py-4" style={{ borderBottom: `1px solid ${RULE}`, background: TINT }}>
+          <div className="mx-auto grid gap-3" style={{ maxWidth: 860, gridTemplateColumns: '1fr 2fr' }}>
+            <label className="text-xs" style={{ color: MUTED }}>
+              <span className="block mb-1">Due date (blank prints none, and no payment details)</span>
+              <input type="date" className="w-full text-sm px-2 py-1 rounded" style={{ border: `1px solid ${RULE}`, color: INK, background: '#fff' }} value={termsForm.dueDate} onChange={e => setTermsForm(f => ({ ...f, dueDate: e.target.value }))} />
+            </label>
+            <label className="text-xs" style={{ color: MUTED }}>
+              <span className="block mb-1">Payable to</span>
+              <input className="w-full text-sm px-2 py-1 rounded" style={{ border: `1px solid ${RULE}`, color: INK, background: '#fff' }} value={termsForm.payableTo} onChange={e => setTermsForm(f => ({ ...f, payableTo: e.target.value }))} placeholder={fromName} />
+            </label>
+            <label className="text-xs" style={{ color: MUTED, gridColumn: '1 / -1' }}>
+              <span className="block mb-1">Payment instructions</span>
+              <textarea rows={3} className="w-full text-sm px-2 py-1 rounded" style={{ border: `1px solid ${RULE}`, color: INK, background: '#fff' }} value={termsForm.paymentInstructions} onChange={e => setTermsForm(f => ({ ...f, paymentInstructions: e.target.value }))} placeholder="Check to the address above, Zelle to …, or pay the way you pay rent." />
+            </label>
+            <div className="flex gap-2 justify-end" style={{ gridColumn: '1 / -1' }}>
+              <button onClick={() => setEditingTerms(false)} className="text-xs px-3 py-1 rounded" style={{ border: `1px solid ${RULE}`, color: INK }}>Cancel</button>
+              <button onClick={saveTerms} disabled={savingTerms} className="text-xs px-3 py-1 rounded" style={{ background: ACCENT, color: '#fff', fontWeight: 600 }}>{savingTerms ? 'Saving…' : 'Save'}</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="sheet mx-auto" style={{ maxWidth: 860, padding: '40px 48px 32px' }}>
         {/* Masthead */}
@@ -138,7 +187,7 @@ export default function ReimbursementInvoicePage() {
           <div style={{ borderLeft: `1px solid ${RULE}`, paddingLeft: 28, paddingTop: 4 }}>
             <Meta k="Invoice #" v={inv.number ?? '—'} />
             <Meta k="Issue date" v={fmtDate(issued, 'MMM d, yyyy')} />
-            <Meta k="Due date" v={fmtDate(due, 'MMM d, yyyy')} />
+            {due && <Meta k="Due date" v={fmtDate(due, 'MMM d, yyyy')} />}
             <Meta k="Billing period" v={`${fmtDate(inv.periodStart, 'MMM d, yyyy')} – ${fmtDate(inv.periodEnd, 'MMM d, yyyy')}`} />
           </div>
         </div>
@@ -222,34 +271,38 @@ export default function ReimbursementInvoicePage() {
           </div>
         </div>
 
-        {/* Payment details */}
-        <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, padding: '22px 26px', background: '#fff', marginBottom: 28 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={ACCENT} strokeWidth="1.8" strokeLinecap="round" aria-hidden><rect x="3" y="6" width="18" height="12" rx="2" /><path d="M3 10h18M7 15h3" /></svg>
-            <span style={{ fontSize: 12, letterSpacing: 2, textTransform: 'uppercase', color: INK, fontWeight: 600 }}>Payment details</span>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 28 }}>
-            <div>
-              <div style={{ fontSize: 11, letterSpacing: 1.4, textTransform: 'uppercase', color: MUTED, fontWeight: 600, marginBottom: 8 }}>Payment instructions</div>
-              <p style={{ fontSize: 13, color: '#3f4552', lineHeight: 1.6, margin: 0 }}>
-                Please make checks payable to <strong style={{ color: INK }}>{fromName}</strong>{lh.address ? `, ${lh.address}` : ''}, or pay the way you pay rent.
-                Reference invoice {inv.number ?? ''} with your payment.
-              </p>
-            </div>
-            <div style={{ borderLeft: `1px solid ${RULE}`, paddingLeft: 28 }}>
-              <div style={{ fontSize: 11, letterSpacing: 1.4, textTransform: 'uppercase', color: MUTED, fontWeight: 600, marginBottom: 8 }}>Important</div>
-              <p style={{ fontSize: 13, color: '#3f4552', lineHeight: 1.6, margin: 0 }}>
-                Payment is due by the date listed above. Copies of the underlying utility statements are available on request.
-                Late payments may be subject to additional fees per your lease agreement.
-              </p>
-            </div>
-          </div>
-        </div>
-
         {inv.notes && <p style={{ fontSize: 13, color: '#3f4552', marginBottom: 20 }}>{inv.notes}</p>}
 
         <p style={{ fontSize: 15, color: INK, margin: 0 }}>Thank you for your prompt payment.</p>
         <div style={{ height: 2, width: 64, background: ACCENT, marginTop: 8, marginBottom: 36 }} />
+
+        {/* Payment details — only with a due date, and at the foot of the page. */}
+        {due && (
+          <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, padding: '22px 26px', background: '#fff', marginBottom: 28 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={ACCENT} strokeWidth="1.8" strokeLinecap="round" aria-hidden><rect x="3" y="6" width="18" height="12" rx="2" /><path d="M3 10h18M7 15h3" /></svg>
+              <span style={{ fontSize: 12, letterSpacing: 2, textTransform: 'uppercase', color: INK, fontWeight: 600 }}>Payment details</span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 28 }}>
+              <div>
+                <div style={{ fontSize: 11, letterSpacing: 1.4, textTransform: 'uppercase', color: MUTED, fontWeight: 600, marginBottom: 8 }}>Payment instructions</div>
+                <p style={{ fontSize: 13, color: '#3f4552', lineHeight: 1.6, margin: 0, whiteSpace: 'pre-line' }}>
+                  {inv.paymentInstructions
+                    ? inv.paymentInstructions
+                    : <>Please make payment payable to <strong style={{ color: INK }}>{payableTo}</strong>{lh.address ? `, ${lh.address}` : ''}.</>}
+                  {' '}Reference invoice {inv.number ?? ''} with your payment.
+                </p>
+              </div>
+              <div style={{ borderLeft: `1px solid ${RULE}`, paddingLeft: 28 }}>
+                <div style={{ fontSize: 11, letterSpacing: 1.4, textTransform: 'uppercase', color: MUTED, fontWeight: 600, marginBottom: 8 }}>Important</div>
+                <p style={{ fontSize: 13, color: '#3f4552', lineHeight: 1.6, margin: 0 }}>
+                  Payment is due by {fmtDate(due, 'MMMM d, yyyy')}. Copies of the underlying utility statements are available on request.
+                  Late payments may be subject to additional fees per your lease agreement.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Footer */}
         <div style={{ borderTop: `1px solid ${RULE}`, paddingTop: 16, display: 'flex', alignItems: 'center', gap: 28, fontSize: 12, color: MUTED, flexWrap: 'wrap' }}>

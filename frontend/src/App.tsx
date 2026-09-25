@@ -46,6 +46,10 @@ export default function App() {
           </div>
         } />
 
+        {/* A printable page: no sidebar, no scroll container, so what prints
+            is the statement and nothing else. */}
+        <Route path="/reimbursements/:id" element={<ProtectedRoute><ReimbursementInvoicePage /></ProtectedRoute>} />
+
         <Route path="/" element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard" element={<DashboardPage />} />
@@ -66,7 +70,6 @@ export default function App() {
           {/* Tenants hub */}
           <Route path="tenants" element={<TenantsHubPage />} />
           <Route path="tenants/:id" element={<TenantDetailPage />} />
-          <Route path="reimbursements/:id" element={<ReimbursementInvoicePage />} />
           <Route path="notices/:id" element={<NoticeDetailPage />} />
 
           {/* Lives as a Finances tab; keep the direct URL working for links. */}

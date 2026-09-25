@@ -40,6 +40,9 @@ export default function UtilityReimbursementPanel({ leaseId }: { leaseId: string
 
   // Generation
   const [range, setRange] = useState({ from: '', to: '' });
+  // Payment terms, set by hand. Whom to pay and how differ by lease and are
+  // remembered from the last invoice; a due date is only printed when given.
+  const [terms, setTerms] = useState({ dueDate: '', payableTo: '', paymentInstructions: '' });
   const [draft, setDraft] = useState<ReimbursementDraft | null>(null);
   // Lines struck out of the draft — already billed on a hand-made invoice,
   // or settled some other way. Re-previewed without them so the totals are true.
@@ -56,7 +59,10 @@ export default function UtilityReimbursementPanel({ leaseId }: { leaseId: string
       setConfig(r.config);
       setInvoices(r.invoices);
       setAccounts(r.accounts);
-      if (r.config) { setRules(r.config.rulesJson); setEnabled(r.config.enabled); }
+      if (r.config) {
+        setRules(r.config.rulesJson); setEnabled(r.config.enabled);
+        setTerms(t => ({ ...t, payableTo: r.config?.payableTo ?? '', paymentInstructions: r.config?.paymentInstructions ?? '' }));
+      }
     } catch (err: any) {
       setError(err?.response?.data?.error ?? 'Could not load reimbursement settings.');
     } finally { setLoading(false); }
@@ -85,7 +91,9 @@ export default function UtilityReimbursementPanel({ leaseId }: { leaseId: string
   async function generate() {
     setBusy('generate'); setError(null);
     try {
-      const inv = await createReimbursementInvoice(leaseId, range.from, range.to, excluded);
+      const inv = await createReimbursementInvoice(leaseId, range.from, range.to, excluded, {
+        dueDate: terms.dueDate || null, payableTo: terms.payableTo || null, paymentInstructions: terms.paymentInstructions || null,
+      });
       setDraft(null); setExcluded([]);
       await load();
       window.open(`/reimbursements/${inv.id}`, '_blank');
@@ -232,6 +240,20 @@ export default function UtilityReimbursementPanel({ leaseId }: { leaseId: string
                 <p className="text-gray-400">Subtotal <span className="text-white ml-2">{money(draft.subtotal)}</span></p>
                 {draft.creditApplied > 0 && <p className="text-emerald-400">Credit applied <span className="ml-2">−{money(draft.creditApplied)}</span></p>}
                 <p className="text-gray-200 font-semibold">Total due <span className="text-white ml-2">{money(draft.total)}</span></p>
+              </div>
+              <div className="grid gap-2 pt-2 border-t border-white/5" style={{ gridTemplateColumns: '1fr 2fr' }}>
+                <label className="text-xs text-gray-400 space-y-1">
+                  <span>Due date <span className="text-gray-600">(optional — none printed if blank)</span></span>
+                  <input type="date" className={sel} value={terms.dueDate} onChange={e => setTerms(t => ({ ...t, dueDate: e.target.value }))} />
+                </label>
+                <label className="text-xs text-gray-400 space-y-1">
+                  <span>Payable to</span>
+                  <input className={sel} placeholder="e.g. The M.S. Talukder Family 2023 Trust" value={terms.payableTo} onChange={e => setTerms(t => ({ ...t, payableTo: e.target.value }))} />
+                </label>
+                <label className="text-xs text-gray-400 space-y-1" style={{ gridColumn: '1 / -1' }}>
+                  <span>Payment instructions <span className="text-gray-600">(printed only when a due date is set)</span></span>
+                  <textarea className={sel} rows={2} placeholder="Check to the address above, Zelle to …, or pay the way you pay rent." value={terms.paymentInstructions} onChange={e => setTerms(t => ({ ...t, paymentInstructions: e.target.value }))} />
+                </label>
               </div>
               {excluded.length > 0 && (
                 <p className="text-xs text-gray-500">
