@@ -38,7 +38,12 @@ router.put('/lease/:leaseId', async (req, res) => {
   try { res.json(await r.upsertConfig(req.params.leaseId, req.dbUserId!, parsed.data)); } catch (err) { fail(res, err); }
 });
 
-const Range = z.object({ from: z.string().min(10), to: z.string().min(10), exclude: z.array(z.string()).optional() });
+const Terms = z.object({
+  dueDate: z.string().nullable().optional(),
+  payableTo: z.string().nullable().optional(),
+  paymentInstructions: z.string().nullable().optional(),
+});
+const Range = z.object({ from: z.string().min(10), to: z.string().min(10), exclude: z.array(z.string()).optional(), terms: Terms.optional() });
 
 router.post('/lease/:leaseId/preview', async (req, res) => {
   const parsed = Range.safeParse(req.body);
@@ -49,7 +54,7 @@ router.post('/lease/:leaseId/preview', async (req, res) => {
 router.post('/lease/:leaseId/invoices', async (req, res) => {
   const parsed = Range.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Choose a date range.' });
-  try { res.status(201).json(await r.createInvoice(req.params.leaseId, req.dbUserId!, parsed.data.from, parsed.data.to, parsed.data.exclude ?? [])); } catch (err) { fail(res, err); }
+  try { res.status(201).json(await r.createInvoice(req.params.leaseId, req.dbUserId!, parsed.data.from, parsed.data.to, parsed.data.exclude ?? [], parsed.data.terms)); } catch (err) { fail(res, err); }
 });
 
 router.get('/letterhead', async (req, res) => {
@@ -81,6 +86,12 @@ router.patch('/invoices/:id', async (req, res) => {
   const parsed = z.object({ status: z.enum(['DRAFT', 'SENT']), notes: z.string().nullable().optional() }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid update.' });
   try { res.json(await r.setStatus(req.params.id, req.dbUserId!, parsed.data.status, parsed.data.notes)); } catch (err) { fail(res, err); }
+});
+
+router.put('/invoices/:id/terms', async (req, res) => {
+  const parsed = Terms.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid payment terms.' });
+  try { res.json(await r.updateTerms(req.params.id, req.dbUserId!, parsed.data)); } catch (err) { fail(res, err); }
 });
 
 router.delete('/invoices/:id', async (req, res) => {

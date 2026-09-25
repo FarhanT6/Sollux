@@ -1698,6 +1698,11 @@ model UtilityReimbursement {
   /// Tenant overpayment carried forward to the next invoice.
   creditBalance Decimal  @default(0) @db.Decimal(10, 2)
   notes         String?
+  /// Defaults for the next invoice's payment terms: whom the tenant makes the
+  /// payment out to, and how to pay. They differ by lease, so they live here
+  /// rather than on the owner's letterhead.
+  payableTo           String?
+  paymentInstructions String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -1720,6 +1725,11 @@ model ReimbursementInvoice {
   /// DRAFT | SENT | PARTIAL | PAID
   status          String   @default("DRAFT")
   notes           String?
+  /// Set by hand, or not at all: an invoice with no due date prints none,
+  /// and no payment-details block.
+  dueDate             DateTime?
+  payableTo           String?
+  paymentInstructions String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

@@ -211,17 +211,33 @@ export async function draftInvoice(leaseId: string, userId: string, fromISO: str
   return { from: fromISO, to: toISO, lines, subtotal, creditAvailable, creditApplied, total: round2(subtotal - creditApplied), alreadyBilled };
 }
 
-export async function createInvoice(leaseId: string, userId: string, fromISO: string, toISO: string, exclude: string[] = []) {
+/** Payment terms the owner sets by hand: a due date (none means the invoice
+ *  prints none), whom to pay, and how. */
+export interface InvoiceTerms { dueDate?: string | null; payableTo?: string | null; paymentInstructions?: string | null }
+
+const cleanTerms = (t: InvoiceTerms | undefined) => ({
+  dueDate: t?.dueDate ? new Date(t.dueDate) : null,
+  payableTo: t?.payableTo?.trim() || null,
+  paymentInstructions: t?.paymentInstructions?.trim() || null,
+});
+
+export async function createInvoice(leaseId: string, userId: string, fromISO: string, toISO: string, exclude: string[] = [], terms?: InvoiceTerms) {
   const draft = await draftInvoice(leaseId, userId, fromISO, toISO, exclude);
   if (draft.lines.length === 0) throw new ReimbursementError('Nothing to bill in that range — no statements, and no flat charges.');
   const config = (await db.utilityReimbursement.findUnique({ where: { leaseId } }))!;
+  const t = cleanTerms(terms);
 
   return db.$transaction(async tx => {
+    // Whom to pay and how are remembered on the lease for the next invoice.
+    if (t.payableTo || t.paymentInstructions) {
+      await tx.utilityReimbursement.update({ where: { id: config.id }, data: { payableTo: t.payableTo, paymentInstructions: t.paymentInstructions } });
+    }
     const invoice = await tx.reimbursementInvoice.create({
       data: {
         reimbursementId: config.id,
         periodStart: new Date(draft.from), periodEnd: new Date(draft.to),
         subtotal: draft.subtotal, creditApplied: draft.creditApplied, total: draft.total,
+        dueDate: t.dueDate, payableTo: t.payableTo, paymentInstructions: t.paymentInstructions,
         lines: {
           create: draft.lines.map(l => ({
             kind: l.kind, category: l.category, label: l.label, statementId: l.statementId,
@@ -306,6 +322,18 @@ export async function recordPayment(invoiceId: string, userId: string, amount: n
 export async function setStatus(invoiceId: string, userId: string, status: 'DRAFT' | 'SENT', notes?: string | null) {
   await getInvoice(invoiceId, userId);
   return db.reimbursementInvoice.update({ where: { id: invoiceId }, data: { status, ...(notes !== undefined ? { notes } : {}) } });
+}
+
+/** The payment terms on an invoice already made, and the lease's defaults with them. */
+export async function updateTerms(invoiceId: string, userId: string, terms: InvoiceTerms) {
+  const invoice = await getInvoice(invoiceId, userId);
+  const t = cleanTerms(terms);
+  return db.$transaction(async tx => {
+    if (t.payableTo || t.paymentInstructions) {
+      await tx.utilityReimbursement.update({ where: { id: invoice.reimbursementId }, data: { payableTo: t.payableTo, paymentInstructions: t.paymentInstructions } });
+    }
+    return tx.reimbursementInvoice.update({ where: { id: invoiceId }, data: t });
+  });
 }
 
 /** Deleting frees its statements to be billed again and returns any credit it consumed. */
