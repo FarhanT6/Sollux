@@ -1521,6 +1521,12 @@ export default function ImportPage() {
       const token = await window.Clerk?.session?.getToken();
       const base  = import.meta.env.VITE_API_URL || '/api';
 
+      // The server pings every 15s while it reads; a stream silent for 90s has
+      // been dropped somewhere, and waiting longer only leaves the spinner up.
+      const controller = new AbortController();
+      let idle: ReturnType<typeof setTimeout> | null = null;
+      const touch = () => { if (idle) clearTimeout(idle); idle = setTimeout(() => controller.abort(), 90000); };
+      touch();
       const response = await fetch(`${base}/import/analyze`, {
         method: 'POST',
         headers: {
@@ -1528,6 +1534,7 @@ export default function ImportPage() {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({ files: filePayloads, method: extractionMethod }),
+        signal: controller.signal,
       });
 
       if (!response.ok || !response.body) throw await badResponseError(response);
@@ -1537,12 +1544,14 @@ export default function ImportPage() {
       let buf     = '';
       let done    = false;
       let counted = 0;
+      let finished = false;
 
       // Switch to review immediately so cards appear as they stream in
       setStage('review');
 
       while (!done) {
         const { value, done: streamDone } = await reader.read();
+        touch();
         done = streamDone;
         buf += decoder.decode(value ?? new Uint8Array(), { stream: !streamDone });
 
@@ -1563,6 +1572,7 @@ export default function ImportPage() {
               fileData: dataByName[event.filename] ?? '',
             }]);
           } else if (event.type === 'done') {
+            finished = true;
             setProperties(event.properties);
             setProgress('');
           } else if (event.type === 'error') {
@@ -1571,9 +1581,15 @@ export default function ImportPage() {
           }
         }
       }
+      if (idle) clearTimeout(idle);
+      if (!finished) {
+        setProgress(`The connection closed after ${counted} of ${files.length} file${files.length === 1 ? '' : 's'} — ${counted ? 'review the ones read, and ' : ''}try the rest again.`);
+      }
     } catch (err: any) {
       console.error(err);
-      const reason = err instanceof TypeError
+      const reason = err?.name === 'AbortError'
+        ? 'The server stopped answering while reading the file (no response for 90 seconds). Try again; if it keeps happening, switch to Free mode for this file.'
+        : err instanceof TypeError
         ? 'Could not reach the server — check your connection, or it may be restarting; try again in a minute.'
         : (err?.message || 'Please try again.');
       setProgress(`Error analyzing files. ${reason}`);
