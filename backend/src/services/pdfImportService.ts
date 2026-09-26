@@ -8,6 +8,7 @@
 import fs from 'fs';
 import path from 'path';
 import Anthropic from '@anthropic-ai/sdk';
+import { askClaude, jsonIn } from '../ai/models';
 import { providersLookAlike } from './providerMatch';
 import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';
@@ -1241,18 +1242,16 @@ async function extractWithClaude(pdfBuffer: Buffer, filename: string): Promise<E
   const image = imageMediaType(pdfBuffer);
   if (image) {
     console.log(`[PDFImport] ${filename}: ${image} ${Math.round(pdfBuffer.length / 1024)}KB`);
-    const response = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 4096,
+    const { text: raw } = await askClaude(anthropic, {
+      label: filename, maxTokens: 4096, check: billCheck,
       messages: [{ role: 'user', content: [
         { type: 'image', source: { type: 'base64', media_type: image, data: pdfBuffer.toString('base64') } },
         { type: 'text', text: EXTRACTION_PROMPT },
       ] }],
     });
-    const raw = response.content[0].type === 'text' ? response.content[0].text : '';
-    const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error(`Claude returned no JSON for ${filename}. Response (first 400 chars): ${raw.slice(0, 400)}`);
-    return normaliseExtracted(JSON.parse(jsonMatch[0]), filename);
+    const parsed = jsonIn(raw);
+    if (!parsed) throw new Error(`Claude returned no JSON for ${filename}. Response (first 400 chars): ${raw.slice(0, 400)}`);
+    return normaliseExtracted(parsed, filename);
   }
 
   const rejection = pdfRejectionReason(pdfBuffer);
@@ -1286,21 +1285,15 @@ async function extractWithClaude(pdfBuffer: Buffer, filename: string): Promise<E
     { type: 'text', text: EXTRACTION_PROMPT },
   ];
 
-  const response = await anthropic.messages.create({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 4096,
-    messages: [{ role: 'user', content }],
-  });
+  // Sonnet first; Opus when Sonnet's reading is unusable or does not add up.
+  const { text: raw } = await askClaude(anthropic, { label: filename, maxTokens: 4096, check: billCheck, messages: [{ role: 'user', content }] });
 
-  const raw = response.content[0].type === 'text' ? response.content[0].text : '';
-
-  // Extract JSON object — Claude may include explanation text or markdown fences.
-  // Grab the first {...} block regardless of surrounding text.
-  const jsonMatch = raw.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
+  // Claude may include explanation text or markdown fences around the JSON.
+  const parsed = jsonIn(raw);
+  if (!parsed) {
     throw new Error(`Claude returned no JSON. Response (first 400 chars): ${raw.slice(0, 400)}`);
   }
-  return normaliseExtracted(JSON.parse(jsonMatch[0]), filename);
+  return normaliseExtracted(parsed, filename);
 }
 
 /**
@@ -1317,15 +1310,34 @@ async function transcribeWithClaude(pdfBuffer: Buffer, filename: string): Promis
   if (headerAt > 0) pdfBuffer = pdfBuffer.subarray(headerAt);
   pdfBuffer = await trimPdfForClaude(pdfBuffer, filename);
   console.log(`[PDFImport] ${filename}: no text layer — transcribing`);
-  const response = await anthropic.messages.create({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 8192,
+  const { text } = await askClaude(anthropic, {
+    label: `${filename} (transcript)`, maxTokens: 8192,
+    check: t => (t.replace(/\s/g, '').length < 100 ? 'transcript came back nearly empty' : null),
     messages: [{ role: 'user', content: [
       { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfBuffer.toString('base64') } } as Anthropic.DocumentBlockParam,
       { type: 'text', text: 'Transcribe every line of text on this document exactly as printed, top to bottom and left to right, one printed line per output line, keeping each table row on one line with its figures. Include every dollar amount, date, label and number. Output the text only — no commentary, no markdown.' },
     ] }],
   });
-  return response.content.map(c => (c.type === 'text' ? c.text : '')).join('\n');
+  return text;
+}
+
+/**
+ * Whether a bill as read is worth keeping, or should go to the stronger
+ * model: it must be JSON, a bill must carry some amount, and when the bill
+ * itemises its charges the lines must come to one of its own totals.
+ */
+export function billCheck(text: string): string | null {
+  const d = jsonIn(text);
+  if (!d) return 'no JSON in the answer';
+  const isBill = !d.documentKind || d.documentKind === 'bill';
+  const amounts = [d.amountDue, d.currentCharges, d.statedTotalDue].filter((v: unknown) => typeof v === 'number') as number[];
+  if (isBill && !amounts.length) return 'no amount read from a bill';
+  const lines = d.chargeBreakdown && typeof d.chargeBreakdown === 'object' ? Object.values(d.chargeBreakdown).filter((v): v is number => typeof v === 'number') : [];
+  if (isBill && lines.length >= 2 && amounts.length) {
+    const sum = lines.reduce((a, b) => a + b, 0);
+    if (!amounts.some(a => Math.abs(a - sum) <= 1)) return `itemised charges (${sum.toFixed(2)}) match none of the bill's totals`;
+  }
+  return null;
 }
 
 /** True when the PDF's text layer is too thin to have read the bill from. */

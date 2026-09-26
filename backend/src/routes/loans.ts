@@ -6,6 +6,9 @@ import { attachDbUser } from '../middleware/requireAuth';
 import { calculateCurrentBalance, buildAmortizationSchedule } from '../lib/amortization';
 import { encryptOptional, decryptOptional } from '../crypto/encrypt';
 import { syncLoanFromComponents, serializeLoanComponent } from '../services/loanComponents';
+import { readDocument } from '../services/documentReader';
+import { trackerMonth, trackerYear } from '../services/loanTracker';
+import { rowsFromCsv, matchRows, loansForMatch, applyRow, cleanRow, PAYMENT_METHODS, type SheetRow } from '../services/loanPaymentDetails';
 
 const router = Router();
 router.use(attachDbUser);
@@ -75,6 +78,14 @@ const LoanSchema = z.object({
   isActive: z.boolean().default(true),
   // The owner's account this loan is usually paid from (pay planner).
   payFromBankAccountId: z.string().optional().nullable(),
+  // How the lender gets paid.
+  paymentMethods: z.array(z.enum(PAYMENT_METHODS)).optional(),
+  paymentInstructions: z.string().optional().nullable(),
+  mailingAddress: z.string().optional().nullable(),
+  payeeBankName: z.string().optional().nullable(),
+  // Last four only — anything longer is cut before it is stored.
+  payeeAccountLast4: z.string().optional().nullable().transform(v => (v ? v.replace(/[^0-9A-Za-z]/g, '').slice(-4) || null : v)),
+  paymentUrl: z.string().optional().nullable(),
 });
 
 const LoanPaymentSchema = z.object({
@@ -89,6 +100,9 @@ const LoanPaymentSchema = z.object({
   balanceAfter: z.number().optional().nullable(),
   confirmationNumber: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
+  // The month the payment covers, YYYY-MM; defaults to the month it was paid.
+  periodMonth: z.string().regex(/^\d{4}-\d{2}$/).optional().nullable(),
+  method: z.enum(PAYMENT_METHODS).optional().nullable(),
 });
 
 // Applies a due rate reset for a VARIABLE-rate loan: looks up the
@@ -196,6 +210,70 @@ function computeRemainingInterest(l: {
   const amortization = buildAmortizationSchedule(loanInput, balanceResult, []);
   return amortization.isAmortizing ? amortization.totalInterestRemaining : null;
 }
+
+// ─── Monthly payment tracker ───────────────────────────────
+// GET /api/loans/tracker?month=YYYY-MM&today=YYYY-MM-DD, or ?year=YYYY for
+// twelve months side by side. `today` is the viewer's date, so "late" turns
+// on at their midnight, not the server's.
+router.get('/tracker', async (req, res, next) => {
+  try {
+    const q = z.object({
+      month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+      year: z.coerce.number().int().min(2000).max(2100).optional(),
+      today: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    }).parse(req.query);
+    const today = q.today ?? new Date().toISOString().slice(0, 10);
+    if (q.year) return res.json(await trackerYear(req.dbUserId!, q.year, today));
+    res.json(await trackerMonth(req.dbUserId!, q.month ?? today.slice(0, 7), today));
+  } catch (err) { next(err); }
+});
+
+// ─── Payment details from the owner's loan sheet ───────────
+// Read a sheet (CSV exactly; PDF or photo through Claude), pair each row with
+// an existing loan, and let the owner confirm before anything is written.
+// Rows never create or delete loans.
+const FileSchema = z.object({ name: z.string(), data: z.string() });
+
+router.post('/payment-details/read', async (req, res, next) => {
+  try {
+    const { files } = z.object({ files: z.array(FileSchema).min(1).max(12) }).parse(req.body);
+    let rows: SheetRow[] = [];
+    const docs = [];
+    for (const f of files) {
+      const buf = Buffer.from(f.data, 'base64');
+      if (/\.csv$/i.test(f.name) || (!buf.includes('%PDF-') && /^[\x09\x0a\x0d\x20-\x7e\u00a0-\uffff]*$/.test(buf.subarray(0, 2000).toString('utf8')) && buf.subarray(0, 2000).toString('utf8').includes(','))) {
+        rows.push(...rowsFromCsv(buf.toString('utf8')));
+      } else docs.push(f);
+    }
+    if (docs.length) {
+      const { fields } = await readDocument('loan_sheet', docs, req.dbUserId!);
+      rows.push(...(fields.loans as SheetRow[]));
+    }
+    if (!rows.length) return res.status(422).json({ error: 'No loan rows were found in the sheet.' });
+    const loans = await loansForMatch(req.dbUserId!);
+    const matches = matchRows(rows, loans);
+    res.json({
+      rows: rows.map((row, i) => ({ row, loanId: matches[i] })),
+      loans: loans.map(l => ({ id: l.id, lender: l.lender, property: l.propertyNickname || l.propertyAddress, monthlyPayment: l.monthlyPayment, accountLast4: l.accountLast4 })),
+    });
+  } catch (err) { next(err); }
+});
+
+router.post('/payment-details/apply', async (req, res, next) => {
+  try {
+    const { items } = z.object({ items: z.array(z.object({ loanId: z.string(), row: z.record(z.unknown()) })).max(200) }).parse(req.body);
+    const seen = new Set<string>();
+    let updated = 0;
+    for (const it of items) {
+      if (seen.has(it.loanId)) return res.status(400).json({ error: 'Two rows point at the same loan — pick one.' });
+      seen.add(it.loanId);
+      // The confirmed row is cleaned again server-side; nothing is trusted as sent.
+      const row = cleanRow({ ...it.row, paymentMethod: (it.row as any).paymentInstructions, payeeAccount: (it.row as any).payeeAccountLast4 });
+      if (row && (await applyRow(req.dbUserId!, it.loanId, row))) updated++;
+    }
+    res.json({ updated });
+  } catch (err) { next(err); }
+});
 
 router.get('/:id', async (req, res, next) => {
   try {
@@ -462,8 +540,10 @@ router.post('/:id/payments', async (req, res, next) => {
   try {
     const loan = await db.loan.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
     if (!loan) return res.status(404).json({ error: 'Loan not found' });
-    const data = LoanPaymentSchema.parse(req.body);
-    const payment = await db.loanPayment.create({ data: { ...data, loanId: req.params.id } });
+    const { periodMonth, ...data } = LoanPaymentSchema.parse(req.body);
+    const payment = await db.loanPayment.create({
+      data: { ...data, loanId: req.params.id, ...(periodMonth ? { periodDate: new Date(`${periodMonth}-01T00:00:00.000Z`) } : {}) },
+    });
     res.status(201).json(serializeLoanPayment(payment));
   } catch (err) { next(err); }
 });

@@ -9,6 +9,7 @@ import { format, addMonths } from 'date-fns';
 import { fmtDate } from '../lib/date';
 import { projectLoanBalance } from '../lib/loanMath';
 import LoanComponentsPanel from '../components/LoanComponentsPanel';
+import HowPaidPanel from '../components/loans/HowPaidPanel';
 
 const money = (n: number | null | undefined) =>
   n == null ? '—' : n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
@@ -895,6 +896,8 @@ export default function LoanDetailPage() {
           )}
         </div>
       </div>
+
+      <HowPaidPanel loan={loan} onSave={updated => setLoan(updated)} />
 
       {/* Payoff progress bar */}
       {originalAmount > 0 && !hasBalanceData && (

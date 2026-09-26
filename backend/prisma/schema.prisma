@@ -1001,6 +1001,14 @@ model Loan {
   // there and only moves to another account when this one cannot cover it.
   payFromBankAccountId      String?
   payFromBankAccount        BankAccount?    @relation("LoanPayFrom", fields: [payFromBankAccountId], references: [id], onDelete: SetNull)
+  // How the lender gets paid: AUTOPAY, ONLINE, CHECK, ZELLE, BANK_DEPOSIT,
+  // CASH, WIRE, DEDUCTED (a broker withholds it), OTHER — often more than one.
+  paymentMethods            String[]        @default([])
+  paymentInstructions       String? // "Deposit to their Chase account", "Monty deducts"
+  mailingAddress            String? // where a mailed check goes
+  payeeBankName             String? // the lender's bank, for deposits and transfers
+  payeeAccountLast4         String? // the lender's account — last four only, never the full number
+  paymentUrl                String? // the servicer's payment website
   createdAt                 DateTime        @default(now())
   updatedAt                 DateTime        @updatedAt
 
@@ -1202,6 +1210,11 @@ model LoanPayment {
   balanceAfter       Decimal?   @db.Decimal(14, 2)
   confirmationNumber String?
   notes              String?
+  // The month this payment covers (first of the month), like rent's
+  // periodDate — a payment sent on the 30th can be for next month. When
+  // null, the month of `date` is the month it covers.
+  periodDate         DateTime?
+  method             String? // AUTOPAY, ONLINE, CHECK, ZELLE, BANK_DEPOSIT, CASH, WIRE, DEDUCTED, OTHER
 
   @@index([loanId, date])
   @@map("loan_payments")

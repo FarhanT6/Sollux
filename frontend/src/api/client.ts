@@ -193,10 +193,46 @@ export const deleteLoan = (id: string) =>
   api.delete(`/loans/${id}`);
 export const getLoanPayments = (loanId: string) =>
   api.get<LoanPayment[]>(`/loans/${loanId}/payments`).then(r => r.data);
-export const createLoanPayment = (loanId: string, data: Partial<LoanPayment>) =>
+export const createLoanPayment = (loanId: string, data: Partial<LoanPayment> & { periodMonth?: string | null }) =>
   api.post<LoanPayment>(`/loans/${loanId}/payments`, data).then(r => r.data);
 export const extendLoan = (id: string, data: { months: number; notes?: string }) =>
   api.post<Loan>(`/loans/${id}/extend`, data).then(r => r.data);
+// Monthly loan-payment tracker — the loans' side of rent collection.
+export type LoanTrackerStatus = 'paid' | 'partial' | 'upcoming' | 'due' | 'late' | 'none';
+interface LoanTrackerBase {
+  loanId: string; lender: string; loanType: string; isPersonal: boolean; property: string; propertyId: string | null;
+  expected: number; dueDay: number | null; gracePeriodDays: number | null;
+  paymentMethods: string[]; paymentInstructions: string | null; mailingAddress: string | null; paymentUrl: string | null; payFrom: string | null;
+}
+export interface LoanTrackerPayment { id: string; loanId: string; date: string; month: string; amount: number; lateFee: number | null; method: string | null; confirmationNumber: string | null; notes: string | null }
+export interface LoanTrackerRow extends LoanTrackerBase {
+  dueDate: string; graceEnds: string; paid: number; remaining: number; lateFees: number; status: LoanTrackerStatus;
+  payments: LoanTrackerPayment[]; lastPayment: { date: string; amount: number } | null;
+}
+export interface LoanTrackerMonth { month: string; rows: LoanTrackerRow[]; totals: { expected: number; paid: number; remaining: number; late: number } }
+export interface LoanTrackerYear {
+  year: number; months: string[];
+  rows: (LoanTrackerBase & { cells: { month: string; expected: number; paid: number; status: LoanTrackerStatus }[]; paidYear: number; lateMonths: number })[];
+}
+export const getLoanTrackerMonth = (month: string, today: string) =>
+  api.get<LoanTrackerMonth>('/loans/tracker', { params: { month, today } }).then(r => r.data);
+export const getLoanTrackerYear = (year: number, today: string) =>
+  api.get<LoanTrackerYear>('/loans/tracker', { params: { year, today } }).then(r => r.data);
+
+// Payment details read from the owner's loan sheet, matched to existing loans.
+export interface LoanSheetRow {
+  lender: string; accountNumber: string | null; paymentAmount: number | null; propertyAddress: string | null;
+  dueDay: number | null; gracePeriodDays: number | null; paymentMethods: string[]; paymentInstructions: string | null;
+  mailingAddress: string | null; payeeBankName: string | null; payeeAccountLast4: string | null; paymentUrl: string | null;
+}
+export interface LoanSheetRead {
+  rows: { row: LoanSheetRow; loanId: string | null }[];
+  loans: { id: string; lender: string; property: string | null; monthlyPayment: number | null; accountLast4: string | null }[];
+}
+export const readLoanPaymentDetails = (files: FilePayload[]) =>
+  api.post<LoanSheetRead>('/loans/payment-details/read', { files }, { timeout: 180000 }).then(r => r.data);
+export const applyLoanPaymentDetails = (items: { loanId: string; row: LoanSheetRow }[]) =>
+  api.post<{ updated: number }>('/loans/payment-details/apply', { items }).then(r => r.data);
 
 // Reconciliation (e.g. a property manager who nets rent, a management fee,
 // and unrelated loan payments together in one monthly statement)

@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { askClaude, jsonIn, needsJson } from '../ai/models';
 import fs from 'fs';
 import path from 'path';
 
@@ -68,9 +69,8 @@ export async function extractLeaseTerms(pdfBuffer: Buffer, filename: string): Pr
 
   console.log(`[LeaseExtract] ${filename}: ${Math.round(pdfBuffer.length / 1024)}KB`);
 
-  const response = await anthropic.messages.create({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 2048,
+  const { text: raw } = await askClaude(anthropic, {
+    label: filename, maxTokens: 2048, check: needsJson,
     messages: [{
       role: 'user',
       content: [
@@ -83,11 +83,8 @@ export async function extractLeaseTerms(pdfBuffer: Buffer, filename: string): Pr
     }],
   });
 
-  const raw = response.content[0].type === 'text' ? response.content[0].text : '';
-  const jsonMatch = raw.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error('Could not read lease terms from that document.');
-
-  const data = JSON.parse(jsonMatch[0]) as ExtractedLeaseTerms;
+  const data = jsonIn(raw) as ExtractedLeaseTerms | null;
+  if (!data) throw new Error('Could not read lease terms from that document.');
   if (!Array.isArray(data.tenantNames)) data.tenantNames = [];
   return data;
 }

@@ -11,14 +11,16 @@ import OutgoingPaymentsPage from './OutgoingPaymentsPage';
 import FeesSummaryPage from './FeesSummaryPage';
 import PaymentsPage from './PaymentsPage';
 import DocumentsPage from './DocumentsPage';
+import LoanPaymentTracker from '../components/loans/LoanPaymentTracker';
 
-type Tab = 'pnl' | 'cashflow' | 'budget' | 'loans' | 'expenses' | 'personal' | 'reconciliation' | 'incoming' | 'outgoing' | 'fees' | 'utility-payments' | 'bills';
+type Tab = 'pnl' | 'cashflow' | 'budget' | 'loans' | 'loan-payments' | 'expenses' | 'personal' | 'reconciliation' | 'incoming' | 'outgoing' | 'fees' | 'utility-payments' | 'bills';
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'pnl',            label: 'P&L'            },
   { key: 'cashflow',       label: 'Cash Flow'      },
   { key: 'budget',         label: 'Budget'         },
   { key: 'loans',          label: 'Loans'          },
+  { key: 'loan-payments',  label: 'Loan Payments'  },
   { key: 'expenses',       label: 'Expenses'       },
   { key: 'reconciliation', label: 'Reconciliation' },
   { key: 'incoming',       label: 'Incoming Payments' },
@@ -41,6 +43,7 @@ export default function FinancesPage() {
     cashflow:       'Rent received against the loans, and against the loans and utilities — per property, per month',
     budget:         'Monthly cash position, rent collection, and delinquency',
     loans:          'Mortgages, HELOCs, and installment plans',
+    'loan-payments': 'Every loan payment month by month — owed, paid, due, in grace or late',
     expenses:       'Operating and capital expenditures across all properties',
     personal:       'Auto loans, insurance, credit cards, and other non-property spending',
     reconciliation: 'Monthly statements from managers/collectors who net rent, fees, and loan payments together',
@@ -79,6 +82,7 @@ export default function FinancesPage() {
         {tab === 'cashflow' && <CashflowPage embedded />}
         {tab === 'budget'   && <BudgetPage embedded />}
         {tab === 'loans'    && <LoansPage embedded />}
+        {tab === 'loan-payments' && <LoanPaymentTracker />}
         {tab === 'expenses' && <ExpensesPage embedded />}
         {tab === 'reconciliation' && <ReconciliationPage embedded />}
         {tab === 'incoming' && <IncomingPaymentsPage embedded />}

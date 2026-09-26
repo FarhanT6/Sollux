@@ -19,7 +19,7 @@ sollux/
 - Workers run separately from the API server: `npm run workers` in `/backend`
 - Gmail OAuth is the fast path for providers without a scraper yet
 - BullMQ queues: `scrape`, `insights`, `notifications`, `gmail`
-- AI insights use `claude-sonnet-4-6` via the Anthropic SDK
+- Claude calls go through `askClaude` in `backend/src/ai/models.ts`: `claude-sonnet-5` first, `claude-opus-5-5` as the fallback when the first answer fails its check or the call errors (env `CLAUDE_MODEL` / `CLAUDE_FALLBACK_MODEL`)
 
 ## Agent workflow (the auditor, the build agent, and PRs)
 Two GitHub Actions keep the app improving without the owner having to describe defects:
