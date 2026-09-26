@@ -12,7 +12,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { imageMediaType, trimPdfForClaude } from './pdfImportService';
 import { matchProperty, type DocumentMatch } from './documentClassifyService';
 
-export type ReadKind = 'citation' | 'tax_bill' | 'transfer_receipt' | 'tax_form';
+export type ReadKind = 'citation' | 'tax_bill' | 'transfer_receipt' | 'tax_form' | 'card_statement';
 
 export interface ReadFile { name: string; data: string } // base64
 
@@ -87,6 +87,34 @@ Return ONLY valid JSON, no markdown:
   "boxes": { "Box 1 Mortgage interest": 12345.67, "Box 2 Outstanding principal": 250000, "Box 10 Property tax": 3456.78, … } — every other numbered box that has a value, labelled as printed; never a TIN,
   "notes": "anything that matters — e.g. a notice's reason — or null"
 }`,
+  card_statement: `This is a credit card statement. Read every page, including every transaction line.
+
+NEVER return a full card number — only its last four digits.
+
+Return ONLY valid JSON, no markdown:
+{
+  "issuer": "Chase, American Express, Capital One, Citi, Discover, Bank of America, Wells Fargo, US Bank, Barclays, …",
+  "cardName": "the product name if printed (Sapphire Preferred, Blue Cash Everyday, Venture X), or null",
+  "network": "Visa | Mastercard | American Express | Discover | null",
+  "last4": "last 4 digits of the account / card number",
+  "cardholderName": "the primary cardholder",
+  "periodStart": "YYYY-MM-DD opening date of the billing period",
+  "closingDate": "YYYY-MM-DD closing / statement date",
+  "dueDate": "YYYY-MM-DD payment due date",
+  "previousBalance": number, "paymentsCredits": number — payments and other credits as a positive number,
+  "purchases": number, "balanceTransfers": number, "cashAdvances": number, "feesCharged": number, "interestCharged": number,
+  "newBalance": number, "minimumPayment": number,
+  "creditLimit": number or null, "cashAdvanceLimit": number or null, "availableCredit": number or null,
+  "purchaseApr": number or null — percent, e.g. 24.99, "cashAdvanceApr": number or null, "balanceTransferApr": number or null, "penaltyApr": number or null,
+  "introApr": number or null — a promotional rate in effect, "introAprType": "PURCHASE | BALANCE_TRANSFER | BOTH | null", "introAprEndDate": "YYYY-MM-DD or null",
+  "daysInCycle": number or null,
+  "rewardsProgram": "e.g. Chase Ultimate Rewards, Membership Rewards, or null", "rewardsType": "POINTS | MILES | CASHBACK | null",
+  "rewardsEarned": number or null — earned this period, "rewardsBalance": number or null — total available,
+  "minPayoffMonths": number or null, "minPayoffTotal": number or null — from the 'minimum payment warning' box,
+  "authorizedUsers": [{ "name": "…", "last4": "1234" }],
+  "transactions": [{ "date": "YYYY-MM-DD transaction date", "postDate": "YYYY-MM-DD or null", "description": "as printed", "merchant": "clean merchant name", "amount": number — positive for a charge, negative for a payment or credit, "kind": "PURCHASE | PAYMENT | CREDIT | FEE | INTEREST | CASH_ADVANCE | BALANCE_TRANSFER", "category": "Groceries | Dining | Gas | Travel | Shopping | Utilities | Home improvement | Insurance | Medical | Subscriptions | Entertainment | Services | Fees & interest | Other", "cardholder": "name when the statement groups by cardholder, else null" }]
+}
+Transaction dates without a year take the year of the billing period (a December charge on a January statement is the prior year).`,
   transfer_receipt: `This is a receipt or confirmation for money sent abroad: a bank wire, Remitly, Wise, Western Union, Xoom or similar. Read every page.
 
 Return ONLY valid JSON, no markdown:
@@ -135,7 +163,8 @@ export async function readDocument(kind: ReadKind, files: ReadFile[], userId: st
 
   const res = await anthropic().messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 4096,
+    // A statement lists every transaction; it needs room.
+    max_tokens: kind === 'card_statement' ? 32000 : 4096,
     messages: [{ role: 'user', content }],
   });
   const raw = res.content.map(c => (c.type === 'text' ? c.text : '')).join('');
@@ -183,6 +212,31 @@ export function shape(kind: ReadKind, d: any): Record<string, any> {
       fineAmount: num(d.fineAmount) ?? (summed > 0 ? Number(summed.toFixed(2)) : null),
       escalation: str(d.escalation), violations,
       contactName: str(d.contactName), contactPhone: str(d.contactPhone), contactEmail: str(d.contactEmail), notes: str(d.notes),
+    };
+  }
+  if (kind === 'card_statement') {
+    const last4 = typeof d.last4 === 'string' || typeof d.last4 === 'number' ? String(d.last4).replace(/\D/g, '').slice(-4) : null;
+    const kinds = ['PURCHASE', 'PAYMENT', 'CREDIT', 'FEE', 'INTEREST', 'CASH_ADVANCE', 'BALANCE_TRANSFER'];
+    const txns = Array.isArray(d.transactions) ? d.transactions.map((t: any) => {
+      const amount = num(t?.amount);
+      const kind = kinds.includes(t?.kind) ? t.kind : amount != null && amount < 0 ? 'CREDIT' : 'PURCHASE';
+      // Payments and credits reduce the balance: negative, whatever sign came back.
+      const signed = amount == null ? null : ['PAYMENT', 'CREDIT'].includes(kind) ? -Math.abs(amount) : Math.abs(amount);
+      return { date: day(t?.date), postDate: day(t?.postDate), description: str(t?.description) ? scrubTin(String(t.description)) : null, merchant: str(t?.merchant), amount: signed, kind, category: str(t?.category), cardholder: str(t?.cardholder) };
+    }).filter((t: any) => t.date && t.description && t.amount != null) : [];
+    const users = Array.isArray(d.authorizedUsers) ? d.authorizedUsers.map((u: any) => ({ name: str(u?.name), last4: u?.last4 ? String(u.last4).replace(/\D/g, '').slice(-4) : null })).filter((u: any) => u.name) : [];
+    const pos = (v: unknown) => { const n = num(v); return n == null ? null : Math.abs(n); };
+    return {
+      issuer: str(d.issuer), cardName: str(d.cardName), network: str(d.network), last4: last4 && last4.length === 4 ? last4 : null, cardholderName: str(d.cardholderName),
+      periodStart: day(d.periodStart), closingDate: day(d.closingDate), dueDate: day(d.dueDate),
+      previousBalance: num(d.previousBalance), paymentsCredits: pos(d.paymentsCredits), purchases: pos(d.purchases), balanceTransfers: pos(d.balanceTransfers),
+      cashAdvances: pos(d.cashAdvances), feesCharged: pos(d.feesCharged), interestCharged: pos(d.interestCharged), newBalance: num(d.newBalance), minimumPayment: pos(d.minimumPayment),
+      creditLimit: pos(d.creditLimit), cashAdvanceLimit: pos(d.cashAdvanceLimit), availableCredit: num(d.availableCredit),
+      purchaseApr: pos(d.purchaseApr), cashAdvanceApr: pos(d.cashAdvanceApr), balanceTransferApr: pos(d.balanceTransferApr), penaltyApr: pos(d.penaltyApr),
+      introApr: num(d.introApr), introAprType: ['PURCHASE', 'BALANCE_TRANSFER', 'BOTH'].includes(d.introAprType) ? d.introAprType : null, introAprEndDate: day(d.introAprEndDate),
+      daysInCycle: num(d.daysInCycle), rewardsProgram: str(d.rewardsProgram), rewardsType: ['POINTS', 'MILES', 'CASHBACK'].includes(d.rewardsType) ? d.rewardsType : null,
+      rewardsEarned: num(d.rewardsEarned), rewardsBalance: num(d.rewardsBalance), minPayoffMonths: num(d.minPayoffMonths), minPayoffTotal: num(d.minPayoffTotal),
+      authorizedUsers: users, transactions: txns,
     };
   }
   if (kind === 'tax_form') {

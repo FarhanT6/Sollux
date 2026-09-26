@@ -361,6 +361,60 @@ export const taxDocUrl = (id: string, n = 0) => api.get<{ url: string }>(`/tax-d
 export const createTaxPayment = (data: Record<string, any>) => api.post<TaxPay>('/tax-documents/payments', data).then(r => r.data);
 export const deleteTaxPayment = (id: string) => api.delete(`/tax-documents/payments/${id}`);
 
+// Personal finance: credit cards
+export interface CardPosition {
+  balance: number; balanceSource: 'ENTERED' | 'STATEMENT' | 'NONE'; limit: number | null; available: number | null; utilization: number | null;
+  apr: number | null; introActive: boolean; promoEndsInDays: number | null; monthlyInterest: number;
+  statementStatus: 'PAID_IN_FULL' | 'MINIMUM_MET' | 'DUE' | 'PAST_DUE' | 'NO_BALANCE' | null; statementRemaining: number; minimumRemaining: number; minimumPayment: number;
+  paidSinceClose: number; latestStatementId: string | null; latestClosingDate: string | null; nextDueDate: string | null; nextClosingDate: string | null;
+  nextAnnualFee: string | null; rewardsBalance: number | null; rewardsValue: number | null; interestYtd: number; feesYtd: number; purchasesYtd: number;
+}
+export interface CreditCardT {
+  id: string; name: string; issuer?: string | null; network?: string | null; last4?: string | null; cardholderName?: string | null; isBusiness: boolean;
+  propertyId?: string | null; bankAccountId?: string | null; status: 'ACTIVE' | 'FROZEN' | 'CLOSED'; openedDate?: string | null; closedDate?: string | null;
+  expiration?: string | null; creditLimit?: number | string | null; cashAdvanceLimit?: number | string | null; currentBalance?: number | string | null; balanceAsOf?: string | null;
+  statementClosingDay?: number | null; paymentDueDay?: number | null; purchaseApr?: number | string | null; cashAdvanceApr?: number | string | null;
+  balanceTransferApr?: number | string | null; penaltyApr?: number | string | null; introApr?: number | string | null; introAprType?: string | null; introAprEndDate?: string | null;
+  annualFee?: number | string | null; annualFeeMonth?: number | null; foreignTransactionFee?: number | string | null; lateFee?: number | string | null;
+  balanceTransferFee?: number | string | null; cashAdvanceFee?: number | string | null; rewardsProgram?: string | null; rewardsType?: string | null;
+  rewardsBalance?: number | string | null; rewardsCentsPerPoint?: number | string | null; rewardsEarnRates?: string | null;
+  autopay: string; autopayAmount?: number | string | null; autopayFromBankAccountId?: string | null; autopayFromName?: string | null;
+  authorizedUsers?: { name: string; last4?: string | null }[] | null; loginUrl?: string | null; phone?: string | null; notes?: string | null;
+  position: CardPosition; statementCount?: number;
+  statements?: CardStatementT[]; payments?: CardPaymentT[]; spending?: { byCategory: Record<string, number>; byMonth: Record<string, number> };
+}
+export interface CardStatementT {
+  id: string; periodStart?: string | null; closingDate: string; dueDate?: string | null; previousBalance?: number | string | null; paymentsCredits?: number | string | null;
+  purchases?: number | string | null; balanceTransfers?: number | string | null; cashAdvances?: number | string | null; feesCharged?: number | string | null;
+  interestCharged?: number | string | null; newBalance: number | string; minimumPayment?: number | string | null; creditLimit?: number | string | null;
+  availableCredit?: number | string | null; purchaseApr?: number | string | null; rewardsEarned?: number | string | null; rewardsBalance?: number | string | null;
+  minPayoffMonths?: number | null; minPayoffTotal?: number | string | null; transactionCount?: number; hasDocument?: boolean;
+}
+export interface CardPaymentT { id: string; date: string; amount: number | string; fromBankAccountId?: string | null; fromBankAccountName?: string | null; confirmation?: string | null; method?: string | null; notes?: string | null; statementId?: string | null }
+export interface CardTxnT { id: string; date: string; postDate?: string | null; description: string; merchant?: string | null; amount: number | string; kind: string; category?: string | null; cardholder?: string | null; isBusiness: boolean; propertyId?: string | null; expenseId?: string | null; notes?: string | null; statementId?: string | null }
+export interface CardsSummary { cards: number; debt: number; limits: number; available: number; utilization: number | null; monthlyInterest: number; minimumsDue30d: number; pastDue: number; promosEnding60d: number; annualFees: number; rewardsValue: number; interestYtd: number }
+export const getCreditCards = () =>
+  api.get<{ cards: CreditCardT[]; summary: CardsSummary; paymentSourceCards: { id: string; name: string; last4?: string | null; bank?: string | null; cardNetwork?: string | null; cardExpiry?: string | null }[] }>('/credit-cards').then(r => r.data);
+export const getCreditCard = (id: string) => api.get<CreditCardT>(`/credit-cards/${id}`).then(r => r.data);
+export const createCreditCard = (data: Record<string, any>) => api.post<CreditCardT>('/credit-cards', data).then(r => r.data);
+export const createCardFromBankAccount = (bankAccountId: string) => api.post<CreditCardT>(`/credit-cards/from-bank-account/${bankAccountId}`).then(r => r.data);
+export const updateCreditCard = (id: string, data: Record<string, any>) => api.patch<CreditCardT>(`/credit-cards/${id}`, data).then(r => r.data);
+export const deleteCreditCard = (id: string) => api.delete(`/credit-cards/${id}`);
+export const readCardStatement = (files: FilePayload[]) =>
+  api.post<{ fields: Record<string, any>; cardId: string | null; cardName: string | null }>('/credit-cards/read-statement', { files }).then(r => r.data);
+export const saveCardStatement = (cardId: string, body: { statement: Record<string, any>; transactions?: Record<string, any>[]; terms?: Record<string, any>; files?: FilePayload[] }) =>
+  api.post<{ statement: CardStatementT; transactionsAdded: number }>(`/credit-cards/${cardId}/statements`, body).then(r => r.data);
+export const deleteCardStatement = (sid: string) => api.delete(`/credit-cards/statements/${sid}`);
+export const cardStatementUrl = (sid: string, n = 0) => api.get<{ url: string }>(`/credit-cards/statements/${sid}/document/${n}`).then(r => r.data.url);
+export const getCardTransactions = (cardId: string, params: Record<string, string | undefined> = {}) =>
+  api.get<CardTxnT[]>(`/credit-cards/${cardId}/transactions`, { params }).then(r => r.data);
+export const createCardTransaction = (cardId: string, data: Record<string, any>) => api.post<CardTxnT>(`/credit-cards/${cardId}/transactions`, data).then(r => r.data);
+export const updateCardTransaction = (tid: string, data: Record<string, any>) => api.patch<CardTxnT>(`/credit-cards/transactions/${tid}`, data).then(r => r.data);
+export const deleteCardTransaction = (tid: string) => api.delete(`/credit-cards/transactions/${tid}`);
+export const cardTransactionToExpense = (tid: string, data: { propertyId: string; category: string }) => api.post(`/credit-cards/transactions/${tid}/expense`, data).then(r => r.data);
+export const createCardPayment = (cardId: string, data: Record<string, any>) => api.post<CardPaymentT>(`/credit-cards/${cardId}/payments`, data).then(r => r.data);
+export const deleteCardPayment = (pid: string) => api.delete(`/credit-cards/payments/${pid}`);
+
 // Compliance: citations, orders to comply, permits, inspections
 export const getComplianceItems = (params?: { propertyId?: string; status?: string }) =>
   api.get<ComplianceItem[]>('/compliance', { params }).then(r => r.data);

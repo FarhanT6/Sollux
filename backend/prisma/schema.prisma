@@ -1966,3 +1966,163 @@ model TaxPayment {
   @@index([userId, taxYear])
   @@map("tax_payments")
 }
+
+// ─── PERSONAL FINANCE: CREDIT CARDS ──────────────────────
+/// One credit card, as detailed as its issuer's terms: limits, every APR
+/// (with a promotional rate and when it ends), the billing cycle, fees,
+/// rewards, autopay and authorized users. Balances and terms are kept in
+/// step by the newest statement imported. Never the card number: last 4.
+model CreditCard {
+  id                    String    @id @default(cuid())
+  userId                String
+  name                  String
+  issuer                String?
+  /// Visa | Mastercard | American Express | Discover
+  network               String?
+  last4                 String?
+  cardholderName        String?
+  /// A business card; optionally the property or entity it is used for.
+  isBusiness            Boolean   @default(false)
+  propertyId            String?
+  /// The payment-source entry (Settings > bank accounts) for this card, if one exists.
+  bankAccountId         String?
+  /// ACTIVE | FROZEN | CLOSED
+  status                String    @default("ACTIVE")
+  openedDate            DateTime?
+  closedDate            DateTime?
+  /// MM/YY
+  expiration            String?
+  creditLimit           Decimal?  @db.Decimal(12, 2)
+  cashAdvanceLimit      Decimal?  @db.Decimal(12, 2)
+  /// The balance right now, when known more recently than the last statement.
+  currentBalance        Decimal?  @db.Decimal(12, 2)
+  balanceAsOf           DateTime?
+  statementClosingDay   Int?
+  paymentDueDay         Int?
+  purchaseApr           Decimal?  @db.Decimal(6, 3)
+  cashAdvanceApr        Decimal?  @db.Decimal(6, 3)
+  balanceTransferApr    Decimal?  @db.Decimal(6, 3)
+  penaltyApr            Decimal?  @db.Decimal(6, 3)
+  introApr              Decimal?  @db.Decimal(6, 3)
+  /// PURCHASE | BALANCE_TRANSFER | BOTH
+  introAprType          String?
+  introAprEndDate       DateTime?
+  annualFee             Decimal?  @db.Decimal(10, 2)
+  /// 1–12: the month the annual fee posts.
+  annualFeeMonth        Int?
+  /// Percent of each foreign transaction.
+  foreignTransactionFee Decimal?  @db.Decimal(5, 2)
+  lateFee               Decimal?  @db.Decimal(10, 2)
+  balanceTransferFee    Decimal?  @db.Decimal(5, 2)
+  cashAdvanceFee        Decimal?  @db.Decimal(5, 2)
+  rewardsProgram        String?
+  /// POINTS | MILES | CASHBACK
+  rewardsType           String?
+  rewardsBalance        Decimal?  @db.Decimal(14, 2)
+  /// Cents each point or mile is worth (1.0 = a cent; cash back = 100).
+  rewardsCentsPerPoint  Decimal?  @db.Decimal(6, 3)
+  /// Earn rates as the issuer states them ("3x dining, 2x travel, 1x else").
+  rewardsEarnRates      String?
+  /// NONE | MINIMUM | STATEMENT_BALANCE | FULL_BALANCE | FIXED
+  autopay               String    @default("NONE")
+  autopayAmount         Decimal?  @db.Decimal(12, 2)
+  autopayFromBankAccountId String?
+  /// [{ name, last4 }]
+  authorizedUsers       Json?
+  loginUrl              String?
+  phone                 String?
+  notes                 String?
+  sortOrder             Int       @default(0)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  statements   CardStatement[]
+  payments     CardPayment[]
+  transactions CardTransaction[]
+
+  @@index([userId])
+  @@map("credit_cards")
+}
+
+/// A monthly statement, every line of its account summary.
+model CardStatement {
+  id               String     @id @default(cuid())
+  cardId           String
+  card             CreditCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  periodStart      DateTime?
+  closingDate      DateTime
+  dueDate          DateTime?
+  previousBalance  Decimal?   @db.Decimal(12, 2)
+  paymentsCredits  Decimal?   @db.Decimal(12, 2)
+  purchases        Decimal?   @db.Decimal(12, 2)
+  balanceTransfers Decimal?   @db.Decimal(12, 2)
+  cashAdvances     Decimal?   @db.Decimal(12, 2)
+  feesCharged      Decimal?   @db.Decimal(12, 2)
+  interestCharged  Decimal?   @db.Decimal(12, 2)
+  newBalance       Decimal    @db.Decimal(12, 2)
+  minimumPayment   Decimal?   @db.Decimal(12, 2)
+  creditLimit      Decimal?   @db.Decimal(12, 2)
+  availableCredit  Decimal?   @db.Decimal(12, 2)
+  purchaseApr      Decimal?   @db.Decimal(6, 3)
+  cashAdvanceApr   Decimal?   @db.Decimal(6, 3)
+  rewardsEarned    Decimal?   @db.Decimal(14, 2)
+  rewardsBalance   Decimal?   @db.Decimal(14, 2)
+  daysInCycle      Int?
+  /// "If you make only the minimum payment…" — months and total cost.
+  minPayoffMonths  Int?
+  minPayoffTotal   Decimal?   @db.Decimal(12, 2)
+  documents        Json?
+  createdAt        DateTime   @default(now())
+
+  transactions CardTransaction[]
+  payments     CardPayment[]
+
+  @@unique([cardId, closingDate])
+  @@map("card_statements")
+}
+
+model CardPayment {
+  id                String         @id @default(cuid())
+  cardId            String
+  card              CreditCard     @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  statementId       String?
+  statement         CardStatement? @relation(fields: [statementId], references: [id], onDelete: SetNull)
+  date              DateTime
+  amount            Decimal        @db.Decimal(12, 2)
+  fromBankAccountId String?
+  confirmation      String?
+  method            String?
+  notes             String?
+  createdAt         DateTime       @default(now())
+
+  @@index([cardId, date])
+  @@map("card_payments")
+}
+
+/// One line of a statement. A charge for a property can be moved into that
+/// property's expenses (expenseId links the two).
+model CardTransaction {
+  id          String         @id @default(cuid())
+  cardId      String
+  card        CreditCard     @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  statementId String?
+  statement   CardStatement? @relation(fields: [statementId], references: [id], onDelete: SetNull)
+  date        DateTime
+  postDate    DateTime?
+  description String
+  merchant    String?
+  /// Positive for a charge, negative for a payment or credit.
+  amount      Decimal        @db.Decimal(12, 2)
+  /// PURCHASE | PAYMENT | CREDIT | FEE | INTEREST | CASH_ADVANCE | BALANCE_TRANSFER
+  kind        String         @default("PURCHASE")
+  category    String?
+  cardholder  String?
+  isBusiness  Boolean        @default(false)
+  propertyId  String?
+  expenseId   String?
+  notes       String?
+  createdAt   DateTime       @default(now())
+
+  @@index([cardId, date])
+  @@map("card_transactions")
+}
