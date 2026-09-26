@@ -180,7 +180,7 @@ router.get('/:id', async (req, res, next) => {
     if (!property) return res.status(404).json({ error: 'Property not found' });
 
     // Never return encrypted credential fields
-    const utilityAccounts = property.utilityAccounts.map(({ accountNumberEnc, usernameEnc, passwordEnc, ...rest }) => ({
+    const utilityAccounts = property.utilityAccounts.map(({ accountNumberEnc, usernameEnc, passwordEnc, mfaCodeEnc, ...rest }) => ({
       ...rest,
       hasCredentials: !!usernameEnc,
     }));

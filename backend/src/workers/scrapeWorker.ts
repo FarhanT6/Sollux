@@ -3,12 +3,15 @@ import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';
 import { getScraperProvider } from '../scrapers/registry';
+import { runPortalAgent } from '../scrapers/portalAgent';
 import { uploadDocument, buildStatementKey } from '../services/s3Service';
 import { guardWorker } from './redisGuard';
 import { insightQueue, createWorkerConnection, workerTuning } from './queues';
 
 interface ScrapeJobData {
   utilityAccountId: string;
+  /** Pressed Sync: the portal agent runs even if it ran recently. */
+  manual?: boolean;
 }
 
 // Normalise account number for matching (strip dashes/spaces/case)
@@ -32,6 +35,28 @@ const worker = new Worker<ScrapeJobData>(
     if (!account.syncEnabled) {
       console.log(`[ScrapeWorker] Sync disabled for ${utilityAccountId}, skipping`);
       return;
+    }
+
+    // ── No hand-written scraper for this provider: the portal agent ──────
+    // Claude drives a browser through the portal. It costs a few cents a
+    // run, so the 6-hourly schedule only runs it when a bill is likely due
+    // (none in 25 days) and not more than once a day; Sync runs it always.
+    if (!getScraperProvider(account.providerSlug)) {
+      const last = await db.statement.findFirst({ where: { utilityAccountId }, orderBy: { statementDate: 'desc' }, select: { statementDate: true } });
+      const recentBill = last && Date.now() - last.statementDate.getTime() < 25 * 86400000;
+      const ranToday = account.lastAgentRunAt && Date.now() - account.lastAgentRunAt.getTime() < 20 * 3600000;
+      if (!job.data.manual && (recentBill || ranToday)) return;
+      await db.utilityAccount.update({ where: { id: utilityAccountId }, data: { lastSyncStatus: 'PENDING' } });
+      const syncJob = await db.syncJob.create({ data: { utilityAccountId, status: 'PENDING', startedAt: new Date() } });
+      const r = await runPortalAgent(utilityAccountId, { interactive: !!job.data.manual });
+      await db.utilityAccount.update({
+        where: { id: utilityAccountId },
+        data: r.ok ? { lastSyncedAt: new Date(), lastSyncStatus: 'SUCCESS', lastSyncError: null } : { lastSyncStatus: 'FAILED', lastSyncError: r.error ?? 'The portal agent stopped.' },
+      });
+      await db.syncJob.update({ where: { id: syncJob.id }, data: { status: r.ok ? 'SUCCESS' : 'FAILED', completedAt: new Date(), statementsFound: r.filed + r.review, error: r.ok ? null : r.error ?? null } });
+      if (r.filed) await insightQueue.add('generate', { propertyId: account.property.id }, { delay: 2000, attempts: 2 });
+      console.log(`[ScrapeWorker] Portal agent ${account.providerName}: ${r.downloads} downloaded, ${r.filed} filed, ${r.review} to review${r.error ? ` — ${r.error}` : ''}`);
+      return; // never retried automatically: a retry could re-trigger a code or lock the login
     }
 
     // Decrypt credentials for the triggering account

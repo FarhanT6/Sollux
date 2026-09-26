@@ -114,13 +114,14 @@ router.get('/inbox', attachDbUser, async (req, res, next) => {
         where: { userId, outcome: { not: 'skipped' } }, orderBy: { createdAt: 'desc' }, take: 60,
         select: { id: true, fromAddress: true, subject: true, receivedAt: true, outcome: true, detail: true, utilityAccountId: true, importJobId: true, createdAt: true, gmailToken: { select: { email: true } } },
       }),
-      db.driveImportJob.findFirst({ where: { userId, source: 'email' }, orderBy: { startedAt: 'desc' } }),
+      // Bills waiting for a check from the inbox agent or a portal agent run.
+      db.driveImportJob.findFirst({ where: { userId, source: { in: ['email', 'portal'] }, NOT: { needsReviewJson: { equals: [] } } }, orderBy: { startedAt: 'desc' } }),
       db.inboxMessage.groupBy({ by: ['outcome'], where: { userId, createdAt: { gte: new Date(Date.now() - 30 * 24 * 3600 * 1000) } }, _count: true }),
     ]);
     const pending = job ? ((job.needsReviewJson as unknown[]) ?? []).length : 0;
     res.json({
       messages: messages.map(({ gmailToken, ...m }) => ({ ...m, mailbox: gmailToken.email })),
-      lastJob: job ? { id: job.id, finishedAt: job.finishedAt, autoImported: job.autoImported, needsReview: pending, errorLog: job.errorLog } : null,
+      lastJob: job ? { id: job.id, source: job.source, label: job.folderName, finishedAt: job.finishedAt, autoImported: job.autoImported, needsReview: pending, errorLog: job.errorLog } : null,
       last30Days: Object.fromEntries(counts.map(c => [c.outcome, c._count])),
     });
   } catch (err) { next(err); }
@@ -130,7 +131,7 @@ router.get('/inbox', attachDbUser, async (req, res, next) => {
 // that run's review; it stops showing as waiting.
 router.post('/inbox/reviewed/:jobId', attachDbUser, async (req, res, next) => {
   try {
-    const job = await db.driveImportJob.findFirst({ where: { id: req.params.jobId, userId: req.dbUserId!, source: 'email' } });
+    const job = await db.driveImportJob.findFirst({ where: { id: req.params.jobId, userId: req.dbUserId!, source: { in: ['email', 'portal'] } } });
     if (!job) return res.status(404).json({ error: 'Not found' });
     await db.driveImportJob.update({ where: { id: job.id }, data: { needsReviewJson: [] } });
     res.status(204).send();

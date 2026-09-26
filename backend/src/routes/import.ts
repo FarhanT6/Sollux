@@ -62,6 +62,9 @@ router.post('/analyze', async (req: Request, res: Response) => {
   res.flushHeaders();
 
   const send = (data: object) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+  // A comment line every 15 seconds: proxies close a stream that goes quiet
+  // while Claude reads a long file, and the page then waits forever.
+  const keepAlive = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* closed */ } }, 15000);
 
   console.log(`[Import] Streaming analysis of ${files.length} PDF(s) for user ${userId}`);
 
@@ -98,6 +101,7 @@ router.post('/analyze', async (req: Request, res: Response) => {
     const message = err instanceof Error && err.message ? err.message.slice(0, 300) : 'Failed to analyze one or more files';
     send({ type: 'error', message });
   } finally {
+    clearInterval(keepAlive);
     res.end();
   }
 });

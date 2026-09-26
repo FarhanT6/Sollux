@@ -25,7 +25,16 @@ export interface AskOptions {
   check?: (text: string) => string | null;
   /** For log lines: the file or job the call is for. */
   label?: string;
+  /** How hard an always-thinking model thinks. Reading a document needs little. */
+  effort?: 'low' | 'medium' | 'high';
 }
+
+// The SDK waits up to ten minutes per call and retries twice on its own; a
+// bill import sat on "Analyzing" for all of that. A call gets two minutes
+// (three for the stronger fallback) and one retry; then the fallback, then
+// an error on screen.
+const PRIMARY_TIMEOUT_MS = 120_000;
+const FALLBACK_TIMEOUT_MS = 180_000;
 export interface AskResult { text: string; model: string; fellBack: boolean }
 
 /** The request shape each model family accepts. */
@@ -35,7 +44,7 @@ export function paramsFor(model: string, o: AskOptions): Anthropic.MessageCreate
   };
   // Opus 5.5 and Fable always think — thinking can't be turned off, only
   // turned down with effort, and it counts against max_tokens.
-  if (/opus-5-5|fable/.test(model)) return { ...base, max_tokens: o.maxTokens + 16000, output_config: { effort: 'medium' } };
+  if (/opus-5-5|fable/.test(model)) return { ...base, max_tokens: o.maxTokens + 16000, output_config: { effort: o.effort ?? 'low' } };
   // Sonnet 5 and Opus 5 think by default; reading a bill into JSON does not
   // need it, and leaving it on would spend the answer's tokens on reasoning.
   if (/sonnet-5|opus-5/.test(model)) return { ...base, thinking: { type: 'disabled' } };
@@ -45,7 +54,9 @@ export function paramsFor(model: string, o: AskOptions): Anthropic.MessageCreate
 const textOf = (m: Anthropic.Message) => m.content.map(c => (c.type === 'text' ? c.text : '')).join('').trim();
 
 async function once(client: Anthropic, model: string, o: AskOptions): Promise<{ text: string; problem: string | null }> {
-  const res = await client.messages.create(paramsFor(model, o));
+  const started = Date.now();
+  const res = await client.messages.create(paramsFor(model, o), { timeout: model === PRIMARY_MODEL ? PRIMARY_TIMEOUT_MS : FALLBACK_TIMEOUT_MS, maxRetries: 1 });
+  console.log(`[Claude] ${o.label ?? 'request'}: ${model} ${Math.round((Date.now() - started) / 100) / 10}s, ${res.usage.input_tokens} in / ${res.usage.output_tokens} out`);
   const text = textOf(res);
   if (res.stop_reason === 'refusal') return { text, problem: 'refused' };
   if (res.stop_reason === 'max_tokens') return { text, problem: 'cut off at max_tokens' };

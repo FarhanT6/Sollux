@@ -210,6 +210,9 @@ router.post('/stream', attachDbUser, async (req, res) => {
   res.flushHeaders();
 
   const send = (data: object) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+  // Keep proxies from closing a stream that goes quiet while a long file is read.
+  const keepAlive = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* closed */ } }, 15000);
+  res.on('close', () => clearInterval(keepAlive));
 
   try {
     const oauth2Client = await getOAuth2ClientForToken(tokenId, userId);

@@ -565,6 +565,8 @@ export const deleteUtility = (id: string) =>
   api.delete(`/utilities/${id}`);
 export const syncUtility = (id: string) =>
   api.post<{ jobId: string }>(`/utilities/${id}/sync`).then(r => r.data);
+// The verification code a portal sent, for the portal agent waiting on it.
+export const submitPortalCode = (id: string, code: string) => api.post(`/utilities/${id}/portal-code`, { code });
 export const revealUtilityAccountNumber = (id: string) =>
   api.get<{ accountNumber: string | null }>(`/utilities/${id}/account-number`).then(r => r.data);
 export const getUtilityUsername = (id: string) =>
@@ -638,7 +640,7 @@ export const getGmailStatus = () =>
   api.get<{ connected: boolean; accounts: GmailMailbox[] }>('/gmail/status').then(r => r.data);
 export interface InboxActivity {
   messages: { id: string; mailbox: string; fromAddress: string | null; subject: string | null; receivedAt: string | null; outcome: string; detail: string | null; utilityAccountId: string | null; importJobId: string | null; createdAt: string }[];
-  lastJob: { id: string; finishedAt: string | null; autoImported: number; needsReview: number; errorLog: string | null } | null;
+  lastJob: { id: string; source?: string; label?: string | null; finishedAt: string | null; autoImported: number; needsReview: number; errorLog: string | null } | null;
   last30Days: Record<string, number>;
 }
 export const getInboxActivity = () => api.get<InboxActivity>('/gmail/inbox').then(r => r.data);

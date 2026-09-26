@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { submitPortalCode } from '../scrapers/portalAgent';
 import { z } from 'zod';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
@@ -260,7 +261,7 @@ router.get('/', async (req, res, next) => {
     });
 
     // Never return encrypted credential fields
-    const sanitized = accounts.map(({ accountNumberEnc, usernameEnc, passwordEnc, ...rest }) => ({
+    const sanitized = accounts.map(({ accountNumberEnc, usernameEnc, passwordEnc, mfaCodeEnc, ...rest }) => ({
       ...rest,
       hasCredentials: !!usernameEnc,
     }));
@@ -368,7 +369,7 @@ router.get('/:id', async (req, res, next) => {
       },
     });
     if (!account) return res.status(404).json({ error: 'Not found' });
-    const { accountNumberEnc, usernameEnc, passwordEnc, ...rest } = account;
+    const { accountNumberEnc, usernameEnc, passwordEnc, mfaCodeEnc, ...rest } = account;
     res.json({ ...rest, hasCredentials: !!usernameEnc });
   } catch (err) { next(err); }
 });
@@ -438,7 +439,7 @@ router.post('/:id/sync', async (req, res, next) => {
       return res.json({ message: 'No credentials set up' });
     }
 
-    const job = await scrapeQueue.add('scrape', { utilityAccountId: account.id }, {
+    const job = await scrapeQueue.add('scrape', { utilityAccountId: account.id, manual: true }, {
       attempts: 3,
       backoff: { type: 'exponential', delay: 120000 },
     });
@@ -487,7 +488,7 @@ router.patch('/:id', async (req, res, next) => {
       else if (existing.escrowLoanId) await unmarkEscrowedStatements(updated.id);
     }
 
-    const { accountNumberEnc, usernameEnc, passwordEnc, ...sanitized } = updated;
+    const { accountNumberEnc, usernameEnc, passwordEnc, mfaCodeEnc, ...sanitized } = updated;
     res.json(sanitized);
   } catch (err) {
     next(err);
@@ -691,6 +692,20 @@ router.delete('/:id/loan', async (req, res, next) => {
       where: { utilityAccountId: req.params.id },
       data: { utilityAccountId: null },
     });
+    res.status(204).send();
+  } catch (err) { next(err); }
+});
+
+// POST /api/utilities/:id/portal-code — the verification code a portal sent,
+// for the portal agent waiting on it. Stored encrypted; cleared once typed.
+router.post('/:id/portal-code', async (req, res, next) => {
+  try {
+    const code = String(req.body?.code ?? '').trim();
+    if (!/^[A-Za-z0-9-]{3,12}$/.test(code)) return res.status(400).json({ error: 'Enter the code the provider sent.' });
+    const account = await db.utilityAccount.findFirst({ where: { id: req.params.id, property: { userId: req.dbUserId! } }, select: { id: true, mfaPrompt: true } });
+    if (!account) return res.status(404).json({ error: 'Utility account not found' });
+    if (!account.mfaPrompt) return res.status(409).json({ error: 'Nothing is waiting for a code on this account.' });
+    await submitPortalCode(account.id, code);
     res.status(204).send();
   } catch (err) { next(err); }
 });

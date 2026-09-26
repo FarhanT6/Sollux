@@ -42,6 +42,7 @@ html[data-theme="light"] [class~="divide-white/5"] > * + * { border-color: #ede8
 html[data-theme="light"] [class~="placeholder-gray-600"]::placeholder { color: #8a8f98 !important; }
 html[data-theme="light"] [class~="text-[#F5A623]"] { color: #b8674a !important; }
 html[data-theme="light"] [class~="text-[#F5A623]/80"] { color: #b8674a !important; }
+html[data-theme="light"] [class~="text-amber-100"] { color: #92400e !important; }
 html[data-theme="light"] [class~="text-amber-200"] { color: #92400e !important; }
 html[data-theme="light"] [class~="text-amber-300"] { color: #b45309 !important; }
 html[data-theme="light"] [class~="text-amber-400"] { color: #b45309 !important; }
