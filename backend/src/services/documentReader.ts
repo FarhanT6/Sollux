@@ -11,8 +11,9 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { imageMediaType, trimPdfForClaude } from './pdfImportService';
 import { matchProperty, type DocumentMatch } from './documentClassifyService';
+import { cleanRow } from './loanPaymentDetails';
 
-export type ReadKind = 'citation' | 'tax_bill' | 'transfer_receipt' | 'tax_form' | 'card_statement';
+export type ReadKind = 'citation' | 'tax_bill' | 'transfer_receipt' | 'tax_form' | 'card_statement' | 'loan_sheet';
 
 export interface ReadFile { name: string; data: string } // base64
 
@@ -115,6 +116,25 @@ Return ONLY valid JSON, no markdown:
   "transactions": [{ "date": "YYYY-MM-DD transaction date", "postDate": "YYYY-MM-DD or null", "description": "as printed", "merchant": "clean merchant name", "amount": number — positive for a charge, negative for a payment or credit, "kind": "PURCHASE | PAYMENT | CREDIT | FEE | INTEREST | CASH_ADVANCE | BALANCE_TRANSFER", "category": "Groceries | Dining | Gas | Travel | Shopping | Utilities | Home improvement | Insurance | Medical | Subscriptions | Entertainment | Services | Fees & interest | Other", "cardholder": "name when the statement groups by cardholder, else null" }]
 }
 Transaction dates without a year take the year of the billing period (a December charge on a January statement is the prior year).`,
+  loan_sheet: `This is the owner's list of their loans and mortgages — a table with one loan per row. Read every row, in order, exactly as typed.
+Never return anything from a login, username, password or "Login Info" column — leave it out completely.
+
+Return ONLY valid JSON, no markdown:
+{
+  "loans": [{
+    "lender": "the Mortgagee / lender column as typed",
+    "accountNumber": "the Account No. cell as typed, or null",
+    "paymentAmount": number or null — the monthly payment including escrow,
+    "propertyAddress": "the Property Address cell, or null",
+    "dueDay": "the Due Date cell as typed, e.g. '1', '15', 'Recorded on 5th', or null",
+    "gracePeriodDays": "the Grace Period cell as typed, e.g. '16', '25/30', or null",
+    "payeeAccount": "the lender's own bank account number cell (Their Bank Account Number), or null",
+    "mailingAddress": "the Mailing Address cell as typed, or null",
+    "paymentMethod": "the Payment Method cell as typed, or null",
+    "paymentUrl": "a payment website typed anywhere in the row, or null"
+  }]
+}
+Skip total and count rows. Keep rows for the same lender separate.`,
   transfer_receipt: `This is a receipt or confirmation for money sent abroad: a bank wire, Remitly, Wise, Western Union, Xoom or similar. Read every page.
 
 Return ONLY valid JSON, no markdown:
@@ -164,7 +184,7 @@ export async function readDocument(kind: ReadKind, files: ReadFile[], userId: st
   const res = await anthropic().messages.create({
     model: 'claude-sonnet-4-6',
     // A statement lists every transaction; it needs room.
-    max_tokens: kind === 'card_statement' ? 32000 : 4096,
+    max_tokens: kind === 'card_statement' ? 32000 : kind === 'loan_sheet' ? 16000 : 4096,
     messages: [{ role: 'user', content }],
   });
   const raw = res.content.map(c => (c.type === 'text' ? c.text : '')).join('');
@@ -238,6 +258,10 @@ export function shape(kind: ReadKind, d: any): Record<string, any> {
       rewardsEarned: num(d.rewardsEarned), rewardsBalance: num(d.rewardsBalance), minPayoffMonths: num(d.minPayoffMonths), minPayoffTotal: num(d.minPayoffTotal),
       authorizedUsers: users, transactions: txns,
     };
+  }
+  if (kind === 'loan_sheet') {
+    const rows = Array.isArray(d.loans) ? d.loans : [];
+    return { loans: rows.map((r: any) => cleanRow(r ?? {})).filter(Boolean) };
   }
   if (kind === 'tax_form') {
     const year = num(d.taxYear);

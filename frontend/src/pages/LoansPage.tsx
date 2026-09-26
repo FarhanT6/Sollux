@@ -4,6 +4,7 @@ import { getLoans, createLoan, updateLoan, deleteLoan, getProperties } from '../
 import type { Loan, Property, LoanType } from '../types';
 import { format } from 'date-fns';
 import { projectLoanBalance } from '../lib/loanMath';
+import PaymentDetailsImport from '../components/loans/PaymentDetailsImport';
 
 const money = (n: number | string | undefined) => n == null ? '—' : Number(n).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 // To the cent, for a figure that is checked against the rows it adds up.
@@ -154,6 +155,8 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
   const [propertyFilter, setPropertyFilter] = useState('');
   const [sortBy, setSortBy] = useState<'lender' | 'balance' | 'maturity' | 'rate'>('lender');
   const [showForm, setShowForm] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [importNote, setImportNote] = useState<string | null>(null);
   const [form, setForm] = useState({
     propertyId: '', loanType: 'MORTGAGE' as LoanType,
     lender: '', accountNumber: '', originalAmount: '', interestRate: '',
@@ -246,9 +249,12 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
             <h1 className="text-xl font-semibold text-white">Loans & Mortgages</h1>
             <p className="text-sm text-gray-400 mt-0.5">{loans.filter(l => l.isActive).length} active · {money(totalDebt)} total balance · {money(monthlyDebt)}/mo</p>
           </div>
-          <button onClick={() => setShowForm(v => !v)} className="btn-primary text-sm">
-            {showForm ? 'Cancel' : '+ Add Loan'}
-          </button>
+          <div className="flex gap-2">
+            <button onClick={() => setShowImport(v => !v)} className="btn text-sm">Import payment details</button>
+            <button onClick={() => setShowForm(v => !v)} className="btn-primary text-sm">
+              {showForm ? 'Cancel' : '+ Add Loan'}
+            </button>
+          </div>
         </div>
       ) : (
         <div className="mb-4">
@@ -304,11 +310,20 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
                 <option value="rate">Sort: Rate (high–low)</option>
               </select>
             </div>
+            <button onClick={() => setShowImport(v => !v)} className="btn text-xs">Import payment details</button>
             <button onClick={() => setShowForm(v => !v)} className="btn text-xs">
               {showForm ? 'Cancel' : '+ Add loan'}
             </button>
           </div>
         </div>
+      )}
+
+      {importNote && <p className="text-xs text-emerald-400 mb-3">{importNote}</p>}
+      {showImport && (
+        <PaymentDetailsImport onDone={n => {
+          setShowImport(false);
+          if (n != null) { setImportNote(`Payment details filed on ${n} loan${n === 1 ? '' : 's'}.`); loadLoans(); }
+        }} />
       )}
 
       {showForm && (

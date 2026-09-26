@@ -197,6 +197,20 @@ export const createLoanPayment = (loanId: string, data: Partial<LoanPayment>) =>
   api.post<LoanPayment>(`/loans/${loanId}/payments`, data).then(r => r.data);
 export const extendLoan = (id: string, data: { months: number; notes?: string }) =>
   api.post<Loan>(`/loans/${id}/extend`, data).then(r => r.data);
+// Payment details read from the owner's loan sheet, matched to existing loans.
+export interface LoanSheetRow {
+  lender: string; accountNumber: string | null; paymentAmount: number | null; propertyAddress: string | null;
+  dueDay: number | null; gracePeriodDays: number | null; paymentMethods: string[]; paymentInstructions: string | null;
+  mailingAddress: string | null; payeeBankName: string | null; payeeAccountLast4: string | null; paymentUrl: string | null;
+}
+export interface LoanSheetRead {
+  rows: { row: LoanSheetRow; loanId: string | null }[];
+  loans: { id: string; lender: string; property: string | null; monthlyPayment: number | null; accountLast4: string | null }[];
+}
+export const readLoanPaymentDetails = (files: FilePayload[]) =>
+  api.post<LoanSheetRead>('/loans/payment-details/read', { files }, { timeout: 180000 }).then(r => r.data);
+export const applyLoanPaymentDetails = (items: { loanId: string; row: LoanSheetRow }[]) =>
+  api.post<{ updated: number }>('/loans/payment-details/apply', { items }).then(r => r.data);
 
 // Reconciliation (e.g. a property manager who nets rent, a management fee,
 // and unrelated loan payments together in one monthly statement)

@@ -469,6 +469,8 @@ export interface IndexRate {
   createdAt: string;
 }
 
+export type LoanPaymentMethod = 'AUTOPAY' | 'ONLINE' | 'CHECK' | 'ZELLE' | 'BANK_DEPOSIT' | 'CASH' | 'WIRE' | 'DEDUCTED' | 'OTHER';
+
 export interface Loan {
   id: string;
   propertyId?: string;
@@ -502,6 +504,13 @@ export interface Loan {
   isActive: boolean;
   // The owner's account this loan is usually paid from (pay planner).
   payFromBankAccountId?: string | null;
+  // How the lender gets paid.
+  paymentMethods?: LoanPaymentMethod[];
+  paymentInstructions?: string | null;
+  mailingAddress?: string | null;
+  payeeBankName?: string | null;
+  payeeAccountLast4?: string | null; // the lender's account, last four only
+  paymentUrl?: string | null;
   createdAt: string;
   property?: Pick<Property, 'id' | 'address' | 'nickname'>;
   loanPayments?: LoanPayment[];
