@@ -12,7 +12,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { imageMediaType, trimPdfForClaude } from './pdfImportService';
 import { matchProperty, type DocumentMatch } from './documentClassifyService';
 
-export type ReadKind = 'citation' | 'tax_bill' | 'transfer_receipt';
+export type ReadKind = 'citation' | 'tax_bill' | 'transfer_receipt' | 'tax_form';
 
 export interface ReadFile { name: string; data: string } // base64
 
@@ -61,6 +61,32 @@ Return ONLY valid JSON, no markdown:
   "notes": "exemptions, penalties, special assessments or anything unusual, or null"
 }
 A bill with a single annual amount (Florida, Texas, West Virginia) reports it as installment1 and leaves installment2 null.`,
+  tax_form: `This is a US income-tax document: a return (Form 1040, a state return such as California 540 or 540NR, West Virginia IT-140), an information form (1098 mortgage interest, 1098-E, 1099-NEC, 1099-MISC, 1099-INT, 1099-DIV, 1099-K, 1099-R, W-2, K-1), a W-9, an estimated-payment voucher, or a notice from the IRS or a state tax agency. Read every page.
+
+NEVER return a full Social Security number, EIN or ITIN anywhere in the answer — only the last four digits, in tinLast4.
+
+Return ONLY valid JSON, no markdown:
+{
+  "formType": "1040 | 540 | 540NR | IT-140 | W-9 | W-2 | 1099-NEC | 1099-MISC | 1099-INT | 1099-DIV | 1099-K | 1099-R | 1098 | 1098-E | K-1 | 1040-ES | NOTICE | OTHER — for a state return, the state's form number as printed",
+  "taxYear": number — the tax year the form reports (a W-9 has none: the year it was signed),
+  "jurisdiction": "FEDERAL, or the two-letter state code for a state form",
+  "direction": "FILED for a return the taxpayer filed; RECEIVED for a form sent to the taxpayer (1098, 1099, W-2, K-1, a notice) or a W-9 someone gave the taxpayer; ISSUED for a 1099 or W-9 the taxpayer sent to someone",
+  "issuerName": "the lender (1098), payer (1099), employer (W-2), partnership (K-1), agency (notice), or the person / business that filled in the W-9",
+  "recipientName": "the borrower / recipient / employee / taxpayer named, or null",
+  "businessName": "W-9 line 2 business name, or null",
+  "entityType": "W-9 box 3 classification: Individual/sole proprietor, C corporation, S corporation, Partnership, Trust/estate, LLC (C/S/P), Other — or null",
+  "tinLast4": "last 4 digits of the TIN of the recipient (1099/1098/W-2) or of the W-9 filer, or null",
+  "address": "the W-9 filer's address, or the payer's, or null",
+  "propertyAddress": "1098 box 8 address of the property securing the mortgage, or null",
+  "amount": number or null — the main figure: 1098 box 1 mortgage interest; 1099-NEC box 1; 1099-MISC box 1 rents or the largest box; 1099-INT box 1; W-2 box 1 wages; a return's total tax; a notice's amount due,
+  "federalWithheld": number or null,
+  "stateWithheld": number or null,
+  "refundOrDue": number or null — on a return: refund as a positive number, amount owed as a negative number,
+  "filedDate": "YYYY-MM-DD the return was signed or filed, or null",
+  "dueDate": "YYYY-MM-DD for a notice or voucher, or null",
+  "boxes": { "Box 1 Mortgage interest": 12345.67, "Box 2 Outstanding principal": 250000, "Box 10 Property tax": 3456.78, … } — every other numbered box that has a value, labelled as printed; never a TIN,
+  "notes": "anything that matters — e.g. a notice's reason — or null"
+}`,
   transfer_receipt: `This is a receipt or confirmation for money sent abroad: a bank wire, Remitly, Wise, Western Union, Xoom or similar. Read every page.
 
 Return ONLY valid JSON, no markdown:
@@ -117,7 +143,7 @@ export async function readDocument(kind: ReadKind, files: ReadFile[], userId: st
   if (!json) throw new Error(`Could not read the document (no fields came back). ${raw.slice(0, 200)}`);
   const fields = shape(kind, JSON.parse(json[0]));
 
-  const address = kind === 'citation' ? fields.violationAddress : kind === 'tax_bill' ? fields.propertyAddress : null;
+  const address = kind === 'citation' ? fields.violationAddress : kind === 'tax_bill' || kind === 'tax_form' ? fields.propertyAddress : null;
   const match = address ? await matchProperty(address, userId) : null;
   return { fields, match };
 }
@@ -127,6 +153,14 @@ const num = (v: unknown): number | null => {
   const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/[$,\s]/g, ''));
   return Number.isFinite(n) ? n : null;
 };
+/** A full SSN / EIN / ITIN never leaves this function: anything shaped like
+ *  one is cut to its last four digits. */
+export function scrubTin(text: string): string {
+  return text
+    .replace(/\b\d{3}-\d{2}-(\d{4})\b/g, '•••-••-$1')
+    .replace(/\b\d{2}-\d{3}(\d{4})\b/g, '••-•••$1')
+    .replace(/\b\d{5}(\d{4})\b/g, '•••••$1');
+}
 const day = (v: unknown): string | null => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
 
@@ -149,6 +183,31 @@ export function shape(kind: ReadKind, d: any): Record<string, any> {
       fineAmount: num(d.fineAmount) ?? (summed > 0 ? Number(summed.toFixed(2)) : null),
       escalation: str(d.escalation), violations,
       contactName: str(d.contactName), contactPhone: str(d.contactPhone), contactEmail: str(d.contactEmail), notes: str(d.notes),
+    };
+  }
+  if (kind === 'tax_form') {
+    const year = num(d.taxYear);
+    const boxes: Record<string, number | string> = {};
+    if (d.boxes && typeof d.boxes === 'object') {
+      for (const [k, v] of Object.entries(d.boxes)) {
+        if (/\b(ssn|tin|ein|itin|social security|identification number)\b/i.test(k)) continue;
+        const n = num(v);
+        if (n != null) boxes[k] = n;
+        else if (typeof v === 'string' && v.trim()) boxes[k] = scrubTin(v.trim());
+      }
+    }
+    const tin = typeof d.tinLast4 === 'string' ? d.tinLast4.replace(/\D/g, '').slice(-4) : null;
+    return {
+      formType: str(d.formType)?.toUpperCase() ?? 'OTHER',
+      taxYear: year && year > 1990 && year < 2100 ? Math.trunc(year) : null,
+      jurisdiction: /^[A-Z]{2}$/.test(String(d.jurisdiction ?? '').toUpperCase()) ? String(d.jurisdiction).toUpperCase() : 'FEDERAL',
+      direction: ['RECEIVED', 'FILED', 'ISSUED'].includes(d.direction) ? d.direction : 'RECEIVED',
+      issuerName: str(d.issuerName), recipientName: str(d.recipientName), businessName: str(d.businessName), entityType: str(d.entityType),
+      tinLast4: tin && tin.length === 4 ? tin : null,
+      address: str(d.address), propertyAddress: str(d.propertyAddress),
+      amount: num(d.amount), federalWithheld: num(d.federalWithheld), stateWithheld: num(d.stateWithheld), refundOrDue: num(d.refundOrDue),
+      filedDate: day(d.filedDate), dueDate: day(d.dueDate), boxes,
+      notes: d.notes ? scrubTin(String(d.notes)) : null,
     };
   }
   if (kind === 'tax_bill') {
