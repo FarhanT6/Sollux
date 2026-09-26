@@ -36,7 +36,7 @@ export default function NoticeDetailPage() {
   async function handleDelete() {
     if (!confirm('Delete this notice record? This cannot be undone.')) return;
     await deleteNotice(id!);
-    navigate('/notices');
+    navigate('/tenants?tab=notices');
   }
 
   if (loading) return <div className="p-6 text-gray-500">Loading…</div>;

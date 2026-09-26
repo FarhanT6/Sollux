@@ -79,8 +79,6 @@ export default function App() {
           <Route path="tenants/:id" element={<TenantDetailPage />} />
           <Route path="notices/:id" element={<NoticeDetailPage />} />
 
-          {/* Lives as a Finances tab; keep the direct URL working for links. */}
-          <Route path="incoming-payments" element={<Navigate to="/finances?tab=incoming" replace />} />
 
           {/* Legal */}
           <Route path="legal" element={<LegalPage />} />
@@ -96,17 +94,7 @@ export default function App() {
           <Route path="import" element={<ImportPage />} />
         <Route path="scan" element={<ScanPage />} />
 
-          {/* Legacy redirects — preserve old bookmarks and back-nav */}
-          <Route path="rent-roll"     element={<Navigate to="/tenants" replace />} />
-          <Route path="notices"       element={<Navigate to="/tenants?tab=notices" replace />} />
-          <Route path="pnl"           element={<Navigate to="/finances?tab=pnl" replace />} />
-          <Route path="budget"        element={<Navigate to="/finances?tab=budget" replace />} />
-          <Route path="loans"         element={<Navigate to="/finances?tab=loans" replace />} />
-          <Route path="expenses"      element={<Navigate to="/finances?tab=expenses" replace />} />
-          <Route path="payments"      element={<Navigate to="/properties" replace />} />
-          <Route path="documents"     element={<Navigate to="/scan?tab=library" replace />} />
-          <Route path="notifications" element={<Navigate to="/settings?tab=notifications" replace />} />
-
+          {/* Anything else lands on the dashboard. */}
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Route>
 

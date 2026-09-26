@@ -1871,7 +1871,7 @@ export default function ImportPage() {
             </div>
             <div className="flex gap-3">
               <button onClick={reset} className="btn text-sm">Import more</button>
-              <a href="/documents" className="btn btn-primary text-sm">View vault</a>
+              <a href="/scan?tab=library" className="btn btn-primary text-sm">View vault</a>
             </div>
           </div>
         )}
