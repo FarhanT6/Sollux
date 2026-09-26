@@ -44,7 +44,7 @@ function Icon({ category }: { category: string }) {
 
 function Meta({ k, v }: { k: string; v: string }) {
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', alignItems: 'baseline', marginBottom: 10 }}>
+    <div className="inv-meta" style={{ display: 'grid', gridTemplateColumns: '150px 1fr', alignItems: 'baseline', marginBottom: 10 }}>
       <span style={{ fontSize: 11, letterSpacing: 1.6, textTransform: 'uppercase', color: MUTED }}>{k}</span>
       <span style={{ fontSize: 14, color: INK }}>{v}</span>
     </div>
@@ -125,9 +125,36 @@ export default function ReimbursementInvoicePage() {
       <style>{`
         @media print {
           .no-print { display: none !important; }
-          body { background: ${PAPER}; }
-          @page { margin: 12mm; }
-          .sheet { padding: 0 !important; }
+          body { background: #fff; }
+          @page { margin: 10mm 12mm; }
+          /* One sheet at 100%: the screen layout is roomy, the paper one is
+             not. Scaling the print instead thins the ink; the sizes below
+             keep the type full-strength and simply tighter. */
+          .sheet { padding: 0 !important; max-width: none !important; }
+          * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+          .inv-masthead { margin-bottom: 18px !important; }
+          .inv-title { margin-bottom: 14px !important; gap: 20px !important; }
+          .inv-h1 { font-size: 26px !important; }
+          .inv-sub { font-size: 12px !important; margin-top: 6px !important; }
+          .inv-meta { margin-bottom: 4px !important; }
+          .inv-meta span { font-size: 11px !important; }
+          .inv-billto { padding: 10px 14px !important; margin-bottom: 12px !important; }
+          .inv-billto div { font-size: 12px !important; margin-bottom: 2px !important; }
+          .inv-month { margin-bottom: 10px !important; break-inside: avoid; page-break-inside: avoid; }
+          .inv-th { padding: 6px 12px !important; font-size: 9px !important; }
+          .inv-td { padding: 7px 12px !important; font-size: 11.5px !important; }
+          .inv-totals { margin-bottom: 12px !important; break-inside: avoid; page-break-inside: avoid; }
+          .inv-totalbox { padding: 12px 20px !important; }
+          .inv-total-label { font-size: 18px !important; }
+          .inv-total-amt { font-size: 22px !important; }
+          .inv-thanks { font-size: 12px !important; }
+          .inv-rule { margin-bottom: 14px !important; }
+          .inv-pay { padding: 12px 16px !important; margin-bottom: 12px !important; break-inside: avoid; page-break-inside: avoid; }
+          .inv-pay p { font-size: 11px !important; line-height: 1.5 !important; }
+          .inv-footer { padding-top: 10px !important; font-size: 10px !important; }
+          /* Light grey reads as faded on paper; print it a shade darker. */
+          .sheet [style*="rgb(107, 114, 128)"] { color: #4b5563 !important; }
+          .sheet [style*="rgb(63, 69, 82)"] { color: #2b3140 !important; }
         }
       `}</style>
 
@@ -165,7 +192,7 @@ export default function ReimbursementInvoicePage() {
 
       <div className="sheet mx-auto" style={{ maxWidth: 860, padding: '40px 48px 32px' }}>
         {/* Masthead */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 44 }}>
+        <div className="inv-masthead" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 44 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke={ACCENT} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
               <path d="M4 20V10l8-6 8 6v10" /><path d="M9 20v-6h6v6" />
@@ -179,10 +206,10 @@ export default function ReimbursementInvoicePage() {
         </div>
 
         {/* Title + meta */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 32, marginBottom: 32 }}>
+        <div className="inv-title" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 32, marginBottom: 32 }}>
           <div>
-            <h1 style={{ fontSize: 38, fontWeight: 700, lineHeight: 1.1, margin: 0, letterSpacing: -0.5 }}>Utility Statement</h1>
-            <p style={{ fontSize: 15, color: MUTED, marginTop: 12 }}>Your share of the utility charges for the property.</p>
+            <h1 className="inv-h1" style={{ fontSize: 38, fontWeight: 700, lineHeight: 1.1, margin: 0, letterSpacing: -0.5 }}>Utility Statement</h1>
+            <p className="inv-sub" style={{ fontSize: 15, color: MUTED, marginTop: 12 }}>Your share of the utility charges for the property.</p>
           </div>
           <div style={{ borderLeft: `1px solid ${RULE}`, paddingLeft: 28, paddingTop: 4 }}>
             <Meta k="Invoice #" v={inv.number ?? '—'} />
@@ -193,7 +220,7 @@ export default function ReimbursementInvoicePage() {
         </div>
 
         {/* Bill to */}
-        <div style={{ background: TINT, borderRadius: 8, padding: '20px 24px', marginBottom: 28, display: 'flex', gap: 16 }}>
+        <div className="inv-billto" style={{ background: TINT, borderRadius: 8, padding: '20px 24px', marginBottom: 28, display: 'flex', gap: 16 }}>
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={ACCENT} strokeWidth="1.8" strokeLinecap="round" aria-hidden>
             <circle cx="12" cy="8" r="4" /><path d="M4 21c0-4 4-6 8-6s8 2 8 6" />
           </svg>
@@ -209,37 +236,37 @@ export default function ReimbursementInvoicePage() {
         {months.map(([ym, lines]) => {
           const monthTotal = lines.reduce((t: number, l: any) => t + num(l.amount), 0);
           return (
-            <div key={ym} style={{ marginBottom: 22, border: `1px solid ${RULE}`, borderRadius: 8, overflow: 'hidden', background: '#fff' }}>
+            <div key={ym} className="inv-month" style={{ marginBottom: 22, border: `1px solid ${RULE}`, borderRadius: 8, overflow: 'hidden', background: '#fff' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr>
-                    <th style={{ ...th, width: '26%' }}>{multiMonth ? monthName(ym) : 'Utility'}</th>
-                    <th style={{ ...th, width: '30%' }}>Billing period</th>
-                    <th style={{ ...th, ...right, width: '16%' }}>Bill</th>
-                    <th style={{ ...th, ...right, width: '12%' }}>Share</th>
-                    <th style={{ ...th, ...right, width: '16%' }}>Amount</th>
+                    <th className="inv-th" style={{ ...th, width: '26%' }}>{multiMonth ? monthName(ym) : 'Utility'}</th>
+                    <th className="inv-th" style={{ ...th, width: '30%' }}>Billing period</th>
+                    <th className="inv-th" style={{ ...th, ...right, width: '16%' }}>Bill</th>
+                    <th className="inv-th" style={{ ...th, ...right, width: '12%' }}>Share</th>
+                    <th className="inv-th" style={{ ...th, ...right, width: '16%' }}>Amount</th>
                   </tr>
                 </thead>
                 <tbody>
                   {lines.map((l: any) => (
                     <tr key={l.id}>
-                      <td style={td}>
+                      <td className="inv-td" style={td}>
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 12, fontWeight: 600 }}>
                           <Icon category={l.category} />{l.label.replace(/\s*\(.*\)$/, '')}
                         </span>
                       </td>
-                      <td style={{ ...td, color: '#3f4552' }}>
+                      <td className="inv-td" style={{ ...td, color: '#3f4552' }}>
                         {l.kind === 'FLAT' ? monthName(monthOf(l.sortKey)) : l.periodStart && l.periodEnd ? `${fmtDate(l.periodStart, 'MMM d')} – ${fmtDate(l.periodEnd, 'MMM d, yyyy')}` : '—'}
                       </td>
-                      <td style={{ ...td, ...right, color: '#3f4552' }}>{l.kind === 'FLAT' ? `${money(l.baseAmount)} / mo` : money(l.baseAmount)}</td>
-                      <td style={{ ...td, ...right, color: '#3f4552' }}>{l.kind === 'FLAT' ? 'flat' : l.sharePercent != null ? `${l.sharePercent}%` : '100%'}</td>
-                      <td style={{ ...td, ...right, fontWeight: 600 }}>{money(l.amount)}</td>
+                      <td className="inv-td" style={{ ...td, ...right, color: '#3f4552' }}>{l.kind === 'FLAT' ? `${money(l.baseAmount)} / mo` : money(l.baseAmount)}</td>
+                      <td className="inv-td" style={{ ...td, ...right, color: '#3f4552' }}>{l.kind === 'FLAT' ? 'flat' : l.sharePercent != null ? `${l.sharePercent}%` : '100%'}</td>
+                      <td className="inv-td" style={{ ...td, ...right, fontWeight: 600 }}>{money(l.amount)}</td>
                     </tr>
                   ))}
                   {multiMonth && (
                     <tr>
-                      <td style={{ ...td, background: PAPER }} colSpan={4}><span style={{ fontSize: 11, letterSpacing: 1.6, textTransform: 'uppercase', color: MUTED, fontWeight: 600 }}>{monthName(ym)} total</span></td>
-                      <td style={{ ...td, ...right, background: PAPER, fontWeight: 700 }}>{money(monthTotal)}</td>
+                      <td className="inv-td" style={{ ...td, background: PAPER }} colSpan={4}><span style={{ fontSize: 11, letterSpacing: 1.6, textTransform: 'uppercase', color: MUTED, fontWeight: 600 }}>{monthName(ym)} total</span></td>
+                      <td className="inv-td" style={{ ...td, ...right, background: PAPER, fontWeight: 700 }}>{money(monthTotal)}</td>
                     </tr>
                   )}
                 </tbody>
@@ -249,7 +276,7 @@ export default function ReimbursementInvoicePage() {
         })}
 
         {/* Totals */}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 28 }}>
+        <div className="inv-totals" style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 28 }}>
           <div style={{ minWidth: 400 }}>
             {(num(inv.creditApplied) > 0 || paid > 0) && (
               <div style={{ padding: '4px 24px 12px', fontSize: 14, color: '#3f4552' }}>
@@ -263,22 +290,22 @@ export default function ReimbursementInvoicePage() {
                 {paid > 0 && balance < -0.01 && <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}><span>Overpaid — credited to your next invoice</span><span style={right}>{money(-balance)}</span></div>}
               </div>
             )}
-            <div style={{ background: '#f3e4de', borderRadius: 8, padding: '22px 28px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 24 }}>
-              <span style={{ fontSize: 26, fontWeight: 700 }}>{paid > 0 ? (balance > 0.01 ? 'Balance Due' : 'Paid in Full') : 'Total Due'}</span>
+            <div className="inv-totalbox" style={{ background: '#f3e4de', borderRadius: 8, padding: '22px 28px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 24 }}>
+              <span className="inv-total-label" style={{ fontSize: 26, fontWeight: 700 }}>{paid > 0 ? (balance > 0.01 ? 'Balance Due' : 'Paid in Full') : 'Total Due'}</span>
               <span style={{ width: 1, height: 34, background: ACCENT, opacity: 0.5 }} />
-              <span style={{ fontSize: 30, fontWeight: 700, ...right }}>{money(paid > 0 ? Math.max(balance, 0) : total)}</span>
+              <span className="inv-total-amt" style={{ fontSize: 30, fontWeight: 700, ...right }}>{money(paid > 0 ? Math.max(balance, 0) : total)}</span>
             </div>
           </div>
         </div>
 
         {inv.notes && <p style={{ fontSize: 13, color: '#3f4552', marginBottom: 20 }}>{inv.notes}</p>}
 
-        <p style={{ fontSize: 15, color: INK, margin: 0 }}>Thank you for your prompt payment.</p>
-        <div style={{ height: 2, width: 64, background: ACCENT, marginTop: 8, marginBottom: 36 }} />
+        <p className="inv-thanks" style={{ fontSize: 15, color: INK, margin: 0 }}>Thank you for your prompt payment.</p>
+        <div className="inv-rule" style={{ height: 2, width: 64, background: ACCENT, marginTop: 8, marginBottom: 36 }} />
 
         {/* Payment details — only with a due date, and at the foot of the page. */}
         {due && (
-          <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, padding: '22px 26px', background: '#fff', marginBottom: 28 }}>
+          <div className="inv-pay" style={{ border: `1px solid ${RULE}`, borderRadius: 8, padding: '22px 26px', background: '#fff', marginBottom: 28 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={ACCENT} strokeWidth="1.8" strokeLinecap="round" aria-hidden><rect x="3" y="6" width="18" height="12" rx="2" /><path d="M3 10h18M7 15h3" /></svg>
               <span style={{ fontSize: 12, letterSpacing: 2, textTransform: 'uppercase', color: INK, fontWeight: 600 }}>Payment details</span>
@@ -305,7 +332,7 @@ export default function ReimbursementInvoicePage() {
         )}
 
         {/* Footer */}
-        <div style={{ borderTop: `1px solid ${RULE}`, paddingTop: 16, display: 'flex', alignItems: 'center', gap: 28, fontSize: 12, color: MUTED, flexWrap: 'wrap' }}>
+        <div className="inv-footer" style={{ borderTop: `1px solid ${RULE}`, paddingTop: 16, display: 'flex', alignItems: 'center', gap: 28, fontSize: 12, color: MUTED, flexWrap: 'wrap' }}>
           <span style={{ fontWeight: 700, color: INK }}>{fromName}</span>
           {lh.email && <span>✉ {lh.email}</span>}
           {lh.phone && <span>☏ {lh.phone}</span>}
