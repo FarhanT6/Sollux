@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import IncomeTaxTab from '../components/taxes/IncomeTaxTab';
+import ScheduleETab from '../components/taxes/ScheduleETab';
 import ContractorsTab from '../components/taxes/ContractorsTab';
 import {
   getTaxAssessments, readTaxBill, saveTaxAssessment, updateTaxAssessment, deleteTaxAssessment, taxBillUrl, getProperties, getLoans, type FilePayload,
@@ -44,6 +45,7 @@ const TABS = [
   { key: 'property', label: 'Property tax' },
   { key: 'income', label: 'Income tax — federal & state' },
   { key: 'w9', label: 'W-9s & 1099s' },
+  { key: 'schedule-e', label: 'Schedule E' },
 ] as const;
 type TabKey = typeof TABS[number]['key'];
 
@@ -63,6 +65,7 @@ export default function TaxesPage() {
       {tab === 'property' && <PropertyTaxTab />}
       {tab === 'income' && <div className="px-6 py-5"><IncomeTaxTab /></div>}
       {tab === 'w9' && <div className="px-6 py-5"><ContractorsTab /></div>}
+      {tab === 'schedule-e' && <div className="px-6 py-5"><ScheduleETab /></div>}
     </div>
   );
 }

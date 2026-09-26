@@ -1001,3 +1001,11 @@ export interface MessageDraftT {
 export const getMessageDrafts = () => api.get<MessageDraftT[]>('/message-drafts').then(r => r.data);
 export const draftRemindersNow = () => api.post<{ drafted: number; late: number }>('/message-drafts/draft-now').then(r => r.data);
 export const markDraft = (id: string, action: 'sent' | 'dismiss') => api.post(`/message-drafts/${id}/${action}`);
+
+// Schedule E worksheet: per property, cash basis.
+export interface ScheduleELine { line: string; key: string; label: string }
+export interface ScheduleEProperty { propertyId: string; name: string; address: string; lines: Record<string, number>; totalExpenses: number; net: number; capitalImprovements: number; finesExcluded: number; notes: string[] }
+export interface ScheduleE { year: number; lines: ScheduleELine[]; properties: ScheduleEProperty[]; totals: Record<string, number>; totalExpenses: number; net: number }
+export const getScheduleE = (year: number) => api.get<ScheduleE>('/tax-documents/schedule-e', { params: { year } }).then(r => r.data);
+export const downloadScheduleECsv = (year: number) =>
+  api.get('/tax-documents/schedule-e', { params: { year, format: 'csv' }, responseType: 'blob' }).then(r => r.data as Blob);
