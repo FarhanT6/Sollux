@@ -3,7 +3,7 @@ import { BaseScraperProvider, ScraperCredentials, ScrapedStatement, ScrapedPayme
 /**
  * Gmail Fallback Scraper
  * Used for any provider that emails bills — parses PDF attachments from Gmail.
- * The actual implementation lives in parsers/gmailParser.ts.
+ * The actual implementation is the inbox agent, ai/inboxAgent.ts.
  * This stub satisfies the ScraperProvider interface for unknown providers.
  */
 export class GmailFallbackScraper extends BaseScraperProvider {

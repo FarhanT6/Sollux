@@ -72,7 +72,7 @@ router.get('/status', attachDbUser, async (req, res, next) => {
   try {
     const tokens = await db.gmailToken.findMany({
       where: { userId: req.dbUserId! },
-      select: { id: true, email: true, label: true, createdAt: true },
+      select: { id: true, email: true, label: true, createdAt: true, lastScanAt: true, lastScanError: true },
       orderBy: { createdAt: 'asc' },
     });
     res.json({ connected: tokens.length > 0, accounts: tokens });
@@ -98,8 +98,42 @@ router.post('/sync', attachDbUser, async (req, res, next) => {
     if (!tokens.length) return res.status(400).json({ error: 'No Gmail accounts connected' });
 
     const { gmailQueue } = await import('../workers/queues');
-    const job = await gmailQueue.add('parse', { userId: req.dbUserId! }, { attempts: 2 });
+    const tokenId = typeof req.body?.tokenId === 'string' ? req.body.tokenId : undefined;
+    const job = await gmailQueue.add('parse', { userId: req.dbUserId!, tokenId }, { attempts: 1 });
     res.json({ jobId: job.id, accounts: tokens.length, message: 'Gmail sync queued' });
+  } catch (err) { next(err); }
+});
+
+// GET /api/gmail/inbox — what the inbox agent did: recent messages and the
+// latest run's bills waiting for review.
+router.get('/inbox', attachDbUser, async (req, res, next) => {
+  try {
+    const userId = req.dbUserId!;
+    const [messages, job, counts] = await Promise.all([
+      db.inboxMessage.findMany({
+        where: { userId, outcome: { not: 'skipped' } }, orderBy: { createdAt: 'desc' }, take: 60,
+        select: { id: true, fromAddress: true, subject: true, receivedAt: true, outcome: true, detail: true, utilityAccountId: true, importJobId: true, createdAt: true, gmailToken: { select: { email: true } } },
+      }),
+      db.driveImportJob.findFirst({ where: { userId, source: 'email' }, orderBy: { startedAt: 'desc' } }),
+      db.inboxMessage.groupBy({ by: ['outcome'], where: { userId, createdAt: { gte: new Date(Date.now() - 30 * 24 * 3600 * 1000) } }, _count: true }),
+    ]);
+    const pending = job ? ((job.needsReviewJson as unknown[]) ?? []).length : 0;
+    res.json({
+      messages: messages.map(({ gmailToken, ...m }) => ({ ...m, mailbox: gmailToken.email })),
+      lastJob: job ? { id: job.id, finishedAt: job.finishedAt, autoImported: job.autoImported, needsReview: pending, errorLog: job.errorLog } : null,
+      last30Days: Object.fromEntries(counts.map(c => [c.outcome, c._count])),
+    });
+  } catch (err) { next(err); }
+});
+
+// POST /api/gmail/inbox/reviewed/:jobId — the owner finished (or dismissed)
+// that run's review; it stops showing as waiting.
+router.post('/inbox/reviewed/:jobId', attachDbUser, async (req, res, next) => {
+  try {
+    const job = await db.driveImportJob.findFirst({ where: { id: req.params.jobId, userId: req.dbUserId!, source: 'email' } });
+    if (!job) return res.status(404).json({ error: 'Not found' });
+    await db.driveImportJob.update({ where: { id: job.id }, data: { needsReviewJson: [] } });
+    res.status(204).send();
   } catch (err) { next(err); }
 });
 

@@ -20,6 +20,7 @@ import { plaidClient } from '../config/plaid';
 import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';
 import { recordRentPayment, periodStartOf } from './rentPaymentService';
+import { findLoanCandidates, confidentLoan, logLoanPaymentFromTransaction } from './loanPaymentMatcher';
 
 // ─── Incoming (rent via P2P) ──────────────────────────────────────────────
 
@@ -257,7 +258,8 @@ async function detectExpenseMatch(name: string, amount: number, userId: string):
 export async function syncTransactionsForItem(plaidItemId: string) {
   const plaidItem = await db.plaidItem.findUnique({
     where: { id: plaidItemId },
-    include: { accounts: { where: { isActive: true, OR: [{ watchForRentPayments: true }, { watchForExpenses: true }] } } },
+    // Accounts a loan is paid from are read too, so an autopay shows up in the loan tracker.
+    include: { accounts: { where: { isActive: true, OR: [{ watchForRentPayments: true }, { watchForExpenses: true }, { loansPaidFrom: { some: { isActive: true } } }] }, include: { _count: { select: { loansPaidFrom: true } } } } },
   });
   if (!plaidItem || plaidItem.accounts.length === 0) return { added: 0 };
 
@@ -336,7 +338,30 @@ export async function syncTransactionsForItem(plaidItemId: string) {
         }
       }
 
-      // Positive amount = money moving OUT of the account (a debit/purchase).
+      // Positive amount = money moving OUT of the account. A loan payment first:
+      // it goes to the loan tracker, logged on its own when the match is sure.
+      if ((bankAccount.watchForExpenses || bankAccount._count.loansPaidFrom > 0) && tx.amount > 0) {
+        const cands = await findLoanCandidates(name, tx.amount, plaidItem.userId, bankAccount.id);
+        if (cands.length) {
+          const seen = await db.outgoingTransaction.findUnique({ where: { plaidTransactionId: tx.transaction_id }, select: { id: true } });
+          if (seen) continue;
+          const sure = confidentLoan(cands);
+          const pick = sure ?? cands[0];
+          const created = await db.outgoingTransaction.create({
+            data: {
+              userId: plaidItem.userId, bankAccountId: bankAccount.id, plaidTransactionId: tx.transaction_id,
+              amount: tx.amount, date: new Date(tx.date), name, matchType: 'LOAN', loanId: pick.loanId, propertyId: pick.propertyId,
+              category: null, status: 'SUGGESTED',
+            },
+          });
+          if (sure) {
+            const paymentId = await logLoanPaymentFromTransaction(created, sure.loanId, plaidItem.userId);
+            await db.outgoingTransaction.update({ where: { id: created.id }, data: { status: 'APPLIED', appliedType: 'LOAN_PAYMENT', appliedId: paymentId } });
+          }
+          added += 1;
+          continue;
+        }
+      }
       if (bankAccount.watchForExpenses && tx.amount > 0) {
         const match = await detectExpenseMatch(name, tx.amount, plaidItem.userId);
         if (match) {
@@ -375,7 +400,7 @@ export async function syncAllWatchedAccounts(userId: string) {
   const items = await db.plaidItem.findMany({
     where: {
       userId, isActive: true,
-      accounts: { some: { isActive: true, OR: [{ watchForRentPayments: true }, { watchForExpenses: true }] } },
+      accounts: { some: { isActive: true, OR: [{ watchForRentPayments: true }, { watchForExpenses: true }, { loansPaidFrom: { some: { isActive: true } } }] } },
     },
   });
   let totalAdded = 0;

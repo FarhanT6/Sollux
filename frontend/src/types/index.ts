@@ -416,7 +416,7 @@ export interface IncomingTransaction {
   createdAt: string;
 }
 
-export type OutgoingMatchType = 'HARDWARE' | 'UTILITY';
+export type OutgoingMatchType = 'HARDWARE' | 'UTILITY' | 'LOAN';
 
 export interface UtilityCandidate {
   utilityAccountId: string;
@@ -444,6 +444,8 @@ export interface OutgoingTransaction {
   utilityAccount?: { id: string; providerName: string } | null;
   category?: ExpenseCategory | null;
   statementId?: string | null;
+  loanId?: string | null;
+  loan?: { id: string; lender: string } | null;
   status: IncomingTransactionStatus;
   appliedType?: string | null;
   appliedId?: string | null;

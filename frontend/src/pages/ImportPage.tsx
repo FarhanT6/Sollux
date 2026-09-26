@@ -1,7 +1,7 @@
 import { useCallback, useState, useRef, useEffect } from 'react';
 import { format } from 'date-fns';
 import { PageHeader } from '../components/ui';
-import api, { getDriveStatus, getDriveConnectUrl, getDriveAccessToken, startDriveImport, getDriveImportJob, getProperties } from '../api/client';
+import api, { getDriveStatus, getDriveConnectUrl, getDriveAccessToken, startDriveImport, getDriveImportJob, getProperties, getGmailStatus, getGmailConnectUrl, getInboxActivity, syncInbox, markInboxReviewed, type GmailMailbox, type InboxActivity } from '../api/client';
 import type { Property, UtilityCategory } from '../types';
 import { CATEGORY_LABELS } from '../types';
 
@@ -512,6 +512,149 @@ function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed, onProgres
       <button onClick={openPicker} disabled={opening} className="btn btn-primary text-xs disabled:opacity-40">
         {opening ? 'Opening...' : 'Choose folder'}
       </button>
+    </div>
+  );
+}
+
+// ── Inbox agent ────────────────────────────────────────────────────────────────
+// Bills that arrive by email are read every night from each connected
+// mailbox; confident matches are filed, the rest wait here for review in the
+// same flow a Drive import uses.
+
+const OUTCOME_STYLE: Record<string, { label: string; cls: string }> = {
+  filed:  { label: 'Filed',        cls: 'text-emerald-400' },
+  review: { label: 'Needs review', cls: 'text-amber-400' },
+  notice: { label: 'Notice added', cls: 'text-blue-400' },
+  policy: { label: 'Policy updated', cls: 'text-blue-400' },
+  error:  { label: 'Error',        cls: 'text-red-400' },
+};
+
+function InboxPanel({ onStreamStart, onBillStreamed }: {
+  onStreamStart: (properties: PropertyWithAccounts[], autoImported: number) => void;
+  onBillStreamed: (bill: ParsedBill) => void;
+}) {
+  const [boxes, setBoxes] = useState<GmailMailbox[] | null>(null);
+  const [activity, setActivity] = useState<InboxActivity | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [showLog, setShowLog] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    const [st, act] = await Promise.all([getGmailStatus(), getInboxActivity().catch(() => null)]);
+    setBoxes(st.accounts); setActivity(act);
+    return st.accounts;
+  }, []);
+  useEffect(() => { load().catch(() => setBoxes([])); }, [load]);
+
+  async function syncNow() {
+    setSyncing(true); setErr(null);
+    const before = new Map((boxes ?? []).map(b => [b.id, b.lastScanAt]));
+    try {
+      await syncInbox();
+      // The run happens on the worker; watch for every mailbox to report back.
+      for (let i = 0; i < 60; i++) {
+        await new Promise(r => setTimeout(r, 5000));
+        const now = await load();
+        if (now.every(b => b.lastScanAt !== before.get(b.id) || b.lastScanError)) break;
+      }
+    } catch (e: any) { setErr(e?.response?.data?.error ?? 'Could not start the inbox sync.'); }
+    finally { setSyncing(false); }
+  }
+
+  async function review(jobId: string) {
+    setErr(null);
+    try {
+      // @ts-ignore
+      const token = await window.Clerk?.session?.getToken();
+      const base = import.meta.env.VITE_API_URL || '/api';
+      const res = await fetch(`${base}/drive/jobs/${jobId}/review-data`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      if (!res.ok || !res.body) throw await badResponseError(res);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '', started = false;
+      for (;;) {
+        const { value, done } = await reader.read();
+        buf += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+        const parts = buf.split('\n\n'); buf = parts.pop() ?? '';
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith('data: ')) continue;
+          const ev = JSON.parse(line.slice(6));
+          if (ev.type === 'bill') {
+            if (!started) { onStreamStart([], activity?.lastJob?.autoImported ?? 0); started = true; }
+            onBillStreamed({ filename: ev.filename, extracted: ev.extracted, match: ev.match, fileData: ev.fileData });
+          } else if (ev.type === 'done') onStreamStart(ev.properties ?? [], ev.autoImported ?? 0);
+        }
+        if (done) break;
+      }
+    } catch (e) { setErr(`Could not open the review: ${(e as Error).message}`); }
+  }
+
+  if (!boxes) return null;
+  if (!boxes.length) {
+    return (
+      <div className="rounded-xl p-5 mb-5 flex items-center justify-between" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+        <div>
+          <p className="text-sm font-medium text-gray-200">Bills by email</p>
+          <p className="text-xs text-gray-500 mt-0.5">Connect the Gmail inboxes your bills go to — as many as you use. Sollux reads them every night and files the bills.</p>
+        </div>
+        <button className="btn text-xs" onClick={() => getGmailConnectUrl().then(r => { window.location.href = r.url; })}>+ Connect Gmail</button>
+      </div>
+    );
+  }
+
+  const job = activity?.lastJob;
+  const c = activity?.last30Days ?? {};
+  return (
+    <div className="rounded-xl p-5 mb-5 space-y-3" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <p className="text-sm font-medium text-gray-200">Bills by email</p>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Read every night from {boxes.length} inbox{boxes.length === 1 ? '' : 'es'}. Last 30 days: {c.filed ?? 0} filed · {c.review ?? 0} to review · {(c.notice ?? 0) + (c.policy ?? 0)} notices/policies{c.error ? ` · ${c.error} errors` : ''}
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn text-xs" onClick={() => getGmailConnectUrl().then(r => { window.location.href = r.url; })}>+ Add inbox</button>
+          <button className="btn btn-primary text-xs disabled:opacity-50" disabled={syncing} onClick={syncNow}>{syncing ? 'Reading inboxes…' : 'Sync now'}</button>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {boxes.map(b => (
+          <span key={b.id} className="text-xs px-2 py-1 rounded" style={{ background: 'rgba(255,255,255,0.05)' }} title={b.lastScanError ?? ''}>
+            <span className="text-gray-300">{b.email}</span>
+            <span className={b.lastScanError ? 'text-amber-400' : 'text-gray-500'}> · {b.lastScanAt ? `read ${format(new Date(b.lastScanAt), 'MMM d, h:mm a')}` : 'not read yet'}{b.lastScanError ? ' ⚠' : ''}</span>
+          </span>
+        ))}
+      </div>
+      {job && job.needsReview > 0 && (
+        <div className="flex items-center gap-3 rounded-lg px-3 py-2" style={{ background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.25)' }}>
+          <p className="text-xs text-amber-300 flex-1">{job.needsReview} bill{job.needsReview === 1 ? '' : 's'} from email need a quick check{job.autoImported ? ` (${job.autoImported} already filed)` : ''}.</p>
+          <button className="btn btn-primary text-xs" onClick={() => review(job.id)}>Review</button>
+          <button className="text-xs text-gray-500 hover:text-gray-300" onClick={() => markInboxReviewed(job.id).then(load)}>Mark done</button>
+        </div>
+      )}
+      {err && <p className="text-xs text-red-400">{err}</p>}
+      {(activity?.messages.length ?? 0) > 0 && (
+        <div>
+          <button className="text-xs text-gray-500 hover:text-gray-300" onClick={() => setShowLog(v => !v)}>{showLog ? '▾' : '▸'} What the inbox agent did</button>
+          {showLog && (
+            <div className="mt-2 max-h-64 overflow-y-auto space-y-1">
+              {activity!.messages.map(m => {
+                const st = OUTCOME_STYLE[m.outcome] ?? { label: m.outcome, cls: 'text-gray-400' };
+                return (
+                  <div key={m.id} className="text-xs flex gap-3">
+                    <span className="text-gray-600 w-16 shrink-0">{m.receivedAt ? format(new Date(m.receivedAt), 'MMM d') : ''}</span>
+                    <span className={`w-24 shrink-0 ${st.cls}`}>{st.label}</span>
+                    <span className="text-gray-300 truncate">{m.subject || '(no subject)'}</span>
+                    <span className="text-gray-600 truncate ml-auto shrink-0 max-w-[40%]">{m.fromAddress}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1551,8 +1694,8 @@ export default function ImportPage() {
     if (props && (props as any).length > 0) setProperties(props);
     setDriveNote(
       autoImported > 0
-        ? `${autoImported} statement${autoImported !== 1 ? 's' : ''} already auto-filed from Drive  -  reviewing the rest.`
-        : 'Reviewing statements from Drive...'
+        ? `${autoImported} statement${autoImported !== 1 ? 's' : ''} already auto-filed  -  reviewing the rest.`
+        : 'Reviewing statements...'
     );
     setStage('review');
   };
@@ -1714,6 +1857,7 @@ export default function ImportPage() {
                 {extractionMethod === 'ai' ? 'AI (uses credits)' : 'Free mode'}
               </button>
             </div>
+            <InboxPanel onStreamStart={handleDriveStreamStart} onBillStreamed={handleDriveBillStreamed} />
             <DriveImportPanel
               onResolved={handleDriveResolved}
               onStreamStart={handleDriveStreamStart}

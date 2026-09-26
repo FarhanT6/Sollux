@@ -3,10 +3,11 @@ import './scrapeWorker';
 import './insightWorker';
 import './gmailWorker';
 import './driveImportWorker';
-import { scrapeQueue, insightQueue } from './queues';
+import { scrapeQueue, insightQueue, gmailQueue } from './queues';
 import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';
 import { runDailyBalanceSnapshot } from './balanceSnapshotWorker';
+import { syncAllWatchedAccounts } from '../services/transactionMatchService';
 import { applyDueRentIncreases, rolloverExpiredLeases, accrueOverdueRent } from './rentIncreaseWorker';
 
 console.log('🔧 Sollux Workers started');
@@ -113,6 +114,34 @@ setTimeout(() => {
   if (first <= new Date()) first.setDate(first.getDate() + 1);
   setTimeout(() => { queueIt(); setInterval(queueIt, 24 * 60 * 60 * 1000); }, first.getTime() - Date.now());
   console.log(`[Bookkeeper] Scheduled — next run at ${first.toLocaleString()}`);
+})();
+
+// The inbox agent reads every connected mailbox nightly at 1am, ahead of
+// the 2am insights and 5am bookkeeper, so what it files is in their view.
+(function scheduleInboxAgent() {
+  const queueIt = () => gmailQueue.add('inbox-all', {}, { attempts: 1, removeOnComplete: { count: 20 }, removeOnFail: { count: 20 } })
+    .catch(err => console.warn('[InboxAgent] could not queue:', err instanceof Error ? err.message : err));
+  const first = new Date();
+  first.setHours(1, 0, 0, 0);
+  if (first <= new Date()) first.setDate(first.getDate() + 1);
+  setTimeout(() => { queueIt(); setInterval(queueIt, 24 * 60 * 60 * 1000); }, first.getTime() - Date.now());
+  console.log(`[InboxAgent] Scheduled — next run at ${first.toLocaleString()}`);
+})();
+
+// Bank transactions sync nightly at 12:30am, so rent received and loan and
+// bill payments made yesterday are matched before the morning. Until now
+// they synced only when someone pressed Sync.
+(function scheduleBankSync() {
+  const run = async () => {
+    const owners = await db.plaidItem.findMany({ where: { isActive: true }, distinct: ['userId'], select: { userId: true } }).catch(() => []);
+    for (const { userId } of owners) {
+      await syncAllWatchedAccounts(userId).catch(err => console.warn('[BankSync]', userId, err instanceof Error ? err.message : err));
+    }
+  };
+  const first = new Date();
+  first.setHours(0, 30, 0, 0);
+  if (first <= new Date()) first.setDate(first.getDate() + 1);
+  setTimeout(() => { run(); setInterval(run, 24 * 60 * 60 * 1000); }, first.getTime() - Date.now());
 })();
 
 // NOTE: Removed startup auto-scrape. Scrapes run every 6 hours via setInterval above,
