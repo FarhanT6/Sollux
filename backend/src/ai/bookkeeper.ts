@@ -5,6 +5,7 @@ import { getPaymentPriorities } from '../services/paymentPriority';
 import { watchDeadlines } from './deadlineWatcher';
 import { payDayBrief } from './payDayBrief';
 import { draftRentReminders } from './rentCollections';
+import { detectLeaks } from './leakDetective';
 
 /**
  * The nightly bookkeeper.
@@ -176,6 +177,9 @@ export async function runBookkeeperForUser(userId: string): Promise<{ raised: nu
   findings.push(...await watchDeadlines(userId, now));
   // ── This week's payments, and how to make each one
   findings.push(...await payDayBrief(userId).catch(() => []));
+  // ── Metered utilities: leaks, vacant-unit use, spikes
+  findings.push(...await detectLeaks(userId).catch(err => { console.warn('[Bookkeeper] leak detective:', err instanceof Error ? err.message : err); return []; }));
+
   // ── Late rent: reminders drafted for the owner to send
   try {
     await draftRentReminders(userId, now);
