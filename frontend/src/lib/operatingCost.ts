@@ -1,7 +1,6 @@
 /**
  * What a bill says the property cost to run, as against what it says to pay.
- * Mirrors backend/src/services/operatingCost.ts — the stat cards are computed
- * in the browser, so the rule has to exist on both sides and agree.
+ * Computed in the browser, where the account's stat cards are drawn.
  *
  * A City of Brawley bill reads Water 191.35 + Sewer 176.03 + Payment Plan
  * 81.36 + Tax 14.69, plus $42.32 penalties. Only the service lines are the

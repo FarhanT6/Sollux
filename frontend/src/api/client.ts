@@ -69,8 +69,6 @@ export const lookupPropertyByAddress = (params: { address: string; city: string;
 // Units
 export const getUnits = (params?: { propertyId?: string; history?: string }) =>
   api.get<Unit[]>('/units', { params }).then(r => r.data);
-export const getUnit = (id: string) =>
-  api.get<Unit>(`/units/${id}`).then(r => r.data);
 export const createUnit = (data: Partial<Unit>) =>
   api.post<Unit>('/units', data).then(r => r.data);
 export const updateUnit = (id: string, data: Partial<Unit>) =>
@@ -197,8 +195,6 @@ export const getLoanPayments = (loanId: string) =>
   api.get<LoanPayment[]>(`/loans/${loanId}/payments`).then(r => r.data);
 export const createLoanPayment = (loanId: string, data: Partial<LoanPayment>) =>
   api.post<LoanPayment>(`/loans/${loanId}/payments`, data).then(r => r.data);
-export const deleteLoanPayment = (loanId: string, paymentId: string) =>
-  api.delete(`/loans/${loanId}/payments/${paymentId}`);
 export const extendLoan = (id: string, data: { months: number; notes?: string }) =>
   api.post<Loan>(`/loans/${id}/extend`, data).then(r => r.data);
 
@@ -208,8 +204,6 @@ export const getReconciliationProfiles = () =>
   api.get<ReconciliationProfile[]>('/reconciliation/profiles').then(r => r.data);
 export const createReconciliationProfile = (data: Partial<ReconciliationProfile>) =>
   api.post<ReconciliationProfile>('/reconciliation/profiles', data).then(r => r.data);
-export const updateReconciliationProfile = (id: string, data: Partial<ReconciliationProfile>) =>
-  api.patch<ReconciliationProfile>(`/reconciliation/profiles/${id}`, data).then(r => r.data);
 export const deleteReconciliationProfile = (id: string) =>
   api.delete(`/reconciliation/profiles/${id}`);
 export const getReconciliationStatements = (profileId?: string) =>
@@ -365,7 +359,6 @@ export const updateTaxDoc = (id: string, data: Record<string, any>) => api.patch
 export const deleteTaxDoc = (id: string) => api.delete(`/tax-documents/${id}`);
 export const taxDocUrl = (id: string, n = 0) => api.get<{ url: string }>(`/tax-documents/${id}/documents/${n}`).then(r => r.data.url);
 export const createTaxPayment = (data: Record<string, any>) => api.post<TaxPay>('/tax-documents/payments', data).then(r => r.data);
-export const updateTaxPayment = (id: string, data: Record<string, any>) => api.patch<TaxPay>(`/tax-documents/payments/${id}`, data).then(r => r.data);
 export const deleteTaxPayment = (id: string) => api.delete(`/tax-documents/payments/${id}`);
 
 // Compliance: citations, orders to comply, permits, inspections
@@ -418,15 +411,11 @@ export const updateLegalMatter = (id: string, data: Partial<LegalMatter>) =>
   api.patch<LegalMatter>(`/legal/${id}`, data).then(r => r.data);
 export const deleteLegalMatter = (id: string) =>
   api.delete(`/legal/${id}`);
-export const getLegalMatter = (id: string) =>
-  api.get<LegalMatter>(`/legal/${id}`).then(r => r.data);
 export const getLegalSummary = () =>
   api.get<LegalSummary>('/legal/summary').then(r => r.data);
 // Timeline
 export const addLegalEvent = (matterId: string, data: Partial<LegalEvent>) =>
   api.post<LegalEvent>(`/legal/${matterId}/events`, data).then(r => r.data);
-export const updateLegalEvent = (matterId: string, eventId: string, data: Partial<LegalEvent>) =>
-  api.patch<LegalEvent>(`/legal/${matterId}/events/${eventId}`, data).then(r => r.data);
 export const deleteLegalEvent = (matterId: string, eventId: string) =>
   api.delete(`/legal/${matterId}/events/${eventId}`);
 // Fees and payments
@@ -554,18 +543,12 @@ export const updateNotificationPreferences = (data: any) =>
 // Gmail
 export const getGmailConnectUrl = () =>
   api.post<{ url: string }>('/gmail/connect').then(r => r.data);
-export const getGmailStatus = () =>
-  api.get<{ connected: boolean; email?: string }>('/gmail/status').then(r => r.data);
-export const syncGmail = () =>
-  api.post<{ jobId: string }>('/gmail/sync').then(r => r.data);
 
 // Google Drive
 export const getDriveConnectUrl = () =>
   api.post<{ url: string }>('/drive/connect').then(r => r.data);
 export const getDriveStatus = () =>
   api.get<{ connected: boolean; accounts: { id: string; email: string }[] }>('/drive/status').then(r => r.data);
-export const disconnectDrive = (id: string) =>
-  api.delete(`/drive/disconnect/${id}`);
 export const getDriveAccessToken = (tokenId: string) =>
   api.get<{ accessToken: string }>('/drive/access-token', { params: { tokenId } }).then(r => r.data);
 export const startDriveImport = (
@@ -619,8 +602,6 @@ export const recordBankBalance = (id: string, data: { balance: number; creditLim
   api.post(`/bank-accounts/${id}/balance`, data).then(r => r.data);
 
 // Pending outflows and the pay planner
-export const getPendingOutflows = (includeCleared = false) =>
-  api.get<PendingOutflow[]>('/bank-accounts/pending', { params: includeCleared ? { cleared: '1' } : {} }).then(r => r.data);
 export const addPendingOutflow = (bankAccountId: string, data: { amount: number; description: string; kind?: PendingOutflowKind; expectedDate?: string | null; loanId?: string | null; notes?: string | null }) =>
   api.post<PendingOutflow>(`/bank-accounts/${bankAccountId}/pending`, data).then(r => r.data);
 export const updatePendingOutflow = (id: string, data: Partial<Pick<PendingOutflow, 'amount' | 'description' | 'kind' | 'expectedDate' | 'cleared' | 'notes' | 'bankAccountId'>>) =>
@@ -631,12 +612,8 @@ export const getPayPlan = (params?: { days?: number; cushion?: number; utilities
   api.get<PayPlan>('/pay-plan', { params: { days: params?.days, cushion: params?.cushion, utilities: params?.utilities === false ? '0' : undefined } }).then(r => r.data);
 
 // Other Income
-export const getOtherIncome = (params?: { year?: number; month?: number }) =>
-  api.get<OtherIncome[]>('/other-income', { params }).then(r => r.data);
 export const createOtherIncome = (data: Partial<OtherIncome>) =>
   api.post<OtherIncome>('/other-income', data).then(r => r.data);
-export const updateOtherIncome = (id: string, data: Partial<OtherIncome>) =>
-  api.patch<OtherIncome>(`/other-income/${id}`, data).then(r => r.data);
 export const deleteOtherIncome = (id: string) =>
   api.delete(`/other-income/${id}`);
 
@@ -861,8 +838,6 @@ export const getClickUpTasks = (opts: { propertyId?: string; includeClosed?: boo
   api.get<{ groups: ClickUpTaskGroup[] }>('/clickup/tasks', { params: opts }).then(r => r.data.groups);
 export const createClickUpTask = (t: { propertyId: string; name: string; description?: string; dueDate?: string | null; priority?: 1 | 2 | 3 | 4 | null }) =>
   api.post<ClickUpTask>('/clickup/tasks', t).then(r => r.data);
-export const updateClickUpTask = (id: string, t: { name?: string; description?: string; dueDate?: string | null; priority?: 1 | 2 | 3 | 4 | null; status?: string }) =>
-  api.patch<ClickUpTask>(`/clickup/tasks/${id}`, t).then(r => r.data);
 export const closeClickUpTask = (id: string, listId: string) => api.post(`/clickup/tasks/${id}/close`, { listId }).then(r => r.data);
 export const syncClickUpBills = () =>
   api.post<{ created: number; updated: number; closed: number; skipped: string[] }>('/clickup/sync-bills').then(r => r.data);

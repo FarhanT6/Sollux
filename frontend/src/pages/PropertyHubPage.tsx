@@ -1871,7 +1871,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                       <p className="text-xs text-gray-600 mt-1">
                         Rent often arrives from a spouse, a relative or an employer. A bank transfer naming
                         someone listed here is matched to this lease and logged without asking; anything else
-                        waits for you in <Link to="/incoming-payments" className="text-amber-400 hover:text-amber-300">Payments</Link>.
+                        waits for you in <Link to="/finances?tab=incoming" className="text-amber-400 hover:text-amber-300">Payments</Link>.
                       </p>
                     </div>
 
