@@ -14,6 +14,7 @@ import type {
 import { OTHER_INCOME_LABELS, RENT_PAYMENT_METHODS, RENT_PAYMENT_METHOD_LABELS } from '../types';
 import { todayISO } from '../lib/date';
 import LoanPaymentTracker from '../components/loans/LoanPaymentTracker';
+import RentRemindersPanel from '../components/tenant/RentRemindersPanel';
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
@@ -236,6 +237,7 @@ function OverviewTab({ budget, onChanged }: { budget: BudgetSummary; onChanged: 
       {/* Rent collection by property */}
       <Section title="Rent Collection" badge={`${fmt(rent.collected)} / ${fmt(rent.expected)}`}>
         <ProgressBar value={rent.collected} total={rent.expected} color="emerald" />
+        <div className="mt-3"><RentRemindersPanel /></div>
         <RentCollectionTable rows={rent.rows} outstanding={rent.outstanding} expected={rent.expected} collected={rent.collected} onChanged={onChanged} period={`${budget.year}-${String(budget.month).padStart(2, '0')}`} />
       </Section>
 

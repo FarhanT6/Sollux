@@ -992,3 +992,12 @@ export const deleteReimbursementInvoice = (id: string) =>
 export interface Letterhead { name: string; address?: string | null; phone?: string | null; email?: string | null }
 export const getLetterhead = () => api.get<Letterhead | null>('/reimbursements/letterhead').then(r => r.data);
 export const saveLetterhead = (body: Letterhead) => api.put<Letterhead>('/reimbursements/letterhead', body).then(r => r.data);
+
+// Rent reminders drafted by the collections assistant, for the owner to send.
+export interface MessageDraftT {
+  id: string; leaseId: string | null; kind: 'REMINDER' | 'FIRM'; toName: string | null; toEmail: string | null; toPhone: string | null;
+  subject: string | null; body: string; sms: string | null; amountDue: number | null; status: string; createdAt: string;
+}
+export const getMessageDrafts = () => api.get<MessageDraftT[]>('/message-drafts').then(r => r.data);
+export const draftRemindersNow = () => api.post<{ drafted: number; late: number }>('/message-drafts/draft-now').then(r => r.data);
+export const markDraft = (id: string, action: 'sent' | 'dismiss') => api.post(`/message-drafts/${id}/${action}`);

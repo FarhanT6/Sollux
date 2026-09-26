@@ -2169,3 +2169,29 @@ model CardTransaction {
   @@index([cardId, date])
   @@map("card_transactions")
 }
+
+// A message Sollux drafted for the owner to send — a rent reminder to a late
+// tenant. Drafted nightly; the owner reviews, copies or opens it in their
+// email or text app, and marks it sent. Sollux never sends it itself.
+model MessageDraft {
+  id         String    @id @default(cuid())
+  userId     String
+  leaseId    String?
+  // REMINDER (a few days late) | FIRM (past the grace period, fee and notice mentioned)
+  kind       String
+  toName     String?
+  toEmail    String?
+  toPhone    String?
+  subject    String?
+  body       String // the email
+  sms        String? // the short text version
+  amountDue  Decimal?  @db.Decimal(10, 2)
+  // DRAFT | SENT | DISMISSED
+  status     String    @default("DRAFT")
+  dedupeKey  String    @unique
+  createdAt  DateTime  @default(now())
+  sentAt     DateTime?
+
+  @@index([userId, status])
+  @@map("message_drafts")
+}
