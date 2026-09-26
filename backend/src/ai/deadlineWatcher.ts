@@ -8,7 +8,10 @@
  *  - a prepayment penalty about to end (the window to refinance opens);
  *  - a property-tax installment coming due and unpaid;
  *  - a citation, notice or permit with a deadline or fine due;
- *  - a fixed-term lease ending.
+ *  - a fixed-term lease ending;
+ *  - a scheduled rent increase whose notice deadline is near (30 days' notice
+ *    for 10% or less, 90 above), leases a year or more without an increase,
+ *    and units standing vacant.
  *
  * Pure date arithmetic on what is on file; the findings go through the
  * bookkeeper, which keeps one live insight per key and clears it when the
@@ -156,6 +159,73 @@ export async function watchDeadlines(userId: string, now = new Date()): Promise<
       key: `lease-ending:${le.id}`, propertyId: le.unit.propertyId, type: 'REMINDER', severity: d <= 30 ? 'WARNING' : 'INFO',
       title: `${name.get(le.unit.propertyId)} · ${le.unit.unitLabel}: ${who}'s lease ends ${fmt(le.endDate!)} (${inDays(d)})`,
       body: 'Renew, raise the rent, convert to month-to-month, or give notice — California needs 30 to 90 days\' notice depending on the change.',
+    });
+  }
+
+  // ── Rent increases ──────────────────────────────────────────────────────
+  // California (Civil Code 827): 30 days' written notice for an increase of
+  // 10% or less in a year, 90 days above that. A scheduled increase is raised
+  // while its notice deadline approaches, so notice goes out in time.
+  const active = await db.lease.findMany({
+    where: { status: 'ACTIVE', unit: { property: { userId } } },
+    select: {
+      id: true, rentAmount: true, startDate: true, businessName: true,
+      unit: { select: { unitLabel: true, propertyId: true } },
+      leaseTenants: { where: { isPrimary: true }, select: { tenant: { select: { fullName: true } } }, take: 1 },
+      scheduledIncreases: { where: { applied: false }, orderBy: { effectiveDate: 'asc' }, take: 1 },
+      rentChanges: { orderBy: { effectiveDate: 'desc' }, take: 1, select: { effectiveDate: true } },
+    },
+  });
+  const eligible: string[] = [];
+  for (const le of active) {
+    const rent = Number(le.rentAmount);
+    const who = le.leaseTenants[0]?.tenant.fullName ?? le.businessName ?? 'Tenant';
+    const where = `${name.get(le.unit.propertyId)} · ${le.unit.unitLabel}`;
+    const inc = le.scheduledIncreases[0];
+    if (inc) {
+      const pct = inc.newAmount != null && rent > 0 ? (Number(inc.newAmount) / rent - 1) * 100 : inc.percentMax ?? inc.percent ?? null;
+      const noticeDays = pct != null && pct > 10 ? 90 : 30;
+      const noticeBy = new Date(inc.effectiveDate.getTime() - noticeDays * DAY);
+      const d = daysUntil(noticeBy, now);
+      const toEffective = daysUntil(inc.effectiveDate, now);
+      if (d <= 21 && toEffective >= -7) {
+        const newRent = inc.newAmount != null ? Number(inc.newAmount) : pct != null ? rent * (1 + pct / 100) : null;
+        out.push({
+          key: `rent-increase:${inc.id}`, propertyId: le.unit.propertyId, type: 'REMINDER', severity: d < 0 ? 'ALERT' : d <= 7 ? 'WARNING' : 'INFO',
+          title: `${where}: rent increase for ${who} on ${fmt(inc.effectiveDate)} — ${d < 0 ? `notice was due ${fmt(noticeBy)}` : `serve notice by ${fmt(noticeBy)} (${inDays(d)})`}`,
+          body: `${money(rent)} → ${newRent != null ? money(newRent) : 'the new rent'}${pct != null ? ` (${pct.toFixed(1)}%)` : ''}. ${noticeDays} days' written notice is needed for an increase ${noticeDays === 90 ? 'over' : 'of'} 10%.${d < 0 ? ' Served late, the increase takes effect ' + noticeDays + ' days after the notice, not on the scheduled date.' : ''}${le.businessName ? ' Commercial lease: the lease\'s own terms govern notice.' : ''}`,
+          recommendation: 'Serve the written notice, then keep a copy on the tenant\'s page.',
+        });
+      }
+      continue;
+    }
+    // No increase scheduled: eligible once the rent has stood for a year.
+    const since = le.rentChanges[0]?.effectiveDate ?? le.startDate;
+    if (since && daysUntil(since, now) <= -365) eligible.push(`${where} (${who}) — ${money(rent)} since ${fmt(since)}`);
+  }
+  if (eligible.length) {
+    out.push({
+      key: 'rent-increase-eligible', propertyId: home, type: 'SAVINGS', severity: 'INFO',
+      title: `${eligible.length} lease${eligible.length === 1 ? '' : 's'} with no rent increase in over a year`,
+      body: eligible.join('\n') + '\n\nFor units covered by California\'s rent cap (AB 1482), a year\'s increase is limited to 5% plus local inflation, 10% at most; single-family homes and newer buildings are often exempt. Commercial leases follow their own terms.',
+      recommendation: 'Schedule an increase on the lease (Rent increases) and Sollux will remind you when notice is due.',
+    });
+  }
+
+  // ── Vacant units ────────────────────────────────────────────────────────
+  const units = await db.unit.findMany({
+    where: { property: { userId } },
+    select: { unitLabel: true, propertyId: true, leases: { orderBy: { endDate: 'desc' }, select: { status: true, endDate: true } } },
+  });
+  const vacant = units.filter(u => u.leases.length > 0 && !u.leases.some(l => l.status === 'ACTIVE' || l.status === 'PENDING'))
+    .map(u => { const ended = u.leases.find(l => l.endDate)?.endDate ?? null; return { u, ended, days: ended ? -daysUntil(ended, now) : null }; })
+    .filter(v => v.days == null || v.days >= 14);
+  if (vacant.length) {
+    out.push({
+      key: 'vacant-units', propertyId: home, type: 'INFO', severity: vacant.some(v => (v.days ?? 0) >= 60) ? 'WARNING' : 'INFO',
+      title: `${vacant.length} vacant unit${vacant.length === 1 ? '' : 's'}`,
+      body: vacant.map(v => `${name.get(v.u.propertyId)} · ${v.u.unitLabel}${v.days != null ? ` — empty ${v.days} days (since ${fmt(v.ended!)})` : ''}`).join('\n'),
+      recommendation: 'List it, or add the new lease so rent is tracked. Utilities on a vacant unit are watched for leaks.',
     });
   }
 
