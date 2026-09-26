@@ -1210,6 +1210,11 @@ model LoanPayment {
   balanceAfter       Decimal?   @db.Decimal(14, 2)
   confirmationNumber String?
   notes              String?
+  // The month this payment covers (first of the month), like rent's
+  // periodDate — a payment sent on the 30th can be for next month. When
+  // null, the month of `date` is the month it covers.
+  periodDate         DateTime?
+  method             String? // AUTOPAY, ONLINE, CHECK, ZELLE, BANK_DEPOSIT, CASH, WIRE, DEDUCTED, OTHER
 
   @@index([loanId, date])
   @@map("loan_payments")

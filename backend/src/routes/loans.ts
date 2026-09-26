@@ -7,6 +7,7 @@ import { calculateCurrentBalance, buildAmortizationSchedule } from '../lib/amort
 import { encryptOptional, decryptOptional } from '../crypto/encrypt';
 import { syncLoanFromComponents, serializeLoanComponent } from '../services/loanComponents';
 import { readDocument } from '../services/documentReader';
+import { trackerMonth, trackerYear } from '../services/loanTracker';
 import { rowsFromCsv, matchRows, loansForMatch, applyRow, cleanRow, PAYMENT_METHODS, type SheetRow } from '../services/loanPaymentDetails';
 
 const router = Router();
@@ -99,6 +100,9 @@ const LoanPaymentSchema = z.object({
   balanceAfter: z.number().optional().nullable(),
   confirmationNumber: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
+  // The month the payment covers, YYYY-MM; defaults to the month it was paid.
+  periodMonth: z.string().regex(/^\d{4}-\d{2}$/).optional().nullable(),
+  method: z.enum(PAYMENT_METHODS).optional().nullable(),
 });
 
 // Applies a due rate reset for a VARIABLE-rate loan: looks up the
@@ -206,6 +210,23 @@ function computeRemainingInterest(l: {
   const amortization = buildAmortizationSchedule(loanInput, balanceResult, []);
   return amortization.isAmortizing ? amortization.totalInterestRemaining : null;
 }
+
+// ─── Monthly payment tracker ───────────────────────────────
+// GET /api/loans/tracker?month=YYYY-MM&today=YYYY-MM-DD, or ?year=YYYY for
+// twelve months side by side. `today` is the viewer's date, so "late" turns
+// on at their midnight, not the server's.
+router.get('/tracker', async (req, res, next) => {
+  try {
+    const q = z.object({
+      month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+      year: z.coerce.number().int().min(2000).max(2100).optional(),
+      today: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    }).parse(req.query);
+    const today = q.today ?? new Date().toISOString().slice(0, 10);
+    if (q.year) return res.json(await trackerYear(req.dbUserId!, q.year, today));
+    res.json(await trackerMonth(req.dbUserId!, q.month ?? today.slice(0, 7), today));
+  } catch (err) { next(err); }
+});
 
 // ─── Payment details from the owner's loan sheet ───────────
 // Read a sheet (CSV exactly; PDF or photo through Claude), pair each row with
@@ -519,8 +540,10 @@ router.post('/:id/payments', async (req, res, next) => {
   try {
     const loan = await db.loan.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
     if (!loan) return res.status(404).json({ error: 'Loan not found' });
-    const data = LoanPaymentSchema.parse(req.body);
-    const payment = await db.loanPayment.create({ data: { ...data, loanId: req.params.id } });
+    const { periodMonth, ...data } = LoanPaymentSchema.parse(req.body);
+    const payment = await db.loanPayment.create({
+      data: { ...data, loanId: req.params.id, ...(periodMonth ? { periodDate: new Date(`${periodMonth}-01T00:00:00.000Z`) } : {}) },
+    });
     res.status(201).json(serializeLoanPayment(payment));
   } catch (err) { next(err); }
 });

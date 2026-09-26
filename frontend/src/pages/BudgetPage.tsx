@@ -4,7 +4,7 @@ import {
   getBudgetMonthly, getBudgetDelinquency, getBudgetForecast,
   getBankAccounts, createBankAccount, updateBankAccount, deleteBankAccount, recordBankBalance,
   createOtherIncome, deleteOtherIncome, updateLease,
-  createRentPayment, createLoanPayment, getRentPayments,
+  createRentPayment, getRentPayments,
 } from '../api/client';
 import type { RentPayment } from '../types';
 import type {
@@ -13,6 +13,7 @@ import type {
 } from '../types';
 import { OTHER_INCOME_LABELS, RENT_PAYMENT_METHODS, RENT_PAYMENT_METHOD_LABELS } from '../types';
 import { todayISO } from '../lib/date';
+import LoanPaymentTracker from '../components/loans/LoanPaymentTracker';
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
@@ -229,7 +230,6 @@ export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
 
 function OverviewTab({ budget, onChanged }: { budget: BudgetSummary; onChanged: () => void }) {
   const { rent, mortgages, utilities } = budget;
-  const [logMortgage, setLogMortgage] = useState<import('../types').BudgetMortgageRow | null>(null);
 
   return (
     <div className="space-y-6">
@@ -239,65 +239,10 @@ function OverviewTab({ budget, onChanged }: { budget: BudgetSummary; onChanged: 
         <RentCollectionTable rows={rent.rows} outstanding={rent.outstanding} expected={rent.expected} collected={rent.collected} onChanged={onChanged} period={`${budget.year}-${String(budget.month).padStart(2, '0')}`} />
       </Section>
 
-      {/* Mortgages */}
-      <Section title="Mortgages" badge={`${fmt(mortgages.paid)} paid of ${fmt(mortgages.total)}`}>
-        <ProgressBar value={mortgages.paid} total={mortgages.total} color="blue" />
-        <div className="mt-3 overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-gray-500 text-xs uppercase tracking-wider border-b border-white/5">
-                <th className="text-left pb-2">Lender</th>
-                <th className="text-left pb-2">Property</th>
-                <th className="text-right pb-2">Monthly</th>
-                <th className="text-right pb-2">Paid</th>
-                <th className="text-left pb-2 pl-3">Status</th>
-                <th className="text-right pb-2"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {mortgages.rows.map(row => (
-                <tr key={row.loanId} className="border-b border-white/5 hover:bg-white/2">
-                  <td className="py-2 text-white">
-                    <Link to={`/loans/${row.loanId}`} className="hover:text-amber-400">{row.lender}</Link>
-                  </td>
-                  <td className="py-2 text-gray-400">{row.property}</td>
-                  <td className="py-2 text-right text-gray-300">{fmt(row.monthlyPayment)}</td>
-                  <td className="py-2 text-right text-emerald-500">{row.paid > 0 ? fmt(row.paid) : '—'}</td>
-                  <td className="py-2 pl-3">
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${
-                      row.status === 'paid'
-                        ? 'bg-emerald-900/40 text-emerald-500'
-                        : 'bg-red-900/50 text-red-500'
-                    }`}>{row.status}</span>
-                  </td>
-                  <td className="py-2 text-right">
-                    {row.status !== 'paid' && (
-                      <button onClick={() => setLogMortgage(row)} className="text-xs text-amber-400 hover:text-amber-300">Log payment</button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr className="text-sm font-semibold text-white border-t border-white/10">
-                <td colSpan={2} className="pt-2">Total</td>
-                <td className="pt-2 text-right">{fmt(mortgages.total)}</td>
-                <td className="pt-2 text-right text-emerald-500">{fmt(mortgages.paid)}</td>
-                <td className="pt-2 pl-3 text-red-500">{mortgages.unpaid > 0 ? `${fmt(mortgages.unpaid)} left` : '✓'}</td>
-                <td />
-              </tr>
-            </tfoot>
-          </table>
-        </div>
+      {/* Loan payments — the same month, tracked like rent */}
+      <Section title="Loan Payments" badge={`${fmt(mortgages.paid)} paid of ${fmt(mortgages.total)} in mortgages`}>
+        <LoanPaymentTracker month={`${budget.year}-${String(budget.month).padStart(2, '0')}`} />
       </Section>
-
-      {logMortgage && (
-        <LogMortgagePaymentModal
-          row={logMortgage}
-          onClose={() => setLogMortgage(null)}
-          onSaved={() => { setLogMortgage(null); onChanged(); }}
-        />
-      )}
 
       {/* Utility bills */}
       <Section title="Utility Bills" badge={`${fmt(utilities.paid)} paid of ${fmt(utilities.total)}`}>
@@ -1014,47 +959,6 @@ function LogRentPaymentModal({ row, period, onClose, onSaved }: {
       <select value={method} onChange={e => setMethod(e.target.value)} className="field-input mb-3 w-full">
         {RENT_PAYMENT_METHODS.map(m => <option key={m} value={m}>{RENT_PAYMENT_METHOD_LABELS[m]}</option>)}
       </select>
-      <label className="field-label">Notes</label>
-      <input value={notes} onChange={e => setNotes(e.target.value)} className="field-input mb-4 w-full" />
-      <div className="flex justify-end gap-2">
-        <button onClick={onClose} className="btn-ghost px-4 py-2 text-sm">Cancel</button>
-        <button disabled={!amount || saving} onClick={handleSave} className="btn-primary px-4 py-2 text-sm disabled:opacity-50">
-          {saving ? 'Saving…' : 'Log payment'}
-        </button>
-      </div>
-    </ModalShell>
-  );
-}
-
-function LogMortgagePaymentModal({ row, onClose, onSaved }: {
-  row: import('../types').BudgetMortgageRow; onClose: () => void; onSaved: () => void;
-}) {
-  const [amount, setAmount] = useState(String(row.monthlyPayment));
-  const [date, setDate] = useState(() => todayISO());
-  const [notes, setNotes] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  async function handleSave() {
-    if (!amount) return;
-    setSaving(true);
-    try {
-      await createLoanPayment(row.loanId, {
-        date,
-        amount: parseFloat(amount),
-        status: 'PAID',
-        notes: notes || undefined,
-      });
-      onSaved();
-    } finally { setSaving(false); }
-  }
-
-  return (
-    <ModalShell title={`Log payment — ${row.lender}`} onClose={onClose}>
-      <p className="text-xs text-gray-500 mb-3">{row.property}</p>
-      <label className="field-label">Amount *</label>
-      <input type="number" value={amount} onChange={e => setAmount(e.target.value)} className="field-input mb-3 w-full" />
-      <label className="field-label">Paid date</label>
-      <input type="date" value={date} onChange={e => setDate(e.target.value)} className="field-input mb-3 w-full" />
       <label className="field-label">Notes</label>
       <input value={notes} onChange={e => setNotes(e.target.value)} className="field-input mb-4 w-full" />
       <div className="flex justify-end gap-2">

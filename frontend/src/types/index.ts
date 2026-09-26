@@ -553,6 +553,9 @@ export interface LoanPayment {
   balanceAfter?: number;
   confirmationNumber?: string;
   notes?: string;
+  /** The month it covers, first of the month; null → the month it was paid. */
+  periodDate?: string | null;
+  method?: LoanPaymentMethod | null;
 }
 
 export interface InsurancePolicy {
