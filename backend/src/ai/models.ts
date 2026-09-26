@@ -29,7 +29,7 @@ export interface AskOptions {
 export interface AskResult { text: string; model: string; fellBack: boolean }
 
 /** The request shape each model family accepts. */
-function paramsFor(model: string, o: AskOptions): Anthropic.MessageCreateParamsNonStreaming {
+export function paramsFor(model: string, o: AskOptions): Anthropic.MessageCreateParamsNonStreaming {
   const base: Anthropic.MessageCreateParamsNonStreaming = {
     model, max_tokens: o.maxTokens, messages: o.messages, ...(o.system ? { system: o.system } : {}),
   };
@@ -87,7 +87,7 @@ export async function askClaude(client: Anthropic, o: AskOptions): Promise<AskRe
 }
 
 /** Overloaded, rate-limited, down or a model this key cannot use: another model may answer. */
-function worthRetrying(err: unknown): boolean {
+export function worthRetrying(err: unknown): boolean {
   const status = (err as { status?: number })?.status;
   if (status == null) return true; // network trouble
   if (status === 401 || status === 403) return false; // the key, not the model

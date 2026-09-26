@@ -728,8 +728,12 @@ export const getBudgetForecast = (months = 6) =>
   api.get<BudgetForecast>('/budget/forecast', { params: { months } }).then(r => r.data);
 
 // AI portfolio query
-export const queryPortfolio = (query: string) =>
-  api.post<{ answer: string }>('/ai/query', { query }).then(r => r.data);
+// Ask Sollux with tools: answers from live data; proposed payments run only on Confirm.
+export interface AgentAction { tool: string; input: Record<string, unknown>; summary: string }
+export const askSollux = (messages: { role: 'user' | 'assistant'; content: string }[], today: string) =>
+  api.post<{ answer: string; actions: AgentAction[] }>('/ai/agent', { messages, today }, { timeout: 120000 }).then(r => r.data);
+export const confirmSolluxAction = (a: AgentAction) =>
+  api.post<{ result: string }>('/ai/agent/confirm', { tool: a.tool, input: a.input }).then(r => r.data);
 
 // Plaid bank sync
 export const createPlaidLinkToken = () =>
