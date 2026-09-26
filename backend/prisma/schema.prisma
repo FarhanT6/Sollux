@@ -129,6 +129,7 @@ model Property {
   reconciliationProfiles ReconciliationProfile[]
   documents              Document[]
   outgoingTransactions   OutgoingTransaction[]
+  complianceItems        ComplianceItem[]
 
   /// ClickUp list holding this property's operations tasks (created on demand).
   clickupListId   String?
@@ -911,6 +912,9 @@ model Expense {
   isCapEx     Boolean         @default(false)
   isPersonal  Boolean         @default(false)
   documentUrl String?
+  /// The citation or permit this money was paid toward, when there is one.
+  complianceItemId String?
+  complianceItem   ComplianceItem? @relation(fields: [complianceItemId], references: [id], onDelete: SetNull)
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 
@@ -934,6 +938,9 @@ enum ExpenseCategory {
   TRAVEL
   ADVERTISING
   OTHER
+  HANDYMAN
+  PERMITS
+  CITATIONS_FINES
   // Personal (isPersonal: true) categories — shown on the dedicated
   // Personal Expenses page, distinct from the property-level categories
   // above (e.g. AUTO_INSURANCE vs. the landlord-policy INSURANCE).
@@ -1297,6 +1304,15 @@ model TaxAssessment {
   installment2Paid DateTime?
   status           TaxStatus @default(UNPAID)
   notes            String?
+  /// What the bill itself prints, so the record reads like the bill.
+  apn                String?
+  taxingAuthority    String?
+  installment1Amount Decimal?  @db.Decimal(12, 2)
+  installment2Amount Decimal?  @db.Decimal(12, 2)
+  /// The tax bill PDF (S3 key; read through a signed URL only).
+  documentS3Key      String?
+  /// Paid by the mortgage lender from escrow, not by the owner directly.
+  escrowLoanId       String?
 
   @@unique([propertyId, taxYear])
   @@map("tax_assessments")
@@ -1759,4 +1775,118 @@ model ReimbursementInvoiceLine {
   sortKey      DateTime
 
   @@map("reimbursement_invoice_lines")
+}
+
+// ─── COMPLIANCE: CITATIONS, PERMITS, INSPECTIONS ─────────
+/// A city's code-enforcement citation, a permit, an inspection or a notice
+/// on one property. Citations carry a compliance date and escalate (warning,
+/// then $100, $200, $500…); permits carry an expiry. Money paid toward one
+/// is an Expense linked back here.
+model ComplianceItem {
+  id              String    @id @default(cuid())
+  userId          String
+  propertyId      String
+  property        Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  /// CITATION | PERMIT | INSPECTION | NOTICE
+  kind            String
+  title           String
+  agency          String?
+  caseNumber      String?
+  referenceNumber String?
+  /// WARNING | FIRST | SECOND | THIRD | FOURTH — how far a citation has escalated.
+  level           String?
+  issuedDate      DateTime?
+  /// When the violation was observed, when the citation was written.
+  violationDate   DateTime?
+  /// Correction deadline for a citation or order, expiry for a permit,
+  /// date of an inspection.
+  dueDate         DateTime?
+  /// When the fine must be paid (Redlands: 15 days from the citation date).
+  paymentDueDate  DateTime?
+  /// The total fine, as printed ("TOTAL FINE: $2,600.00").
+  fineAmount      Decimal?  @db.Decimal(10, 2)
+  apn             String?
+  /// What happens if it is ignored ("$100 citation after 30 days, rising
+  /// every 30 days"), in the notice's words.
+  escalation      String?
+  /// OPEN | IN_PROGRESS | RESOLVED | APPEALED | CLOSED
+  status          String    @default("OPEN")
+  resolvedDate    DateTime?
+  /// [{ code, description, correction, fine }] as the citation lists them.
+  violations      Json?
+  contactName     String?
+  contactPhone    String?
+  contactEmail    String?
+  notes           String?
+  /// The citation's pages — a scan, or several phone photos — as
+  /// [{ key, name }]; read only through signed URLs.
+  documents       Json?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  expenses Expense[]
+
+  @@index([userId, status])
+  @@index([propertyId])
+  @@map("compliance_items")
+}
+
+// ─── DEVELOPMENT PROJECTS (outside the rental portfolio) ─
+/// A build funded from here but not a rental property — a 10-story
+/// apartment building in Bangladesh, say. Money goes out as transfers
+/// (a wire, Remitly, Wise), each with its fee and the exchange rate that
+/// decides what arrived on the other side.
+model DevelopmentProject {
+  id            String    @id @default(cuid())
+  userId        String
+  name          String
+  country       String?
+  city          String?
+  address       String?
+  description   String?
+  /// ISO code of the currency spent on the ground (BDT).
+  localCurrency String    @default("BDT")
+  budgetUsd     Decimal?  @db.Decimal(14, 2)
+  budgetLocal   Decimal?  @db.Decimal(16, 2)
+  floors        Int?
+  /// PLANNING | ACTIVE | ON_HOLD | COMPLETE
+  status        String    @default("ACTIVE")
+  startDate     DateTime?
+  targetDate    DateTime?
+  notes         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  transfers ProjectTransfer[]
+
+  @@index([userId])
+  @@map("development_projects")
+}
+
+model ProjectTransfer {
+  id            String             @id @default(cuid())
+  projectId     String
+  project       DevelopmentProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  date          DateTime
+  /// What left the account, before the fee.
+  amountUsd     Decimal            @db.Decimal(12, 2)
+  feeUsd        Decimal?           @db.Decimal(10, 2)
+  /// Local currency per US dollar (e.g. 121.35 BDT).
+  exchangeRate  Decimal?           @db.Decimal(12, 4)
+  /// What arrived, in local currency; derived from the rate when not given.
+  amountLocal   Decimal?           @db.Decimal(16, 2)
+  /// Bank wire, Remitly, Wise, Western Union, cash, …
+  method        String?
+  recipient     String?
+  /// What the money is for: LAND, DESIGN_PERMITS, FOUNDATION, STRUCTURE,
+  /// MATERIALS, LABOR, FINISHING, UTILITIES, OTHER.
+  purpose       String?
+  bankAccountId String?
+  reference     String?
+  notes         String?
+  documentS3Key String?
+  createdAt     DateTime           @default(now())
+
+  @@index([projectId, date])
+  @@map("project_transfers")
 }

@@ -53,6 +53,8 @@ import { errorHandler } from './middleware/errorHandler';
 import { requireAuth, clerkMiddleware } from './middleware/requireAuth';
 import auditRouter from './routes/audit';
 import telemetryRouter from './routes/telemetry';
+import complianceRouter from './routes/compliance';
+import projectsRouter from './routes/projects';
 
 // Run the Drive-import and Gmail workers in the API process. Ideally these
 // live in a separate Render service, but a Background Worker costs extra —
@@ -192,6 +194,8 @@ app.use('/api/transactions', transactionsRouter);
 app.use('/api/expense-transactions', outgoingTransactionsRouter);
 app.use('/api/insurance', insuranceRouter);
 app.use('/api/taxes', taxesRouter);
+app.use('/api/compliance', complianceRouter);
+app.use('/api/projects', projectsRouter);
 app.use('/api/improvements', improvementsRouter);
 app.use('/api/legal', legalRouter);
 app.use('/api/pnl', pnlRouter);

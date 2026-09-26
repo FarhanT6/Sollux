@@ -45,6 +45,18 @@ const NAV = [
     icon: (z: number) => <Ico size={z}><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></Ico>,
   },
   {
+    to: '/taxes', label: 'Taxes',
+    icon: (z: number) => <Ico size={z}><path d="M3 21h18"/><path d="M4 10h16"/><path d="M12 3l9 5H3l9-5z"/><path d="M6 10v8M10 10v8M14 10v8M18 10v8"/></Ico>,
+  },
+  {
+    to: '/compliance', label: 'Compliance',
+    icon: (z: number) => <Ico size={z}><path d="M12 2l8 4v6c0 5-3.5 9-8 10-4.5-1-8-5-8-10V6l8-4z"/><path d="M9 12l2 2 4-4"/></Ico>,
+  },
+  {
+    to: '/projects', label: 'Projects',
+    icon: (z: number) => <Ico size={z}><path d="M4 21V5h7v16"/><path d="M11 9h9v12"/><path d="M7 9h1M7 13h1M7 17h1M14 13h2M14 17h2"/><path d="M2 21h20"/></Ico>,
+  },
+  {
     to: '/operations', label: 'Operations',
     icon: (z: number) => <Ico size={z}><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></Ico>,
   },

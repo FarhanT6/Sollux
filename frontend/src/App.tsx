@@ -23,6 +23,9 @@ import LoanDetailPage from './pages/LoanDetailPage';
 import NoticeDetailPage from './pages/NoticeDetailPage';
 import TenantDetailPage from './pages/TenantDetailPage';
 import ReimbursementInvoicePage from './pages/ReimbursementInvoicePage';
+import CompliancePage from './pages/CompliancePage';
+import ProjectsPage from './pages/ProjectsPage';
+import TaxesPage from './pages/TaxesPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isSignedIn, isLoaded } = useAuth();
@@ -61,6 +64,10 @@ export default function App() {
 
           {/* Finances hub */}
           <Route path="finances" element={<FinancesPage />} />
+          <Route path="taxes" element={<TaxesPage />} />
+          <Route path="compliance" element={<CompliancePage />} />
+          <Route path="projects" element={<ProjectsPage />} />
+          <Route path="projects/:id" element={<ProjectsPage />} />
           <Route path="loans/:id" element={<LoanDetailPage />} />
 
           {/* Portfolio hub */}

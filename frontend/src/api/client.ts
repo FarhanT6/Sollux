@@ -28,6 +28,7 @@ import type {
   Property, UtilityAccount, Statement, StatementSummaryRow, Payment, AIInsight, DashboardSummary,
   Unit, Tenant, LeaseTenant, Lease, LeaseDeposit, RentPayment, RentNotice, RentChange, ScheduledRentIncrease, LeaseUtilityCharge, Expense, Loan, LoanComponent, LoanPayment,
   InsurancePolicy, TaxAssessment, Improvement, LegalMatter, PropertyPnL, MonthlyPnL,
+  ComplianceItem, DevelopmentProject, ProjectTransfer,
   BankAccount, PendingOutflow, PendingOutflowKind, PayPlan, OtherIncome, BudgetSummary, DelinquencyTenant, BudgetForecast, IndexRate,
   ReconciliationProfile, ReconciliationStatement, ReconciliationLineItem,
   Document, DocumentClassification, DocumentMatch, DocumentCategory,
@@ -320,6 +321,45 @@ export const updateTaxAssessment = (id: string, data: Partial<TaxAssessment>) =>
   api.patch<TaxAssessment>(`/taxes/${id}`, data).then(r => r.data);
 export const deleteTaxAssessment = (id: string) =>
   api.delete(`/taxes/${id}`);
+export type FilePayload = { name: string; data: string };
+export interface DocMatch { confidence: 'high' | 'medium' | 'low' | 'none'; propertyId: string | null; propertyName: string | null }
+export const readTaxBill = (files: FilePayload[]) =>
+  api.post<{ fields: Record<string, any>; match: DocMatch | null }>('/taxes/read', { files }).then(r => r.data);
+export const saveTaxAssessment = (data: Record<string, any>) =>
+  api.post<TaxAssessment>('/taxes', data).then(r => r.data);
+export const taxBillUrl = (id: string) =>
+  api.get<{ url: string }>(`/taxes/${id}/document`).then(r => r.data.url);
+
+// Compliance: citations, orders to comply, permits, inspections
+export const getComplianceItems = (params?: { propertyId?: string; status?: string }) =>
+  api.get<ComplianceItem[]>('/compliance', { params }).then(r => r.data);
+export const readCitation = (files: FilePayload[]) =>
+  api.post<{ fields: Record<string, any>; match: DocMatch | null }>('/compliance/read', { files }).then(r => r.data);
+export const createComplianceItem = (data: Record<string, any>) =>
+  api.post<ComplianceItem>('/compliance', data).then(r => r.data);
+export const updateComplianceItem = (id: string, data: Record<string, any>) =>
+  api.patch<ComplianceItem>(`/compliance/${id}`, data).then(r => r.data);
+export const deleteComplianceItem = (id: string) => api.delete(`/compliance/${id}`);
+export const complianceDocumentUrl = (id: string, n: number) =>
+  api.get<{ url: string; name: string }>(`/compliance/${id}/documents/${n}`).then(r => r.data.url);
+export const payComplianceItem = (id: string, data: { amount: number; date: string; vendor?: string | null; description?: string | null; category?: string }) =>
+  api.post(`/compliance/${id}/payments`, data).then(r => r.data);
+
+// Development projects and transfers abroad
+export const getProjects = () => api.get<DevelopmentProject[]>('/projects').then(r => r.data);
+export const getProject = (id: string) => api.get<DevelopmentProject>(`/projects/${id}`).then(r => r.data);
+export const createProject = (data: Record<string, any>) => api.post<DevelopmentProject>('/projects', data).then(r => r.data);
+export const updateProject = (id: string, data: Record<string, any>) => api.patch<DevelopmentProject>(`/projects/${id}`, data).then(r => r.data);
+export const deleteProject = (id: string) => api.delete(`/projects/${id}`);
+export const readTransferReceipt = (files: FilePayload[]) =>
+  api.post<{ fields: Record<string, any> }>('/projects/read-receipt', { files }).then(r => r.data);
+export const createTransfer = (projectId: string, data: Record<string, any>) =>
+  api.post<ProjectTransfer>(`/projects/${projectId}/transfers`, data).then(r => r.data);
+export const updateTransfer = (id: string, data: Record<string, any>) =>
+  api.patch<ProjectTransfer>(`/projects/transfers/${id}`, data).then(r => r.data);
+export const deleteTransfer = (id: string) => api.delete(`/projects/transfers/${id}`);
+export const transferReceiptUrl = (id: string) =>
+  api.get<{ url: string }>(`/projects/transfers/${id}/document`).then(r => r.data.url);
 
 // Improvements
 export const getImprovements = (params?: { propertyId?: string }) =>

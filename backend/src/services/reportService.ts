@@ -29,6 +29,9 @@ const EXPENSE_CATEGORY_LABELS: Record<string, string> = {
   SUPPLIES: 'Office/Supplies',
   TRAVEL: 'Travel',
   ADVERTISING: 'Advertising',
+  HANDYMAN: 'Repairs & Maintenance (Handyman)',
+  PERMITS: 'Permits & Licenses',
+  CITATIONS_FINES: 'Fines & Citations',
   OTHER: 'Other',
 };
 

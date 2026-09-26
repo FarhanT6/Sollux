@@ -1216,7 +1216,7 @@ export function imageMediaType(buffer: Buffer): 'image/jpeg' | 'image/png' | 'im
  */
 const CLAUDE_PAGE_LIMIT = 100;
 const CLAUDE_PAGES_SENT = 40;
-async function trimPdfForClaude(pdfBuffer: Buffer, filename: string): Promise<Buffer> {
+export async function trimPdfForClaude(pdfBuffer: Buffer, filename: string): Promise<Buffer> {
   try {
     const { PDFDocument } = await import('pdf-lib');
     const src = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true, updateMetadata: false });
