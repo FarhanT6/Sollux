@@ -1,27 +1,23 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getLeases, createRentPayment, getProperties, getUnits } from '../api/client';
-import type { Lease, Property, Unit } from '../types';
-import { format } from 'date-fns';
-import { fmtDate, todayISO, thisMonthISO } from '../lib/date';
+import { getLeases, getProperties } from '../api/client';
+import type { Lease, Property } from '../types';
+import { fmtDate } from '../lib/date';
+import LogRentPaymentModal from '../components/tenant/LogRentPaymentModal';
+import RentPaymentHistory from '../components/tenant/RentPaymentHistory';
 
 const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 
 export default function RentRollPage({ embedded }: { embedded?: boolean } = {}) {
   const [leases, setLeases] = useState<Lease[]>([]);
   const [properties, setProperties] = useState<Property[]>([]);
-  const [units, setUnits] = useState<Unit[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterPropId, setFilterPropId] = useState('');
   const [filterStatus, setFilterStatus] = useState('ACTIVE');
-  const [showPayForm, setShowPayForm] = useState<string | null>(null);
-  const [payAmount, setPayAmount] = useState('');
-  const [payDate, setPayDate] = useState(() => todayISO());
-  const [payForMonth, setPayForMonth] = useState(() => thisMonthISO());
-  const [payMethod, setPayMethod] = useState('ZELLE');
-  const [payNotes, setPayNotes] = useState('');
-  const [saving, setSaving] = useState(false);
-
+  // The lease whose payment form is open, and the one whose history is shown.
+  const [logFor, setLogFor] = useState<Lease | null>(null);
+  const [openLease, setOpenLease] = useState<string | null>(null);
+  const [refresh, setRefresh] = useState(0);
   useEffect(() => {
     Promise.all([
       getLeases({ status: filterStatus || undefined }),
@@ -41,26 +37,6 @@ export default function RentRollPage({ embedded }: { embedded?: boolean } = {}) 
     const cmp = pa.localeCompare(pb);
     return cmp !== 0 ? cmp : (a.unit?.unitLabel || '').localeCompare(b.unit?.unitLabel || '');
   });
-
-  async function logPayment(leaseId: string) {
-    if (!payAmount || !payDate) return;
-    setSaving(true);
-    try {
-      await createRentPayment({
-        leaseId,
-        periodDate: `${payForMonth}-01T00:00:00.000Z`,
-        amount: parseFloat(payAmount),
-        paidDate: payDate,
-        method: payMethod,
-        notes: payNotes || undefined,
-      });
-      const updated = await getLeases({ status: filterStatus || undefined });
-      setLeases(updated);
-      setShowPayForm(null);
-      setPayAmount('');
-      setPayNotes('');
-    } finally { setSaving(false); }
-  }
 
   const totalRent = filtered.filter(l => l.status === 'ACTIVE').reduce((s, l) => s + Number(l.rentAmount), 0);
   const totalArrears = filtered.filter(l => l.status === 'ACTIVE').reduce((s, l) => s + Number(l.arrearsBalance), 0);
@@ -128,16 +104,24 @@ export default function RentRollPage({ embedded }: { embedded?: boolean } = {}) 
               </thead>
               <tbody className="divide-y divide-white/5">
                 {filtered.map(lease => {
-                  const tenants = lease.leaseTenants?.map(lt => lt.tenant.fullName).join(', ') || '—';
+                  const tenantList = lease.leaseTenants ?? [];
                   const prop = lease.unit?.property;
                   const arrears = Number(lease.arrearsBalance);
                   return (
-                    <tr key={lease.id} className="hover:bg-white/[0.02]">
+                    <Fragment key={lease.id}>
+                    <tr className="hover:bg-white/[0.02]">
                       <td className="px-4 py-3">
                         <div className="font-medium text-white">{prop?.nickname || prop?.address || '—'}</div>
                         <div className="text-xs text-gray-500">{lease.unit?.unitLabel}</div>
                       </td>
-                      <td className="px-4 py-3 text-gray-300">{tenants}</td>
+                      <td className="px-4 py-3 text-gray-300">
+                        {tenantList.length ? tenantList.map((lt, i) => (
+                          <span key={lt.tenant.id}>
+                            {i > 0 && ', '}
+                            <Link to={`/tenants/${lt.tenant.id}`} className="hover:text-amber-400 hover:underline">{lt.tenant.fullName}</Link>
+                          </span>
+                        )) : '—'}
+                      </td>
                       <td className="px-4 py-3 text-white font-medium">{money(Number(lease.rentAmount))}</td>
                       <td className="px-4 py-3">
                         {arrears > 0 ? (
@@ -157,57 +141,48 @@ export default function RentRollPage({ embedded }: { embedded?: boolean } = {}) 
                         {lease.endDate ? fmtDate(lease.endDate, 'MMM d, yyyy') : 'M-to-M'}
                       </td>
                       <td className="px-4 py-3 text-right">
-                        {showPayForm === lease.id ? (
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="number"
-                              placeholder="Amount"
-                              value={payAmount}
-                              onChange={e => setPayAmount(e.target.value)}
-                              className="input-dark text-xs w-24"
-                            />
-                            <input
-                              type="month"
-                              title="Month this payment applies to"
-                              value={payForMonth}
-                              onChange={e => setPayForMonth(e.target.value)}
-                              className="input-dark text-xs w-32"
-                            />
-                            <input
-                              type="date"
-                              title="Date the money arrived"
-                              value={payDate}
-                              onChange={e => setPayDate(e.target.value)}
-                              className="input-dark text-xs w-32"
-                            />
-                            <select value={payMethod} onChange={e => setPayMethod(e.target.value)} className="input-dark text-xs w-24">
-                              <option value="ZELLE">Zelle</option>
-                              <option value="CHECK">Check</option>
-                              <option value="CASH">Cash</option>
-                              <option value="ACH">ACH</option>
-                              <option value="OTHER">Other</option>
-                            </select>
-                            <button onClick={() => logPayment(lease.id)} disabled={saving} className="btn-primary text-xs px-3 py-1.5">
-                              {saving ? '…' : 'Log'}
-                            </button>
-                            <button onClick={() => setShowPayForm(null)} className="text-xs text-gray-500 hover:text-gray-300">✕</button>
-                          </div>
-                        ) : (
-                          <button
-                            onClick={() => setShowPayForm(lease.id)}
-                            className="text-xs text-amber-400 hover:text-amber-300"
-                          >
-                            Log payment
+                        <div className="flex items-center justify-end gap-3 whitespace-nowrap">
+                          <button onClick={() => setOpenLease(o => (o === lease.id ? null : lease.id))} className="text-xs text-gray-400 hover:text-gray-200">
+                            History {openLease === lease.id ? '▴' : '▾'}
                           </button>
-                        )}
+                          <button onClick={() => setLogFor(lease)} className="text-xs text-amber-400 hover:text-amber-300">Log payment</button>
+                        </div>
                       </td>
                     </tr>
+                    {openLease === lease.id && (
+                      <tr>
+                        <td colSpan={7} className="px-4 py-3" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                          <RentPaymentHistory leaseId={lease.id} refreshKey={refresh} />
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
                   );
                 })}
               </tbody>
             </table>
           </div>
         </div>
+      )}
+      {logFor && (
+        <LogRentPaymentModal
+          target={{
+            leaseId: logFor.id,
+            tenant: logFor.leaseTenants?.map(lt => lt.tenant.fullName).join(', ') || 'Tenant',
+            unit: logFor.unit?.unitLabel ?? '',
+            property: logFor.unit?.property?.nickname || logFor.unit?.property?.address || '',
+            rent: Number(logFor.rentAmount),
+            arrears: Number(logFor.arrearsBalance),
+          }}
+          onClose={() => setLogFor(null)}
+          onSaved={async () => {
+            const id = logFor.id;
+            setLogFor(null);
+            setLeases(await getLeases({ status: filterStatus || undefined }));
+            setOpenLease(id);
+            setRefresh(r => r + 1);
+          }}
+        />
       )}
     </div>
   );
