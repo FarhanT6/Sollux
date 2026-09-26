@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { format } from 'date-fns';
 import {
   getOutgoingTransactions, syncOutgoingTransactions, matchOutgoingTransaction,
-  applyOutgoingTransaction, ignoreOutgoingTransaction, getProperties, getUtilityCandidates,
+  applyOutgoingTransaction, ignoreOutgoingTransaction, getProperties, getUtilityCandidates, getLoanCandidates,
 } from '../api/client';
 import type { OutgoingTransaction, IncomingTransactionStatus, Property, ExpenseCategory, UtilityCandidate } from '../types';
 import { EXPENSE_CATEGORY_LABELS } from '../types';
@@ -10,7 +10,7 @@ import { fmtDate } from '../lib/date';
 
 const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 
-const MATCH_TYPE_LABELS: Record<string, string> = { HARDWARE: 'Hardware store', UTILITY: 'Utility payment' };
+const MATCH_TYPE_LABELS: Record<string, string> = { HARDWARE: 'Hardware store', UTILITY: 'Utility payment', LOAN: 'Loan payment' };
 
 const FILTERS: { key: IncomingTransactionStatus | 'ALL'; label: string }[] = [
   { key: 'ALL', label: 'All' },
@@ -83,7 +83,7 @@ export default function OutgoingPaymentsPage({ embedded }: { embedded?: boolean 
       {!embedded && (
         <div className="mb-4">
           <h1 className="text-xl font-semibold text-white">Expense Payments</h1>
-          <p className="text-sm text-gray-400 mt-0.5">Hardware-store purchases and utility bill payments from your watched bank accounts</p>
+          <p className="text-sm text-gray-400 mt-0.5">Loan payments, utility bill payments and hardware-store purchases from your bank accounts</p>
         </div>
       )}
 
@@ -121,6 +121,7 @@ export default function OutgoingPaymentsPage({ embedded }: { embedded?: boolean 
                   <span className="text-xs text-gray-500">{fmtDate(tx.date, 'MMM d, yyyy')}</span>
                   <span className="text-xs text-gray-600">· {tx.bankAccount?.name}</span>
                   {tx.utilityAccount && <span className="text-xs text-gray-600">· {tx.utilityAccount.providerName}</span>}
+                  {tx.loan && <span className="text-xs text-gray-600">· {tx.loan.lender}</span>}
                 </div>
                 <p className="text-sm font-semibold text-red-400">{money(tx.amount)}</p>
               </div>
@@ -129,10 +130,12 @@ export default function OutgoingPaymentsPage({ embedded }: { embedded?: boolean 
               <div className="flex items-center gap-2">
                 {tx.status === 'APPLIED' ? (
                   <p className="text-xs text-emerald-500">
-                    {tx.appliedType === 'STATEMENT' ? 'Marked matching utility statement paid' : 'Logged as an expense'} — {tx.property?.nickname || tx.property?.address}
+                    {tx.appliedType === 'LOAN_PAYMENT' ? `Logged in the loan tracker — ${tx.loan?.lender ?? 'loan'}` : <>{tx.appliedType === 'STATEMENT' ? 'Marked matching utility statement paid' : 'Logged as an expense'} — {tx.property?.nickname || tx.property?.address}</>}
                   </p>
                 ) : tx.status === 'IGNORED' ? (
                   <p className="text-xs text-gray-600">Ignored</p>
+                ) : tx.matchType === 'LOAN' ? (
+                  <LoanMatchRow tx={tx} onPick={async (id, loanId) => { await matchOutgoingTransaction(id, { loanId }); load(); }} onApply={handleApply} onIgnore={handleIgnore} />
                 ) : tx.matchType === 'UTILITY' ? (
                   <UtilityMatchRow tx={tx} onCandidate={handleCandidate} onApply={handleApply} onIgnore={handleIgnore} />
                 ) : (
@@ -220,6 +223,33 @@ function UtilityMatchRow({ tx, onCandidate, onApply, onIgnore }: {
         className="text-xs text-amber-400 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed flex-shrink-0"
       >Apply</button>
       <button onClick={() => onIgnore(tx.id)} className="text-xs text-red-500 hover:text-red-400 flex-shrink-0">Ignore</button>
+    </>
+  );
+}
+
+// ─── Loan payment row ─────────────────────────────────────────────────────────
+// A debit that looks like a loan payment: the likely loans first, then every
+// other active loan, so any payment can be put on the right one. Apply logs it
+// in the loan tracker for the month whose due date it answers.
+
+function LoanMatchRow({ tx, onPick, onApply, onIgnore }: {
+  tx: OutgoingTransaction;
+  onPick: (id: string, loanId: string) => void;
+  onApply: (id: string) => void;
+  onIgnore: (id: string) => void;
+}) {
+  const [cands, setCands] = useState<{ loanId: string; lender: string; expected: number; likely: boolean }[] | null>(null);
+  useEffect(() => { getLoanCandidates(tx.id).then(setCands); }, [tx.id]);
+  return (
+    <>
+      <select value={tx.loanId ?? ''} onChange={e => e.target.value && onPick(tx.id, e.target.value)} className="field-input text-xs flex-1">
+        <option value="">— Pick the loan —</option>
+        {cands?.map(c => (
+          <option key={c.loanId} value={c.loanId}>{c.likely ? '' : '· '}{c.lender}{c.expected ? ` — ${money(c.expected)}/mo` : ''}</option>
+        ))}
+      </select>
+      <button disabled={!tx.loanId} onClick={() => onApply(tx.id)} className="text-xs text-amber-400 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed flex-shrink-0">Log payment</button>
+      <button onClick={() => onIgnore(tx.id)} className="text-xs text-red-500 hover:text-red-400 flex-shrink-0">Not a loan payment</button>
     </>
   );
 }

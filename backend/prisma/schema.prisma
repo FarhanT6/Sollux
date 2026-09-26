@@ -1592,13 +1592,14 @@ model OutgoingTransaction {
   amount             Decimal         @db.Decimal(10, 2)
   date               DateTime
   name               String // Plaid's transaction name/merchant description
-  matchType          String? // HARDWARE | UTILITY
+  matchType          String? // HARDWARE | UTILITY | LOAN
   propertyId         String?
   property           Property?       @relation(fields: [propertyId], references: [id], onDelete: SetNull)
   utilityAccountId   String?
   utilityAccount     UtilityAccount? @relation(fields: [utilityAccountId], references: [id], onDelete: SetNull)
   category           String? // ExpenseCategory — mutable suggestion, editable before apply
   statementId        String? // an open/unpaid Statement this can mark paid instead of creating an Expense
+  loanId             String? // matchType LOAN: the loan this debit paid
   status             String          @default("UNMATCHED") // UNMATCHED | SUGGESTED | APPLIED | IGNORED
   appliedType        String? // EXPENSE | STATEMENT — which kind of record apply created
   appliedId          String?

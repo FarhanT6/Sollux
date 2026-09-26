@@ -761,8 +761,10 @@ export const getOutgoingTransactions = (status?: IncomingTransactionStatus) =>
 export const syncOutgoingTransactions = () =>
   api.post<{ itemsSynced: number; added: number; errors: string[] }>('/expense-transactions/sync').then(r => r.data);
 export const matchOutgoingTransaction = (id: string, data: {
-  propertyId?: string | null; category?: string | null; utilityAccountId?: string | null; statementId?: string | null;
+  propertyId?: string | null; category?: string | null; utilityAccountId?: string | null; statementId?: string | null; loanId?: string | null;
 }) => api.patch<OutgoingTransaction>(`/expense-transactions/${id}`, data).then(r => r.data);
+export const getLoanCandidates = (id: string) =>
+  api.get<{ loanId: string; lender: string; expected: number; likely: boolean }[]>(`/expense-transactions/${id}/loan-candidates`).then(r => r.data);
 export const getUtilityCandidates = (id: string) =>
   api.get<UtilityCandidate[]>(`/expense-transactions/${id}/utility-candidates`).then(r => r.data);
 export const applyOutgoingTransaction = (id: string) =>

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { syncAllWatchedAccounts, findUtilityCandidates } from '../services/transactionMatchService';
+import { findLoanCandidates, logLoanPaymentFromTransaction } from '../services/loanPaymentMatcher';
 
 const router = Router();
 router.use(attachDbUser);
@@ -19,7 +20,11 @@ router.get('/', async (req, res, next) => {
       },
       orderBy: { date: 'desc' },
     });
-    res.json(transactions);
+    // Loan matches carry the lender's name for the list.
+    const loanIds = [...new Set(transactions.map(t => t.loanId).filter((x): x is string => !!x))];
+    const loans = loanIds.length ? await db.loan.findMany({ where: { id: { in: loanIds }, userId: req.dbUserId! }, select: { id: true, lender: true } }) : [];
+    const lender = new Map(loans.map(l => [l.id, l.lender]));
+    res.json(transactions.map(t => ({ ...t, loan: t.loanId ? { id: t.loanId, lender: lender.get(t.loanId) ?? 'Loan' } : null })));
   } catch (err) { next(err); }
 });
 
@@ -43,6 +48,22 @@ router.get('/:id/utility-candidates', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /:id/loan-candidates — loans this debit could be a payment on, best first.
+router.get('/:id/loan-candidates', async (req, res, next) => {
+  try {
+    const tx = await db.outgoingTransaction.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
+    if (!tx) return res.status(404).json({ error: 'Transaction not found' });
+    const named = await findLoanCandidates(tx.name, Number(tx.amount), req.dbUserId!, tx.bankAccountId);
+    // Always offer every active loan after the likely ones, so any debit can be assigned.
+    const all = await db.loan.findMany({ where: { userId: req.dbUserId!, isActive: true }, select: { id: true, lender: true, monthlyPayment: true, escrowAmount: true }, orderBy: { lender: 'asc' } });
+    const seen = new Set(named.map(c => c.loanId));
+    res.json([
+      ...named.map(c => ({ loanId: c.loanId, lender: c.lender, expected: c.expected, likely: true })),
+      ...all.filter(l => !seen.has(l.id)).map(l => ({ loanId: l.id, lender: l.lender, expected: Number(l.monthlyPayment ?? 0) + Number(l.escrowAmount ?? 0), likely: false })),
+    ]);
+  } catch (err) { next(err); }
+});
+
 // PATCH /:id — set/override property, utility account/statement, or category before applying
 router.patch('/:id', async (req, res, next) => {
   try {
@@ -50,9 +71,15 @@ router.patch('/:id', async (req, res, next) => {
     if (!tx) return res.status(404).json({ error: 'Transaction not found' });
     if (tx.status === 'APPLIED') return res.status(400).json({ error: 'Already applied — cannot re-match' });
 
-    const { propertyId, category, utilityAccountId, statementId } = req.body as {
-      propertyId?: string | null; category?: string | null; utilityAccountId?: string | null; statementId?: string | null;
+    const { propertyId, category, utilityAccountId, statementId, loanId } = req.body as {
+      propertyId?: string | null; category?: string | null; utilityAccountId?: string | null; statementId?: string | null; loanId?: string | null;
     };
+    if (loanId) {
+      const loan = await db.loan.findFirst({ where: { id: loanId, userId: req.dbUserId! }, select: { id: true, propertyId: true } });
+      if (!loan) return res.status(404).json({ error: 'Loan not found' });
+      const updated = await db.outgoingTransaction.update({ where: { id: tx.id }, data: { matchType: 'LOAN', loanId: loan.id, propertyId: loan.propertyId, status: 'SUGGESTED' } });
+      return res.json(updated);
+    }
 
     if (propertyId) {
       const prop = await db.property.findFirst({ where: { id: propertyId, userId: req.dbUserId! } });
@@ -88,6 +115,12 @@ router.post('/:id/apply', async (req, res, next) => {
     const tx = await db.outgoingTransaction.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
     if (!tx) return res.status(404).json({ error: 'Transaction not found' });
     if (tx.status === 'APPLIED') return res.status(400).json({ error: 'Already applied' });
+    // A loan payment goes to the loan tracker; a personal loan has no property.
+    if (tx.matchType === 'LOAN' && tx.loanId) {
+      const paymentId = await logLoanPaymentFromTransaction(tx, tx.loanId, req.dbUserId!);
+      const updated = await db.outgoingTransaction.update({ where: { id: tx.id }, data: { status: 'APPLIED', appliedType: 'LOAN_PAYMENT', appliedId: paymentId } });
+      return res.json(updated);
+    }
     if (!tx.propertyId) return res.status(400).json({ error: 'No property matched — set one first' });
 
     const property = await db.property.findFirst({ where: { id: tx.propertyId, userId: req.dbUserId! } });
