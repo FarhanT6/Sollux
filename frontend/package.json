@@ -3,9 +3,10 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "build:ios": "tsc && vite build --mode ios",
+    "dev": "node scripts/gen-light-theme.mjs && vite",
+    "build": "node scripts/gen-light-theme.mjs && tsc && vite build",
+    "build:ios": "node scripts/gen-light-theme.mjs && tsc && vite build --mode ios",
+    "theme:light": "node scripts/gen-light-theme.mjs",
     "ios": "npm run build:ios && cap sync ios && cap open ios",
     "ios:sync": "npm run build:ios && cap sync ios",
     "preview": "vite preview",

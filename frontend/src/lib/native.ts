@@ -15,11 +15,7 @@ export const platform = Capacitor.getPlatform(); // 'ios' | 'android' | 'web'
 
 export async function initNative(): Promise<void> {
   if (!isNative) return;
-  try {
-    const { StatusBar, Style } = await import('@capacitor/status-bar');
-    await StatusBar.setStyle({ style: Style.Dark });
-    if (platform === 'android') await StatusBar.setBackgroundColor({ color: '#1e1e1e' });
-  } catch { /* plugin missing on this platform */ }
+  await setStatusBarTheme(document.documentElement.dataset.theme === 'light' ? 'light' : 'dark');
   try {
     const { App } = await import('@capacitor/app');
     // Android hardware back: walk history, and leave the app only from the
@@ -29,6 +25,17 @@ export async function initNative(): Promise<void> {
       else App.exitApp();
     });
   } catch { /* ignore */ }
+}
+
+/** Status bar text that contrasts with the page: light text on the dark
+ *  theme, dark text on the light one. */
+export async function setStatusBarTheme(theme: 'dark' | 'light'): Promise<void> {
+  if (!isNative) return;
+  try {
+    const { StatusBar, Style } = await import('@capacitor/status-bar');
+    await StatusBar.setStyle({ style: theme === 'light' ? Style.Light : Style.Dark });
+    if (platform === 'android') await StatusBar.setBackgroundColor({ color: theme === 'light' ? '#efe9e4' : '#1e1e1e' });
+  } catch { /* plugin missing on this platform */ }
 }
 
 /** Hide the launch screen once React has painted something worth seeing. */

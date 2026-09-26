@@ -1,0 +1,191 @@
+/*
+ * Sollux light theme — the palette of the utility statement: warm paper,
+ * white cards, a sand tint for chrome, ink text and a terracotta accent.
+ *
+ * The app was built dark with its colors written directly into Tailwind
+ * classes and inline styles. Rather than rewrite every page, the light theme
+ * remaps those colors when <html data-theme="light">:
+ *   - theme-light.generated.css: every color class the source uses
+ *     (generated before each build by scripts/gen-light-theme.mjs);
+ *   - this file: the page, the app chrome, the shared component classes,
+ *     and the inline styles, matched by how the browser writes them
+ *     ("background: rgb(30, 30, 30)", "rgba(255, 255, 255, 0.08)").
+ * Dark stays the default; nothing here applies unless light is chosen.
+ */
+
+html[data-theme="light"] {
+  --paper: #f8f6f3;
+  --tint: #efe9e4;
+  --tint-soft: #f5f1ec;
+  --rule: #e6e0da;
+  --ink: #1c2230;
+  --ink-2: #2b3140;
+  --muted: #6b7280;
+  --accent: #b8674a;
+  --accent-dark: #9f563c;
+  --accent-soft: #f3e4de;
+  color-scheme: light;
+}
+html[data-theme="dark"] { color-scheme: dark; }
+
+html[data-theme="light"] body { background: var(--paper); color: var(--ink); }
+
+/* ── App chrome: sidebar, phone header, tab bar ────────────────────────── */
+html[data-theme="light"] .app-canvas.app-canvas { background: var(--paper) !important; }
+html[data-theme="light"] .app-chrome.app-chrome { background: var(--tint) !important; border-color: var(--rule) !important; }
+
+/* ── Inline surfaces ───────────────────────────────────────────────────── */
+/* Cards and panels (#1e1e1e, #2a2a2a, #252525, #242424) become white. */
+html[data-theme="light"] [style*="background: rgb(30, 30, 30)"],
+html[data-theme="light"] [style*="background-color: rgb(30, 30, 30)"],
+html[data-theme="light"] [style*="background: rgb(42, 42, 42)"],
+html[data-theme="light"] [style*="background: rgb(37, 37, 37)"],
+html[data-theme="light"] [style*="background: rgb(36, 36, 36)"] {
+  background: #fff !important;
+}
+/* Recessed panels (#161616, #1a1a1a, #151515, #1c1c1c, #111) become a warm tint. */
+html[data-theme="light"] [style*="background: rgb(22, 22, 22)"],
+html[data-theme="light"] [style*="background-color: rgb(22, 22, 22)"],
+html[data-theme="light"] [style*="background: rgb(26, 26, 26)"],
+html[data-theme="light"] [style*="background: rgb(21, 21, 21)"],
+html[data-theme="light"] [style*="background: rgb(28, 28, 28)"],
+html[data-theme="light"] [style*="background: rgb(17, 17, 17)"],
+html[data-theme="light"] [style*="background: rgb(20, 20, 20)"] {
+  background: var(--tint-soft) !important;
+}
+/* A white wash on dark is a faint ink wash on paper. */
+html[data-theme="light"] [style*="background: rgba(255, 255, 255"],
+html[data-theme="light"] [style*="background-color: rgba(255, 255, 255"] {
+  background: rgba(28, 34, 48, 0.035) !important;
+}
+/* Hairlines drawn in translucent white become the statement's rule color. */
+html[data-theme="light"] [style*="border"][style*="rgba(255, 255, 255"] {
+  border-color: var(--rule) !important;
+}
+/* Modal scrims stay a scrim, just a lighter one. */
+html[data-theme="light"] [style*="background: rgba(0, 0, 0, 0.6)"],
+html[data-theme="light"] [style*="background: rgba(0, 0, 0, 0.7)"],
+html[data-theme="light"] [style*="background: rgba(0, 0, 0, 0.5)"] {
+  background: rgba(28, 34, 48, 0.35) !important;
+}
+
+/* ── Inline accent: the gold becomes terracotta ───────────────────────── */
+html[data-theme="light"] [style^="color: rgb(245, 166, 35)"],
+html[data-theme="light"] [style*="; color: rgb(245, 166, 35)"] {
+  color: var(--accent) !important;
+}
+html[data-theme="light"] [style*="background: rgba(245, 166, 35"],
+html[data-theme="light"] [style*="background-color: rgba(245, 166, 35"] {
+  background: rgba(184, 103, 74, 0.1) !important;
+}
+html[data-theme="light"] [style*="border"][style*="rgba(245, 166, 35"] {
+  border-color: rgba(184, 103, 74, 0.35) !important;
+}
+/* A solid gold button: terracotta with white type, whatever its text said. */
+html[data-theme="light"] [style*="background: rgb(245, 166, 35)"],
+html[data-theme="light"] [style*="background-color: rgb(245, 166, 35)"] {
+  background: var(--accent) !important;
+  color: #fff !important;
+}
+html[data-theme="light"] [style*="background: rgb(245, 166, 35)"] *,
+html[data-theme="light"] [style*="background-color: rgb(245, 166, 35)"] * {
+  color: #fff !important;
+}
+
+/* ── Inline text colors tuned for dark ────────────────────────────────── */
+html[data-theme="light"] [style^="color: rgb(156, 163, 175)"],
+html[data-theme="light"] [style*="; color: rgb(156, 163, 175)"] { color: #4b5563 !important; }
+html[data-theme="light"] [style^="color: rgb(229, 231, 235)"],
+html[data-theme="light"] [style*="; color: rgb(229, 231, 235)"],
+html[data-theme="light"] [style^="color: rgb(240, 240, 240)"],
+html[data-theme="light"] [style*="; color: rgb(240, 240, 240)"],
+html[data-theme="light"] [style^="color: rgb(238, 238, 238)"],
+html[data-theme="light"] [style*="; color: rgb(238, 238, 238)"] { color: var(--ink) !important; }
+html[data-theme="light"] [style^="color: rgb(52, 211, 153)"],
+html[data-theme="light"] [style*="; color: rgb(52, 211, 153)"] { color: #047857 !important; }
+html[data-theme="light"] [style^="color: rgb(248, 113, 113)"],
+html[data-theme="light"] [style*="; color: rgb(248, 113, 113)"] { color: #b91c1c !important; }
+html[data-theme="light"] [style^="color: rgb(165, 180, 252)"],
+html[data-theme="light"] [style*="; color: rgb(165, 180, 252)"] { color: #4338ca !important; }
+
+/* ── Solid colored buttons keep white type ────────────────────────────── */
+html[data-theme="light"] .btn-primary,
+html[data-theme="light"] .btn-primary *,
+html[data-theme="light"] [class~="bg-gold-500"],
+html[data-theme="light"] [class~="bg-gold-500"] [class~="text-white"],
+html[data-theme="light"] [class~="bg-[#F5A623]"],
+html[data-theme="light"] [class~="bg-[#F5A623]"] *,
+html[data-theme="light"] [class~="bg-red-500"][class~="text-white"],
+html[data-theme="light"] [class~="bg-red-600"][class~="text-white"],
+html[data-theme="light"] [class~="bg-emerald-500"][class~="text-white"],
+html[data-theme="light"] [class~="bg-blue-500"][class~="text-white"],
+html[data-theme="light"] [class~="bg-amber-500"][class~="text-white"] {
+  color: #fff !important;
+}
+
+/* ── Shared component classes (globals.css) ───────────────────────────── */
+html[data-theme="light"] .card,
+html[data-theme="light"] .stat-card {
+  background: #fff;
+  border-color: var(--rule);
+}
+html[data-theme="light"] .section-label { color: var(--muted); }
+html[data-theme="light"] .btn {
+  background: #fff;
+  border-color: var(--rule);
+  color: var(--ink-2);
+}
+html[data-theme="light"] .btn:hover { background: var(--tint-soft); }
+html[data-theme="light"] .btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+html[data-theme="light"] .btn-primary:hover { background: var(--accent-dark); }
+html[data-theme="light"] .btn-ghost { color: #4b5563; border-color: var(--rule); }
+html[data-theme="light"] .btn-ghost:hover { color: var(--ink); background: var(--tint-soft); }
+
+html[data-theme="light"] .input-dark,
+html[data-theme="light"] .field-input {
+  background: #fff;
+  border-color: var(--rule);
+  color: var(--ink);
+}
+html[data-theme="light"] .input-dark::placeholder,
+html[data-theme="light"] .field-input::placeholder { color: #8a8f98; }
+html[data-theme="light"] .input-dark:focus,
+html[data-theme="light"] .field-input:focus { border-color: rgba(184, 103, 74, 0.6); }
+html[data-theme="light"] .input-dark option,
+html[data-theme="light"] .field-input option { background: #fff; color: var(--ink); }
+html[data-theme="light"] .field-label { color: #4b5563; }
+
+html[data-theme="light"] .sidebar-link { color: #4b5563; }
+html[data-theme="light"] .sidebar-link:hover { background: rgba(28, 34, 48, 0.05); color: var(--ink); }
+html[data-theme="light"] .sidebar-link.active { background: rgba(184, 103, 74, 0.12); color: var(--accent-dark); }
+html[data-theme="light"] .tabbar-link { color: var(--muted); }
+html[data-theme="light"] .tabbar-link.active { color: var(--accent); }
+
+html[data-theme="light"] .pill-gray { background: rgba(28, 34, 48, 0.06); color: #4b5563; }
+html[data-theme="light"] .pill-green { color: #047857; }
+html[data-theme="light"] .pill-amber { color: #b45309; }
+html[data-theme="light"] .pill-red { color: #b91c1c; }
+html[data-theme="light"] .pill-blue { color: #1d4ed8; }
+html[data-theme="light"] .text-pos { color: #047857; }
+html[data-theme="light"] .text-neg { color: #b91c1c; }
+
+html[data-theme="light"] .table-base th { color: var(--muted); border-bottom-color: var(--rule); }
+html[data-theme="light"] .table-base td { color: var(--ink-2); border-bottom-color: #ede8e3; }
+html[data-theme="light"] .table-base tr:hover td { background: rgba(28, 34, 48, 0.025); }
+
+/* ── Charts (Recharts draws grid lines and tooltips with inline values) ── */
+html[data-theme="light"] [stroke^="rgba(255,255,255"],
+html[data-theme="light"] [stroke^="rgba(255, 255, 255"] { stroke: rgba(28, 34, 48, 0.1); }
+html[data-theme="light"] .recharts-default-tooltip {
+  background: #fff !important;
+  border-color: var(--rule) !important;
+  color: var(--ink) !important;
+}
+
+/* Scrollbars that match the paper. */
+html[data-theme="light"] ::-webkit-scrollbar-thumb { background: #d9d2cb; border-radius: 8px; }
+html[data-theme="light"] ::-webkit-scrollbar-track { background: transparent; }
