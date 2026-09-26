@@ -330,6 +330,44 @@ export const saveTaxAssessment = (data: Record<string, any>) =>
 export const taxBillUrl = (id: string) =>
   api.get<{ url: string }>(`/taxes/${id}/document`).then(r => r.data.url);
 
+// Income tax: returns, forms received, W-9s, payments to tax agencies
+export interface TaxDoc {
+  id: string; taxYear: number; jurisdiction: string; formType: string; direction: 'RECEIVED' | 'FILED' | 'ISSUED'; status: string;
+  issuerName?: string | null; recipientName?: string | null; businessName?: string | null; entityType?: string | null; tinLast4?: string | null;
+  address?: string | null; propertyId?: string | null; loanId?: string | null; amount?: number | string | null; federalWithheld?: number | string | null;
+  stateWithheld?: number | string | null; refundOrDue?: number | string | null; boxes?: Record<string, number | string> | null;
+  filedDate?: string | null; dueDate?: string | null; documents?: { key: string; name: string }[] | null; notes?: string | null;
+  property?: { id: string; address: string; nickname?: string | null } | null;
+}
+export interface TaxPay {
+  id: string; taxYear: number; jurisdiction: string; kind: 'ESTIMATED' | 'BALANCE_DUE' | 'EXTENSION' | 'REFUND'; period?: string | null;
+  dueDate?: string | null; paidDate?: string | null; amount: number | string; confirmation?: string | null; method?: string | null; notes?: string | null;
+}
+export interface TaxChecklist {
+  year: number; statesWithIncomeTax: string[];
+  forms: { formType: string; label: string; loanId: string; propertyId: string | null; documentId: string | null; done: boolean }[];
+  returns: { jurisdiction: string; label: string; dueDate: string; documentId: string | null; filedDate: string | null; refundOrDue: number | string | null; done: boolean }[];
+  estimatedPayments: { jurisdiction: string; period: string; dueDate: string; paid: number; paymentIds: string[] }[];
+}
+export interface ContractorRow {
+  vendor: string; total: number; payments: number; categories: string[]; propertyCount: number; needs1099: boolean; corporation: boolean;
+  w9: { id: string; entityType?: string | null; tinLast4?: string | null; taxYear: number } | null; issued1099: { id: string; amount?: number | string | null } | null;
+}
+export const getTaxDocs = (year?: number) =>
+  api.get<{ documents: TaxDoc[]; payments: TaxPay[]; years: number[] }>('/tax-documents', { params: year ? { year } : {} }).then(r => r.data);
+export const getTaxChecklist = (year: number) => api.get<TaxChecklist>('/tax-documents/checklist', { params: { year } }).then(r => r.data);
+export const getContractors1099 = (year: number) =>
+  api.get<{ year: number; threshold: number; contractors: ContractorRow[]; w9sOnFile: number }>('/tax-documents/contractors', { params: { year } }).then(r => r.data);
+export const readTaxForm = (files: FilePayload[]) =>
+  api.post<{ fields: Record<string, any>; match: DocMatch | null }>('/tax-documents/read', { files }).then(r => r.data);
+export const createTaxDoc = (data: Record<string, any>) => api.post<TaxDoc>('/tax-documents', data).then(r => r.data);
+export const updateTaxDoc = (id: string, data: Record<string, any>) => api.patch<TaxDoc>(`/tax-documents/${id}`, data).then(r => r.data);
+export const deleteTaxDoc = (id: string) => api.delete(`/tax-documents/${id}`);
+export const taxDocUrl = (id: string, n = 0) => api.get<{ url: string }>(`/tax-documents/${id}/documents/${n}`).then(r => r.data.url);
+export const createTaxPayment = (data: Record<string, any>) => api.post<TaxPay>('/tax-documents/payments', data).then(r => r.data);
+export const updateTaxPayment = (id: string, data: Record<string, any>) => api.patch<TaxPay>(`/tax-documents/payments/${id}`, data).then(r => r.data);
+export const deleteTaxPayment = (id: string) => api.delete(`/tax-documents/payments/${id}`);
+
 // Compliance: citations, orders to comply, permits, inspections
 export const getComplianceItems = (params?: { propertyId?: string; status?: string }) =>
   api.get<ComplianceItem[]>('/compliance', { params }).then(r => r.data);

@@ -130,6 +130,7 @@ model Property {
   documents              Document[]
   outgoingTransactions   OutgoingTransaction[]
   complianceItems        ComplianceItem[]
+  taxDocuments           TaxDocument[]
 
   /// ClickUp list holding this property's operations tasks (created on demand).
   clickupListId   String?
@@ -1889,4 +1890,79 @@ model ProjectTransfer {
 
   @@index([projectId, date])
   @@map("project_transfers")
+}
+
+// ─── INCOME TAX: FORMS, RETURNS, W-9s, PAYMENTS ──────────
+/// One tax form for one year: a return filed (1040, CA 540, WV IT-140), a
+/// form received (1098 mortgage interest, 1099, W-2, K-1), or a W-9 — one
+/// a contractor gave you so you can issue their 1099-NEC, or one you gave
+/// someone. Taxpayer IDs are never stored in full: only the last four
+/// digits; the document itself is read through a signed URL.
+model TaxDocument {
+  id            String    @id @default(cuid())
+  userId        String
+  taxYear       Int
+  /// FEDERAL, or a state's two-letter code.
+  jurisdiction  String    @default("FEDERAL")
+  /// 1040, 540, W-9, W-2, 1099-NEC, 1099-MISC, 1099-INT, 1099-DIV, 1099-K,
+  /// 1099-R, 1098, 1098-E, K-1, NOTICE, OTHER …
+  formType      String
+  /// RECEIVED (sent to you) | FILED (a return you filed) | ISSUED (you sent it)
+  direction     String    @default("RECEIVED")
+  /// EXPECTED | RECEIVED | FILED
+  status        String    @default("RECEIVED")
+  /// Who issued it: the lender on a 1098, the payer on a 1099, the
+  /// contractor on a W-9.
+  issuerName    String?
+  recipientName String?
+  businessName  String?
+  /// Individual/sole proprietor, LLC, C corp, S corp, partnership … (W-9)
+  entityType    String?
+  tinLast4      String?
+  address       String?
+  propertyId    String?
+  property      Property? @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  loanId        String?
+  /// The form's main figure: interest on a 1098, the amount on a 1099,
+  /// wages on a W-2, total tax on a return.
+  amount          Decimal? @db.Decimal(14, 2)
+  federalWithheld Decimal? @db.Decimal(14, 2)
+  stateWithheld   Decimal? @db.Decimal(14, 2)
+  /// On a return: refund (positive) or amount owed (negative).
+  refundOrDue     Decimal? @db.Decimal(14, 2)
+  /// Every other box as printed, { "Box 1": 1234.56, … } — never a TIN.
+  boxes         Json?
+  filedDate     DateTime?
+  dueDate       DateTime?
+  documents     Json?
+  notes         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([userId, taxYear])
+  @@index([userId, formType])
+  @@map("tax_documents")
+}
+
+/// Money paid to or received from a tax authority: an estimated payment,
+/// a balance due with the return, an extension payment, or a refund.
+model TaxPayment {
+  id           String    @id @default(cuid())
+  userId       String
+  taxYear      Int
+  jurisdiction String    @default("FEDERAL")
+  /// ESTIMATED | BALANCE_DUE | EXTENSION | REFUND
+  kind         String
+  /// Q1–Q4 for an estimated payment.
+  period       String?
+  dueDate      DateTime?
+  paidDate     DateTime?
+  amount       Decimal   @db.Decimal(14, 2)
+  confirmation String?
+  method       String?
+  notes        String?
+  createdAt    DateTime  @default(now())
+
+  @@index([userId, taxYear])
+  @@map("tax_payments")
 }
