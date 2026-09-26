@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { askClaude, jsonIn, needsJson } from './models';
 import { db } from '../config/db';
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -235,14 +236,9 @@ async function callClaudeForInsight(data: ClaudeInsightRequest): Promise<ClaudeI
 
          Respond in JSON: { "body": "...", "recommendation": "...", "estimatedSavings": <number> }`;
 
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 500,
-      messages: [{ role: 'user', content: prompt }],
-    });
-
-    const text = response.content[0].type === 'text' ? response.content[0].text : '';
-    const parsed = JSON.parse(text.replace(/```json\n?|\n?```/g, '').trim());
+    const { text } = await askClaude(anthropic, { label: 'insight', maxTokens: 500, check: needsJson, messages: [{ role: 'user', content: prompt }] });
+    const parsed = jsonIn(text);
+    if (!parsed) throw new Error('no JSON in the insight');
     return parsed;
   } catch (err) {
     // Fallback to template response if Claude call fails

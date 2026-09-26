@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { askClaude } from './models';
 import { db } from '../config/db';
 import { getPaymentPriorities } from '../services/paymentPriority';
 
@@ -236,16 +237,14 @@ async function writeDigest(userId: string, propertyIds: string[], findings: Find
   if (process.env.ANTHROPIC_API_KEY) {
     try {
       const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-      const res = await anthropic.messages.create({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 400,
+      const { text: digest } = await askClaude(anthropic, {
+        label: 'bookkeeper digest', maxTokens: 400,
         messages: [{
           role: 'user',
           content: `You are the nightly bookkeeper for a small real-estate portfolio. Write a short digest (4–8 sentences, plain prose, no headers or bullet points, no preamble) of what needs the owner's attention, most urgent first, in dollars and dates. Do not invent anything not in the list. Findings:\n${findings.map(f => `- [${f.severity}] ${f.title}. ${f.body}`).join('\n')}`,
         }],
       });
-      const text = res.content.map(c => (c.type === 'text' ? c.text : '')).join('').trim();
-      if (text) body = text;
+      if (digest) body = digest;
     } catch (err) {
       console.warn('[Bookkeeper] digest fell back to the plain summary:', err instanceof Error ? err.message : err);
     }

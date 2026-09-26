@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import Anthropic from '@anthropic-ai/sdk';
+import { askClaude } from '../ai/models';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 
@@ -147,9 +148,8 @@ router.post('/query', async (req: Request, res: Response) => {
 
     const context = lines.join('\n');
 
-    const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 1024,
+    const { text: answer } = await askClaude(anthropic, {
+      label: 'ask', maxTokens: 1024,
       system: `You are a concise property management assistant for a real estate investor.
 Answer questions about their portfolio using only the data provided.
 Use bullet points for lists of items. Include dollar amounts whenever relevant.
@@ -157,8 +157,6 @@ If data needed to answer isn't in the context, say so clearly.
 Keep responses under 300 words unless detail is genuinely needed.`,
       messages: [{ role: 'user', content: `${context}\n\nQuestion: ${query}` }],
     });
-
-    const answer = (message.content[0] as Anthropic.TextBlock).text;
     res.json({ answer });
   } catch (err: any) {
     console.error('AI query error:', err);

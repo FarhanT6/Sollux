@@ -8,6 +8,7 @@
  * property falls back to unlinked (the generic "Documents" bucket).
  */
 import Anthropic from '@anthropic-ai/sdk';
+import { askClaude, jsonIn, needsJson } from '../ai/models';
 import { db } from '../config/db';
 
 function loadAnthropicKey(): string {
@@ -66,16 +67,9 @@ async function classifyWithClaude(pdfBuffer: Buffer): Promise<ClassifiedDocument
     { type: 'text', text: CLASSIFY_PROMPT },
   ];
 
-  const response = await anthropic.messages.create({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 1024,
-    messages: [{ role: 'user', content }],
-  });
-
-  const raw = response.content[0].type === 'text' ? response.content[0].text : '';
-  const jsonMatch = raw.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error(`Claude returned no JSON. Response (first 400 chars): ${raw.slice(0, 400)}`);
-  const data = JSON.parse(jsonMatch[0]) as ClassifiedDocument;
+  const { text: raw } = await askClaude(anthropic, { label: 'classify', maxTokens: 1024, check: needsJson, messages: [{ role: 'user', content }] });
+  const data = jsonIn(raw) as ClassifiedDocument | null;
+  if (!data) throw new Error(`Claude returned no JSON. Response (first 400 chars): ${raw.slice(0, 400)}`);
 
   const validCategories: DocumentCategory[] = ['UTILITY', 'INSURANCE', 'TAX', 'LEGAL', 'HOA', 'EXPENSE_RECEIPT', 'LEASE', 'OTHER'];
   if (!validCategories.includes(data.category)) data.category = 'OTHER';

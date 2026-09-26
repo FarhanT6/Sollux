@@ -9,6 +9,7 @@
  * and saves what they confirm.
  */
 import Anthropic from '@anthropic-ai/sdk';
+import { askClaude, jsonIn, needsJson } from '../ai/models';
 import { imageMediaType, trimPdfForClaude } from './pdfImportService';
 import { matchProperty, type DocumentMatch } from './documentClassifyService';
 import { cleanRow } from './loanPaymentDetails';
@@ -181,16 +182,16 @@ export async function readDocument(kind: ReadKind, files: ReadFile[], userId: st
   for (const f of files) content.push(await blockFor(f));
   content.push({ type: 'text', text: PROMPTS[kind] });
 
-  const res = await anthropic().messages.create({
-    model: 'claude-sonnet-4-6',
+  const { text: raw } = await askClaude(anthropic(), {
+    label: kind,
     // A statement lists every transaction; it needs room.
-    max_tokens: kind === 'card_statement' ? 32000 : kind === 'loan_sheet' ? 16000 : 4096,
+    maxTokens: kind === 'card_statement' ? 32000 : kind === 'loan_sheet' ? 16000 : 4096,
+    check: needsJson,
     messages: [{ role: 'user', content }],
   });
-  const raw = res.content.map(c => (c.type === 'text' ? c.text : '')).join('');
-  const json = raw.match(/\{[\s\S]*\}/);
-  if (!json) throw new Error(`Could not read the document (no fields came back). ${raw.slice(0, 200)}`);
-  const fields = shape(kind, JSON.parse(json[0]));
+  const parsed = jsonIn(raw);
+  if (!parsed) throw new Error(`Could not read the document (no fields came back). ${raw.slice(0, 200)}`);
+  const fields = shape(kind, parsed);
 
   const address = kind === 'citation' ? fields.violationAddress : kind === 'tax_bill' || kind === 'tax_form' ? fields.propertyAddress : null;
   const match = address ? await matchProperty(address, userId) : null;

@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { askClaude, jsonIn, needsJson } from '../ai/models';
 
 /**
  * Reads an insurance declarations page.
@@ -112,9 +113,8 @@ export async function extractDeclarations(
   const anthropic = getAnthropic();
   console.log(`[Declarations] ${filename}: ${Math.round(pdfBuffer.length / 1024)}KB`);
 
-  const response = await anthropic.messages.create({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 2048,
+  const { text: raw } = await askClaude(anthropic, {
+    label: filename, maxTokens: 2048, check: needsJson,
     messages: [{
       role: 'user',
       content: [
@@ -127,11 +127,8 @@ export async function extractDeclarations(
     }],
   });
 
-  const raw = response.content[0].type === 'text' ? response.content[0].text : '';
-  const match = raw.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error(`Could not read a declarations page from ${filename}.`);
-
-  const parsed = JSON.parse(match[0]) as Partial<ExtractedPolicyData>;
+  const parsed = jsonIn(raw) as Partial<ExtractedPolicyData> | null;
+  if (!parsed) throw new Error(`Could not read a declarations page from ${filename}.`);
 
   // Everything is optional: a dec page that omits a field is normal, and a
   // missing key must not become undefined-shaped data downstream.
