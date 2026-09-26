@@ -14,6 +14,8 @@ import type {
 import { OTHER_INCOME_LABELS, RENT_PAYMENT_METHODS, RENT_PAYMENT_METHOD_LABELS } from '../types';
 import { todayISO } from '../lib/date';
 import LoanPaymentTracker from '../components/loans/LoanPaymentTracker';
+import RentRemindersPanel from '../components/tenant/RentRemindersPanel';
+import LogRentPaymentModal from '../components/tenant/LogRentPaymentModal';
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
@@ -236,6 +238,7 @@ function OverviewTab({ budget, onChanged }: { budget: BudgetSummary; onChanged: 
       {/* Rent collection by property */}
       <Section title="Rent Collection" badge={`${fmt(rent.collected)} / ${fmt(rent.expected)}`}>
         <ProgressBar value={rent.collected} total={rent.expected} color="emerald" />
+        <div className="mt-3"><RentRemindersPanel /></div>
         <RentCollectionTable rows={rent.rows} outstanding={rent.outstanding} expected={rent.expected} collected={rent.collected} onChanged={onChanged} period={`${budget.year}-${String(budget.month).padStart(2, '0')}`} />
       </Section>
 
@@ -465,7 +468,7 @@ function RentCollectionTable({ rows, outstanding, expected, collected, onChanged
 
       {logRent && (
         <LogRentPaymentModal
-          row={logRent}
+          target={{ leaseId: logRent.leaseId, tenant: logRent.tenant, unit: logRent.unit, property: logRent.property, rent: logRent.expected, arrears: logRent.arrearsBalance, remainingThisMonth: logRent.remaining }}
           period={period}
           onClose={() => setLogRent(null)}
           onSaved={() => { setLogRent(null); onChanged(); }}
@@ -917,59 +920,6 @@ function PaymentHistory({ row, payments, onLog }: {
 }
 
 // ─── Modals ───────────────────────────────────────────────
-
-function LogRentPaymentModal({ row, period, onClose, onSaved }: {
-  row: import('../types').BudgetRentRow; period: string; onClose: () => void; onSaved: () => void;
-}) {
-  const [amount, setAmount] = useState(String(row.remaining > 0 ? row.remaining : row.expected));
-  // The month the money is FOR, not the month it arrived: a payment logged
-  // while looking at August is August's rent, however late it came in.
-  const [forMonth, setForMonth] = useState(period);
-  const [paidDate, setPaidDate] = useState(() => todayISO());
-  const [method, setMethod] = useState('ZELLE');
-  const [notes, setNotes] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  async function handleSave() {
-    if (!amount) return;
-    setSaving(true);
-    try {
-      await createRentPayment({
-        leaseId: row.leaseId,
-        periodDate: `${forMonth}-01T00:00:00.000Z`,
-        amount: parseFloat(amount),
-        paidDate,
-        method,
-        notes: notes || undefined,
-      });
-      onSaved();
-    } finally { setSaving(false); }
-  }
-
-  return (
-    <ModalShell title={`Log payment — ${row.tenant}`} onClose={onClose}>
-      <p className="text-xs text-gray-500 mb-3">{row.unit} · {row.property}</p>
-      <label className="field-label">Amount *</label>
-      <input type="number" value={amount} onChange={e => setAmount(e.target.value)} className="field-input mb-3 w-full" />
-      <label className="field-label">Apply to month</label>
-      <input type="month" value={forMonth} onChange={e => setForMonth(e.target.value)} className="field-input mb-3 w-full" />
-      <label className="field-label">Paid date</label>
-      <input type="date" value={paidDate} onChange={e => setPaidDate(e.target.value)} className="field-input mb-3 w-full" />
-      <label className="field-label">Method</label>
-      <select value={method} onChange={e => setMethod(e.target.value)} className="field-input mb-3 w-full">
-        {RENT_PAYMENT_METHODS.map(m => <option key={m} value={m}>{RENT_PAYMENT_METHOD_LABELS[m]}</option>)}
-      </select>
-      <label className="field-label">Notes</label>
-      <input value={notes} onChange={e => setNotes(e.target.value)} className="field-input mb-4 w-full" />
-      <div className="flex justify-end gap-2">
-        <button onClick={onClose} className="btn-ghost px-4 py-2 text-sm">Cancel</button>
-        <button disabled={!amount || saving} onClick={handleSave} className="btn-primary px-4 py-2 text-sm disabled:opacity-50">
-          {saving ? 'Saving…' : 'Log payment'}
-        </button>
-      </div>
-    </ModalShell>
-  );
-}
 
 function AddBankModal({ onClose, onSave }: { onClose: () => void; onSave: (data: any) => Promise<void> }) {
   const [form, setForm] = useState({ name: '', last4: '', bank: '', accountType: 'CHECKING' as BankAccountType, notes: '' });

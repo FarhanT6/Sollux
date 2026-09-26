@@ -1,20 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useUser } from '@clerk/clerk-react';
-import { getDashboardSummary, getRecentActivity, getInsights, queryPortfolio, getPlaidItems, getBankAccounts, getLeases, getRentPayments } from '../api/client';
+import { getDashboardSummary, getRecentActivity, getInsights, getPlaidItems, getBankAccounts, getLeases, getRentPayments } from '../api/client';
 import type { DashboardSummary, AIInsight, BankAccount, Lease, RentPayment } from '../types';
 import type { PlaidItem } from '../api/client';
 import { StatCard, InsightCard, Skeleton, EmptyState } from '../components/ui';
 import { format } from 'date-fns';
 import AddPropertyModal from '../components/property/AddPropertyModal';
 import { fmtDate } from '../lib/date';
+import AskSollux from '../components/AskSollux';
 
-const SUGGESTIONS = [
-  "Who hasn't paid rent this month?",
-  "What utilities are due soon?",
-  "Total loan balance?",
-  "Any past-due bills?",
-];
 
 export default function DashboardPage() {
   const { user } = useUser();
@@ -30,11 +25,6 @@ export default function DashboardPage() {
   const [leases, setLeases] = useState<Lease[]>([]);
   const [rentPayments, setRentPayments] = useState<RentPayment[]>([]);
   const [showDue, setShowDue] = useState(false);
-  const [query, setQuery] = useState('');
-  const [queryLoading, setQueryLoading] = useState(false);
-  const [queryAnswer, setQueryAnswer] = useState('');
-  const [queryError, setQueryError] = useState('');
-  const inputRef = useRef<HTMLInputElement>(null);
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
@@ -59,29 +49,6 @@ export default function DashboardPage() {
       setManualAccounts((ba as any[]).filter((ac: any) => !ac.plaidAccountId && !plaidIds.has(ac.id)));
     }).finally(() => setLoading(false));
   }, []);
-
-  async function handleQuery(e: React.FormEvent) {
-    e.preventDefault();
-    if (!query.trim()) return;
-    setQueryLoading(true);
-    setQueryAnswer('');
-    setQueryError('');
-    try {
-      const { answer } = await queryPortfolio(query.trim());
-      setQueryAnswer(answer);
-    } catch {
-      setQueryError('Could not get an answer — please try again.');
-    } finally {
-      setQueryLoading(false);
-    }
-  }
-
-  function applySuggestion(s: string) {
-    setQuery(s);
-    setQueryAnswer('');
-    setQueryError('');
-    inputRef.current?.focus();
-  }
 
   return (
     <div>
@@ -175,63 +142,8 @@ export default function DashboardPage() {
         {/* Rent */}
         {!loading && leases.length > 0 && <RentSummaryCard leases={leases} payments={rentPayments} />}
 
-        {/* AI Search Bar */}
-        <div className="mb-6">
-          <div className="rounded-xl p-4" style={{ background: 'rgba(245,166,35,0.05)', border: '1px solid rgba(245,166,35,0.2)' }}>
-            <div className="flex items-center gap-2 mb-3">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#F5A623" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z"/>
-              </svg>
-              <p className="text-xs font-medium text-amber-400">Ask anything about your portfolio</p>
-            </div>
-            <form onSubmit={handleQuery} className="flex gap-2">
-              <input
-                ref={inputRef}
-                value={query}
-                onChange={e => setQuery(e.target.value)}
-                placeholder="Who hasn't paid rent this month?"
-                className="flex-1 rounded-lg px-3 py-2 text-sm text-white bg-white/5 border border-white/10 focus:border-amber-500/50 outline-none placeholder-gray-600 transition-colors"
-              />
-              <button
-                type="submit"
-                disabled={queryLoading || !query.trim()}
-                className="btn btn-primary text-xs px-5 flex-shrink-0"
-              >
-                {queryLoading ? (
-                  <span className="flex items-center gap-1.5">
-                    <svg className="animate-spin" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-                    Thinking
-                  </span>
-                ) : 'Ask'}
-              </button>
-            </form>
-            <div className="flex gap-2 mt-2.5 flex-wrap">
-              {SUGGESTIONS.map(s => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => applySuggestion(s)}
-                  className="text-xs text-gray-600 hover:text-amber-400 px-2.5 py-1 rounded-full border border-white/6 hover:border-amber-400/25 hover:bg-amber-400/5 transition-colors"
-                >
-                  {s}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {(queryAnswer || queryError) && (
-            <div className="mt-2 rounded-xl p-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
-              {queryError ? (
-                <p className="text-xs text-red-400">{queryError}</p>
-              ) : (
-                <>
-                  <p className="text-xs font-medium text-amber-400 mb-2">Answer</p>
-                  <p className="text-sm text-gray-200 whitespace-pre-wrap leading-relaxed">{queryAnswer}</p>
-                </>
-              )}
-            </div>
-          )}
-        </div>
+        {/* Ask Sollux */}
+        <div className="mb-6"><AskSollux /></div>
 
         {/* Two column layout */}
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-5">

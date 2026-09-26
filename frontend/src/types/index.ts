@@ -1143,6 +1143,9 @@ export interface PayPlanObligation {
   payFrom: { accountId: string; amount: number }[];
   reason: string;
   link: string;
+  /** How this one gets paid: method, where a check goes, the lender's account. */
+  howToPay?: string | null;
+  payUrl?: string | null;
 }
 export interface PayPlan {
   asOf: string;

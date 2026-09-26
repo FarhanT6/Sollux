@@ -13,6 +13,7 @@
  * digits only and scrubs anything shaped like an SSN or EIN.
  */
 import { Router } from 'express';
+import { buildScheduleE, scheduleECsv } from '../services/scheduleE';
 import { z } from 'zod';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
@@ -283,6 +284,20 @@ router.get('/contractors', async (req, res, next) => {
       };
     }).sort((a, b) => b.total - a.total);
     res.json({ year, threshold: 600, contractors: rows, w9sOnFile: w9s.length });
+  } catch (err) { next(err); }
+});
+
+// ── Schedule E worksheet: per property, cash basis ──────────────────────────
+router.get('/schedule-e', async (req, res, next) => {
+  try {
+    const year = Number(req.query.year) || new Date().getFullYear() - 1;
+    const data = await buildScheduleE(req.dbUserId!, year);
+    if (req.query.format === 'csv') {
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="schedule-e-${year}.csv"`);
+      return res.send(scheduleECsv(data));
+    }
+    res.json(data);
   } catch (err) { next(err); }
 });
 

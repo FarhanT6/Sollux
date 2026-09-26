@@ -104,7 +104,7 @@ const PaymentSchema = z.object({
  * once you log a payment against that statement — the payment record is the
  * more specific claim.
  */
-async function syncStatementPaid(statementId: string | null | undefined) {
+export async function syncStatementPaid(statementId: string | null | undefined) {
   if (!statementId) return;
   const agg = await db.payment.aggregate({
     where: { statementId, status: { in: ['PAID', 'PARTIAL'] } },

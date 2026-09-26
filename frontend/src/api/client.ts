@@ -728,8 +728,12 @@ export const getBudgetForecast = (months = 6) =>
   api.get<BudgetForecast>('/budget/forecast', { params: { months } }).then(r => r.data);
 
 // AI portfolio query
-export const queryPortfolio = (query: string) =>
-  api.post<{ answer: string }>('/ai/query', { query }).then(r => r.data);
+// Ask Sollux with tools: answers from live data; proposed payments run only on Confirm.
+export interface AgentAction { tool: string; input: Record<string, unknown>; summary: string }
+export const askSollux = (messages: { role: 'user' | 'assistant'; content: string }[], today: string) =>
+  api.post<{ answer: string; actions: AgentAction[] }>('/ai/agent', { messages, today }, { timeout: 120000 }).then(r => r.data);
+export const confirmSolluxAction = (a: AgentAction) =>
+  api.post<{ result: string }>('/ai/agent/confirm', { tool: a.tool, input: a.input }).then(r => r.data);
 
 // Plaid bank sync
 export const createPlaidLinkToken = () =>
@@ -992,3 +996,20 @@ export const deleteReimbursementInvoice = (id: string) =>
 export interface Letterhead { name: string; address?: string | null; phone?: string | null; email?: string | null }
 export const getLetterhead = () => api.get<Letterhead | null>('/reimbursements/letterhead').then(r => r.data);
 export const saveLetterhead = (body: Letterhead) => api.put<Letterhead>('/reimbursements/letterhead', body).then(r => r.data);
+
+// Rent reminders drafted by the collections assistant, for the owner to send.
+export interface MessageDraftT {
+  id: string; leaseId: string | null; kind: 'REMINDER' | 'FIRM'; toName: string | null; toEmail: string | null; toPhone: string | null;
+  subject: string | null; body: string; sms: string | null; amountDue: number | null; status: string; createdAt: string;
+}
+export const getMessageDrafts = () => api.get<MessageDraftT[]>('/message-drafts').then(r => r.data);
+export const draftRemindersNow = () => api.post<{ drafted: number; late: number }>('/message-drafts/draft-now').then(r => r.data);
+export const markDraft = (id: string, action: 'sent' | 'dismiss') => api.post(`/message-drafts/${id}/${action}`);
+
+// Schedule E worksheet: per property, cash basis.
+export interface ScheduleELine { line: string; key: string; label: string }
+export interface ScheduleEProperty { propertyId: string; name: string; address: string; lines: Record<string, number>; totalExpenses: number; net: number; capitalImprovements: number; finesExcluded: number; notes: string[] }
+export interface ScheduleE { year: number; lines: ScheduleELine[]; properties: ScheduleEProperty[]; totals: Record<string, number>; totalExpenses: number; net: number }
+export const getScheduleE = (year: number) => api.get<ScheduleE>('/tax-documents/schedule-e', { params: { year } }).then(r => r.data);
+export const downloadScheduleECsv = (year: number) =>
+  api.get('/tax-documents/schedule-e', { params: { year, format: 'csv' }, responseType: 'blob' }).then(r => r.data as Blob);

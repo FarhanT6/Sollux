@@ -51,6 +51,9 @@ export interface PlanObligation {
   payFrom: { accountId: string; amount: number }[];
   reason: string;
   link: string;
+  /** How this one gets paid: method, where a check goes, the lender's account. */
+  howToPay: string | null;
+  payUrl: string | null;
 }
 
 export interface PayPlan {
@@ -79,6 +82,21 @@ function nextDue(dueDay: number, from: Date): Date {
   return thisMonth >= from ? thisMonth : clamp(y, m + 1);
 }
 
+const METHOD_WORDS: Record<string, string> = {
+  AUTOPAY: 'autopay', ONLINE: 'pay online', CHECK: 'mail a check', ZELLE: 'Zelle', BANK_DEPOSIT: "deposit to the lender's account",
+  CASH: 'cash', WIRE: 'wire', DEDUCTED: 'deducted by the broker', OTHER: 'other',
+};
+/** "Mail a check to 6408 Crestview Lane … · Deposit to their Chase ••7058" — from the loan's payment details. */
+export function howToPay(l: { paymentMethods?: string[]; paymentInstructions?: string | null; mailingAddress?: string | null; payeeBankName?: string | null; payeeAccountLast4?: string | null }): string | null {
+  const parts: string[] = [];
+  const methods = (l.paymentMethods ?? []).map(m => METHOD_WORDS[m] ?? m.toLowerCase());
+  if (methods.length) parts.push(methods.join(' or ').replace(/^./, c => c.toUpperCase()));
+  if (l.mailingAddress && (l.paymentMethods ?? []).includes('CHECK')) parts.push(`to ${l.mailingAddress}`);
+  if (l.payeeBankName || l.payeeAccountLast4) parts.push(`lender's account: ${[l.payeeBankName, l.payeeAccountLast4 ? `••${l.payeeAccountLast4}` : null].filter(Boolean).join(' ')}`);
+  if (l.paymentInstructions && !parts.length) parts.push(l.paymentInstructions);
+  return parts.length ? parts.join(' · ') : null;
+}
+
 export async function buildPayPlan(userId: string, opts: { horizonDays?: number; cushion?: number; includeUtilities?: boolean } = {}): Promise<PayPlan> {
   const horizonDays = Math.max(1, Math.min(90, opts.horizonDays ?? 14));
   const cushion = Math.max(0, opts.cushion ?? 0);
@@ -103,7 +121,7 @@ export async function buildPayPlan(userId: string, opts: { horizonDays?: number;
       where: { userId, isActive: true },
       include: {
         property: { select: { id: true, address: true, nickname: true } },
-        loanPayments: { where: { date: { gte: lookback } }, select: { date: true, status: true, amount: true } },
+        loanPayments: { where: { OR: [{ date: { gte: lookback } }, { periodDate: { gte: lookback } }] }, select: { date: true, periodDate: true, status: true, amount: true } },
       },
     }),
   ]);
@@ -158,7 +176,8 @@ export async function buildPayPlan(userId: string, opts: { horizonDays?: number;
       if (d < lookback) return false;
       const mStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
       const mEnd = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
-      const paid = loan.loanPayments.some(lp => lp.status !== 'UNPAID' && lp.date.getTime() >= mStart && lp.date.getTime() < mEnd);
+      // A payment covers the month it says it covers; without one, the month it was paid in.
+      const paid = loan.loanPayments.some(lp => { const t = (lp.periodDate ?? lp.date).getTime(); return lp.status !== 'UNPAID' && t >= mStart && t < mEnd; });
       return !paid;
     });
     if (!due) continue;
@@ -173,6 +192,7 @@ export async function buildPayPlan(userId: string, opts: { horizonDays?: number;
       preferredAccountId: loan.payFromBankAccountId ?? null,
       payFrom: [], reason: sent >= amount - 0.005 ? 'Already sent — waiting to clear' : '',
       link: `/loans/${loan.id}`,
+      howToPay: howToPay(loan), payUrl: loan.paymentUrl ?? null,
     });
   }
 
@@ -199,7 +219,7 @@ export async function buildPayPlan(userId: string, opts: { horizonDays?: number;
           label: p.providerName, detail: [p.serviceLabel, p.propertyName].filter(Boolean).join(' · ') || null,
           propertyId: p.propertyId, amount, dueDate: due.toISOString(), daysUntil,
           status: 'DUE', preferredAccountId: lastAcct.get(p.accountId) ?? null,
-          payFrom: [], reason: '', link: `/properties/${p.propertyId}/utilities/${p.accountId}`,
+          payFrom: [], reason: '', link: `/properties/${p.propertyId}/utilities/${p.accountId}`, howToPay: null, payUrl: null,
         });
       }
     } catch {

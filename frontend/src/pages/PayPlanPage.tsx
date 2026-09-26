@@ -173,6 +173,8 @@ export default function PayPlanPage() {
                                 </p>
                               )}
                               {o.reason && <p className="text-xs text-gray-500 mt-0.5">{o.reason}</p>}
+                              {o.howToPay && <p className="text-xs text-gray-400 mt-0.5">{o.howToPay}</p>}
+                              {o.payUrl && <a href={o.payUrl} target="_blank" rel="noreferrer" className="text-xs text-[#F5A623] hover:underline">Open payment site ↗</a>}
                             </div>
                           </div>
                           <div className="text-right flex-shrink-0">

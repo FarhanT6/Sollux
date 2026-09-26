@@ -3,6 +3,9 @@ import { askClaude } from './models';
 import { db } from '../config/db';
 import { getPaymentPriorities } from '../services/paymentPriority';
 import { watchDeadlines } from './deadlineWatcher';
+import { payDayBrief } from './payDayBrief';
+import { draftRentReminders } from './rentCollections';
+import { detectLeaks } from './leakDetective';
 
 /**
  * The nightly bookkeeper.
@@ -172,6 +175,24 @@ export async function runBookkeeperForUser(userId: string): Promise<{ raised: nu
 
   // ── Deadlines: balloons, rate resets, tax installments, citations, leases
   findings.push(...await watchDeadlines(userId, now));
+  // ── This week's payments, and how to make each one
+  findings.push(...await payDayBrief(userId).catch(() => []));
+  // ── Metered utilities: leaks, vacant-unit use, spikes
+  findings.push(...await detectLeaks(userId).catch(err => { console.warn('[Bookkeeper] leak detective:', err instanceof Error ? err.message : err); return []; }));
+
+  // ── Late rent: reminders drafted for the owner to send
+  try {
+    await draftRentReminders(userId, now);
+    const waiting = await db.messageDraft.count({ where: { userId, status: 'DRAFT' } });
+    const home = properties[0];
+    if (waiting && home) {
+      findings.push({
+        key: 'rent-drafts', propertyId: home.id, type: 'REMINDER', severity: 'WARNING',
+        title: `${waiting} rent reminder${waiting === 1 ? '' : 's'} drafted for late tenants`,
+        body: 'Open Budget → Rent Collection to review each one, then send it from your email or phone and mark it sent.',
+      });
+    }
+  } catch (err) { console.warn('[Bookkeeper] rent reminders:', err instanceof Error ? err.message : err); }
 
   // ── Write: refresh, raise, clear ─────────────────────────────────────────
   const propertyIds = properties.map(p => p.id);

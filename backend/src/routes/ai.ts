@@ -2,6 +2,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import Anthropic from '@anthropic-ai/sdk';
 import { askClaude } from '../ai/models';
+import { assistantTurn, runAction, type ChatTurn } from '../ai/assistant';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 
@@ -161,6 +162,32 @@ Keep responses under 300 words unless detail is genuinely needed.`,
   } catch (err: any) {
     console.error('AI query error:', err);
     res.status(500).json({ error: 'Failed to process query' });
+  }
+});
+
+// POST /api/ai/agent — Ask Sollux with tools. { messages: [{role, content}], today }
+// Returns the answer and any payments it proposes, which run only via /agent/confirm.
+router.post('/agent', async (req: Request, res: Response) => {
+  try {
+    const body = req.body as { messages?: ChatTurn[]; today?: string };
+    const history = (body.messages ?? []).filter(m => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim()).map(m => ({ role: m.role, content: m.content.slice(0, 4000) }));
+    if (!history.length || history[history.length - 1].role !== 'user') return res.status(400).json({ error: 'Ask a question.' });
+    const today = typeof body.today === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.today) ? body.today : new Date().toISOString().slice(0, 10);
+    res.json(await assistantTurn(req.dbUserId!, history, today));
+  } catch (err: any) {
+    console.error('AI agent error:', err?.message ?? err);
+    res.status(500).json({ error: 'Sollux could not answer that just now.' });
+  }
+});
+
+// POST /api/ai/agent/confirm — run one action the owner confirmed.
+router.post('/agent/confirm', async (req: Request, res: Response) => {
+  try {
+    const a = req.body as { tool?: string; input?: Record<string, unknown> };
+    if (!a?.tool || !a.input) return res.status(400).json({ error: 'Nothing to confirm.' });
+    res.json({ result: await runAction(req.dbUserId!, { tool: a.tool, input: a.input }) });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message ?? 'Could not record that.' });
   }
 });
 

@@ -55,7 +55,11 @@ async function generateInsightsForAccount(
   const deviation = (current - recentAvg) / recentAvg;
 
   // ── Anomaly detection ──────────────────────────────────────
-  if (Math.abs(deviation) >= ANOMALY_THRESHOLD) {
+  // Metered accounts (water, sewer, gas, electric) are the leak detective's,
+  // which reads usage per day against the season and vacancy; this simple
+  // dollar comparison is kept for the flat-rate ones.
+  const metered = ['WATER', 'SEWER', 'GAS', 'ELECTRIC'].includes(account.category);
+  if (!metered && Math.abs(deviation) >= ANOMALY_THRESHOLD) {
     const direction = deviation > 0 ? 'higher' : 'lower';
     const pct = Math.abs(Math.round(deviation * 100));
 
