@@ -63,6 +63,7 @@ export type ExpenseCategory =
   | 'UTILITIES' | 'REPAIRS_MAINTENANCE' | 'LANDSCAPING' | 'PROPERTY_MANAGEMENT'
   | 'LEGAL' | 'INSURANCE' | 'PROPERTY_TAX' | 'HOA' | 'MORTGAGE_DEBT_SERVICE'
   | 'CAPITAL_IMPROVEMENT' | 'SUPPLIES' | 'TRAVEL' | 'ADVERTISING' | 'OTHER'
+  | 'HANDYMAN' | 'PERMITS' | 'CITATIONS_FINES'
   | 'AUTO_LOAN' | 'AUTO_INSURANCE' | 'CREDIT_CARD' | 'MEDICAL' | 'PHONE'
   | 'STUDENT_LOAN' | 'LIFE_INSURANCE' | 'SUBSCRIPTIONS';
 
@@ -575,8 +576,58 @@ export interface TaxAssessment {
   installment2Paid?: string;
   status: TaxStatus;
   notes?: string;
-  property?: Pick<Property, 'id' | 'address' | 'nickname'>;
+  apn?: string | null;
+  taxingAuthority?: string | null;
+  installment1Amount?: number | string | null;
+  installment2Amount?: number | string | null;
+  escrowLoanId?: string | null;
+  hasDocument?: boolean;
+  property?: Pick<Property, 'id' | 'address' | 'nickname'> & { city?: string; state?: string };
 }
+
+// ─── Compliance: citations, orders to comply, permits, inspections ─────────
+export type ComplianceKind = 'CITATION' | 'NOTICE' | 'PERMIT' | 'INSPECTION';
+export type ComplianceStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'APPEALED' | 'CLOSED';
+export interface ComplianceViolation { code?: string | null; description?: string | null; correction?: string | null; fine?: number | null }
+export interface ComplianceItem {
+  id: string; propertyId: string; kind: ComplianceKind; title: string;
+  agency?: string | null; caseNumber?: string | null; referenceNumber?: string | null;
+  level?: 'WARNING' | 'FIRST' | 'SECOND' | 'THIRD' | 'FOURTH' | null;
+  issuedDate?: string | null; violationDate?: string | null; dueDate?: string | null; paymentDueDate?: string | null; resolvedDate?: string | null;
+  fineAmount?: number | string | null; apn?: string | null; escalation?: string | null;
+  status: ComplianceStatus; violations?: ComplianceViolation[] | null;
+  contactName?: string | null; contactPhone?: string | null; contactEmail?: string | null; notes?: string | null;
+  documents?: { key: string; name: string }[] | null;
+  property?: { id: string; address: string; nickname?: string | null; city?: string; state?: string };
+  expenses?: { id: string; amount: number | string; date: string; category: ExpenseCategory; vendor?: string | null; description?: string | null }[];
+  paid?: number; owed?: number | null;
+}
+export const COMPLIANCE_KIND_LABELS: Record<ComplianceKind, string> = { CITATION: 'Citation', NOTICE: 'Notice / order', PERMIT: 'Permit', INSPECTION: 'Inspection' };
+export const COMPLIANCE_STATUS_LABELS: Record<ComplianceStatus, string> = { OPEN: 'Open', IN_PROGRESS: 'In progress', RESOLVED: 'Resolved', APPEALED: 'Appealed', CLOSED: 'Closed' };
+export const CITATION_LEVEL_LABELS: Record<string, string> = { WARNING: 'Warning', FIRST: '1st citation', SECOND: '2nd citation', THIRD: '3rd citation', FOURTH: '4th citation' };
+
+// ─── Development projects and money sent to them ───────────────────────────
+export interface ProjectTotals {
+  sentUsd: number; feesUsd: number; totalCostUsd: number; receivedLocal: number; transfersWithoutRate: number;
+  averageRate: number | null; budgetUsedPct: number | null;
+  byPurpose: Record<string, { usd: number; local: number; count: number }>; lastTransfer: string | null;
+}
+export interface ProjectTransfer {
+  id: string; projectId: string; date: string; amountUsd: number | string; feeUsd?: number | string | null;
+  exchangeRate?: number | string | null; amountLocal?: number | string | null; amountLocalComputed?: number | null;
+  method?: string | null; recipient?: string | null; purpose?: string | null; bankAccountId?: string | null; bankAccountName?: string | null;
+  reference?: string | null; notes?: string | null; hasDocument?: boolean;
+}
+export interface DevelopmentProject {
+  id: string; name: string; country?: string | null; city?: string | null; address?: string | null; description?: string | null;
+  localCurrency: string; budgetUsd?: number | string | null; budgetLocal?: number | string | null; floors?: number | null;
+  status: 'PLANNING' | 'ACTIVE' | 'ON_HOLD' | 'COMPLETE'; startDate?: string | null; targetDate?: string | null; notes?: string | null;
+  transferCount?: number; transfers?: ProjectTransfer[]; totals: ProjectTotals;
+}
+export const TRANSFER_PURPOSE_LABELS: Record<string, string> = {
+  LAND: 'Land', DESIGN_PERMITS: 'Design & permits', FOUNDATION: 'Foundation', STRUCTURE: 'Structure / frame',
+  MATERIALS: 'Materials', LABOR: 'Labor', FINISHING: 'Finishing', UTILITIES: 'Utilities & connections', OTHER: 'Other',
+};
 
 export interface Improvement {
   id: string;
@@ -983,6 +1034,7 @@ export const EXPENSE_CATEGORY_LABELS: Record<ExpenseCategory, string> = {
   HOA: 'HOA', MORTGAGE_DEBT_SERVICE: 'Mortgage / Debt Service',
   CAPITAL_IMPROVEMENT: 'Capital Improvement', SUPPLIES: 'Supplies',
   TRAVEL: 'Travel', ADVERTISING: 'Advertising', OTHER: 'Other',
+  HANDYMAN: 'Handyman', PERMITS: 'Permits', CITATIONS_FINES: 'Citations & Fines',
   AUTO_LOAN: 'Auto Loan', AUTO_INSURANCE: 'Auto Insurance',
   CREDIT_CARD: 'Credit Cards', MEDICAL: 'Medical', PHONE: 'Phone',
   STUDENT_LOAN: 'Student Loan', LIFE_INSURANCE: 'Life Insurance',

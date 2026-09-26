@@ -8,7 +8,7 @@ router.use(attachDbUser);
 
 const ExpenseFields = z.object({
   propertyId: z.string().optional().nullable(),
-  category: z.enum(['UTILITIES','REPAIRS_MAINTENANCE','LANDSCAPING','PROPERTY_MANAGEMENT','LEGAL','INSURANCE','PROPERTY_TAX','HOA','MORTGAGE_DEBT_SERVICE','CAPITAL_IMPROVEMENT','SUPPLIES','TRAVEL','ADVERTISING','OTHER','AUTO_LOAN','AUTO_INSURANCE','CREDIT_CARD','MEDICAL','PHONE','STUDENT_LOAN','LIFE_INSURANCE','SUBSCRIPTIONS']),
+  category: z.enum(['UTILITIES','REPAIRS_MAINTENANCE','LANDSCAPING','PROPERTY_MANAGEMENT','LEGAL','INSURANCE','PROPERTY_TAX','HOA','MORTGAGE_DEBT_SERVICE','CAPITAL_IMPROVEMENT','SUPPLIES','TRAVEL','ADVERTISING','OTHER','HANDYMAN','PERMITS','CITATIONS_FINES','AUTO_LOAN','AUTO_INSURANCE','CREDIT_CARD','MEDICAL','PHONE','STUDENT_LOAN','LIFE_INSURANCE','SUBSCRIPTIONS']),
   amount: z.number().positive(),
   date: z.string().transform(s => new Date(s)),
   vendor: z.string().optional().nullable(),
@@ -16,6 +16,7 @@ const ExpenseFields = z.object({
   isCapEx: z.boolean().default(false),
   isPersonal: z.boolean().default(false),
   documentUrl: z.string().optional().nullable(),
+  complianceItemId: z.string().optional().nullable(),
 });
 const ExpenseSchema = ExpenseFields.refine(data => data.propertyId || data.isPersonal, {
   message: 'propertyId is required unless the expense is marked personal',

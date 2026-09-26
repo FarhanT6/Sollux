@@ -110,7 +110,7 @@ function addressMatch(a: string, b: string): boolean {
   return overlap / shorter.length >= 0.6;
 }
 
-async function matchProperty(address: string | null, userId: string): Promise<DocumentMatch> {
+export async function matchProperty(address: string | null, userId: string): Promise<DocumentMatch> {
   const noMatch: DocumentMatch = { confidence: 'none', propertyId: null, propertyName: null };
   if (!address) return noMatch;
 
