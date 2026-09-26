@@ -26,6 +26,8 @@ import ReimbursementInvoicePage from './pages/ReimbursementInvoicePage';
 import CompliancePage from './pages/CompliancePage';
 import ProjectsPage from './pages/ProjectsPage';
 import TaxesPage from './pages/TaxesPage';
+import PersonalPage from './pages/PersonalPage';
+import CreditCardPage from './pages/CreditCardPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isSignedIn, isLoaded } = useAuth();
@@ -65,6 +67,8 @@ export default function App() {
           {/* Finances hub */}
           <Route path="finances" element={<FinancesPage />} />
           <Route path="taxes" element={<TaxesPage />} />
+          <Route path="personal" element={<PersonalPage />} />
+          <Route path="personal/cards/:id" element={<CreditCardPage />} />
           <Route path="compliance" element={<CompliancePage />} />
           <Route path="projects" element={<ProjectsPage />} />
           <Route path="projects/:id" element={<ProjectsPage />} />

@@ -1,11 +1,10 @@
-import { useSearchParams } from 'react-router-dom';
+import { Navigate, useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/ui';
 import PnLPage from './PnLPage';
 import CashflowPage from './CashflowPage';
 import BudgetPage from './BudgetPage';
 import LoansPage from './LoansPage';
 import ExpensesPage from './ExpensesPage';
-import PersonalExpensesPage from './PersonalExpensesPage';
 import ReconciliationPage from './ReconciliationPage';
 import IncomingPaymentsPage from './IncomingPaymentsPage';
 import OutgoingPaymentsPage from './OutgoingPaymentsPage';
@@ -21,7 +20,6 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'budget',         label: 'Budget'         },
   { key: 'loans',          label: 'Loans'          },
   { key: 'expenses',       label: 'Expenses'       },
-  { key: 'personal',       label: 'Personal Expenses' },
   { key: 'reconciliation', label: 'Reconciliation' },
   { key: 'incoming',       label: 'Incoming Payments' },
   { key: 'outgoing',       label: 'Expense Payments' },
@@ -53,6 +51,9 @@ export default function FinancesPage() {
     bills:          'Every statement across all properties, searchable, with PDFs',
   };
 
+  // Personal expenses moved to the Personal section.
+  if ((tab as string) === 'personal') return <Navigate to="/personal?tab=expenses" replace />;
+
   return (
     <div>
       <PageHeader title="Finances" subtitle={subtitles[tab]} />
@@ -79,7 +80,6 @@ export default function FinancesPage() {
         {tab === 'budget'   && <BudgetPage embedded />}
         {tab === 'loans'    && <LoansPage embedded />}
         {tab === 'expenses' && <ExpensesPage embedded />}
-        {tab === 'personal' && <PersonalExpensesPage embedded />}
         {tab === 'reconciliation' && <ReconciliationPage embedded />}
         {tab === 'incoming' && <IncomingPaymentsPage embedded />}
         {tab === 'outgoing' && <OutgoingPaymentsPage embedded />}
