@@ -633,6 +633,18 @@ export const updateNotificationPreferences = (data: any) =>
 // Gmail
 export const getGmailConnectUrl = () =>
   api.post<{ url: string }>('/gmail/connect').then(r => r.data);
+export interface GmailMailbox { id: string; email: string; label?: string | null; lastScanAt?: string | null; lastScanError?: string | null }
+export const getGmailStatus = () =>
+  api.get<{ connected: boolean; accounts: GmailMailbox[] }>('/gmail/status').then(r => r.data);
+export interface InboxActivity {
+  messages: { id: string; mailbox: string; fromAddress: string | null; subject: string | null; receivedAt: string | null; outcome: string; detail: string | null; utilityAccountId: string | null; importJobId: string | null; createdAt: string }[];
+  lastJob: { id: string; finishedAt: string | null; autoImported: number; needsReview: number; errorLog: string | null } | null;
+  last30Days: Record<string, number>;
+}
+export const getInboxActivity = () => api.get<InboxActivity>('/gmail/inbox').then(r => r.data);
+export const syncInbox = (tokenId?: string) =>
+  api.post<{ jobId: string; accounts: number }>('/gmail/sync', { tokenId }).then(r => r.data);
+export const markInboxReviewed = (jobId: string) => api.post(`/gmail/inbox/reviewed/${jobId}`);
 
 // Google Drive
 export const getDriveConnectUrl = () =>

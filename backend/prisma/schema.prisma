@@ -500,11 +500,38 @@ model GmailToken {
   expiresAt    DateTime
   email        String   @unique
   label        String?
+  // The inbox agent reads mail newer than this; null reads the last 60 days.
+  lastScanAt    DateTime?
+  lastScanError String?
+  messages      InboxMessage[]
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   @@unique([userId, email])
   @@map("gmail_tokens")
+}
+
+// Every email the inbox agent has looked at, once — so a message is never
+// read (or billed for) twice, and the owner can see what it did with each.
+model InboxMessage {
+  id           String     @id @default(cuid())
+  userId       String
+  gmailTokenId String
+  gmailToken   GmailToken @relation(fields: [gmailTokenId], references: [id], onDelete: Cascade)
+  messageId    String
+  fromAddress  String?
+  subject      String?
+  receivedAt   DateTime?
+  // filed | review | notice | policy | skipped | error
+  outcome      String
+  detail       String?
+  utilityAccountId String?
+  importJobId  String?
+  createdAt    DateTime   @default(now())
+
+  @@unique([gmailTokenId, messageId])
+  @@index([userId, createdAt])
+  @@map("inbox_messages")
 }
 
 // ─── DRIVE TOKENS ────────────────────────────────────────
@@ -537,7 +564,9 @@ enum DriveImportStatus {
 model DriveImportJob {
   id              String            @id @default(cuid())
   userId          String
-  driveTokenId    String
+  driveTokenId    String? // null for jobs that did not come from Drive
+  // Where the documents came from: 'drive', or 'email' for an inbox run.
+  source          String            @default("drive")
   folderName      String?
   status          DriveImportStatus @default(RUNNING)
   totalFiles      Int               @default(0)

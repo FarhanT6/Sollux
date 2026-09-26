@@ -563,7 +563,13 @@ router.get('/jobs/:id/review-data', attachDbUser, async (req, res, next) => {
       })
     );
 
-    send({ type: 'done', autoImported: job.autoImported });
+    // The review dropdowns need the owner's properties and accounts.
+    const properties = await db.property.findMany({
+      where: { userId: req.dbUserId! },
+      include: { utilityAccounts: { select: { id: true, providerName: true, category: true, serviceLabel: true, accountNumber: true }, orderBy: { providerName: 'asc' } } },
+      orderBy: { address: 'asc' },
+    });
+    send({ type: 'done', autoImported: job.autoImported, properties });
     res.end();
   } catch (err) { next(err); }
 });

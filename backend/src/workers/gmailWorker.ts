@@ -1,19 +1,24 @@
 import { Worker, Job } from 'bullmq';
-import { parseGmailForUser } from '../parsers/gmailParser';
+import { runInboxAgent, runInboxAgentForEveryone } from '../ai/inboxAgent';
 import { guardWorker } from './redisGuard';
 import { createWorkerConnection, workerTuning } from './queues';
 
 interface GmailJobData {
-  userId: string;
+  userId?: string;
+  tokenId?: string;
 }
 
+// 'parse' reads one owner's mailboxes (Sync now); 'inbox-all' is the nightly
+// run over every owner with a connected mailbox.
 const worker = new Worker<GmailJobData>(
   'gmail',
   async (job: Job<GmailJobData>) => {
-    console.log(`[GmailWorker] Parsing Gmail for user ${job.data.userId}`);
-    await parseGmailForUser(job.data.userId);
+    if (job.name === 'inbox-all') return runInboxAgentForEveryone();
+    if (!job.data.userId) return;
+    console.log(`[GmailWorker] Inbox agent for user ${job.data.userId}`);
+    return runInboxAgent(job.data.userId, { tokenId: job.data.tokenId });
   },
-  { connection: createWorkerConnection(), concurrency: 2, ...workerTuning }
+  { connection: createWorkerConnection(), concurrency: 1, ...workerTuning }
 );
 
 worker.on('completed', job => console.log(`[GmailWorker] Job ${job.id} completed`));
