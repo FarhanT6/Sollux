@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { getDashboardSummary } from '../../api/client';
 import type { DashboardSummary } from '../../types';
 import { tap } from '../../lib/native';
+import { useThemeChoice, type ThemeChoice } from '../../lib/theme';
 
 function Ico({ d, children, size = 16 }: { d?: string; children?: React.ReactNode; size?: number }) {
   return (
@@ -74,6 +75,7 @@ export default function AppLayout() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [themeChoice, setThemeChoice] = useThemeChoice();
 
   useEffect(() => {
     getDashboardSummary().then(setSummary).catch(() => {});
@@ -105,8 +107,21 @@ export default function AppLayout() {
     </nav>
   );
 
+  const themeSwitch = (
+    <div className="mb-2 flex items-center gap-0.5 rounded-lg p-0.5" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }} role="radiogroup" aria-label="Theme">
+      {(['light', 'dark', 'system'] as ThemeChoice[]).map(c => (
+        <button key={c} role="radio" aria-checked={themeChoice === c} onClick={() => setThemeChoice(c)}
+          className={`flex-1 text-[11px] py-1 rounded-md transition-colors ${themeChoice === c ? 'text-white' : 'text-gray-500 hover:text-gray-300'}`}
+          style={themeChoice === c ? { background: 'rgba(255,255,255,0.08)' } : undefined}>
+          {c === 'light' ? 'Light' : c === 'dark' ? 'Dark' : 'Auto'}
+        </button>
+      ))}
+    </div>
+  );
+
   const account = (
     <div className="px-3 py-3" style={{ borderTop: '1px solid rgba(255,255,255,0.07)' }}>
+      {themeSwitch}
       <NavLink to="/settings" className="flex items-center gap-2 rounded-lg px-1 py-1 transition-colors hover:bg-white/5 cursor-pointer">
         <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0"
           style={{ background: 'rgba(245,166,35,0.2)', color: '#F5A623' }}>
@@ -133,7 +148,7 @@ export default function AppLayout() {
   );
 
   return (
-    <div className="flex h-screen overflow-hidden" style={{ background: '#1e1e1e', height: '100dvh' }}>
+    <div className="app-canvas flex h-screen overflow-hidden" style={{ background: '#1e1e1e', height: '100dvh' }}>
       {/* ── Desktop sidebar ─────────────────────────────────────── */}
       {!sidebarOpen && (
         <button
@@ -146,7 +161,7 @@ export default function AppLayout() {
         </button>
       )}
       <aside
-        className={`hidden md:flex flex-shrink-0 flex-col overflow-hidden transition-all duration-200 ${sidebarOpen ? 'w-52' : 'w-0'}`}
+        className={`app-chrome hidden md:flex flex-shrink-0 flex-col overflow-hidden transition-all duration-200 ${sidebarOpen ? 'w-52' : 'w-0'}`}
         style={{ background: '#161616', borderRight: sidebarOpen ? '1px solid rgba(255,255,255,0.07)' : 'none' }}
       >
         <div className="px-4 py-4 flex items-center justify-between gap-2" style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
@@ -162,7 +177,7 @@ export default function AppLayout() {
 
       {/* ── Phone: top bar + drawer + tab bar ───────────────────── */}
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="md:hidden pt-safe flex-shrink-0" style={{ background: '#161616', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+        <header className="app-chrome md:hidden pt-safe flex-shrink-0" style={{ background: '#161616', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
           <div className="h-11 px-3 flex items-center justify-between">
             {logo}
             <button onClick={() => { tap(); setDrawerOpen(true); }}
@@ -175,7 +190,7 @@ export default function AppLayout() {
         {drawerOpen && (
           <div className="md:hidden fixed inset-0 z-50 flex">
             <div className="absolute inset-0" style={{ background: 'rgba(0,0,0,0.6)' }} onClick={() => setDrawerOpen(false)} />
-            <aside className="relative w-72 max-w-[85vw] h-full flex flex-col pt-safe pb-safe" style={{ background: '#161616', borderRight: '1px solid rgba(255,255,255,0.07)' }}>
+            <aside className="app-chrome relative w-72 max-w-[85vw] h-full flex flex-col pt-safe pb-safe" style={{ background: '#161616', borderRight: '1px solid rgba(255,255,255,0.07)' }}>
               <div className="px-4 py-4 flex items-center justify-between" style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
                 {logo}
                 <button onClick={() => setDrawerOpen(false)} className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-500" aria-label="Close">✕</button>
@@ -186,13 +201,13 @@ export default function AppLayout() {
           </div>
         )}
 
-        <main className={`flex-1 overflow-y-auto ${!sidebarOpen ? 'md:pt-12' : ''}`} style={{ background: '#1e1e1e', WebkitOverflowScrolling: 'touch' }}>
+        <main className={`app-canvas flex-1 overflow-y-auto ${!sidebarOpen ? 'md:pt-12' : ''}`} style={{ background: '#1e1e1e', WebkitOverflowScrolling: 'touch' }}>
           <Outlet />
           {/* Keep the last row above the tab bar on phones. */}
           <div className="md:hidden h-20" />
         </main>
 
-        <nav className="md:hidden pb-safe flex-shrink-0 flex items-stretch" style={{ background: '#161616', borderTop: '1px solid rgba(255,255,255,0.07)' }}>
+        <nav className="app-chrome md:hidden pb-safe flex-shrink-0 flex items-stretch" style={{ background: '#161616', borderTop: '1px solid rgba(255,255,255,0.07)' }}>
           {TAB_BAR.map(to => {
             const n = NAV.find(x => x.to === to)!;
             const b = badge(to);
