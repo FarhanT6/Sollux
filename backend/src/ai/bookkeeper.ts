@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { askClaude } from './models';
 import { db } from '../config/db';
 import { getPaymentPriorities } from '../services/paymentPriority';
+import { watchDeadlines } from './deadlineWatcher';
 
 /**
  * The nightly bookkeeper.
@@ -166,18 +167,11 @@ export async function runBookkeeperForUser(userId: string): Promise<{ raised: nu
           recommendation: 'Open the loan and set the current balance from the latest statement.',
         });
       }
-      if (l.maturityDate && daysFromNow(l.maturityDate) <= 90 && daysFromNow(l.maturityDate) >= -30) {
-        const left = daysFromNow(l.maturityDate);
-        findings.push({
-          key: `loan-maturing:${l.id}`, propertyId: prop.id,
-          type: 'REMINDER', severity: left <= 30 ? 'ALERT' : 'WARNING',
-          title: `${l.lender} · ${propName}: ${left < 0 ? 'matured' : `matures in ${left} day${left === 1 ? '' : 's'}`}${balance != null ? ` with ${money(balance)} outstanding` : ''}`,
-          body: `Maturity ${fmt(l.maturityDate)}. A balloon or payoff falls due then unless the loan is extended or refinanced.`,
-          recommendation: 'Line up the payoff, an extension (Extend on the loan page records it), or a refinance.',
-        });
-      }
     }
   }
+
+  // ── Deadlines: balloons, rate resets, tax installments, citations, leases
+  findings.push(...await watchDeadlines(userId, now));
 
   // ── Write: refresh, raise, clear ─────────────────────────────────────────
   const propertyIds = properties.map(p => p.id);
