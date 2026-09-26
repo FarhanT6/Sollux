@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from 'react';
+import PortalCodeBanner from '../components/utility/PortalCodeBanner';
 import PaymentBreakdownLine from '../components/utility/PaymentBreakdownLine';
 import { openBalanceOf, isStatementPaid, computeResolvedByFutureCheckpoint, computePaidMap, isEffectivelyPaid, isPriorStatementPaid, statementStatus, coveredByCredit, liveCarriedOf, newestIssued, arrearsPaidSince, unlinkedPaidSince } from '../lib/paidState';
 import { bankAccountLabel } from '../lib/bankAccountLabel';
@@ -1216,6 +1217,13 @@ export default function UtilityDetailPage() {
           </button>
         </div>
       </div>
+
+      {account.mfaPrompt && (
+        <PortalCodeBanner accountId={account.id} prompt={account.mfaPrompt} requestedAt={account.mfaRequestedAt} providerName={account.providerName} />
+      )}
+      {account.lastSyncStatus === 'FAILED' && account.lastSyncError && !syncing && (
+        <p className="mx-6 mt-3 text-xs text-red-400">Last sync failed: {account.lastSyncError}</p>
+      )}
 
       {/* Stats bar */}
       <div className="px-6 py-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3"

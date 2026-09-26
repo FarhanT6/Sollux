@@ -170,6 +170,13 @@ model UtilityAccount {
   usernameEnc      String?
   passwordEnc      String?
   loginUrl         String?
+  // Portal agent: a verification code the portal sent, asked of the owner
+  // mid-login. The prompt is what the portal said; the code is encrypted and
+  // cleared as soon as the agent has typed it.
+  mfaPrompt        String?
+  mfaRequestedAt   DateTime?
+  mfaCodeEnc       String?
+  lastAgentRunAt   DateTime?
   category         UtilityCategory
   // Which unit this meter serves. A multi-unit property can carry several
   // meters for one utility — "IID ****8110" and "IID ****5855" are

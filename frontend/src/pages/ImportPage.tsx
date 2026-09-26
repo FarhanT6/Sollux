@@ -591,19 +591,27 @@ function InboxPanel({ onStreamStart, onBillStreamed }: {
   }
 
   if (!boxes) return null;
+  const waiting = activity?.lastJob && activity.lastJob.needsReview > 0 ? activity.lastJob : null;
+  const reviewBar = waiting && (
+    <div className="flex items-center gap-3 rounded-lg px-3 py-2" style={{ background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.25)' }}>
+      <p className="text-xs text-amber-300 flex-1">{waiting.needsReview} bill{waiting.needsReview === 1 ? '' : 's'} from {waiting.source === 'portal' ? (waiting.label?.replace(/^Portal · /, '') ?? 'a provider portal') : 'email'} need a quick check{waiting.autoImported ? ` (${waiting.autoImported} already filed)` : ''}.</p>
+      <button className="btn btn-primary text-xs" onClick={() => review(waiting.id)}>Review</button>
+      <button className="text-xs text-gray-500 hover:text-gray-300" onClick={() => markInboxReviewed(waiting.id).then(load)}>Mark done</button>
+    </div>
+  );
   if (!boxes.length) {
     return (
-      <div className="rounded-xl p-5 mb-5 flex items-center justify-between" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+      <div className="rounded-xl p-5 mb-5 flex items-center justify-between flex-wrap gap-y-2" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
         <div>
           <p className="text-sm font-medium text-gray-200">Bills by email</p>
           <p className="text-xs text-gray-500 mt-0.5">Connect the Gmail inboxes your bills go to — as many as you use. Sollux reads them every night and files the bills.</p>
         </div>
         <button className="btn text-xs" onClick={() => getGmailConnectUrl().then(r => { window.location.href = r.url; })}>+ Connect Gmail</button>
+        {reviewBar && <div className="w-full mt-3">{reviewBar}</div>}
       </div>
     );
   }
 
-  const job = activity?.lastJob;
   const c = activity?.last30Days ?? {};
   return (
     <div className="rounded-xl p-5 mb-5 space-y-3" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
@@ -627,13 +635,7 @@ function InboxPanel({ onStreamStart, onBillStreamed }: {
           </span>
         ))}
       </div>
-      {job && job.needsReview > 0 && (
-        <div className="flex items-center gap-3 rounded-lg px-3 py-2" style={{ background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.25)' }}>
-          <p className="text-xs text-amber-300 flex-1">{job.needsReview} bill{job.needsReview === 1 ? '' : 's'} from email need a quick check{job.autoImported ? ` (${job.autoImported} already filed)` : ''}.</p>
-          <button className="btn btn-primary text-xs" onClick={() => review(job.id)}>Review</button>
-          <button className="text-xs text-gray-500 hover:text-gray-300" onClick={() => markInboxReviewed(job.id).then(load)}>Mark done</button>
-        </div>
-      )}
+      {reviewBar}
       {err && <p className="text-xs text-red-400">{err}</p>}
       {(activity?.messages.length ?? 0) > 0 && (
         <div>
