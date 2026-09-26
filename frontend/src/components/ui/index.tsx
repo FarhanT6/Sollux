@@ -114,7 +114,7 @@ export function InsightCard({ insight, onRead, onDismiss }: InsightCardProps) {
           )}
         </div>
       </div>
-      <p className="text-xs text-gray-400 leading-relaxed mb-2">{insight.body}</p>
+      <p className="text-xs text-gray-400 leading-relaxed mb-2 whitespace-pre-line">{insight.body}</p>
       {insight.recommendation && (
         <div className="rounded-lg px-3 py-2" style={{ background: 'rgba(255,255,255,0.05)' }}>
           <p className="text-xs font-medium text-gold-500 uppercase tracking-wide mb-0.5">Recommendation</p>

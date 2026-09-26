@@ -3,6 +3,7 @@ import { askClaude } from './models';
 import { db } from '../config/db';
 import { getPaymentPriorities } from '../services/paymentPriority';
 import { watchDeadlines } from './deadlineWatcher';
+import { payDayBrief } from './payDayBrief';
 
 /**
  * The nightly bookkeeper.
@@ -172,6 +173,8 @@ export async function runBookkeeperForUser(userId: string): Promise<{ raised: nu
 
   // ── Deadlines: balloons, rate resets, tax installments, citations, leases
   findings.push(...await watchDeadlines(userId, now));
+  // ── This week's payments, and how to make each one
+  findings.push(...await payDayBrief(userId).catch(() => []));
 
   // ── Write: refresh, raise, clear ─────────────────────────────────────────
   const propertyIds = properties.map(p => p.id);
