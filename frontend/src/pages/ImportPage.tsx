@@ -71,6 +71,9 @@ interface ParsedBill {
   newAccount?:  NewAccountPayload;
   // When adding to an existing property (no new property creation needed)
   addToPropertyId?: string | null;
+  // The owner picked the account themselves: the server files it there even
+  // when the bill's account number differs (a renewed policy, a new number).
+  ownerChose?: boolean;
 }
 
 interface SlimAccount {
@@ -1336,6 +1339,20 @@ function BillCard({
                     </optgroup>
                   )}
                 </select>
+                {/* The bill's number differs from the chosen account's: say so
+                    before importing — filing it there updates the account. */}
+                {(() => {
+                  if (!selectedAcctId || !ex.accountNumber) return null;
+                  const chosen = properties.flatMap(p => p.utilityAccounts).find(a => a.id === selectedAcctId);
+                  const last4 = (v?: string | null) => (v ?? '').replace(/[^0-9A-Za-z]/g, '').slice(-4);
+                  const billL4 = last4(ex.accountNumber), acctL4 = last4(chosen?.accountNumber);
+                  if (!chosen || !acctL4 || acctL4.includes('*') || billL4 === acctL4) return null;
+                  return (
+                    <p className="text-xs text-amber-300 rounded-lg px-3 py-2" style={{ background: 'rgba(251,191,36,0.08)' }}>
+                      This bill is for account ending {billL4}; {chosen.providerName}'s number on file ends {acctL4}. Importing files it here and updates the account to ending {billL4} (a renewed policy or new number). Pick another account if that's wrong.
+                    </p>
+                  );
+                })()}
                 {/* More than one account with this provider at the bill's
                     address: the importer will not guess, so offer the choice. */}
                 {/* Or no number to match on (an agreement, a screenshot, a notice):
@@ -1606,7 +1623,7 @@ export default function ImportPage() {
   const handleAssign = (filename: string, utilityAccountId: string) => {
     setBills(prev => prev.map(b =>
       b.filename === filename
-        ? { ...b, match: { ...b.match, utilityAccountId: utilityAccountId || null }, newProperty: undefined, newAccount: undefined }
+        ? { ...b, match: { ...b.match, utilityAccountId: utilityAccountId || null }, newProperty: undefined, newAccount: undefined, ownerChose: !!utilityAccountId }
         : b
     ));
   };
@@ -1641,7 +1658,7 @@ export default function ImportPage() {
 
   function applyAssignment(source: ParsedBill, target: ParsedBill): ParsedBill {
     if (source.match.utilityAccountId) {
-      return { ...target, match: { ...target.match, utilityAccountId: source.match.utilityAccountId }, newProperty: undefined, newAccount: undefined, addToPropertyId: undefined };
+      return { ...target, match: { ...target.match, utilityAccountId: source.match.utilityAccountId }, newProperty: undefined, newAccount: undefined, addToPropertyId: undefined, ownerChose: true };
     }
     if (source.addToPropertyId && source.newAccount) {
       return { ...target, match: { ...target.match, utilityAccountId: null }, addToPropertyId: source.addToPropertyId, newAccount: source.newAccount, newProperty: undefined };
@@ -1756,6 +1773,9 @@ export default function ImportPage() {
       propertyId:       b.addToPropertyId || null,
       newProperty:      b.newProperty,
       newAccount:       b.newAccount,
+      // An uncertain match the owner reviewed and imported is their choice too;
+      // only a confident automatic match is held to the bill's account number.
+      ownerChose:       b.ownerChose ?? (b.match.confidence !== 'high'),
     });
 
     // Submit in batches rather than one request. Every item carries its PDF as
@@ -1807,6 +1827,20 @@ export default function ImportPage() {
 
     setProgress('');
     setResult(totals);
+
+    // A bill the server refused ("this bill is for account ending 1921…") stays
+    // on screen with its reason, so fixing it is one change and Confirm —
+    // not a fresh upload and a second read.
+    const refused = ready.filter(b => !failed.includes(b) && totals.errors.some(e => e.startsWith(`${b.filename}:`)));
+    if (refused.length > 0) {
+      failed.push(...refused);
+      const reasons = totals.errors.filter(e => refused.some(b => e.startsWith(`${b.filename}:`)));
+      const failedNames = new Set(failed.map(f => f.filename));
+      setBills(prev => prev.filter(b => failedNames.has(b.filename)));
+      setDriveNote(`${totals.imported} filed. ${failed.length} not filed yet — ${reasons.join(' ')} Fix it on the card below and press Confirm again.`);
+      setStage('review');
+      return;
+    }
 
     if (failed.length > 0) {
       // Keep the ones that did not land, with their assignments intact, so the
