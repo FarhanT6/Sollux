@@ -5,7 +5,7 @@
 import { Router, Request, Response } from 'express';
 import { Prisma } from '@prisma/client';
 import { markEscrowedStatements } from '../services/escrow';
-import { applyPolicyDocument } from '../services/pdfImportService';
+import { applyPolicyDocument, settleInFull } from '../services/pdfImportService';
 import { parseBill, applyPastDueNotice, recordConfirmedPayment, syncPaymentPlanFromBill, syncInsurancePolicyFromBill, syncLoanComponentsFromBill, normalizeAcct, ExtractedBillData, MatchResult } from '../services/pdfImportService';
 import { encrypt, decrypt } from '../crypto/encrypt';
 import { uploadDocument, buildStatementKey } from '../services/s3Service';
@@ -302,6 +302,10 @@ router.post('/confirm', async (req: Request, res: Response) => {
         }
 
         const ex = item.extracted;
+        // A premium the lender pays from escrow, or billed once a term, is the
+        // whole term paid once — not the first of the installments the
+        // carrier also offers.
+        settleInFull(ex, acct);
 
         // The bill names its account. If the chosen account names a different
         // one, this import would file one account's bill under another and
@@ -392,13 +396,18 @@ router.post('/confirm', async (req: Request, res: Response) => {
           ? new Date(ex.statementDate)
           : (filenameDate ?? new Date());
 
-        // Infer billing period from statement month when not extracted (e.g. management fees)
+        // Infer billing period from statement month when not extracted (e.g.
+        // management fees). Not for insurance: a premium bill issued in April
+        // for a July term does not cover April, and an invented "Apr 1 – Apr
+        // 30" row misstated what it billed. It keeps its coverage term when it
+        // is paid in full, and no period otherwise.
+        const insuranceNoPeriod = (!!ex.insurance || acct.category === 'INSURANCE') && !ex.billingPeriodStart;
         const billingPeriodStart = ex.billingPeriodStart
           ? new Date(ex.billingPeriodStart)
-          : new Date(statementDate.getFullYear(), statementDate.getMonth(), 1);
+          : insuranceNoPeriod ? null : new Date(statementDate.getFullYear(), statementDate.getMonth(), 1);
         const billingPeriodEnd = ex.billingPeriodEnd
           ? new Date(ex.billingPeriodEnd)
-          : new Date(statementDate.getFullYear(), statementDate.getMonth() + 1, 0);
+          : insuranceNoPeriod ? null : new Date(statementDate.getFullYear(), statementDate.getMonth() + 1, 0);
 
         if (isNaN(statementDate.getTime())) {
           errors.push(`${item.filename}: invalid statement date`);
