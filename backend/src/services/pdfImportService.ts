@@ -2231,6 +2231,11 @@ export function applyInsuranceFromText(ex: ExtractedBillData, text: string): voi
   // ROBELINI DR", and the mailing address made a new property of the home.
   const insured = insuredLocationFromText(text);
   if (insured) ex.serviceAddress = insured;
+  // A policy document that labels no insured location prints only where the
+  // policyholder gets mail — Bamboo bills the 432 W D St policy to the
+  // owner's home. That address is not the property, so it is not used: the
+  // policy number and the carrier's accounts identify the account instead.
+  else if (ins.policyNumber || period || ex.insurance?.policyNumber) ex.serviceAddress = null;
   ins.carrier ??= text.match(/underwritten\s+by\s*[:\-]?\s*([A-Z][A-Za-z&.,' ]{3,60}?)(?=\s*\n)/i)?.[1]?.trim() ?? null;
   ins.termPremium ??= (() => {
     const m = text.match(/(\d{1,2})-?\s*month\s+(?:policy\s+)?premium[^$\n]{0,60}\$\s*([\d,]+\.\d{2})/i)

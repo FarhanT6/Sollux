@@ -134,6 +134,8 @@ interface ConfirmItem {
   propertyId?:      string | null;    // existing property to add a new account to
   newProperty?:     NewPropertyPayload;
   newAccount?:      NewAccountPayload;
+  /** The owner picked this account on the card, rather than accepting the importer's match. */
+  ownerChose?:      boolean;
 }
 
 router.post('/confirm', async (req: Request, res: Response) => {
@@ -311,8 +313,22 @@ router.post('/confirm', async (req: Request, res: Response) => {
           let stored = '';
           try { stored = acct.accountNumberEnc ? normalizeAcct(decrypt(acct.accountNumberEnc)) : ''; } catch { stored = ''; }
           if (stored.length >= 6 && !stored.includes(billAcct) && !billAcct.includes(stored)) {
-            errors.push(`${item.filename}: this bill is for account ending ${billAcct.slice(-4)}, but the selected account's number on file ends ${stored.slice(-4)}. Choose the right account, or correct the account number on it, then import again.`);
-            continue;
+            // Chosen by the importer, the account is a guess; a different number
+            // means the guess is wrong. Chosen by the owner, it is a decision —
+            // a policy renewed under a new number, a provider that renumbered —
+            // so the bill files there and the account takes the bill's number.
+            if (!item.ownerChose) {
+              errors.push(`${item.filename}: this bill is for account ending ${billAcct.slice(-4)}, but the account it was matched to ends ${stored.slice(-4)}. Pick the account on the card to file it there anyway.`);
+              continue;
+            }
+            await db.utilityAccount.update({
+              where: { id: acct.id },
+              data: {
+                accountNumberEnc: encrypt(ex.accountNumber!),
+                accountNumber: `****${ex.accountNumber!.replace(/\s/g, '').slice(-4)}`,
+                notes: [acct.notes, `Account number changed from ending ${stored.slice(-4)} to ending ${billAcct.slice(-4)} on import of ${item.filename} (${new Date().toISOString().slice(0, 10)}).`].filter(Boolean).join('\n'),
+              },
+            });
           }
           if (!stored) {
             await db.utilityAccount.update({
