@@ -5,7 +5,7 @@ import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { getSignedDocumentUrl, downloadDocument, uploadDocument, buildStatementKey } from '../services/s3Service';
 import { markEscrowedStatements } from '../services/escrow';
-import { applyPolicyDocument } from '../services/pdfImportService';
+import { applyPolicyDocument, settleInFull } from '../services/pdfImportService';
 import { applyPastDueNotice, parseBill, recordConfirmedPayment, syncPaymentPlanFromBill, syncInsurancePolicyFromBill, syncLoanComponentsFromBill } from '../services/pdfImportService';
 import { findOrCreateUtilityAccount } from '../services/utilityAccountResolver';
 
@@ -287,8 +287,10 @@ router.post('/stream', attachDbUser, async (req, res) => {
 
         // High-confidence: auto-import to DB, don't need review
         if (utilityAccountId && match.confidence === 'high') {
-          const acct = await db.utilityAccount.findUnique({ where: { id: utilityAccountId }, select: { id: true, propertyId: true } });
+          const acct = await db.utilityAccount.findUnique({ where: { id: utilityAccountId }, select: { id: true, propertyId: true, escrowLoanId: true, billingCadence: true } });
           if (acct) {
+            // A premium the lender pays from escrow, or billed once a term, is the whole term, once.
+            settleInFull(ex, acct);
             const filenameDate  = parseDateFromFilename(file.name);
             const statementDate = ex.statementDate ? new Date(ex.statementDate) : (filenameDate ?? new Date());
 

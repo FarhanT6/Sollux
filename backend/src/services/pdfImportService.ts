@@ -92,6 +92,10 @@ export interface ExtractedBillData {
     carrier?: string | null;        // the underwriter when it differs from the brand
     autoPay?: boolean | null;       // payments are taken automatically on the dates below
     totalCost?: number | null;      // term premium plus billing fees, when printed
+    /** "To pay premium in full: $4,479.72" — the whole term paid at once,
+     *  the figure a lender paying from escrow (or an owner paying the term
+     *  up front) pays instead of the installments. */
+    payInFull?: number | null;
     /** Every installment the document lists, date and amount. */
     paymentSchedule?: { date: string; amount: number; principal?: number | null; interest?: number | null }[] | null;
     /** Vehicles, addresses or people covered, as printed. */
@@ -245,7 +249,7 @@ Schema (use null for any field not present in the document):
   "ratePlan": "string or null — rate schedule, plan name, or tier",
   "isPaid": boolean — true ONLY if balance is $0.00 or document shows 'Paid in Full' / paid stamp. A bill-detail layout with columns Billed / Payments and adjustments / Due where Due and TOTAL DUE are $0.00 is paid: report currentCharges and amountDue as the Billed figure and isPaid true,
   "utilityType": "electric | gas | water | sewer | trash | solar | internet | phone | other",
-  "insurance": object or null — for ANY insurance document, whatever the carrier or kind of cover (auto, homeowners, renters, health, dental, vision, life, umbrella, flood, business) and whatever the document is (billing statement, renewal offer, declarations page, welcome letter, ID card, payment schedule): {"policyNumber": "string", "insuranceType": "PROPERTY | AUTO | RENTERS | LIABILITY | FLOOD | UMBRELLA | HEALTH | DENTAL | VISION | LIFE | BUSINESS | OTHER", "carrier": "underwriter when it differs from the brand, else null", "coverageStart": "YYYY-MM-DD", "coverageEnd": "YYYY-MM-DD", "termPremium": n, "installment": n, "serviceCharge": n, "installmentsRemaining": n, "renewedOn": "YYYY-MM-DD", "autoPay": boolean, "totalCost": n, "paymentSchedule": [{"date": "YYYY-MM-DD", "amount": n}], "insuredItems": ["2022 Land Rover Discovery Sport", ...]}. insuranceType from what is covered (vehicles/VINs → AUTO; a dwelling → PROPERTY; medical/dental/vision plan → HEALTH/DENTAL/VISION). coverageStart/End are the "Policy Period" / "Coverage period" dates. termPremium is the premium for the whole term excluding billing fees ("Your 6-month policy premium excluding billing fees is $2,752.28"; on a billing statement the "Renewal" line or Full Balance). installment is one regular payment; serviceCharge the per-payment installment/billing fee ("We included an installment fee of $4.00 in each payment"); totalCost the term total including fees ("$2,776.28 Total Cost"). paymentSchedule is EVERY dated payment line the document prints ("Automatic Payments Schedule", "Payment schedule", "Your Installment Schedule"), in order, including ones already past. autoPay true when payments are drafted automatically. On a billing statement's policy table ("Policy / Coverage period / Balance / Installment") the policy number is the alphanumeric code on that row. A different policy number with a later coverage start than earlier documents is a renewal onto a new policy,
+  "insurance": object or null — for ANY insurance document, whatever the carrier or kind of cover (auto, homeowners, renters, health, dental, vision, life, umbrella, flood, business) and whatever the document is (billing statement, renewal offer, declarations page, welcome letter, ID card, payment schedule): {"policyNumber": "string", "insuranceType": "PROPERTY | AUTO | RENTERS | LIABILITY | FLOOD | UMBRELLA | HEALTH | DENTAL | VISION | LIFE | BUSINESS | OTHER", "carrier": "underwriter when it differs from the brand, else null", "coverageStart": "YYYY-MM-DD", "coverageEnd": "YYYY-MM-DD", "termPremium": n, "installment": n, "serviceCharge": n, "installmentsRemaining": n, "renewedOn": "YYYY-MM-DD", "autoPay": boolean, "totalCost": n, "payInFull": n, "paymentSchedule": [{"date": "YYYY-MM-DD", "amount": n}], "insuredItems": ["2022 Land Rover Discovery Sport", ...]}. payInFull is the amount printed to pay the whole term at once ("To pay premium in full: $4,479.72", "Pay in full amount", "Full pay"); when it is printed, termPremium is that same whole-term figure, NOT the "Premium" line of a Billing Summary that only totals the first installment. insuranceType from what is covered (vehicles/VINs → AUTO; a dwelling → PROPERTY; medical/dental/vision plan → HEALTH/DENTAL/VISION). coverageStart/End are the "Policy Period" / "Coverage period" dates. termPremium is the premium for the whole term excluding billing fees ("Your 6-month policy premium excluding billing fees is $2,752.28"; on a billing statement the "Renewal" line or Full Balance). installment is one regular payment; serviceCharge the per-payment installment/billing fee ("We included an installment fee of $4.00 in each payment"); totalCost the term total including fees ("$2,776.28 Total Cost"). paymentSchedule is EVERY dated payment line the document prints ("Automatic Payments Schedule", "Payment schedule", "Your Installment Schedule", "Billing Schedule"), in order, including ones already past, each date with the amount on its own row. autoPay true when payments are drafted automatically. On a billing statement's policy table ("Policy / Coverage period / Balance / Installment") the policy number is the alphanumeric code on that row. A different policy number with a later coverage start than earlier documents is a renewal onto a new policy,
   "premiumFinance": object or null — ONLY for a premium finance agreement or its notices (a lender such as Capital Premium Financing, IPFS or First Insurance Funding pays the carrier and is repaid monthly with interest; the document has a "Loan Summary" with Amount Financed, Finance Charge, Annual % Rate): {"lender": "Capital Premium Financing", "loanNumber": "string", "totalPremiums": n, "amountFinanced": n, "downPayment": n, "financeCharge": n, "payment": n, "apr": n, "numberOfPayments": n, "effectiveDate": "YYYY-MM-DD", "firstDueDate": "YYYY-MM-DD", "loanBalance": n}. Put the loan number in accountNumber and the lender in providerName. The lender is the premium finance company on the letterhead (e.g. Capital Premium Financing), not a bank the agreement names as its funding source (e.g. \"Ameris Bank (Lender)\"). Leave serviceAddress null — the address on these is the borrower's mailing address, not the insured property. The signed agreement itself ("Premium Finance Agreement and Disclosure Statement") usually has no loan number yet — only a "Quote" number (e.g. 7925660.1); a quote number is NOT the loan number: leave loanNumber and accountNumber null, and put the insurer from the Schedule of Policies in insurance.carrier. A "Notice of Acceptance" or the agreement itself bills nothing: documentKind 'policy_document', the notice date in statementDate, amountDue and dueDate null. A screenshot of the lender's portal ("Payment Schedule & History" / "Payment History" table with Date, Pmt #, Description, Total, Principal, Interest, Late Charge columns) is the same thing read off a ledger: documentKind 'policy_document'; loanNumber from "Account #"; lender from the page header (Capital Premium Financing); EVERY "Scheduled Payment Due" row into insurance.paymentSchedule as {"date", "amount", "principal", "interest"}; every payment received ("Insured: Installment eCheck", "Installment Credit Card") into ledgerPayments as {"date", "amount", "description"}; every fee row (Late Fee, Convenience Fee, Cancel Fee, NSF Fee) into premiumFinance.fees as {"date", "amount", "label"}, a waived or reversed fee ("($50.00)") as a negative amount; leave amountFinanced, apr and numberOfPayments null when the page does not print them (they are derived from the columns); statementDate is the page's own date if shown, else null,
   "ledgerPayments": array or null — ONLY for a document that lists payments received one by one on their own dates (an HOA ledger, a premium finance portal's payment history): [{"date": "YYYY-MM-DD", "amount": n, "description": "as printed"}]. A single "payments received" figure on an ordinary bill goes in paymentsReceived instead,
   "loanGroups": array or null — ONLY for a loan servicer statement that lists MORE THAN ONE loan under the account (a federal student-loan "Account Snapshot" with columns Group AA / Group BB, or "Loan 1-01 / Loan 1-02"): one entry per loan column, [{"label": "Group AA", "loanKind": "DIRECT SUB", "originalPrincipal": n, "outstandingPrincipal": n, "interestRate": n, "monthlyPayment": n, "accruedInterest": n, "disbursedOn": "YYYY-MM-DD", "payoffDate": "YYYY-MM-DD"}]. Read each column: loanKind from the "Loan Type" row, originalPrincipal from "Original Principal Amount", outstandingPrincipal from "Outstanding Principal Balance", interestRate as a percent from "Interest Rate", monthlyPayment from "Regular Monthly Payment Amount" (the Monthly Payment section, not the Account Snapshot's zeros), accruedInterest from "Accrued Interest" / "Estimated Interest Outstanding", disbursedOn from "First Disbursement Date", payoffDate from "Estimated Payoff Date". A statement for a single loan reports null,
@@ -2012,7 +2016,9 @@ export async function syncInsurancePolicyFromBill(utilityAccountId: string, ex: 
     ...(start ? { effectiveDate: start } : {}),
     ...(end ? { expirationDate: end } : {}),
     ...(ins.termPremium != null ? { termPremium: ins.termPremium } : {}),
-    ...(perInstallment != null ? { premiumAmount: perInstallment, premiumFrequency: cadenceOf(ins, start, end) } : {}),
+    ...(perInstallment != null ? { premiumAmount: perInstallment, premiumFrequency: cadenceOf(ins, start, end) }
+      // Paid in full (by the lender from escrow, or up front): one premium a term.
+      : ins.payInFull != null ? { premiumAmount: ins.payInFull, premiumFrequency: 'ANNUAL' as const } : {}),
     ...(ins.insuranceType ? { policyType: ins.insuranceType as any } : {}),
     isActive: true,
   };
@@ -2196,7 +2202,7 @@ export function inferInsuranceType(text: string): NonNullable<NonNullable<Extrac
 /** The insured property's address on an insurance document, when it
  *  names one apart from the policyholder's mailing address. */
 function insuredLocationFromText(text: string): string | null {
-  const m = text.match(/(?:property\s+at|described\s+location|residence\s+premises|insured\s+location|location\s+of\s+(?:premises|property)|premises\s+insured|property\s+address)\s*[:\-]?\s*\n?\s*([0-9]{1,6}\s+[A-Z0-9][A-Za-z0-9 .'#-]{3,60}?(?:,?\s+[A-Z][A-Za-z .]{2,30})?,?\s+[A-Z]{2}\s+\d{5}(?:-\d{4})?)/i);
+  const m = text.match(/(?:property\s+at|described\s+location|residence\s+premises|insured\s+premises?(?:\s*\(s\))?|insured\s+location|location\s+of\s+(?:premises|property)|premises\s+insured|property\s+address)\s*[:\-]?\s*\n?\s*([0-9]{1,6}\s+[A-Z0-9][A-Za-z0-9 .'#-]{3,60}?(?:,?\s+[A-Z][A-Za-z .]{2,30})?,?\s+[A-Z]{2}\s+\d{5}(?:-\d{4})?)/i);
   return m ? m[1]!.replace(/\s+/g, ' ').trim() : null;
 }
 
@@ -2208,6 +2214,80 @@ function insuredLocationFromText(text: string): string | null {
  * $2,752.28 … Automatic Payments Schedule … Sep 27, 2026 $467.21 …
  * installment fee of $4.00 in each payment".
  */
+/**
+ * The pay-in-full figure and the installment schedule a policy bill offers.
+ * Bamboo prints "To pay premium in full: $4,479.72" beside a first
+ * installment of $1,172.43 and a "Billing Schedule" of five dated amounts;
+ * pdf-parse lists the schedule's dates and its amounts as separate columns,
+ * and the amounts can come out in the reverse order of the dates, so they
+ * are paired with the bill's own due date and amount as the anchor.
+ */
+export function applyPayInFullFromText(ex: ExtractedBillData, text: string): void {
+  if (!ex.insurance) return;
+  const ins = ex.insurance;
+  const num = (v: string) => parseFloat(v.replace(/[$,\s]/g, ''));
+  const full = text.match(/(?:to\s*pay\s*(?:(?:the\s*)?premium\s*)?in\s*full|pay[\s-]*in[\s-]*full(?:\s*amount)?|full[\s-]*pay(?:ment)?\s*amount|paid\s*in\s*full\s*amount)\s*:?[\s$]*([\d,]+\.\d{2})/i);
+  if (full) ins.payInFull ??= num(full[1]!);
+  const fee = text.match(/\$\s*([\d.]+)\s*installment\s*fee/i) ?? text.match(/installment\s*fee\s*of\s*\$\s*([\d.]+)/i);
+  if (fee && ins.serviceCharge == null) ins.serviceCharge = num(fee[1]!);
+
+  if (!ins.paymentSchedule?.length) {
+    // The schedule block only: it ends where the payment stub or help text
+    // begins, and the installment-fee sentence inside it is not a row.
+    let block = text.match(/(?:billing|payment|installment)\s*schedule([\s\S]{0,900})/i)?.[1] ?? '';
+    block = block.split(/need\s*help|bill\s*to\s*:|amount\s*due\s*:|to\s*pay\s*(?:premium\s*)?in\s*full|policy\s*number\s*:|if\s*paying\s*by\s*mail/i)[0]!;
+    block = block.replace(/\$[\s\n]*[\d.]+[\s\n]*installment\s*fee/gi, ' ').replace(/[^.\n]*installment\s*fee[^.]*\.?/gi, ' ');
+    // Dates of a schedule run forward; the first one out of order ends it.
+    const allDates = Array.from(block.matchAll(/\b(\d{2}\/\d{2}\/\d{4})\b/g)).map(m => parseDate(m[1]!)).filter((d): d is string => !!d);
+    const dates: string[] = [];
+    for (const d of allDates) { if (dates.length && d <= dates[dates.length - 1]!) break; dates.push(d); }
+    const amounts = Array.from(block.matchAll(/\$?\s*\n?\s*(\d{1,3}(?:,\d{3})*\.\d{2})\b/g)).map(m => num(m[1]!));
+    if (dates.length >= 2 && amounts.length >= dates.length) {
+      let amts = amounts.slice(0, dates.length);
+      const anchor = ex.amountDue ?? ex.statedTotalDue;
+      // The first installment is the one this bill asks for: its amount belongs with the earliest date.
+      if (anchor != null && Math.abs(amts[0]! - anchor) > 0.01 && Math.abs(amts[amts.length - 1]! - anchor) <= 0.01) amts = [...amts].reverse();
+      ins.paymentSchedule = dates.map((date, i) => ({ date, amount: amts[i]! }));
+    }
+  }
+  const sched = ins.paymentSchedule ?? [];
+  const total = Number(sched.reduce((t, p) => t + p.amount, 0).toFixed(2));
+  if (ins.payInFull == null && sched.length >= 2) ins.payInFull = total;
+  // The whole term is the pay-in-full figure; the "Premium" line of a first
+  // installment's summary is not.
+  if (ins.payInFull != null && (ins.termPremium == null || ins.termPremium < ins.payInFull * 0.9)) ins.termPremium = ins.payInFull;
+  if (sched.length >= 3 && ins.installment == null) {
+    const counts = new Map<number, number>();
+    for (const p of sched.slice(1)) counts.set(p.amount, (counts.get(p.amount) ?? 0) + 1);
+    ins.installment = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]![0];
+  }
+}
+
+/**
+ * A policy bill on an account whose premium is paid in one go — the lender
+ * pays it from escrow, or the account is set to bill once per term — is the
+ * whole term's premium, due once. The installment schedule the carrier also
+ * prints is an option nobody took: it does not become bills or a monthly
+ * premium. The statement becomes the pay-in-full amount for the coverage
+ * term, and the policy's premium the whole term, annually.
+ */
+export function settleInFull(ex: ExtractedBillData, account: { escrowLoanId?: string | null; billingCadence?: string | null }): boolean {
+  const ins = ex.insurance;
+  if (!ins || ex.documentKind === 'policy_document' || ex.documentKind === 'past_due_notice') return false;
+  const inFull = !!account.escrowLoanId || ['TERM', 'ANNUAL', 'ONE_TIME'].includes(String(account.billingCadence ?? ''));
+  const amount = ins.payInFull ?? (ins.paymentSchedule && ins.paymentSchedule.length >= 2 ? Number(ins.paymentSchedule.reduce((t, p) => t + p.amount, 0).toFixed(2)) : null);
+  if (!inFull || amount == null || amount <= 0) return false;
+  ins.payInFull = amount;
+  ins.termPremium = amount;
+  ins.installment = null; ins.serviceCharge = null; ins.installmentsRemaining = null;
+  ins.paymentSchedule = [{ date: ex.dueDate ?? ins.coverageStart ?? ex.statementDate ?? '', amount }].filter(p => p.date);
+  ex.amountDue = amount; ex.currentCharges = amount; ex.statedTotalDue = amount;
+  ex.previousBalance = null; ex.paymentPlan = null; ex.paymentPlanAmount = null;
+  ex.chargeBreakdown = { [account.escrowLoanId ? 'Term premium — paid in full by the lender (escrow)' : 'Term premium — paid in full']: amount };
+  if (ins.coverageStart) { ex.billingPeriodStart = ins.coverageStart; ex.billingPeriodEnd = ins.coverageEnd ?? ex.billingPeriodEnd; }
+  return true;
+}
+
 export function applyInsuranceFromText(ex: ExtractedBillData, text: string): void {
   // No word boundaries: pdf-parse renders some carriers' statements with the
   // spaces stripped ("PolicyCoverageperiodBalanceInstallment").
@@ -3400,6 +3480,7 @@ export async function parseBill(
         applyCreditFromText(text, extracted);
         applyLoanGroupsFromText(extracted, text);
         applyInsuranceFromText(extracted, text);
+        applyPayInFullFromText(extracted, text);
         applyCancellationNoticeFromText(extracted, text);
         applyPremiumFinanceFromText(extracted, text);
       } catch { /* an unreadable text layer changes nothing */ }

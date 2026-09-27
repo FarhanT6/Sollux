@@ -9,7 +9,7 @@
 import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { markEscrowedStatements } from './escrow';
-import { applyPolicyDocument, recordConfirmedPayment, syncPaymentPlanFromBill, syncInsurancePolicyFromBill, syncLoanComponentsFromBill, applyPastDueNotice, parseBill } from './pdfImportService';
+import { settleInFull, applyPolicyDocument, recordConfirmedPayment, syncPaymentPlanFromBill, syncInsurancePolicyFromBill, syncLoanComponentsFromBill, applyPastDueNotice, parseBill } from './pdfImportService';
 import { findOrCreateUtilityAccount } from './utilityAccountResolver';
 import { uploadDocument, buildStatementKey } from './s3Service';
 
@@ -99,9 +99,11 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
   if (utilityAccountId && (match.confidence === 'high' || autoCreated)) {
     const acct = await db.utilityAccount.findUnique({
       where: { id: utilityAccountId },
-      select: { id: true, propertyId: true },
+      select: { id: true, propertyId: true, escrowLoanId: true, billingCadence: true },
     });
     if (!acct) throw new Error('account disappeared mid-import');
+    // A premium the lender pays from escrow, or billed once a term, is the whole term, once.
+    settleInFull(ex, acct);
 
     const parsedDate = ex.statementDate ? new Date(ex.statementDate) : new Date();
     const statementDate = isNaN(parsedDate.getTime()) ? new Date() : parsedDate;
