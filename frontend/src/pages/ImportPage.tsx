@@ -1055,10 +1055,15 @@ function BillCard({
 
   // Status label for the badge
   const resolvedPropName = resolvedPropertyName || match.propertyName;
+  // The account the card is filing to, when it is one already on file.
+  const chosenProp = mode === 'select' && selectedAcctId ? properties.find(p => p.utilityAccounts.some(a => a.id === selectedAcctId)) ?? null : null;
+  const chosenAcct = chosenProp?.utilityAccounts.find(a => a.id === selectedAcctId) ?? null;
   const statusLabel = applied
-    ? (mode === 'add-existing' || resolvedPropertyName != null)
-      ? `New ${acctForm.category.toLowerCase()} account → ${resolvedPropName}`
-      : 'New property & account will be created'
+    ? chosenAcct
+      ? 'Files to an existing account'
+      : (mode === 'add-existing' || resolvedPropertyName != null)
+        ? `New ${acctForm.category.toLowerCase()} account → ${resolvedPropName}`
+        : 'New property & account will be created'
     : CONFIDENCE_LABELS[match.confidence];
 
   return (
@@ -1206,17 +1211,26 @@ function BillCard({
         {applied && (
           <div className="space-y-2">
             <div className="rounded-lg px-3 py-2.5 space-y-0.5" style={{ background: 'rgba(52,211,153,0.07)', border: '1px solid rgba(52,211,153,0.2)' }}>
-              {(mode === 'add-existing' || resolvedPropertyName != null) ? (
-                <p className="text-xs text-emerald-300 font-medium">{resolvedPropName}</p>
+              {chosenAcct && chosenProp ? (
+                <>
+                  <p className="text-xs text-emerald-300 font-medium">{chosenProp.nickname || chosenProp.address}</p>
+                  <p className="text-xs text-gray-400">{describeAccount(chosenAcct)}</p>
+                </>
               ) : (
-                <p className="text-xs text-emerald-300 font-medium">
-                  {propForm.address}, {propForm.city}, {propForm.state} {propForm.zip}
-                </p>
+                <>
+                  {(mode === 'add-existing' || resolvedPropertyName != null) ? (
+                    <p className="text-xs text-emerald-300 font-medium">{resolvedPropName}</p>
+                  ) : (
+                    <p className="text-xs text-emerald-300 font-medium">
+                      {propForm.address}, {propForm.city}, {propForm.state} {propForm.zip}
+                    </p>
+                  )}
+                  <p className="text-xs text-gray-400">
+                    {acctForm.providerName} · {acctForm.category.toLowerCase()}
+                    {acctForm.accountNumber ? ` · #${acctForm.accountNumber.slice(-4)}` : ''}
+                  </p>
+                </>
               )}
-              <p className="text-xs text-gray-400">
-                {acctForm.providerName} · {acctForm.category.toLowerCase()}
-                {acctForm.accountNumber ? ` · #${acctForm.accountNumber.slice(-4)}` : ''}
-              </p>
               <button onClick={() => setApplied(false)} className="text-xs text-gray-500 hover:text-gray-400 transition-colors mt-0.5">
                 Edit
               </button>
