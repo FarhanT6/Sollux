@@ -1338,10 +1338,14 @@ function BillCard({
                 </select>
                 {/* More than one account with this provider at the bill's
                     address: the importer will not guess, so offer the choice. */}
-                {match.method === 'address_and_provider_ambiguous' && match.candidates && match.candidates.length > 0 && !selectedAcctId && (
+                {/* Or no number to match on (an agreement, a screenshot, a notice):
+                    every account with this provider, to pick from. */}
+                {match.candidates && match.candidates.length > 0 && !selectedAcctId && (
                   <div className="rounded-lg px-3 py-2 text-xs" style={{ background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.3)' }}>
                     <p className="text-amber-300 mb-1.5">
-                      {match.candidates.length} {match.providerName ?? ''} accounts at {match.propertyName}{ex.accountNumber ? ` — this bill is for account ${ex.accountNumber}` : ''}. Which one?
+                      {match.method === 'address_and_provider_ambiguous'
+                        ? <>{match.candidates.length} {match.providerName ?? ''} accounts at {match.propertyName}{ex.accountNumber ? ` — this bill is for account ${ex.accountNumber}` : ''}. Which one?</>
+                        : <>{ex.accountNumber ? `Account ${ex.accountNumber} isn't on file` : 'This document has no account number'} — which {match.providerName ?? ex.providerName ?? ''} account is it?</>}
                     </p>
                     <div className="flex flex-wrap gap-1.5">
                       {match.candidates.map(c => (

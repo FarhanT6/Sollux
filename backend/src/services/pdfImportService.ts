@@ -1400,7 +1400,89 @@ interface AccountRow {
   property: { address: string; nickname: string | null };
 }
 
-export async function matchToAccount(
+/**
+ * Match a document to its account, and when nothing settles it, narrow the
+ * choice: every account with the same provider is offered to the reviewer
+ * rather than the whole portfolio.
+ */
+export async function matchToAccount(extracted: ExtractedBillData, userId: string): Promise<MatchResult> {
+  const r = await matchByNumberAndAddress(extracted, userId);
+  if (r.utilityAccountId || r.candidates?.length) return r;
+  const name = extracted.premiumFinance?.lender ?? extracted.providerName;
+  if (!name) return r;
+  const same = await db.utilityAccount.findMany({
+    where: { property: { userId } },
+    select: { id: true, providerName: true, serviceLabel: true, accountNumber: true, propertyId: true, property: { select: { address: true, nickname: true } } },
+  });
+  const candidates = same.filter(a => providersLookAlike(a.providerName, name)).slice(0, 15)
+    .map(a => ({ utilityAccountId: a.id, label: [a.property.nickname || a.property.address, a.serviceLabel, a.accountNumber ? `••${a.accountNumber}` : null].filter(Boolean).join(' · ') }));
+  return candidates.length ? { ...r, candidates } : r;
+}
+
+/**
+ * The backup match, for a document whose account number is missing (a
+ * finance agreement, a portal screenshot, a notice) or not on file. Each
+ * rule below identifies one account on its own; a rule that points at more
+ * than one is not used.
+ *  1. its policy number is on an insurance policy on file;
+ *  2. the last four of its account number, with the same provider;
+ *  3. the same statement is already on file — same provider, issue date and amount;
+ *  4. it is a scheduled installment on file — same provider, due date and amount.
+ */
+async function matchByFigures(ex: ExtractedBillData, accounts: AccountRow[]): Promise<MatchResult | null> {
+  const hit = (id: string, method: string): MatchResult | null => {
+    const a = accounts.find(x => x.id === id);
+    return a ? { confidence: 'high', method, utilityAccountId: a.id, propertyId: a.propertyId, propertyName: a.property.nickname || a.property.address, providerName: a.providerName } : null;
+  };
+  const unique = (ids: string[]) => { const u = [...new Set(ids)]; return u.length === 1 ? u[0] : null; };
+  const ids = accounts.map(a => a.id);
+  const norm = (v: string) => v.replace(/[^a-z0-9]/gi, '').toUpperCase();
+
+  // 1. Policy number.
+  const pol = ex.insurance?.policyNumber ? norm(ex.insurance.policyNumber) : '';
+  if (pol.length >= 5) {
+    const policies = await db.insurancePolicy.findMany({ where: { utilityAccountId: { in: ids }, policyNumber: { not: null } }, select: { utilityAccountId: true, policyNumber: true } });
+    const one = unique(policies.filter(p => { const x = norm(p.policyNumber!); return x === pol || (x.length >= 6 && (x.includes(pol) || pol.includes(x))); }).map(p => p.utilityAccountId!));
+    if (one) return hit(one, 'policy_number');
+  }
+
+  const provider = ex.premiumFinance?.lender ?? ex.providerName;
+  const sameProvider = provider ? accounts.filter(a => providersLookAlike(a.providerName, provider)) : [];
+  if (!sameProvider.length) return null;
+
+  // 2. Last four digits of the account number.
+  const last4 = ex.accountNumber ? ex.accountNumber.replace(/\D/g, '').slice(-4) : '';
+  if (last4.length === 4) {
+    const one = unique(sameProvider.filter(a => a.accountNumber && a.accountNumber.replace(/\D/g, '').slice(-4) === last4).map(a => a.id));
+    if (one) return hit(one, 'account_last4');
+  }
+
+  const amount = ex.amountDue ?? ex.statedTotalDue ?? ex.insurance?.installment ?? null;
+  const pids = sameProvider.map(a => a.id);
+  // 3. The same statement already on file (a re-import, or a copy from another source).
+  if (ex.statementDate && amount != null) {
+    const d = new Date(ex.statementDate);
+    const rows = await db.statement.findMany({
+      where: { utilityAccountId: { in: pids }, statementDate: { gte: new Date(d.getTime() - 86400000), lte: new Date(d.getTime() + 86400000) }, amountDue: { gte: amount - 0.01, lte: amount + 0.01 } },
+      select: { utilityAccountId: true },
+    });
+    const one = unique(rows.map(r => r.utilityAccountId));
+    if (one) return hit(one, 'same_statement_on_file');
+  }
+  // 4. A scheduled installment on file with this due date and amount.
+  if (ex.dueDate && amount != null) {
+    const d = new Date(ex.dueDate);
+    const rows = await db.statement.findMany({
+      where: { utilityAccountId: { in: pids }, isScheduled: true, dueDate: { gte: new Date(d.getTime() - 3 * 86400000), lte: new Date(d.getTime() + 3 * 86400000) }, amountDue: { gte: amount - 0.02, lte: amount + 0.02 } },
+      select: { utilityAccountId: true },
+    });
+    const one = unique(rows.map(r => r.utilityAccountId));
+    if (one) return hit(one, 'scheduled_installment');
+  }
+  return null;
+}
+
+async function matchByNumberAndAddress(
   extracted: ExtractedBillData,
   userId: string,
 ): Promise<MatchResult> {
@@ -1441,6 +1523,58 @@ export async function matchToAccount(
       } catch { /* decryption failed, skip */ }
     }
   }
+
+  // ── 1b. Premium finance agreement with no loan number ────────────────────
+  // The signed agreement prints only a quote number; the loan number comes
+  // later. Its terms identify the loan just as well: the same payment, first
+  // due date and amounts as a loan already on file (from the portal or the
+  // acceptance notice). The borrower's address on it is a mailing address,
+  // not the insured property, so the address rule below must not run.
+  const pf = extracted.premiumFinance;
+  if (pf && !(pf.loanNumber || extracted.accountNumber)) {
+    const near = (a: unknown, b: number | null | undefined) => a != null && b != null && Math.abs(Number(a) - b) <= 0.02;
+    const day = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : null);
+    const loans = await db.loan.findMany({
+      where: { userId, utilityAccountId: { not: null } },
+      select: { utilityAccountId: true, monthlyPayment: true, originalAmount: true, downPayment: true, dueDay: true, originationDate: true },
+    });
+    const scored = loans.map(l => {
+      let score = 0;
+      if (near(l.monthlyPayment, pf.payment)) score += 3;
+      if (near(l.originalAmount, pf.totalPremiums)) score += 2;
+      if (near(l.downPayment, pf.downPayment)) score += 2;
+      if (pf.effectiveDate && day(l.originationDate) === pf.effectiveDate) score += 2;
+      if (pf.firstDueDate && l.dueDay === Number(pf.firstDueDate.slice(8, 10))) score += 1;
+      return { id: l.utilityAccountId!, score };
+    }).filter(x => x.score >= 5).sort((a, b) => b.score - a.score);
+    if (scored.length && (scored.length === 1 || scored[0].score > scored[1].score)) {
+      const acct = accounts.find(a => a.id === scored[0].id);
+      if (acct) {
+        return {
+          confidence: 'high', method: 'premium_finance_terms',
+          utilityAccountId: acct.id, propertyId: acct.propertyId,
+          propertyName: acct.property.nickname || acct.property.address, providerName: acct.providerName,
+        };
+      }
+    }
+    // No loan on file matches: offer every account with this lender to choose from.
+    const sameLender = accounts.filter(a => providersLookAlike(a.providerName, pf.lender ?? extracted.providerName ?? ''));
+    if (sameLender.length) {
+      return {
+        confidence: 'low', method: 'premium_finance_lender',
+        utilityAccountId: sameLender.length === 1 ? sameLender[0].id : null,
+        propertyId: sameLender[0].propertyId,
+        propertyName: sameLender[0].property.nickname || sameLender[0].property.address,
+        providerName: sameLender[0].providerName,
+        candidates: sameLender.map(a => ({ utilityAccountId: a.id, label: [a.property.nickname || a.property.address, a.serviceLabel, a.accountNumber].filter(Boolean).join(' · ') })),
+      };
+    }
+    return noMatch;
+  }
+
+  // ── 1c. No account number to go on: the document's other identifiers ────
+  const byFigures = await matchByFigures(extracted, accounts);
+  if (byFigures) return byFigures;
 
   // ── 2. Service address + provider name ────────────────────────────────────
   if (extracted.serviceAddress) {
