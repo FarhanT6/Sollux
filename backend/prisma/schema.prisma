@@ -2202,3 +2202,55 @@ model MessageDraft {
   @@index([userId, status])
   @@map("message_drafts")
 }
+
+// ─── VAULT ───────────────────────────────────────────────
+// Bank accounts, cards, logins and ID numbers, encrypted in the owner's
+// browser with a key only their vault passphrase (or recovery key) opens.
+// The server never sees the passphrase or the plaintext: it stores the
+// browser's ciphertext, and encrypts that again with ENCRYPTION_KEY at rest.
+model VaultKey {
+  id                 String   @id @default(cuid())
+  userId             String   @unique
+  // PBKDF2-SHA256 parameters for the passphrase.
+  salt               String
+  iterations         Int
+  // The random data key, wrapped (AES-GCM) by the passphrase key and by the
+  // recovery key. Server-encrypted again at rest.
+  wrappedByPassphrase String
+  wrappedByRecovery   String
+  recoverySalt        String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@map("vault_keys")
+}
+
+model VaultItem {
+  id         String   @id @default(cuid())
+  userId     String
+  // BANK_ACCOUNT | CARD | LOGIN | ID_DOCUMENT | NOTE — the only thing
+  // stored in the clear, so the list can be grouped before unlocking.
+  kind       String
+  // Everything else — label, numbers, notes — as one AES-GCM ciphertext
+  // from the browser (iv:ciphertext, base64), server-encrypted at rest.
+  payload    String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([userId])
+  @@map("vault_items")
+}
+
+// Every unlock, failed unlock, reveal, copy and change in the vault.
+model VaultAccessLog {
+  id        String   @id @default(cuid())
+  userId    String
+  action    String   // UNLOCK | UNLOCK_FAILED | REVEAL | COPY | CREATE | UPDATE | DELETE | SETUP | PASSPHRASE_CHANGED | RECOVERED
+  itemId    String?
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@map("vault_access_log")
+}

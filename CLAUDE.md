@@ -69,6 +69,10 @@ Always use `npx prisma migrate dev --name <description>` — never edit schema w
 - Never return `usernameEnc`, `passwordEnc`, `accountNumberEnc` fields from any API endpoint
 - All `/api/*` routes except `/api/auth` and `/api/stripe/webhook` require authentication
 - PDF files must always be accessed via signed S3 URLs, never public URLs
+- The vault (`/vault`, `routes/vault.ts`, `lib/vaultCrypto.ts`) is zero-knowledge: records are encrypted in the
+  browser with a key only the owner's vault passphrase or recovery key unwraps. The server must never receive,
+  derive or log a passphrase, recovery key, data key or plaintext field; no AI tool, agent, export or import may
+  read `vault_items`. Elsewhere, bank and card numbers stay last-4 only.
 
 ## Environment setup
 Copy `.env.example` to `.env` in both `frontend/` and `backend/` and fill in your keys.

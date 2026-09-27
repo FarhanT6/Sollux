@@ -1015,3 +1015,17 @@ export interface ScheduleE { year: number; lines: ScheduleELine[]; properties: S
 export const getScheduleE = (year: number) => api.get<ScheduleE>('/tax-documents/schedule-e', { params: { year } }).then(r => r.data);
 export const downloadScheduleECsv = (year: number) =>
   api.get('/tax-documents/schedule-e', { params: { year, format: 'csv' }, responseType: 'blob' }).then(r => r.data as Blob);
+
+// Vault: records sealed in the browser; the server only holds ciphertext.
+export interface VaultKeyInfo { setUp: boolean; salt?: string; iterations?: number; recoverySalt?: string; wrappedByPassphrase?: string; wrappedByRecovery?: string }
+export interface VaultItemRow { id: string; kind: string; payload: string; createdAt: string; updatedAt: string }
+export const getVaultKey = () => api.get<VaultKeyInfo>('/vault/key').then(r => r.data);
+export const setupVault = (k: { salt: string; iterations: number; recoverySalt: string; wrappedByPassphrase: string; wrappedByRecovery: string }) => api.post('/vault/setup', k);
+export const rekeyVault = (k: { salt: string; iterations: number; recoverySalt: string; wrappedByPassphrase: string; wrappedByRecovery: string; recovered?: boolean }) => api.put('/vault/key', k);
+export const getVaultItems = () => api.get<VaultItemRow[]>('/vault/items').then(r => r.data);
+export const createVaultItem = (kind: string, payload: string) => api.post<Omit<VaultItemRow, 'payload'>>('/vault/items', { kind, payload }).then(r => r.data);
+export const updateVaultItem = (id: string, kind: string, payload: string) => api.put<Omit<VaultItemRow, 'payload'>>(`/vault/items/${id}`, { kind, payload }).then(r => r.data);
+export const deleteVaultItem = (id: string) => api.delete(`/vault/items/${id}`);
+export const vaultEvent = (action: 'UNLOCK' | 'UNLOCK_FAILED' | 'REVEAL' | 'COPY', itemId?: string) =>
+  api.post<{ lockedUntil: string | null }>('/vault/events', { action, itemId }).then(r => r.data);
+export const getVaultActivity = () => api.get<{ id: string; action: string; itemId: string | null; ip: string | null; userAgent: string | null; createdAt: string }[]>('/vault/activity').then(r => r.data);

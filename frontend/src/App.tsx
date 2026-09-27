@@ -26,6 +26,7 @@ import ReimbursementInvoicePage from './pages/ReimbursementInvoicePage';
 import CompliancePage from './pages/CompliancePage';
 import ProjectsPage from './pages/ProjectsPage';
 import TaxesPage from './pages/TaxesPage';
+import VaultPage from './pages/VaultPage';
 import PersonalPage from './pages/PersonalPage';
 import CreditCardPage from './pages/CreditCardPage';
 
@@ -68,6 +69,7 @@ export default function App() {
           <Route path="finances" element={<FinancesPage />} />
           <Route path="taxes" element={<TaxesPage />} />
           <Route path="personal" element={<PersonalPage />} />
+          <Route path="vault" element={<VaultPage />} />
           <Route path="personal/cards/:id" element={<CreditCardPage />} />
           <Route path="compliance" element={<CompliancePage />} />
           <Route path="projects" element={<ProjectsPage />} />
