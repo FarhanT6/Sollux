@@ -6,6 +6,7 @@ import './styles/globals.css';
 import './styles/theme-light.generated.css';
 import './styles/theme-light.css';
 import { initNative, hideSplash } from './lib/native';
+import NativeLock from './components/NativeLock';
 import { installErrorReporting } from './lib/telemetry';
 import { initTheme } from './lib/theme';
 
@@ -54,6 +55,7 @@ if (!CLERK_KEY) {
     <React.StrictMode>
       <ClerkProvider publishableKey={CLERK_KEY}>
         <App />
+        <NativeLock />
       </ClerkProvider>
     </React.StrictMode>
   );

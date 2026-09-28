@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { shareFile } from '../../lib/native';
 import { getScheduleE, downloadScheduleECsv, type ScheduleE } from '../../api/client';
 import { fmtMoney } from '../../lib/money';
 import { describeApiError } from '../../lib/apiError';
@@ -20,9 +21,7 @@ export default function ScheduleETab() {
 
   async function csv() {
     const blob = await downloadScheduleECsv(year);
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = `schedule-e-${year}.csv`; a.click();
-    URL.revokeObjectURL(url);
+    await shareFile(blob, `schedule-e-${year}.csv`);
   }
 
   const props = data ? (focus === 'all' ? data.properties : data.properties.filter(p => p.propertyId === focus)) : [];

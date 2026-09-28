@@ -1,4 +1,5 @@
 import { useCallback, useState, useRef, useEffect } from 'react';
+import { openOAuth } from '../lib/native';
 import { format } from 'date-fns';
 import { PageHeader } from '../components/ui';
 import api, { getDriveStatus, getDriveConnectUrl, getDriveAccessToken, startDriveImport, getDriveImportJob, getProperties, getGmailStatus, getGmailConnectUrl, getInboxActivity, syncInbox, markInboxReviewed, type GmailMailbox, type InboxActivity } from '../api/client';
@@ -468,7 +469,7 @@ function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed, onProgres
           <p className="text-sm font-medium text-gray-200">Import from Google Drive</p>
           <p className="text-xs text-gray-500 mt-0.5">Connect a Drive account to bulk-import a whole folder of statements at once.</p>
         </div>
-        <button className="btn text-xs" onClick={() => getDriveConnectUrl().then(r => { window.location.href = r.url; })}>
+        <button className="btn text-xs" onClick={() => getDriveConnectUrl().then(r => openOAuth(r.url, () => window.location.reload()))}>
           + Connect Drive
         </button>
       </div>
@@ -609,7 +610,7 @@ function InboxPanel({ onStreamStart, onBillStreamed }: {
           <p className="text-sm font-medium text-gray-200">Bills by email</p>
           <p className="text-xs text-gray-500 mt-0.5">Connect the Gmail inboxes your bills go to — as many as you use. Sollux reads them every night and files the bills.</p>
         </div>
-        <button className="btn text-xs" onClick={() => getGmailConnectUrl().then(r => { window.location.href = r.url; })}>+ Connect Gmail</button>
+        <button className="btn text-xs" onClick={() => getGmailConnectUrl().then(r => openOAuth(r.url, () => { load().catch(() => {}); }))}>+ Connect Gmail</button>
         {reviewBar && <div className="w-full mt-3">{reviewBar}</div>}
       </div>
     );
@@ -626,7 +627,7 @@ function InboxPanel({ onStreamStart, onBillStreamed }: {
           </p>
         </div>
         <div className="flex gap-2">
-          <button className="btn text-xs" onClick={() => getGmailConnectUrl().then(r => { window.location.href = r.url; })}>+ Add inbox</button>
+          <button className="btn text-xs" onClick={() => getGmailConnectUrl().then(r => openOAuth(r.url, () => { load().catch(() => {}); }))}>+ Add inbox</button>
           <button className="btn btn-primary text-xs disabled:opacity-50" disabled={syncing} onClick={syncNow}>{syncing ? 'Reading inboxes…' : 'Sync now'}</button>
         </div>
       </div>

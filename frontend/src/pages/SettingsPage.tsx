@@ -1,4 +1,6 @@
 import { useUser, useClerk } from '@clerk/clerk-react';
+import { faceIdLockEnabled, biometryName, setFaceIdLock } from '../components/NativeLock';
+import { openOAuth } from '../lib/native';
 import ClickUpCard from '../components/settings/ClickUpCard';
 import LetterheadCard from '../components/settings/LetterheadCard';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -128,6 +130,7 @@ export default function SettingsPage() {
         </div>
 
         <SharedAccessCard />
+        <PhoneLockCard />
 
         <div className="card p-5 mb-4">
           <h2 className="text-sm font-semibold text-white mb-4">Subscription</h2>
@@ -181,7 +184,7 @@ export default function SettingsPage() {
             </div>
             <button
               className="btn text-xs"
-              onClick={() => getGmailConnectUrl().then(r => { window.location.href = r.url; })}
+              onClick={() => getGmailConnectUrl().then(r => openOAuth(r.url, () => { api.get('/gmail/status').then(x => setGmailStatus(x.data)).catch(() => {}); }))}
             >
               + Connect
             </button>
@@ -220,7 +223,7 @@ export default function SettingsPage() {
             </div>
             <button
               className="btn text-xs"
-              onClick={() => getDriveConnectUrl().then(r => { window.location.href = r.url; })}
+              onClick={() => getDriveConnectUrl().then(r => openOAuth(r.url, () => window.location.reload()))}
             >
               + Connect
             </button>
@@ -1139,6 +1142,30 @@ function Toggle({ label, desc, checked, busy, onChange }: {
         <div className="w-9 h-5 bg-white/10 peer-checked:bg-gold-500 rounded-full transition-colors" />
         <div className="absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-4" />
       </label>
+    </div>
+  );
+}
+
+/** On the iPhone app: require Face ID (or the passcode) to open Sollux. Per device. */
+function PhoneLockCard() {
+  const [name, setName] = useState<string | null>(null);
+  const [on, setOn] = useState(faceIdLockEnabled());
+  const [msg, setMsg] = useState<string | null>(null);
+  useEffect(() => { biometryName().then(setName); }, []);
+  if (!name) return null;
+  return (
+    <div className="card p-5 mb-4">
+      <h2 className="text-sm font-semibold text-white mb-1">Lock this phone's Sollux with {name}</h2>
+      <p className="text-xs text-gray-400 mb-3">Asks for {name} when Sollux opens or comes back after a minute away. The screen is always hidden in the app switcher.</p>
+      <label className="flex items-center gap-2 text-sm text-gray-200">
+        <input type="checkbox" checked={on} onChange={async e => {
+          const want = e.target.checked;
+          const ok = await setFaceIdLock(want);
+          if (ok) { setOn(want); setMsg(want ? `${name} lock is on.` : 'Lock is off.'); } else setMsg(`${name} did not confirm — nothing changed.`);
+        }} />
+        Require {name} to open Sollux
+      </label>
+      {msg && <p className="text-xs text-gray-400 mt-2">{msg}</p>}
     </div>
   );
 }

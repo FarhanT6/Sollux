@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { shareFile, isNative } from '../lib/native';
 import { PageHeader } from '../components/ui';
 import {
   getVaultKey, setupVault, rekeyVault, getVaultItems, createVaultItem, updateVaultItem, deleteVaultItem, vaultEvent, getVaultActivity,
@@ -134,7 +135,7 @@ function Setup({ onDone }: { onDone: (key: CryptoKey) => void }) {
   }
   const download = () => {
     const blob = new Blob([`Sollux vault recovery key\n\n${recovery}\n\nKeep this somewhere safe and offline. It opens your vault if you forget the passphrase. Sollux cannot recover the vault without it.\n`], { type: 'text/plain' });
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'sollux-vault-recovery-key.txt'; a.click(); URL.revokeObjectURL(a.href);
+    void shareFile(blob, 'sollux-vault-recovery-key.txt');
   };
 
   return (
@@ -279,7 +280,10 @@ function Open({ dataKey, info, items, setItems, onLock, onRekeyed }: {
       vaultEvent('COPY', id).catch(() => {});
       setCopied(`${id}:${key}`); setTimeout(() => setCopied(null), 1500);
       // Clear the clipboard after 30 seconds, if it still holds this value.
-      setTimeout(async () => { try { if ((await navigator.clipboard.readText()) === value) await navigator.clipboard.writeText(''); } catch { /* permission */ } }, CLIPBOARD_MS);
+      // On the phone reading the clipboard asks the owner's permission every
+      // time, so the value is cleared without checking; on the web only if
+      // it is still what was copied.
+      setTimeout(async () => { try { if (isNative || (await navigator.clipboard.readText()) === value) await navigator.clipboard.writeText(''); } catch { /* permission */ } }, CLIPBOARD_MS);
     } catch { setErr('The browser would not allow copying.'); }
   };
 
