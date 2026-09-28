@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Sollux uses Face ID to lock the app, if you turn that on in Settings.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Sollux uses the camera to scan paper bills and statements.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
