@@ -1558,6 +1558,32 @@ export default function UtilityDetailPage() {
                             </details>
                           );
                         })()}
+                        {/* The statement's own transaction table — payments,
+                            fees and reversals since the last statement — as
+                            printed. */}
+                        {(() => {
+                          const txns = (s.rawDataJson as any)?.transactions as { date: string; description: string; amount: number }[] | undefined;
+                          if (!Array.isArray(txns) || txns.length === 0) return null;
+                          return (
+                            <details className="mt-1">
+                              <summary className="text-xs text-gray-600 cursor-pointer hover:text-gray-400 select-none">
+                                {txns.length} transaction{txns.length === 1 ? '' : 's'}
+                              </summary>
+                              <div className="mt-1 space-y-0.5">
+                                {txns.map((t, i) => (
+                                  <div key={i} className="flex justify-between gap-4 text-xs max-w-xs">
+                                    <span className="text-gray-500 truncate">
+                                      <span className="text-gray-600 mr-2">{fmtDate(t.date, 'MMM d')}</span>{t.description}
+                                    </span>
+                                    <span className={Number(t.amount) < 0 ? 'text-green-500' : 'text-gray-400'}>
+                                      {Number(t.amount) < 0 ? '−' : ''}{fmtMoney(Math.abs(Number(t.amount)))}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            </details>
+                          );
+                        })()}
                       </div>
 
                       {/* Due date */}

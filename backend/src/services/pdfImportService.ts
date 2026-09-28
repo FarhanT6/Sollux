@@ -14,6 +14,7 @@ import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';
 import { syncLoanFromComponents } from './loanComponents';
 import { Prisma } from '@prisma/client';
+import { flattenFormFields, layoutText } from './pdfForms';
 
 // Read the API key directly from the .env file — reliable regardless of
 // process.cwd() or ESM vs CJS module context (dotenv uses cwd which can vary).
@@ -163,6 +164,10 @@ export interface ExtractedBillData {
    *  such as Seabreeze / CINC), each on its own date. Recorded as separate
    *  payments rather than one lump "payments received". */
   ledgerPayments?:    { date: string; amount: number; description: string }[] | null;
+  /** The statement's own transaction table ("Previous Transaction Detail",
+   *  "Transaction Activity"): every row as printed, amount signed as a
+   *  movement on the account (payments and reversals negative). */
+  transactions?:      StatementTransaction[] | null;
   /** Net-metering (solar) accounts: energy charges accrue monthly but are
    *  settled once a year at the true-up. `deferred` is the part of this
    *  period's charges not billed now; `ytdBalance` the deferred balance after
@@ -191,6 +196,13 @@ export interface ExtractedBillData {
   utilityType:        'electric' | 'gas' | 'water' | 'sewer' | 'trash' | 'solar' | 'internet' | 'phone' | 'other';
   chargeBreakdown:    Record<string, number> | null;
   alerts:             string[];        // leak warning, high usage, outage credit, etc.
+}
+
+export interface StatementTransaction {
+  date: string;          // YYYY-MM-DD
+  description: string;   // as printed
+  amount: number;        // positive = charged, negative = paid or credited
+  kind: 'payment' | 'fee' | 'credit' | 'charge';
 }
 
 export type MatchConfidence = 'high' | 'medium' | 'low' | 'none';
@@ -252,6 +264,7 @@ Schema (use null for any field not present in the document):
   "insurance": object or null — for ANY insurance document, whatever the carrier or kind of cover (auto, homeowners, renters, health, dental, vision, life, umbrella, flood, business) and whatever the document is (billing statement, renewal offer, declarations page, welcome letter, ID card, payment schedule): {"policyNumber": "string", "insuranceType": "PROPERTY | AUTO | RENTERS | LIABILITY | FLOOD | UMBRELLA | HEALTH | DENTAL | VISION | LIFE | BUSINESS | OTHER", "carrier": "underwriter when it differs from the brand, else null", "coverageStart": "YYYY-MM-DD", "coverageEnd": "YYYY-MM-DD", "termPremium": n, "installment": n, "serviceCharge": n, "installmentsRemaining": n, "renewedOn": "YYYY-MM-DD", "autoPay": boolean, "totalCost": n, "payInFull": n, "paymentSchedule": [{"date": "YYYY-MM-DD", "amount": n}], "insuredItems": ["2022 Land Rover Discovery Sport", ...]}. payInFull is the amount printed to pay the whole term at once ("To pay premium in full: $4,479.72", "Pay in full amount", "Full pay"); when it is printed, termPremium is that same whole-term figure, NOT the "Premium" line of a Billing Summary that only totals the first installment. insuranceType from what is covered (vehicles/VINs → AUTO; a dwelling → PROPERTY; medical/dental/vision plan → HEALTH/DENTAL/VISION). coverageStart/End are the "Policy Period" / "Coverage period" dates. termPremium is the premium for the whole term excluding billing fees ("Your 6-month policy premium excluding billing fees is $2,752.28"; on a billing statement the "Renewal" line or Full Balance). installment is one regular payment; serviceCharge the per-payment installment/billing fee ("We included an installment fee of $4.00 in each payment"); totalCost the term total including fees ("$2,776.28 Total Cost"). paymentSchedule is EVERY dated payment line the document prints ("Automatic Payments Schedule", "Payment schedule", "Your Installment Schedule", "Billing Schedule"), in order, including ones already past, each date with the amount on its own row. autoPay true when payments are drafted automatically. On a billing statement's policy table ("Policy / Coverage period / Balance / Installment") the policy number is the alphanumeric code on that row. A different policy number with a later coverage start than earlier documents is a renewal onto a new policy,
   "premiumFinance": object or null — ONLY for a premium finance agreement or its notices (a lender such as Capital Premium Financing, IPFS or First Insurance Funding pays the carrier and is repaid monthly with interest; the document has a "Loan Summary" with Amount Financed, Finance Charge, Annual % Rate): {"lender": "Capital Premium Financing", "loanNumber": "string", "totalPremiums": n, "amountFinanced": n, "downPayment": n, "financeCharge": n, "payment": n, "apr": n, "numberOfPayments": n, "effectiveDate": "YYYY-MM-DD", "firstDueDate": "YYYY-MM-DD", "loanBalance": n}. Put the loan number in accountNumber and the lender in providerName. The lender is the premium finance company on the letterhead (e.g. Capital Premium Financing), not a bank the agreement names as its funding source (e.g. \"Ameris Bank (Lender)\"). Leave serviceAddress null — the address on these is the borrower's mailing address, not the insured property. The signed agreement itself ("Premium Finance Agreement and Disclosure Statement") usually has no loan number yet — only a "Quote" number (e.g. 7925660.1); a quote number is NOT the loan number: leave loanNumber and accountNumber null, and put the insurer from the Schedule of Policies in insurance.carrier. A "Notice of Acceptance" or the agreement itself bills nothing: documentKind 'policy_document', the notice date in statementDate, amountDue and dueDate null. A screenshot of the lender's portal ("Payment Schedule & History" / "Payment History" table with Date, Pmt #, Description, Total, Principal, Interest, Late Charge columns) is the same thing read off a ledger: documentKind 'policy_document'; loanNumber from "Account #"; lender from the page header (Capital Premium Financing); EVERY "Scheduled Payment Due" row into insurance.paymentSchedule as {"date", "amount", "principal", "interest"}; every payment received ("Insured: Installment eCheck", "Installment Credit Card") into ledgerPayments as {"date", "amount", "description"}; every fee row (Late Fee, Convenience Fee, Cancel Fee, NSF Fee) into premiumFinance.fees as {"date", "amount", "label"}, a waived or reversed fee ("($50.00)") as a negative amount; leave amountFinanced, apr and numberOfPayments null when the page does not print them (they are derived from the columns); statementDate is the page's own date if shown, else null,
   "ledgerPayments": array or null — ONLY for a document that lists payments received one by one on their own dates (an HOA ledger, a premium finance portal's payment history): [{"date": "YYYY-MM-DD", "amount": n, "description": "as printed"}]. A single "payments received" figure on an ordinary bill goes in paymentsReceived instead,
+  "transactions": array or null — when the statement prints a table of account activity since the last statement ("Previous Transaction Detail", "Transaction Activity", "Recent Transactions", "Account Activity", a TRANSACTION DATE / DESCRIPTION / AMOUNT table): EVERY row, in order, as {"date": "YYYY-MM-DD", "description": "as printed", "amount": n}. amount is the movement on the account: a charge or fee positive, a payment, reversal, waiver or credit NEGATIVE, whatever sign the statement prints ("08/30/2026 PAYMENT $722.49" → -722.49; "3/11/2024 PRINCIPAL PAYMENT -$613.76" → -613.76; "05/09/2025 REVERSE LATE CHARGE $36.12" → -36.12; "05/09/2025 LATE CHARGE $36.12" → 36.12). A running-balance column is not the amount. These rows are history, not this period's charges: never add them to amountDue or chargeBreakdown,
   "loanGroups": array or null — ONLY for a loan servicer statement that lists MORE THAN ONE loan under the account (a federal student-loan "Account Snapshot" with columns Group AA / Group BB, or "Loan 1-01 / Loan 1-02"): one entry per loan column, [{"label": "Group AA", "loanKind": "DIRECT SUB", "originalPrincipal": n, "outstandingPrincipal": n, "interestRate": n, "monthlyPayment": n, "accruedInterest": n, "disbursedOn": "YYYY-MM-DD", "payoffDate": "YYYY-MM-DD"}]. Read each column: loanKind from the "Loan Type" row, originalPrincipal from "Original Principal Amount", outstandingPrincipal from "Outstanding Principal Balance", interestRate as a percent from "Interest Rate", monthlyPayment from "Regular Monthly Payment Amount" (the Monthly Payment section, not the Account Snapshot's zeros), accruedInterest from "Accrued Interest" / "Estimated Interest Outstanding", disbursedOn from "First Disbursement Date", payoffDate from "Estimated Payoff Date". A statement for a single loan reports null,
   "statedTotalDue": number or null — the ONE figure the bill asks to be paid now: its "Total Amount Due" / "Amount Due" box. Negative when the account is in credit ("No payment is due. Your account has a credit balance of $0.82" → -0.82). This is the grand total AFTER previous balance, payments, credits and any payment-arrangement deferral; report it exactly as printed,
   "totalAccountBalance": number or null — "Total Account Balance" when printed: everything owed including a balance a payment arrangement has deferred,
@@ -486,7 +499,7 @@ function scanAccountNumbers(text: string): string[] {
 function detectUtilityType(text: string, provider: string | null): ExtractedBillData['utilityType'] {
   const t = (text + ' ' + (provider || '')).toLowerCase();
   // Financial/loan statements — check first so keywords like "gas" in legal boilerplate don't misfire
-  if (/auto\s+loan|vehicle\s+loan|car\s+(?:loan|payment)|mortgage|home\s+loan|personal\s+loan|installment\s+loan/.test(t)) return 'other';
+  if (/auto\s+loan|vehicle\s+loan|car\s+(?:loan|payment)|mortgage|home\s+loan|personal\s+loan|installment\s+loan|auto\s+finance|payoff\s+(?:amount|progress)|principal\s+(?:payment|balance)|remaining\s+term|terms?\s+paid|retail\s+installment/.test(t)) return 'other';
   // Named financial institutions — any statement from these is non-utility
   if (/land\s+rover\s+financial|bmw\s+financial|ford\s+motor\s+credit|toyota\s+financial|honda\s+financial|chase\s+(?:auto|bank|financial)|chase\s+bank|\bchase\b.*(?:loan|auto|vehicle)|\bally\s+(?:financial|bank)|capital\s+one\s+(?:auto|bank)|wells\s+fargo|bank\s+of\s+america|citibank|\brushmore\b|\bcarrington\b|select\s+portfolio|\bsps\b|\busaa\b/.test(t)) return 'other';
   if (/insurance\s+premium|homeowner['s]*\s+insurance|renters\s+insurance|policy\s+(?:number|no\.)|safeco|bamboo|lemonade/.test(t)) return 'other';
@@ -503,20 +516,36 @@ function detectUtilityType(text: string, provider: string | null): ExtractedBill
   return 'other';
 }
 
-export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Promise<ExtractedBillData> {
+export async function extractWithRegex(pdfBuffer: Buffer, filename: string, layerText?: string): Promise<ExtractedBillData> {
   console.log(`[PDFImport/regex] ${filename}: ${Math.round(pdfBuffer.length / 1024)}KB`);
-  const { text } = await pdfParse(pdfBuffer);
-  const garbled  = isGarbledText(text);
+  // A form-built statement is read in page order (see pdfForms.ts): its
+  // default text puts every label before every value.
+  const text = layerText ?? (await pdfParse(pdfBuffer)).text;
+  // Page-order text keeps its words apart; a form's fill-in lines
+  // ("______") are not words run together.
+  const garbled  = isGarbledText(layerText ? text.replace(/_{5,}/g, ' ') : text);
   const fnHints  = hintsFromFilename(filename);
   if (garbled) console.log(`[PDFImport/regex] ${filename}: garbled text detected, using fallback scanners`);
 
   // ── Provider name ─────────────────────────────────────────────────────────
   const lines = text.split('\n').map((l: string) => l.trim()).filter(Boolean);
   let providerName: string | null = null;
-  if (!garbled) {
+  // "Make check payable to Westlake Portfolio Management" names the sender
+  // outright; statements that open with a letter-spaced banner and the
+  // customer's own name have nothing better at the top.
+  for (const m of text.matchAll(/payable\s+to\b[: \t]*([^\n]*)\n?([^\n]*)/gi)) {
+    const name = [m[1], m[2]]
+      .map(l => (l.split(/\s{2,}/)[0] ?? '').match(/^([A-Z][A-Za-z&' ]{3,60}?)(?:[.,]|\s*$)/)?.[1]?.trim())
+      .find(n => n && n.split(/\s+/).length >= 2 && !/^(check|money|the|your)\b/i.test(n));
+    if (name) { providerName = name; break; }
+  }
+  if (!garbled && !providerName) {
     for (const line of lines.slice(0, 20)) {
       if (line.length < 3 || line.length > 100) continue;
       if (/^\d/.test(line)) continue;
+      // A heading paired with its value, a PO box, a phone number or a
+      // city/state/ZIP line is not the sender's name.
+      if (/:\s*[$\d]/.test(line) || /^p\.?\s*o\.?\s*box\b/i.test(line) || /^\(\d{3}\)/.test(line) || /,\s*[A-Z]{2}\s+\d{5}/.test(line)) continue;
       if (/^(account|invoice|statement|bill|date|customer|service|payment|policy|page\s+\d)/i.test(line)) continue;
       // A bare column heading is not a name.
       if (/^(policy|number|coverage|description|totals?|status|amount|due|minimum|effective\s+date|due\s+date|date\s+of\s+notice|account\s+number)$/i.test(line)) continue;
@@ -530,6 +559,7 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
   if (!providerName) {
     const knownProviders = [
       // Auto/financial
+      'Westlake Portfolio Management','Westlake Financial','Mechanics Bank',
       'Land Rover Financial','Chase Auto','Chase Bank','Wells Fargo','Bank of America',
       'Citi','Capital One','Ally Financial','Toyota Financial','Honda Financial',
       'BMW Financial','Ford Motor Credit',
@@ -575,8 +605,13 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
     /delivered\s+to/i, /service\s+for/i,
   ]);
   if (!serviceAddress) {
-    const addrMatch = text.match(/\b(\d{2,6}\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\s+(?:St(?:reet)?|Ave(?:nue)?|Blvd|Dr(?:ive)?|Rd|Way|Ln|Ct|Pl|Cir|Ter(?:race)?|Trail|Pkwy|Hwy)[^\n]{0,50})/);
-    if (addrMatch) serviceAddress = addrMatch[1].trim();
+    // One line, whole words: "00\nRemaining Term" is not a street ending in
+    // "Ter". Capitals as well as title case — statements print names and
+    // addresses in capitals ("4349 VISTA VERDE WAY").
+    const suffixes = ['St', 'Street', 'Ave', 'Avenue', 'Blvd', 'Dr', 'Drive', 'Rd', 'Road', 'Way', 'Ln', 'Lane', 'Ct', 'Court', 'Pl', 'Place', 'Cir', 'Circle', 'Ter', 'Terrace', 'Trail', 'Pkwy', 'Hwy'];
+    const suffix = [...suffixes, ...suffixes.map(x => x.toUpperCase())].join('|');
+    const addrMatch = text.match(new RegExp(`\\b(\\d{2,6}[ \\t]+(?:[A-Z][a-z]+|[A-Z]{2,})(?:[ \\t]+(?:[A-Z][a-z]+|[A-Z]{2,})){0,2}[ \\t]+(?:${suffix})\\b[^\\n]{0,50})`));
+    if (addrMatch) serviceAddress = (layerText ? addrMatch[1].split(/\s{2,}/)[0] : addrMatch[1]).trim();
   }
 
   // ── Account number ────────────────────────────────────────────────────────
@@ -837,6 +872,9 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
     /previous\s+(?:amount\s+due|charges)/i,
     /(?:outstanding|past\s+due)\s+balance/i,
     /amount\s+past\s+due/i,
+    // A payment breakdown box: "PAST DUE: $722.49 / CURRENT AMOUNT DUE:
+    // $722.49 / UNPAID LATE CHARGES: $36.12 / TOTAL AMOUNT DUE $1,481.10".
+    /\bpast\s+due\s*:/i,
   ]);
 
   // ── Payments received ─────────────────────────────────────────────────────
@@ -942,6 +980,11 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
     // Water-specific
     /water\s+charges?\s+(?:this\s+period)?/i,
   ]);
+  // A payment breakdown that prints both "CURRENT AMOUNT DUE:" and a
+  // "TOTAL AMOUNT DUE" means the first as this period's part of the second.
+  if (currentCharges == null && /\btotal\s+amount\s+due\b/i.test(text)) {
+    currentCharges = findDollarNear(text, [/current\s+amount\s+due\s*:/i]);
+  }
   // Loan: monthly payment IS the current charge
   if (currentCharges == null && amountDue != null && /loan|mortgage|installment|auto|vehicle/i.test(text)) {
     currentCharges = amountDue;
@@ -1022,7 +1065,9 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
   // ── Paid status ───────────────────────────────────────────────────────────
   // "TOTAL DUE $0.00" (Tyler "Bill Detail" exports print Billed, Payments and
   // adjustments, Due — a settled bill shows its charge with nothing owed).
-  const isPaid = /paid\s+in\s+full|balance\s+is\s+\$?0\.00|\$0\.00\s+(?:due|balance)|zero\s+balance|no\s+payment\s+due/i.test(text)
+  // "PAID IN FULL" in quotes is the fine print about checks so marked
+  // (Westlake: 'marked as "PAID IN FULL" will be deposited'), not a stamp.
+  const isPaid = /(?<!["“])paid\s+in\s+full(?!["”])|balance\s+is\s+\$?0\.00|\$0\.00\s+(?:due|balance)|zero\s+balance|no\s+payment\s+due/i.test(text)
     || /total\s+(?:amount\s+)?due\s*:?\s*\$?\s*0\.00(?!\d)/i.test(text)
     || (amountDue === 0);
 
@@ -1034,10 +1079,20 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
   let cm: RegExpExecArray | null;
   let breakdownCount = 0;
 
+  // In page-order text two columns share a line ("37 of 72 payments!
+  // CURRENT AMOUNT DUE: $722.49"); the label is the fragment nearest the
+  // figure. A dated row is a transaction, not a charge of this period.
+  const lineLabel = (raw: string): string | null => {
+    let label = raw.trim();
+    if (/^\d{1,2}\/\d{1,2}\/\d{2,4}\b/.test(label)) return null;
+    if (layerText) label = (label.split(/\s{2,}/).pop() ?? label).replace(/:$/, '').trim();
+    if (/^\d{1,2}\/\d{1,2}\/\d{2,4}\b/.test(label) || !/[A-Za-z]{2}/.test(label)) return null;
+    return label;
+  };
   // Pattern 1: "Label ...... $X.XX"  (dot or space leaders, right-aligned)
   const leaderRe = /^(.{3,55}?)[\s\.]{2,}\$?\s*([\d,]+\.\d{2})\s*$/gm;
   while ((cm = leaderRe.exec(text)) !== null && breakdownCount < 25) {
-    const label  = cm[1].trim().replace(/\.+$/, '').trim();
+    const label  = lineLabel(cm[1].trim().replace(/\.+$/, '').trim()) ?? '';
     const amount = parseFloat(cm[2].replace(/,/g, ''));
     if (!isNaN(amount) && label.length > 2 && !/^(page|account|date|total\s+amount\s+due)/i.test(label)) {
       chargeBreakdown[label] = amount;
@@ -1048,7 +1103,7 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
   if (breakdownCount < 3) {
     const tabRe = /^(.{3,55}?)\s{2,}\$\s*([\d,]+\.\d{2})$/gm;
     while ((cm = tabRe.exec(text)) !== null && breakdownCount < 25) {
-      const label  = cm[1].trim();
+      const label  = lineLabel(cm[1]) ?? '';
       const amount = parseFloat(cm[2].replace(/,/g, ''));
       if (!isNaN(amount) && label.length > 2 && !chargeBreakdown[label]) {
         chargeBreakdown[label] = amount;
@@ -1060,9 +1115,9 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string): Pro
   if (breakdownCount < 3) {
     const colonRe = /^([A-Za-z][^:\n]{2,50}):\s*\$?\s*([\d,]+\.\d{2})/gm;
     while ((cm = colonRe.exec(text)) !== null && breakdownCount < 25) {
-      const label  = cm[1].trim();
+      const label  = lineLabel(cm[1]) ?? '';
       const amount = parseFloat(cm[2].replace(/,/g, ''));
-      if (!isNaN(amount) && !chargeBreakdown[label]) {
+      if (!isNaN(amount) && label.length > 2 && !chargeBreakdown[label]) {
         chargeBreakdown[label] = amount;
         breakdownCount++;
       }
@@ -1878,6 +1933,31 @@ export function reconcileWithStatedTotal(ex: ExtractedBillData): void {
         && Math.abs((ex.previousBalance + ex.currentCharges - deferred) - total) < 0.01) {
       ex.amountDue = ex.currentCharges;
       return;
+    }
+    // Westlake: PAST DUE 722.49 + CURRENT AMOUNT DUE 722.49 + UNPAID LATE
+    // CHARGES 36.12 = TOTAL AMOUNT DUE 1,481.10. The period's charge
+    // includes the late fee added to it.
+    const fee = ex.lateFee ?? 0;
+    if (ex.currentCharges != null && ex.previousBalance != null && fee > 0
+        && Math.abs(ex.amountDue - total) < 0.01
+        && Math.abs((ex.previousBalance + ex.currentCharges + fee - deferred) - total) < 0.01) {
+      ex.amountDue = Number((ex.currentCharges + fee).toFixed(2));
+      ex.currentCharges = ex.amountDue;
+      return;
+    }
+    // The same bill read with the period's charge before its late fee:
+    // carried + charge + fee is the total, so the fee belongs to the charge.
+    if (ex.currentCharges != null && ex.previousBalance != null && fee > 0
+        && Math.abs(ex.currentCharges - ex.amountDue) < 0.01
+        && Math.abs((ex.previousBalance + ex.currentCharges + fee - deferred) - total) < 0.01) {
+      ex.amountDue = Number((ex.currentCharges + fee).toFixed(2));
+    }
+    // The period's charge is stored from currentCharges; one that leaves the
+    // late fee out would understate what the bill asks for — when the bill's
+    // own total says the fee is part of it.
+    if (ex.currentCharges != null && fee > 0 && Math.abs(ex.amountDue - (ex.currentCharges + fee)) < 0.01
+        && Math.abs((ex.previousBalance ?? 0) + ex.amountDue - deferred - total) < 0.01) {
+      ex.currentCharges = ex.amountDue;
     }
     const payableCharge = ex.amountDue - deferred;
     const derived = Number((total - payableCharge).toFixed(2));
@@ -3243,6 +3323,97 @@ async function recordLedgerPayments(utilityAccountId: string, statementId: strin
 }
 
 /**
+ * The statement's own transaction table: "Previous Transaction Detail" on a
+ * Westlake statement, "TRANSACTION DATE / DESCRIPTION / AMOUNT" on a
+ * Mechanics Bank one, "Recent Transactions" or "Account Activity" elsewhere.
+ * Read from the page-order text, where each row is one line: a date, what
+ * happened, the amount, and sometimes a running balance after it (ignored).
+ * The text layer is the statement itself, so rows found here replace what
+ * Claude read of the table.
+ */
+const TXN_HEADING = /transaction\s+(?:detail|history|activity)|recent\s+(?:transactions|activity)|account\s+activity|activity\s+since|\bdate\s+description\s+amount\b/i;
+const TXN_ROW = /^(\d{1,2}\/\d{1,2}\/\d{2,4})\s+(.*?[A-Za-z].*?)\s+(\(?-?\$?\s?-?[\d,]+\.\d{2}\)?(?:\s*CR)?)(?:\s+\(?-?\$?\s?[\d,]+\.\d{2}\)?)?\s*$/;
+
+export function transactionKind(description: string): StatementTransaction['kind'] {
+  const d = description.toLowerCase();
+  // A payment that bounced puts the money back on the account.
+  if (/payment\s+revers|revers\w*\s+(?:of\s+)?payment|returned\s+(?:payment|check|item)|protest|dishono|bounced|chargeback|\bnsf\b|insufficient/.test(d)) return 'fee';
+  if (/revers|waive|refund|credit|adjust|rebate/.test(d)) return 'credit';
+  if (/payment|\bpmt\b|\bpaid\b|autopay|remittance/.test(d)) return 'payment';
+  if (/late|fee|penalt|charge-?off/.test(d)) return 'fee';
+  return 'charge';
+}
+
+export function applyTransactionsFromText(ex: ExtractedBillData, text: string): void {
+  const lines = text.split('\n').map(l => l.trim());
+  const rows: StatementTransaction[] = [];
+  const seen = new Set<number>();
+  for (let h = 0; h < lines.length; h++) {
+    if (!TXN_HEADING.test(lines[h])) continue;
+    let misses = 0;
+    for (let i = h + 1; i < lines.length && i < h + 60; i++) {
+      const m = lines[i].replace(/\s+/g, ' ').match(TXN_ROW);
+      if (!m) {
+        // Rows can be interleaved with a side column's text; a long run of
+        // lines that are not rows is the end of the table.
+        if (++misses >= (rows.length ? 5 : 8)) break;
+        continue;
+      }
+      misses = 0;
+      if (seen.has(i)) continue;
+      seen.add(i);
+      const date = parseDate(m[1]);
+      if (!date) continue;
+      const description = m[2].trim();
+      const printed = m[3];
+      const magnitude = parseFloat(printed.replace(/[^\d.]/g, ''));
+      if (!Number.isFinite(magnitude)) continue;
+      const kind = transactionKind(description);
+      const printedNegative = /-|\(|CR/i.test(printed);
+      const negative = printedNegative || kind === 'payment' || kind === 'credit';
+      rows.push({ date, description, amount: Number((negative ? -magnitude : magnitude).toFixed(2)), kind });
+    }
+  }
+  if (rows.length) ex.transactions = rows;
+}
+
+/**
+ * Payments in the transaction table are payments on file. Rows on the same
+ * day are one payment — Mechanics Bank prints a single payment as its
+ * PRINCIPAL PAYMENT and INTEREST PAYMENT halves. A statement that already
+ * lists its payments as a ledger keeps that list.
+ */
+export function paymentsFromTransactions(ex: ExtractedBillData): void {
+  if (ex.ledgerPayments?.length || !ex.transactions?.length) return;
+  const DAY = 24 * 60 * 60 * 1000;
+  const days = (a: string, b: string) => (new Date(b).getTime() - new Date(a).getTime()) / DAY;
+  // A payment returned within a few weeks ("Protested Payment Invalid
+  // Account" two days after "Payment Received", same amount) never arrived.
+  const returned = ex.transactions.filter(t => t.kind === 'fee' && transactionKind(t.description) === 'fee'
+    && /revers|return|protest|dishono|bounced|chargeback|nsf|insufficient/i.test(t.description));
+  const bounced = new Set<StatementTransaction>();
+  for (const r of returned) {
+    const paid = ex.transactions.find(t => t.kind === 'payment' && !bounced.has(t)
+      && Math.abs(Math.abs(t.amount) - Math.abs(r.amount)) < 0.01 && days(t.date, r.date) >= 0 && days(t.date, r.date) <= 30);
+    if (paid) bounced.add(paid);
+  }
+  const byDate = new Map<string, { amount: number; parts: string[] }>();
+  for (const t of ex.transactions) {
+    if (t.kind !== 'payment' || t.amount >= 0 || bounced.has(t)) continue;
+    if (ex.statementDate && t.date > ex.statementDate) continue;
+    const g = byDate.get(t.date) ?? { amount: 0, parts: [] };
+    g.amount += -t.amount;
+    g.parts.push(`${t.description} ${Math.abs(t.amount).toFixed(2)}`);
+    byDate.set(t.date, g);
+  }
+  if (!byDate.size) return;
+  ex.ledgerPayments = [...byDate.entries()].map(([date, g]) => ({
+    date, amount: Number(g.amount.toFixed(2)),
+    description: g.parts.length > 1 ? `Payment (${g.parts.join(' + ')})` : g.parts[0].replace(/\s[\d.]+$/, ''),
+  }));
+}
+
+/**
  * A bill that says in words that the account is in credit is in credit,
  * whatever sign the extractor gave its figures. "No payment is due. Your
  * account has a credit balance of $47.34" fixes the stated total at −47.34
@@ -3411,15 +3582,20 @@ export async function parseBill(
     // It is read by Claude whatever method was chosen, and its text is
     // transcribed so the readers that work off the bill's own wording
     // still run.
+    // A fillable-form statement (Westlake) keeps every figure in its form
+    // fields, which no text reader sees and some renderers skip. Drawn into
+    // the page, they are read like any other text — by Claude as well.
+    const flattened = isImage ? null : await flattenFormFields(buffer);
+    if (flattened) buffer = flattened;
     let layerText = '';
-    if (!isImage) { try { layerText = (await pdfParse(buffer)).text; } catch { /* no text layer */ } }
+    if (!isImage) { try { layerText = flattened ? await layoutText(buffer) : (await pdfParse(buffer)).text; } catch { /* no text layer */ } }
     const scanned = !isImage && noTextLayer(layerText);
     if (isImage) {
       extractedBy = 'ai';
       if (method === 'regex') extractionNote = 'Images are always read by Claude; text extraction needs a PDF.';
       extracted = await extractWithClaude(buffer, filename);
     } else if (method === 'regex' && !scanned) {
-      extracted = await extractWithRegex(buffer, filename);
+      extracted = await extractWithRegex(buffer, filename, flattened ? layerText : undefined);
     } else if (scanned) {
       extractedBy = 'ai';
       if (method === 'regex') extractionNote = 'No text layer (a scanned bill) — read by Claude.';
@@ -3444,7 +3620,7 @@ export async function parseBill(
         // the month's charge — and nothing on screen said which ones.
         extractedBy = 'text';
         extractionNote = message;
-        extracted = await extractWithRegex(buffer, filename);
+        extracted = await extractWithRegex(buffer, filename, flattened ? layerText : undefined);
       }
     }
     // Some bills print no issue date at all — Fallbrook PUD gives only a due
@@ -3484,7 +3660,14 @@ export async function parseBill(
         applyCancellationNoticeFromText(extracted, text);
         applyPremiumFinanceFromText(extracted, text);
       } catch { /* an unreadable text layer changes nothing */ }
+      // A statement's transaction table, read in page order so each row's
+      // date, description and amount sit on one line.
+      try {
+        const rowsText = scanned || flattened ? text : await layoutText(buffer);
+        applyTransactionsFromText(extracted, rowsText);
+      } catch { /* the table stays as Claude read it */ }
     }
+    paymentsFromTransactions(extracted);
     // A screenshot has no text layer; what Claude read of a premium finance
     // ledger is shaped here.
     shapePremiumFinance(extracted);

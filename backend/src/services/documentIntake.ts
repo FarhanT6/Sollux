@@ -54,6 +54,7 @@ export function buildRawData(ex: Awaited<ReturnType<typeof parseBill>>['extracte
     paymentPlan: ex.paymentPlan ?? null,
     paymentPlanAmount: ex.paymentPlanAmount ?? null,
     insurance: ex.insurance ?? null,
+    transactions: ex.transactions ?? null,
   };
 }
 

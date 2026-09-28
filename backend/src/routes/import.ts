@@ -654,6 +654,21 @@ router.post('/confirm', async (req: Request, res: Response) => {
           ? { trueUpDeferred: nem.deferred, trueUpBalance: nem.ytdBalance, trueUpDate: nem.trueUpDate ? new Date(nem.trueUpDate) : null }
           : {};
 
+        // A paid mark the bill itself put there — the old reading's amount,
+        // paid in full, with no owner override — goes when the re-read
+        // amount differs and the bill no longer reads as paid. Westlake's
+        // statements were read as $5.00 "PAID IN FULL" off the fine print;
+        // what was really paid is what the payments linked to them say.
+        let stalePaid = false;
+        if (existing && !ex.isPaid && existing.paidOverride == null && existing.amountPaid != null && existing.amountDue != null
+            && periodCharge != null && Math.abs(Number(existing.amountPaid) - Number(existing.amountDue)) < 0.01
+            && Math.abs(periodCharge - Number(existing.amountDue)) > 0.01) {
+          stalePaid = true;
+        }
+        const linkedPaid = stalePaid
+          ? (await db.payment.aggregate({ where: { statementId: existing!.id, status: 'PAID' }, _sum: { amount: true } }))._sum.amount
+          : null;
+
         if (existing) {
           // Overwrite with better data from the new extraction
           await db.statement.update({
@@ -665,7 +680,8 @@ router.post('/confirm', async (req: Request, res: Response) => {
               billingPeriodEnd,
               amountDue:      periodCharge      ?? existing.amountDue,
               balance:        ex.totalAccountBalance ?? totalDue ?? existing.balance,
-              amountPaid:     paidAmount ?? (legacyDerivedPaid != null && Number(existing.amountPaid) === legacyDerivedPaid ? null : existing.amountPaid),
+              amountPaid:     paidAmount ?? (stalePaid ? (linkedPaid != null && Number(linkedPaid) > 0 ? linkedPaid : null)
+                : legacyDerivedPaid != null && Number(existing.amountPaid) === legacyDerivedPaid ? null : existing.amountPaid),
               chargesExcludingFees: ex.currentCharges ?? existing.chargesExcludingFees,
               penaltiesFees:  ex.lateFee         ?? existing.penaltiesFees,
               paymentPlanAmount: planAmount       ?? existing.paymentPlanAmount,
@@ -803,6 +819,9 @@ function buildRawData(ex: ExtractedBillData, extractedBy?: 'ai' | 'text'): Recor
     paymentPlanAmount:   ex.paymentPlanAmount ?? null,
     insurance:           ex.insurance ?? null,
     netMetering:         ex.netMetering ?? null,
+    // The statement's transaction table as printed: payments, fees and
+    // reversals since the last statement.
+    transactions:        ex.transactions ?? null,
   };
 }
 
