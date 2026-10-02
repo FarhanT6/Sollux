@@ -1,0 +1,1 @@
+ALTER TABLE "payments" ADD COLUMN IF NOT EXISTS "lateFeeAdded" DECIMAL(10,2);
