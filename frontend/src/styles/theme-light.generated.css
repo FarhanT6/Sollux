@@ -93,6 +93,7 @@ html[data-theme="light"] [class~="hover:bg-white/8"]:hover { background-color: r
 html[data-theme="light"] [class~="hover:border-gold-300"]:hover { border-color: #b8674a !important; }
 html[data-theme="light"] [class~="hover:border-white/20"]:hover { border-color: #e6e0da !important; }
 html[data-theme="light"] [class~="hover:text-[#F5A623]"]:hover { color: #b8674a !important; }
+html[data-theme="light"] [class~="hover:text-amber-200"]:hover { color: #92400e !important; }
 html[data-theme="light"] [class~="hover:text-amber-300"]:hover { color: #b45309 !important; }
 html[data-theme="light"] [class~="hover:text-amber-400"]:hover { color: #b45309 !important; }
 html[data-theme="light"] [class~="hover:text-blue-300"]:hover { color: #1d4ed8 !important; }
