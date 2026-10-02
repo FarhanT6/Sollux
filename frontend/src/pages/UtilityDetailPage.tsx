@@ -678,7 +678,7 @@ export default function UtilityDetailPage() {
   const [editPaymentId, setEditPaymentId] = useState<string | null>(null);
   const [savingPayment, setSavingPayment] = useState(false);
   const [payForm, setPayForm] = useState({
-    amount: '', feeAmount: '', paymentDate: todayISO(),
+    amount: '', feeAmount: '', lateFee: '', paymentDate: todayISO(),
     paymentMethod: 'ACH', status: 'PAID', statementId: '',
     confirmationNumber: '', bankAccountId: '', notes: '',
   });
@@ -697,7 +697,7 @@ export default function UtilityDetailPage() {
 
   function resetPayForm() {
     setPayForm({
-      amount: '', feeAmount: '', paymentDate: todayISO(),
+      amount: '', feeAmount: '', lateFee: '', paymentDate: todayISO(),
       paymentMethod: 'ACH', status: 'PAID', statementId: '',
       confirmationNumber: '', bankAccountId: '', notes: '',
     });
@@ -709,6 +709,7 @@ export default function UtilityDetailPage() {
     setPayForm({
       amount: String(p.amount ?? ''),
       feeAmount: p.feeAmount != null ? String(p.feeAmount) : '',
+      lateFee: p.lateFeeAdded != null ? String(p.lateFeeAdded) : '',
       paymentDate: (p.paymentDate ?? '').slice(0, 10),
       paymentMethod: p.paymentMethod || 'ACH',
       status: p.status || 'PAID',
@@ -739,6 +740,9 @@ export default function UtilityDetailPage() {
       alert('Enter an amount greater than zero.');
       return;
     }
+    const lateFee = payForm.lateFee ? parseFloat(payForm.lateFee) : 0;
+    if (Number.isNaN(lateFee) || lateFee < 0) { alert('Enter the late fee as an amount, or leave it blank.'); return; }
+    if (lateFee > 0 && !bill.statementId && !bill.split) { alert('Choose the bill this payment was late for — the late fee is added to it.'); return; }
     const split = bill.split && !editPaymentId ? splitAllocations(bill, amount) : null;
     if (split && 'error' in split) { alert(split.error); return; }
     setSavingPayment(true);
@@ -748,6 +752,7 @@ export default function UtilityDetailPage() {
         utilityAccountId: accountId,
         amount,
         feeAmount: payForm.feeAmount ? parseFloat(payForm.feeAmount) : null,
+        lateFee: payForm.lateFee ? parseFloat(payForm.lateFee) : null,
         paymentDate: payForm.paymentDate,
         paymentMethod: payForm.paymentMethod || null,
         status: payForm.status,
@@ -1765,9 +1770,47 @@ export default function UtilityDetailPage() {
                 card={newCard} onCardChange={setNewCard} />
               <input value={payForm.confirmationNumber} onChange={e => setPayForm(f => ({ ...f, confirmationNumber: e.target.value }))}
                 placeholder="Confirmation #" className="input-dark text-xs" />
+              <input type="number" value={payForm.lateFee} onChange={e => setPayForm(f => ({ ...f, lateFee: e.target.value }))}
+                placeholder="Late fee (optional)" title="A late fee the provider charged because this payment was late — added to the bill it pays"
+                className="input-dark text-xs" />
               <input value={payForm.notes} onChange={e => setPayForm(f => ({ ...f, notes: e.target.value }))}
-                placeholder="Notes" className="input-dark text-xs sm:col-span-2 lg:col-span-4" />
+                placeholder="Notes" className="input-dark text-xs sm:col-span-2 lg:col-span-3" />
             </div>
+            {/* Paid after the bill's due date: say so, and offer the fee this
+                account charged last time. The fee goes on the bill and the
+                amount paid grows by it. */}
+            {(() => {
+              const target = statements.find((s: any) => s.id === bill.statementId) as any;
+              if (!target?.dueDate || !payForm.paymentDate) return null;
+              const due = String(target.dueDate).slice(0, 10);
+              if (payForm.paymentDate <= due) return null;
+              const daysLate = Math.round((Date.parse(payForm.paymentDate) - Date.parse(due)) / 86400000);
+              const lastFee = [...payments].map((p: any) => Number(p.lateFeeAdded ?? 0)).find(v => v > 0)
+                ?? [...statements].sort((a: any, b: any) => String(b.statementDate).localeCompare(String(a.statementDate)))
+                  .map((x: any) => Number(x.penaltiesFees ?? 0)).find(v => v > 0);
+              return (
+                <div className="flex flex-wrap items-center gap-3 mt-2 text-xs">
+                  <span className="text-amber-400">
+                    Paid {daysLate} day{daysLate === 1 ? '' : 's'} after the {fmtDate(due, 'MMM d')} due date.
+                    {!payForm.lateFee && ' Did the provider charge a late fee?'}
+                  </span>
+                  {!payForm.lateFee && lastFee != null && (
+                    <button type="button" className="text-amber-300 underline hover:text-amber-200"
+                      onClick={() => setPayForm(f => ({
+                        ...f, lateFee: lastFee.toFixed(2),
+                        amount: f.amount && !Number.isNaN(parseFloat(f.amount)) ? (parseFloat(f.amount) + lastFee).toFixed(2) : f.amount,
+                      }))}>
+                      Add {fmtMoney(lastFee)} late fee (last charged)
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
+            {Number(payForm.lateFee) > 0 && (
+              <p className="text-xs text-gray-500 mt-1">
+                {fmtMoney(Number(payForm.lateFee))} is added to the bill's penalties and balance. Include it in the amount if you paid it with this payment.
+              </p>
+            )}
             <div className="flex justify-end gap-3 mt-2">
               <button onClick={() => { setEditPaymentId(null); setShowPayForm(false); }}
                 className="text-xs text-gray-500 hover:text-gray-300">Cancel</button>
@@ -1820,6 +1863,7 @@ export default function UtilityDetailPage() {
                     <div className="text-right flex-shrink-0 w-28">
                       <p className="text-base font-semibold text-white">{fmtMoney(p.amount)}</p>
                       {Number(p.feeAmount ?? 0) > 0 && <p className="text-xs text-gray-500">+ {fmtMoney(p.feeAmount)} fee · {fmtMoney(Number(p.amount) + Number(p.feeAmount))} out</p>}
+                      {Number((p as any).lateFeeAdded ?? 0) > 0 && <p className="text-xs text-red-400">incl. {fmtMoney(Number((p as any).lateFeeAdded))} late fee</p>}
                     </div>
                     <div className="flex-shrink-0 w-20 text-right">
                       <Pill color={p.status === 'PAID' ? 'green' : p.status === 'PENDING' ? 'amber' : 'red'}>{p.status}</Pill>

@@ -385,6 +385,10 @@ model Payment {
   // A processing / convenience fee paid on top of the amount — money out
   // that never reduced the bill.
   feeAmount          Decimal?       @db.Decimal(10, 2)
+  // A late fee the owner added to the bill when logging this payment late:
+  // put on the statement's penalties and charge, and taken back off if the
+  // payment is edited or deleted.
+  lateFeeAdded       Decimal?       @db.Decimal(10, 2)
   // How much of this payment was taken off the account's payment plan:
   // what was paid beyond the bill's own charge and the plan's fee. Kept
   // on the payment so an edit or deletion puts it back on the plan.

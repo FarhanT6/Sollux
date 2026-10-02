@@ -82,6 +82,8 @@ const PaymentSchema = z.object({
   statementId: z.string().optional().nullable(),
   amount: z.number().positive(),
   feeAmount: z.number().min(0).optional().nullable(),
+  // A late fee to add to the bill this payment is for (see applyLateFee).
+  lateFee: z.number().min(0).max(100000).optional().nullable(),
   // Accepts a plain date ("2026-08-17") as well as a full ISO timestamp — the
   // old .datetime() rule rejected what a <input type="date"> sends.
   paymentDate: z.string(),
@@ -119,6 +121,27 @@ export async function syncStatementPaid(statementId: string | null | undefined) 
   });
 }
 
+/**
+ * A late fee the owner adds while logging a late payment. Late fees exist
+ * because a payment was late, so the fee goes on the bill that payment was
+ * for: its penalties and its charge (amountDue includes penalties, so the
+ * open balance grows with it). The amount is kept on the payment so an edit
+ * or deletion takes exactly that much back off.
+ */
+async function applyLateFee(statementId: string | null | undefined, amount: number) {
+  if (!statementId || !amount) return;
+  const s = await db.statement.findUnique({ where: { id: statementId }, select: { amountDue: true, penaltiesFees: true } });
+  if (!s) return;
+  const fees = Number((Number(s.penaltiesFees ?? 0) + amount).toFixed(2));
+  await db.statement.update({
+    where: { id: statementId },
+    data: {
+      penaltiesFees: Math.abs(fees) < 0.005 ? null : fees,
+      amountDue: Number((Number(s.amountDue ?? 0) + amount).toFixed(2)),
+    },
+  });
+}
+
 // Ownership check shared by every write path.
 async function ownAccount(userId: string, utilityAccountId: string) {
   return db.utilityAccount.findFirst({
@@ -153,7 +176,7 @@ router.post('/split', async (req, res, next) => {
       if (!bank) return res.status(404).json({ error: 'Bank account not found' });
     }
 
-    const { allocations, amount: _total, feeAmount, ...shared } = data;
+    const { allocations, amount: _total, feeAmount, lateFee, ...shared } = data;
     const splitGroupId = `split_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     const created: any[] = [];
     for (const [i, alloc] of allocations.entries()) {
@@ -164,11 +187,14 @@ router.post('/split', async (req, res, next) => {
           amount: alloc.amount,
           // The fee was paid once; it sits on the first part so totals stay right.
           feeAmount: i === 0 ? feeAmount ?? null : null,
+          // So is a late fee: it goes on the first bill paid.
+          lateFeeAdded: i === 0 && lateFee ? lateFee : null,
           splitGroupId,
           paymentDate: new Date(shared.paymentDate),
         },
         include: { bankAccount: { select: { id: true, name: true, bank: true, last4: true, accountType: true, ownerLabel: true, cardNetwork: true } } },
       });
+      if (i === 0 && lateFee) await applyLateFee(alloc.statementId, lateFee);
       await syncStatementPaid(alloc.statementId);
       const planApplied = await applyPaymentToPlan(payment.id);
       const loanApplied = await applyPaymentToLoan(payment.id);
@@ -202,11 +228,14 @@ router.post('/', async (req, res, next) => {
       if (!bank) return res.status(404).json({ error: 'Bank account not found' });
     }
 
+    const { lateFee, ...fields } = data;
+    if (lateFee && !fields.statementId) return res.status(400).json({ error: 'Choose the bill this payment was late for, so the late fee goes on it.' });
     const payment = await db.payment.create({
-      data: { ...data, paymentDate: new Date(data.paymentDate) },
+      data: { ...fields, lateFeeAdded: lateFee || null, paymentDate: new Date(fields.paymentDate) },
       include: { bankAccount: { select: { id: true, name: true, bank: true, last4: true, accountType: true, ownerLabel: true, cardNetwork: true } } },
     });
-    await syncStatementPaid(data.statementId);
+    if (lateFee) await applyLateFee(fields.statementId, lateFee);
+    await syncStatementPaid(fields.statementId);
     const planApplied = await applyPaymentToPlan(payment.id);
     const loanApplied = await applyPaymentToLoan(payment.id);
 
@@ -241,11 +270,24 @@ router.patch('/:id', async (req, res, next) => {
       if (!stmt) return res.status(404).json({ error: 'Statement not found on this account' });
     }
 
+    // The late fee moves with the payment: off the bill it was on, onto the
+    // bill (and at the amount) the payment now names.
+    const { lateFee, ...fields } = data;
+    const oldFee = Number(existing.lateFeeAdded ?? 0);
+    const newFee = lateFee !== undefined ? Number(lateFee ?? 0) : oldFee;
+    const newStatementId = fields.statementId !== undefined ? fields.statementId : existing.statementId;
+    if (newFee && !newStatementId) return res.status(400).json({ error: 'Choose the bill this payment was late for, so the late fee goes on it.' });
+    if (oldFee !== newFee || newStatementId !== existing.statementId) {
+      await applyLateFee(existing.statementId, -oldFee);
+      await applyLateFee(newStatementId, newFee);
+    }
+
     const payment = await db.payment.update({
       where: { id: existing.id },
       data: {
-        ...data,
-        ...(data.paymentDate ? { paymentDate: new Date(data.paymentDate) } : {}),
+        ...fields,
+        lateFeeAdded: newFee || null,
+        ...(fields.paymentDate ? { paymentDate: new Date(fields.paymentDate) } : {}),
       },
       include: { bankAccount: { select: { id: true, name: true, bank: true, last4: true, accountType: true, ownerLabel: true, cardNetwork: true } } },
     });
@@ -274,6 +316,8 @@ router.delete('/:id', async (req, res, next) => {
     // Whatever it took off the plan or the loan goes back on it.
     await unapplyPaymentFromPlan(existing.id);
     await unapplyPaymentFromLoan(existing.id);
+    // So does a late fee it added to the bill.
+    await applyLateFee(existing.statementId, -Number(existing.lateFeeAdded ?? 0));
     await db.payment.delete({ where: { id: existing.id } });
     // Removing the last payment leaves the statement unpaid again.
     await syncStatementPaid(existing.statementId);
