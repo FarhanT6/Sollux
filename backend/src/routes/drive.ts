@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { google, drive_v3 } from 'googleapis';
 import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
+import { restoreLateFees } from '../services/lateFees';
 import { attachDbUser } from '../middleware/requireAuth';
 import { getSignedDocumentUrl, downloadDocument, uploadDocument, buildStatementKey } from '../services/s3Service';
 import { markEscrowedStatements } from '../services/escrow';
@@ -408,6 +409,7 @@ router.post('/stream', attachDbUser, async (req, res) => {
                 rawDataJson: rawData as Prisma.InputJsonValue,
                 ...(pdfS3Key ? { pdfS3Key } : {}),
               }});
+              await restoreLateFees(existing.id, ex.lateFee ?? undefined);
               await recordConfirmedPayment(acct.id, existing.id, ex);
               await syncPaymentPlanFromBill(acct.id, ex);
               await syncInsurancePolicyFromBill(acct.id, ex);

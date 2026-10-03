@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../config/db';
+import { applyLateFee } from '../services/lateFees';
 import { attachDbUser } from '../middleware/requireAuth';
 import { allocateAccountPayments } from '../lib/paymentAllocation';
 import { applyPaymentToPlan, unapplyPaymentFromPlan, applyPaymentToLoan, unapplyPaymentFromLoan } from '../services/planApplication';
@@ -118,27 +119,6 @@ export async function syncStatementPaid(statementId: string | null | undefined) 
     // A payment logged against a bill the owner had pinned open lifts the
     // pin: the newer, more specific claim wins.
     data: { amountPaid: total ?? null, ...(total != null && Number(total) > 0 ? { paidOverride: null } : {}) },
-  });
-}
-
-/**
- * A late fee the owner adds while logging a late payment. Late fees exist
- * because a payment was late, so the fee goes on the bill that payment was
- * for: its penalties and its charge (amountDue includes penalties, so the
- * open balance grows with it). The amount is kept on the payment so an edit
- * or deletion takes exactly that much back off.
- */
-async function applyLateFee(statementId: string | null | undefined, amount: number) {
-  if (!statementId || !amount) return;
-  const s = await db.statement.findUnique({ where: { id: statementId }, select: { amountDue: true, penaltiesFees: true } });
-  if (!s) return;
-  const fees = Number((Number(s.penaltiesFees ?? 0) + amount).toFixed(2));
-  await db.statement.update({
-    where: { id: statementId },
-    data: {
-      penaltiesFees: Math.abs(fees) < 0.005 ? null : fees,
-      amountDue: Number((Number(s.amountDue ?? 0) + amount).toFixed(2)),
-    },
   });
 }
 

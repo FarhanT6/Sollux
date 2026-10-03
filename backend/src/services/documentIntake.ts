@@ -8,6 +8,7 @@
  */
 import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
+import { restoreLateFees } from './lateFees';
 import { markEscrowedStatements } from './escrow';
 import { settleInFull, applyPolicyDocument, recordConfirmedPayment, syncPaymentPlanFromBill, syncInsurancePolicyFromBill, syncLoanComponentsFromBill, applyPastDueNotice, parseBill } from './pdfImportService';
 import { findOrCreateUtilityAccount } from './utilityAccountResolver';
@@ -170,6 +171,8 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
           ...(pdfS3Key && !existing.pdfS3Key ? { pdfS3Key } : {}),
         },
       });
+      // Late fees logged with payments are not on the PDF; put them back.
+      await restoreLateFees(existing.id);
       await recordConfirmedPayment(acct.id, existing.id, ex);
       await syncPaymentPlanFromBill(acct.id, ex);
       await syncInsurancePolicyFromBill(acct.id, ex);
