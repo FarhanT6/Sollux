@@ -11,6 +11,7 @@ import { encrypt, decrypt } from '../crypto/encrypt';
 import { uploadDocument, buildStatementKey } from '../services/s3Service';
 import { attachDbUser } from '../middleware/requireAuth';
 import { db } from '../config/db';
+import { restoreLateFees } from '../services/lateFees';
 
 const router = Router();
 
@@ -699,6 +700,8 @@ router.post('/confirm', async (req: Request, res: Response) => {
               ...(pdfS3Key ? { pdfS3Key } : {}),
             },
           });
+          // Late fees logged with payments are not on the PDF; put them back.
+          await restoreLateFees(existing.id, ex.lateFee ?? undefined);
           await recordConfirmedPayment(utilityAccountId, existing.id, ex);
           await syncPaymentPlanFromBill(utilityAccountId, ex);
           await syncInsurancePolicyFromBill(utilityAccountId, ex);
