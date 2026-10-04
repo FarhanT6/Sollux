@@ -1,3 +1,4 @@
+import { PrivacyPage, TermsPage } from './pages/PolicyPage';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from '@clerk/clerk-react';
 import { SignIn, SignUp } from '@clerk/clerk-react';
@@ -41,6 +42,9 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
+        {/* Public: Google's OAuth consent screen links to these. */}
+        <Route path="/privacy" element={<PrivacyPage />} />
+        <Route path="/terms" element={<TermsPage />} />
         <Route path="/sign-in/*" element={
           <div className="flex h-screen items-center justify-center bg-[#161616]">
             <SignIn routing="path" path="/sign-in" afterSignInUrl="/dashboard" />
