@@ -635,7 +635,7 @@ function InboxPanel({ onStreamStart, onBillStreamed }: {
         {boxes.map(b => (
           <span key={b.id} className="text-xs px-2 py-1 rounded" style={{ background: 'rgba(255,255,255,0.05)' }} title={b.lastScanError ?? ''}>
             <span className="text-gray-300">{b.email}</span>
-            <span className={b.lastScanError ? 'text-amber-400' : 'text-gray-500'}> · {b.lastScanAt ? `read ${format(new Date(b.lastScanAt), 'MMM d, h:mm a')}` : 'not read yet'}{b.lastScanError ? ' ⚠' : ''}</span>
+            <span className={b.lastScanError ? 'text-amber-400' : 'text-gray-500'}> · {b.lastScanAt ? `read ${format(new Date(b.lastScanAt), 'MMM d, h:mm a')}` : b.lastScanError ? 'partly read' : 'not read yet'}{b.lastScanError ? ' ⚠' : ''}</span>
           </span>
         ))}
       </div>
@@ -652,7 +652,11 @@ function InboxPanel({ onStreamStart, onBillStreamed }: {
                   <div key={m.id} className="text-xs flex gap-3">
                     <span className="text-gray-600 w-16 shrink-0">{m.receivedAt ? format(new Date(m.receivedAt), 'MMM d') : ''}</span>
                     <span className={`w-24 shrink-0 ${st.cls}`}>{st.label}</span>
-                    <span className="text-gray-300 truncate">{m.subject || '(no subject)'}</span>
+                    <span className="min-w-0">
+                      <span className="text-gray-300 truncate block">{m.subject || '(no subject)'}</span>
+                      {/* Why it failed, so an error can be acted on. */}
+                      {m.outcome === 'error' && m.detail && <span className="text-red-400/80 block truncate" title={m.detail}>{m.detail}</span>}
+                    </span>
                     <span className="text-gray-600 truncate ml-auto shrink-0 max-w-[40%]">{m.fromAddress}</span>
                   </div>
                 );
