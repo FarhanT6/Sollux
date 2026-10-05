@@ -25,7 +25,9 @@ const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string
 // 60-day first read of two inboxes ran through a lot of credits. The rest of
 // a backlog is read on later runs. Both can be raised with env vars.
 const FIRST_RUN_DAYS = Number(process.env.INBOX_FIRST_RUN_DAYS) || 3;
-const MAX_MESSAGES_PER_MAILBOX = 200;
+// Listing is free (no Claude reads); large enough that a month's backfill
+// reaches its oldest mail.
+const MAX_MESSAGES_PER_MAILBOX = 1000;
 const MAX_DOCUMENTS_PER_RUN = Number(process.env.INBOX_MAX_DOCUMENTS_PER_RUN) || 25;
 
 const BILL_SUBJECT = /\b(bill|statement|invoice|payment (is )?due|amount due|balance due|past due|premium|renewal|notice|e-?bill|autopay|tax)\b/i;
@@ -147,7 +149,8 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
       const budgetEnd = documents + perMailbox;
       try {
         const gmail = google.gmail({ version: 'v1', auth: oauthFor(token) });
-        const since = token.lastScanAt ? new Date(token.lastScanAt.getTime() - 24 * 3600 * 1000) : new Date(Date.now() - FIRST_RUN_DAYS * 24 * 3600 * 1000);
+        const since = token.backfillFrom
+          ?? (token.lastScanAt ? new Date(token.lastScanAt.getTime() - 24 * 3600 * 1000) : new Date(Date.now() - FIRST_RUN_DAYS * 24 * 3600 * 1000));
         const q = `after:${Math.floor(since.getTime() / 1000)} -category:promotions -category:social (has:attachment OR subject:(bill OR statement OR invoice OR due OR notice OR premium OR renewal OR tax))`;
 
         const ids: string[] = [];
@@ -188,6 +191,8 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
           const pdfs = parts.filter(p => p.body?.attachmentId && (p.mimeType === 'application/pdf' || /\.pdf$/i.test(p.filename ?? '')));
           const outcomes: string[] = [];
           const problems: string[] = [];
+          // Why something was not read, so a missed bill can be spotted in the log.
+          const skips: string[] = [];
           let accountId: string | null = null;
 
           const handle = async (buffer: Buffer, filename: string) => {
@@ -196,7 +201,7 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
             if (r.outcome === 'filed') { sum.filed++; accountId = r.utilityAccountId; outcomes.push('filed'); }
             else if (r.outcome === 'review') { sum.review++; review.push(r.reviewItem); outcomes.push('review'); }
             else if (r.outcome === 'error') { sum.errors.push(r.error); problems.push(r.error); outcomes.push('error'); }
-            else if (r.outcome === 'not_a_bill') { outcomes.push('skipped'); problems.length || problems.push('not a bill'); }
+            else if (r.outcome === 'not_a_bill') { outcomes.push('skipped'); skips.push(`${filename}: read, not a bill`); }
             else { sum.applied++; outcomes.push(r.outcome); }
           };
 
@@ -208,7 +213,7 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
                 let text = '';
                 try { text = (await pdfParse(buffer)).text; } catch { /* scanned or odd — let Claude decide if the email says bill */ }
                 const scanned = text.replace(/\s/g, '').length < 200;
-                if (scanned ? !BILL_SUBJECT.test(subject) : !looksLikeBill(text)) { outcomes.push('skipped'); continue; }
+                if (scanned ? !BILL_SUBJECT.test(subject) : !looksLikeBill(text)) { outcomes.push('skipped'); skips.push(`${p.filename || 'attachment'}: no amount or bill wording`); continue; }
                 await handle(buffer, p.filename || `${subject || 'email'}.pdf`);
               }
             } else {
@@ -228,7 +233,7 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
                   pdf = await textToPdf(`From: ${from}\nSubject: ${subject}\nReceived: ${receivedAt?.toISOString().slice(0, 10) ?? ''}\n\n${body}`);
                 }
                 await handle(pdf, `${(subject || 'e-bill').replace(/[^\w .-]+/g, '').slice(0, 80)}.pdf`);
-              } else outcomes.push('skipped');
+              } else { outcomes.push('skipped'); skips.push(html || plain ? 'email has no amount or bill wording' : 'empty email'); }
             }
           } catch (err) {
             outcomes.push('error');
@@ -241,9 +246,14 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
           if (best === 'error' && retrying.has(messageId)) best = 'failed';
           if (best === 'skipped') sum.skipped++;
           // An error says why, so the log can be acted on.
-          await record(best, problems.length ? problems.join('; ') : outcomes.length > 1 ? outcomes.join(', ') : null, accountId);
+          await record(best, problems.length ? problems.join('; ') : best === 'skipped' ? (skips.join('; ') || 'nothing to read') : outcomes.length > 1 ? outcomes.join(', ') : null, accountId);
         }
-        await db.gmailToken.update({ where: { id: token.id }, data: { lastScanAt: capped ? token.lastScanAt : startedAt, lastScanError: capped ? `Stopped at ${perMailbox} documents; the rest are read next run (or press Sync now).` : null } });
+        await db.gmailToken.update({ where: { id: token.id }, data: {
+          lastScanAt: capped ? token.lastScanAt : startedAt,
+          lastScanError: capped ? `Stopped at ${perMailbox} documents; the rest are read next run (or press Sync now).` : null,
+          // A backfill is done once a run gets through all of it.
+          ...(capped ? {} : { backfillFrom: null }),
+        } });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         sum.errors.push(`${token.email}: ${message}`);

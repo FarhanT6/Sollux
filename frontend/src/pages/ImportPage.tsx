@@ -540,6 +540,7 @@ const OUTCOME_STYLE: Record<string, { label: string; cls: string }> = {
   policy: { label: 'Policy updated', cls: 'text-blue-400' },
   error:  { label: 'Error',        cls: 'text-red-400' },
   failed: { label: 'Failed twice', cls: 'text-red-400' },
+  skipped: { label: 'Skipped',     cls: 'text-gray-500' },
 };
 
 function InboxPanel({ onStreamStart, onBillStreamed }: {
@@ -550,20 +551,27 @@ function InboxPanel({ onStreamStart, onBillStreamed }: {
   const [activity, setActivity] = useState<InboxActivity | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [showLog, setShowLog] = useState(false);
+  const [showSkipped, setShowSkipped] = useState(false);
+  const [showQuiet, setShowQuiet] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const [st, act] = await Promise.all([getGmailStatus(), getInboxActivity().catch(() => null)]);
+    const [st, act] = await Promise.all([getGmailStatus(), getInboxActivity({ skipped: showSkipped }).catch(() => null)]);
     setBoxes(st.accounts); setActivity(act);
     return st.accounts;
-  }, []);
+  }, [showSkipped]);
   useEffect(() => { load().catch(() => setBoxes([])); }, [load]);
 
-  async function syncNow() {
+  async function backfill() {
+    if (!confirm('Read the last 30 days of both inboxes for bills that were missed?\n\nEmails already handled are not read again. Each new bill or PDF is one paid read, at most 25 per run; if there are more, the rest are read on the next Sync or the nightly run.')) return;
+    await syncNow(30);
+  }
+
+  async function syncNow(backfillDays?: number) {
     setSyncing(true); setErr(null);
     const before = new Map((boxes ?? []).map(b => [b.id, b.lastScanAt]));
     try {
-      await syncInbox();
+      await syncInbox(undefined, backfillDays);
       // The run happens on the worker; watch for every mailbox to report back.
       for (let i = 0; i < 60; i++) {
         await new Promise(r => setTimeout(r, 5000));
@@ -637,22 +645,52 @@ function InboxPanel({ onStreamStart, onBillStreamed }: {
         </div>
         <div className="flex gap-2">
           <button className="btn text-xs" onClick={() => getGmailConnectUrl().then(r => openOAuth(r.url, () => { load().catch(() => {}); }))}>+ Add inbox</button>
-          <button className="btn btn-primary text-xs disabled:opacity-50" disabled={syncing} onClick={syncNow}>{syncing ? 'Reading inboxes…' : 'Sync now'}</button>
+          <button className="btn text-xs disabled:opacity-50" disabled={syncing} onClick={backfill} title="Read the last 30 days for anything missed">Backfill 30 days</button>
+          <button className="btn btn-primary text-xs disabled:opacity-50" disabled={syncing} onClick={() => syncNow()}>{syncing ? 'Reading inboxes…' : 'Sync now'}</button>
         </div>
       </div>
       <div className="flex flex-wrap gap-2">
         {boxes.map(b => (
           <span key={b.id} className="text-xs px-2 py-1 rounded" style={{ background: 'rgba(255,255,255,0.05)' }} title={b.lastScanError ?? ''}>
             <span className="text-gray-300">{b.email}</span>
-            <span className={b.lastScanError ? 'text-amber-400' : 'text-gray-500'}> · {b.lastScanAt ? `read ${format(new Date(b.lastScanAt), 'MMM d, h:mm a')}` : b.lastScanError ? 'partly read' : 'not read yet'}{b.lastScanError ? ' ⚠' : ''}</span>
+            <span className={b.lastScanError ? 'text-amber-400' : 'text-gray-500'}> · {b.backfillFrom ? `backfilling to ${format(new Date(b.backfillFrom), 'MMM d')}` : b.lastScanAt ? `read ${format(new Date(b.lastScanAt), 'MMM d, h:mm a')}` : b.lastScanError ? 'partly read' : 'not read yet'}{b.lastScanError ? ' ⚠' : ''}</span>
           </span>
         ))}
       </div>
       {reviewBar}
+      {/* How to tell something was missed: accounts that bill every month
+          (or two) with no bill on file for longer than that. */}
+      {(activity?.quietAccounts?.length ?? 0) > 0 && (
+        <div>
+          <button className="text-xs text-amber-400/90 hover:text-amber-300" onClick={() => setShowQuiet(v => !v)}>
+            {showQuiet ? '▾' : '▸'} {activity!.quietAccounts!.length} account{activity!.quietAccounts!.length === 1 ? '' : 's'} with no recent bill — possibly missed
+          </button>
+          {showQuiet && (
+            <div className="mt-2 max-h-56 overflow-y-auto space-y-1">
+              {activity!.quietAccounts!.map(a => (
+                <a key={a.utilityAccountId} href={`/properties/${a.propertyId}/utilities/${a.utilityAccountId}`} className="text-xs flex gap-3 hover:bg-white/5 rounded px-1">
+                  <span className="text-gray-300 truncate">{a.provider}</span>
+                  <span className="text-gray-500 truncate">{a.property}</span>
+                  <span className="text-gray-500 ml-auto shrink-0">{a.lastBill ? `last bill ${fmtDate(a.lastBill, 'MMM d')} · ${a.days} days` : 'no bills on file'}</span>
+                </a>
+              ))}
+              <p className="text-xs text-gray-600 pt-1">Bills that go to an inbox you haven't connected, to the provider's portal only, or by mail show up here too.</p>
+            </div>
+          )}
+        </div>
+      )}
       {err && <p className="text-xs text-red-400">{err}</p>}
       {(activity?.messages.length ?? 0) > 0 && (
         <div>
-          <button className="text-xs text-gray-500 hover:text-gray-300" onClick={() => setShowLog(v => !v)}>{showLog ? '▾' : '▸'} What the inbox agent did</button>
+          <div className="flex items-center gap-4">
+            <button className="text-xs text-gray-500 hover:text-gray-300" onClick={() => setShowLog(v => !v)}>{showLog ? '▾' : '▸'} What the inbox agent did</button>
+            {showLog && (
+              <label className="text-xs text-gray-500 flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" checked={showSkipped} onChange={e => setShowSkipped(e.target.checked)} />
+                Include emails it skipped, and why
+              </label>
+            )}
+          </div>
           {showLog && (
             <div className="mt-2 max-h-64 overflow-y-auto space-y-1">
               {activity!.messages.map(m => {
@@ -664,7 +702,8 @@ function InboxPanel({ onStreamStart, onBillStreamed }: {
                     <span className="min-w-0">
                       <span className="text-gray-300 truncate block">{m.subject || '(no subject)'}</span>
                       {/* Why it failed, so an error can be acted on. */}
-                      {m.outcome === 'error' && m.detail && <span className="text-red-400/80 block truncate" title={m.detail}>{m.detail}</span>}
+                      {(m.outcome === 'error' || m.outcome === 'failed') && m.detail && <span className="text-red-400/80 block truncate" title={m.detail}>{m.detail}</span>}
+                      {m.outcome === 'skipped' && m.detail && <span className="text-gray-500 block truncate" title={m.detail}>{m.detail}</span>}
                     </span>
                     <span className="text-gray-600 truncate ml-auto shrink-0 max-w-[40%]">{m.fromAddress}</span>
                   </div>

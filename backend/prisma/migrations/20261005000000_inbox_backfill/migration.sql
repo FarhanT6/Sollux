@@ -1,0 +1,1 @@
+ALTER TABLE "gmail_tokens" ADD COLUMN IF NOT EXISTS "backfillFrom" TIMESTAMP(3);
