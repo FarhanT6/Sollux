@@ -168,8 +168,13 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
         // A message that failed is read again next run — the cause (a missing
         // browser, a timeout) is usually fixed by then. Everything else is
         // handled once.
-        const prior = await db.inboxMessage.findMany({ where: { gmailTokenId: token.id, messageId: { in: ids } }, select: { messageId: true, outcome: true } });
-        const seen = new Set(prior.filter(m => m.outcome !== 'error').map(m => m.messageId));
+        const prior = await db.inboxMessage.findMany({ where: { gmailTokenId: token.id, messageId: { in: ids } }, select: { messageId: true, outcome: true, detail: true } });
+        // During a backfill, emails skipped as having no amount are looked at
+        // again: until long email bodies were read, every long e-bill was
+        // skipped that way. Looking costs no Claude read unless it is a bill.
+        const recheck = (m: { outcome: string; detail: string | null }) =>
+          !!token.backfillFrom && m.outcome === 'skipped' && (!m.detail || /no amount or bill wording|^skipped|empty email/.test(m.detail));
+        const seen = new Set(prior.filter(m => m.outcome !== 'error' && !recheck(m)).map(m => m.messageId));
         // A message is retried once. If it fails again it is marked failed and
         // left alone, so one bad email cannot cost a read every night.
         const retrying = new Set(prior.filter(m => m.outcome === 'error').map(m => m.messageId));
