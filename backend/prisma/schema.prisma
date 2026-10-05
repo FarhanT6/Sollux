@@ -533,6 +533,9 @@ model InboxMessage {
   gmailTokenId String
   gmailToken   GmailToken @relation(fields: [gmailTokenId], references: [id], onDelete: Cascade)
   messageId    String
+  // The email's own Message-ID header: the same email delivered to two
+  // connected inboxes has two Gmail ids but one of these, and is read once.
+  rfcMessageId String?
   fromAddress  String?
   subject      String?
   receivedAt   DateTime?
@@ -545,6 +548,7 @@ model InboxMessage {
 
   @@unique([gmailTokenId, messageId])
   @@index([userId, createdAt])
+  @@index([userId, rfcMessageId])
   @@map("inbox_messages")
 }
 
