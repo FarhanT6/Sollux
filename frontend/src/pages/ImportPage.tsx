@@ -541,6 +541,7 @@ const OUTCOME_STYLE: Record<string, { label: string; cls: string }> = {
   error:  { label: 'Error',        cls: 'text-red-400' },
   failed: { label: 'Failed twice', cls: 'text-red-400' },
   skipped: { label: 'Skipped',     cls: 'text-gray-500' },
+  online: { label: 'Bill online only', cls: 'text-amber-300' },
 };
 
 function InboxPanel({ onStreamStart, onBillStreamed }: {
@@ -640,7 +641,7 @@ function InboxPanel({ onStreamStart, onBillStreamed }: {
         <div>
           <p className="text-sm font-medium text-gray-200">Bills by email</p>
           <p className="text-xs text-gray-500 mt-0.5">
-            Read every night from {boxes.length} inbox{boxes.length === 1 ? '' : 'es'}. Last 30 days: {c.filed ?? 0} filed · {c.review ?? 0} to review · {(c.notice ?? 0) + (c.policy ?? 0)} notices/policies{(c.error ?? 0) + (c.failed ?? 0) ? ` · ${(c.error ?? 0) + (c.failed ?? 0)} errors` : ''}
+            Read every night from {boxes.length} inbox{boxes.length === 1 ? '' : 'es'}. Last 30 days: {c.filed ?? 0} filed · {c.review ?? 0} to review · {(c.notice ?? 0) + (c.policy ?? 0)} notices/policies{(c.error ?? 0) + (c.failed ?? 0) ? ` · ${(c.error ?? 0) + (c.failed ?? 0)} errors` : ''}{c.online ? ` · ${c.online} bills only on the provider's site` : ''}
           </p>
         </div>
         <div className="flex gap-2">
@@ -702,8 +703,12 @@ function InboxPanel({ onStreamStart, onBillStreamed }: {
                     <span className="min-w-0">
                       <span className="text-gray-300 truncate block">{m.subject || '(no subject)'}</span>
                       {/* Why it failed, so an error can be acted on. */}
-                      {(m.outcome === 'error' || m.outcome === 'failed') && m.detail && <span className="text-red-400/80 block truncate" title={m.detail}>{m.detail}</span>}
-                      {m.outcome === 'skipped' && m.detail && <span className="text-gray-500 block truncate" title={m.detail}>{m.detail}</span>}
+                      {(m.outcome === 'error' || m.outcome === 'failed') && (
+                        <span className="text-red-400/80 block truncate" title={m.detail ?? ''}>
+                          {m.detail ?? 'No reason saved: read before reasons were recorded. Backfill retries it once and shows why.'}
+                        </span>
+                      )}
+                      {(m.outcome === 'skipped' || m.outcome === 'online') && m.detail && <span className="text-gray-500 block truncate" title={m.detail}>{m.detail}</span>}
                     </span>
                     <span className="text-gray-600 truncate ml-auto shrink-0 max-w-[40%]">{m.fromAddress}</span>
                   </div>

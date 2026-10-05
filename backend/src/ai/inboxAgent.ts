@@ -30,8 +30,12 @@ const FIRST_RUN_DAYS = Number(process.env.INBOX_FIRST_RUN_DAYS) || 3;
 const MAX_MESSAGES_PER_MAILBOX = 1000;
 const MAX_DOCUMENTS_PER_RUN = Number(process.env.INBOX_MAX_DOCUMENTS_PER_RUN) || 25;
 
-const BILL_SUBJECT = /\b(bill|statement|invoice|payment (is )?due|amount due|balance due|past due|premium|renewal|notice|e-?bill|autopay|tax)\b/i;
-const PAYMENT_CONFIRMATION = /thank you for (your )?payment|payment (received|confirmation|processed|successful)|we received your payment|receipt for your payment/i;
+const BILL_SUBJECT = /\b(bill|statement|invoice|payment (is )?due|amount due|balance due|past due|premium|renewal|notice|e-?bill|autopay|tax|cancell?ation|disconnect)/i;
+const PAYMENT_CONFIRMATION = /thank you for (your )?payment|payment (received|confirmation|processed|successful)|we received your payment|receipt for your payment|your receipt from|^receipt\b/i;
+// "Your bill is ready / available / posted", "New bill notification": the bill
+// is on the provider's site and the email carries no amount. Nothing to read,
+// but worth showing, since that bill is not in Sollux until it is fetched.
+const BILL_POSTED = /\bnew (bill|statement|invoice)|\b(bill|e-?statement|statement|invoice)s?\b[^.!?\n]{0,40}?\b(ready|available|posted|here)\b|(view|pay) your bill online/i;
 const BILL_WORDS = /amount due|total due|balance due|new balance|statement date|billing period|service period|due date|invoice|premium|past due|minimum payment|account (number|no|#)/i;
 const MONEY = /\$\s?\d[\d,]*\.\d{2}/;
 
@@ -151,7 +155,7 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
         const gmail = google.gmail({ version: 'v1', auth: oauthFor(token) });
         const since = token.backfillFrom
           ?? (token.lastScanAt ? new Date(token.lastScanAt.getTime() - 24 * 3600 * 1000) : new Date(Date.now() - FIRST_RUN_DAYS * 24 * 3600 * 1000));
-        const q = `after:${Math.floor(since.getTime() / 1000)} -category:promotions -category:social (has:attachment OR subject:(bill OR statement OR invoice OR due OR notice OR premium OR renewal OR tax))`;
+        const q = `after:${Math.floor(since.getTime() / 1000)} -category:promotions -category:social (has:attachment OR subject:(bill OR statement OR invoice OR due OR notice OR premium OR renewal OR tax OR cancellation OR disconnection))`;
 
         const ids: string[] = [];
         let pageToken: string | undefined;
@@ -176,16 +180,26 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
           if (documents >= budgetEnd) { capped = true; break; }
           const msg = (await gmail.users.messages.get({ userId: 'me', id: messageId, format: 'full' })).data;
           const subject = header(msg, 'Subject'), from = header(msg, 'From');
+          const rfcMessageId = header(msg, 'Message-ID').slice(0, 300) || null;
           const receivedAt = msg.internalDate ? new Date(Number(msg.internalDate)) : null;
           const record = (outcome: string, detail?: string | null, utilityAccountId?: string | null) =>
             db.inboxMessage.upsert({
               where: { gmailTokenId_messageId: { gmailTokenId: token.id, messageId } },
-              create: { userId, gmailTokenId: token.id, messageId, fromAddress: from.slice(0, 300), subject: subject.slice(0, 300), receivedAt, outcome, detail: detail?.slice(0, 500) ?? null, utilityAccountId: utilityAccountId ?? null },
-              update: { outcome, detail: detail?.slice(0, 500) ?? null, utilityAccountId: utilityAccountId ?? null, createdAt: new Date() },
+              create: { userId, gmailTokenId: token.id, messageId, rfcMessageId, fromAddress: from.slice(0, 300), subject: subject.slice(0, 300), receivedAt, outcome, detail: detail?.slice(0, 500) ?? null, utilityAccountId: utilityAccountId ?? null },
+              update: { outcome, rfcMessageId, detail: detail?.slice(0, 500) ?? null, utilityAccountId: utilityAccountId ?? null, createdAt: new Date() },
             }).catch(() => {});
           sum.read++;
 
-          if (PAYMENT_CONFIRMATION.test(subject)) { sum.skipped++; await record('skipped', 'payment confirmation'); continue; }
+          if (PAYMENT_CONFIRMATION.test(subject)) { sum.skipped++; await record('skipped', 'payment confirmation or receipt'); continue; }
+          // The same email delivered to two connected inboxes (sent to both, or
+          // forwarded) is read once: a second read files nothing new and costs a read.
+          if (rfcMessageId) {
+            const twin = await db.inboxMessage.findFirst({
+              where: { userId, rfcMessageId, gmailTokenId: { not: token.id }, outcome: { notIn: ['error', 'failed'] } },
+              select: { outcome: true, gmailToken: { select: { email: true } } },
+            });
+            if (twin) { sum.skipped++; await record('skipped', `same email already read in ${twin.gmailToken.email} (${twin.outcome})`); continue; }
+          }
 
           const parts = walk(msg.payload);
           const pdfs = parts.filter(p => p.body?.attachmentId && (p.mimeType === 'application/pdf' || /\.pdf$/i.test(p.filename ?? '')));
@@ -217,12 +231,27 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
                 await handle(buffer, p.filename || `${subject || 'email'}.pdf`);
               }
             } else {
-              const html = parts.find(p => p.mimeType === 'text/html')?.body?.data;
-              const plain = parts.find(p => p.mimeType === 'text/plain')?.body?.data;
-              const body = html ? htmlToText(decode(html).toString('utf8')) : decode(plain).toString('utf8');
+              // Gmail hands a long body over like an attachment (body.attachmentId,
+              // no body.data), and SDG&E's, Republic's and most utilities' e-bill
+              // emails are long. Reading only body.data found nothing in them,
+              // so the bill emails were skipped as having no amount.
+              const textOf = async (mime: string) => {
+                const out: string[] = [];
+                for (const p of parts.filter(x => x.mimeType === mime)) {
+                  if (p.body?.data) out.push(decode(p.body.data).toString('utf8'));
+                  else if (p.body?.attachmentId) {
+                    const att = await gmail.users.messages.attachments.get({ userId: 'me', messageId, id: p.body.attachmentId });
+                    out.push(decode(att.data.data).toString('utf8'));
+                  }
+                }
+                return out.join('\n');
+              };
+              const htmlRaw = await textOf('text/html');
+              const plainRaw = htmlRaw ? '' : await textOf('text/plain');
+              const body = htmlRaw ? htmlToText(htmlRaw) : plainRaw;
               if (isBillEmail(subject, body)) {
-                const page = html
-                  ? decode(html).toString('utf8')
+                const page = htmlRaw
+                  ? htmlRaw
                   : `<pre style="font:13px/1.4 sans-serif;white-space:pre-wrap">${esc(body)}</pre>`;
                 const stamped = `<div style="font:12px sans-serif;color:#555;border-bottom:1px solid #ddd;margin-bottom:12px;padding-bottom:6px">From: ${esc(from)}<br>Subject: ${esc(subject)}<br>Received: ${receivedAt?.toISOString().slice(0, 10) ?? ''}</div>${page}`;
                 let pdf: Buffer;
@@ -233,7 +262,10 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
                   pdf = await textToPdf(`From: ${from}\nSubject: ${subject}\nReceived: ${receivedAt?.toISOString().slice(0, 10) ?? ''}\n\n${body}`);
                 }
                 await handle(pdf, `${(subject || 'e-bill').replace(/[^\w .-]+/g, '').slice(0, 80)}.pdf`);
-              } else { outcomes.push('skipped'); skips.push(html || plain ? 'email has no amount or bill wording' : 'empty email'); }
+              } else if (BILL_POSTED.test(subject) || BILL_POSTED.test(body.slice(0, 2000))) {
+                outcomes.push('online');
+                skips.push('bill posted on the provider\'s site; the email has no amount. Download it there, or upload the PDF.');
+              } else { outcomes.push('skipped'); skips.push(body ? 'email has no amount or bill wording' : 'empty email'); }
             }
           } catch (err) {
             outcomes.push('error');
@@ -242,11 +274,11 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
             sum.errors.push(`${subject || messageId}: ${why}`);
           }
 
-          let best = ['filed', 'review', 'notice', 'policy', 'error'].find(o => outcomes.includes(o)) ?? 'skipped';
+          let best = ['filed', 'review', 'notice', 'policy', 'error', 'online'].find(o => outcomes.includes(o)) ?? 'skipped';
           if (best === 'error' && retrying.has(messageId)) best = 'failed';
           if (best === 'skipped') sum.skipped++;
           // An error says why, so the log can be acted on.
-          await record(best, problems.length ? problems.join('; ') : best === 'skipped' ? (skips.join('; ') || 'nothing to read') : outcomes.length > 1 ? outcomes.join(', ') : null, accountId);
+          await record(best, problems.length ? problems.join('; ') : best === 'skipped' || best === 'online' ? (skips.join('; ') || 'nothing to read') : null, accountId);
         }
         await db.gmailToken.update({ where: { id: token.id }, data: {
           lastScanAt: capped ? token.lastScanAt : startedAt,
