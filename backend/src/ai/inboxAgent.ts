@@ -220,6 +220,7 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
             if (r.outcome === 'filed') { sum.filed++; accountId = r.utilityAccountId; outcomes.push('filed'); }
             else if (r.outcome === 'review') { sum.review++; review.push(r.reviewItem); outcomes.push('review'); }
             else if (r.outcome === 'error') { sum.errors.push(r.error); problems.push(r.error); outcomes.push('error'); }
+            else if (r.outcome === 'card') { sum.filed++; outcomes.push('filed'); skips.push(`credit card ${r.cardName}${r.created ? ' (new card added)' : ''}`); }
             else if (r.outcome === 'not_a_bill') { outcomes.push('skipped'); skips.push(`${filename}: read, not a bill`); }
             else { sum.applied++; outcomes.push(r.outcome); }
           };
@@ -283,7 +284,7 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
           if (best === 'error' && retrying.has(messageId)) best = 'failed';
           if (best === 'skipped') sum.skipped++;
           // An error says why, so the log can be acted on.
-          await record(best, problems.length ? problems.join('; ') : best === 'skipped' || best === 'online' ? (skips.join('; ') || 'nothing to read') : null, accountId);
+          await record(best, problems.length ? problems.join('; ') : best === 'skipped' || best === 'online' || best === 'filed' ? (skips.join('; ') || (best === 'filed' ? null : 'nothing to read')) : null, accountId);
         }
         await db.gmailToken.update({ where: { id: token.id }, data: {
           lastScanAt: capped ? token.lastScanAt : startedAt,

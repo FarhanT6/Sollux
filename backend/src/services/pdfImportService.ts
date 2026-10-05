@@ -188,7 +188,14 @@ export interface ExtractedBillData {
   /** 'past_due_notice' when the document is a dunning/disconnection notice
    *  rather than a bill — it demands an existing balance and bills nothing
    *  new, so it must never become a statement row. */
-  documentKind?:      'bill' | 'past_due_notice' | 'policy_document' | 'not_a_bill';
+  documentKind?:      'bill' | 'past_due_notice' | 'policy_document' | 'not_a_bill' | 'credit_card_statement';
+  /** A credit card (or store card, PayPal Credit, line of credit) statement or payment-due alert. */
+  creditCard?: {
+    issuer?: string | null; cardName?: string | null; network?: string | null; last4?: string | null; cardholderName?: string | null;
+    closingDate?: string | null; periodStart?: string | null; dueDate?: string | null;
+    previousBalance?: number | null; paymentsCredits?: number | null; purchases?: number | null; feesCharged?: number | null; interestCharged?: number | null;
+    newBalance?: number | null; minimumPayment?: number | null; creditLimit?: number | null; availableCredit?: number | null; purchaseApr?: number | null;
+  } | null;
   lateFee:            number | null;
   usageValue:         number | null;
   usageUnit:          string | null;   // kWh, CCF, therms, gallons, etc.
@@ -277,7 +284,8 @@ Schema (use null for any field not present in the document):
   "penaltyDate": "YYYY-MM-DD" or null — the date a penalty or late fee applies if the bill is unpaid, when the bill states one ("Penalty Date", "Late after", "Penalty applies after"). This is often a day or two later than the due date; report what the bill says, not the due date,
   "amountAfterDueDate": number or null — what the bill says is payable if paid after the due date ("Amount due after 09/15/2026", "After Due Date Pay"). The difference between this and the amount due is the late fee this provider will charge,
   "agingBuckets": object or null — when the bill prints an aging table (commonly "Past Due | 30 Days | 60 Days | 90+ Days"), report it as {"current": n, "days30": n, "days60": n, "days90plus": n}, omitting any bucket the bill does not show. Report each bucket's own figure, not a running total,
-  "documentKind": "bill | past_due_notice | policy_document | not_a_bill — 'not_a_bill' when the document asks for no payment and is none of the kinds below: correspondence, a legal filing or court notice, a loan approval or title document, a money-transfer or payment receipt, a marketing email. For it, leave every amount null. Otherwise: 'policy_document' when the document describes an insurance policy and how it will be billed but does not itself bill a period: a renewal offer ('Your Auto Renewal Is All Set Up'), a welcome letter, a declarations page, an ID card, a payment-schedule notice. For it: fill 'insurance' (above) in full, put the document's own date in statementDate, and leave amountDue, currentCharges, previousBalance and dueDate null — its installments are in insurance.paymentSchedule. 'past_due_notice' ONLY when the document bills nothing new: it demands an already-overdue balance, shows no service period and no new charges. A regular invoice that carries a PAST DUE or suspension banner but also bills a new period's service is a 'bill', never a notice ('PAST DUE STATEMENT', 'FINAL NOTICE', 'service will be locked/disconnected'). For a notice: the demanded amount goes in previousBalance, currentCharges is null, any stated lock-up/disconnection or penalty date goes in penaltyDate, and its aging table in agingBuckets. Everything else is 'bill'",
+  "creditCard": object or null — ONLY for a credit card, store card (Home Depot, Lowe's), PayPal Credit or similar revolving-credit statement, or its "minimum payment due" alert: {"issuer": "Citi", "cardName": "The Home Depot Consumer Credit Card", "network": "Visa | Mastercard | American Express | Discover or null", "last4": "8361", "cardholderName": string, "closingDate": "YYYY-MM-DD (statement closing date)", "periodStart": "YYYY-MM-DD", "dueDate": "YYYY-MM-DD", "previousBalance": n, "paymentsCredits": n (positive), "purchases": n, "feesCharged": n, "interestCharged": n, "newBalance": n, "minimumPayment": n, "creditLimit": n, "availableCredit": n, "purchaseApr": n (percent)}. Use documentKind 'credit_card_statement' for these, put the new balance in statedTotalDue and the minimum payment in amountDue,
+  "documentKind": "bill | past_due_notice | policy_document | not_a_bill | credit_card_statement — 'credit_card_statement' for a credit card / store card / PayPal Credit statement or payment alert (fill creditCard). 'not_a_bill' when the document asks for no payment and is none of the kinds below: correspondence, a legal filing or court notice, a loan approval or title document, a money-transfer or payment receipt, a marketing email. For it, leave every amount null. Otherwise: 'policy_document' when the document describes an insurance policy and how it will be billed but does not itself bill a period: a renewal offer ('Your Auto Renewal Is All Set Up'), a welcome letter, a declarations page, an ID card, a payment-schedule notice. For it: fill 'insurance' (above) in full, put the document's own date in statementDate, and leave amountDue, currentCharges, previousBalance and dueDate null — its installments are in insurance.paymentSchedule. 'past_due_notice' ONLY when the document bills nothing new: it demands an already-overdue balance, shows no service period and no new charges. A regular invoice that carries a PAST DUE or suspension banner but also bills a new period's service is a 'bill', never a notice ('PAST DUE STATEMENT', 'FINAL NOTICE', 'service will be locked/disconnected'). For a notice: the demanded amount goes in previousBalance, currentCharges is null, any stated lock-up/disconnection or penalty date goes in penaltyDate, and its aging table in agingBuckets. Everything else is 'bill'",
   "chargeBreakdown": { "line item name": dollar_amount, ... } or null — every individual charge the bill itemises, using the bill's own wording as the key ({"Water": 118.53, "Sewer": 121.50} for a bill splitting the two). Include credits and discounts as negative values. This is how a total is explained later, so itemise whenever the bill does,
   "alerts": ["string", ...] — notable flags: past due, late fees, NSF, payment plan, high usage, leak, outage credit, SCRA, debt collection notice, legal action warning, etc.
 }
@@ -1394,7 +1402,7 @@ export function billCheck(text: string): string | null {
   if (!d) return 'no JSON in the answer';
   // A document that is not a bill has no amount to read; asking the stronger
   // model again only spends more on the same answer.
-  if (d.documentKind === 'not_a_bill') return null;
+  if (d.documentKind === 'not_a_bill' || d.documentKind === 'credit_card_statement') return null;
   const isBill = !d.documentKind || d.documentKind === 'bill';
   const amounts = [d.amountDue, d.currentCharges, d.statedTotalDue].filter((v: unknown) => typeof v === 'number') as number[];
   if (isBill && !amounts.length) return 'no amount read from a bill';
@@ -1427,6 +1435,19 @@ function normalizeAddress(addr: string): string {
     .replace(/[^a-z0-9\s]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/** The trailing digits a bill shows of its account number (at least 4), or null. */
+function billTail(acct: string | null | undefined): string | null {
+  const m = (acct ?? '').match(/(\d{4,})\D*$/);
+  return m ? m[1].slice(-4) : null;
+}
+/** The last `n` digits of the number on file for an account, or null if none is known. */
+function storedTail(a: { accountNumber: string | null; accountNumberEnc: string | null }, n: number): string | null {
+  let full = '';
+  if (a.accountNumberEnc) { try { full = decrypt(a.accountNumberEnc); } catch { /* unreadable */ } }
+  const digits = (full || a.accountNumber || '').replace(/\D/g, '');
+  return digits.length >= n ? digits.slice(-n) : null;
 }
 
 export function normalizeAcct(s: string): string {
@@ -1590,6 +1611,26 @@ async function matchByNumberAndAddress(
     }
   }
 
+  // ── 1a. A masked number ("*******7055", "XXXX-7055") ─────────────────────
+  // Many statements print only the last digits. The asterisks never match a
+  // stored number, so the bill fell through to address + provider, which
+  // filed a Dignity statement for ****7055 to the other Dignity account at
+  // the same address, ****6749. The visible tail identifies the account when
+  // exactly one account ends with it.
+  const tail = billTail(extracted.accountNumber);
+  if (tail && /[*•●]|x{2,}/i.test(extracted.accountNumber ?? '')) {
+    const hits = accounts.filter(a => storedTail(a, tail.length) === tail);
+    const pick = hits.length > 1 ? hits.filter(a => providersLookAlike(a.providerName, extracted.providerName ?? '')) : hits;
+    if (pick.length === 1) {
+      const acct = pick[0];
+      return {
+        confidence: 'high', method: 'account_number_masked',
+        utilityAccountId: acct.id, propertyId: acct.propertyId,
+        propertyName: acct.property.nickname || acct.property.address, providerName: acct.providerName,
+      };
+    }
+  }
+
   // ── 1b. Premium finance agreement with no loan number ────────────────────
   // The signed agreement prints only a quote number; the loan number comes
   // later. Its terms identify the loan just as well: the same payment, first
@@ -1656,8 +1697,11 @@ async function matchByNumberAndAddress(
       if (extracted.providerName) {
         // Shared matcher rather than substring: an account stored as
         // "San Diego Gas & Electric" has to match a bill saying "SDGE".
+        // An account whose number ends differently from the bill's is not the
+        // bill's, however alike the address and provider.
         const withProvider = addrMatches.filter(a =>
           providersLookAlike(a.providerName, extracted.providerName!)
+          && !(tail && storedTail(a, tail.length) && storedTail(a, tail.length) !== tail)
         );
         if (withProvider.length === 1) {
           const acct = withProvider[0];

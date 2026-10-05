@@ -9,6 +9,7 @@
 import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { restoreLateFees } from './lateFees';
+import { fileCardStatement } from './cardIntake';
 import { compareWithOwner, keepOwnerFigures, ownerEntered } from './statementConflict';
 import { markEscrowedStatements } from './escrow';
 import { settleInFull, applyPolicyDocument, recordConfirmedPayment, syncPaymentPlanFromBill, syncInsurancePolicyFromBill, syncLoanComponentsFromBill, applyPastDueNotice, parseBill } from './pdfImportService';
@@ -31,7 +32,8 @@ export type IntakeResult =
   | { outcome: 'policy' }
   | { outcome: 'review'; reviewItem: ReviewItem }
   | { outcome: 'error'; error: string }
-  | { outcome: 'not_a_bill' };
+  | { outcome: 'not_a_bill' }
+  | { outcome: 'card'; cardId: string; cardName: string; created: boolean };
 
 export function buildRawData(ex: Awaited<ReturnType<typeof parseBill>>['extracted'], source = 'drive_import') {
   const totalDue = (ex.currentCharges != null || ex.previousBalance != null)
@@ -73,6 +75,12 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
 
   // Correspondence, a legal filing, a transfer receipt: nothing to file or review.
   if (ex.documentKind === 'not_a_bill') return { outcome: 'not_a_bill' };
+  // A credit card statement goes to its card (Personal → Credit cards),
+  // which is created if Sollux does not have it yet.
+  if (ex.documentKind === 'credit_card_statement') {
+    const r = await fileCardStatement(userId, ex, buffer, filename);
+    return { outcome: 'card', cardId: r.cardId, cardName: r.cardName, created: r.created };
+  }
 
   let utilityAccountId = match.utilityAccountId;
   let autoCreated = false;

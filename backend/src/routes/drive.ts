@@ -3,6 +3,7 @@ import { google, drive_v3 } from 'googleapis';
 import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { restoreLateFees } from '../services/lateFees';
+import { fileCardStatement } from '../services/cardIntake';
 import { compareWithOwner, keepOwnerFigures, ownerEntered } from '../services/statementConflict';
 import { attachDbUser } from '../middleware/requireAuth';
 import { getSignedDocumentUrl, downloadDocument, uploadDocument, buildStatementKey } from '../services/s3Service';
@@ -263,6 +264,14 @@ router.post('/stream', attachDbUser, async (req, res) => {
             accountNumber: ex.accountNumber,
           });
           utilityAccountId = acct.id;
+        }
+
+        // A credit card statement goes to its card, created if need be.
+        if (ex.documentKind === 'credit_card_statement') {
+          const r = await fileCardStatement(userId, ex, buffer, file.name);
+          autoImported++;
+          send({ type: 'auto_imported', filename: file.name, note: `credit card ${r.cardName}${r.created ? ' (new card added)' : ''}` });
+          return;
         }
 
         // A past-due / disconnection notice never becomes a statement — it
