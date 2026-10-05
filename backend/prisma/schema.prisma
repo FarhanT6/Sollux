@@ -511,9 +511,12 @@ model GmailToken {
   expiresAt    DateTime
   email        String   @unique
   label        String?
-  // The inbox agent reads mail newer than this; null reads the last 60 days.
+  // The inbox agent reads mail newer than this; null is a first read (a few days back).
   lastScanAt    DateTime?
   lastScanError String?
+  // A backfill the owner asked for: read back to this date, across as many
+  // runs as the per-run document limit needs, then cleared.
+  backfillFrom  DateTime?
   messages      InboxMessage[]
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt

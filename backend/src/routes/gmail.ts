@@ -72,7 +72,7 @@ router.get('/status', attachDbUser, async (req, res, next) => {
   try {
     const tokens = await db.gmailToken.findMany({
       where: { userId: req.dbUserId! },
-      select: { id: true, email: true, label: true, createdAt: true, lastScanAt: true, lastScanError: true },
+      select: { id: true, email: true, label: true, createdAt: true, lastScanAt: true, lastScanError: true, backfillFrom: true },
       orderBy: { createdAt: 'asc' },
     });
     res.json({ connected: tokens.length > 0, accounts: tokens });
@@ -99,6 +99,15 @@ router.post('/sync', attachDbUser, async (req, res, next) => {
 
     const { gmailQueue } = await import('../workers/queues');
     const tokenId = typeof req.body?.tokenId === 'string' ? req.body.tokenId : undefined;
+    // "Backfill N days": read back that far, across as many runs as the
+    // per-run limit needs. Messages already handled are not read again.
+    const days = Number(req.body?.backfillDays);
+    if (Number.isFinite(days) && days >= 1) {
+      await db.gmailToken.updateMany({
+        where: { userId: req.dbUserId!, ...(tokenId ? { id: tokenId } : {}) },
+        data: { backfillFrom: new Date(Date.now() - Math.min(days, 90) * 24 * 3600 * 1000) },
+      });
+    }
     const job = await gmailQueue.add('parse', { userId: req.dbUserId!, tokenId }, { attempts: 1 });
     res.json({ jobId: job.id, accounts: tokens.length, message: 'Gmail sync queued' });
   } catch (err) { next(err); }
@@ -109,9 +118,10 @@ router.post('/sync', attachDbUser, async (req, res, next) => {
 router.get('/inbox', attachDbUser, async (req, res, next) => {
   try {
     const userId = req.dbUserId!;
+    const withSkipped = req.query.skipped === '1';
     const [messages, job, counts] = await Promise.all([
       db.inboxMessage.findMany({
-        where: { userId, outcome: { not: 'skipped' } }, orderBy: { createdAt: 'desc' }, take: 60,
+        where: { userId, ...(withSkipped ? {} : { outcome: { not: 'skipped' } }) }, orderBy: { receivedAt: 'desc' }, take: withSkipped ? 200 : 60,
         select: { id: true, fromAddress: true, subject: true, receivedAt: true, outcome: true, detail: true, utilityAccountId: true, importJobId: true, createdAt: true, gmailToken: { select: { email: true } } },
       }),
       // Bills waiting for a check from the inbox agent or a portal agent run.
@@ -119,10 +129,32 @@ router.get('/inbox', attachDbUser, async (req, res, next) => {
       db.inboxMessage.groupBy({ by: ['outcome'], where: { userId, createdAt: { gte: new Date(Date.now() - 30 * 24 * 3600 * 1000) } }, _count: true }),
     ]);
     const pending = job ? ((job.needsReviewJson as unknown[]) ?? []).length : 0;
+    // How to tell a bill was missed: accounts billed monthly (or every two
+    // months) with no bill for longer than that. Escrowed accounts and ones
+    // billed once a term are left out.
+    const accounts = await db.utilityAccount.findMany({
+      where: { property: { userId }, isActive: true, escrowLoanId: null, billingCadence: { in: ['MONTHLY', 'BIMONTHLY'] } },
+      select: {
+        id: true, providerName: true, billingCadence: true, createdAt: true, propertyId: true,
+        property: { select: { address: true, nickname: true } },
+        statements: { where: { isScheduled: false }, orderBy: { statementDate: 'desc' }, take: 1, select: { statementDate: true } },
+      },
+    });
+    const now = Date.now();
+    const quiet = accounts
+      .map(a => {
+        const last = a.statements[0]?.statementDate ?? null;
+        const days = Math.floor((now - (last ?? a.createdAt).getTime()) / 86400000);
+        return { utilityAccountId: a.id, propertyId: a.propertyId, provider: a.providerName, property: a.property.nickname || a.property.address, lastBill: last, days, limit: a.billingCadence === 'BIMONTHLY' ? 75 : 45 };
+      })
+      .filter(a => a.days > a.limit)
+      .sort((a, b) => b.days - a.days)
+      .map(({ limit: _l, ...a }) => a);
     res.json({
       messages: messages.map(({ gmailToken, ...m }) => ({ ...m, mailbox: gmailToken.email })),
       lastJob: job ? { id: job.id, source: job.source, label: job.folderName, finishedAt: job.finishedAt, autoImported: job.autoImported, needsReview: pending, errorLog: job.errorLog } : null,
       last30Days: Object.fromEntries(counts.map(c => [c.outcome, c._count])),
+      quietAccounts: quiet,
     });
   } catch (err) { next(err); }
 });

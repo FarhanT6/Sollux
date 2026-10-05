@@ -47,6 +47,7 @@ html[data-theme="light"] [class~="text-amber-200"] { color: #92400e !important; 
 html[data-theme="light"] [class~="text-amber-300"] { color: #b45309 !important; }
 html[data-theme="light"] [class~="text-amber-400"] { color: #b45309 !important; }
 html[data-theme="light"] [class~="text-amber-400/80"] { color: #b45309 !important; }
+html[data-theme="light"] [class~="text-amber-400/90"] { color: #b45309 !important; }
 html[data-theme="light"] [class~="text-amber-500"] { color: #b45309 !important; }
 html[data-theme="light"] [class~="text-amber-500/70"] { color: #b45309 !important; }
 html[data-theme="light"] [class~="text-blue-300"] { color: #1d4ed8 !important; }
