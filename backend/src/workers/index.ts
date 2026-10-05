@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import '../config/playwrightPath';
 import './scrapeWorker';
 import './insightWorker';
 import './gmailWorker';

@@ -86,6 +86,38 @@ async function printToPdf(html: string): Promise<Buffer> {
     return Buffer.from(await page.pdf({ format: 'Letter', printBackground: true, margin: { top: '0.4in', bottom: '0.4in', left: '0.4in', right: '0.4in' } }));
   } finally { await page.close().catch(() => {}); }
 }
+/**
+ * The same e-bill as a plain PDF, made without a browser. Used when
+ * Chromium cannot start (it was missing on Render, and every email without
+ * an attachment failed). The layout is lost but the words and figures that
+ * bill readers need are all there.
+ */
+export async function textToPdf(text: string): Promise<Buffer> {
+  const { PDFDocument, StandardFonts } = await import('pdf-lib');
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const size = 10, lineH = 13, margin = 40, width = 612 - margin * 2;
+  // The standard font covers Latin-1 only; anything else becomes a space.
+  const clean = text.replace(/[\u2018\u2019]/g, "'").replace(/[\u201C\u201D]/g, '"').replace(/[\u2013\u2014]/g, '-').replace(/[^\x09\x0A\x20-\x7E\xA0-\xFF]/g, ' ');
+  const lines: string[] = [];
+  for (const raw of clean.split('\n')) {
+    let line = '';
+    for (const word of raw.split(/\s+/).filter(Boolean)) {
+      const next = line ? `${line} ${word}` : word;
+      if (font.widthOfTextAtSize(next, size) > width && line) { lines.push(line); line = word; } else line = next;
+    }
+    lines.push(line);
+  }
+  let page = doc.addPage([612, 792]);
+  let y = 792 - margin;
+  for (const line of lines) {
+    if (y < margin) { page = doc.addPage([612, 792]); y = 792 - margin; }
+    if (line) page.drawText(line, { x: margin, y, size, font });
+    y -= lineH;
+  }
+  return Buffer.from(await doc.save());
+}
+
 async function closeBrowser() {
   if (!browserP) return;
   const b = browserP; browserP = null;
@@ -104,8 +136,13 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
   let documents = 0;
 
   try {
+    // Each mailbox gets its own share of the run's document allowance. A
+    // shared one let the first mailbox's backlog use all of it, and the
+    // second was never read ("not read yet" for fhmtalukder@).
+    const perMailbox = Math.max(20, Math.floor(MAX_DOCUMENTS_PER_RUN / tokens.length));
     for (const token of tokens) {
       const startedAt = new Date();
+      const budgetEnd = documents + perMailbox;
       try {
         const gmail = google.gmail({ version: 'v1', auth: oauthFor(token) });
         const since = token.lastScanAt ? new Date(token.lastScanAt.getTime() - 24 * 3600 * 1000) : new Date(Date.now() - FIRST_RUN_DAYS * 24 * 3600 * 1000);
@@ -119,17 +156,24 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
           pageToken = list.data.nextPageToken ?? undefined;
         } while (pageToken && ids.length < MAX_MESSAGES_PER_MAILBOX);
 
-        const seen = new Set((await db.inboxMessage.findMany({ where: { gmailTokenId: token.id, messageId: { in: ids } }, select: { messageId: true } })).map(m => m.messageId));
+        // A message that failed is read again next run — the cause (a missing
+        // browser, a timeout) is usually fixed by then. Everything else is
+        // handled once.
+        const seen = new Set((await db.inboxMessage.findMany({ where: { gmailTokenId: token.id, messageId: { in: ids }, outcome: { not: 'error' } }, select: { messageId: true } })).map(m => m.messageId));
         let capped = false;
 
         // Oldest first, so a backlog files in order and a cap leaves the newest for next run.
         for (const messageId of ids.filter(id => !seen.has(id)).reverse()) {
-          if (documents >= MAX_DOCUMENTS_PER_RUN) { capped = true; break; }
+          if (documents >= budgetEnd) { capped = true; break; }
           const msg = (await gmail.users.messages.get({ userId: 'me', id: messageId, format: 'full' })).data;
           const subject = header(msg, 'Subject'), from = header(msg, 'From');
           const receivedAt = msg.internalDate ? new Date(Number(msg.internalDate)) : null;
           const record = (outcome: string, detail?: string | null, utilityAccountId?: string | null) =>
-            db.inboxMessage.create({ data: { userId, gmailTokenId: token.id, messageId, fromAddress: from.slice(0, 300), subject: subject.slice(0, 300), receivedAt, outcome, detail: detail?.slice(0, 500) ?? null, utilityAccountId: utilityAccountId ?? null } }).catch(() => {});
+            db.inboxMessage.upsert({
+              where: { gmailTokenId_messageId: { gmailTokenId: token.id, messageId } },
+              create: { userId, gmailTokenId: token.id, messageId, fromAddress: from.slice(0, 300), subject: subject.slice(0, 300), receivedAt, outcome, detail: detail?.slice(0, 500) ?? null, utilityAccountId: utilityAccountId ?? null },
+              update: { outcome, detail: detail?.slice(0, 500) ?? null, utilityAccountId: utilityAccountId ?? null, createdAt: new Date() },
+            }).catch(() => {});
           sum.read++;
 
           if (PAYMENT_CONFIRMATION.test(subject)) { sum.skipped++; await record('skipped', 'payment confirmation'); continue; }
@@ -137,6 +181,7 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
           const parts = walk(msg.payload);
           const pdfs = parts.filter(p => p.body?.attachmentId && (p.mimeType === 'application/pdf' || /\.pdf$/i.test(p.filename ?? '')));
           const outcomes: string[] = [];
+          const problems: string[] = [];
           let accountId: string | null = null;
 
           const handle = async (buffer: Buffer, filename: string) => {
@@ -144,7 +189,7 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
             const r = await intakeBill(buffer, filename, userId, 'ai', batchId, 'email');
             if (r.outcome === 'filed') { sum.filed++; accountId = r.utilityAccountId; outcomes.push('filed'); }
             else if (r.outcome === 'review') { sum.review++; review.push(r.reviewItem); outcomes.push('review'); }
-            else if (r.outcome === 'error') { sum.errors.push(r.error); outcomes.push('error'); }
+            else if (r.outcome === 'error') { sum.errors.push(r.error); problems.push(r.error); outcomes.push('error'); }
             else { sum.applied++; outcomes.push(r.outcome); }
           };
 
@@ -168,19 +213,29 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
                   ? decode(html).toString('utf8')
                   : `<pre style="font:13px/1.4 sans-serif;white-space:pre-wrap">${esc(body)}</pre>`;
                 const stamped = `<div style="font:12px sans-serif;color:#555;border-bottom:1px solid #ddd;margin-bottom:12px;padding-bottom:6px">From: ${esc(from)}<br>Subject: ${esc(subject)}<br>Received: ${receivedAt?.toISOString().slice(0, 10) ?? ''}</div>${page}`;
-                await handle(await printToPdf(stamped), `${(subject || 'e-bill').replace(/[^\w .-]+/g, '').slice(0, 80)}.pdf`);
+                let pdf: Buffer;
+                try { pdf = await printToPdf(stamped); }
+                catch (e) {
+                  console.warn(`[InboxAgent] browser print failed (${e instanceof Error ? e.message.split('\n')[0] : e}); using a plain-text PDF`);
+                  browserP = null;
+                  pdf = await textToPdf(`From: ${from}\nSubject: ${subject}\nReceived: ${receivedAt?.toISOString().slice(0, 10) ?? ''}\n\n${body}`);
+                }
+                await handle(pdf, `${(subject || 'e-bill').replace(/[^\w .-]+/g, '').slice(0, 80)}.pdf`);
               } else outcomes.push('skipped');
             }
           } catch (err) {
             outcomes.push('error');
-            sum.errors.push(`${subject || messageId}: ${err instanceof Error ? err.message : String(err)}`);
+            const why = err instanceof Error ? err.message.split('\n')[0] : String(err);
+            problems.push(why);
+            sum.errors.push(`${subject || messageId}: ${why}`);
           }
 
           const best = ['filed', 'review', 'notice', 'policy', 'error'].find(o => outcomes.includes(o)) ?? 'skipped';
           if (best === 'skipped') sum.skipped++;
-          await record(best, outcomes.length > 1 ? outcomes.join(', ') : null, accountId);
+          // An error says why, so the log can be acted on.
+          await record(best, problems.length ? problems.join('; ') : outcomes.length > 1 ? outcomes.join(', ') : null, accountId);
         }
-        await db.gmailToken.update({ where: { id: token.id }, data: { lastScanAt: capped ? token.lastScanAt : startedAt, lastScanError: capped ? `Stopped at ${MAX_DOCUMENTS_PER_RUN} documents; the rest are read next run.` : null } });
+        await db.gmailToken.update({ where: { id: token.id }, data: { lastScanAt: capped ? token.lastScanAt : startedAt, lastScanError: capped ? `Stopped at ${perMailbox} documents; the rest are read next run (or press Sync now).` : null } });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         sum.errors.push(`${token.email}: ${message}`);
