@@ -20,11 +20,13 @@ import { intakeBill, type ReviewItem } from '../services/documentIntake';
 
 const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string }>;
 
-const FIRST_RUN_DAYS = 60;
+// How far back a newly connected mailbox is read, and how many documents
+// Claude reads per run. Kept small: every document is a paid read, and a
+// 60-day first read of two inboxes ran through a lot of credits. The rest of
+// a backlog is read on later runs. Both can be raised with env vars.
+const FIRST_RUN_DAYS = Number(process.env.INBOX_FIRST_RUN_DAYS) || 3;
 const MAX_MESSAGES_PER_MAILBOX = 200;
-// A ceiling on Claude reads per run, so a mailbox full of statements from a
-// backlog cannot run up a bill in one night. The rest are read next run.
-const MAX_DOCUMENTS_PER_RUN = 80;
+const MAX_DOCUMENTS_PER_RUN = Number(process.env.INBOX_MAX_DOCUMENTS_PER_RUN) || 25;
 
 const BILL_SUBJECT = /\b(bill|statement|invoice|payment (is )?due|amount due|balance due|past due|premium|renewal|notice|e-?bill|autopay|tax)\b/i;
 const PAYMENT_CONFIRMATION = /thank you for (your )?payment|payment (received|confirmation|processed|successful)|we received your payment|receipt for your payment/i;
@@ -139,7 +141,7 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
     // Each mailbox gets its own share of the run's document allowance. A
     // shared one let the first mailbox's backlog use all of it, and the
     // second was never read ("not read yet" for fhmtalukder@).
-    const perMailbox = Math.max(20, Math.floor(MAX_DOCUMENTS_PER_RUN / tokens.length));
+    const perMailbox = Math.max(5, Math.floor(MAX_DOCUMENTS_PER_RUN / tokens.length));
     for (const token of tokens) {
       const startedAt = new Date();
       const budgetEnd = documents + perMailbox;
@@ -159,7 +161,11 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
         // A message that failed is read again next run — the cause (a missing
         // browser, a timeout) is usually fixed by then. Everything else is
         // handled once.
-        const seen = new Set((await db.inboxMessage.findMany({ where: { gmailTokenId: token.id, messageId: { in: ids }, outcome: { not: 'error' } }, select: { messageId: true } })).map(m => m.messageId));
+        const prior = await db.inboxMessage.findMany({ where: { gmailTokenId: token.id, messageId: { in: ids } }, select: { messageId: true, outcome: true } });
+        const seen = new Set(prior.filter(m => m.outcome !== 'error').map(m => m.messageId));
+        // A message is retried once. If it fails again it is marked failed and
+        // left alone, so one bad email cannot cost a read every night.
+        const retrying = new Set(prior.filter(m => m.outcome === 'error').map(m => m.messageId));
         let capped = false;
 
         // Oldest first, so a backlog files in order and a cap leaves the newest for next run.
@@ -190,6 +196,7 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
             if (r.outcome === 'filed') { sum.filed++; accountId = r.utilityAccountId; outcomes.push('filed'); }
             else if (r.outcome === 'review') { sum.review++; review.push(r.reviewItem); outcomes.push('review'); }
             else if (r.outcome === 'error') { sum.errors.push(r.error); problems.push(r.error); outcomes.push('error'); }
+            else if (r.outcome === 'not_a_bill') { outcomes.push('skipped'); problems.length || problems.push('not a bill'); }
             else { sum.applied++; outcomes.push(r.outcome); }
           };
 
@@ -230,7 +237,8 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
             sum.errors.push(`${subject || messageId}: ${why}`);
           }
 
-          const best = ['filed', 'review', 'notice', 'policy', 'error'].find(o => outcomes.includes(o)) ?? 'skipped';
+          let best = ['filed', 'review', 'notice', 'policy', 'error'].find(o => outcomes.includes(o)) ?? 'skipped';
+          if (best === 'error' && retrying.has(messageId)) best = 'failed';
           if (best === 'skipped') sum.skipped++;
           // An error says why, so the log can be acted on.
           await record(best, problems.length ? problems.join('; ') : outcomes.length > 1 ? outcomes.join(', ') : null, accountId);

@@ -30,7 +30,8 @@ export type IntakeResult =
   | { outcome: 'notice' }
   | { outcome: 'policy' }
   | { outcome: 'review'; reviewItem: ReviewItem }
-  | { outcome: 'error'; error: string };
+  | { outcome: 'error'; error: string }
+  | { outcome: 'not_a_bill' };
 
 export function buildRawData(ex: Awaited<ReturnType<typeof parseBill>>['extracted'], source = 'drive_import') {
   const totalDue = (ex.currentCharges != null || ex.previousBalance != null)
@@ -69,6 +70,9 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
   // every bulk import silently bills per PDF regardless of what was picked.
   const parsed = await parseBill(buffer, filename, userId, method === 'ai' ? 'ai' : 'regex');
   const { extracted: ex, match } = parsed;
+
+  // Correspondence, a legal filing, a transfer receipt: nothing to file or review.
+  if (ex.documentKind === 'not_a_bill') return { outcome: 'not_a_bill' };
 
   let utilityAccountId = match.utilityAccountId;
   let autoCreated = false;
