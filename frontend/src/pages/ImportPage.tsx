@@ -1005,6 +1005,7 @@ function BillCard({
   pendingAccounts,
   onPickPending,
   onKeepMine,
+  onMarkCard,
 }: {
   bill:               ParsedBill;
   properties:         PropertyWithAccounts[];
@@ -1018,6 +1019,7 @@ function BillCard({
   pendingAccounts:    { key: string; propertyId: string; propertyLabel: string; account: NewAccountPayload }[];
   onPickPending:      (propertyId: string, account: NewAccountPayload) => void;
   onKeepMine:         (keep: boolean) => void;
+  onMarkCard:         (isCard: boolean) => void;
 }) {
   const { extracted: ex, match, error } = bill;
   const confColor = CONFIDENCE_COLORS[match.confidence];
@@ -1166,6 +1168,20 @@ function BillCard({
                 the API cannot open a PDF. That path produces no charge
                 breakdown and infers the billing period, so the bill lands
                 looking fine and is materially worse. Say so here. */}
+            {(bill.extracted as any)?.documentKind === 'credit_card_statement' ? (() => {
+              const cc = (bill.extracted as any).creditCard ?? {};
+              const last4 = String(cc.last4 ?? ex.accountNumber ?? '').replace(/\D/g, '').slice(-4);
+              return (
+                <p className="text-xs mt-1 text-emerald-400">
+                  Credit card statement: files to {cc.cardName ?? cc.issuer ?? ex.providerName ?? 'the card'}{last4 ? ` ••${last4}` : ''} under Personal → Credit cards, adding the card if Sollux doesn't have it.{' '}
+                  <button className="underline text-gray-500 hover:text-gray-300" onClick={() => onMarkCard(false)}>Not a card statement</button>
+                </p>
+              );
+            })() : match.confidence === 'none' && (
+              <p className="text-xs mt-1 text-gray-500">
+                <button className="underline hover:text-gray-300" onClick={() => onMarkCard(true)}>This is a credit card statement</button>
+              </p>
+            )}
             {(bill.extracted as any)?.documentKind === 'past_due_notice' && (
               <p className="text-xs mt-1 text-amber-400">
                 Past-due notice, not a bill — will attach its aging and shut-off date to the account instead of creating a statement
@@ -1548,6 +1564,8 @@ function BillCard({
 type Stage = 'drop' | 'analyzing' | 'review' | 'importing' | 'done';
 
 function isBillReady(bill: ParsedBill): boolean {
+  // A credit card statement files to its card, which is created if need be.
+  if ((bill.extracted as any)?.documentKind === 'credit_card_statement') return true;
   if (bill.match.utilityAccountId) return true;
   // Add account to existing property
   if (bill.addToPropertyId && bill.newAccount?.providerName) return true;
@@ -1757,6 +1775,12 @@ export default function ImportPage() {
         ? { ...b, match: { ...b.match, utilityAccountId: null }, newProperty: prop, newAccount: acct, addToPropertyId: undefined }
         : b
     ));
+  };
+
+  const handleMarkCard = (filename: string, isCard: boolean) => {
+    setBills(prev => prev.map(b => (b.filename === filename
+      ? { ...b, extracted: { ...b.extracted, documentKind: isCard ? 'credit_card_statement' : 'bill' } as ExtractedBill }
+      : b)));
   };
 
   const handleKeepMine = (filename: string, keep: boolean) => {
@@ -2135,6 +2159,7 @@ export default function ImportPage() {
                   pendingAccounts={getPendingAccounts(bill.filename)}
                   onPickPending={(propId, acct) => handleAddToProperty(bill.filename, propId, acct)}
                   onKeepMine={keep => handleKeepMine(bill.filename, keep)}
+                  onMarkCard={isCard => handleMarkCard(bill.filename, isCard)}
                 />
               ))}
             </div>

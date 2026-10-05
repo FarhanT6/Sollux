@@ -12,6 +12,7 @@ import { uploadDocument, buildStatementKey } from '../services/s3Service';
 import { attachDbUser } from '../middleware/requireAuth';
 import { db } from '../config/db';
 import { restoreLateFees } from '../services/lateFees';
+import { fileCardStatement } from '../services/cardIntake';
 import { compareWithOwner, keepOwnerFigures, ownerEntered } from '../services/statementConflict';
 
 const router = Router();
@@ -172,6 +173,13 @@ router.post('/confirm', async (req: Request, res: Response) => {
 
     for (const item of items) {
       try {
+        // A credit card statement goes to its card (created if Sollux does
+        // not have it), whatever account the card was left on.
+        if (item.extracted?.documentKind === 'credit_card_statement') {
+          await fileCardStatement(userId, item.extracted, item.fileData ? Buffer.from(item.fileData, 'base64') : null, item.filename);
+          imported++;
+          continue;
+        }
         let utilityAccountId = item.utilityAccountId;
         let propertyId: string | null = null;
 
