@@ -539,6 +539,7 @@ const OUTCOME_STYLE: Record<string, { label: string; cls: string }> = {
   notice: { label: 'Notice added', cls: 'text-blue-400' },
   policy: { label: 'Policy updated', cls: 'text-blue-400' },
   error:  { label: 'Error',        cls: 'text-red-400' },
+  failed: { label: 'Failed twice', cls: 'text-red-400' },
 };
 
 function InboxPanel({ onStreamStart, onBillStreamed }: {
@@ -631,7 +632,7 @@ function InboxPanel({ onStreamStart, onBillStreamed }: {
         <div>
           <p className="text-sm font-medium text-gray-200">Bills by email</p>
           <p className="text-xs text-gray-500 mt-0.5">
-            Read every night from {boxes.length} inbox{boxes.length === 1 ? '' : 'es'}. Last 30 days: {c.filed ?? 0} filed · {c.review ?? 0} to review · {(c.notice ?? 0) + (c.policy ?? 0)} notices/policies{c.error ? ` · ${c.error} errors` : ''}
+            Read every night from {boxes.length} inbox{boxes.length === 1 ? '' : 'es'}. Last 30 days: {c.filed ?? 0} filed · {c.review ?? 0} to review · {(c.notice ?? 0) + (c.policy ?? 0)} notices/policies{(c.error ?? 0) + (c.failed ?? 0) ? ` · ${(c.error ?? 0) + (c.failed ?? 0)} errors` : ''}
           </p>
         </div>
         <div className="flex gap-2">

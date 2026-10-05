@@ -188,7 +188,7 @@ export interface ExtractedBillData {
   /** 'past_due_notice' when the document is a dunning/disconnection notice
    *  rather than a bill — it demands an existing balance and bills nothing
    *  new, so it must never become a statement row. */
-  documentKind?:      'bill' | 'past_due_notice' | 'policy_document';
+  documentKind?:      'bill' | 'past_due_notice' | 'policy_document' | 'not_a_bill';
   lateFee:            number | null;
   usageValue:         number | null;
   usageUnit:          string | null;   // kWh, CCF, therms, gallons, etc.
@@ -277,7 +277,7 @@ Schema (use null for any field not present in the document):
   "penaltyDate": "YYYY-MM-DD" or null — the date a penalty or late fee applies if the bill is unpaid, when the bill states one ("Penalty Date", "Late after", "Penalty applies after"). This is often a day or two later than the due date; report what the bill says, not the due date,
   "amountAfterDueDate": number or null — what the bill says is payable if paid after the due date ("Amount due after 09/15/2026", "After Due Date Pay"). The difference between this and the amount due is the late fee this provider will charge,
   "agingBuckets": object or null — when the bill prints an aging table (commonly "Past Due | 30 Days | 60 Days | 90+ Days"), report it as {"current": n, "days30": n, "days60": n, "days90plus": n}, omitting any bucket the bill does not show. Report each bucket's own figure, not a running total,
-  "documentKind": "bill | past_due_notice | policy_document — 'policy_document' when the document describes an insurance policy and how it will be billed but does not itself bill a period: a renewal offer ('Your Auto Renewal Is All Set Up'), a welcome letter, a declarations page, an ID card, a payment-schedule notice. For it: fill 'insurance' (above) in full, put the document's own date in statementDate, and leave amountDue, currentCharges, previousBalance and dueDate null — its installments are in insurance.paymentSchedule. 'past_due_notice' ONLY when the document bills nothing new: it demands an already-overdue balance, shows no service period and no new charges. A regular invoice that carries a PAST DUE or suspension banner but also bills a new period's service is a 'bill', never a notice ('PAST DUE STATEMENT', 'FINAL NOTICE', 'service will be locked/disconnected'). For a notice: the demanded amount goes in previousBalance, currentCharges is null, any stated lock-up/disconnection or penalty date goes in penaltyDate, and its aging table in agingBuckets. Everything else is 'bill'",
+  "documentKind": "bill | past_due_notice | policy_document | not_a_bill — 'not_a_bill' when the document asks for no payment and is none of the kinds below: correspondence, a legal filing or court notice, a loan approval or title document, a money-transfer or payment receipt, a marketing email. For it, leave every amount null. Otherwise: 'policy_document' when the document describes an insurance policy and how it will be billed but does not itself bill a period: a renewal offer ('Your Auto Renewal Is All Set Up'), a welcome letter, a declarations page, an ID card, a payment-schedule notice. For it: fill 'insurance' (above) in full, put the document's own date in statementDate, and leave amountDue, currentCharges, previousBalance and dueDate null — its installments are in insurance.paymentSchedule. 'past_due_notice' ONLY when the document bills nothing new: it demands an already-overdue balance, shows no service period and no new charges. A regular invoice that carries a PAST DUE or suspension banner but also bills a new period's service is a 'bill', never a notice ('PAST DUE STATEMENT', 'FINAL NOTICE', 'service will be locked/disconnected'). For a notice: the demanded amount goes in previousBalance, currentCharges is null, any stated lock-up/disconnection or penalty date goes in penaltyDate, and its aging table in agingBuckets. Everything else is 'bill'",
   "chargeBreakdown": { "line item name": dollar_amount, ... } or null — every individual charge the bill itemises, using the bill's own wording as the key ({"Water": 118.53, "Sewer": 121.50} for a bill splitting the two). Include credits and discounts as negative values. This is how a total is explained later, so itemise whenever the bill does,
   "alerts": ["string", ...] — notable flags: past due, late fees, NSF, payment plan, high usage, leak, outage credit, SCRA, debt collection notice, legal action warning, etc.
 }
@@ -1392,6 +1392,9 @@ async function transcribeWithClaude(pdfBuffer: Buffer, filename: string): Promis
 export function billCheck(text: string): string | null {
   const d = jsonIn(text);
   if (!d) return 'no JSON in the answer';
+  // A document that is not a bill has no amount to read; asking the stronger
+  // model again only spends more on the same answer.
+  if (d.documentKind === 'not_a_bill') return null;
   const isBill = !d.documentKind || d.documentKind === 'bill';
   const amounts = [d.amountDue, d.currentCharges, d.statedTotalDue].filter((v: unknown) => typeof v === 'number') as number[];
   if (isBill && !amounts.length) return 'no amount read from a bill';
