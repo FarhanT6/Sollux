@@ -13,6 +13,7 @@ import { attachDbUser } from '../middleware/requireAuth';
 import { db } from '../config/db';
 import { restoreLateFees } from '../services/lateFees';
 import { fileCardStatement } from '../services/cardIntake';
+import { fileServiceInvoice } from '../services/expenseIntake';
 import { compareWithOwner, keepOwnerFigures, ownerEntered } from '../services/statementConflict';
 
 const router = Router();
@@ -141,6 +142,9 @@ interface ConfirmItem {
   ownerChose?:      boolean;
   /** The bill disagreed with a statement the owner entered by hand, and they chose to keep theirs. */
   keepMine?:        boolean;
+  /** A one-time invoice recorded as an expense: on this property (null = personal), in this category. */
+  expensePropertyId?: string | null;
+  expenseCategory?:   string | null;
 }
 
 router.post('/confirm', async (req: Request, res: Response) => {
@@ -175,6 +179,18 @@ router.post('/confirm', async (req: Request, res: Response) => {
       try {
         // A credit card statement goes to its card (created if Sollux does
         // not have it), whatever account the card was left on.
+        // A one-time invoice for work at a property: an expense on the property
+        // the owner chose on the card (or a personal expense with none).
+        if (item.extracted?.documentKind === 'service_invoice') {
+          if (item.expensePropertyId) {
+            const prop = await db.property.findFirst({ where: { id: item.expensePropertyId, userId }, select: { id: true } });
+            if (!prop) { errors.push(`${item.filename}: property not found`); continue; }
+          }
+          await fileServiceInvoice(userId, item.expensePropertyId ?? null, item.extracted, item.fileData ? Buffer.from(item.fileData, 'base64') : null, item.filename, item.expenseCategory);
+          imported++;
+          continue;
+        }
+        if (item.extracted?.documentKind === 'receipt' || item.extracted?.documentKind === 'estimate') { skipped++; continue; }
         if (item.extracted?.documentKind === 'credit_card_statement') {
           await fileCardStatement(userId, item.extracted, item.fileData ? Buffer.from(item.fileData, 'base64') : null, item.filename);
           imported++;

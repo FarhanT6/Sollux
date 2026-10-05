@@ -220,6 +220,8 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
             if (r.outcome === 'filed') { sum.filed++; accountId = r.utilityAccountId; outcomes.push('filed'); }
             else if (r.outcome === 'review') { sum.review++; review.push(r.reviewItem); outcomes.push('review'); }
             else if (r.outcome === 'error') { sum.errors.push(r.error); problems.push(r.error); outcomes.push('error'); }
+            else if (r.outcome === 'skipped') { outcomes.push('skipped'); skips.push(`${filename}: ${r.reason}`); }
+            else if (r.outcome === 'expense') { sum.filed++; outcomes.push('filed'); skips.push(r.duplicate ? 'expense already recorded' : 'recorded as an expense on the property'); }
             else if (r.outcome === 'card') { sum.filed++; outcomes.push('filed'); skips.push(`credit card ${r.cardName}${r.created ? ' (new card added)' : ''}`); }
             else if (r.outcome === 'not_a_bill') { outcomes.push('skipped'); skips.push(`${filename}: read, not a bill`); }
             else { sum.applied++; outcomes.push(r.outcome); }

@@ -83,6 +83,9 @@ interface ParsedBill {
   // When the bill disagrees with a statement the owner entered by hand:
   // keep the owner's figures (the default) or take the statement's.
   keepMine?: boolean;
+  // A one-time invoice: the property it is an expense of ('' = personal) and its category.
+  expensePropertyId?: string;
+  expenseCategory?: string;
 }
 
 interface SlimAccount {
@@ -993,6 +996,12 @@ function addBills(prev: ParsedBill[], incoming: ParsedBill[]): ParsedBill[] {
   return out;
 }
 
+const INVOICE_CATEGORIES: [string, string][] = [
+  ['REPAIRS_MAINTENANCE', 'Repairs & maintenance'], ['HANDYMAN', 'Handyman'], ['LANDSCAPING', 'Landscaping'], ['LEGAL', 'Legal'],
+  ['PROPERTY_MANAGEMENT', 'Property management'], ['CAPITAL_IMPROVEMENT', 'Capital improvement'], ['SUPPLIES', 'Supplies'],
+  ['PERMITS', 'Permits'], ['CITATIONS_FINES', 'Citations & fines'], ['ADVERTISING', 'Advertising'], ['OTHER', 'Other'],
+];
+
 function BillCard({
   bill,
   properties,
@@ -1005,7 +1014,8 @@ function BillCard({
   pendingAccounts,
   onPickPending,
   onKeepMine,
-  onMarkCard,
+  onSetKind,
+  onExpenseChoice,
 }: {
   bill:               ParsedBill;
   properties:         PropertyWithAccounts[];
@@ -1019,7 +1029,8 @@ function BillCard({
   pendingAccounts:    { key: string; propertyId: string; propertyLabel: string; account: NewAccountPayload }[];
   onPickPending:      (propertyId: string, account: NewAccountPayload) => void;
   onKeepMine:         (keep: boolean) => void;
-  onMarkCard:         (isCard: boolean) => void;
+  onSetKind:          (kind: string) => void;
+  onExpenseChoice:    (propertyId: string, category: string) => void;
 }) {
   const { extracted: ex, match, error } = bill;
   const confColor = CONFIDENCE_COLORS[match.confidence];
@@ -1168,20 +1179,46 @@ function BillCard({
                 the API cannot open a PDF. That path produces no charge
                 breakdown and infers the billing period, so the bill lands
                 looking fine and is materially worse. Say so here. */}
-            {(bill.extracted as any)?.documentKind === 'credit_card_statement' ? (() => {
-              const cc = (bill.extracted as any).creditCard ?? {};
-              const last4 = String(cc.last4 ?? ex.accountNumber ?? '').replace(/\D/g, '').slice(-4);
+            {/* What the document is decides where it goes. A bill the reader
+                took for a utility bill can be re-labelled here. */}
+            {(() => {
+              const kind = (bill.extracted as any)?.documentKind ?? 'bill';
+              const link = (k: string, label: string) => (
+                <button key={k} className="underline hover:text-gray-300 mr-3" onClick={() => onSetKind(k)}>{label}</button>
+              );
+              if (kind === 'credit_card_statement') {
+                const cc = (bill.extracted as any).creditCard ?? {};
+                const last4 = String(cc.last4 ?? ex.accountNumber ?? '').replace(/\D/g, '').slice(-4);
+                return (
+                  <p className="text-xs mt-1 text-emerald-400">
+                    Credit card statement: files to {cc.cardName ?? cc.issuer ?? ex.providerName ?? 'the card'}{last4 ? ` ••${last4}` : ''} under Personal → Credit cards, adding the card if Sollux doesn't have it.{' '}
+                    <span className="text-gray-500">{link('bill', 'It is a bill')}</span>
+                  </p>
+                );
+              }
+              if (kind === 'receipt' || kind === 'estimate') {
+                return (
+                  <p className="text-xs mt-1 text-gray-400">
+                    {kind === 'receipt' ? 'Receipt or subscription charge, already paid' : 'Estimate or quote, nothing owed yet'}: nothing to file; importing skips it.{' '}
+                    <span className="text-gray-500">{link('bill', 'It is a bill')}</span>
+                  </p>
+                );
+              }
+              if (kind === 'service_invoice') {
+                return (
+                  <p className="text-xs mt-1 text-emerald-400">
+                    One-time invoice: recorded as an expense, not a utility account.{' '}
+                    <span className="text-gray-500">{link('bill', 'It is a recurring bill')}</span>
+                  </p>
+                );
+              }
+              if (kind !== 'bill') return null;
               return (
-                <p className="text-xs mt-1 text-emerald-400">
-                  Credit card statement: files to {cc.cardName ?? cc.issuer ?? ex.providerName ?? 'the card'}{last4 ? ` ••${last4}` : ''} under Personal → Credit cards, adding the card if Sollux doesn't have it.{' '}
-                  <button className="underline text-gray-500 hover:text-gray-300" onClick={() => onMarkCard(false)}>Not a card statement</button>
+                <p className="text-xs mt-1 text-gray-500">
+                  Not a utility bill? {link('service_invoice', 'One-time invoice (expense)')}{link('credit_card_statement', 'Credit card statement')}{link('receipt', 'Receipt / subscription')}{link('estimate', 'Estimate')}
                 </p>
               );
-            })() : match.confidence === 'none' && (
-              <p className="text-xs mt-1 text-gray-500">
-                <button className="underline hover:text-gray-300" onClick={() => onMarkCard(true)}>This is a credit card statement</button>
-              </p>
-            )}
+            })()}
             {(bill.extracted as any)?.documentKind === 'past_due_notice' && (
               <p className="text-xs mt-1 text-amber-400">
                 Past-due notice, not a bill — will attach its aging and shut-off date to the account instead of creating a statement
@@ -1291,8 +1328,23 @@ function BillCard({
         </div>
       )}
 
+      {/* A one-time invoice: which property it is an expense of, and what kind. */}
+      {(bill.extracted as any)?.documentKind === 'service_invoice' && (
+        <div className="space-y-2 pt-2 border-t" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
+          <div className="grid grid-cols-2 gap-2">
+            <select className="input-dark text-xs" value={bill.expensePropertyId ?? match.propertyId ?? ''} onChange={e => onExpenseChoice(e.target.value, bill.expenseCategory ?? (bill.extracted as any).expenseCategory ?? 'REPAIRS_MAINTENANCE')}>
+              <option value="">Personal (no property)</option>
+              {properties.map(p => <option key={p.id} value={p.id}>{p.nickname || p.address}</option>)}
+            </select>
+            <select className="input-dark text-xs" value={bill.expenseCategory ?? (bill.extracted as any).expenseCategory ?? 'REPAIRS_MAINTENANCE'} onChange={e => onExpenseChoice(bill.expensePropertyId ?? match.propertyId ?? '', e.target.value)}>
+              {INVOICE_CATEGORIES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+        </div>
+      )}
+
       {/* Match status + account selector */}
-      <div className="space-y-2 pt-1 border-t" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
+      <div className="space-y-2 pt-1 border-t" style={{ borderColor: 'rgba(255,255,255,0.08)', display: ['service_invoice', 'receipt', 'estimate', 'credit_card_statement'].includes((bill.extracted as any)?.documentKind) ? 'none' : undefined }}>
         {/* Confidence / status badge */}
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: applied ? '#34d399' : confColor }} />
@@ -1565,7 +1617,9 @@ type Stage = 'drop' | 'analyzing' | 'review' | 'importing' | 'done';
 
 function isBillReady(bill: ParsedBill): boolean {
   // A credit card statement files to its card, which is created if need be.
-  if ((bill.extracted as any)?.documentKind === 'credit_card_statement') return true;
+  // A card statement files to its card; an invoice to the property chosen
+  // (or personal); a receipt or estimate is skipped. None needs an account.
+  if (['credit_card_statement', 'service_invoice', 'receipt', 'estimate'].includes((bill.extracted as any)?.documentKind)) return true;
   if (bill.match.utilityAccountId) return true;
   // Add account to existing property
   if (bill.addToPropertyId && bill.newAccount?.providerName) return true;
@@ -1777,10 +1831,15 @@ export default function ImportPage() {
     ));
   };
 
-  const handleMarkCard = (filename: string, isCard: boolean) => {
+  const handleSetKind = (filename: string, kind: string) => {
     setBills(prev => prev.map(b => (b.filename === filename
-      ? { ...b, extracted: { ...b.extracted, documentKind: isCard ? 'credit_card_statement' : 'bill' } as ExtractedBill }
+      ? { ...b, extracted: { ...b.extracted, documentKind: kind } as ExtractedBill,
+          // An invoice starts on the property the bill's address matched.
+          ...(kind === 'service_invoice' && b.expensePropertyId === undefined ? { expensePropertyId: b.match.propertyId ?? '' } : {}) }
       : b)));
+  };
+  const handleExpenseChoice = (filename: string, propertyId: string, category: string) => {
+    setBills(prev => prev.map(b => (b.filename === filename ? { ...b, expensePropertyId: propertyId, expenseCategory: category } : b)));
   };
 
   const handleKeepMine = (filename: string, keep: boolean) => {
@@ -1922,6 +1981,8 @@ export default function ImportPage() {
       // Never overwrite the owner's own figures without their say: a
       // disagreement keeps theirs unless they chose the statement's.
       keepMine:         !!b.match.conflict && b.match.utilityAccountId === b.match.conflict.utilityAccountId && (b.keepMine ?? true),
+      expensePropertyId: (b.extracted as any)?.documentKind === 'service_invoice' ? ((b.expensePropertyId ?? b.match.propertyId ?? '') || null) : undefined,
+      expenseCategory:   (b.extracted as any)?.documentKind === 'service_invoice' ? (b.expenseCategory ?? (b.extracted as any).expenseCategory ?? 'REPAIRS_MAINTENANCE') : undefined,
     });
 
     // Submit in batches rather than one request. Every item carries its PDF as
@@ -2159,7 +2220,8 @@ export default function ImportPage() {
                   pendingAccounts={getPendingAccounts(bill.filename)}
                   onPickPending={(propId, acct) => handleAddToProperty(bill.filename, propId, acct)}
                   onKeepMine={keep => handleKeepMine(bill.filename, keep)}
-                  onMarkCard={isCard => handleMarkCard(bill.filename, isCard)}
+                  onSetKind={kind => handleSetKind(bill.filename, kind)}
+                  onExpenseChoice={(propId, cat) => handleExpenseChoice(bill.filename, propId, cat)}
                 />
               ))}
             </div>
