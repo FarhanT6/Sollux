@@ -975,6 +975,24 @@ function AddAccountForm({
 
 type CardMode = 'select' | 'add-existing' | 'new';
 
+/**
+ * Adds bills to the review, giving each a name no other card has. Cards are
+ * keyed and edited by file name, and email bills often share one ("Your
+ * Account Statement Is Now Available.pdf" three times from one sender):
+ * assigning one card assigned them all, and its × removed the wrong one.
+ */
+function addBills(prev: ParsedBill[], incoming: ParsedBill[]): ParsedBill[] {
+  const taken = new Set(prev.map(b => b.filename));
+  const out = [...prev];
+  for (const b of incoming) {
+    let name = b.filename;
+    for (let n = 2; taken.has(name); n++) name = b.filename.replace(/(\.[a-z0-9]+)?$/i, m => ` (${n})${m}`);
+    taken.add(name);
+    out.push(name === b.filename ? b : { ...b, filename: name });
+  }
+  return out;
+}
+
 function BillCard({
   bill,
   properties,
@@ -1687,10 +1705,10 @@ export default function ImportPage() {
           if (event.type === 'bill') {
             counted++;
             setProgress(`Analyzed ${counted} / ${files.length} files...`);
-            setBills(prev => [...prev, {
+            setBills(prev => addBills(prev, [{
               ...event,
               fileData: dataByName[event.filename] ?? '',
-            }]);
+            }]));
           } else if (event.type === 'done') {
             finished = true;
             setProperties(event.properties);
@@ -1820,7 +1838,7 @@ export default function ImportPage() {
       return;
     }
     // Fallback non-streaming path
-    setBills(prev => [...prev, ...driveBills]);
+    setBills(prev => addBills(prev, driveBills));
     setProperties(props);
     setDriveNote(
       autoImported > 0
@@ -1841,7 +1859,7 @@ export default function ImportPage() {
   };
 
   const handleDriveBillStreamed = (bill: ParsedBill) => {
-    setBills(prev => [...prev, bill]);
+    setBills(prev => addBills(prev, [bill]));
   };
 
   const handleDriveProgress = (done: number, total: number) => {
