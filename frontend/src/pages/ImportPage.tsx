@@ -1,6 +1,8 @@
 import { useCallback, useState, useRef, useEffect } from 'react';
 import { openOAuth } from '../lib/native';
 import { format } from 'date-fns';
+import { fmtDate } from '../lib/date';
+import { fmtMoney } from '../lib/money';
 import { PageHeader } from '../components/ui';
 import api, { getDriveStatus, getDriveConnectUrl, getDriveAccessToken, startDriveImport, getDriveImportJob, getProperties, getGmailStatus, getGmailConnectUrl, getInboxActivity, syncInbox, markInboxReviewed, type GmailMailbox, type InboxActivity } from '../api/client';
 import type { Property, UtilityCategory } from '../types';
@@ -38,6 +40,9 @@ interface MatchResult {
   propertyName:     string | null;
   providerName:     string | null;
   candidates?:      { utilityAccountId: string; label: string }[];
+  // The account already has a statement for this period that the owner
+  // entered by hand, with a different amount.
+  conflict?:        { utilityAccountId: string; statementId: string; statementDate: string; ownerAmount: number; statementAmount: number } | null;
 }
 
 interface NewPropertyPayload {
@@ -75,6 +80,9 @@ interface ParsedBill {
   // The owner picked the account themselves: the server files it there even
   // when the bill's account number differs (a renewed policy, a new number).
   ownerChose?: boolean;
+  // When the bill disagrees with a statement the owner entered by hand:
+  // keep the owner's figures (the default) or take the statement's.
+  keepMine?: boolean;
 }
 
 interface SlimAccount {
@@ -933,6 +941,7 @@ function BillCard({
   onApplyTo,
   pendingAccounts,
   onPickPending,
+  onKeepMine,
 }: {
   bill:               ParsedBill;
   properties:         PropertyWithAccounts[];
@@ -945,6 +954,7 @@ function BillCard({
   // Accounts other cards in this batch are about to create.
   pendingAccounts:    { key: string; propertyId: string; propertyLabel: string; account: NewAccountPayload }[];
   onPickPending:      (propertyId: string, account: NewAccountPayload) => void;
+  onKeepMine:         (keep: boolean) => void;
 }) {
   const { extracted: ex, match, error } = bill;
   const confColor = CONFIDENCE_COLORS[match.confidence];
@@ -1372,6 +1382,29 @@ function BillCard({
                     </p>
                   );
                 })()}
+                {/* The owner entered this period by hand and the bill reads a
+                    different amount: their figures stay unless they choose the
+                    statement's. */}
+                {match.conflict && selectedAcctId === match.conflict.utilityAccountId && (() => {
+                  const keep = bill.keepMine ?? true;
+                  const c = match.conflict;
+                  const btn = (on: boolean) => ({ background: on ? 'rgba(245,166,35,0.18)' : 'rgba(255,255,255,0.06)', border: `1px solid ${on ? 'rgba(245,166,35,0.6)' : 'rgba(255,255,255,0.12)'}` });
+                  return (
+                    <div className="rounded-lg px-3 py-2 text-xs" style={{ background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.3)' }}>
+                      <p className="text-amber-300 mb-1.5">
+                        You entered {fmtMoney(c.ownerAmount)} for the {fmtDate(c.statementDate, 'MMM d, yyyy')} statement; this bill reads {fmtMoney(c.statementAmount)}. Which is right?
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        <button onClick={() => onKeepMine(true)} className="px-2 py-1 rounded-md text-gray-200" style={btn(keep)}>
+                          Keep mine ({fmtMoney(c.ownerAmount)}) — attach the PDF
+                        </button>
+                        <button onClick={() => onKeepMine(false)} className="px-2 py-1 rounded-md text-gray-200" style={btn(!keep)}>
+                          Use the statement ({fmtMoney(c.statementAmount)})
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
                 {/* More than one account with this provider at the bill's
                     address: the importer will not guess, so offer the choice. */}
                 {/* Or no number to match on (an agreement, a screenshot, a notice):
@@ -1663,6 +1696,10 @@ export default function ImportPage() {
     ));
   };
 
+  const handleKeepMine = (filename: string, keep: boolean) => {
+    setBills(prev => prev.map(b => (b.filename === filename ? { ...b, keepMine: keep } : b)));
+  };
+
   const handleRemove = (filename: string) => {
     setBills(prev => prev.filter(b => b.filename !== filename));
   };
@@ -1795,6 +1832,9 @@ export default function ImportPage() {
       // An uncertain match the owner reviewed and imported is their choice too;
       // only a confident automatic match is held to the bill's account number.
       ownerChose:       b.ownerChose ?? (b.match.confidence !== 'high'),
+      // Never overwrite the owner's own figures without their say: a
+      // disagreement keeps theirs unless they chose the statement's.
+      keepMine:         !!b.match.conflict && b.match.utilityAccountId === b.match.conflict.utilityAccountId && (b.keepMine ?? true),
     });
 
     // Submit in batches rather than one request. Every item carries its PDF as
@@ -2031,6 +2071,7 @@ export default function ImportPage() {
                   onApplyTo={targets => handleApplyTo(bill, targets)}
                   pendingAccounts={getPendingAccounts(bill.filename)}
                   onPickPending={(propId, acct) => handleAddToProperty(bill.filename, propId, acct)}
+                  onKeepMine={keep => handleKeepMine(bill.filename, keep)}
                 />
               ))}
             </div>

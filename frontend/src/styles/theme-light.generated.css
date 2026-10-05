@@ -74,6 +74,7 @@ html[data-theme="light"] [class~="text-orange-400"] { color: #c2410c !important;
 html[data-theme="light"] [class~="text-purple-300"] { color: #6d28d9 !important; }
 html[data-theme="light"] [class~="text-red-300"] { color: #b91c1c !important; }
 html[data-theme="light"] [class~="text-red-400"] { color: #b91c1c !important; }
+html[data-theme="light"] [class~="text-red-400/80"] { color: #b91c1c !important; }
 html[data-theme="light"] [class~="text-red-500"] { color: #b91c1c !important; }
 html[data-theme="light"] [class~="text-red-500/70"] { color: #b91c1c !important; }
 html[data-theme="light"] [class~="text-red-600"] { color: #991b1b !important; }

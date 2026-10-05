@@ -15,6 +15,7 @@ import { decrypt } from '../crypto/encrypt';
 import { syncLoanFromComponents } from './loanComponents';
 import { Prisma } from '@prisma/client';
 import { flattenFormFields, layoutText } from './pdfForms';
+import { compareWithOwner, type StatementConflict } from './statementConflict';
 
 // Read the API key directly from the .env file — reliable regardless of
 // process.cwd() or ESM vs CJS module context (dotenv uses cwd which can vary).
@@ -216,6 +217,9 @@ export interface MatchResult {
   providerName:     string | null;
   /** When more than one account could be the bill's, the ones to choose between. */
   candidates?:      { utilityAccountId: string; label: string }[];
+  /** The account already has a statement for this period that the owner
+   *  entered by hand, with a different amount (see statementConflict.ts). */
+  conflict?:        StatementConflict | null;
 }
 
 export interface ParsedBill {
@@ -3676,6 +3680,14 @@ export async function parseBill(
     sanitiseCurrentCharges(extracted);
     derivePaymentPlanFromBreakdown(extracted);
     const match     = await matchToAccount(extracted, userId);
+    // A bill for a period the owner entered by hand, with a different
+    // amount, waits for the owner's choice instead of overwriting it.
+    if (match.utilityAccountId && (extracted.documentKind ?? 'bill') === 'bill') {
+      try {
+        const cmp = await compareWithOwner(match.utilityAccountId, extracted);
+        if (cmp.kind === 'conflict') match.conflict = cmp.conflict;
+      } catch { /* the comparison is advisory */ }
+    }
     return { filename, extracted, match, extractedBy, extractionNote };
   } catch (err) {
     console.error(`[PDFImport] Error parsing ${filename}:`, err instanceof Error ? err.message : err);

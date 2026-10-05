@@ -1563,6 +1563,11 @@ export default function UtilityDetailPage() {
                             </details>
                           );
                         })()}
+                        {/* The owner kept their own amount over what an imported
+                            statement read; say what it read. */}
+                        {typeof (s.rawDataJson as any)?.statementSaid === 'number' && (
+                          <p className="text-xs text-gray-500 mt-0.5">Statement read {fmtMoney((s.rawDataJson as any).statementSaid)} · you kept your amount</p>
+                        )}
                         {/* The statement's own transaction table — payments,
                             fees and reversals since the last statement — as
                             printed. */}

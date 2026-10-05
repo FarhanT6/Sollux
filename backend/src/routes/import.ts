@@ -12,6 +12,7 @@ import { uploadDocument, buildStatementKey } from '../services/s3Service';
 import { attachDbUser } from '../middleware/requireAuth';
 import { db } from '../config/db';
 import { restoreLateFees } from '../services/lateFees';
+import { compareWithOwner, keepOwnerFigures, ownerEntered } from '../services/statementConflict';
 
 const router = Router();
 
@@ -137,6 +138,8 @@ interface ConfirmItem {
   newAccount?:      NewAccountPayload;
   /** The owner picked this account on the card, rather than accepting the importer's match. */
   ownerChose?:      boolean;
+  /** The bill disagreed with a statement the owner entered by hand, and they chose to keep theirs. */
+  keepMine?:        boolean;
 }
 
 router.post('/confirm', async (req: Request, res: Response) => {
@@ -654,6 +657,19 @@ router.post('/confirm', async (req: Request, res: Response) => {
         const trueUpFields = nem
           ? { trueUpDeferred: nem.deferred, trueUpBalance: nem.ytdBalance, trueUpDate: nem.trueUpDate ? new Date(nem.trueUpDate) : null }
           : {};
+
+        // A period the owner entered by hand keeps their figures when the
+        // bill agrees, or when they chose "Keep mine" on the card; the PDF,
+        // charge list and payments it lists are added either way.
+        if (existing && (item.keepMine || (ownerEntered(existing) && (await compareWithOwner(utilityAccountId, ex, existing)).kind === 'same'))) {
+          await keepOwnerFigures(existing, ex, buildRawData(ex, item.extractedBy), pdfS3Key ?? null);
+          await recordConfirmedPayment(utilityAccountId, existing.id, ex);
+          await syncPaymentPlanFromBill(utilityAccountId, ex);
+          await syncInsurancePolicyFromBill(utilityAccountId, ex);
+          await syncLoanComponentsFromBill(utilityAccountId, ex);
+          skipped++;
+          continue;
+        }
 
         // A paid mark the bill itself put there — the old reading's amount,
         // paid in full, with no owner override — goes when the re-read

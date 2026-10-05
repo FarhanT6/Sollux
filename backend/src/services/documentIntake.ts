@@ -9,6 +9,7 @@
 import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { restoreLateFees } from './lateFees';
+import { compareWithOwner, keepOwnerFigures, ownerEntered } from './statementConflict';
 import { markEscrowedStatements } from './escrow';
 import { settleInFull, applyPolicyDocument, recordConfirmedPayment, syncPaymentPlanFromBill, syncInsurancePolicyFromBill, syncLoanComponentsFromBill, applyPastDueNotice, parseBill } from './pdfImportService';
 import { findOrCreateUtilityAccount } from './utilityAccountResolver';
@@ -148,9 +149,26 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
       });
     }
 
+    // The owner entered this period by hand: a different amount waits for
+    // their choice; the same amount keeps their figures and adds the PDF.
+    const ownerCheck = existing && ownerEntered(existing) ? await compareWithOwner(acct.id, ex, existing) : null;
+    if (ownerCheck?.kind === 'conflict') {
+      const pendingKey = `pending-review/${userId}/${batchId}/${sanitizeFilename(filename)}`;
+      await uploadDocument(pendingKey, buffer);
+      return { outcome: 'review', reviewItem: { filename, s3Key: pendingKey, extracted: ex, match: { ...match, conflict: ownerCheck.conflict } } };
+    }
+
     const key = buildStatementKey(userId, acct.propertyId, acct.id, statementDate, sanitizeFilename(filename));
     const pdfS3Key = await uploadDocument(key, buffer);
     const rawData = buildRawData(ex, source);
+    if (existing && ownerCheck?.kind === 'same') {
+      await keepOwnerFigures(existing, ex, rawData, pdfS3Key);
+      await recordConfirmedPayment(acct.id, existing.id, ex);
+      await syncPaymentPlanFromBill(acct.id, ex);
+      await syncInsurancePolicyFromBill(acct.id, ex);
+      await syncLoanComponentsFromBill(acct.id, ex);
+      return { outcome: 'filed', utilityAccountId: acct.id };
+    }
     // amountDue = current period charges only; balance = full amount owed.
     const amountDueCurrent = ex.currentCharges ?? ex.amountDue;
     const totalBalance = rawData.totalDue ?? amountDueCurrent;

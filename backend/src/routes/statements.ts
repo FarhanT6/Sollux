@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../config/db';
+import { Prisma } from '@prisma/client';
 import { attachDbUser } from '../middleware/requireAuth';
 import { getSignedDocumentUrl } from '../services/s3Service';
 
@@ -198,9 +199,16 @@ router.patch('/:id', async (req, res, next) => {
       statementDate: z.string().optional().transform(s => (s ? new Date(s) : undefined)),
     }).partial().parse(req.body);
 
+    // The owner's own figures: an import for this period compares against
+    // them instead of overwriting them (services/statementConflict.ts).
+    const figures = ['amountDue', 'dueDate', 'chargesExcludingFees', 'penaltiesFees', 'pastDueCarried'] as const;
+    const editedFigures = figures.some(f => (data as any)[f] !== undefined);
+    const raw = statement.rawDataJson && typeof statement.rawDataJson === 'object' && !Array.isArray(statement.rawDataJson) ? statement.rawDataJson as Record<string, unknown> : null;
+
     const updated = await db.statement.update({
       where: { id: req.params.id },
       data: {
+        ...(editedFigures && raw ? { rawDataJson: { ...raw, ownerEditedAt: new Date().toISOString() } as Prisma.InputJsonValue } : {}),
         ...(data.statementDate !== undefined && { statementDate: data.statementDate }),
         ...(data.dueDate !== undefined && { dueDate: data.dueDate }),
         ...(data.amountDue !== undefined && { amountDue: data.amountDue, balance: data.amountDue }),
