@@ -3,6 +3,7 @@ import { google, drive_v3 } from 'googleapis';
 import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { restoreLateFees } from '../services/lateFees';
+import { compareWithOwner, keepOwnerFigures, ownerEntered } from '../services/statementConflict';
 import { attachDbUser } from '../middleware/requireAuth';
 import { getSignedDocumentUrl, downloadDocument, uploadDocument, buildStatementKey } from '../services/s3Service';
 import { markEscrowedStatements } from '../services/escrow';
@@ -340,6 +341,15 @@ router.post('/stream', attachDbUser, async (req, res) => {
               });
             }
 
+            // The owner entered this period by hand: a different amount goes to
+            // the review card for their choice; the same amount keeps their
+            // figures and adds the PDF (services/statementConflict.ts).
+            const ownerCheck = existing && ownerEntered(existing) ? await compareWithOwner(acct.id, ex, existing) : null;
+            if (ownerCheck?.kind === 'conflict') {
+              send({ type: 'bill', ...parsed, match: { ...parsed.match, conflict: ownerCheck.conflict }, fileData: buffer.toString('base64') });
+              return;
+            }
+
             const s3Key = buildStatementKey(userId, acct.propertyId, acct.id, statementDate, sanitizeFilename(file.name));
             const pdfS3Key = await uploadDocument(s3Key, buffer);
 
@@ -386,7 +396,13 @@ router.post('/stream', attachDbUser, async (req, res) => {
             const amountPaidValue = ex.isPaid ? (totalDue ?? amountDueCurrent ?? null) : null;
             const legacyDerivedPaid = ex.paymentsReceived != null ? Number(ex.paymentsReceived) : null;
 
-            if (existing) {
+            if (existing && ownerCheck?.kind === 'same') {
+              await keepOwnerFigures(existing, ex, rawData, pdfS3Key);
+              await recordConfirmedPayment(acct.id, existing.id, ex);
+              await syncPaymentPlanFromBill(acct.id, ex);
+              await syncInsurancePolicyFromBill(acct.id, ex);
+              await syncLoanComponentsFromBill(acct.id, ex);
+            } else if (existing) {
               await db.statement.update({ where: { id: existing.id }, data: {
                 statementDate,
                 amountDue: amountDueCurrent ?? existing.amountDue,
