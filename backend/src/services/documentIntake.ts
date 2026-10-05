@@ -10,6 +10,7 @@ import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { restoreLateFees } from './lateFees';
 import { fileCardStatement } from './cardIntake';
+import { fileServiceInvoice, invoiceAmount } from './expenseIntake';
 import { compareWithOwner, keepOwnerFigures, ownerEntered } from './statementConflict';
 import { markEscrowedStatements } from './escrow';
 import { settleInFull, applyPolicyDocument, recordConfirmedPayment, syncPaymentPlanFromBill, syncInsurancePolicyFromBill, syncLoanComponentsFromBill, applyPastDueNotice, parseBill } from './pdfImportService';
@@ -33,7 +34,9 @@ export type IntakeResult =
   | { outcome: 'review'; reviewItem: ReviewItem }
   | { outcome: 'error'; error: string }
   | { outcome: 'not_a_bill' }
-  | { outcome: 'card'; cardId: string; cardName: string; created: boolean };
+  | { outcome: 'card'; cardId: string; cardName: string; created: boolean }
+  | { outcome: 'skipped'; reason: string }
+  | { outcome: 'expense'; expenseId: string; duplicate: boolean };
 
 export function buildRawData(ex: Awaited<ReturnType<typeof parseBill>>['extracted'], source = 'drive_import') {
   const totalDue = (ex.currentCharges != null || ex.previousBalance != null)
@@ -75,6 +78,22 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
 
   // Correspondence, a legal filing, a transfer receipt: nothing to file or review.
   if (ex.documentKind === 'not_a_bill') return { outcome: 'not_a_bill' };
+  // Already paid, or nothing owed yet: nothing to file and nothing to review.
+  if (ex.documentKind === 'receipt') return { outcome: 'skipped', reason: 'receipt or subscription charge (already paid)' };
+  if (ex.documentKind === 'estimate') return { outcome: 'skipped', reason: 'estimate or quote (nothing owed yet)' };
+  // A one-time invoice for work at a property is an expense there, not a
+  // utility account. With no property to put it on, the owner picks one.
+  if (ex.documentKind === 'service_invoice') {
+    if (!invoiceAmount(ex)) return { outcome: 'skipped', reason: 'invoice shows nothing owed' };
+    if (match.propertyId) {
+      const r = await fileServiceInvoice(userId, match.propertyId, ex, buffer, filename);
+      return { outcome: 'expense', expenseId: r.expenseId, duplicate: r.duplicate };
+    }
+    const pendingKey = `pending-review/${userId}/${batchId}/${sanitizeFilename(filename)}`;
+    await uploadDocument(pendingKey, buffer);
+    return { outcome: 'review', reviewItem: { filename, s3Key: pendingKey, extracted: ex, match } };
+  }
+
   // A credit card statement goes to its card (Personal → Credit cards),
   // which is created if Sollux does not have it yet.
   if (ex.documentKind === 'credit_card_statement') {

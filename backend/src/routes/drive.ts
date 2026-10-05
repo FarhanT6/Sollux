@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { restoreLateFees } from '../services/lateFees';
 import { fileCardStatement } from '../services/cardIntake';
+import { fileServiceInvoice, invoiceAmount } from '../services/expenseIntake';
 import { compareWithOwner, keepOwnerFigures, ownerEntered } from '../services/statementConflict';
 import { attachDbUser } from '../middleware/requireAuth';
 import { getSignedDocumentUrl, downloadDocument, uploadDocument, buildStatementKey } from '../services/s3Service';
@@ -256,7 +257,10 @@ router.post('/stream', attachDbUser, async (req, res) => {
         // Property matched but no account for this utility yet. Goes through
         // the resolver rather than creating directly: these files are processed
         // concurrently, and a bare create-per-file gives one account per bill.
-        if (!utilityAccountId && match.method === 'property_exists_no_account' && match.propertyId) {
+        // Only a utility-style bill gets an account created for it; an invoice,
+        // receipt, estimate or card statement is filed elsewhere below.
+        const notUtility = ['service_invoice', 'receipt', 'estimate', 'credit_card_statement', 'not_a_bill'].includes(ex.documentKind ?? '');
+        if (!utilityAccountId && !notUtility && match.method === 'property_exists_no_account' && match.propertyId) {
           const acct = await findOrCreateUtilityAccount({
             propertyId: match.propertyId,
             providerName: ex.providerName,
@@ -266,6 +270,19 @@ router.post('/stream', attachDbUser, async (req, res) => {
           utilityAccountId = acct.id;
         }
 
+        // Already paid or nothing owed yet: nothing to file.
+        if (ex.documentKind === 'receipt' || ex.documentKind === 'estimate') {
+          send({ type: 'auto_imported', filename: file.name, note: ex.documentKind === 'receipt' ? 'receipt — already paid, skipped' : 'estimate — nothing owed yet, skipped' });
+          return;
+        }
+        // A one-time invoice for work at a property: an expense there. With no
+        // property matched it goes to review, where the owner picks one.
+        if (ex.documentKind === 'service_invoice' && match.propertyId && invoiceAmount(ex)) {
+          const r = await fileServiceInvoice(userId, match.propertyId, ex, buffer, file.name);
+          autoImported++;
+          send({ type: 'auto_imported', filename: file.name, note: r.duplicate ? 'expense already recorded' : 'recorded as an expense' });
+          return;
+        }
         // A credit card statement goes to its card, created if need be.
         if (ex.documentKind === 'credit_card_statement') {
           const r = await fileCardStatement(userId, ex, buffer, file.name);
