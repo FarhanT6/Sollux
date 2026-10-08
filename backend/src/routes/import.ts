@@ -14,7 +14,7 @@ import { db } from '../config/db';
 import { restoreLateFees } from '../services/lateFees';
 import { fileCardStatement } from '../services/cardIntake';
 import { fileServiceInvoice } from '../services/expenseIntake';
-import { compareWithOwner, keepOwnerFigures, ownerEntered } from '../services/statementConflict';
+import { compareWithOwner, keepOwnerFigures, ownerEntered, sameBillByDue, thinnerThan } from '../services/statementConflict';
 
 const router = Router();
 
@@ -681,6 +681,15 @@ router.post('/confirm', async (req: Request, res: Response) => {
         const trueUpFields = nem
           ? { trueUpDeferred: nem.deferred, trueUpBalance: nem.ytdBalance, trueUpDate: nem.trueUpDate ? new Date(nem.trueUpDate) : null }
           : {};
+
+        // A "your bill is ready" email and the PDF statement are one bill;
+        // a reading thinner than what is on file only confirms it.
+        if (!existing) existing = await sameBillByDue(utilityAccountId, ex);
+        if (existing && thinnerThan(ex, existing)) {
+          await recordConfirmedPayment(utilityAccountId, existing.id, ex);
+          skipped++;
+          continue;
+        }
 
         // A period the owner entered by hand keeps their figures when the
         // bill agrees, or when they chose "Keep mine" on the card; the PDF,

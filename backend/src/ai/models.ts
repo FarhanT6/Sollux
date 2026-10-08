@@ -55,7 +55,15 @@ const textOf = (m: Anthropic.Message) => m.content.map(c => (c.type === 'text' ?
 
 async function once(client: Anthropic, model: string, o: AskOptions): Promise<{ text: string; problem: string | null }> {
   const started = Date.now();
-  const res = await client.messages.create(paramsFor(model, o), { timeout: model === PRIMARY_MODEL ? PRIMARY_TIMEOUT_MS : FALLBACK_TIMEOUT_MS, maxRetries: 1 });
+  // Streamed, then collected. The SDK refuses a non-streamed request whose
+  // max_tokens could take over ten minutes ("Streaming is required…"):
+  // a credit card statement read with every transaction (32k tokens, 48k on
+  // the fallback) failed on both models. A long answer also needs longer
+  // than the usual two minutes, so the timeout grows with the room asked for.
+  const params = paramsFor(model, o);
+  const base = model === PRIMARY_MODEL ? PRIMARY_TIMEOUT_MS : FALLBACK_TIMEOUT_MS;
+  const timeout = Math.max(base, params.max_tokens * 15);
+  const res = await client.messages.stream(params, { timeout, maxRetries: 1 }).finalMessage();
   console.log(`[Claude] ${o.label ?? 'request'}: ${model} ${Math.round((Date.now() - started) / 100) / 10}s, ${res.usage.input_tokens} in / ${res.usage.output_tokens} out`);
   const text = textOf(res);
   if (res.stop_reason === 'refusal') return { text, problem: 'refused' };
