@@ -6,6 +6,7 @@ import './gmailWorker';
 import './driveImportWorker';
 import { scrapeQueue, insightQueue, gmailQueue } from './queues';
 import { db } from '../config/db';
+import { runNoticeReminders } from '../services/noticeTracker';
 import { decrypt } from '../crypto/encrypt';
 import { runDailyBalanceSnapshot } from './balanceSnapshotWorker';
 import { syncAllWatchedAccounts } from '../services/transactionMatchService';
@@ -115,6 +116,19 @@ setTimeout(() => {
   if (first <= new Date()) first.setDate(first.getDate() + 1);
   setTimeout(() => { queueIt(); setInterval(queueIt, 24 * 60 * 60 * 1000); }, first.getTime() - Date.now());
   console.log(`[Bookkeeper] Scheduled — next run at ${first.toLocaleString()}`);
+})();
+
+// Shut-off and cancellation notices: close the ones payments now cover and
+// remind about the rest, every morning at 8am Pacific (15:00 UTC).
+(function scheduleNoticeReminders() {
+  const run = () => runNoticeReminders()
+    .then(r => console.log(`[Notices] ${r.reminded} reminded, ${r.resolved} resolved by payments`))
+    .catch(err => console.warn('[Notices] reminders failed:', err instanceof Error ? err.message : err));
+  const first = new Date();
+  first.setUTCHours(15, 0, 0, 0);
+  if (first <= new Date()) first.setUTCDate(first.getUTCDate() + 1);
+  setTimeout(() => { run(); setInterval(run, 24 * 60 * 60 * 1000); }, first.getTime() - Date.now());
+  console.log(`[Notices] Reminders scheduled — next run at ${first.toISOString()}`);
 })();
 
 // The inbox agent reads every connected mailbox nightly at 1am, ahead of

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../config/db';
 import { applyLateFee } from '../services/lateFees';
+import { resolveAccountNotices } from '../services/noticeTracker';
 import { attachDbUser } from '../middleware/requireAuth';
 import { allocateAccountPayments } from '../lib/paymentAllocation';
 import { applyPaymentToPlan, unapplyPaymentFromPlan, applyPaymentToLoan, unapplyPaymentFromLoan } from '../services/planApplication';
@@ -180,6 +181,7 @@ router.post('/split', async (req, res, next) => {
       const loanApplied = await applyPaymentToLoan(payment.id);
       created.push({ ...payment, planApplied: planApplied > 0 ? planApplied : null, loanApplied: loanApplied > 0 ? loanApplied : null });
     }
+    await resolveAccountNotices(data.utilityAccountId).catch(() => {});
     res.status(201).json(created);
   } catch (err) {
     next(err);
@@ -219,6 +221,8 @@ router.post('/', async (req, res, next) => {
     const planApplied = await applyPaymentToPlan(payment.id);
     const loanApplied = await applyPaymentToLoan(payment.id);
 
+    // A payment can settle a shut-off notice on the account.
+    await resolveAccountNotices(fields.utilityAccountId).catch(() => {});
     res.status(201).json({ ...payment, planApplied: planApplied > 0 ? planApplied : null, loanApplied: loanApplied > 0 ? loanApplied : null });
   } catch (err) {
     next(err);

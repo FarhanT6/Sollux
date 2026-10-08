@@ -1,3 +1,4 @@
+import UrgentNotices from '../components/UrgentNotices';
 import { useEffect, useState, useMemo } from 'react';
 import PortalCodeBanner from '../components/utility/PortalCodeBanner';
 import PaymentBreakdownLine from '../components/utility/PaymentBreakdownLine';
@@ -1229,6 +1230,9 @@ export default function UtilityDetailPage() {
       {account.lastSyncStatus === 'FAILED' && account.lastSyncError && !syncing && (
         <p className="mx-6 mt-3 text-xs text-red-400">Last sync failed: {account.lastSyncError}</p>
       )}
+
+      {/* An open shut-off or cancellation notice on this account. */}
+      <UrgentNotices utilityAccountId={account.id} className="mx-6 mt-3" />
 
       {/* Stats bar */}
       <div className="px-6 py-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3"

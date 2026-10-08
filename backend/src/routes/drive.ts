@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { restoreLateFees } from '../services/lateFees';
 import { fileCardStatement } from '../services/cardIntake';
+import { recordNotice } from '../services/noticeTracker';
 import { fileServiceInvoice, invoiceAmount } from '../services/expenseIntake';
 import { compareWithOwner, keepOwnerFigures, ownerEntered, sameBillByDue, thinnerThan } from '../services/statementConflict';
 import { attachDbUser } from '../middleware/requireAuth';
@@ -294,14 +295,15 @@ router.post('/stream', attachDbUser, async (req, res) => {
         // A past-due / disconnection notice never becomes a statement — it
         // demands a balance the real bills already carry. Its aging table and
         // shut-off date attach to the account's newest statement instead.
+        // Tracked on its own until paid (services/noticeTracker.ts), matched
+        // to an account or not; unmatched it also goes to review below.
+        if (ex.documentKind === 'past_due_notice') {
+          await recordNotice(userId, utilityAccountId ?? null, ex, { source: 'drive_import' }).catch(() => {});
+        }
         if (utilityAccountId && ex.documentKind === 'past_due_notice') {
-          const attached = await applyPastDueNotice(utilityAccountId, ex);
-          if (attached) {
-            autoImported++;
-            send({ type: 'auto_imported', filename: file.name, note: 'past-due notice attached' });
-          } else {
-            send({ type: 'error', filename: file.name, message: 'past-due notice, but the account has no statement to attach it to — import the bills first' });
-          }
+          await applyPastDueNotice(utilityAccountId, ex);
+          autoImported++;
+          send({ type: 'auto_imported', filename: file.name, note: 'notice tracked until paid' });
           return;
         }
         // A renewal offer / welcome letter / declarations page: update the

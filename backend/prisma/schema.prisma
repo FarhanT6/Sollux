@@ -2265,3 +2265,35 @@ model VaultAccessLog {
   @@index([userId, createdAt])
   @@map("vault_access_log")
 }
+
+/// A shut-off, past-due or cancellation notice: tracked on its own until it is
+/// paid or resolved, so a disconnection date is never just a field on a bill.
+model ServiceNotice {
+  id               String    @id @default(cuid())
+  userId           String
+  /// Null until the notice is matched to an account (it is kept either way).
+  utilityAccountId String?
+  /// DISCONNECTION | CANCELLATION | PAST_DUE
+  kind             String
+  provider         String?
+  accountLast4     String?
+  noticeDate       DateTime
+  /// The shut-off, lock-up or coverage-end date the notice states.
+  cutoffDate       DateTime?
+  amountDemanded   Decimal?  @db.Decimal(12, 2)
+  summary          String?
+  pdfS3Key         String?
+  source           String?
+  /// OPEN | RESOLVED
+  status           String    @default("OPEN")
+  resolvedAt       DateTime?
+  resolvedReason   String?
+  alertedAt        DateTime?
+  lastRemindedAt   DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([userId, status])
+  @@index([utilityAccountId])
+  @@map("service_notices")
+}

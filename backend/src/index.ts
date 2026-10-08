@@ -60,6 +60,7 @@ import complianceRouter from './routes/compliance';
 import projectsRouter from './routes/projects';
 import taxDocumentsRouter from './routes/taxDocuments';
 import creditCardsRouter from './routes/creditCards';
+import serviceNoticesRouter from './routes/serviceNotices';
 
 // Run the Drive-import and Gmail workers in the API process. Ideally these
 // live in a separate Render service, but a Background Worker costs extra —
@@ -203,6 +204,7 @@ app.use('/api/compliance', complianceRouter);
 app.use('/api/projects', projectsRouter);
 app.use('/api/tax-documents', taxDocumentsRouter);
 app.use('/api/credit-cards', creditCardsRouter);
+app.use('/api/service-notices', serviceNoticesRouter);
 app.use('/api/improvements', improvementsRouter);
 app.use('/api/legal', legalRouter);
 app.use('/api/pnl', pnlRouter);
