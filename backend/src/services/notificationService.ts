@@ -1,8 +1,44 @@
 import sgMail from '@sendgrid/mail';
 import twilio from 'twilio';
 
-sgMail.setApiKey(process.env.SENDGRID_API_KEY || '');
-const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+if (process.env.SENDGRID_API_KEY) sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+// Created on first use: twilio() throws without credentials, and loading this
+// module must not take the worker down where SMS is not set up.
+let twilioInstance: ReturnType<typeof twilio> | null = null;
+const twilioClient = {
+  messages: {
+    create: (opts: Parameters<ReturnType<typeof twilio>['messages']['create']>[0]) => {
+      twilioInstance ??= twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+      return twilioInstance.messages.create(opts);
+    },
+  },
+};
+
+export const emailConfigured = () => !!(process.env.SENDGRID_API_KEY && process.env.SENDGRID_FROM_EMAIL);
+export const smsConfigured = () => !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER);
+
+const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/** An urgent alert: a headline, a few lines, and a link into Sollux. */
+export async function sendAlertEmail(opts: { to: string; subject: string; headline: string; lines: string[]; path: string }) {
+  await sgMail.send({
+    to: opts.to,
+    from: { email: process.env.SENDGRID_FROM_EMAIL!, name: process.env.SENDGRID_FROM_NAME || 'Sollux' },
+    subject: opts.subject,
+    html: `
+      <div style="font-family: Inter, system-ui, sans-serif; max-width: 520px; margin: 0 auto; padding: 32px 24px; color: #1a1a1a;">
+        <h1 style="font-size: 20px; font-weight: 600; margin: 0 0 16px; color: #B91C1C;">${esc(opts.headline)}</h1>
+        <div style="background: #FEF2F2; border: 1px solid #FCA5A5; border-radius: 12px; padding: 16px 20px; margin-bottom: 24px;">
+          ${opts.lines.map(l => `<p style="margin: 0 0 6px; font-size: 14px;">${esc(l)}</p>`).join('')}
+        </div>
+        <a href="${process.env.FRONTEND_URL}${opts.path}" style="display: inline-block; background: #F5A623; color: white; text-decoration: none; padding: 12px 24px; border-radius: 8px; font-size: 14px; font-weight: 500;">Open in Sollux →</a>
+      </div>`,
+  });
+}
+
+export async function sendAlertSMS(opts: { to: string; body: string }) {
+  await twilioClient.messages.create({ body: opts.body, from: process.env.TWILIO_PHONE_NUMBER!, to: opts.to });
+}
 
 // ── Email ─────────────────────────────────────────────────
 

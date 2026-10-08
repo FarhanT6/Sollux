@@ -10,6 +10,7 @@ import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { restoreLateFees } from './lateFees';
 import { fileCardStatement } from './cardIntake';
+import { recordNotice } from './noticeTracker';
 import { fileServiceInvoice, invoiceAmount } from './expenseIntake';
 import { compareWithOwner, keepOwnerFigures, ownerEntered, sameBillByDue, thinnerThan } from './statementConflict';
 import { markEscrowedStatements } from './escrow';
@@ -118,11 +119,18 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
     console.log(`[Intake] Auto-created ${ex.utilityType} account ${acct.id} on property ${match.propertyId}`);
   }
 
+  // A shut-off, past-due or cancellation notice is tracked on its own until
+  // it is paid (services/noticeTracker.ts), whether or not it matched an
+  // account or the account has a bill to attach it to. Unmatched, it also
+  // goes to review so the owner can say whose it is.
+  if (ex.documentKind === 'past_due_notice') {
+    await recordNotice(userId, utilityAccountId, ex, { source }).catch(err => console.warn('[Intake] notice not recorded:', err instanceof Error ? err.message : err));
+  }
   if (utilityAccountId && ex.documentKind === 'past_due_notice') {
-    // Not a bill: attach its aging and shut-off date to the newest
+    // Not a bill: its aging and shut-off date also go on the newest
     // statement rather than minting a fake month of spending.
-    const attached = await applyPastDueNotice(utilityAccountId, ex);
-    return attached ? { outcome: 'notice' } : { outcome: 'error', error: `${filename}: past-due notice, but the account has no statement to attach it to` };
+    await applyPastDueNotice(utilityAccountId, ex);
+    return { outcome: 'notice' };
   }
   if (utilityAccountId && ex.documentKind === 'policy_document') {
     // Describes the policy and its payment schedule; bills nothing.

@@ -1034,6 +1034,7 @@ const NOTIF_CHANNELS = [
 ] as const;
 
 const NOTIF_EVENTS = [
+  { id: 'SHUTOFF_NOTICE', label: 'Shut-off & cancellation notices', desc: 'Email and text the moment a disconnection, past-due or cancellation notice arrives, then daily until it is paid (on unless turned off)' },
   { id: 'BILL_DUE',       label: 'Bill due reminders',    desc: 'Alert when a bill is due within N days' },
   { id: 'ANOMALY',        label: 'Anomaly detection',     desc: 'Alert when a bill is significantly above average' },
   { id: 'PAYMENT',        label: 'Payment confirmations', desc: 'Alert when a payment is recorded' },
@@ -1058,7 +1059,8 @@ function NotificationsTab() {
   // event at once, which is what the single row implies.
   const channelOn = (channel: string) => NOTIF_EVENTS.some(e => find(channel, e.id)?.isEnabled);
   // An event row reflects email, the channel that always exists.
-  const eventOn = (eventType: string) => find('EMAIL', eventType)?.isEnabled ?? false;
+  // Shut-off notices alert unless switched off; everything else is opt-in.
+  const eventOn = (eventType: string) => find('EMAIL', eventType)?.isEnabled ?? (eventType === 'SHUTOFF_NOTICE');
   const thresholdDays = find('EMAIL', 'BILL_DUE')?.thresholdDays ?? 5;
 
   async function save(channel: string, eventType: string, patch: { isEnabled?: boolean; thresholdDays?: number }) {

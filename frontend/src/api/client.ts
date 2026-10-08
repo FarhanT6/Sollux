@@ -1041,3 +1041,15 @@ export const deleteVaultItem = (id: string) => api.delete(`/vault/items/${id}`);
 export const vaultEvent = (action: 'UNLOCK' | 'UNLOCK_FAILED' | 'REVEAL' | 'COPY', itemId?: string) =>
   api.post<{ lockedUntil: string | null }>('/vault/events', { action, itemId }).then(r => r.data);
 export const getVaultActivity = () => api.get<{ id: string; action: string; itemId: string | null; ip: string | null; userAgent: string | null; createdAt: string }[]>('/vault/activity').then(r => r.data);
+
+// Shut-off, past-due and cancellation notices, tracked until resolved.
+export interface ServiceNotice {
+  id: string; kind: 'DISCONNECTION' | 'CANCELLATION' | 'PAST_DUE'; status: 'OPEN' | 'RESOLVED';
+  provider: string | null; accountLast4: string | null; utilityAccountId: string | null; propertyId: string | null; property: string | null;
+  noticeDate: string; cutoffDate: string | null; amountDemanded: number | null; summary: string | null;
+  resolvedAt: string | null; resolvedReason: string | null;
+}
+export const getServiceNotices = (status: 'OPEN' | 'RESOLVED' | 'ALL' = 'OPEN') =>
+  api.get<ServiceNotice[]>('/service-notices', { params: { status } }).then(r => r.data);
+export const resolveServiceNotice = (id: string, reason?: string) => api.post(`/service-notices/${id}/resolve`, { reason });
+export const reopenServiceNotice = (id: string) => api.post(`/service-notices/${id}/reopen`);

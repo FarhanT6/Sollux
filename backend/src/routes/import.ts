@@ -13,6 +13,7 @@ import { attachDbUser } from '../middleware/requireAuth';
 import { db } from '../config/db';
 import { restoreLateFees } from '../services/lateFees';
 import { fileCardStatement } from '../services/cardIntake';
+import { recordNotice } from '../services/noticeTracker';
 import { fileServiceInvoice } from '../services/expenseIntake';
 import { compareWithOwner, keepOwnerFigures, ownerEntered, sameBillByDue, thinnerThan } from '../services/statementConflict';
 
@@ -376,6 +377,8 @@ router.post('/confirm', async (req: Request, res: Response) => {
         // the same debt twice. Its aging table and shut-off date attach to
         // the account's newest statement instead.
         if (ex.documentKind === 'past_due_notice') {
+          // Tracked on its own until paid, attached to a bill or not.
+          await recordNotice(userId, utilityAccountId, ex, { source: 'upload' }).catch(err => console.warn('[Import] notice not recorded:', err instanceof Error ? err.message : err));
           const attached = await applyPastDueNotice(utilityAccountId, ex);
           if (attached) {
             notices++;
@@ -392,7 +395,8 @@ router.post('/confirm', async (req: Request, res: Response) => {
             ex.statedTotalDue = ex.previousBalance;
             ex.previousBalance = null;
           } else {
-            errors.push(`${item.filename}: past-due notice, but the account has no statement to attach it to — import the bills first`);
+            // Tracked as a notice (above); there is no bill to attach it to yet.
+            notices++;
             continue;
           }
         }

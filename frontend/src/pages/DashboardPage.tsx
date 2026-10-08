@@ -1,3 +1,4 @@
+import UrgentNotices from '../components/UrgentNotices';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useUser } from '@clerk/clerk-react';
@@ -70,6 +71,8 @@ export default function DashboardPage() {
       </div>
 
       <div className="px-6 py-5">
+        {/* Shut-off and cancellation notices come before everything else. */}
+        <UrgentNotices className="mb-5" />
         {/* Stats */}
         <p className="section-label mb-2">Portfolio summary</p>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
