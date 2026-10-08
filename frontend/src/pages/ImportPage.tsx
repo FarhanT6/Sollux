@@ -4,7 +4,7 @@ import { format } from 'date-fns';
 import { fmtDate } from '../lib/date';
 import { fmtMoney } from '../lib/money';
 import { PageHeader } from '../components/ui';
-import api, { getDriveStatus, getDriveConnectUrl, getDriveAccessToken, startDriveImport, getDriveImportJob, getProperties, getGmailStatus, getGmailConnectUrl, getInboxActivity, syncInbox, markInboxReviewed, type GmailMailbox, type InboxActivity } from '../api/client';
+import api, { getDriveStatus, getDriveConnectUrl, getDriveAccessToken, startDriveImport, getDriveImportJob, getProperties, getGmailStatus, getGmailConnectUrl, getInboxActivity, syncInbox, markInboxReviewed, getDuplicateStatements, mergeDuplicateStatements, type DuplicateStatementPair, type GmailMailbox, type InboxActivity } from '../api/client';
 import type { Property, UtilityCategory } from '../types';
 import { CATEGORY_LABELS } from '../types';
 
@@ -546,6 +546,46 @@ const OUTCOME_STYLE: Record<string, { label: string; cls: string }> = {
   skipped: { label: 'Skipped',     cls: 'text-gray-500' },
   online: { label: 'Bill online only', cls: 'text-amber-300' },
 };
+
+/**
+ * Statements filed twice for one bill — a provider's "your bill is ready"
+ * email beside its PDF statement — with a merge into the fuller one.
+ */
+function DuplicatesPanel() {
+  const [pairs, setPairs] = useState<DuplicateStatementPair[] | null>(null);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => getDuplicateStatements().then(setPairs).catch(() => setPairs([])), []);
+  useEffect(() => { load(); }, [load]);
+  if (!pairs?.length) return null;
+  const merge = async (body: { all?: boolean; pairs?: { keepId: string; dropId: string }[] }) => {
+    setBusy(true);
+    try { await mergeDuplicateStatements(body); await load(); } finally { setBusy(false); }
+  };
+  const label = (side: { statementDate: string; hasPeriod: boolean }) => `billed ${fmtDate(side.statementDate, 'MMM d')}${side.hasPeriod ? '' : ' (no billing period)'}`;
+  return (
+    <div className="rounded-xl p-4 mb-5 space-y-2" style={{ background: 'rgba(245,166,35,0.06)', border: '1px solid rgba(245,166,35,0.25)' }}>
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <button className="text-xs text-amber-300 text-left" onClick={() => setOpen(v => !v)}>
+          {open ? '▾' : '▸'} {pairs.length} bill{pairs.length === 1 ? '' : 's'} filed twice: a "bill ready" email saved next to the statement it announced
+        </button>
+        <button className="btn btn-primary text-xs disabled:opacity-50" disabled={busy} onClick={() => merge({ all: true })}>{busy ? 'Merging…' : `Merge all ${pairs.length}`}</button>
+      </div>
+      {open && (
+        <div className="max-h-64 overflow-y-auto space-y-1">
+          {pairs.map(p => (
+            <div key={p.dropId} className="text-xs flex items-center gap-3">
+              <a href={`/properties/${p.propertyId}/utilities/${p.utilityAccountId}`} className="text-gray-300 hover:text-white truncate">{p.provider} · {p.property}</a>
+              <span className="text-gray-500 truncate">{p.amount != null ? fmtMoney(p.amount) : ''}{p.dueDate ? ` due ${fmtDate(p.dueDate, 'MMM d')}` : ''}: keeps {label(p.keep)}, removes {label(p.drop)}</span>
+              <button className="ml-auto text-amber-300 hover:text-amber-200 shrink-0 disabled:opacity-50" disabled={busy} onClick={() => merge({ pairs: [{ keepId: p.keepId, dropId: p.dropId }] })}>Merge</button>
+            </div>
+          ))}
+          <p className="text-xs text-gray-500 pt-1">Merging keeps the fuller statement (billing period, charges, PDF), moves any payments onto it, and deletes the other.</p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function InboxPanel({ onStreamStart, onBillStreamed }: {
   onStreamStart: (properties: PropertyWithAccounts[], autoImported: number) => void;
@@ -2121,6 +2161,7 @@ export default function ImportPage() {
               </button>
             </div>
             <InboxPanel onStreamStart={handleDriveStreamStart} onBillStreamed={handleDriveBillStreamed} />
+            <DuplicatesPanel />
             <DriveImportPanel
               onResolved={handleDriveResolved}
               onStreamStart={handleDriveStreamStart}

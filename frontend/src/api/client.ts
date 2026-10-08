@@ -650,6 +650,15 @@ export const getInboxActivity = (opts: { skipped?: boolean } = {}) =>
 export const syncInbox = (tokenId?: string, backfillDays?: number) =>
   api.post<{ jobId: string; accounts: number }>('/gmail/sync', { tokenId, backfillDays }).then(r => r.data);
 export const markInboxReviewed = (jobId: string) => api.post(`/gmail/inbox/reviewed/${jobId}`);
+// Statements that are one bill filed twice (a summary email beside the PDF statement).
+export interface DuplicateStatementPair {
+  keepId: string; dropId: string; utilityAccountId: string; propertyId: string; provider: string; property: string;
+  amount: number | null; dueDate: string | null;
+  keep: { statementDate: string; hasPeriod: boolean }; drop: { statementDate: string; hasPeriod: boolean };
+}
+export const getDuplicateStatements = () => api.get<DuplicateStatementPair[]>('/statements/duplicates').then(r => r.data);
+export const mergeDuplicateStatements = (body: { all?: boolean; pairs?: { keepId: string; dropId: string }[] }) =>
+  api.post<{ merged: number }>('/statements/duplicates/merge', body).then(r => r.data);
 
 // Google Drive
 export const getDriveConnectUrl = () =>

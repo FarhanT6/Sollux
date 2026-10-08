@@ -4,6 +4,7 @@ import { db } from '../config/db';
 import { Prisma } from '@prisma/client';
 import { attachDbUser } from '../middleware/requireAuth';
 import { getSignedDocumentUrl } from '../services/s3Service';
+import { findDuplicates, mergeStatements } from '../services/statementDuplicates';
 
 const router = Router();
 router.use(attachDbUser);
@@ -157,6 +158,24 @@ const StatementSchema = z.object({
   pastDueCarried: z.number().optional().nullable(),
   notes: z.string().optional().nullable(),
   paidOverride: z.enum(['UNPAID', 'PAID']).optional().nullable(),
+});
+
+// GET /api/statements/duplicates — pairs of statements that are one bill
+// (a "bill ready" summary email filed beside the PDF statement).
+router.get('/duplicates', async (req, res, next) => {
+  try { res.json(await findDuplicates(req.dbUserId!)); } catch (err) { next(err); }
+});
+
+// POST /api/statements/duplicates/merge — { pairs: [{ keepId, dropId }] }, or
+// { all: true } for every pair found.
+router.post('/duplicates/merge', async (req, res, next) => {
+  try {
+    const body = z.object({ all: z.boolean().optional(), pairs: z.array(z.object({ keepId: z.string(), dropId: z.string() })).max(500).optional() }).parse(req.body);
+    const pairs = body.all ? await findDuplicates(req.dbUserId!) : body.pairs ?? [];
+    let merged = 0;
+    for (const p of pairs) if (await mergeStatements(req.dbUserId!, p.keepId, p.dropId)) merged++;
+    res.json({ merged });
+  } catch (err) { next(err); }
 });
 
 // POST /api/statements — manual entry (no PDF required)
