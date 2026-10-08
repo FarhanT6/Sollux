@@ -5,7 +5,7 @@ import { db } from '../config/db';
 import { restoreLateFees } from '../services/lateFees';
 import { fileCardStatement } from '../services/cardIntake';
 import { fileServiceInvoice, invoiceAmount } from '../services/expenseIntake';
-import { compareWithOwner, keepOwnerFigures, ownerEntered } from '../services/statementConflict';
+import { compareWithOwner, keepOwnerFigures, ownerEntered, sameBillByDue, thinnerThan } from '../services/statementConflict';
 import { attachDbUser } from '../middleware/requireAuth';
 import { getSignedDocumentUrl, downloadDocument, uploadDocument, buildStatementKey } from '../services/s3Service';
 import { markEscrowedStatements } from '../services/escrow';
@@ -365,6 +365,16 @@ router.post('/stream', attachDbUser, async (req, res) => {
                   ],
                 },
               });
+            }
+
+            // A "your bill is ready" email and the PDF statement are one bill;
+            // a reading thinner than what is on file only confirms it.
+            if (!existing) existing = await sameBillByDue(acct.id, ex);
+            if (existing && thinnerThan(ex, existing)) {
+              await recordConfirmedPayment(acct.id, existing.id, ex);
+              autoImported++;
+              send({ type: 'auto_imported', filename: file.name, note: 'already on file' });
+              return;
             }
 
             // The owner entered this period by hand: a different amount goes to

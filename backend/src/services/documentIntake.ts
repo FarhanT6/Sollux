@@ -11,7 +11,7 @@ import { db } from '../config/db';
 import { restoreLateFees } from './lateFees';
 import { fileCardStatement } from './cardIntake';
 import { fileServiceInvoice, invoiceAmount } from './expenseIntake';
-import { compareWithOwner, keepOwnerFigures, ownerEntered } from './statementConflict';
+import { compareWithOwner, keepOwnerFigures, ownerEntered, sameBillByDue, thinnerThan } from './statementConflict';
 import { markEscrowedStatements } from './escrow';
 import { settleInFull, applyPolicyDocument, recordConfirmedPayment, syncPaymentPlanFromBill, syncInsurancePolicyFromBill, syncLoanComponentsFromBill, applyPastDueNotice, parseBill } from './pdfImportService';
 import { findOrCreateUtilityAccount } from './utilityAccountResolver';
@@ -180,6 +180,14 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
       });
     }
 
+    // A "your bill is ready" email and the PDF statement are one bill.
+    if (!existing) existing = await sameBillByDue(acct.id, ex);
+    if (existing && thinnerThan(ex, existing)) {
+      // It confirms a bill already on file in full; nothing to replace.
+      await recordConfirmedPayment(acct.id, existing.id, ex);
+      return { outcome: 'filed', utilityAccountId: acct.id };
+    }
+
     // The owner entered this period by hand: a different amount waits for
     // their choice; the same amount keeps their figures and adds the PDF.
     const ownerCheck = existing && ownerEntered(existing) ? await compareWithOwner(acct.id, ex, existing) : null;
@@ -217,7 +225,8 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
           usageUnit: ex.usageUnit ?? existing.usageUnit,
           ratePlan: ex.ratePlan ?? existing.ratePlan,
           rawDataJson: rawData as Prisma.InputJsonValue,
-          ...(pdfS3Key && !existing.pdfS3Key ? { pdfS3Key } : {}),
+          // A full statement replaces the printed summary email it updates.
+          ...(pdfS3Key && (!existing.pdfS3Key || !existing.billingPeriodStart) ? { pdfS3Key } : {}),
         },
       });
       // Late fees logged with payments are not on the PDF; put them back.

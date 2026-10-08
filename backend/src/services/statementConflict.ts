@@ -125,3 +125,38 @@ export async function keepOwnerFigures(existing: Statement, ex: ExtractedBillDat
     },
   });
 }
+
+/**
+ * The same bill found by its due date and amount, when its period did not
+ * find it. A provider's "Your bill is ready" email prints no billing period,
+ * so the period and issue-month lookups missed the PDF statement for the very
+ * same bill (City of Brawley: the Sep 25 email and the Sep 30 PDF, both
+ * $453.14 due Oct 15), and a second statement was created for it.
+ */
+export async function sameBillByDue(utilityAccountId: string, ex: ExtractedBillData): Promise<Statement | null> {
+  if (!ex.dueDate) return null;
+  const due = new Date(`${ex.dueDate.slice(0, 10)}T00:00:00Z`);
+  if (isNaN(due.getTime())) return null;
+  const window = 3 * 24 * 60 * 60 * 1000;
+  const near = await db.statement.findMany({
+    where: { utilityAccountId, dueDate: { gte: new Date(due.getTime() - window), lte: new Date(due.getTime() + window) } },
+  });
+  const charge = periodCharge(ex);
+  const total = ex.statedTotalDue ?? null;
+  const same = near.filter(s => {
+    if (s.amountDue == null || charge == null) return true;
+    const a = Number(s.amountDue), carried = Number(s.pastDueCarried ?? 0);
+    return Math.abs(a - charge) <= 0.01 || (total != null && Math.abs(a + carried - total) <= 0.01);
+  });
+  return same.length === 1 ? same[0] : null;
+}
+
+/**
+ * A reading with less in it than the statement already on file: no billing
+ * period or charge lines where the statement has them. It confirms the bill
+ * but must not replace it (the summary email over the PDF statement).
+ */
+export function thinnerThan(ex: ExtractedBillData, s: Statement): boolean {
+  const lines = (r: unknown) => Object.keys(((r as any)?.chargeBreakdown ?? {}) as object).length;
+  return !ex.billingPeriodStart && !!s.billingPeriodStart && lines(ex) <= lines(s.rawDataJson);
+}
