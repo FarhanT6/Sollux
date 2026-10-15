@@ -1054,3 +1054,15 @@ export const getServiceNotices = (status: 'OPEN' | 'RESOLVED' | 'ALL' = 'OPEN') 
   api.get<ServiceNotice[]>('/service-notices', { params: { status } }).then(r => r.data);
 export const resolveServiceNotice = (id: string, reason?: string) => api.post(`/service-notices/${id}/resolve`, { reason });
 export const reopenServiceNotice = (id: string) => api.post(`/service-notices/${id}/reopen`);
+
+// Which providers' bills reach Sollux from Gmail, and which bill emails were not extracted.
+export interface CoverageMessage { id: string; receivedAt: string | null; subject: string | null; from: string | null; mailbox: string; outcome: string; detail: string | null }
+export interface GmailCoverage {
+  since: string;
+  providers: {
+    provider: string; status: 'not_extracted' | 'partial' | 'no_email' | 'ok'; filed: number; notExtractedCount: number; notExtracted: CoverageMessage[];
+    accounts: { utilityAccountId: string; propertyId: string; property: string; lastBill: string | null; lastBillSource: string | null; overdue: boolean }[];
+  }[];
+  unmatched: { from: string; count: number; latest: CoverageMessage }[];
+}
+export const getGmailCoverage = () => api.get<GmailCoverage>('/gmail/coverage').then(r => r.data);
