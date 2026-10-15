@@ -4,7 +4,7 @@ import { format } from 'date-fns';
 import { fmtDate } from '../lib/date';
 import { fmtMoney } from '../lib/money';
 import { PageHeader } from '../components/ui';
-import api, { getDriveStatus, getDriveConnectUrl, getDriveAccessToken, startDriveImport, getDriveImportJob, getProperties, getGmailStatus, getGmailConnectUrl, getInboxActivity, syncInbox, markInboxReviewed, getDuplicateStatements, mergeDuplicateStatements, type DuplicateStatementPair, type GmailMailbox, type InboxActivity } from '../api/client';
+import api, { getDriveStatus, getDriveConnectUrl, getDriveAccessToken, startDriveImport, getDriveImportJob, getProperties, getGmailStatus, getGmailConnectUrl, getInboxActivity, syncInbox, markInboxReviewed, getDuplicateStatements, mergeDuplicateStatements, getGmailCoverage, type GmailCoverage, type DuplicateStatementPair, type GmailMailbox, type InboxActivity } from '../api/client';
 import type { Property, UtilityCategory } from '../types';
 import { CATEGORY_LABELS } from '../types';
 
@@ -546,6 +546,104 @@ const OUTCOME_STYLE: Record<string, { label: string; cls: string }> = {
   skipped: { label: 'Skipped',     cls: 'text-gray-500' },
   online: { label: 'Bill online only', cls: 'text-amber-300' },
 };
+
+const OUTCOME_WHY: Record<string, string> = {
+  online: 'Bill only on the provider\'s site', error: 'Failed', failed: 'Failed twice', review: 'Waiting in review', skipped: 'Skipped',
+};
+const STATUS_STYLE: Record<string, { label: string; cls: string }> = {
+  not_extracted: { label: 'Emails arrive, bills not extracted', cls: 'text-red-300' },
+  partial:       { label: 'Some bills not extracted', cls: 'text-amber-300' },
+  no_email:      { label: 'No bill emails seen', cls: 'text-gray-400' },
+  ok:            { label: 'Coming in from email', cls: 'text-emerald-400' },
+};
+
+/**
+ * Which bills come in from Gmail and which do not: per provider, the bill
+ * emails filed and the ones not extracted (with why), and each account's
+ * newest bill and where it came from.
+ */
+function GmailCoveragePanel() {
+  const [data, setData] = useState<GmailCoverage | null>(null);
+  const [open, setOpen] = useState(false);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [showOk, setShowOk] = useState(false);
+  useEffect(() => { getGmailCoverage().then(setData).catch(() => setData(null)); }, []);
+  if (!data || !data.providers.length) return null;
+  const count = (st: string) => data.providers.filter(p => p.status === st).length;
+  const missing = count('not_extracted') + count('partial');
+  const quietNoEmail = data.providers.filter(p => p.status === 'no_email' && p.accounts.some(a => a.overdue)).length;
+  const rows = data.providers.filter(p => showOk || p.status !== 'ok');
+  return (
+    <div className="rounded-xl p-4 mb-5 space-y-2" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+      <button className="text-left w-full" onClick={() => setOpen(v => !v)}>
+        <p className="text-sm font-medium text-gray-200">{open ? '▾' : '▸'} What Gmail is and isn't bringing in</p>
+        <p className="text-xs text-gray-500 mt-0.5">
+          Last 45 days: <span className="text-emerald-400">{count('ok')} providers coming in from email</span>
+          {missing ? <> · <span className="text-red-300">{missing} with bill emails not extracted</span></> : null}
+          {' · '}{count('no_email')} with no bill emails seen{quietNoEmail ? ` (${quietNoEmail} also have no recent bill)` : ''}
+          {data.unmatched.length ? ` · ${data.unmatched.length} senders with no account` : ''}
+        </p>
+      </button>
+      {open && (
+        <div className="space-y-1.5">
+          <label className="text-xs text-gray-500 flex items-center gap-1.5 cursor-pointer">
+            <input type="checkbox" checked={showOk} onChange={e => setShowOk(e.target.checked)} /> Include providers that are coming in fine
+          </label>
+          {rows.map(p => {
+            const st = STATUS_STYLE[p.status];
+            const isOpen = expanded === p.provider;
+            return (
+              <div key={p.provider} className="rounded-lg px-3 py-2" style={{ background: 'rgba(0,0,0,0.18)' }}>
+                <button className="w-full flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-left" onClick={() => setExpanded(isOpen ? null : p.provider)}>
+                  <span className="text-gray-200 font-medium">{p.provider}</span>
+                  <span className={st.cls}>{st.label}</span>
+                  <span className="text-gray-500 ml-auto">{p.filed} filed{p.notExtractedCount ? ` · ${p.notExtractedCount} not extracted` : ''} · {p.accounts.length} account{p.accounts.length === 1 ? '' : 's'}</span>
+                </button>
+                {isOpen && (
+                  <div className="mt-2 space-y-1">
+                    {p.notExtracted.map(m => (
+                      <div key={m.id} className="text-xs flex gap-3">
+                        <span className="text-gray-600 w-14 shrink-0">{m.receivedAt ? format(new Date(m.receivedAt), 'MMM d') : ''}</span>
+                        <span className="text-amber-300/90 w-40 shrink-0">{OUTCOME_WHY[m.outcome] ?? m.outcome}</span>
+                        <span className="min-w-0">
+                          <span className="text-gray-300 block truncate">{m.subject || '(no subject)'}</span>
+                          {m.detail && <span className="text-gray-500 block truncate" title={m.detail}>{m.detail}</span>}
+                        </span>
+                      </div>
+                    ))}
+                    {p.status === 'no_email' && <p className="text-xs text-gray-500">No email from this provider reached a connected inbox. Its bills come by mail, by the provider's website, or to an inbox you haven't connected.</p>}
+                    <div className="pt-1 space-y-0.5">
+                      {p.accounts.map(a => (
+                        <a key={a.utilityAccountId} href={`/properties/${a.propertyId}/utilities/${a.utilityAccountId}`} className="text-xs flex gap-3 hover:bg-white/5 rounded px-1">
+                          <span className="text-gray-400 truncate">{a.property}</span>
+                          <span className={`ml-auto shrink-0 ${a.overdue ? 'text-amber-300' : 'text-gray-500'}`}>
+                            {a.lastBill ? `last bill ${fmtDate(a.lastBill, 'MMM d')}${a.lastBillSource ? ` (${a.lastBillSource})` : ''}` : 'no bills on file'}{a.overdue ? ' · overdue for a new bill' : ''}
+                          </span>
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {data.unmatched.length > 0 && (
+            <div className="pt-2">
+              <p className="text-xs text-gray-400 mb-1">Bill-like emails from senders that match none of your accounts:</p>
+              {data.unmatched.map(u => (
+                <div key={u.from} className="text-xs flex gap-3">
+                  <span className="text-gray-300 truncate">{u.from}</span>
+                  <span className="text-gray-500 truncate">{u.latest.subject}</span>
+                  <span className="text-gray-600 ml-auto shrink-0">{u.count} email{u.count === 1 ? '' : 's'} · {OUTCOME_WHY[u.latest.outcome] ?? u.latest.outcome}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /**
  * Statements filed twice for one bill — a provider's "your bill is ready"
@@ -2162,6 +2260,7 @@ export default function ImportPage() {
             </div>
             <InboxPanel onStreamStart={handleDriveStreamStart} onBillStreamed={handleDriveBillStreamed} />
             <DuplicatesPanel />
+            <GmailCoveragePanel />
             <DriveImportPanel
               onResolved={handleDriveResolved}
               onStreamStart={handleDriveStreamStart}

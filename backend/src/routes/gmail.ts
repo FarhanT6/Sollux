@@ -1,3 +1,4 @@
+import { gmailCoverage } from '../services/gmailCoverage';
 import { Router } from 'express';
 import { google } from 'googleapis';
 import { db } from '../config/db';
@@ -157,6 +158,12 @@ router.get('/inbox', attachDbUser, async (req, res, next) => {
       quietAccounts: quiet,
     });
   } catch (err) { next(err); }
+});
+
+// GET /api/gmail/coverage — per provider: bill emails filed, bill emails
+// not extracted (and why), and each account's newest bill and its source.
+router.get('/coverage', attachDbUser, async (req, res, next) => {
+  try { res.json(await gmailCoverage(req.dbUserId!)); } catch (err) { next(err); }
 });
 
 // POST /api/gmail/inbox/reviewed/:jobId — the owner finished (or dismissed)
