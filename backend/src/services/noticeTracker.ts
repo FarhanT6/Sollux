@@ -182,3 +182,53 @@ export async function resolveAccountNotices(utilityAccountId: string): Promise<v
   const open = await db.serviceNotice.findMany({ where: { utilityAccountId, status: 'OPEN' }, select: { id: true } });
   for (const n of open) await resolveIfPaid(n.id);
 }
+
+/**
+ * Notices read before notices were tracked (#244) were only folded into the
+ * bill they arrived against: a "Past-due notice <date>" line in its alerts and
+ * the shut-off date as its penalty date. Those are brought into the tracker,
+ * once: recent ones only (a cut-off within the last 60 days or still ahead),
+ * closed straight away where payments since already cover them. No email or
+ * text goes out for them here; the next morning's run reminds about any
+ * still open within a week of the cut-off.
+ */
+export async function importEarlierNotices(): Promise<{ created: number; open: number }> {
+  const since = new Date(Date.now() - 60 * DAY);
+  const statements = await db.statement.findMany({
+    where: { OR: [{ penaltyDate: { gte: since } }, { statementDate: { gte: since } }] },
+    select: {
+      id: true, utilityAccountId: true, statementDate: true, penaltyDate: true, amountDue: true, pastDueCarried: true, agingBuckets: true, rawDataJson: true,
+      utilityAccount: { select: { providerName: true, property: { select: { userId: true } } } },
+    },
+  });
+  let created = 0, open = 0;
+  for (const s of statements) {
+    const alerts: string[] = Array.isArray((s.rawDataJson as any)?.alerts) ? (s.rawDataJson as any).alerts : [];
+    const marker = alerts.find(a => /^Past-due notice|^Notice of cancell?ation|^Notice of nonrenewal/i.test(a));
+    if (!marker) continue;
+    const cutoff = s.penaltyDate;
+    if (cutoff && cutoff < since) continue;
+    const userId = s.utilityAccount.property.userId;
+    const kind = noticeKind({ alerts } as unknown as ExtractedBillData);
+    const noticeDate = day(marker.match(/\d{4}-\d{2}-\d{2}/)?.[0]) ?? s.statementDate;
+    const exists = await db.serviceNotice.findFirst({
+      where: { userId, utilityAccountId: s.utilityAccountId, ...(cutoff ? { cutoffDate: cutoff } : { noticeDate }) },
+      select: { id: true },
+    });
+    if (exists) continue;
+    // What it demanded: the aging buckets it printed, else the bill's open total.
+    const aging = (s.agingBuckets ?? {}) as Record<string, number>;
+    const agingTotal = Object.values(aging).reduce((t, v) => t + (Number(v) || 0), 0);
+    const amount = agingTotal > 0 ? agingTotal : Number(s.amountDue ?? 0) + Number(s.pastDueCarried ?? 0) || null;
+    const n = await db.serviceNotice.create({
+      data: {
+        userId, utilityAccountId: s.utilityAccountId, kind, provider: s.utilityAccount.providerName,
+        noticeDate, cutoffDate: cutoff, amountDemanded: amount, summary: alerts.slice(0, 4).join(' · ').slice(0, 500),
+        source: 'earlier import', alertedAt: new Date(),
+      },
+    });
+    created++;
+    if (!(await resolveIfPaid(n.id))) open++;
+  }
+  return { created, open };
+}

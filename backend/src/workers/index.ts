@@ -6,7 +6,7 @@ import './gmailWorker';
 import './driveImportWorker';
 import { scrapeQueue, insightQueue, gmailQueue } from './queues';
 import { db } from '../config/db';
-import { runNoticeReminders } from '../services/noticeTracker';
+import { runNoticeReminders, importEarlierNotices } from '../services/noticeTracker';
 import { decrypt } from '../crypto/encrypt';
 import { runDailyBalanceSnapshot } from './balanceSnapshotWorker';
 import { syncAllWatchedAccounts } from '../services/transactionMatchService';
@@ -129,6 +129,10 @@ setTimeout(() => {
   if (first <= new Date()) first.setUTCDate(first.getUTCDate() + 1);
   setTimeout(() => { run(); setInterval(run, 24 * 60 * 60 * 1000); }, first.getTime() - Date.now());
   console.log(`[Notices] Reminders scheduled — next run at ${first.toISOString()}`);
+  // Notices read before they were tracked: brought in once (idempotent).
+  importEarlierNotices()
+    .then(r => r.created && console.log(`[Notices] ${r.created} earlier notice(s) brought into the tracker, ${r.open} still open`))
+    .catch(err => console.warn('[Notices] earlier notices not imported:', err instanceof Error ? err.message : err));
 })();
 
 // The inbox agent reads every connected mailbox nightly at 1am, ahead of
