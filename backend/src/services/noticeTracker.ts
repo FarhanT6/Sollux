@@ -135,17 +135,20 @@ async function alertOwner(noticeId: string, reason: 'new' | 'reminder') {
     else await db.aIInsight.create({ data: { ...data, propertyId: d.propertyId, utilityAccountId: n.utilityAccountId, dedupeKey: key } });
   }
 
-  const user = await db.user.findUnique({ where: { id: n.userId }, select: { email: true, phone: true } });
+  // The owner and everyone they share Sollux with.
+  const people = await db.user.findMany({ where: { OR: [{ id: n.userId }, { ownerUserId: n.userId }] }, select: { email: true, phone: true } });
   const prefs = await db.notificationPreference.findMany({ where: { userId: n.userId, eventType: 'SHUTOFF_NOTICE' } });
   // On unless the owner switched it off: these are the alerts that matter most.
   const wants = (channel: 'EMAIL' | 'SMS') => prefs.find(p => p.channel === channel)?.isEnabled ?? true;
   const subject = `${n.kind === 'DISCONNECTION' ? '⚠ Disconnection' : n.kind === 'CANCELLATION' ? '⚠ Cancellation' : '⚠ Past due'}: ${who}, ${where}`;
-  if (user?.email && wants('EMAIL') && emailConfigured()) {
-    await sendAlertEmail({ to: user.email, subject, headline, lines, path }).catch(e => console.warn('[Notices] email failed:', e?.message ?? e));
-  }
-  if (user?.phone && wants('SMS') && smsConfigured()) {
-    const body = `Sollux: ${headline}${n.amountDemanded != null ? ` — pay ${money(Number(n.amountDemanded))}` : ''}.`;
-    await sendAlertSMS({ to: user.phone, body: body.slice(0, 300) }).catch(e => console.warn('[Notices] SMS failed:', e?.message ?? e));
+  const body = `Sollux: ${headline}${n.amountDemanded != null ? ` — pay ${money(Number(n.amountDemanded))}` : ''}.`;
+  for (const person of people) {
+    if (person.email && wants('EMAIL') && emailConfigured()) {
+      await sendAlertEmail({ to: person.email, subject, headline, lines, path }).catch(e => console.warn('[Notices] email failed:', e?.message ?? e));
+    }
+    if (person.phone && wants('SMS') && smsConfigured()) {
+      await sendAlertSMS({ to: person.phone, body: body.slice(0, 300) }).catch(e => console.warn('[Notices] SMS failed:', e?.message ?? e));
+    }
   }
   await db.serviceNotice.update({ where: { id: n.id }, data: reason === 'new' ? { alertedAt: new Date() } : { lastRemindedAt: new Date() } });
 }

@@ -261,10 +261,11 @@ export interface AccountInfo {
   owner: AccountMember | null;
   members: AccountMember[];
   pendingInvites: AccountInvite[];
-  me: { id: string; email: string; fullName: string } | null;
+  me: { id: string; email: string; fullName: string; phone?: string | null } | null;
   isOwner: boolean;
 }
 export const getAccount = () => api.get<AccountInfo>('/account').then(r => r.data);
+export const setAlertPhone = (phone: string | null) => api.patch<{ phone: string | null }>('/account/phone', { phone }).then(r => r.data);
 export const inviteAccountMember = (data: { email?: string; phone?: string }) =>
   api.post<{ linked: boolean }>('/account/invites', data).then(r => r.data);
 export const cancelAccountInvite = (id: string) => api.delete(`/account/invites/${id}`);

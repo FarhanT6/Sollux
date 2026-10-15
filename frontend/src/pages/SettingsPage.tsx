@@ -37,7 +37,7 @@ import type { PlaidItem } from '../api/client';
 import type { BankAccount, BankAccountType, IndexRate } from '../types';
 import { format } from 'date-fns';
 import { fmtDate as fmtDateSafe, todayISO } from '../lib/date';
-import { getAccount, inviteAccountMember, cancelAccountInvite, removeAccountMember,
+import { getAccount, setAlertPhone, inviteAccountMember, cancelAccountInvite, removeAccountMember,
   getNotificationPreferences, updateNotificationPreferences } from '../api/client';
 import type { AccountInfo } from '../api/client';
 
@@ -121,6 +121,10 @@ export default function SettingsPage() {
             <div>
               <p className="text-xs text-gray-400 mb-1">Email</p>
               <p className="text-sm text-gray-100">{user?.primaryEmailAddress?.emailAddress || '—'}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-400 mb-1">Mobile for alerts</p>
+              <AlertPhoneField />
             </div>
             <div>
               <p className="text-xs text-gray-400 mb-1">Member since</p>
@@ -1144,6 +1148,26 @@ function Toggle({ label, desc, checked, busy, onChange }: {
         <div className="w-9 h-5 bg-white/10 peer-checked:bg-gold-500 rounded-full transition-colors" />
         <div className="absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-4" />
       </label>
+    </div>
+  );
+}
+
+/** The mobile number shut-off and cancellation alerts are texted to. */
+function AlertPhoneField() {
+  const [value, setValue] = useState('');
+  const [saved, setSaved] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  useEffect(() => { getAccount().then(a => { const p = a.me?.phone ?? ''; setValue(p); setSaved(p); }).catch(() => {}); }, []);
+  async function save() {
+    setMsg(null);
+    try { const r = await setAlertPhone(value.trim() || null); setValue(r.phone ?? ''); setSaved(r.phone ?? ''); setMsg(r.phone ? 'Saved' : 'Removed'); }
+    catch (e: any) { setMsg(e?.response?.data?.error ?? 'Could not save'); }
+  }
+  return (
+    <div className="flex items-center gap-2">
+      <input value={value} onChange={e => setValue(e.target.value)} placeholder="(760) 555-0123" className="input-dark text-sm w-48" inputMode="tel" />
+      <button className="btn text-xs disabled:opacity-40" disabled={value === saved} onClick={save}>Save</button>
+      {msg && <span className="text-xs text-gray-500">{msg}</span>}
     </div>
   );
 }
