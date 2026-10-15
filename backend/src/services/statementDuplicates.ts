@@ -97,6 +97,7 @@ export async function mergeStatements(userId: string, keepId: string, dropId: st
     // billed from it, follow it to the statement that stays.
     db.outgoingTransaction.updateMany({ where: { statementId: drop.id }, data: { statementId: keep.id } }),
     db.reimbursementInvoiceLine.updateMany({ where: { statementId: drop.id }, data: { statementId: keepBilled ? null : keep.id } }),
+    db.reimbursementAllocation.updateMany({ where: { statementId: drop.id }, data: { statementId: keep.id } }),
     db.statement.update({
       where: { id: keep.id },
       data: {

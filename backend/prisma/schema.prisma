@@ -767,6 +767,7 @@ model Lease {
   legalMatters         LegalMatter[]
   incomingTransactions IncomingTransaction[]
   rentCharges          RentCharge[]
+  reimbursementPayments ReimbursementPayment[]
 
   @@map("leases")
 }
@@ -1592,6 +1593,7 @@ model BankAccount {
   incomingTransactions IncomingTransaction[]
   outgoingTransactions OutgoingTransaction[]
   rentPayments         RentPayment[]
+  reimbursementPayments ReimbursementPayment[]
   leaseDeposits        LeaseDeposit[]
   legalFees            LegalFee[]
   utilityPayments      Payment[]
@@ -1870,6 +1872,46 @@ model ReimbursementInvoiceLine {
   sortKey      DateTime
 
   @@map("reimbursement_invoice_lines")
+}
+
+/// Money a tenant paid back for utilities, logged like a rent payment, and
+/// the bills it covers: which utility account, which month, how much of each.
+model ReimbursementPayment {
+  id            String            @id @default(cuid())
+  leaseId       String
+  lease         Lease             @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  amount        Decimal           @db.Decimal(10, 2)
+  paidDate      DateTime
+  method        RentPaymentMethod @default(OTHER)
+  bankAccountId String?
+  bankAccount   BankAccount?      @relation(fields: [bankAccountId], references: [id], onDelete: SetNull)
+  notes         String?
+  createdAt     DateTime          @default(now())
+
+  allocations ReimbursementAllocation[]
+
+  @@index([leaseId, paidDate])
+  @@map("reimbursement_payments")
+}
+
+/// One bill (or one month's flat charge) a reimbursement payment covers.
+model ReimbursementAllocation {
+  id               String               @id @default(cuid())
+  paymentId        String
+  payment          ReimbursementPayment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  /// The utility account and, for a bill, the statement. Null statementId =
+  /// a flat monthly charge (category says which).
+  utilityAccountId String?
+  statementId      String?
+  category         String
+  periodDate       DateTime // first of the month it is for
+  /// The reimbursement invoice this paid toward, when the bill was on one.
+  invoiceId        String?
+  amount           Decimal              @db.Decimal(10, 2)
+
+  @@index([statementId])
+  @@index([paymentId])
+  @@map("reimbursement_allocations")
 }
 
 // ─── COMPLIANCE: CITATIONS, PERMITS, INSPECTIONS ─────────

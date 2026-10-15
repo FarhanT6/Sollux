@@ -8,7 +8,7 @@ import {
   deleteLeaseAgreement,
   getProperty, getLeases, getLoans, getExpenses, getInsurancePolicies,
   getTaxAssessments, getImprovements, getPropertyPnL, getRentPayments,
-  createRentPayment, waiveRentCharge, createExpense, createImprovement, createInsurancePolicy,
+  createRentPayment, waiveRentCharge, getReimbursableItems, getReimbursementPayments, createReimbursementPayment, deleteReimbursementPayment, createExpense, createImprovement, createInsurancePolicy,
   createTaxAssessment, createLoan, deleteLoan,
   updateExpense, deleteExpense, updateInsurancePolicy, deleteInsurancePolicy,
   updateTaxAssessment, deleteTaxAssessment, updateImprovement, deleteImprovement,
@@ -25,6 +25,7 @@ import {
   addLeaseDeposit, deleteLeaseDeposit,
 } from '../api/client';
 import type { PaymentApplyTo } from '../types';
+import type { ReimbursableItem, ReimbursementPaymentRow } from '../api/client';
 import type {
   Property, Lease, Loan, Expense, InsurancePolicy, TaxAssessment,
   Improvement, PropertyPnL, Tenant, Unit, Document, DocumentCategory, PropertyType, RentChange, ScheduledRentIncrease, LeaseUtilityCharge,
@@ -965,6 +966,13 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   const [payStatus, setPayStatus] = useState('RECEIVED');
   const [payExpectedDate, setPayExpectedDate] = useState('');
   const [payApplyTo, setPayApplyTo] = useState<PaymentApplyTo>('CURRENT');
+  // Rent, or utilities the tenant is paying back (matched to the bills it covers).
+  const [payFor, setPayFor] = useState<'RENT' | 'UTILITY'>('RENT');
+  const [reimbItems, setReimbItems] = useState<Record<string, ReimbursableItem[]>>({});
+  const [reimbAlloc, setReimbAlloc] = useState<Record<string, string>>({});
+  const [reimbTouched, setReimbTouched] = useState(false);
+  const [reimbPays, setReimbPays] = useState<Record<string, ReimbursementPaymentRow[]>>({});
+  const [payError, setPayError] = useState<string | null>(null);
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
   const [saving, setSaving]       = useState(false);
   // Security deposit received — its own form, its own table, never rent.
@@ -1445,10 +1453,50 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
     .slice()
     .sort((a, b) => (a.unit?.unitLabel ?? '').localeCompare(b.unit?.unitLabel ?? ''));
 
+  async function loadReimbItems(leaseId: string) {
+    const items = await getReimbursableItems(leaseId);
+    setReimbItems(prev => ({ ...prev, [leaseId]: items }));
+    return items;
+  }
+
+  // Oldest unpaid bills first, until the amount runs out.
+  function autoAllocate(items: ReimbursableItem[], amount: number) {
+    const out: Record<string, string> = {};
+    let left = Math.round(amount * 100) / 100;
+    for (const it of [...items].filter(i => i.outstanding > 0).sort((a, b) => a.periodDate.localeCompare(b.periodDate))) {
+      if (left <= 0) break;
+      const take = Math.min(left, it.outstanding);
+      out[it.key] = take.toFixed(2);
+      left = Math.round((left - take) * 100) / 100;
+    }
+    return out;
+  }
+
+  async function logReimbursement(leaseId: string) {
+    const amount = parseFloat(payAmount);
+    const allocations = Object.entries(reimbAlloc)
+      .map(([key, v]) => ({ key, amount: parseFloat(v) || 0 }))
+      .filter(a => a.amount > 0);
+    await createReimbursementPayment(leaseId, {
+      amount, paidDate: payDate, method: payMethod,
+      bankAccountId: payBankAccountId || null, notes: payNotes || null, allocations,
+    });
+    const [items, pays] = await Promise.all([loadReimbItems(leaseId), getReimbursementPayments(leaseId)]);
+    void items;
+    setReimbPays(prev => ({ ...prev, [leaseId]: pays }));
+  }
+
   async function logPayment(leaseId: string) {
     if (!payAmount || !payDate) return;
     setSaving(true);
+    setPayError(null);
     try {
+      if (payFor === 'UTILITY') {
+        await logReimbursement(leaseId);
+        setShowPayForm(null);
+        setPayAmount(''); setPayNotes(''); setPayBankAccountId(''); setReimbAlloc({}); setReimbTouched(false); setPayFor('RENT');
+        return;
+      }
       await createRentPayment({
         leaseId,
         periodDate: `${payForMonth}-01T00:00:00.000Z`,
@@ -1471,6 +1519,8 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
       if (payments[leaseId]) {
         getRentPayments({ leaseId }).then(p => setPayments(prev => ({ ...prev, [leaseId]: p })));
       }
+    } catch (err: any) {
+      setPayError(err?.response?.data?.error ?? 'Could not log that payment.');
     } finally { setSaving(false); }
   }
 
@@ -1516,6 +1566,10 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
     if (!payments[leaseId]) {
       const p = await getRentPayments({ leaseId });
       setPayments(prev => ({ ...prev, [leaseId]: p }));
+    }
+    if (!reimbPays[leaseId]) {
+      const [rp] = await Promise.all([getReimbursementPayments(leaseId), reimbItems[leaseId] ? null : loadReimbItems(leaseId)]);
+      setReimbPays(prev => ({ ...prev, [leaseId]: rp }));
     }
     if (!rentChanges[leaseId]) {
       const rc = await getRentChanges(leaseId);
@@ -1700,14 +1754,9 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                         const required = Number(lease.securityDeposit ?? 0);
                         const received = depositReceived(lease);
                         if (required <= 0 && received <= 0) return null;
-                        const short = required - received;
+                        // The amount only; what was received is under Log deposit.
                         return (
-                          <p className="text-xs text-gray-500">
-                            {required > 0 ? `${money(required)} dep.` : `${money(received)} dep.`}
-                            {/* Paid in full says nothing worth a line; only a shortfall does. */}
-                            {received > 0 && short > 0 && <span className="text-amber-400"> · {money(received)} received, {money(short)} owed</span>}
-                            {received <= 0 && required > 0 && <span className="text-red-400"> · not received</span>}
-                          </p>
+                          <p className="text-xs text-gray-500">{money(required > 0 ? required : received)} dep.</p>
                         );
                       })()}
                       {lease.rentChanges && lease.rentChanges.length > 0 && (
@@ -1729,7 +1778,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                   </div>
                   <div className="flex gap-3 mt-2.5">
                     {lease.status === 'ACTIVE' && (
-                      <button onClick={() => { setPayApplyTo(lease.paymentsApplyTo ?? 'CURRENT'); setShowPayForm(showPayForm === lease.id ? null : lease.id); }}
+                      <button onClick={() => { setPayApplyTo(lease.paymentsApplyTo ?? 'CURRENT'); setPayFor('RENT'); setReimbAlloc({}); setReimbTouched(false); setPayError(null); setShowPayForm(showPayForm === lease.id ? null : lease.id); }}
                         className="text-xs text-amber-400 hover:text-amber-300">
                         Log payment
                       </button>
@@ -2107,8 +2156,25 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
 
                 {showPayForm === lease.id && (
                   <div className="px-4 py-3 flex gap-2 flex-wrap" style={{ background: 'rgba(255,255,255,0.03)', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                    <input type="number" placeholder="Amount" value={payAmount} onChange={e => setPayAmount(e.target.value)} className="input-dark text-xs w-28" />
-                    <input type="month"  title="Month this payment applies to" value={payForMonth} onChange={e => setPayForMonth(e.target.value)} className="input-dark text-xs w-36" />
+                    <select value={payFor} title="What the payment is for" className="input-dark text-xs"
+                      onChange={async e => {
+                        const v = e.target.value as 'RENT' | 'UTILITY';
+                        setPayFor(v);
+                        if (v === 'UTILITY') {
+                          const items = reimbItems[lease.id] ?? await loadReimbItems(lease.id);
+                          if (!reimbTouched && parseFloat(payAmount) > 0) setReimbAlloc(autoAllocate(items, parseFloat(payAmount)));
+                        }
+                      }}>
+                      <option value="RENT">Rent</option>
+                      <option value="UTILITY">Utility reimbursement</option>
+                    </select>
+                    <input type="number" placeholder="Amount" value={payAmount} onChange={e => {
+                      setPayAmount(e.target.value);
+                      if (payFor === 'UTILITY' && !reimbTouched) setReimbAlloc(autoAllocate(reimbItems[lease.id] ?? [], parseFloat(e.target.value) || 0));
+                    }} className="input-dark text-xs w-28" />
+                    {payFor === 'RENT' && (
+                      <input type="month"  title="Month this payment applies to" value={payForMonth} onChange={e => setPayForMonth(e.target.value)} className="input-dark text-xs w-36" />
+                    )}
                     <input type="date"   title="Date the money arrived" value={payDate}   onChange={e => setPayDate(e.target.value)}   className="input-dark text-xs w-36" />
                     <select value={payMethod} onChange={e => {
                       setPayMethod(e.target.value);
@@ -2150,7 +2216,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                         onChange={e => setPayExpectedDate(e.target.value)} className="input-dark text-xs w-36" />
                     )}
                     {/* Where the money goes first: some tenants pay down the old balance, others this month. */}
-                    {(Number(lease.arrearsBalance ?? 0) > 0 || payApplyTo === 'ARREARS') && (
+                    {payFor === 'RENT' && (Number(lease.arrearsBalance ?? 0) > 0 || payApplyTo === 'ARREARS') && (
                       <select value={payApplyTo} onChange={e => setPayApplyTo(e.target.value as PaymentApplyTo)} className="input-dark text-xs"
                         title="Where this payment goes first">
                         <option value="CURRENT">To this month first</option>
@@ -2160,6 +2226,16 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                     <input placeholder="Notes (optional)" value={payNotes} onChange={e => setPayNotes(e.target.value)} className="input-dark text-xs flex-1 min-w-32" />
                     <button onClick={() => logPayment(lease.id)} disabled={saving} className="btn btn-primary text-xs">{saving ? '…' : 'Log'}</button>
                     <button onClick={() => setShowPayForm(null)} className="text-xs text-gray-500 hover:text-gray-300">✕</button>
+                    {payError && <p className="w-full text-xs text-red-400">{payError}</p>}
+                    {payFor === 'UTILITY' && (
+                      <ReimbursementPicker
+                        items={reimbItems[lease.id]}
+                        amount={parseFloat(payAmount) || 0}
+                        alloc={reimbAlloc}
+                        onChange={next => { setReimbAlloc(next); setReimbTouched(true); }}
+                        onAuto={() => { setReimbAlloc(autoAllocate(reimbItems[lease.id] ?? [], parseFloat(payAmount) || 0)); setReimbTouched(false); }}
+                      />
+                    )}
                   </div>
                 )}
 
@@ -2367,6 +2443,42 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                         </div>
                       )}
                     </div>
+
+                    {/* Utility reimbursements the tenant paid, and the bills each covered */}
+                    {(reimbPays[lease.id]?.length ?? 0) > 0 && (
+                      <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                        <p className="px-4 pt-3 pb-1 text-xs font-medium text-gray-300">Utility reimbursements</p>
+                        <div className="px-4 pb-3 space-y-1.5">
+                          {reimbPays[lease.id]!.map(rp => {
+                            const items = new Map((reimbItems[lease.id] ?? []).map(i => [i.statementId ?? i.key, i]));
+                            const allocated = rp.allocations.reduce((s2, a) => s2 + Number(a.amount), 0);
+                            return (
+                              <div key={rp.id} className="text-xs flex gap-3 group">
+                                <span className="text-gray-300 w-24 shrink-0">{fmtDate(rp.paidDate)}</span>
+                                <span className="text-white font-medium w-20 shrink-0">{money(Number(rp.amount))}</span>
+                                <span className="text-gray-400 w-20 shrink-0">{RENT_PAYMENT_METHOD_LABELS[rp.method as RentPaymentMethod] ?? rp.method}</span>
+                                <span className="text-gray-500 min-w-0">
+                                  {rp.allocations.length === 0 ? 'not matched to a bill' : rp.allocations.map(a => {
+                                    const it = items.get(a.statementId ?? `flat:${a.category}:${a.periodDate.slice(0, 7)}`);
+                                    return `${it?.label ?? a.category} ${fmtDateSafe(a.periodDate, 'MMM yyyy')} ${money(Number(a.amount))}`;
+                                  }).join(' · ')}
+                                  {rp.allocations.length > 0 && Number(rp.amount) - allocated > 0.005 && ` · ${money(Number(rp.amount) - allocated)} not matched`}
+                                  {rp.notes && <span className="text-gray-600"> · {rp.notes}</span>}
+                                </span>
+                                <button className="ml-auto opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400"
+                                  title="Delete this reimbursement"
+                                  onClick={async () => {
+                                    if (!confirm(`Delete the ${money(Number(rp.amount))} reimbursement from ${fmtDateSafe(rp.paidDate)}?`)) return;
+                                    await deleteReimbursementPayment(rp.id);
+                                    const [pays] = await Promise.all([getReimbursementPayments(lease.id), loadReimbItems(lease.id)]);
+                                    setReimbPays(prev => ({ ...prev, [lease.id]: pays }));
+                                  }}>✕</button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -3757,6 +3869,69 @@ function DocumentsTab({ propertyId, documents, setDocuments }: {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Utility reimbursement: which bills a payment covers ───────────────────────
+// The property's utility bills (the lease's reimbursement accounts and shares
+// when it has them), newest first. Ticking a bill puts what is still owed on
+// it, up to what is left of the payment; amounts can be typed over.
+function ReimbursementPicker({ items, amount, alloc, onChange, onAuto }: {
+  items: ReimbursableItem[] | undefined;
+  amount: number;
+  alloc: Record<string, string>;
+  onChange: (next: Record<string, string>) => void;
+  onAuto: () => void;
+}) {
+  const [showPaid, setShowPaid] = useState(false);
+  if (!items) return <p className="w-full text-xs text-gray-500">Loading the property's utility bills…</p>;
+  if (items.length === 0) {
+    return <p className="w-full text-xs text-gray-500">No utility bills on this property in the last 12 months to match it to. It will be logged without a bill.</p>;
+  }
+  const allocated = Object.values(alloc).reduce((s, v) => s + (parseFloat(v) || 0), 0);
+  const left = Math.round((amount - allocated) * 100) / 100;
+  const shown = items.filter(i => showPaid || i.outstanding > 0 || alloc[i.key]);
+  const fmt = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return (
+    <div className="w-full mt-1 rounded-lg p-2" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
+      <div className="flex items-center gap-3 mb-1.5 text-xs">
+        <span className="text-gray-300">Which bills does it cover?</span>
+        <span className={left < -0.005 ? 'text-red-400' : left > 0.005 ? 'text-amber-400' : 'text-emerald-400'}>
+          {left < -0.005 ? `${fmt(-left)} more than paid` : left > 0.005 ? `${fmt(left)} not matched yet` : amount > 0 ? 'all matched' : ''}
+        </span>
+        <button className="text-amber-400 hover:text-amber-300 ml-auto" onClick={onAuto} title="Oldest unpaid bills first">Match oldest first</button>
+        <label className="text-gray-500 flex items-center gap-1 cursor-pointer">
+          <input type="checkbox" checked={showPaid} onChange={e => setShowPaid(e.target.checked)} /> show paid
+        </label>
+      </div>
+      <div className="max-h-56 overflow-y-auto space-y-1">
+        {shown.length === 0 && <p className="text-xs text-gray-500">Every bill is paid back. Tick "show paid" to see them.</p>}
+        {shown.map(i => {
+          const on = !!alloc[i.key];
+          return (
+            <div key={i.key} className="flex items-center gap-2 text-xs">
+              <input type="checkbox" checked={on} onChange={e => {
+                const next = { ...alloc };
+                if (e.target.checked) {
+                  const room = Math.max(0, Math.round((amount - allocated) * 100) / 100);
+                  next[i.key] = (room > 0 ? Math.min(room, i.outstanding || i.owed) : (i.outstanding || i.owed)).toFixed(2);
+                } else delete next[i.key];
+                onChange(next);
+              }} />
+              <span className="text-gray-300 w-20 shrink-0">{fmtDateSafe(i.periodDate, 'MMM yyyy')}</span>
+              <span className="text-gray-300 min-w-0 truncate flex-1" title={i.period}>{i.label}</span>
+              <span className="text-gray-500 shrink-0 text-right" title={i.period}>
+                {i.sharePercent != null ? `${i.sharePercent}% of ${fmt(i.billAmount)} = ` : ''}{fmt(i.owed)}
+                {i.paid > 0 && <span className="text-emerald-500/80"> · {fmt(i.paid)} paid</span>}
+              </span>
+              <input type="number" step="0.01" value={alloc[i.key] ?? ''} placeholder="0.00" disabled={!on}
+                onChange={e => onChange({ ...alloc, [i.key]: e.target.value })}
+                className="input-dark text-xs w-24 disabled:opacity-30" />
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

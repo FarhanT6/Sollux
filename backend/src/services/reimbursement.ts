@@ -367,3 +367,208 @@ export async function upsertLetterhead(userId: string, input: { name: string; ad
     update: { name: input.name.trim(), address: input.address ?? null, phone: input.phone ?? null, email: input.email ?? null },
   });
 }
+
+// ── Reimbursement payments ─────────────────────────────────────────────────
+//
+// What a tenant paid back for utilities, logged from the tenant's row like a
+// rent payment and matched to the bills it covers: which utility account and
+// month, how much of each. A bill on an invoice counts the payment on that
+// invoice too, so the two ways of tracking it never disagree.
+
+export interface ReimbursableItem {
+  /** The statement id, or flat:<category>:<YYYY-MM>. */
+  key: string;
+  utilityAccountId: string | null;
+  statementId: string | null;
+  category: string;
+  /** "SDG&E · Electricity" */
+  label: string;
+  /** First of the month the bill is for (its period end, else its statement date). */
+  periodDate: string;
+  /** Billing period or statement date, for display. */
+  period: string;
+  billAmount: number;
+  sharePercent: number | null;
+  owed: number;
+  paid: number;
+  outstanding: number;
+  invoiceId: string | null;
+}
+
+const monthStart = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+
+/**
+ * The utility bills a tenant could be paying back, newest first, with what is
+ * still outstanding on each. With reimbursement rules on the lease, their
+ * accounts and shares; without, every utility account on the property that
+ * is not another unit's meter, at the whole bill.
+ */
+export async function reimbursableItems(leaseId: string, userId: string, months = 12): Promise<ReimbursableItem[]> {
+  const lease = await ownedLease(leaseId, userId);
+  const config = lease.utilityReimbursement?.enabled ? lease.utilityReimbursement : null;
+  const rules = config ? ((config.rulesJson as unknown as Rule[]) ?? []) : [];
+  const accountIds = config ? ((config.accountIdsJson as unknown as string[]) ?? []).filter(Boolean) : [];
+  const statementRules = rules.filter(r => r.mode !== 'FLAT_MONTHLY');
+  const since = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() - months + 1, 1));
+
+  const accounts = await db.utilityAccount.findMany({
+    where: {
+      propertyId: lease.unit.propertyId,
+      ...(config && statementRules.length ? { category: { in: statementRules.map(r => r.category) as never[] } } : {}),
+      ...(accountIds.length ? { id: { in: accountIds } } : { OR: [{ unitId: null }, { unitId: lease.unitId }] }),
+    },
+    select: { id: true, providerName: true, serviceLabel: true, category: true },
+  });
+  // Rules that are only flat charges bill no statements.
+  const billAccounts = config && !statementRules.length ? [] : accounts;
+  const byAccount = new Map(billAccounts.map(a => [a.id, a]));
+
+  const statements = billAccounts.length ? await db.statement.findMany({
+    where: {
+      utilityAccountId: { in: billAccounts.map(a => a.id) },
+      isDownPayment: false, isScheduled: false,
+      OR: [{ billingPeriodEnd: { gte: since } }, { billingPeriodEnd: null, statementDate: { gte: since } }],
+    },
+    select: { id: true, utilityAccountId: true, statementDate: true, billingPeriodStart: true, billingPeriodEnd: true, amountDue: true },
+    orderBy: { statementDate: 'desc' },
+  }) : [];
+
+  const [allocs, invoiceLines] = await Promise.all([
+    db.reimbursementAllocation.findMany({
+      where: { payment: { leaseId }, OR: [{ statementId: { in: statements.map(s => s.id) } }, { statementId: null }] },
+      select: { statementId: true, category: true, periodDate: true, amount: true },
+    }),
+    config ? db.reimbursementInvoiceLine.findMany({
+      where: { invoice: { reimbursementId: config.id } },
+      select: { statementId: true, kind: true, category: true, periodStart: true, invoiceId: true, invoice: { select: { status: true } } },
+    }) : Promise.resolve([]),
+  ]);
+  const paidOn = new Map<string, number>();
+  for (const a of allocs) {
+    const k = a.statementId ?? `flat:${a.category}:${a.periodDate.toISOString().slice(0, 7)}`;
+    paidOn.set(k, (paidOn.get(k) ?? 0) + num(a.amount));
+  }
+  const onInvoice = new Map<string, { invoiceId: string; paid: boolean }>();
+  for (const l of invoiceLines) {
+    const k = l.statementId ?? (l.periodStart ? `flat:${l.category}:${l.periodStart.toISOString().slice(0, 7)}` : null);
+    if (k) onInvoice.set(k, { invoiceId: l.invoiceId, paid: l.invoice.status === 'PAID' });
+  }
+  const finish = (it: Omit<ReimbursableItem, 'paid' | 'outstanding' | 'invoiceId'>): ReimbursableItem => {
+    const inv = onInvoice.get(it.key);
+    // An invoice paid in full before payments were matched to bills counts its bills as paid.
+    const paid = round2(inv?.paid ? Math.max(it.owed, paidOn.get(it.key) ?? 0) : paidOn.get(it.key) ?? 0);
+    return { ...it, paid, outstanding: round2(Math.max(0, it.owed - paid)), invoiceId: inv?.invoiceId ?? null };
+  };
+
+  const items: ReimbursableItem[] = [];
+  for (const s of statements) {
+    const acct = byAccount.get(s.utilityAccountId)!;
+    const rule = statementRules.find(r => r.category === acct.category);
+    const share = rule ? (rule.mode === 'FULL' ? 100 : num(rule.value)) : 100;
+    const base = num(s.amountDue);
+    const ref = s.billingPeriodEnd ?? s.statementDate;
+    items.push(finish({
+      key: s.id, utilityAccountId: acct.id, statementId: s.id, category: acct.category,
+      label: `${acct.providerName}${acct.serviceLabel ? ` · ${acct.serviceLabel}` : ` · ${CATEGORY_LABEL[acct.category] ?? acct.category}`}`,
+      periodDate: monthStart(ref).toISOString(),
+      period: s.billingPeriodStart && s.billingPeriodEnd
+        ? `${s.billingPeriodStart.toISOString().slice(0, 10)} – ${s.billingPeriodEnd.toISOString().slice(0, 10)}`
+        : `billed ${s.statementDate.toISOString().slice(0, 10)}`,
+      billAmount: round2(base), sharePercent: share === 100 ? null : share, owed: round2(base * share / 100),
+    }));
+  }
+  for (const rule of rules.filter(r => r.mode === 'FLAT_MONTHLY')) {
+    for (let m = 0; m < months; m++) {
+      const p = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() - m, 1));
+      items.push(finish({
+        key: `flat:${rule.category}:${p.toISOString().slice(0, 7)}`, utilityAccountId: null, statementId: null, category: rule.category,
+        label: `${rule.label || CATEGORY_LABEL[rule.category] || rule.category} (flat monthly)`,
+        periodDate: p.toISOString(), period: p.toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }),
+        billAmount: round2(num(rule.value)), sharePercent: null, owed: round2(num(rule.value)),
+      }));
+    }
+  }
+  return items.sort((a, b) => b.periodDate.localeCompare(a.periodDate) || a.label.localeCompare(b.label));
+}
+
+export interface ReimbursementPaymentInput {
+  amount: number;
+  paidDate: string;
+  method: string;
+  bankAccountId?: string | null;
+  notes?: string | null;
+  allocations: { key: string; amount: number }[];
+}
+
+/** Log what the tenant paid back and the bills it covers. */
+export async function recordReimbursementPayment(leaseId: string, userId: string, input: ReimbursementPaymentInput) {
+  if (!(input.amount > 0)) throw new ReimbursementError('Enter an amount greater than zero.');
+  const allocations = input.allocations.filter(a => a.amount > 0);
+  const allocated = round2(allocations.reduce((s, a) => s + a.amount, 0));
+  if (allocated > input.amount + 0.005) throw new ReimbursementError(`The bills add up to $${allocated.toFixed(2)}, more than the $${input.amount.toFixed(2)} paid.`);
+  if (input.bankAccountId) {
+    const acct = await db.bankAccount.findFirst({ where: { id: input.bankAccountId, userId }, select: { id: true } });
+    if (!acct) throw new ReimbursementError('Bank account not found', 404);
+  }
+  const items = new Map((await reimbursableItems(leaseId, userId, 36)).map(i => [i.key, i]));
+  for (const a of allocations) if (!items.has(a.key)) throw new ReimbursementError('One of the bills picked is not on this lease.');
+
+  const paidAt = new Date(input.paidDate);
+  const payment = await db.reimbursementPayment.create({
+    data: {
+      leaseId, amount: input.amount, paidDate: paidAt, method: input.method as any,
+      bankAccountId: input.bankAccountId ?? null, notes: input.notes ?? null,
+      allocations: {
+        create: allocations.map(a => {
+          const it = items.get(a.key)!;
+          return { utilityAccountId: it.utilityAccountId, statementId: it.statementId, category: it.category, periodDate: new Date(it.periodDate), invoiceId: it.invoiceId, amount: round2(a.amount) };
+        }),
+      },
+    },
+    include: { allocations: true },
+  });
+  // Bills on an invoice: the invoice shows the payment too.
+  const perInvoice = new Map<string, number>();
+  for (const a of payment.allocations) if (a.invoiceId) perInvoice.set(a.invoiceId, (perInvoice.get(a.invoiceId) ?? 0) + num(a.amount));
+  for (const [invoiceId, amt] of perInvoice) await recordPayment(invoiceId, userId, round2(amt), input.paidDate);
+  return payment;
+}
+
+export async function listReimbursementPayments(leaseId: string, userId: string) {
+  await ownedLease(leaseId, userId);
+  return db.reimbursementPayment.findMany({
+    where: { leaseId },
+    include: { allocations: true, bankAccount: { select: { id: true, name: true, bank: true, last4: true } } },
+    orderBy: { paidDate: 'desc' },
+  });
+}
+
+/** Remove a logged reimbursement, and take it back off any invoice it paid toward. */
+export async function deleteReimbursementPayment(paymentId: string, userId: string) {
+  const p = await db.reimbursementPayment.findFirst({
+    where: { id: paymentId, lease: { unit: { property: { userId } } } },
+    include: { allocations: true },
+  });
+  if (!p) throw new ReimbursementError('Payment not found', 404);
+  const perInvoice = new Map<string, number>();
+  for (const a of p.allocations) if (a.invoiceId) perInvoice.set(a.invoiceId, (perInvoice.get(a.invoiceId) ?? 0) + num(a.amount));
+  await db.$transaction(async tx => {
+    for (const [invoiceId, amt] of perInvoice) {
+      const inv = await tx.reimbursementInvoice.findUnique({ where: { id: invoiceId } });
+      if (!inv) continue;
+      const before = num(inv.paidAmount), total = num(inv.total);
+      const after = round2(Math.max(0, before - amt));
+      // Credit an overpayment created goes away with it.
+      const creditBack = round2(Math.max(0, before - total) - Math.max(0, after - total));
+      await tx.reimbursementInvoice.update({
+        where: { id: invoiceId },
+        data: { paidAmount: after, status: after <= 0 ? 'SENT' : after >= total - 0.01 ? 'PAID' : 'PARTIAL', ...(after <= 0 ? { paidAt: null } : {}) },
+      });
+      if (creditBack > 0) {
+        const cfg = await tx.utilityReimbursement.findUnique({ where: { id: inv.reimbursementId }, select: { creditBalance: true } });
+        await tx.utilityReimbursement.update({ where: { id: inv.reimbursementId }, data: { creditBalance: Math.max(0, round2(num(cfg?.creditBalance) - creditBack)) } });
+      }
+    }
+    await tx.reimbursementPayment.delete({ where: { id: p.id } });
+  });
+}
