@@ -67,12 +67,41 @@ function leaseTermStatus(lease: Lease): { label: string; pill: 'green' | 'amber'
   return { label: 'Active term', pill: 'green', detail: `Lease ends ${fmtDateSafe(lease.endDate)}` };
 }
 
-// A lease's rentAmount is the TOTAL the tenant pays. Utility charges break out
-// the reimbursement portion, so base rent is the remainder.
+// A lease's rentAmount is the TOTAL the tenant pays each month: the rent plus
+// the utilities billed on top of it (utility charges). Rent is what the owner
+// types and what increases apply to; adding or removing a utility moves the
+// total, not the rent.
 function rentBreakdown(lease: Lease) {
   const total = Number(lease.rentAmount ?? 0);
   const utilities = (lease.utilityCharges ?? []).reduce((s, c) => s + Number(c.amount), 0);
   return { total, utilities, baseRent: Math.round((total - utilities) * 100) / 100 };
+}
+
+// How each payment splits between the rent and the utilities billed with it.
+// Within a month, what a payment put toward the month (not what went to
+// arrears) pays the rent first, then the utilities: $2,900 on $2,800 rent +
+// $100 utilities is $2,800 rent and $100 utilities.
+function rentUtilitySplit(lease: Lease, pays: any[]) {
+  const { utilities, baseRent } = rentBreakdown(lease);
+  const out = new Map<string, { rent: number; utilities: number }>();
+  if (utilities <= 0) return out;
+  const byMonth = new Map<string, any[]>();
+  for (const p of pays) {
+    if (p.status === 'PENDING') continue;
+    const k = monthKey(p.periodDate) ?? '';
+    byMonth.set(k, [...(byMonth.get(k) ?? []), p]);
+  }
+  for (const list of byMonth.values()) {
+    list.sort((a, b) => String(a.paidDate).localeCompare(String(b.paidDate)) || String(a.createdAt).localeCompare(String(b.createdAt)));
+    let rentLeft = baseRent, utilLeft = utilities;
+    for (const p of list) {
+      const portion = Math.max(0, Number(p.amount) - Number(p.appliedToArrears ?? 0));
+      const r = Math.min(portion, rentLeft); rentLeft -= r;
+      const u = Math.min(portion - r, utilLeft); utilLeft -= u;
+      out.set(p.id, { rent: Math.round(r * 100) / 100, utilities: Math.round(u * 100) / 100 });
+    }
+  }
+  return out;
 }
 
 // "Chase Checking ••4821" — bank and last4 are both optional in the schema.
@@ -1026,7 +1055,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   function openEditLease(lease: Lease) {
     setEditForm({
       unitId: lease.unitId,
-      rentAmount: String(lease.rentAmount ?? ''),
+      rentAmount: String(rentBreakdown(lease).baseRent),
       securityDeposit: String(lease.securityDeposit ?? ''),
       startDate: lease.startDate?.slice(0, 10) ?? '',
       endDate: lease.endDate?.slice(0, 10) ?? '',
@@ -1231,12 +1260,15 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   }
 
   async function saveEditLease(leaseId: string) {
-    const rentChanged = parseFloat(editForm.rentAmount || '0') !== Number(leases.find(l => l.id === leaseId)?.rentAmount ?? 0);
+    // The field is the rent; the total saved is rent plus the utilities billed on top.
+    const current = leases.find(l => l.id === leaseId);
+    const utilities = current ? rentBreakdown(current).utilities : 0;
+    const rentChanged = current ? parseFloat(editForm.rentAmount || '0') !== rentBreakdown(current).baseRent : false;
     setSavingEdit(true);
     try {
       await updateLease(leaseId, {
         unitId: editForm.unitId || undefined,
-        rentAmount: parseFloat(editForm.rentAmount) || undefined,
+        rentAmount: parseFloat(editForm.rentAmount) ? round2(parseFloat(editForm.rentAmount) + utilities) : undefined,
         securityDeposit: editForm.securityDeposit ? parseFloat(editForm.securityDeposit) : null,
         startDate: editForm.startDate || null,
         endDate: editForm.endDate || null,
@@ -1371,7 +1403,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
     // would submit the stale rent and silently undo the increase.
     const fresh = updated.find(l => l.id === leaseId);
     if (fresh && editLease === leaseId) {
-      setEditForm(f => ({ ...f, rentAmount: String(fresh.rentAmount ?? ''), rentEffectiveDate: '' }));
+      setEditForm(f => ({ ...f, rentAmount: String(rentBreakdown(fresh).baseRent), rentEffectiveDate: '' }));
     }
     if (rentChanges[leaseId]) getRentChanges(leaseId).then(rc => setRentChanges(prev => ({ ...prev, [leaseId]: rc })));
   }
@@ -1772,7 +1804,10 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                         <p className="text-xs text-gray-500">Last raised {fmtDate(lease.rentChanges[0].effectiveDate)}</p>
                       )}
                       {(() => {
-                        const chain = chainProjections(Number(lease.rentAmount), lease.scheduledIncreases ?? []);
+                        // Increases are to the rent; the utilities on top are added back for the total.
+                        const util = rentBreakdown(lease).utilities;
+                        const chain = chainProjections(rentBreakdown(lease).baseRent, lease.scheduledIncreases ?? [])
+                          .map(c => ({ ...c, low: round2(c.low + util), high: round2(c.high + util) }));
                         if (chain.length === 0) return null;
                         const { si, low, high } = chain[0];
                         const detail = `→ ${money(low)}${high !== low ? `–${money(high)}` : ''}`;
@@ -1821,7 +1856,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                         )}
                         {units.map(u => <option key={u.id} value={u.id}>{u.unitLabel}</option>)}
                       </select>
-                      <input type="number" placeholder="Rent/mo" value={editForm.rentAmount} onChange={e => setEditForm(f => ({ ...f, rentAmount: e.target.value }))} className="input-dark text-xs" />
+                      <input type="number" placeholder="Rent/mo" title="Rent, before utilities billed on top" value={editForm.rentAmount} onChange={e => setEditForm(f => ({ ...f, rentAmount: e.target.value }))} className="input-dark text-xs" />
                       <input type="number" placeholder="Security deposit" value={editForm.securityDeposit} onChange={e => setEditForm(f => ({ ...f, securityDeposit: e.target.value }))} className="input-dark text-xs" />
                       <select value={editForm.status} onChange={e => setEditForm(f => ({ ...f, status: e.target.value }))} className="input-dark text-xs">
                         {['ACTIVE', 'ENDED', 'PENDING', 'TERMINATED'].map(s => <option key={s} value={s}>{s}</option>)}
@@ -1849,7 +1884,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                     </p>
 
                     {/* When rent changed, capture the effective date for the history log */}
-                    {parseFloat(editForm.rentAmount || '0') !== Number(lease.rentAmount) && (
+                    {parseFloat(editForm.rentAmount || '0') !== rentBreakdown(lease).baseRent && (
                       <div className="flex items-center gap-2 flex-wrap">
                         <label className="text-xs text-gray-400">This rent change took effect on</label>
                         <input type="date" value={editForm.rentEffectiveDate} onChange={e => setEditForm(f => ({ ...f, rentEffectiveDate: e.target.value }))} className="input-dark text-xs" />
@@ -1920,7 +1955,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                           className="input-dark text-xs" title="Days after the due date before the fee applies" />
                       </div>
                       {(() => {
-                        const rentNow = parseFloat(editForm.rentAmount || '0') || Number(lease.rentAmount);
+                        const rentNow = (parseFloat(editForm.rentAmount || '0') || rentBreakdown(lease).baseRent) + rentBreakdown(lease).utilities;
                         const fee = editForm.lateFeePercent
                           ? round2(rentNow * parseFloat(editForm.lateFeePercent) / 100)
                           : editForm.lateFeeAmount ? parseFloat(editForm.lateFeeAmount) : null;
@@ -1992,7 +2027,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                     {/* Utility contributions — portion of the payment that isn't rent */}
                     <div>
                       <label className="block text-xs text-gray-500 mb-1">
-                        Payments toward utilities (part of the {money(Number(lease.rentAmount))} total — leave empty if utilities are included in rent)
+                        Utilities billed with rent (added on top of the rent — leave empty if utilities are included in rent)
                       </label>
                       <div className="space-y-1 mb-2">
                         {(lease.utilityCharges ?? []).length === 0 && <span className="text-xs text-gray-600">None — full amount is rent</span>}
@@ -2015,19 +2050,19 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                         </select>
                         <input type="number" placeholder="Amount $/mo" value={ucForm.amount} onChange={e => setUcForm(f => ({ ...f, amount: e.target.value }))} className="input-dark text-xs" />
                         <input placeholder="Note" value={ucForm.note} onChange={e => setUcForm(f => ({ ...f, note: e.target.value }))} className="input-dark text-xs" />
-                        <button onClick={() => addUtilCharge(lease.id)} disabled={!ucForm.amount} className="btn text-xs disabled:opacity-40">Add utility payment</button>
+                        <button onClick={() => addUtilCharge(lease.id)} disabled={!ucForm.amount} className="btn text-xs disabled:opacity-40">Add utility</button>
                       </div>
                       {(() => {
-                        const { total, utilities, baseRent } = rentBreakdown(lease);
+                        const { utilities, baseRent } = rentBreakdown(lease);
+                        const rentNow = parseFloat(editForm.rentAmount || '') || baseRent;
                         const pendingAmt = ucForm.amount ? parseFloat(ucForm.amount) : 0;
                         const projUtil = utilities + (Number.isNaN(pendingAmt) ? 0 : pendingAmt);
                         return (
                           <p className="text-xs text-gray-400 mt-1.5">
-                            Rent <span className="font-medium text-white">{money(round2(total - projUtil))}</span>
+                            Rent <span className="font-medium text-white">{money(rentNow)}</span>
                             {projUtil > 0 && <> + utilities <span className="font-medium text-white">{money(projUtil)}</span></>}
-                            {' = total '}<span className="font-medium text-amber-400">{money(total)}</span>
+                            {' = total '}<span className="font-medium text-amber-400">{money(round2(rentNow + projUtil))}</span>
                             {projUtil !== utilities && <span className="text-gray-600"> (incl. the amount you're adding)</span>}
-                            {baseRent < 0 && <span className="text-red-400"> — utilities exceed the total payment</span>}
                           </p>
                         );
                       })()}
@@ -2038,7 +2073,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                       <label className="block text-xs text-gray-500 mb-1">Scheduled rent increases (planned — each builds on the previous)</label>
                       <div className="space-y-1 mb-2">
                         {(lease.scheduledIncreases ?? []).length === 0 && <span className="text-xs text-gray-600">None scheduled</span>}
-                        {chainProjections(Number(lease.rentAmount), lease.scheduledIncreases ?? []).map(({ si, base, low, high }) => (
+                        {chainProjections(rentBreakdown(lease).baseRent, lease.scheduledIncreases ?? []).map(({ si, base, low, high }) => (
                           <div key={si.id} className="flex items-center gap-2 text-xs group flex-wrap">
                             <span className="text-gray-500 w-24">{fmtDate(si.effectiveDate)}</span>
                             <span className="text-gray-300">
@@ -2065,7 +2100,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                       </div>
                       <div className="flex items-center gap-3 mt-1.5">
                         {(() => {
-                          const base = baseForNew(Number(lease.rentAmount), lease.scheduledIncreases ?? [], siForm.effectiveDate);
+                          const base = baseForNew(rentBreakdown(lease).baseRent, lease.scheduledIncreases ?? [], siForm.effectiveDate);
                           const low = targetFrom(base, siForm.newAmount ? parseFloat(siForm.newAmount) : null, siForm.percent ? parseFloat(siForm.percent) : null);
                           const high = siForm.percentMax ? round2(base * (1 + parseFloat(siForm.percentMax) / 100)) : low;
                           return low != null ? (
@@ -2423,6 +2458,12 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                                         {Number(p.appliedToArrears) >= Number(p.amount) ? 'to arrears' : `${money(Number(p.appliedToArrears))} to arrears`}
                                       </span>
                                     )}
+                                    {(() => {
+                                      const sp = rentUtilitySplit(lease, payments[lease.id] ?? []).get(p.id);
+                                      return sp && sp.utilities > 0 ? (
+                                        <span className="block text-[11px] font-normal text-gray-500">{money(sp.rent)} rent · {money(sp.utilities)} utilities</span>
+                                      ) : null;
+                                    })()}
                                   </td>
                                   <td className="px-4 py-2 text-gray-400">
                                     {RENT_PAYMENT_METHOD_LABELS[p.method as RentPaymentMethod] ?? p.method}
@@ -2454,11 +2495,32 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                     </div>
 
                     {/* Utility reimbursements the tenant paid, and the bills each covered */}
-                    {(reimbPays[lease.id]?.length ?? 0) > 0 && (
+                    {(() => {
+                      // The utilities paid with rent count as reimbursed too.
+                      const split = rentUtilitySplit(lease, payments[lease.id] ?? []);
+                      const withRent = (payments[lease.id] ?? []).filter((p: any) => (split.get(p.id)?.utilities ?? 0) > 0);
+                      if ((reimbPays[lease.id]?.length ?? 0) === 0 && withRent.length === 0) return null;
+                      const charges = lease.utilityCharges ?? [];
+                      const spread = (u: number) => {
+                        let left = u;
+                        return charges.map(c => {
+                          const take = Math.min(left, Number(c.amount)); left = Math.round((left - take) * 100) / 100;
+                          return take > 0 ? `${CATEGORY_LABELS[c.category as keyof typeof CATEGORY_LABELS] ?? c.category} ${money(take)}` : null;
+                        }).filter(Boolean).join(' · ');
+                      };
+                      return (
                       <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                         <p className="px-4 pt-3 pb-1 text-xs font-medium text-gray-300">Utility reimbursements</p>
                         <div className="px-4 pb-3 space-y-1.5">
-                          {reimbPays[lease.id]!.map(rp => {
+                          {withRent.map((p: any) => (
+                            <div key={`rent-${p.id}`} className="text-xs flex gap-3">
+                              <span className="text-gray-300 w-24 shrink-0">{fmtDate(p.paidDate)}</span>
+                              <span className="text-white font-medium w-20 shrink-0">{money(split.get(p.id)!.utilities)}</span>
+                              <span className="text-gray-400 w-20 shrink-0">{RENT_PAYMENT_METHOD_LABELS[p.method as RentPaymentMethod] ?? p.method}</span>
+                              <span className="text-gray-500 min-w-0">{spread(split.get(p.id)!.utilities)} · {fmtDateSafe(p.periodDate, 'MMM yyyy')} <span className="text-gray-600">(paid with rent)</span></span>
+                            </div>
+                          ))}
+                          {(reimbPays[lease.id] ?? []).map(rp => {
                             const items = new Map((reimbItems[lease.id]?.items ?? []).map(i => [i.statementId ?? i.key, i]));
                             const allocated = rp.allocations.reduce((s2, a) => s2 + Number(a.amount), 0);
                             return (
@@ -2487,7 +2549,8 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                           })}
                         </div>
                       </div>
-                    )}
+                      );
+                    })()}
                   </div>
                 )}
               </div>
@@ -2801,9 +2864,9 @@ function NewLeaseModal({ propertyId, isCommercial, onClose, onCreated }: {
           <div>
             <div className="flex items-center justify-between mb-2">
               <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">
-                Payments toward utilities <span className="normal-case font-normal text-gray-600">(part of the rent total — leave empty if utilities are included)</span>
+                Utilities billed with rent <span className="normal-case font-normal text-gray-600">(added on top of the rent — leave empty if utilities are included)</span>
               </p>
-              <button onClick={() => setCharges(c => [...c, { category: 'WATER', amount: '', note: '' }])} className="text-xs text-amber-400 hover:text-amber-300">+ Add utility payment</button>
+              <button onClick={() => setCharges(c => [...c, { category: 'WATER', amount: '', note: '' }])} className="text-xs text-amber-400 hover:text-amber-300">+ Add utility</button>
             </div>
             {charges.length === 0 ? (
               <p className="text-xs text-gray-600">None — the full amount is rent.</p>
@@ -2820,7 +2883,7 @@ function NewLeaseModal({ propertyId, isCommercial, onClose, onCreated }: {
                   </div>
                 ))}
                 {rentNum > 0 && (
-                  <p className="text-xs text-gray-500">Rent {money(Math.max(rentNum - chargesTotal, 0))} + utilities {money(chargesTotal)} = total <span className="text-amber-400">{money(rentNum)}</span></p>
+                  <p className="text-xs text-gray-500">Rent {money(rentNum)} + utilities {money(chargesTotal)} = total <span className="text-amber-400">{money(rentNum + chargesTotal)}</span></p>
                 )}
               </div>
             )}
