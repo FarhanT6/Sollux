@@ -17,6 +17,7 @@ import { google, gmail_v1 } from 'googleapis';
 import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { intakeBill, type ReviewItem } from '../services/documentIntake';
+import { parseP2PEmail, recordP2PEmail } from '../services/p2pPaymentEmails';
 
 const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string }>;
 
@@ -40,6 +41,9 @@ const BILL_POSTED = /\bnew (bill|statement|invoice)|\b(bill|e-?statement|stateme
 // are bill wording too; without them T-Mobile's bill email was skipped.
 const BILL_WORDS = /amount due|total due|balance due|new balance|\bbalance\b|statement date|billing period|service period|billing cycle|due date|invoice|premium|past due|minimum payment|autopay is scheduled|account\s*(number|no|#)/i;
 const MONEY = /\$\s?\d[\d,]*\.\d{2}/;
+// Money received through Zelle, Venmo, Cash App, PayPal or Apple Cash: rent, read without Claude.
+const P2P_HINT = /zelle|venmo|cash ?app|paypal|apple cash|sent you|paid you|received money|got money|been paid/i;
+const P2P_SENDER = /@(\w+\.)*(venmo\.com|cash\.app|square\.com|squareup\.com)\b/i;
 
 export interface InboxRunSummary {
   mailboxes: number; read: number; filed: number; review: number; applied: number; skipped: number; errors: string[]; jobId: string | null;
@@ -68,7 +72,7 @@ function walk(part: Part | undefined, out: Part[] = []): Part[] {
 const header = (m: gmail_v1.Schema$Message, name: string) => m.payload?.headers?.find(h => h.name?.toLowerCase() === name.toLowerCase())?.value ?? '';
 const decode = (data?: string | null) => (data ? Buffer.from(data, 'base64url') : Buffer.alloc(0));
 
-function htmlToText(html: string): string {
+export function htmlToText(html: string): string {
   return html.replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/gi, ' ').replace(/<br\s*\/?>|<\/(p|div|tr|li|h\d)>/gi, '\n')
     .replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&#36;|&dollar;/g, '$').replace(/[ \t]+/g, ' ').trim();
 }
@@ -159,7 +163,7 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
         const gmail = google.gmail({ version: 'v1', auth: oauthFor(token) });
         const since = token.backfillFrom
           ?? (token.lastScanAt ? new Date(token.lastScanAt.getTime() - 24 * 3600 * 1000) : new Date(Date.now() - FIRST_RUN_DAYS * 24 * 3600 * 1000));
-        const q = `after:${Math.floor(since.getTime() / 1000)} -category:promotions -category:social (has:attachment OR subject:(bill OR statement OR invoice OR due OR notice OR premium OR renewal OR tax OR cancellation OR disconnection))`;
+        const q = `after:${Math.floor(since.getTime() / 1000)} -category:promotions -category:social (has:attachment OR subject:(bill OR statement OR invoice OR due OR notice OR premium OR renewal OR tax OR cancellation OR disconnection) OR subject:(zelle OR venmo OR "cash app" OR "apple cash" OR "sent you" OR "paid you" OR "received money" OR "got money" OR "been paid") OR from:(venmo.com OR cash.app OR square.com))`;
 
         const ids: string[] = [];
         let pageToken: string | undefined;
@@ -172,12 +176,15 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
         // A message that failed is read again next run — the cause (a missing
         // browser, a timeout) is usually fixed by then. Everything else is
         // handled once.
-        const prior = await db.inboxMessage.findMany({ where: { gmailTokenId: token.id, messageId: { in: ids } }, select: { messageId: true, outcome: true, detail: true } });
+        const prior = await db.inboxMessage.findMany({ where: { gmailTokenId: token.id, messageId: { in: ids } }, select: { messageId: true, outcome: true, detail: true, subject: true } });
         // During a backfill, emails skipped as having no amount are looked at
         // again: until long email bodies were read, every long e-bill was
         // skipped that way. Looking costs no Claude read unless it is a bill.
-        const recheck = (m: { outcome: string; detail: string | null }) =>
-          !!token.backfillFrom && m.outcome === 'skipped' && (!m.detail || /no amount or bill wording|^skipped|empty email/.test(m.detail));
+        // Zelle / Venmo emails skipped before payment emails were read are read again too.
+        const recheck = (m: { outcome: string; detail: string | null; subject: string | null }) =>
+          m.outcome === 'skipped' && (
+            (!!token.backfillFrom && (!m.detail || /no amount or bill wording|^skipped|empty email/.test(m.detail)))
+            || (/payment confirmation|no amount or bill wording/.test(m.detail ?? '') && P2P_HINT.test(m.subject ?? '')));
         const seen = new Set(prior.filter(m => m.outcome !== 'error' && !recheck(m)).map(m => m.messageId));
         // A message is retried once. If it fails again it is marked failed and
         // left alone, so one bad email cannot cost a read every night.
@@ -199,6 +206,45 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
             }).catch(() => {});
           sum.read++;
 
+          const parts = walk(msg.payload);
+          // Gmail hands a long body over like an attachment (body.attachmentId,
+          // no body.data), and SDG&E's, Republic's and most utilities' e-bill
+          // emails are long. Reading only body.data found nothing in them,
+          // so the bill emails were skipped as having no amount.
+          const textOf = async (mime: string) => {
+            const out: string[] = [];
+            for (const p of parts.filter(x => x.mimeType === mime)) {
+              if (p.body?.data) out.push(decode(p.body.data).toString('utf8'));
+              else if (p.body?.attachmentId) {
+                const att = await gmail.users.messages.attachments.get({ userId: 'me', messageId, id: p.body.attachmentId });
+                out.push(decode(att.data.data).toString('utf8'));
+              }
+            }
+            return out.join('\n');
+          };
+
+          // "JACOB ADAMS sent you $4,452.00": a tenant's payment, before the
+          // receipt rule below (a bank's "Zelle payment received" is not a bill
+          // receipt). Goes to Finances -> Incoming, logged when the tenant is certain.
+          if (P2P_HINT.test(subject) || P2P_SENDER.test(from)) {
+            try {
+              const html = await textOf('text/html');
+              const text = html ? htmlToText(html) : await textOf('text/plain');
+              const p2p = parseP2PEmail(from, subject, text, receivedAt);
+              if (p2p) {
+                const r = await recordP2PEmail(userId, p2p, rfcMessageId ?? messageId);
+                sum.applied++;
+                await record(r.outcome, r.detail);
+                continue;
+              }
+            } catch (err) {
+              const why = err instanceof Error ? err.message.split('\n')[0] : String(err);
+              sum.errors.push(`${subject || messageId}: ${why}`);
+              await record(retrying.has(messageId) ? 'failed' : 'error', why);
+              continue;
+            }
+          }
+
           if (PAYMENT_CONFIRMATION.test(subject)) { sum.skipped++; await record('skipped', 'payment confirmation or receipt'); continue; }
           // The same email delivered to two connected inboxes (sent to both, or
           // forwarded) is read once: a second read files nothing new and costs a read.
@@ -210,7 +256,6 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
             if (twin) { sum.skipped++; await record('skipped', `same email already read in ${twin.gmailToken.email} (${twin.outcome})`); continue; }
           }
 
-          const parts = walk(msg.payload);
           const pdfs = parts.filter(p => p.body?.attachmentId && (p.mimeType === 'application/pdf' || /\.pdf$/i.test(p.filename ?? '')));
           const outcomes: string[] = [];
           const problems: string[] = [];
@@ -243,21 +288,6 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
                 await handle(buffer, p.filename || `${subject || 'email'}.pdf`);
               }
             } else {
-              // Gmail hands a long body over like an attachment (body.attachmentId,
-              // no body.data), and SDG&E's, Republic's and most utilities' e-bill
-              // emails are long. Reading only body.data found nothing in them,
-              // so the bill emails were skipped as having no amount.
-              const textOf = async (mime: string) => {
-                const out: string[] = [];
-                for (const p of parts.filter(x => x.mimeType === mime)) {
-                  if (p.body?.data) out.push(decode(p.body.data).toString('utf8'));
-                  else if (p.body?.attachmentId) {
-                    const att = await gmail.users.messages.attachments.get({ userId: 'me', messageId, id: p.body.attachmentId });
-                    out.push(decode(att.data.data).toString('utf8'));
-                  }
-                }
-                return out.join('\n');
-              };
               const htmlRaw = await textOf('text/html');
               const plainRaw = htmlRaw ? '' : await textOf('text/plain');
               const body = htmlRaw ? htmlToText(htmlRaw) : plainRaw;

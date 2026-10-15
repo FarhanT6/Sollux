@@ -28,6 +28,9 @@ const RentPaymentSchema = z.object({
   // BANK_DEPOSIT, optional for anything else.
   bankAccountId: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
+  // Where this payment goes first: this month's rent, or the balance owed
+  // from earlier months. null = the tenant's setting.
+  applyTo: z.enum(['CURRENT', 'ARREARS']).optional().nullable(),
 });
 
 router.get('/', async (req, res, next) => {
@@ -74,6 +77,7 @@ router.post('/', async (req, res, next) => {
       bankAccountId: data.bankAccountId,
       notes: data.notes,
       appliedToArrears: data.appliedToArrears,
+      applyTo: data.applyTo ?? null,
     });
     res.status(201).json(payment);
   } catch (err) { next(err); }
@@ -109,7 +113,7 @@ router.patch('/:id', async (req, res, next) => {
     const status = data.status ?? (existing.status as 'PENDING' | 'RECEIVED');
 
     const appliedToArrears = await repriceRentPayment(existing.id, {
-      leaseId, periodDate, amount, status, appliedToArrears: data.appliedToArrears,
+      leaseId, periodDate, amount, status, appliedToArrears: data.appliedToArrears, applyTo: data.applyTo,
     });
 
     // Money that just arrived should carry a real receipt date, not the date it
@@ -125,6 +129,7 @@ router.patch('/:id', async (req, res, next) => {
         ...(data.expectedDate !== undefined ? { expectedDate: data.expectedDate } : {}),
         ...(data.bankAccountId !== undefined ? { bankAccountId: data.bankAccountId } : {}),
         ...(data.notes !== undefined ? { notes: data.notes } : {}),
+        ...(data.applyTo !== undefined ? { applyTo: data.applyTo } : {}),
       },
       include: { bankAccount: { select: { id: true, name: true, bank: true, last4: true, accountType: true, ownerLabel: true, cardNetwork: true } } },
     });

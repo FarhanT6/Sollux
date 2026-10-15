@@ -20,6 +20,7 @@ import { plaidClient } from '../config/plaid';
 import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';
 import { recordRentPayment, periodStartOf } from './rentPaymentService';
+import { findTwin, findLoggedPayment } from './p2pPaymentEmails';
 import { findLoanCandidates, confidentLoan, logLoanPaymentFromTransaction } from './loanPaymentMatcher';
 
 // ─── Incoming (rent via P2P) ──────────────────────────────────────────────
@@ -62,7 +63,7 @@ export const CHANNEL_TO_METHOD: Record<Channel, string> = {
   OTHER: 'OTHER',
 };
 
-function detectChannel(name: string): Channel | null {
+export function detectChannel(name: string): Channel | null {
   for (const [re, channel] of CHANNEL_PATTERNS) {
     if (re.test(name)) return channel;
   }
@@ -85,10 +86,12 @@ function normalizeWords(s: string): string[] {
   return s.toLowerCase().replace(/[^a-z\s]/g, '').replace(/\s+/g, ' ').trim().split(' ').filter(w => w.length > 1);
 }
 
-interface LeaseMatch {
+export interface LeaseMatch {
   leaseId: string;
   /** True when the descriptor matched a payer name the owner entered by hand. */
   viaAlias: boolean;
+  /** True when every word of the tenant's (or alias's) name is in the payer name. */
+  exact: boolean;
 }
 
 /**
@@ -96,7 +99,7 @@ interface LeaseMatch {
  * the payer names they listed for each lease. Returns a match only when exactly
  * one lease fits — two tenants sharing a surname must stay ambiguous.
  */
-async function matchLease(counterpartyName: string, userId: string): Promise<LeaseMatch | null> {
+export async function matchLease(counterpartyName: string, userId: string): Promise<LeaseMatch | null> {
   const words = normalizeWords(counterpartyName);
   if (words.length === 0) return null;
 
@@ -115,12 +118,15 @@ async function matchLease(counterpartyName: string, userId: string): Promise<Lea
 
   // An alias is something the owner typed specifically to be recognised, so it
   // is the stronger signal and is tested first.
+  const whole = (candidate: string) => normalizeWords(candidate).every(w => words.includes(w));
   const aliasMatches = activeLeases.filter(l => l.paymentAliases.some(a => fits(a.name)));
-  if (aliasMatches.length === 1) return { leaseId: aliasMatches[0].id, viaAlias: true };
+  if (aliasMatches.length === 1) return { leaseId: aliasMatches[0].id, viaAlias: true, exact: aliasMatches[0].paymentAliases.some(a => whole(a.name)) };
   if (aliasMatches.length > 1) return null;
 
   const tenantMatches = activeLeases.filter(l => l.leaseTenants.some(lt => fits(lt.tenant.fullName)));
-  return tenantMatches.length === 1 ? { leaseId: tenantMatches[0].id, viaAlias: false } : null;
+  return tenantMatches.length === 1
+    ? { leaseId: tenantMatches[0].id, viaAlias: false, exact: tenantMatches[0].leaseTenants.some(lt => whole(lt.tenant.fullName)) }
+    : null;
 }
 
 /**
@@ -129,7 +135,7 @@ async function matchLease(counterpartyName: string, userId: string): Promise<Lea
  * share that rent there is no way to tell them apart, so it stays unmatched
  * rather than guessing wrong.
  */
-async function matchLeaseByAmount(amount: number, userId: string): Promise<string | null> {
+export async function matchLeaseByAmount(amount: number, userId: string): Promise<string | null> {
   const leases = await db.lease.findMany({
     where: { status: 'ACTIVE', unit: { property: { userId } } },
     select: { id: true, rentAmount: true },
@@ -290,6 +296,13 @@ export async function syncTransactionsForItem(plaidItemId: string) {
           if (seen) continue;
 
           const amount = Math.abs(tx.amount);
+          // Already read from the Zelle / Venmo email: the bank feed adds the
+          // account it landed in, not a second payment.
+          const fromEmail = await findTwin(plaidItem.userId, amount, new Date(tx.date), 'email', bankAccount.id);
+          if (fromEmail) {
+            if (!fromEmail.bankAccountId) await db.incomingTransaction.update({ where: { id: fromEmail.id }, data: { bankAccountId: bankAccount.id } });
+            continue;
+          }
           const counterparty = extractCounterpartyName(name);
           // Name first — it identifies the payer. Fall back to the rent amount,
           // which is all a bare "MOBILE DEPOSIT" gives us to go on.
@@ -319,7 +332,10 @@ export async function syncTransactionsForItem(plaidItemId: string) {
           // exactly this purpose, so the match is theirs, not a guess — every
           // other match still waits for review, because a wrongly applied
           // payment moves a balance and shows up in Budget and the P&L.
-          if (nameMatch?.viaAlias) {
+          const logged = nameMatch ? await findLoggedPayment(nameMatch.leaseId, amount, new Date(tx.date)) : null;
+          if (logged) {
+            await db.incomingTransaction.update({ where: { id: created.id }, data: { status: 'APPLIED', rentPaymentId: logged.id } });
+          } else if (nameMatch?.viaAlias) {
             const payment = await recordRentPayment({
               leaseId: nameMatch.leaseId,
               periodDate: periodStartOf(new Date(tx.date)),

@@ -12,6 +12,7 @@ import { decrypt } from '../crypto/encrypt';
 import { runDailyBalanceSnapshot } from './balanceSnapshotWorker';
 import { syncAllWatchedAccounts } from '../services/transactionMatchService';
 import { applyDueRentIncreases, rolloverExpiredLeases, accrueOverdueRent } from './rentIncreaseWorker';
+import { assessLateFees } from '../services/rentCharges';
 
 console.log('🔧 Sollux Workers started');
 
@@ -76,7 +77,9 @@ setInterval(scheduleAllScrapes, 6 * 60 * 60 * 1000);
 async function runLeaseMaintenance() {
   await applyDueRentIncreases().catch(err => console.warn('[RentIncrease] run failed:', err));
   await rolloverExpiredLeases().catch(err => console.warn('[LeaseRollover] run failed:', err));
+  // Last month into arrears first, then this month's late fees.
   await accrueOverdueRent().catch(err => console.warn('[Arrears] run failed:', err));
+  await assessLateFees().catch(err => console.warn('[LateFees] run failed:', err));
 }
 runLeaseMaintenance();
 setInterval(runLeaseMaintenance, 24 * 60 * 60 * 1000);

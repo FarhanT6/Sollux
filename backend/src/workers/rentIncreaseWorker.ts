@@ -54,55 +54,80 @@ export async function applyDueRentIncreases(now = new Date()): Promise<number> {
   return applied;
 }
 
-// Roll unpaid rent into arrears once its due date has passed.
+// Roll a month's unpaid rent (and its late fees) into arrears once the month
+// is over. Until then it is that month's overdue amount, shown on its own
+// ("$1,550 overdue for October"); arrears are the months before it.
 //
-// The rule: the CURRENT month's rent is not arrears until its due day passes
-// unpaid. So we only accrue periods whose due date is strictly in the past.
+// It used to roll the month in as soon as its due day passed. The month was
+// then counted twice (in arrears and as overdue), and a payment logged for it
+// afterwards went to the month, so it never came off the arrears.
 //
-// Idempotency: arrearsCaughtUpThrough marks the last period already rolled in.
-// For a lease that has never been accrued (null), we seed it to the current
-// period WITHOUT accruing anything — existing arrearsBalance values were
-// entered by hand, and retroactively accruing every past month on top of them
-// would double-count. Accrual therefore starts from the next period onward.
+// What a month was paid is each received payment less the part of it that
+// paid down arrears, so a payment the owner sent to the balance does not also
+// count as covering the month.
+//
+// Idempotency: arrearsCaughtUpThrough marks the last month rolled in. A lease
+// never rolled (null) is seeded to last month without adding anything: its
+// arrearsBalance was entered by hand and covers the months before this one.
 export async function accrueOverdueRent(now = new Date()): Promise<number> {
   const leases = await db.lease.findMany({
     where: { status: 'ACTIVE' },
-    include: { rentPayments: true },
+    include: { rentPayments: true, rentCharges: true },
   });
 
-  const periodStart = (d: Date) => new Date(d.getFullYear(), d.getMonth(), 1);
+  const periodStart = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+  const addMonths = (d: Date, n: number) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + n, 1));
   const currentPeriod = periodStart(now);
+  const lastPeriod = addMonths(currentPeriod, -1);
+  const inPeriod = (d: Date, p: Date) => periodStart(new Date(d)).getTime() === p.getTime();
+  const owedFor = (lease: typeof leases[number], p: Date) => {
+    const credited = lease.rentPayments
+      .filter(x => inPeriod(x.periodDate, p) && x.status === 'RECEIVED')
+      .reduce((s, x) => s + Number(x.amount) - Number(x.appliedToArrears), 0);
+    const charges = lease.rentCharges.filter(c => inPeriod(c.periodDate, p)).reduce((s, c) => s + Number(c.amount), 0);
+    return Math.max(0, Math.round((Number(lease.rentAmount) + charges - credited) * 100) / 100);
+  };
 
   let accrued = 0;
   for (const lease of leases) {
-    // Seed a lease that has never been accrued; don't touch its balance.
     if (!lease.arrearsCaughtUpThrough) {
-      await db.lease.update({ where: { id: lease.id }, data: { arrearsCaughtUpThrough: currentPeriod } });
+      await db.lease.update({ where: { id: lease.id }, data: { arrearsCaughtUpThrough: lastPeriod } });
       continue;
     }
 
-    const dueDay = lease.rentDueDay ?? 1;
-    const rent = Number(lease.rentAmount);
+    // Once only: this month was rolled in early by the old rule. Take it back
+    // out (what was unpaid when it was rolled in, on its due day) so it is
+    // rolled in once, at month end, with everything paid toward it by then.
+    if (periodStart(lease.arrearsCaughtUpThrough).getTime() >= currentPeriod.getTime()) {
+      // A lease added this month was only seeded to this month, never rolled in.
+      if (lease.createdAt.getTime() >= currentPeriod.getTime() - 24 * 3600 * 1000) {
+        await db.lease.update({ where: { id: lease.id }, data: { arrearsCaughtUpThrough: lastPeriod } });
+        continue;
+      }
+      const dueDay = lease.rentDueDay ?? 1;
+      const daysInMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).getUTCDate();
+      const rolledAt = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), Math.min(dueDay, daysInMonth) + 1));
+      const credited = lease.rentPayments
+        .filter(x => inPeriod(x.periodDate, currentPeriod) && x.createdAt < rolledAt)
+        .reduce((s, x) => s + Number(x.amount), 0);
+      const wasAdded = Math.max(0, Math.round((Number(lease.rentAmount) - credited) * 100) / 100);
+      const back = Math.min(wasAdded, Math.max(0, Number(lease.arrearsBalance)));
+      await db.lease.update({
+        where: { id: lease.id },
+        data: { arrearsCaughtUpThrough: lastPeriod, ...(back > 0 ? { arrearsBalance: { decrement: back } } : {}) },
+      });
+      if (back > 0) console.log(`[Arrears] lease ${lease.id}: took ${back} for this month back out of arrears; it rolls in at month end`);
+      continue;
+    }
+
     let cursor = periodStart(lease.arrearsCaughtUpThrough);
     let shortfallTotal = 0;
     let lastAccrued: Date | null = null;
-
-    // Walk forward from the period after the last accrued one.
+    // Every finished month after the last one rolled in.
     for (;;) {
-      cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
-      if (cursor > currentPeriod) break;
-
-      // Due date for this period — clamp to the month's last day.
-      const daysInMonth = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0).getDate();
-      const dueDate = new Date(cursor.getFullYear(), cursor.getMonth(), Math.min(dueDay, daysInMonth));
-      // Not yet overdue (this is the "current month before its due date" case).
-      if (dueDate >= now) break;
-
-      const paid = lease.rentPayments
-        .filter(p => periodStart(new Date(p.periodDate)).getTime() === cursor.getTime())
-        .reduce((s, p) => s + Number(p.amount), 0);
-      const shortfall = Math.max(0, Math.round((rent - paid) * 100) / 100);
-      if (shortfall > 0) shortfallTotal += shortfall;
+      cursor = addMonths(cursor, 1);
+      if (cursor.getTime() >= currentPeriod.getTime()) break;
+      shortfallTotal += owedFor(lease, cursor);
       lastAccrued = cursor;
     }
 
@@ -110,7 +135,7 @@ export async function accrueOverdueRent(now = new Date()): Promise<number> {
       await db.lease.update({
         where: { id: lease.id },
         data: {
-          ...(shortfallTotal > 0 ? { arrearsBalance: { increment: shortfallTotal } } : {}),
+          ...(shortfallTotal > 0 ? { arrearsBalance: { increment: Math.round(shortfallTotal * 100) / 100 } } : {}),
           arrearsCaughtUpThrough: lastAccrued,
         },
       });
@@ -118,7 +143,7 @@ export async function accrueOverdueRent(now = new Date()): Promise<number> {
     }
   }
 
-  if (accrued > 0) console.log(`[Arrears] Rolled overdue rent into arrears on ${accrued} lease(s)`);
+  if (accrued > 0) console.log(`[Arrears] Rolled last month's unpaid rent into arrears on ${accrued} lease(s)`);
   return accrued;
 }
 

@@ -356,17 +356,21 @@ function RentSummaryCard({ leases, payments }: { leases: Lease[]; payments: Rent
   for (const p of payments) {
     if (p.status !== 'RECEIVED') continue;
     if (String(p.periodDate).slice(0, 7) !== ym) continue;
-    paidByLease.set(p.leaseId, (paidByLease.get(p.leaseId) ?? 0) + Number(p.amount));
+    // The part sent to arrears paid down the balance, not this month.
+    paidByLease.set(p.leaseId, (paidByLease.get(p.leaseId) ?? 0) + Number(p.amount) - Number(p.appliedToArrears ?? 0));
   }
+  // This month's rent plus any late fee charged on it.
+  const dueFor = (l: Lease) => Number(l.rentAmount)
+    + (l.rentCharges ?? []).filter(c => String(c.periodDate).slice(0, 7) === ym).reduce((s, c) => s + Number(c.amount), 0);
 
   const expected = leases.reduce((s, l) => s + Number(l.rentAmount), 0);
   const collected = leases.reduce((s, l) => s + Math.min(paidByLease.get(l.id) ?? 0, Number(l.rentAmount)), 0);
   const arrears = leases.reduce((s, l) => s + Number(l.arrearsBalance ?? 0), 0);
   const unpaid = leases
-    .filter(l => (paidByLease.get(l.id) ?? 0) + 0.01 < Number(l.rentAmount))
+    .filter(l => (paidByLease.get(l.id) ?? 0) + 0.01 < dueFor(l))
     .map(l => ({
       lease: l,
-      remaining: Number(l.rentAmount) - (paidByLease.get(l.id) ?? 0),
+      remaining: dueFor(l) - (paidByLease.get(l.id) ?? 0),
       overdue: now.getDate() > (l.rentDueDay ?? 1),
     }))
     .sort((a, b) => Number(b.overdue) - Number(a.overdue) || b.remaining - a.remaining);

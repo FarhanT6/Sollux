@@ -41,7 +41,9 @@ router.get('/monthly', async (req, res, next) => {
     const rentRows = activeLeases.map(lease => {
       const expected  = toNum(lease.rentAmount);
       const collected = lease.rentPayments.reduce((s, p) => s + toNum(p.amount), 0);
-      const remaining = Math.max(0, expected - collected);
+      // Money sent to the balance from earlier months did not pay this month.
+      const towardMonth = lease.rentPayments.reduce((s, p) => s + toNum(p.amount) - toNum(p.appliedToArrears), 0);
+      const remaining = Math.max(0, expected - towardMonth);
       const tenant    = lease.leaseTenants[0]?.tenant.fullName ?? 'Unknown';
       const tenantId  = lease.leaseTenants[0]?.tenant.id ?? null;
       return {
@@ -55,7 +57,7 @@ router.get('/monthly', async (req, res, next) => {
         collected,
         remaining,
         arrearsBalance: toNum(lease.arrearsBalance),
-        status: collected === 0 ? 'unpaid' : collected >= expected ? 'paid' : 'partial',
+        status: towardMonth <= 0 ? 'unpaid' : towardMonth >= expected ? 'paid' : 'partial',
         payments: lease.rentPayments.map(p => ({
           id: p.id,
           amount: toNum(p.amount),
