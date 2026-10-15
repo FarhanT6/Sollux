@@ -1886,6 +1886,9 @@ model ReimbursementPayment {
   bankAccountId String?
   bankAccount   BankAccount?      @relation(fields: [bankAccountId], references: [id], onDelete: SetNull)
   notes         String?
+  /// Set when the payment was made toward one invoice: what is not matched
+  /// to its lines still counts on it (an overpayment becomes credit).
+  invoiceId     String?
   createdAt     DateTime          @default(now())
 
   allocations ReimbursementAllocation[]

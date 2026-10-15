@@ -110,13 +110,17 @@ export interface ReimbursementPaymentRow {
   bankAccount?: { id: string; name: string; bank?: string | null; last4?: string | null } | null;
   allocations: { id: string; statementId: string | null; utilityAccountId: string | null; category: string; periodDate: string; amount: number }[];
 }
+export interface OpenInvoice { id: string; periodStart: string; periodEnd: string; total: number; paidAmount: number; outstanding: number; status: string }
+export interface ReimbursableBills { invoices: OpenInvoice[]; items: ReimbursableItem[] }
 export const getReimbursableItems = (leaseId: string) =>
-  api.get<ReimbursableItem[]>(`/reimbursements/lease/${leaseId}/owed`).then(r => r.data);
+  api.get<ReimbursableBills>(`/reimbursements/lease/${leaseId}/owed`).then(r => r.data);
+export const getInvoicePayments = (invoiceId: string) =>
+  api.get<{ lines: Record<string, number>; payments: { id: string; paidDate: string; method: string; amount: number }[]; earlier: number }>(`/reimbursements/invoices/${invoiceId}/payments`).then(r => r.data);
 export const getReimbursementPayments = (leaseId: string) =>
   api.get<ReimbursementPaymentRow[]>(`/reimbursements/lease/${leaseId}/payments`).then(r => r.data);
 export const createReimbursementPayment = (leaseId: string, data: {
   amount: number; paidDate: string; method: string; bankAccountId?: string | null; notes?: string | null;
-  allocations: { key: string; amount: number }[];
+  allocations: { key: string; amount: number }[]; invoiceId?: string | null;
 }) => api.post(`/reimbursements/lease/${leaseId}/payments`, data).then(r => r.data);
 export const deleteReimbursementPayment = (id: string) =>
   api.delete(`/reimbursements/payments/${id}`);
@@ -1027,8 +1031,8 @@ export const updateReimbursementInvoiceTerms = (id: string, terms: Reimbursement
   api.put(`/reimbursements/invoices/${id}/terms`, terms).then(r => r.data);
 export const getReimbursementInvoice = (id: string) =>
   api.get<any>(`/reimbursements/invoices/${id}`).then(r => r.data);
-export const recordReimbursementPayment = (id: string, amount: number, paidAt?: string) =>
-  api.post(`/reimbursements/invoices/${id}/payment`, { amount, paidAt }).then(r => r.data);
+export const recordReimbursementPayment = (id: string, amount: number, paidAt?: string, method?: string) =>
+  api.post(`/reimbursements/invoices/${id}/payment`, { amount, paidAt, method }).then(r => r.data);
 export const setReimbursementInvoiceStatus = (id: string, status: 'DRAFT' | 'SENT', notes?: string | null) =>
   api.patch(`/reimbursements/invoices/${id}`, { status, notes }).then(r => r.data);
 export const deleteReimbursementInvoice = (id: string) =>

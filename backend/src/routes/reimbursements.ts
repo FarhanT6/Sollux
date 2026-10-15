@@ -77,9 +77,17 @@ router.get('/invoices/:id', async (req, res) => {
 });
 
 router.post('/invoices/:id/payment', async (req, res) => {
-  const parsed = z.object({ amount: z.number().positive(), paidAt: z.string().optional() }).safeParse(req.body);
+  const parsed = z.object({
+    amount: z.number().positive(), paidAt: z.string().optional(),
+    method: z.string().optional(), bankAccountId: z.string().nullable().optional(), notes: z.string().nullable().optional(),
+  }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Enter an amount greater than zero.' });
-  try { res.json(await r.recordPayment(req.params.id, req.dbUserId!, parsed.data.amount, parsed.data.paidAt)); } catch (err) { fail(res, err); }
+  // Logged as a reimbursement payment matched to the invoice's lines, so it shows on the tenant row too.
+  try { res.json(await r.payInvoice(req.params.id, req.dbUserId!, parsed.data)); } catch (err) { fail(res, err); }
+});
+
+router.get('/invoices/:id/payments', async (req, res) => {
+  try { res.json(await r.invoicePayments(req.params.id, req.dbUserId!)); } catch (err) { fail(res, err); }
 });
 
 router.patch('/invoices/:id', async (req, res) => {
@@ -118,6 +126,7 @@ router.post('/lease/:leaseId/payments', async (req, res) => {
     bankAccountId: z.string().nullable().optional(),
     notes: z.string().nullable().optional(),
     allocations: z.array(z.object({ key: z.string().min(1), amount: z.number().min(0) })).default([]),
+    invoiceId: z.string().nullable().optional(),
   }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Enter an amount and a date.' });
   try { res.status(201).json(await r.recordReimbursementPayment(req.params.leaseId, req.dbUserId!, parsed.data)); } catch (err) { fail(res, err); }
