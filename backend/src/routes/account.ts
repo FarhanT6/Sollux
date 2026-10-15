@@ -27,9 +27,27 @@ router.get('/', async (req, res, next) => {
         where: { ownerUserId: ownerId, acceptedAt: null },
         orderBy: { createdAt: 'asc' },
       }),
-      db.user.findUnique({ where: { id: req.actingUserId! }, select: { id: true, email: true, fullName: true } }),
+      db.user.findUnique({ where: { id: req.actingUserId! }, select: { id: true, email: true, fullName: true, phone: true } }),
     ]);
     res.json({ owner, members, pendingInvites: invites, me, isOwner: !!req.isAccountOwner });
+  } catch (err) { next(err); }
+});
+
+// PATCH /api/account/phone — the mobile number shut-off and cancellation
+// alerts are texted to. Each person sets their own.
+router.patch('/phone', async (req, res, next) => {
+  try {
+    const { phone } = z.object({ phone: z.string().max(30).nullable() }).parse(req.body);
+    let e164: string | null = null;
+    if (phone && phone.trim()) {
+      const digits = phone.replace(/\D/g, '');
+      if (digits.length === 10) e164 = `+1${digits}`;
+      else if (digits.length === 11 && digits.startsWith('1')) e164 = `+${digits}`;
+      else if (phone.trim().startsWith('+') && digits.length >= 8 && digits.length <= 15) e164 = `+${digits}`;
+      else return res.status(400).json({ error: 'Enter a mobile number like (760) 555-0123.' });
+    }
+    await db.user.update({ where: { id: req.actingUserId! }, data: { phone: e164 } });
+    res.json({ phone: e164 });
   } catch (err) { next(err); }
 });
 
