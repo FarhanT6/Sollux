@@ -6,6 +6,7 @@ import {
   type ReimbursementRule, type ReimbursementConfig, type ReimbursementInvoiceSummary, type ReimbursementDraft,
 } from '../../api/client';
 import { fmtDate, todayISO } from '../../lib/date';
+import { RENT_PAYMENT_METHODS, RENT_PAYMENT_METHOD_LABELS } from '../../types';
 
 /**
  * The tenant's utility reimbursement for one lease: which utilities they
@@ -50,7 +51,7 @@ export default function UtilityReimbursementPanel({ leaseId }: { leaseId: string
 
   // Payment recording
   const [payingId, setPayingId] = useState<string | null>(null);
-  const [payForm, setPayForm] = useState({ amount: '', paidAt: todayISO() });
+  const [payForm, setPayForm] = useState({ amount: '', paidAt: todayISO(), method: 'ZELLE' });
 
   async function load() {
     setLoading(true);
@@ -107,9 +108,10 @@ export default function UtilityReimbursementPanel({ leaseId }: { leaseId: string
     if (!(amount > 0)) return;
     setBusy(id); setError(null);
     try {
-      await recordReimbursementPayment(id, amount, payForm.paidAt);
+      // Logged as a reimbursement matched to this invoice's lines; it shows on the tenant's payment history too.
+      await recordReimbursementPayment(id, amount, payForm.paidAt, payForm.method);
       setPayingId(null);
-      setPayForm({ amount: '', paidAt: todayISO() });
+      setPayForm({ amount: '', paidAt: todayISO(), method: 'ZELLE' });
       await load();
     } catch (err: any) {
       setError(err?.response?.data?.error ?? 'Could not record the payment.');
@@ -303,6 +305,9 @@ export default function UtilityReimbursementPanel({ leaseId }: { leaseId: string
                   <div className="flex items-center gap-2 mt-2">
                     <input type="number" step="0.01" className={`${sel} w-28`} value={payForm.amount} onChange={e => setPayForm(f => ({ ...f, amount: e.target.value }))} placeholder="Amount" />
                     <input type="date" className={sel} value={payForm.paidAt} onChange={e => setPayForm(f => ({ ...f, paidAt: e.target.value }))} />
+                    <select className={sel} value={payForm.method} onChange={e => setPayForm(f => ({ ...f, method: e.target.value }))}>
+                      {RENT_PAYMENT_METHODS.map(m => <option key={m} value={m}>{RENT_PAYMENT_METHOD_LABELS[m]}</option>)}
+                    </select>
                     <button onClick={() => pay(inv.id)} disabled={busy === inv.id} className="btn btn-primary text-xs disabled:opacity-50">Save</button>
                     <button onClick={() => setPayingId(null)} className="btn text-xs">Cancel</button>
                     <span className="text-xs text-gray-600">Paying more than the total banks the difference as credit for the next invoice.</span>

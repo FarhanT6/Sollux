@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import BackLink from '../components/ui/BackLink';
-import { getReimbursementInvoice, setReimbursementInvoiceStatus, updateReimbursementInvoiceTerms } from '../api/client';
+import { getReimbursementInvoice, getInvoicePayments, setReimbursementInvoiceStatus, updateReimbursementInvoiceTerms } from '../api/client';
+import { RENT_PAYMENT_METHOD_LABELS, type RentPaymentMethod } from '../types';
 import { fmtDate } from '../lib/date';
 
 /**
@@ -58,10 +59,13 @@ export default function ReimbursementInvoicePage() {
   const [editingTerms, setEditingTerms] = useState(false);
   const [savingTerms, setSavingTerms] = useState(false);
   const [termsForm, setTermsForm] = useState({ dueDate: '', payableTo: '', paymentInstructions: '' });
+  // What each line has been reimbursed, and the payments made toward the invoice.
+  const [pays, setPays] = useState<{ lines: Record<string, number>; payments: { id: string; paidDate: string; method: string; amount: number }[]; earlier: number } | null>(null);
 
   useEffect(() => {
     if (!id) return;
     getReimbursementInvoice(id).then(setInv).catch(err => setError(err?.response?.data?.error ?? 'Invoice not found.'));
+    getInvoicePayments(id).then(setPays).catch(() => {});
   }, [id]);
 
   const months = useMemo(() => {
@@ -260,7 +264,14 @@ export default function ReimbursementInvoicePage() {
                       </td>
                       <td className="inv-td" style={{ ...td, ...right, color: '#3f4552' }}>{l.kind === 'FLAT' ? `${money(l.baseAmount)} / mo` : money(l.baseAmount)}</td>
                       <td className="inv-td" style={{ ...td, ...right, color: '#3f4552' }}>{l.kind === 'FLAT' ? 'flat' : l.sharePercent != null ? `${l.sharePercent}%` : '100%'}</td>
-                      <td className="inv-td" style={{ ...td, ...right, fontWeight: 600 }}>{money(l.amount)}</td>
+                      <td className="inv-td" style={{ ...td, ...right, fontWeight: 600 }}>
+                        {money(l.amount)}
+                        {(pays?.lines[l.id] ?? 0) > 0.005 && (
+                          <div style={{ fontSize: 11, fontWeight: 500, color: (pays!.lines[l.id] >= num(l.amount) - 0.005) ? '#2f7a4f' : '#a8641c' }}>
+                            {pays!.lines[l.id] >= num(l.amount) - 0.005 ? '✓ reimbursed' : `${money(pays!.lines[l.id])} paid`}
+                          </div>
+                        )}
+                      </td>
                     </tr>
                   ))}
                   {multiMonth && (
@@ -286,7 +297,17 @@ export default function ReimbursementInvoicePage() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}><span>Credit from previous overpayment</span><span style={right}>−{money(inv.creditApplied)}</span></div>
                   </>
                 )}
-                {paid > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}><span>Paid{inv.paidAt ? ` on ${fmtDate(inv.paidAt, 'MMM d, yyyy')}` : ''}</span><span style={right}>−{money(paid)}</span></div>}
+                {paid > 0 && (pays && pays.payments.length > 0 ? (
+                  <>
+                    {pays.earlier > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}><span>Paid</span><span style={right}>−{money(pays.earlier)}</span></div>}
+                    {pays.payments.map(p => (
+                      <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
+                        <span>Paid {fmtDate(p.paidDate, 'MMM d, yyyy')}{p.method && p.method !== 'OTHER' ? ` · ${RENT_PAYMENT_METHOD_LABELS[p.method as RentPaymentMethod] ?? p.method}` : ''}</span>
+                        <span style={right}>−{money(p.amount)}</span>
+                      </div>
+                    ))}
+                  </>
+                ) : <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}><span>Paid{inv.paidAt ? ` on ${fmtDate(inv.paidAt, 'MMM d, yyyy')}` : ''}</span><span style={right}>−{money(paid)}</span></div>)}
                 {paid > 0 && balance < -0.01 && <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}><span>Overpaid — credited to your next invoice</span><span style={right}>{money(-balance)}</span></div>}
               </div>
             )}

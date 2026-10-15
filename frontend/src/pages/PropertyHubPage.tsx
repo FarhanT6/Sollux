@@ -25,7 +25,7 @@ import {
   addLeaseDeposit, deleteLeaseDeposit,
 } from '../api/client';
 import type { PaymentApplyTo } from '../types';
-import type { ReimbursableItem, ReimbursementPaymentRow } from '../api/client';
+import type { ReimbursableItem, ReimbursableBills, ReimbursementPaymentRow } from '../api/client';
 import type {
   Property, Lease, Loan, Expense, InsurancePolicy, TaxAssessment,
   Improvement, PropertyPnL, Tenant, Unit, Document, DocumentCategory, PropertyType, RentChange, ScheduledRentIncrease, LeaseUtilityCharge,
@@ -968,7 +968,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   const [payApplyTo, setPayApplyTo] = useState<PaymentApplyTo>('CURRENT');
   // Rent, or utilities the tenant is paying back (matched to the bills it covers).
   const [payFor, setPayFor] = useState<'RENT' | 'UTILITY'>('RENT');
-  const [reimbItems, setReimbItems] = useState<Record<string, ReimbursableItem[]>>({});
+  const [reimbItems, setReimbItems] = useState<Record<string, ReimbursableBills>>({});
   const [reimbAlloc, setReimbAlloc] = useState<Record<string, string>>({});
   const [reimbTouched, setReimbTouched] = useState(false);
   const [reimbPays, setReimbPays] = useState<Record<string, ReimbursementPaymentRow[]>>({});
@@ -1459,11 +1459,16 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
     return items;
   }
 
-  // Oldest unpaid bills first, until the amount runs out.
-  function autoAllocate(items: ReimbursableItem[], amount: number) {
+  // Invoices first (oldest invoice first), then bills on no invoice, oldest
+  // first, until the amount runs out.
+  function autoAllocate(bills: ReimbursableBills | undefined, amount: number) {
     const out: Record<string, string> = {};
+    if (!bills) return out;
     let left = Math.round(amount * 100) / 100;
-    for (const it of [...items].filter(i => i.outstanding > 0).sort((a, b) => a.periodDate.localeCompare(b.periodDate))) {
+    const invOrder = new Map([...bills.invoices].reverse().map((inv, i) => [inv.id, i]));
+    const ordered = bills.items.filter(i => i.outstanding > 0).sort((a, b) =>
+      (a.invoiceId ? invOrder.get(a.invoiceId)! : 1e6) - (b.invoiceId ? invOrder.get(b.invoiceId)! : 1e6) || a.periodDate.localeCompare(b.periodDate));
+    for (const it of ordered) {
       if (left <= 0) break;
       const take = Math.min(left, it.outstanding);
       out[it.key] = take.toFixed(2);
@@ -1477,9 +1482,13 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
     const allocations = Object.entries(reimbAlloc)
       .map(([key, v]) => ({ key, amount: parseFloat(v) || 0 }))
       .filter(a => a.amount > 0);
+    // All of it toward one invoice: the invoice counts the whole payment (an overpayment banks as credit).
+    const byKey = new Map((reimbItems[leaseId]?.items ?? []).map(i => [i.key, i]));
+    const invs = new Set(allocations.map(a => byKey.get(a.key)?.invoiceId ?? null));
+    const invoiceId = invs.size === 1 ? [...invs][0] : null;
     await createReimbursementPayment(leaseId, {
       amount, paidDate: payDate, method: payMethod,
-      bankAccountId: payBankAccountId || null, notes: payNotes || null, allocations,
+      bankAccountId: payBankAccountId || null, notes: payNotes || null, allocations, invoiceId,
     });
     const [items, pays] = await Promise.all([loadReimbItems(leaseId), getReimbursementPayments(leaseId)]);
     void items;
@@ -2161,8 +2170,8 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                         const v = e.target.value as 'RENT' | 'UTILITY';
                         setPayFor(v);
                         if (v === 'UTILITY') {
-                          const items = reimbItems[lease.id] ?? await loadReimbItems(lease.id);
-                          if (!reimbTouched && parseFloat(payAmount) > 0) setReimbAlloc(autoAllocate(items, parseFloat(payAmount)));
+                          const bills = reimbItems[lease.id] ?? await loadReimbItems(lease.id);
+                          if (!reimbTouched && parseFloat(payAmount) > 0) setReimbAlloc(autoAllocate(bills, parseFloat(payAmount)));
                         }
                       }}>
                       <option value="RENT">Rent</option>
@@ -2170,7 +2179,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                     </select>
                     <input type="number" placeholder="Amount" value={payAmount} onChange={e => {
                       setPayAmount(e.target.value);
-                      if (payFor === 'UTILITY' && !reimbTouched) setReimbAlloc(autoAllocate(reimbItems[lease.id] ?? [], parseFloat(e.target.value) || 0));
+                      if (payFor === 'UTILITY' && !reimbTouched) setReimbAlloc(autoAllocate(reimbItems[lease.id], parseFloat(e.target.value) || 0));
                     }} className="input-dark text-xs w-28" />
                     {payFor === 'RENT' && (
                       <input type="month"  title="Month this payment applies to" value={payForMonth} onChange={e => setPayForMonth(e.target.value)} className="input-dark text-xs w-36" />
@@ -2229,11 +2238,11 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                     {payError && <p className="w-full text-xs text-red-400">{payError}</p>}
                     {payFor === 'UTILITY' && (
                       <ReimbursementPicker
-                        items={reimbItems[lease.id]}
+                        bills={reimbItems[lease.id]}
                         amount={parseFloat(payAmount) || 0}
                         alloc={reimbAlloc}
                         onChange={next => { setReimbAlloc(next); setReimbTouched(true); }}
-                        onAuto={() => { setReimbAlloc(autoAllocate(reimbItems[lease.id] ?? [], parseFloat(payAmount) || 0)); setReimbTouched(false); }}
+                        onAuto={() => { setReimbAlloc(autoAllocate(reimbItems[lease.id], parseFloat(payAmount) || 0)); setReimbTouched(false); }}
                       />
                     )}
                   </div>
@@ -2450,7 +2459,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                         <p className="px-4 pt-3 pb-1 text-xs font-medium text-gray-300">Utility reimbursements</p>
                         <div className="px-4 pb-3 space-y-1.5">
                           {reimbPays[lease.id]!.map(rp => {
-                            const items = new Map((reimbItems[lease.id] ?? []).map(i => [i.statementId ?? i.key, i]));
+                            const items = new Map((reimbItems[lease.id]?.items ?? []).map(i => [i.statementId ?? i.key, i]));
                             const allocated = rp.allocations.reduce((s2, a) => s2 + Number(a.amount), 0);
                             return (
                               <div key={rp.id} className="text-xs flex gap-3 group">
@@ -3874,63 +3883,113 @@ function DocumentsTab({ propertyId, documents, setDocuments }: {
 }
 
 // ── Utility reimbursement: which bills a payment covers ───────────────────────
-// The property's utility bills (the lease's reimbursement accounts and shares
-// when it has them), newest first. Ticking a bill puts what is still owed on
-// it, up to what is left of the payment; amounts can be typed over.
-function ReimbursementPicker({ items, amount, alloc, onChange, onAuto }: {
-  items: ReimbursableItem[] | undefined;
+// Invoices first, each with its lines and what is still owed on them; then
+// the property's bills that are on no invoice (the lease's reimbursement
+// accounts and shares when it has them). Ticking an invoice puts its unpaid
+// lines on the payment; ticking a bill puts what is owed on it, up to what is
+// left of the payment. Amounts can be typed over.
+function ReimbursementPicker({ bills, amount, alloc, onChange, onAuto }: {
+  bills: ReimbursableBills | undefined;
   amount: number;
   alloc: Record<string, string>;
   onChange: (next: Record<string, string>) => void;
   onAuto: () => void;
 }) {
   const [showPaid, setShowPaid] = useState(false);
-  if (!items) return <p className="w-full text-xs text-gray-500">Loading the property's utility bills…</p>;
+  const [showLoose, setShowLoose] = useState(false);
+  if (!bills) return <p className="w-full text-xs text-gray-500">Loading the property's utility bills…</p>;
+  const { invoices, items } = bills;
   if (items.length === 0) {
-    return <p className="w-full text-xs text-gray-500">No utility bills on this property in the last 12 months to match it to. It will be logged without a bill.</p>;
+    return <p className="w-full text-xs text-gray-500">No invoices or utility bills in the last 12 months to match it to. It will be logged without a bill.</p>;
   }
   const allocated = Object.values(alloc).reduce((s, v) => s + (parseFloat(v) || 0), 0);
   const left = Math.round((amount - allocated) * 100) / 100;
-  const shown = items.filter(i => showPaid || i.outstanding > 0 || alloc[i.key]);
   const fmt = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const visible = (i: ReimbursableItem) => showPaid || i.outstanding > 0 || !!alloc[i.key];
+  const loose = items.filter(i => !i.invoiceId);
+  const looseOpen = showLoose || invoices.length === 0 || loose.some(i => alloc[i.key]);
+
+  const fill = (list: ReimbursableItem[], next: Record<string, string>) => {
+    let room = Math.max(0, Math.round((amount - Object.values(next).reduce((s, v) => s + (parseFloat(v) || 0), 0)) * 100) / 100);
+    for (const i of [...list].filter(x => x.outstanding > 0 && !next[x.key]).sort((a, b) => a.periodDate.localeCompare(b.periodDate))) {
+      const take = amount > 0 ? Math.min(room, i.outstanding) : i.outstanding;
+      if (amount > 0 && take <= 0) break;
+      next[i.key] = take.toFixed(2);
+      room = Math.round((room - take) * 100) / 100;
+    }
+    return next;
+  };
+
+  const row = (i: ReimbursableItem, indent: boolean) => {
+    const on = !!alloc[i.key];
+    return (
+      <div key={i.key} className={`flex items-center gap-2 text-xs ${indent ? 'pl-5' : ''}`}>
+        <input type="checkbox" checked={on} onChange={e => {
+          const next = { ...alloc };
+          if (e.target.checked) fill([i], next); else delete next[i.key];
+          if (e.target.checked && !next[i.key]) next[i.key] = (i.outstanding || i.owed).toFixed(2);
+          onChange(next);
+        }} />
+        <span className="text-gray-300 w-20 shrink-0">{fmtDateSafe(i.periodDate, 'MMM yyyy')}</span>
+        <span className="text-gray-300 min-w-0 truncate flex-1" title={i.period}>{i.label}</span>
+        <span className="text-gray-500 shrink-0 text-right" title={i.period}>
+          {i.sharePercent != null ? `${i.sharePercent}% of ${fmt(i.billAmount)} = ` : ''}{fmt(i.owed)}
+          {i.paid > 0 && <span className="text-emerald-500/80"> · {i.outstanding <= 0 ? 'reimbursed' : `${fmt(i.paid)} paid`}</span>}
+        </span>
+        <input type="number" step="0.01" value={alloc[i.key] ?? ''} placeholder="0.00" disabled={!on}
+          onChange={e => onChange({ ...alloc, [i.key]: e.target.value })}
+          className="input-dark text-xs w-24 disabled:opacity-30" />
+      </div>
+    );
+  };
+
   return (
     <div className="w-full mt-1 rounded-lg p-2" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
       <div className="flex items-center gap-3 mb-1.5 text-xs">
-        <span className="text-gray-300">Which bills does it cover?</span>
+        <span className="text-gray-300">What does it pay?</span>
         <span className={left < -0.005 ? 'text-red-400' : left > 0.005 ? 'text-amber-400' : 'text-emerald-400'}>
           {left < -0.005 ? `${fmt(-left)} more than paid` : left > 0.005 ? `${fmt(left)} not matched yet` : amount > 0 ? 'all matched' : ''}
         </span>
-        <button className="text-amber-400 hover:text-amber-300 ml-auto" onClick={onAuto} title="Oldest unpaid bills first">Match oldest first</button>
+        <button className="text-amber-400 hover:text-amber-300 ml-auto" onClick={onAuto} title="Oldest invoice first, then other bills">Match oldest first</button>
         <label className="text-gray-500 flex items-center gap-1 cursor-pointer">
           <input type="checkbox" checked={showPaid} onChange={e => setShowPaid(e.target.checked)} /> show paid
         </label>
       </div>
-      <div className="max-h-56 overflow-y-auto space-y-1">
-        {shown.length === 0 && <p className="text-xs text-gray-500">Every bill is paid back. Tick "show paid" to see them.</p>}
-        {shown.map(i => {
-          const on = !!alloc[i.key];
+      <div className="max-h-72 overflow-y-auto space-y-1">
+        {invoices.filter(inv => showPaid || inv.outstanding > 0.005 || items.some(i => i.invoiceId === inv.id && alloc[i.key])).map(inv => {
+          const lines = items.filter(i => i.invoiceId === inv.id);
+          const open = lines.filter(i => i.outstanding > 0);
+          const allOn = open.length > 0 && open.every(i => alloc[i.key]);
           return (
-            <div key={i.key} className="flex items-center gap-2 text-xs">
-              <input type="checkbox" checked={on} onChange={e => {
-                const next = { ...alloc };
-                if (e.target.checked) {
-                  const room = Math.max(0, Math.round((amount - allocated) * 100) / 100);
-                  next[i.key] = (room > 0 ? Math.min(room, i.outstanding || i.owed) : (i.outstanding || i.owed)).toFixed(2);
-                } else delete next[i.key];
-                onChange(next);
-              }} />
-              <span className="text-gray-300 w-20 shrink-0">{fmtDateSafe(i.periodDate, 'MMM yyyy')}</span>
-              <span className="text-gray-300 min-w-0 truncate flex-1" title={i.period}>{i.label}</span>
-              <span className="text-gray-500 shrink-0 text-right" title={i.period}>
-                {i.sharePercent != null ? `${i.sharePercent}% of ${fmt(i.billAmount)} = ` : ''}{fmt(i.owed)}
-                {i.paid > 0 && <span className="text-emerald-500/80"> · {fmt(i.paid)} paid</span>}
-              </span>
-              <input type="number" step="0.01" value={alloc[i.key] ?? ''} placeholder="0.00" disabled={!on}
-                onChange={e => onChange({ ...alloc, [i.key]: e.target.value })}
-                className="input-dark text-xs w-24 disabled:opacity-30" />
+            <div key={inv.id} className="rounded-md p-1.5" style={{ background: 'rgba(255,255,255,0.03)' }}>
+              <div className="flex items-center gap-2 text-xs">
+                <input type="checkbox" checked={allOn} disabled={open.length === 0} onChange={e => {
+                  const next = { ...alloc };
+                  if (e.target.checked) fill(open, next); else for (const i of lines) delete next[i.key];
+                  onChange(next);
+                }} />
+                <span className="text-white font-medium">Invoice {fmtDateSafe(inv.periodStart, 'MMM d')} – {fmtDateSafe(inv.periodEnd, 'MMM d, yyyy')}</span>
+                <span className="text-gray-500">{fmt(inv.total)}</span>
+                <span className={`ml-auto ${inv.outstanding > 0.005 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                  {inv.outstanding > 0.005 ? `${fmt(inv.outstanding)} left` : 'paid'}
+                </span>
+              </div>
+              <div className="mt-1 space-y-1">{lines.filter(visible).map(i => row(i, true))}</div>
             </div>
           );
         })}
+        {loose.length > 0 && (
+          invoices.length > 0 && !looseOpen ? (
+            <button className="text-xs text-gray-500 hover:text-gray-300" onClick={() => setShowLoose(true)}>
+              ▸ Bills not on an invoice ({loose.filter(i => i.outstanding > 0).length})
+            </button>
+          ) : (
+            <div className="space-y-1">
+              {invoices.length > 0 && <p className="text-xs text-gray-500 pt-1">Bills not on an invoice</p>}
+              {loose.filter(visible).map(i => row(i, false))}
+            </div>
+          )
+        )}
       </div>
     </div>
   );

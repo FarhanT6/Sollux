@@ -397,13 +397,49 @@ export interface ReimbursableItem {
 
 const monthStart = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
 
+const flatKey = (category: string, month: Date) => `flat:${category}:${month.toISOString().slice(0, 7)}`;
+const lineKey = (l: { statementId: string | null; category: string; periodStart: Date | null; sortKey: Date }) =>
+  l.statementId ?? flatKey(l.category, monthStart(l.periodStart ?? l.sortKey));
+
 /**
- * The utility bills a tenant could be paying back, newest first, with what is
- * still outstanding on each. With reimbursement rules on the lease, their
- * accounts and shares; without, every utility account on the property that
- * is not another unit's meter, at the whole bill.
+ * How much of each line of an invoice has been reimbursed: the payments
+ * matched to the line, then any payment recorded on the invoice as a lump sum
+ * (before payments were matched to bills) spread over its lines oldest first.
  */
-export async function reimbursableItems(leaseId: string, userId: string, months = 12): Promise<ReimbursableItem[]> {
+async function invoiceLinePaid(invoices: { id: string; paidAmount: unknown; lines: { statementId: string | null; category: string; periodStart: Date | null; sortKey: Date; amount: unknown }[] }[]) {
+  const allocs = invoices.length ? await db.reimbursementAllocation.findMany({
+    where: { invoiceId: { in: invoices.map(i => i.id) } },
+    select: { invoiceId: true, statementId: true, category: true, periodDate: true, amount: true },
+  }) : [];
+  const paid = new Map<string, number>(); // `${invoiceId}|${key}`
+  for (const inv of invoices) {
+    const mine = allocs.filter(a => a.invoiceId === inv.id);
+    for (const a of mine) {
+      const k = `${inv.id}|${a.statementId ?? flatKey(a.category, a.periodDate)}`;
+      paid.set(k, (paid.get(k) ?? 0) + num(a.amount));
+    }
+    let lump = round2(num(inv.paidAmount) - mine.reduce((t, a) => t + num(a.amount), 0));
+    for (const l of [...inv.lines].sort((a, b) => a.sortKey.getTime() - b.sortKey.getTime())) {
+      if (lump <= 0) break;
+      const k = `${inv.id}|${lineKey(l)}`;
+      const take = Math.min(lump, Math.max(0, num(l.amount) - (paid.get(k) ?? 0)));
+      if (take > 0) { paid.set(k, round2((paid.get(k) ?? 0) + take)); lump = round2(lump - take); }
+    }
+  }
+  return paid;
+}
+
+export interface OpenInvoice {
+  id: string; periodStart: string; periodEnd: string; total: number; paidAmount: number; outstanding: number; status: string;
+}
+
+/**
+ * What a tenant could be paying back. Invoices first, each line with what is
+ * still owed on it; then bills not on any invoice (newest first). With rules
+ * on the lease, their accounts and shares; without, every utility account on
+ * the property that is not another unit's meter, at the whole bill.
+ */
+export async function reimbursableItems(leaseId: string, userId: string, months = 12): Promise<{ invoices: OpenInvoice[]; items: ReimbursableItem[] }> {
   const lease = await ownedLease(leaseId, userId);
   const config = lease.utilityReimbursement?.enabled ? lease.utilityReimbursement : null;
   const rules = config ? ((config.rulesJson as unknown as Rule[]) ?? []) : [];
@@ -419,10 +455,45 @@ export async function reimbursableItems(leaseId: string, userId: string, months 
     },
     select: { id: true, providerName: true, serviceLabel: true, category: true },
   });
-  // Rules that are only flat charges bill no statements.
+  const accountLabel = (a: { providerName: string; serviceLabel: string | null; category: string }) =>
+    `${a.providerName} · ${a.serviceLabel || CATEGORY_LABEL[a.category] || a.category}`;
+
+  // Invoices and their lines.
+  const invoices = config ? await db.reimbursementInvoice.findMany({
+    where: { reimbursementId: config.id },
+    include: { lines: true },
+    orderBy: { periodEnd: 'asc' },
+  }) : [];
+  const linePaid = await invoiceLinePaid(invoices);
+  const invoiced = new Set<string>();
+  const lineStatements = await db.statement.findMany({
+    where: { id: { in: invoices.flatMap(i => i.lines.map(l => l.statementId).filter((x): x is string => !!x)) } },
+    select: { id: true, utilityAccount: { select: { id: true, providerName: true, serviceLabel: true, category: true } } },
+  });
+  const stAcct = new Map(lineStatements.map(s => [s.id, s.utilityAccount]));
+
+  const items: ReimbursableItem[] = [];
+  for (const inv of invoices) {
+    for (const l of inv.lines.sort((a, b) => a.sortKey.getTime() - b.sortKey.getTime())) {
+      const key = lineKey(l);
+      invoiced.add(key);
+      const acct = l.statementId ? stAcct.get(l.statementId) : null;
+      const owed = round2(num(l.amount));
+      const paid = round2(linePaid.get(`${inv.id}|${key}`) ?? 0);
+      items.push({
+        key, utilityAccountId: acct?.id ?? null, statementId: l.statementId, category: l.category,
+        label: acct ? accountLabel(acct) : l.label,
+        periodDate: monthStart(l.kind === 'FLAT' ? (l.periodStart ?? l.sortKey) : l.sortKey).toISOString(),
+        period: l.periodStart && l.periodEnd ? `${l.periodStart.toISOString().slice(0, 10)} – ${l.periodEnd.toISOString().slice(0, 10)}` : l.sortKey.toISOString().slice(0, 10),
+        billAmount: round2(num(l.baseAmount)), sharePercent: l.kind === 'FLAT' || l.sharePercent == null || l.sharePercent === 100 ? null : l.sharePercent,
+        owed, paid, outstanding: round2(Math.max(0, owed - paid)), invoiceId: inv.id,
+      });
+    }
+  }
+
+  // Bills on no invoice.
   const billAccounts = config && !statementRules.length ? [] : accounts;
   const byAccount = new Map(billAccounts.map(a => [a.id, a]));
-
   const statements = billAccounts.length ? await db.statement.findMany({
     where: {
       utilityAccountId: { in: billAccounts.map(a => a.id) },
@@ -432,45 +503,29 @@ export async function reimbursableItems(leaseId: string, userId: string, months 
     select: { id: true, utilityAccountId: true, statementDate: true, billingPeriodStart: true, billingPeriodEnd: true, amountDue: true },
     orderBy: { statementDate: 'desc' },
   }) : [];
-
-  const [allocs, invoiceLines] = await Promise.all([
-    db.reimbursementAllocation.findMany({
-      where: { payment: { leaseId }, OR: [{ statementId: { in: statements.map(s => s.id) } }, { statementId: null }] },
-      select: { statementId: true, category: true, periodDate: true, amount: true },
-    }),
-    config ? db.reimbursementInvoiceLine.findMany({
-      where: { invoice: { reimbursementId: config.id } },
-      select: { statementId: true, kind: true, category: true, periodStart: true, invoiceId: true, invoice: { select: { status: true } } },
-    }) : Promise.resolve([]),
-  ]);
+  const allocs = await db.reimbursementAllocation.findMany({
+    where: { payment: { leaseId }, invoiceId: null },
+    select: { statementId: true, category: true, periodDate: true, amount: true },
+  });
   const paidOn = new Map<string, number>();
   for (const a of allocs) {
-    const k = a.statementId ?? `flat:${a.category}:${a.periodDate.toISOString().slice(0, 7)}`;
+    const k = a.statementId ?? flatKey(a.category, a.periodDate);
     paidOn.set(k, (paidOn.get(k) ?? 0) + num(a.amount));
   }
-  const onInvoice = new Map<string, { invoiceId: string; paid: boolean }>();
-  for (const l of invoiceLines) {
-    const k = l.statementId ?? (l.periodStart ? `flat:${l.category}:${l.periodStart.toISOString().slice(0, 7)}` : null);
-    if (k) onInvoice.set(k, { invoiceId: l.invoiceId, paid: l.invoice.status === 'PAID' });
-  }
-  const finish = (it: Omit<ReimbursableItem, 'paid' | 'outstanding' | 'invoiceId'>): ReimbursableItem => {
-    const inv = onInvoice.get(it.key);
-    // An invoice paid in full before payments were matched to bills counts its bills as paid.
-    const paid = round2(inv?.paid ? Math.max(it.owed, paidOn.get(it.key) ?? 0) : paidOn.get(it.key) ?? 0);
-    return { ...it, paid, outstanding: round2(Math.max(0, it.owed - paid)), invoiceId: inv?.invoiceId ?? null };
+  const loose = (it: Omit<ReimbursableItem, 'paid' | 'outstanding' | 'invoiceId'>): ReimbursableItem => {
+    const paid = round2(paidOn.get(it.key) ?? 0);
+    return { ...it, paid, outstanding: round2(Math.max(0, it.owed - paid)), invoiceId: null };
   };
-
-  const items: ReimbursableItem[] = [];
+  const looseItems: ReimbursableItem[] = [];
   for (const s of statements) {
+    if (invoiced.has(s.id)) continue;
     const acct = byAccount.get(s.utilityAccountId)!;
     const rule = statementRules.find(r => r.category === acct.category);
     const share = rule ? (rule.mode === 'FULL' ? 100 : num(rule.value)) : 100;
     const base = num(s.amountDue);
-    const ref = s.billingPeriodEnd ?? s.statementDate;
-    items.push(finish({
-      key: s.id, utilityAccountId: acct.id, statementId: s.id, category: acct.category,
-      label: `${acct.providerName}${acct.serviceLabel ? ` · ${acct.serviceLabel}` : ` · ${CATEGORY_LABEL[acct.category] ?? acct.category}`}`,
-      periodDate: monthStart(ref).toISOString(),
+    looseItems.push(loose({
+      key: s.id, utilityAccountId: acct.id, statementId: s.id, category: acct.category, label: accountLabel(acct),
+      periodDate: monthStart(s.billingPeriodEnd ?? s.statementDate).toISOString(),
       period: s.billingPeriodStart && s.billingPeriodEnd
         ? `${s.billingPeriodStart.toISOString().slice(0, 10)} – ${s.billingPeriodEnd.toISOString().slice(0, 10)}`
         : `billed ${s.statementDate.toISOString().slice(0, 10)}`,
@@ -480,15 +535,23 @@ export async function reimbursableItems(leaseId: string, userId: string, months 
   for (const rule of rules.filter(r => r.mode === 'FLAT_MONTHLY')) {
     for (let m = 0; m < months; m++) {
       const p = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() - m, 1));
-      items.push(finish({
-        key: `flat:${rule.category}:${p.toISOString().slice(0, 7)}`, utilityAccountId: null, statementId: null, category: rule.category,
+      const key = flatKey(rule.category, p);
+      if (invoiced.has(key)) continue;
+      looseItems.push(loose({
+        key, utilityAccountId: null, statementId: null, category: rule.category,
         label: `${rule.label || CATEGORY_LABEL[rule.category] || rule.category} (flat monthly)`,
         periodDate: p.toISOString(), period: p.toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }),
         billAmount: round2(num(rule.value)), sharePercent: null, owed: round2(num(rule.value)),
       }));
     }
   }
-  return items.sort((a, b) => b.periodDate.localeCompare(a.periodDate) || a.label.localeCompare(b.label));
+  looseItems.sort((a, b) => b.periodDate.localeCompare(a.periodDate) || a.label.localeCompare(b.label));
+
+  const open: OpenInvoice[] = invoices.slice().reverse().map(inv => {
+    const total = round2(num(inv.total)), paid = round2(num(inv.paidAmount));
+    return { id: inv.id, periodStart: inv.periodStart.toISOString(), periodEnd: inv.periodEnd.toISOString(), total, paidAmount: paid, outstanding: round2(Math.max(0, total - paid)), status: inv.status };
+  });
+  return { invoices: open, items: [...items, ...looseItems] };
 }
 
 export interface ReimbursementPaymentInput {
@@ -498,6 +561,8 @@ export interface ReimbursementPaymentInput {
   bankAccountId?: string | null;
   notes?: string | null;
   allocations: { key: string; amount: number }[];
+  /** Paying one invoice: what is not matched to its lines is still counted on it (an overpayment becomes credit). */
+  invoiceId?: string | null;
 }
 
 /** Log what the tenant paid back and the bills it covers. */
@@ -510,8 +575,12 @@ export async function recordReimbursementPayment(leaseId: string, userId: string
     const acct = await db.bankAccount.findFirst({ where: { id: input.bankAccountId, userId }, select: { id: true } });
     if (!acct) throw new ReimbursementError('Bank account not found', 404);
   }
-  const items = new Map((await reimbursableItems(leaseId, userId, 36)).map(i => [i.key, i]));
+  const owed = await reimbursableItems(leaseId, userId, 36);
+  // An invoiced bill is matched on its invoice, never as a loose bill.
+  const items = new Map<string, ReimbursableItem>();
+  for (const i of owed.items) if (!items.has(i.key) || i.invoiceId) items.set(i.key, i);
   for (const a of allocations) if (!items.has(a.key)) throw new ReimbursementError('One of the bills picked is not on this lease.');
+  if (input.invoiceId && !owed.invoices.some(i => i.id === input.invoiceId)) throw new ReimbursementError('Invoice not found', 404);
 
   const paidAt = new Date(input.paidDate);
   const payment = await db.reimbursementPayment.create({
@@ -530,6 +599,12 @@ export async function recordReimbursementPayment(leaseId: string, userId: string
   // Bills on an invoice: the invoice shows the payment too.
   const perInvoice = new Map<string, number>();
   for (const a of payment.allocations) if (a.invoiceId) perInvoice.set(a.invoiceId, (perInvoice.get(a.invoiceId) ?? 0) + num(a.amount));
+  // Paying an invoice: the rest of the money counts on it too, so an overpayment banks as credit.
+  if (input.invoiceId) {
+    const rest = round2(input.amount - allocated);
+    if (rest > 0) perInvoice.set(input.invoiceId, (perInvoice.get(input.invoiceId) ?? 0) + rest);
+    await db.reimbursementPayment.update({ where: { id: payment.id }, data: { invoiceId: input.invoiceId } });
+  }
   for (const [invoiceId, amt] of perInvoice) await recordPayment(invoiceId, userId, round2(amt), input.paidDate);
   return payment;
 }
@@ -552,6 +627,10 @@ export async function deleteReimbursementPayment(paymentId: string, userId: stri
   if (!p) throw new ReimbursementError('Payment not found', 404);
   const perInvoice = new Map<string, number>();
   for (const a of p.allocations) if (a.invoiceId) perInvoice.set(a.invoiceId, (perInvoice.get(a.invoiceId) ?? 0) + num(a.amount));
+  if (p.invoiceId) {
+    const rest = round2(num(p.amount) - p.allocations.reduce((t, a) => t + num(a.amount), 0));
+    if (rest > 0) perInvoice.set(p.invoiceId, (perInvoice.get(p.invoiceId) ?? 0) + rest);
+  }
   await db.$transaction(async tx => {
     for (const [invoiceId, amt] of perInvoice) {
       const inv = await tx.reimbursementInvoice.findUnique({ where: { id: invoiceId } });
@@ -569,6 +648,50 @@ export async function deleteReimbursementPayment(paymentId: string, userId: stri
         await tx.utilityReimbursement.update({ where: { id: inv.reimbursementId }, data: { creditBalance: Math.max(0, round2(num(cfg?.creditBalance) - creditBack)) } });
       }
     }
+    await tx.reimbursementAllocation.deleteMany({ where: { paymentId: p.id } });
     await tx.reimbursementPayment.delete({ where: { id: p.id } });
   });
+}
+
+/**
+ * A payment recorded on an invoice: logged like any reimbursement, matched to
+ * the invoice's unpaid lines oldest first, the rest counted on the invoice.
+ */
+export async function payInvoice(invoiceId: string, userId: string, input: { amount: number; paidAt?: string; method?: string; bankAccountId?: string | null; notes?: string | null }) {
+  const invoice = await getInvoice(invoiceId, userId);
+  const leaseId = invoice.reimbursement.leaseId;
+  const { items } = await reimbursableItems(leaseId, userId, 36);
+  let left = round2(input.amount);
+  const allocations: { key: string; amount: number }[] = [];
+  for (const it of items.filter(i => i.invoiceId === invoiceId && i.outstanding > 0).sort((a, b) => a.periodDate.localeCompare(b.periodDate))) {
+    if (left <= 0) break;
+    const take = round2(Math.min(left, it.outstanding));
+    allocations.push({ key: it.key, amount: take });
+    left = round2(left - take);
+  }
+  return recordReimbursementPayment(leaseId, userId, {
+    amount: input.amount, paidDate: input.paidAt || new Date().toISOString().slice(0, 10), method: input.method ?? 'OTHER',
+    bankAccountId: input.bankAccountId ?? null, notes: input.notes ?? null, allocations, invoiceId,
+  });
+}
+
+/** Each line's reimbursed amount and the payments that went to an invoice, for the invoice page. */
+export async function invoicePayments(invoiceId: string, userId: string) {
+  const invoice = await getInvoice(invoiceId, userId);
+  const paid = await invoiceLinePaid([invoice]);
+  const lines = Object.fromEntries(invoice.lines.map(l => [l.id, round2(paid.get(`${invoice.id}|${lineKey(l)}`) ?? 0)]));
+  const payments = await db.reimbursementPayment.findMany({
+    where: { OR: [{ invoiceId }, { allocations: { some: { invoiceId } } }] },
+    include: { allocations: { where: { invoiceId } } },
+    orderBy: { paidDate: 'asc' },
+  });
+  const rows = payments.map(p => {
+    const onLines = p.allocations.reduce((t, a) => t + num(a.amount), 0);
+    const onInvoice = p.invoiceId === invoiceId ? num(p.amount) : onLines;
+    return { id: p.id, paidDate: p.paidDate, method: p.method, amount: round2(onInvoice) };
+  });
+  // Recorded on the invoice before payments were logged one by one.
+  const logged = rows.reduce((t, r) => t + r.amount, 0);
+  const earlier = round2(num(invoice.paidAmount) - logged);
+  return { lines, payments: rows, earlier: earlier > 0.005 ? earlier : 0 };
 }
