@@ -189,6 +189,10 @@ export interface ExtractedBillData {
    *  rather than a bill — it demands an existing balance and bills nothing
    *  new, so it must never become a statement row. */
   documentKind?:      'bill' | 'past_due_notice' | 'policy_document' | 'not_a_bill' | 'credit_card_statement' | 'receipt' | 'estimate' | 'service_invoice';
+  /** Read from the body of an email ("your bill is ready, $252.00 due Oct 27"),
+   *  not from a statement. Its figures are kept; the printout of the email is
+   *  not saved as the statement's PDF, because it is not the statement. */
+  fromEmailBody?:     boolean;
   /** For a service_invoice: what kind of property expense it is (an ExpenseCategory). */
   expenseCategory?:   string | null;
   /** A credit card (or store card, PayPal Credit, line of credit) statement or payment-due alert. */
@@ -1445,12 +1449,18 @@ function billTail(acct: string | null | undefined): string | null {
   const m = (acct ?? '').match(/(\d{4,})\D*$/);
   return m ? m[1].slice(-4) : null;
 }
-/** The last `n` digits of the number on file for an account, or null if none is known. */
-function storedTail(a: { accountNumber: string | null; accountNumberEnc: string | null }, n: number): string | null {
+/**
+ * Whether an account's number on file ends with the digits a bill shows.
+ * Some providers print the digits before a final check digit: SDG&E's email
+ * says "Account Ending: 6670" for account …6670 3. Either reading counts.
+ * Null when the account has no number on file to compare.
+ */
+function tailMatches(a: { accountNumber: string | null; accountNumberEnc: string | null }, tail: string): boolean | null {
   let full = '';
   if (a.accountNumberEnc) { try { full = decrypt(a.accountNumberEnc); } catch { /* unreadable */ } }
   const digits = (full || a.accountNumber || '').replace(/\D/g, '');
-  return digits.length >= n ? digits.slice(-n) : null;
+  if (digits.length < tail.length) return null;
+  return digits.endsWith(tail) || (digits.length > tail.length && digits.slice(0, -1).endsWith(tail));
 }
 
 export function normalizeAcct(s: string): string {
@@ -1496,7 +1506,7 @@ interface AccountRow {
  * rather than the whole portfolio.
  */
 export async function matchToAccount(extracted: ExtractedBillData, userId: string): Promise<MatchResult> {
-  const r = await matchByNumberAndAddress(extracted, userId);
+  const r = await lastDigitsAgree(await matchByNumberAndAddress(extracted, userId), extracted, userId);
   if (r.utilityAccountId || r.candidates?.length) return r;
   const name = extracted.premiumFinance?.lender ?? extracted.providerName;
   if (!name) return r;
@@ -1507,6 +1517,34 @@ export async function matchToAccount(extracted: ExtractedBillData, userId: strin
   const candidates = same.filter(a => providersLookAlike(a.providerName, name)).slice(0, 15)
     .map(a => ({ utilityAccountId: a.id, label: [a.property.nickname || a.property.address, a.serviceLabel, a.accountNumber ? `••${a.accountNumber}` : null].filter(Boolean).join(' · ') }));
   return candidates.length ? { ...r, candidates } : r;
+}
+
+/**
+ * The rule every match must pass: a bill whose account number ends in
+ * different digits from the account's is not that account's bill, however
+ * alike the address and provider. Such a match is not filed; the accounts
+ * whose numbers do end that way (or, failing that, the provider's accounts)
+ * are offered instead. A policy matched by its policy number or a finance
+ * loan by its terms is exempt: a renewal brings a new number.
+ */
+async function lastDigitsAgree(r: MatchResult, ex: ExtractedBillData, userId: string): Promise<MatchResult> {
+  const tail = billTail(ex.accountNumber);
+  if (!r.utilityAccountId || !tail || ['account_number', 'policy_number', 'premium_finance_terms'].includes(r.method) || ex.insurance?.policyNumber || ex.premiumFinance) return r;
+  const accounts = await db.utilityAccount.findMany({
+    where: { property: { userId } },
+    select: { id: true, providerName: true, serviceLabel: true, accountNumber: true, accountNumberEnc: true, propertyId: true, property: { select: { address: true, nickname: true } } },
+  });
+  const chosen = accounts.find(a => a.id === r.utilityAccountId);
+  if (!chosen || tailMatches(chosen, tail) !== false) return r;
+  const ending = accounts.filter(a => tailMatches(a, tail) === true);
+  const pool = ending.length ? ending : accounts.filter(a => providersLookAlike(a.providerName, ex.providerName ?? chosen.providerName));
+  const one = ending.length === 1 ? ending[0] : null;
+  return {
+    confidence: one ? 'high' : 'low', method: one ? 'account_number_tail' : 'account_number_mismatch',
+    utilityAccountId: one?.id ?? null, propertyId: one?.propertyId ?? null,
+    propertyName: one ? one.property.nickname || one.property.address : null, providerName: one?.providerName ?? chosen.providerName,
+    candidates: one ? undefined : pool.slice(0, 15).map(a => ({ utilityAccountId: a.id, label: [a.property.nickname || a.property.address, a.serviceLabel, a.accountNumber ? `••${a.accountNumber}` : null].filter(Boolean).join(' · ') })),
+  };
 }
 
 /**
@@ -1621,8 +1659,13 @@ async function matchByNumberAndAddress(
   // the same address, ****6749. The visible tail identifies the account when
   // exactly one account ends with it.
   const tail = billTail(extracted.accountNumber);
-  if (tail && /[*•●]|x{2,}/i.test(extracted.accountNumber ?? '')) {
-    const hits = accounts.filter(a => storedTail(a, tail.length) === tail);
+  // Only the last digits are printed: masked ("*******7055", "XXXXX1102"),
+  // or a short number on its own ("Account Ending: 6664"). A bare 6664 was
+  // not treated as a tail, so SDG&E's Kauana Loa email fell through to a
+  // weaker rule and was filed to the 4349 Vista Verde Way account.
+  const onlyTail = /[*•●]|x{2,}|ending/i.test(extracted.accountNumber ?? '') || (extracted.accountNumber ?? '').replace(/\D/g, '').length <= 6;
+  if (tail && onlyTail) {
+    const hits = accounts.filter(a => tailMatches(a, tail) === true);
     const pick = hits.length > 1 ? hits.filter(a => providersLookAlike(a.providerName, extracted.providerName ?? '')) : hits;
     if (pick.length === 1) {
       const acct = pick[0];
@@ -1704,7 +1747,7 @@ async function matchByNumberAndAddress(
         // bill's, however alike the address and provider.
         const withProvider = addrMatches.filter(a =>
           providersLookAlike(a.providerName, extracted.providerName!)
-          && !(tail && storedTail(a, tail.length) && storedTail(a, tail.length) !== tail)
+          && !(tail && tailMatches(a, tail) === false)
         );
         if (withProvider.length === 1) {
           const acct = withProvider[0];

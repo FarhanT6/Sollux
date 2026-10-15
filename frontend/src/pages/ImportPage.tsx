@@ -80,6 +80,10 @@ interface ParsedBill {
   // The owner picked the account themselves: the server files it there even
   // when the bill's account number differs (a renewed policy, a new number).
   ownerChose?: boolean;
+  // A card from an email or portal review list: the list and the staged file
+  // it came from, so importing it takes it off that list.
+  reviewJobId?: string;
+  reviewKey?: string;
   // When the bill disagrees with a statement the owner entered by hand:
   // keep the owner's figures (the default) or take the statement's.
   keepMine?: boolean;
@@ -745,7 +749,7 @@ function InboxPanel({ onStreamStart, onBillStreamed }: {
           const ev = JSON.parse(line.slice(6));
           if (ev.type === 'bill') {
             if (!started) { onStreamStart([], activity?.lastJob?.autoImported ?? 0); started = true; }
-            onBillStreamed({ filename: ev.filename, extracted: ev.extracted, match: ev.match, fileData: ev.fileData });
+            onBillStreamed({ filename: ev.filename, extracted: ev.extracted, match: ev.match, fileData: ev.fileData, reviewKey: ev.s3Key, reviewJobId: jobId });
           } else if (ev.type === 'done') onStreamStart(ev.properties ?? [], ev.autoImported ?? 0);
         }
         if (done) break;
@@ -2169,6 +2173,16 @@ export default function ImportPage() {
         'Nothing was reported against them — please re-run the import for those bills.'
       );
     }
+
+    // Cards from an email/portal review list that were filed leave that list,
+    // so "N bills need a quick check" does not come back after importing.
+    const notFiled = new Set([...failed.map(f => f.filename), ...ready.filter(b => totals.errors.some(e => e.startsWith(`${b.filename}:`))).map(b => b.filename)]);
+    const doneByJob = new Map<string, string[]>();
+    for (const b of ready) {
+      if (!b.reviewJobId || !b.reviewKey || notFiled.has(b.filename)) continue;
+      doneByJob.set(b.reviewJobId, [...(doneByJob.get(b.reviewJobId) ?? []), b.reviewKey]);
+    }
+    for (const [jobId, keys] of doneByJob) await markInboxReviewed(jobId, keys).catch(() => {});
 
     setProgress('');
     setResult(totals);

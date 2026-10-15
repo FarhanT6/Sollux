@@ -1569,6 +1569,11 @@ export default function UtilityDetailPage() {
                         })()}
                         {/* The owner kept their own amount over what an imported
                             statement read; say what it read. */}
+                        {/* Figures from the provider's "your bill is ready" email:
+                            the statement itself has not come in yet. */}
+                        {(s.rawDataJson as any)?.emailNotice && !s.pdfS3Key && (
+                          <p className="text-xs text-gray-500 mt-0.5">From the bill email · statement PDF not on file yet</p>
+                        )}
                         {typeof (s.rawDataJson as any)?.statementSaid === 'number' && (
                           <p className="text-xs text-gray-500 mt-0.5">Statement read {fmtMoney((s.rawDataJson as any).statementSaid)} · you kept your amount</p>
                         )}

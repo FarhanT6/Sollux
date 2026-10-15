@@ -36,7 +36,9 @@ const PAYMENT_CONFIRMATION = /thank you for (your )?payment|payment (received|co
 // is on the provider's site and the email carries no amount. Nothing to read,
 // but worth showing, since that bill is not in Sollux until it is fetched.
 const BILL_POSTED = /\bnew (bill|statement|invoice)|\b(bill|e-?statement|statement|invoice)s?\b[^.!?\n]{0,40}?\b(ready|available|posted|here)\b|(view|pay) your bill online/i;
-const BILL_WORDS = /amount due|total due|balance due|new balance|statement date|billing period|service period|due date|invoice|premium|past due|minimum payment|account (number|no|#)/i;
+// "Balance $394.40", "account# XXXXX1102" (T-Mobile) and "AutoPay is scheduled"
+// are bill wording too; without them T-Mobile's bill email was skipped.
+const BILL_WORDS = /amount due|total due|balance due|new balance|\bbalance\b|statement date|billing period|service period|billing cycle|due date|invoice|premium|past due|minimum payment|autopay is scheduled|account\s*(number|no|#)/i;
 const MONEY = /\$\s?\d[\d,]*\.\d{2}/;
 
 export interface InboxRunSummary {
@@ -103,6 +105,8 @@ async function printToPdf(html: string): Promise<Buffer> {
 export async function textToPdf(text: string): Promise<Buffer> {
   const { PDFDocument, StandardFonts } = await import('pdf-lib');
   const doc = await PDFDocument.create();
+  // Marks it as a printout of an email, not a statement (emailPrintouts.ts).
+  doc.setSubject('Sollux email printout');
   const font = await doc.embedFont(StandardFonts.Helvetica);
   const size = 10, lineH = 13, margin = 40, width = 612 - margin * 2;
   // The standard font covers Latin-1 only; anything else becomes a space.
@@ -214,9 +218,9 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
           const skips: string[] = [];
           let accountId: string | null = null;
 
-          const handle = async (buffer: Buffer, filename: string) => {
+          const handle = async (buffer: Buffer, filename: string, emailBody = false) => {
             documents++;
-            const r = await intakeBill(buffer, filename, userId, 'ai', batchId, 'email');
+            const r = await intakeBill(buffer, filename, userId, 'ai', batchId, 'email', { emailBody });
             if (r.outcome === 'filed') { sum.filed++; accountId = r.utilityAccountId; outcomes.push('filed'); }
             else if (r.outcome === 'review') { sum.review++; review.push(r.reviewItem); outcomes.push('review'); }
             else if (r.outcome === 'error') { sum.errors.push(r.error); problems.push(r.error); outcomes.push('error'); }
@@ -269,7 +273,9 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
                   browserP = null;
                   pdf = await textToPdf(`From: ${from}\nSubject: ${subject}\nReceived: ${receivedAt?.toISOString().slice(0, 10) ?? ''}\n\n${body}`);
                 }
-                await handle(pdf, `${(subject || 'e-bill').replace(/[^\w .-]+/g, '').slice(0, 80)}.pdf`);
+                // The email is a notice, not the statement: its figures are
+                // filed, the printout used to read them is not kept.
+                await handle(pdf, `${(subject || 'e-bill').replace(/[^\w .-]+/g, '').slice(0, 80)}.pdf`, true);
               } else if (BILL_POSTED.test(subject) || BILL_POSTED.test(body.slice(0, 2000))) {
                 outcomes.push('online');
                 skips.push('bill posted on the provider\'s site; the email has no amount. Download it there, or upload the PDF.');

@@ -172,7 +172,14 @@ router.post('/inbox/reviewed/:jobId', attachDbUser, async (req, res, next) => {
   try {
     const job = await db.driveImportJob.findFirst({ where: { id: req.params.jobId, userId: req.dbUserId!, source: { in: ['email', 'portal'] } } });
     if (!job) return res.status(404).json({ error: 'Not found' });
-    await db.driveImportJob.update({ where: { id: job.id }, data: { needsReviewJson: [] } });
+    // Imported cards leave the list (by their staged file); with none named,
+    // the whole list is done ("Mark done"). Until now importing left every
+    // card in place, so "3 bills need a quick check" came back after import.
+    const keys: unknown = req.body?.s3Keys;
+    const remaining = Array.isArray(keys) && keys.length
+      ? ((job.needsReviewJson as any[]) ?? []).filter(item => !keys.includes(item?.s3Key))
+      : [];
+    await db.driveImportJob.update({ where: { id: job.id }, data: { needsReviewJson: remaining } });
     res.status(204).send();
   } catch (err) { next(err); }
 });
