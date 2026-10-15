@@ -170,6 +170,11 @@ export interface Lease {
   lateFeeAmount?: number | null;
   lateFeePercent?: number | null;
   lateFeeGraceDays?: number | null;
+  /** Charge the late fee automatically when the month is late. */
+  autoLateFee?: boolean;
+  /** Where a payment goes first unless chosen on the payment. */
+  paymentsApplyTo?: PaymentApplyTo;
+  rentCharges?: RentCharge[];
   businessName?: string | null;
   createdAt: string;
   leaseTenants?: LeaseTenant[];
@@ -239,6 +244,18 @@ export interface ScheduledRentIncrease {
   createdAt: string;
 }
 
+export type PaymentApplyTo = 'CURRENT' | 'ARREARS';
+
+/** A late fee added to one month's rent. */
+export interface RentCharge {
+  id: string;
+  leaseId: string;
+  periodDate: string;
+  kind: string;
+  amount: number;
+  createdAt: string;
+}
+
 export interface RentPayment {
   id: string;
   leaseId: string;
@@ -252,6 +269,8 @@ export interface RentPayment {
   bankAccountId?: string | null;
   bankAccount?: Pick<BankAccount, 'id' | 'name' | 'bank' | 'last4'> | null;
   notes?: string;
+  /** Where the owner sent this payment first; null = the tenant's setting. */
+  applyTo?: PaymentApplyTo | null;
   createdAt: string;
   lease?: Lease & { unit?: Unit & { property?: Pick<Property, 'id' | 'address' | 'nickname'> } };
 }
@@ -399,11 +418,16 @@ export type PaymentChannel = 'ZELLE' | 'VENMO' | 'PAYPAL' | 'CASH_APP' | 'APPLE_
 
 export interface IncomingTransaction {
   id: string;
-  bankAccountId: string;
-  bankAccount?: { id: string; name: string; bank?: string | null };
+  bankAccountId: string | null;
+  bankAccount?: { id: string; name: string; bank?: string | null } | null;
   amount: number;
   date: string;
   name: string;
+  /** bank = the bank feed; email = read from a Zelle / Venmo / Cash App email */
+  source?: 'bank' | 'email';
+  confirmation?: string | null;
+  memo?: string | null;
+  depositLast4?: string | null;
   channel?: PaymentChannel | null;
   matchedLeaseId?: string | null;
   matchedLease?: {
@@ -432,11 +456,16 @@ export interface UtilityCandidate {
 
 export interface OutgoingTransaction {
   id: string;
-  bankAccountId: string;
-  bankAccount?: { id: string; name: string; bank?: string | null };
+  bankAccountId: string | null;
+  bankAccount?: { id: string; name: string; bank?: string | null } | null;
   amount: number;
   date: string;
   name: string;
+  /** bank = the bank feed; email = read from a Zelle / Venmo / Cash App email */
+  source?: 'bank' | 'email';
+  confirmation?: string | null;
+  memo?: string | null;
+  depositLast4?: string | null;
   matchType?: OutgoingMatchType | null;
   propertyId?: string | null;
   property?: Pick<Property, 'id' | 'address' | 'nickname'> | null;

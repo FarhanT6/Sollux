@@ -99,6 +99,9 @@ export const updateLease = (id: string, data: any) =>
   api.patch<Lease>(`/leases/${id}`, data).then(r => r.data);
 export const deleteLease = (id: string) =>
   api.delete(`/leases/${id}`);
+/** Waive a late fee charged on a month. */
+export const waiveRentCharge = (leaseId: string, chargeId: string) =>
+  api.delete(`/leases/${leaseId}/charges/${chargeId}`);
 export const uploadLeaseDocument = (id: string, fileData: string, filename: string) =>
   api.post<Lease>(`/leases/${id}/document`, { fileData, filename }).then(r => r.data);
 export const getLeaseDocumentUrl = (id: string) =>

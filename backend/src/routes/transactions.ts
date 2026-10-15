@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { syncAllWatchedAccounts, CHANNEL_TO_METHOD } from '../services/transactionMatchService';
-import { recordRentPayment, periodStartOf } from '../services/rentPaymentService';
+import { recordRentPayment } from '../services/rentPaymentService';
+import { findLoggedPayment, periodFor } from '../services/p2pPaymentEmails';
 
 const router = Router();
 router.use(attachDbUser);
@@ -72,14 +73,21 @@ router.post('/:id/apply', async (req, res, next) => {
     // Goes through the shared recorder so an auto-applied payment splits
     // against arrears exactly like a hand-entered one, and carries the account
     // the money actually landed in.
+    // Logged by hand already: link it instead of logging the money twice.
+    const logged = await findLoggedPayment(lease.id, Number(tx.amount), tx.date);
+    if (logged) {
+      const linked = await db.incomingTransaction.update({ where: { id: tx.id }, data: { status: 'APPLIED', rentPaymentId: logged.id } });
+      return res.json({ ...linked, linkedExisting: true });
+    }
+
     const payment = await recordRentPayment({
       leaseId: lease.id,
-      periodDate: periodStartOf(tx.date),
+      periodDate: periodFor(tx.date, tx.memo),
       amount: Number(tx.amount),
       paidDate: tx.date,
       method: (CHANNEL_TO_METHOD[(tx.channel ?? 'OTHER') as keyof typeof CHANNEL_TO_METHOD] ?? 'OTHER') as any,
-      bankAccountId: tx.bankAccountId,
-      notes: `Auto-matched from ${tx.channel ?? 'bank'} transaction: "${tx.name}"`,
+      bankAccountId: tx.bankAccountId ?? undefined,
+      notes: [`Matched from ${tx.channel ?? 'bank'} ${tx.source === 'email' ? 'email' : 'transaction'}: "${tx.name}"`, tx.confirmation && `confirmation ${tx.confirmation}`, tx.memo && `memo "${tx.memo}"`].filter(Boolean).join(' · '),
     });
 
     const updated = await db.incomingTransaction.update({

@@ -743,6 +743,13 @@ model Lease {
   lateFeeAmount          Decimal?    @db.Decimal(10, 2)
   lateFeePercent         Float?
   lateFeeGraceDays       Int?
+  // Charge that late fee on its own: once the due day plus grace days pass
+  // with the month not paid, the fee is added to that month (RentCharge),
+  // and rolls into arrears with it if still unpaid.
+  autoLateFee            Boolean     @default(false)
+  // Where a payment goes first when the owner does not say: CURRENT = this
+  // month's rent, then the balance; ARREARS = the balance, then this month.
+  paymentsApplyTo        String      @default("CURRENT")
   // Commercial leases: the business/entity on the lease alongside the person.
   businessName           String?
   createdAt              DateTime    @default(now())
@@ -759,6 +766,7 @@ model Lease {
   paymentAliases       LeasePaymentAlias[]
   legalMatters         LegalMatter[]
   incomingTransactions IncomingTransaction[]
+  rentCharges          RentCharge[]
 
   @@map("leases")
 }
@@ -867,11 +875,29 @@ model RentPayment {
   bankAccountId    String?
   bankAccount      BankAccount?      @relation(fields: [bankAccountId], references: [id], onDelete: SetNull)
   notes            String?
+  // CURRENT or ARREARS when the owner chose where this payment goes; null =
+  // the lease's paymentsApplyTo. Kept so editing the payment keeps the choice.
+  applyTo          String?
   createdAt        DateTime          @default(now())
 
   @@index([leaseId, periodDate])
   @@index([bankAccountId])
   @@map("rent_payments")
+}
+
+// A charge added to one month's rent: a late fee. Owed with that month, and
+// rolled into arrears with it if the month is not paid.
+model RentCharge {
+  id         String   @id @default(cuid())
+  leaseId    String
+  lease      Lease    @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  periodDate DateTime // first of the month, midnight UTC
+  kind       String   @default("LATE_FEE")
+  amount     Decimal  @db.Decimal(10, 2)
+  createdAt  DateTime @default(now())
+
+  @@unique([leaseId, periodDate, kind])
+  @@map("rent_charges")
 }
 
 enum RentPaymentStatus {
@@ -1582,12 +1608,19 @@ model IncomingTransaction {
   id                 String      @id @default(cuid())
   userId             String
   user               User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  bankAccountId      String
-  bankAccount        BankAccount @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
+  // Null for a payment read from a Zelle/Venmo/Cash App email whose
+  // "deposited to account ending ..." matches none of the owner's accounts.
+  bankAccountId      String?
+  bankAccount        BankAccount? @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
+  // Plaid's id, or "email:<message id>" for one read from a payment email.
   plaidTransactionId String      @unique
   amount             Decimal     @db.Decimal(10, 2)
   date               DateTime
-  name               String // Plaid's transaction name/counterparty description
+  name               String // Plaid's transaction name/counterparty description, or the payer named in the email
+  source             String      @default("bank") // bank | email
+  confirmation       String? // the app's confirmation / transaction number, from the email
+  memo               String? // what the payer wrote, e.g. Oct rent
+  depositLast4       String? // last 4 of the account the email says it was deposited to
   channel            String? // ZELLE | VENMO | PAYPAL | CASH_APP | APPLE_CASH | OTHER
   matchedLeaseId     String?
   matchedLease       Lease?      @relation(fields: [matchedLeaseId], references: [id], onDelete: SetNull)

@@ -101,7 +101,7 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
         <p className="text-sm text-gray-500 py-8 text-center">Loading…</p>
       ) : transactions.length === 0 ? (
         <p className="text-sm text-gray-500 py-8 text-center">
-          No {filter === 'ALL' ? '' : filter.toLowerCase()} transactions. Turn on "Watch for rent payments" on a bank account under Settings → Banking, then Sync.
+          No {filter === 'ALL' ? '' : filter.toLowerCase()} transactions. Payments from Zelle, Venmo and Cash App emails in your connected Gmail land here, and so do transfers into bank accounts with "Watch for rent payments" on (Settings → Banking).
         </p>
       ) : (
         <div className="space-y-2">
@@ -111,11 +111,18 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
                 <div className="flex items-center gap-2">
                   <span className="text-xs px-1.5 py-0.5 rounded bg-white/10 text-gray-300">{CHANNEL_LABELS[tx.channel ?? 'OTHER']}</span>
                   <span className="text-xs text-gray-500">{fmtDate(tx.date, 'MMM d, yyyy')}</span>
-                  <span className="text-xs text-gray-600">· {tx.bankAccount?.name}</span>
+                  <span className="text-xs text-gray-600">
+                    · {tx.bankAccount?.name ?? (tx.depositLast4 ? `account …${tx.depositLast4}` : 'account not named')}
+                    {tx.source === 'email' && ' · from email'}
+                  </span>
                 </div>
                 <p className="text-sm font-semibold text-emerald-500">{money(tx.amount)}</p>
               </div>
-              <p className="text-xs text-gray-500 mb-2 truncate">{tx.name}</p>
+              <p className="text-xs text-gray-500 mb-2 truncate">
+                {tx.name}
+                {tx.memo && <span className="text-gray-400"> · “{tx.memo}”</span>}
+                {tx.confirmation && <span className="text-gray-600"> · conf. {tx.confirmation}</span>}
+              </p>
 
               <div className="flex items-center gap-2">
                 {tx.status === 'APPLIED' ? (
@@ -143,7 +150,8 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
                       onClick={() => handleApply(tx.id)}
                       className="text-xs text-amber-400 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed flex-shrink-0"
                     >Apply</button>
-                    <button onClick={() => handleIgnore(tx.id)} className="text-xs text-red-500 hover:text-red-400 flex-shrink-0">Ignore</button>
+                    <button onClick={() => handleIgnore(tx.id)} className="text-xs text-red-500 hover:text-red-400 flex-shrink-0"
+                      title={tx.source === 'email' ? `Not rent. Later emails from ${tx.name} are ignored too.` : 'Not rent'}>Ignore</button>
                   </>
                 )}
               </div>

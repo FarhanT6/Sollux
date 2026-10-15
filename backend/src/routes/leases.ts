@@ -4,6 +4,7 @@ import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { uploadDocument, getSignedDocumentUrl } from '../services/s3Service';
 import { extractLeaseTerms } from '../services/leaseExtract';
+import { assessLateFees, waiveCharge } from '../services/rentCharges';
 
 const router = Router();
 router.use(attachDbUser);
@@ -41,6 +42,10 @@ const LeaseSchema = z.object({
   lateFeeAmount: z.number().optional().nullable(),
   lateFeePercent: z.number().optional().nullable(),
   lateFeeGraceDays: z.number().int().optional().nullable(),
+  // Charge that fee by itself when the month is late.
+  autoLateFee: z.boolean().optional(),
+  // Where a payment goes first when the owner does not choose on the payment.
+  paymentsApplyTo: z.enum(['CURRENT', 'ARREARS']).optional(),
   // Commercial: business/entity on the lease.
   businessName: z.string().optional().nullable(),
 });
@@ -72,6 +77,7 @@ router.get('/', async (req, res, next) => {
         scheduledIncreases: { where: { applied: false }, orderBy: { effectiveDate: 'asc' } },
         utilityCharges: { orderBy: { createdAt: 'asc' } },
         paymentAliases: { orderBy: { createdAt: 'asc' } },
+        rentCharges: { orderBy: { periodDate: 'desc' }, take: 12 },
       },
       orderBy: { startDate: 'desc' },
     });
@@ -93,6 +99,7 @@ router.get('/:id', async (req, res, next) => {
         scheduledIncreases: { where: { applied: false }, orderBy: { effectiveDate: 'asc' } },
         utilityCharges: { orderBy: { createdAt: 'asc' } },
         paymentAliases: { orderBy: { createdAt: 'asc' } },
+        rentCharges: { orderBy: { periodDate: 'desc' }, take: 12 },
       },
     });
     if (!lease) return res.status(404).json({ error: 'Lease not found' });
@@ -156,7 +163,19 @@ router.patch('/:id', async (req, res, next) => {
         rentChanges: { orderBy: { effectiveDate: 'desc' } },
       },
     });
+    // Turned on mid-month for a tenant who is already late: this month's fee now.
+    if (lease.autoLateFee) await assessLateFees(new Date(), lease.id);
     res.json(lease);
+  } catch (err) { next(err); }
+});
+
+// DELETE /api/leases/:id/charges/:chargeId — waive a late fee
+router.delete('/:id/charges/:chargeId', async (req, res, next) => {
+  try {
+    const charge = await db.rentCharge.findFirst({ where: { id: req.params.chargeId, leaseId: req.params.id, lease: { unit: { property: { userId: req.dbUserId! } } } } });
+    if (!charge) return res.status(404).json({ error: 'Charge not found' });
+    await waiveCharge(charge.id);
+    res.status(204).send();
   } catch (err) { next(err); }
 });
 

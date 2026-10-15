@@ -8,7 +8,7 @@ import {
   deleteLeaseAgreement,
   getProperty, getLeases, getLoans, getExpenses, getInsurancePolicies,
   getTaxAssessments, getImprovements, getPropertyPnL, getRentPayments,
-  createRentPayment, createExpense, createImprovement, createInsurancePolicy,
+  createRentPayment, waiveRentCharge, createExpense, createImprovement, createInsurancePolicy,
   createTaxAssessment, createLoan, deleteLoan,
   updateExpense, deleteExpense, updateInsurancePolicy, deleteInsurancePolicy,
   updateTaxAssessment, deleteTaxAssessment, updateImprovement, deleteImprovement,
@@ -24,6 +24,7 @@ import {
   addPaymentAlias, deletePaymentAlias, deleteRentPayment, updateRentPayment,
   addLeaseDeposit, deleteLeaseDeposit,
 } from '../api/client';
+import type { PaymentApplyTo } from '../types';
 import type {
   Property, Lease, Loan, Expense, InsurancePolicy, TaxAssessment,
   Improvement, PropertyPnL, Tenant, Unit, Document, DocumentCategory, PropertyType, RentChange, ScheduledRentIncrease, LeaseUtilityCharge,
@@ -963,6 +964,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   const [payBankAccountId, setPayBankAccountId] = useState('');
   const [payStatus, setPayStatus] = useState('RECEIVED');
   const [payExpectedDate, setPayExpectedDate] = useState('');
+  const [payApplyTo, setPayApplyTo] = useState<PaymentApplyTo>('CURRENT');
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
   const [saving, setSaving]       = useState(false);
   // Security deposit received — its own form, its own table, never rent.
@@ -977,6 +979,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
     leaseType: 'MONTH_TO_MONTH', status: 'ACTIVE', arrearsBalance: '', notes: '',
     rentEffectiveDate: '',
     lateFeeAmount: '', lateFeePercent: '', lateFeeGraceDays: '', businessName: '', rentDueDay: '',
+    autoLateFee: false, paymentsApplyTo: 'CURRENT',
   });
   // Inline "add scheduled increase" form (date + amount OR percent/range + note)
   const [siForm, setSiForm] = useState({ effectiveDate: '', newAmount: '', percent: '', percentMax: '', note: '' });
@@ -990,7 +993,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   const [deletingPayment, setDeletingPayment] = useState<string | null>(null);
   const [editPayment, setEditPayment] = useState<string | null>(null);
   const [savingPayment, setSavingPayment] = useState(false);
-  const [payEdit, setPayEdit] = useState({ paidDate: '', amount: '', method: 'ZELLE', status: 'RECEIVED', expectedDate: '', notes: '' });
+  const [payEdit, setPayEdit] = useState({ paidDate: '', amount: '', method: 'ZELLE', status: 'RECEIVED', expectedDate: '', notes: '', applyTo: 'CURRENT' as PaymentApplyTo });
   const [savingEdit, setSavingEdit] = useState(false);
   const [uploadingDoc, setUploadingDoc] = useState(false);
   const [docCategory, setDocCategory] = useState<string>('LEASE');
@@ -1029,6 +1032,8 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
       lateFeeGraceDays: lease.lateFeeGraceDays != null ? String(lease.lateFeeGraceDays) : '',
       businessName: lease.businessName ?? '',
       rentDueDay: lease.rentDueDay != null ? String(lease.rentDueDay) : '',
+      autoLateFee: !!lease.autoLateFee,
+      paymentsApplyTo: lease.paymentsApplyTo ?? 'CURRENT',
     });
     setSiForm({ effectiveDate: '', newAmount: '', percent: '', percentMax: '', note: '' });
     setUcForm({ category: 'WATER', amount: '', note: '' });
@@ -1135,6 +1140,8 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
       status: p.status ?? 'RECEIVED',
       expectedDate: (p.expectedDate ?? '').slice(0, 10),
       notes: p.notes ?? '',
+      // What it did, so saving without touching it keeps it.
+      applyTo: p.applyTo ?? (Number(p.appliedToArrears ?? 0) > 0 && Number(p.appliedToArrears) >= Number(p.amount) ? 'ARREARS' : (leases.find(l => l.id === p.leaseId)?.paymentsApplyTo ?? 'CURRENT')),
     });
     setEditPayment(p.id);
   }
@@ -1166,6 +1173,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
         status: payEdit.status,
         expectedDate: payEdit.status === 'PENDING' ? (payEdit.expectedDate || null) : null,
         notes: payEdit.notes || null,
+        applyTo: payEdit.applyTo,
       });
       setEditPayment(null);
       await refreshAfterPayment(leaseId);
@@ -1235,6 +1243,8 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
         lateFeeGraceDays: editForm.lateFeeGraceDays ? parseInt(editForm.lateFeeGraceDays) : null,
         businessName: editForm.businessName || null,
         rentDueDay: editForm.rentDueDay ? parseInt(editForm.rentDueDay) : null,
+        autoLateFee: editForm.autoLateFee && !!(editForm.lateFeeAmount || editForm.lateFeePercent),
+        paymentsApplyTo: editForm.paymentsApplyTo,
       });
       const updated = await getLeases({ propertyId });
       setLeases(updated);
@@ -1449,6 +1459,8 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
         expectedDate: payStatus === 'PENDING' ? (payExpectedDate || null) : null,
         bankAccountId: payBankAccountId || undefined,
         notes: payNotes || undefined,
+        // Only kept on the payment when it differs from the tenant's setting.
+        applyTo: payApplyTo !== (leases.find(l => l.id === leaseId)?.paymentsApplyTo ?? 'CURRENT') ? payApplyTo : null,
       });
       const updated = await getLeases({ propertyId });
       setLeases(updated);
@@ -1626,25 +1638,44 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                           .filter(p => monthKey(p.periodDate) === thisMonth);
                         // Pending assistance is committed, not collected — it
                         // must not make a month look covered.
+                        // What went to this month: a payment sent to arrears
+                        // paid down the balance, not the month.
                         const paidThisPeriod = thisMonthPayments
                           .filter(p => p.status !== 'PENDING')
-                          .reduce((s, p) => s + Number(p.amount), 0);
+                          .reduce((s, p) => s + Number(p.amount) - Number(p.appliedToArrears ?? 0), 0);
                         const pendingThisPeriod = thisMonthPayments
                           .filter(p => p.status === 'PENDING')
                           .reduce((s, p) => s + Number(p.amount), 0);
-                        const owed = Math.max(0, Number(lease.rentAmount) - paidThisPeriod);
+                        // Late fees charged on this month are owed with it.
+                        const charges = (lease.rentCharges ?? []).filter(c => monthKey(c.periodDate) === thisMonth);
+                        const feeTotal = charges.reduce((s, c) => s + Number(c.amount), 0);
+                        const dueThisMonth = Number(lease.rentAmount) + feeTotal;
+                        const owed = Math.max(0, Math.round((dueThisMonth - paidThisPeriod) * 100) / 100);
+                        const toArrears = thisMonthPayments
+                          .filter(p => p.status !== 'PENDING')
+                          .reduce((s, p) => s + Number(p.appliedToArrears ?? 0), 0);
                         const monthName = format(now, 'MMMM');
+                        const feeNote = charges.map(c => (
+                          <span key={c.id} className="text-gray-500"> · incl. {money(Number(c.amount))} late fee{' '}
+                            <button className="text-gray-600 hover:text-amber-400 underline-offset-2 hover:underline"
+                              title="Remove this late fee"
+                              onClick={async () => {
+                                if (!confirm(`Waive the ${money(Number(c.amount))} late fee for ${monthName}?`)) return;
+                                await waiveRentCharge(lease.id, c.id);
+                                setLeases(await getLeases({ propertyId }));
+                              }}>waive</button>
+                          </span>
+                        ));
 
                         // Always say where the month stands. Hiding the line
                         // once rent was covered made a paid tenant and a broken
                         // calculation look identical — there was no way to tell
                         // "collected" from "not working".
                         if (owed <= 0) {
-                          const over = paidThisPeriod - Number(lease.rentAmount);
                           return (
                             <p className="text-xs text-emerald-400">
                               {monthName} paid
-                              {over > 0 && <span className="text-gray-500"> · {money(over)} toward balance</span>}
+                              {toArrears > 0 && <span className="text-gray-500"> · {money(toArrears)} toward balance</span>}
                               {pendingThisPeriod > 0 && <span className="text-sky-400"> · {money(pendingThisPeriod)} pending</span>}
                             </p>
                           );
@@ -1658,7 +1689,9 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                         return (
                           <p className={`text-xs ${overdue ? 'text-red-400' : 'text-gray-500'}`}>
                             {money(owed)} {overdue ? `overdue for ${monthName}` : `due ${fmtDateSafe(dueDate.toISOString(), 'MMM d')}`}
+                            {feeNote}
                             {partial && <span className="text-gray-500"> · {money(paidThisPeriod)} paid</span>}
+                            {toArrears > 0 && <span className="text-gray-500"> · {money(toArrears)} to arrears</span>}
                             {pendingThisPeriod > 0 && <span className="text-sky-400"> · {money(pendingThisPeriod)} pending</span>}
                           </p>
                         );
@@ -1670,8 +1703,8 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                         const short = required - received;
                         return (
                           <p className="text-xs text-gray-500">
-                            {required > 0 ? `${money(required)} dep.` : 'Deposit'}
-                            {received > 0 && short <= 0 && <span className="text-emerald-400"> · {required > 0 ? 'received' : `${money(received)} received`}{short < 0 ? ` (+${money(-short)})` : ''}</span>}
+                            {required > 0 ? `${money(required)} dep.` : `${money(received)} dep.`}
+                            {/* Paid in full says nothing worth a line; only a shortfall does. */}
                             {received > 0 && short > 0 && <span className="text-amber-400"> · {money(received)} received, {money(short)} owed</span>}
                             {received <= 0 && required > 0 && <span className="text-red-400"> · not received</span>}
                           </p>
@@ -1696,7 +1729,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                   </div>
                   <div className="flex gap-3 mt-2.5">
                     {lease.status === 'ACTIVE' && (
-                      <button onClick={() => setShowPayForm(showPayForm === lease.id ? null : lease.id)}
+                      <button onClick={() => { setPayApplyTo(lease.paymentsApplyTo ?? 'CURRENT'); setShowPayForm(showPayForm === lease.id ? null : lease.id); }}
                         className="text-xs text-amber-400 hover:text-amber-300">
                         Log payment
                       </button>
@@ -1842,6 +1875,29 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                           </p>
                         );
                       })()}
+                      {(editForm.lateFeeAmount || editForm.lateFeePercent) && (
+                        <label className="flex items-start gap-2 text-xs text-gray-300 mt-2 cursor-pointer">
+                          <input type="checkbox" className="mt-0.5" checked={editForm.autoLateFee}
+                            onChange={e => setEditForm(f => ({ ...f, autoLateFee: e.target.checked }))} />
+                          <span>
+                            Charge it automatically
+                            <span className="block text-gray-500">
+                              When the month isn't paid in full by the due day{editForm.lateFeeGraceDays ? ` plus ${editForm.lateFeeGraceDays} grace days` : ''}, the fee is added to that month's overdue amount, and rolls into arrears with it if still unpaid at month end.
+                            </span>
+                          </span>
+                        </label>
+                      )}
+                    </div>
+
+                    {/* Where a payment goes first */}
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">Payments go to</label>
+                      <select value={editForm.paymentsApplyTo} onChange={e => setEditForm(f => ({ ...f, paymentsApplyTo: e.target.value }))}
+                        className="input-dark text-xs">
+                        <option value="CURRENT">This month's rent first, then arrears</option>
+                        <option value="ARREARS">Arrears first, then this month</option>
+                      </select>
+                      <p className="text-xs text-gray-600 mt-1">The default for this tenant; each payment can still be sent the other way when you log it.</p>
                     </div>
 
                     {/* Expected payer names — drives Plaid auto-logging */}
@@ -2093,6 +2149,14 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                       <input type="date" value={payExpectedDate} title="Expected to disburse"
                         onChange={e => setPayExpectedDate(e.target.value)} className="input-dark text-xs w-36" />
                     )}
+                    {/* Where the money goes first: some tenants pay down the old balance, others this month. */}
+                    {(Number(lease.arrearsBalance ?? 0) > 0 || payApplyTo === 'ARREARS') && (
+                      <select value={payApplyTo} onChange={e => setPayApplyTo(e.target.value as PaymentApplyTo)} className="input-dark text-xs"
+                        title="Where this payment goes first">
+                        <option value="CURRENT">To this month first</option>
+                        <option value="ARREARS">To arrears first</option>
+                      </select>
+                    )}
                     <input placeholder="Notes (optional)" value={payNotes} onChange={e => setPayNotes(e.target.value)} className="input-dark text-xs flex-1 min-w-32" />
                     <button onClick={() => logPayment(lease.id)} disabled={saving} className="btn btn-primary text-xs">{saving ? '…' : 'Log'}</button>
                     <button onClick={() => setShowPayForm(null)} className="text-xs text-gray-500 hover:text-gray-300">✕</button>
@@ -2243,6 +2307,11 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                                           onChange={e => setPayEdit(f => ({ ...f, expectedDate: e.target.value }))}
                                           className="input-dark text-xs w-32" />
                                       )}
+                                      <select value={payEdit.applyTo} onChange={e => setPayEdit(f => ({ ...f, applyTo: e.target.value as PaymentApplyTo }))}
+                                        className="input-dark text-xs" title="Where this payment goes first">
+                                        <option value="CURRENT">To its month first</option>
+                                        <option value="ARREARS">To arrears first</option>
+                                      </select>
                                     </div>
                                   </td>
                                   <td className="px-4 py-2">
@@ -2264,6 +2333,11 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                                   </td>
                                   <td className={`px-4 py-2 font-medium ${p.status === 'PENDING' ? 'text-sky-400' : 'text-white'}`}>
                                     {money(Number(p.amount))}
+                                    {Number(p.appliedToArrears ?? 0) > 0 && (
+                                      <span className="block text-[11px] font-normal text-gray-500">
+                                        {Number(p.appliedToArrears) >= Number(p.amount) ? 'to arrears' : `${money(Number(p.appliedToArrears))} to arrears`}
+                                      </span>
+                                    )}
                                   </td>
                                   <td className="px-4 py-2 text-gray-400">
                                     {RENT_PAYMENT_METHOD_LABELS[p.method as RentPaymentMethod] ?? p.method}

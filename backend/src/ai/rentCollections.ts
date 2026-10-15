@@ -33,15 +33,18 @@ export async function lateLeases(userId: string, now = new Date()): Promise<Late
     include: {
       leaseTenants: { where: { isPrimary: true }, include: { tenant: true }, take: 1 },
       unit: { select: { unitLabel: true, property: { select: { address: true, nickname: true } } } },
-      rentPayments: { where: { periodDate: { gte: monthStart, lt: monthEnd } }, select: { amount: true } },
+      rentPayments: { where: { periodDate: { gte: monthStart, lt: monthEnd }, status: 'RECEIVED' }, select: { amount: true, appliedToArrears: true } },
+      rentCharges: { where: { periodDate: { gte: monthStart, lt: monthEnd } }, select: { amount: true } },
     },
   });
   const out: LateLease[] = [];
   for (const l of leases) {
     const rent = Number(l.rentAmount) - Number(l.section8Amount ?? 0);
     if (rent <= 0) continue;
-    const paid = l.rentPayments.reduce((s, p) => s + Number(p.amount), 0);
-    const owed = Math.round((rent - paid) * 100) / 100;
+    // A payment sent to the balance did not pay this month; a late fee already charged is owed with it.
+    const paid = l.rentPayments.reduce((s, p) => s + Number(p.amount) - Number(p.appliedToArrears), 0);
+    const charged = l.rentCharges.reduce((s, c) => s + Number(c.amount), 0);
+    const owed = Math.round((rent + charged - paid) * 100) / 100;
     if (owed <= 1) continue;
     const dueDay = l.rentDueDay ?? 1;
     const dueDate = new Date(Date.UTC(now.getFullYear(), now.getMonth(), Math.min(dueDay, 28)));
