@@ -95,28 +95,12 @@ export async function accrueOverdueRent(now = new Date()): Promise<number> {
       continue;
     }
 
-    // Once only: this month was rolled in early by the old rule. Take it back
-    // out (what was unpaid when it was rolled in, on its due day) so it is
-    // rolled in once, at month end, with everything paid toward it by then.
+    // Marked as rolled in through this month by the old rule (which rolled a
+    // month in on its due day). The balance is left as it is: owners keep it
+    // to the months before this one by hand. From here this month rolls in
+    // once, at month end, with what was paid toward it.
     if (periodStart(lease.arrearsCaughtUpThrough).getTime() >= currentPeriod.getTime()) {
-      // A lease added this month was only seeded to this month, never rolled in.
-      if (lease.createdAt.getTime() >= currentPeriod.getTime() - 24 * 3600 * 1000) {
-        await db.lease.update({ where: { id: lease.id }, data: { arrearsCaughtUpThrough: lastPeriod } });
-        continue;
-      }
-      const dueDay = lease.rentDueDay ?? 1;
-      const daysInMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).getUTCDate();
-      const rolledAt = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), Math.min(dueDay, daysInMonth) + 1));
-      const credited = lease.rentPayments
-        .filter(x => inPeriod(x.periodDate, currentPeriod) && x.createdAt < rolledAt)
-        .reduce((s, x) => s + Number(x.amount), 0);
-      const wasAdded = Math.max(0, Math.round((Number(lease.rentAmount) - credited) * 100) / 100);
-      const back = Math.min(wasAdded, Math.max(0, Number(lease.arrearsBalance)));
-      await db.lease.update({
-        where: { id: lease.id },
-        data: { arrearsCaughtUpThrough: lastPeriod, ...(back > 0 ? { arrearsBalance: { decrement: back } } : {}) },
-      });
-      if (back > 0) console.log(`[Arrears] lease ${lease.id}: took ${back} for this month back out of arrears; it rolls in at month end`);
+      await db.lease.update({ where: { id: lease.id }, data: { arrearsCaughtUpThrough: lastPeriod } });
       continue;
     }
 
