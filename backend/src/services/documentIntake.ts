@@ -64,6 +64,8 @@ export function buildRawData(ex: Awaited<ReturnType<typeof parseBill>>['extracte
     paymentPlanAmount: ex.paymentPlanAmount ?? null,
     insurance: ex.insurance ?? null,
     transactions: ex.transactions ?? null,
+    // Figures read from an email, not a statement; the real statement replaces them when it comes.
+    emailNotice: ex.fromEmailBody ? true : undefined,
   };
 }
 
@@ -71,11 +73,15 @@ export function buildRawData(ex: Awaited<ReturnType<typeof parseBill>>['extracte
  * @param batchId groups staged review copies under pending-review/<user>/<batch>/
  * @param source recorded in the statement's raw data ('drive_import', 'email')
  */
-export async function intakeBill(buffer: Buffer, filename: string, userId: string, method: 'ai' | 'regex', batchId: string, source = 'drive_import'): Promise<IntakeResult> {
+export async function intakeBill(buffer: Buffer, filename: string, userId: string, method: 'ai' | 'regex', batchId: string, source = 'drive_import', opts: { emailBody?: boolean } = {}): Promise<IntakeResult> {
   // parseBill defaults to AI; this path must pass the choice through or
   // every bulk import silently bills per PDF regardless of what was picked.
   const parsed = await parseBill(buffer, filename, userId, method === 'ai' ? 'ai' : 'regex');
   const { extracted: ex, match } = parsed;
+  if (opts.emailBody) ex.fromEmailBody = true;
+  // An email body is read from a printout, but the printout is not a statement:
+  // nothing of it is saved as one.
+  const docBuffer = ex.fromEmailBody ? null : buffer;
 
   // Correspondence, a legal filing, a transfer receipt: nothing to file or review.
   if (ex.documentKind === 'not_a_bill') return { outcome: 'not_a_bill' };
@@ -87,7 +93,7 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
   if (ex.documentKind === 'service_invoice') {
     if (!invoiceAmount(ex)) return { outcome: 'skipped', reason: 'invoice shows nothing owed' };
     if (match.propertyId) {
-      const r = await fileServiceInvoice(userId, match.propertyId, ex, buffer, filename);
+      const r = await fileServiceInvoice(userId, match.propertyId, ex, docBuffer, filename);
       return { outcome: 'expense', expenseId: r.expenseId, duplicate: r.duplicate };
     }
     const pendingKey = `pending-review/${userId}/${batchId}/${sanitizeFilename(filename)}`;
@@ -98,7 +104,7 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
   // A credit card statement goes to its card (Personal → Credit cards),
   // which is created if Sollux does not have it yet.
   if (ex.documentKind === 'credit_card_statement') {
-    const r = await fileCardStatement(userId, ex, buffer, filename);
+    const r = await fileCardStatement(userId, ex, docBuffer, filename);
     return { outcome: 'card', cardId: r.cardId, cardName: r.cardName, created: r.created };
   }
 
@@ -206,7 +212,7 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
     }
 
     const key = buildStatementKey(userId, acct.propertyId, acct.id, statementDate, sanitizeFilename(filename));
-    const pdfS3Key = await uploadDocument(key, buffer);
+    const pdfS3Key = docBuffer ? await uploadDocument(key, docBuffer) : null;
     const rawData = buildRawData(ex, source);
     if (existing && ownerCheck?.kind === 'same') {
       await keepOwnerFigures(existing, ex, rawData, pdfS3Key);

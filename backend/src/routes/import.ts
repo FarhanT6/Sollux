@@ -15,6 +15,7 @@ import { restoreLateFees } from '../services/lateFees';
 import { fileCardStatement } from '../services/cardIntake';
 import { recordNotice } from '../services/noticeTracker';
 import { fileServiceInvoice } from '../services/expenseIntake';
+import { isEmailPrintout } from '../services/emailPrintouts';
 import { compareWithOwner, keepOwnerFigures, ownerEntered, sameBillByDue, thinnerThan } from '../services/statementConflict';
 
 const router = Router();
@@ -187,13 +188,13 @@ router.post('/confirm', async (req: Request, res: Response) => {
             const prop = await db.property.findFirst({ where: { id: item.expensePropertyId, userId }, select: { id: true } });
             if (!prop) { errors.push(`${item.filename}: property not found`); continue; }
           }
-          await fileServiceInvoice(userId, item.expensePropertyId ?? null, item.extracted, item.fileData ? Buffer.from(item.fileData, 'base64') : null, item.filename, item.expenseCategory);
+          await fileServiceInvoice(userId, item.expensePropertyId ?? null, item.extracted, item.fileData && !item.extracted.fromEmailBody ? Buffer.from(item.fileData, 'base64') : null, item.filename, item.expenseCategory);
           imported++;
           continue;
         }
         if (item.extracted?.documentKind === 'receipt' || item.extracted?.documentKind === 'estimate') { skipped++; continue; }
         if (item.extracted?.documentKind === 'credit_card_statement') {
-          await fileCardStatement(userId, item.extracted, item.fileData ? Buffer.from(item.fileData, 'base64') : null, item.filename);
+          await fileCardStatement(userId, item.extracted, item.fileData && !item.extracted.fromEmailBody ? Buffer.from(item.fileData, 'base64') : null, item.filename);
           imported++;
           continue;
         }
@@ -592,7 +593,11 @@ router.post('/confirm', async (req: Request, res: Response) => {
 
         // Upload PDF to S3
         let pdfS3Key: string | undefined;
-        if (item.fileData) {
+        // An email's body is not the statement: its figures are filed, its
+        // printout is not. Cards staged before this was known are recognised
+        // by the stamp on the printout.
+        if (item.fileData && !ex.fromEmailBody && await isEmailPrintout(Buffer.from(item.fileData, 'base64'))) ex.fromEmailBody = true;
+        if (item.fileData && !ex.fromEmailBody) {
           const buf = Buffer.from(item.fileData, 'base64');
           const key = buildStatementKey(
             userId,
@@ -875,6 +880,7 @@ function buildRawData(ex: ExtractedBillData, extractedBy?: 'ai' | 'text'): Recor
     paymentPlanAmount:   ex.paymentPlanAmount ?? null,
     insurance:           ex.insurance ?? null,
     netMetering:         ex.netMetering ?? null,
+    emailNotice:         ex.fromEmailBody ? true : undefined,
     // The statement's transaction table as printed: payments, fees and
     // reversals since the last statement.
     transactions:        ex.transactions ?? null,

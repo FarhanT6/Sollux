@@ -621,6 +621,8 @@ router.get('/jobs/:id/review-data', attachDbUser, async (req, res, next) => {
           extracted: item.extracted,
           match: item.match,
           fileData: buffer.toString('base64'),
+          // Lets the page take this card off the review list once imported.
+          s3Key: item.s3Key,
         });
       })
     );

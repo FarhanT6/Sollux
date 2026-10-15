@@ -7,6 +7,7 @@ import './driveImportWorker';
 import { scrapeQueue, insightQueue, gmailQueue } from './queues';
 import { db } from '../config/db';
 import { runNoticeReminders, importEarlierNotices } from '../services/noticeTracker';
+import { detachEmailPrintouts } from '../services/emailPrintouts';
 import { decrypt } from '../crypto/encrypt';
 import { runDailyBalanceSnapshot } from './balanceSnapshotWorker';
 import { syncAllWatchedAccounts } from '../services/transactionMatchService';
@@ -129,6 +130,11 @@ setTimeout(() => {
   if (first <= new Date()) first.setUTCDate(first.getUTCDate() + 1);
   setTimeout(() => { run(); setInterval(run, 24 * 60 * 60 * 1000); }, first.getTime() - Date.now());
   console.log(`[Notices] Reminders scheduled — next run at ${first.toISOString()}`);
+  // Printouts of bill emails saved as statement PDFs before email notices
+  // were kept as figures only: taken off (once per bill).
+  detachEmailPrintouts()
+    .then(r => r.detached && console.log(`[Import] ${r.detached} email printout(s) taken off statements (${r.checked} checked)`))
+    .catch(err => console.warn('[Import] email printouts not checked:', err instanceof Error ? err.message : err));
   // Notices read before they were tracked: brought in once (idempotent).
   importEarlierNotices()
     .then(r => r.created && console.log(`[Notices] ${r.created} earlier notice(s) brought into the tracker, ${r.open} still open`))

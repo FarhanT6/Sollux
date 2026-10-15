@@ -650,7 +650,8 @@ export const getInboxActivity = (opts: { skipped?: boolean } = {}) =>
   api.get<InboxActivity>('/gmail/inbox', { params: opts.skipped ? { skipped: 1 } : {} }).then(r => r.data);
 export const syncInbox = (tokenId?: string, backfillDays?: number) =>
   api.post<{ jobId: string; accounts: number }>('/gmail/sync', { tokenId, backfillDays }).then(r => r.data);
-export const markInboxReviewed = (jobId: string) => api.post(`/gmail/inbox/reviewed/${jobId}`);
+// With s3Keys, only those cards leave the review list; without, the whole list is done.
+export const markInboxReviewed = (jobId: string, s3Keys?: string[]) => api.post(`/gmail/inbox/reviewed/${jobId}`, s3Keys ? { s3Keys } : {});
 // Statements that are one bill filed twice (a summary email beside the PDF statement).
 export interface DuplicateStatementPair {
   keepId: string; dropId: string; utilityAccountId: string; propertyId: string; provider: string; property: string;
