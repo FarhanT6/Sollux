@@ -98,4 +98,33 @@ router.delete('/invoices/:id', async (req, res) => {
   try { await r.deleteInvoice(req.params.id, req.dbUserId!); res.status(204).send(); } catch (err) { fail(res, err); }
 });
 
+// Logging what a tenant paid back, matched to the bills it covers.
+router.get('/lease/:leaseId/owed', async (req, res) => {
+  try { res.json(await r.reimbursableItems(req.params.leaseId, req.dbUserId!)); } catch (err) { fail(res, err); }
+});
+
+router.get('/lease/:leaseId/payments', async (req, res) => {
+  try { res.json(await r.listReimbursementPayments(req.params.leaseId, req.dbUserId!)); } catch (err) { fail(res, err); }
+});
+
+router.post('/lease/:leaseId/payments', async (req, res) => {
+  const parsed = z.object({
+    amount: z.number().positive(),
+    paidDate: z.string().min(10),
+    method: z.enum([
+      'CASH','CHECK','ZELLE','ACH','MONEY_ORDER','CARD',
+      'VENMO','PAYPAL','CASH_APP','APPLE_CASH','BANK_DEPOSIT','SECTION_8','RENTAL_ASSISTANCE','OTHER',
+    ]).default('OTHER'),
+    bankAccountId: z.string().nullable().optional(),
+    notes: z.string().nullable().optional(),
+    allocations: z.array(z.object({ key: z.string().min(1), amount: z.number().min(0) })).default([]),
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Enter an amount and a date.' });
+  try { res.status(201).json(await r.recordReimbursementPayment(req.params.leaseId, req.dbUserId!, parsed.data)); } catch (err) { fail(res, err); }
+});
+
+router.delete('/payments/:id', async (req, res) => {
+  try { await r.deleteReimbursementPayment(req.params.id, req.dbUserId!); res.status(204).send(); } catch (err) { fail(res, err); }
+});
+
 export default router;

@@ -99,6 +99,28 @@ export const updateLease = (id: string, data: any) =>
   api.patch<Lease>(`/leases/${id}`, data).then(r => r.data);
 export const deleteLease = (id: string) =>
   api.delete(`/leases/${id}`);
+// Utility reimbursement paid by a tenant, matched to the bills it covers.
+export interface ReimbursableItem {
+  key: string; utilityAccountId: string | null; statementId: string | null; category: string;
+  label: string; periodDate: string; period: string; billAmount: number; sharePercent: number | null;
+  owed: number; paid: number; outstanding: number; invoiceId: string | null;
+}
+export interface ReimbursementPaymentRow {
+  id: string; leaseId: string; amount: number; paidDate: string; method: string; notes: string | null;
+  bankAccount?: { id: string; name: string; bank?: string | null; last4?: string | null } | null;
+  allocations: { id: string; statementId: string | null; utilityAccountId: string | null; category: string; periodDate: string; amount: number }[];
+}
+export const getReimbursableItems = (leaseId: string) =>
+  api.get<ReimbursableItem[]>(`/reimbursements/lease/${leaseId}/owed`).then(r => r.data);
+export const getReimbursementPayments = (leaseId: string) =>
+  api.get<ReimbursementPaymentRow[]>(`/reimbursements/lease/${leaseId}/payments`).then(r => r.data);
+export const createReimbursementPayment = (leaseId: string, data: {
+  amount: number; paidDate: string; method: string; bankAccountId?: string | null; notes?: string | null;
+  allocations: { key: string; amount: number }[];
+}) => api.post(`/reimbursements/lease/${leaseId}/payments`, data).then(r => r.data);
+export const deleteReimbursementPayment = (id: string) =>
+  api.delete(`/reimbursements/payments/${id}`);
+
 /** Waive a late fee charged on a month. */
 export const waiveRentCharge = (leaseId: string, chargeId: string) =>
   api.delete(`/leases/${leaseId}/charges/${chargeId}`);
