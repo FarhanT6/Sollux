@@ -7,6 +7,12 @@ import { extractLeaseTerms } from '../services/leaseExtract';
 import { assessLateFees, waiveCharge } from '../services/rentCharges';
 
 const router = Router();
+
+/** The utilities a lease bills on top of rent each month. */
+export async function utilitiesOf(leaseId: string): Promise<number> {
+  const r = await db.leaseUtilityCharge.aggregate({ where: { leaseId }, _sum: { amount: true } });
+  return Number(r._sum.amount ?? 0);
+}
 router.use(attachDbUser);
 
 function sanitizeFilename(name: string): string {
@@ -223,7 +229,11 @@ router.post('/:id/utility-charges', async (req, res, next) => {
     const data = UtilityChargeSchema.parse(req.body);
     const lease = await db.lease.findFirst({ where: { id: req.params.id, unit: { property: { userId: req.dbUserId! } } } });
     if (!lease) return res.status(404).json({ error: 'Lease not found' });
-    const created = await db.leaseUtilityCharge.create({ data: { ...data, leaseId: lease.id } });
+    // Utilities are billed on top of rent: the total the tenant pays goes up with them.
+    const [created] = await db.$transaction([
+      db.leaseUtilityCharge.create({ data: { ...data, leaseId: lease.id } }),
+      db.lease.update({ where: { id: lease.id }, data: { rentAmount: { increment: data.amount } } }),
+    ]);
     res.status(201).json(created);
   } catch (err) { next(err); }
 });
@@ -233,7 +243,14 @@ router.delete('/:id/utility-charges/:chargeId', async (req, res, next) => {
   try {
     const lease = await db.lease.findFirst({ where: { id: req.params.id, unit: { property: { userId: req.dbUserId! } } } });
     if (!lease) return res.status(404).json({ error: 'Lease not found' });
-    await db.leaseUtilityCharge.deleteMany({ where: { id: req.params.chargeId, leaseId: lease.id } });
+    const charge = await db.leaseUtilityCharge.findFirst({ where: { id: req.params.chargeId, leaseId: lease.id } });
+    if (charge) {
+      // And down again when one is removed; the rent itself stays.
+      await db.$transaction([
+        db.leaseUtilityCharge.delete({ where: { id: charge.id } }),
+        db.lease.update({ where: { id: lease.id }, data: { rentAmount: { decrement: charge.amount } } }),
+      ]);
+    }
     res.status(204).send();
   } catch (err) { next(err); }
 });
@@ -299,16 +316,20 @@ router.post('/:id/scheduled-increases/:sid/apply', async (req, res, next) => {
     // actual percent/amount within the planned range).
     const override = z.object({ percent: z.number().optional(), amount: z.number().optional() }).parse(req.body || {});
 
+    // An increase is to the rent; utilities billed with it stay as they are.
     const prev = Number(lease.rentAmount);
-    const newAmount = override.amount != null
+    const utilities = await utilitiesOf(lease.id);
+    const base = prev - utilities;
+    const newBase = override.amount != null
       ? override.amount
       : override.percent != null
-        ? Math.round(prev * (1 + override.percent / 100) * 100) / 100
+        ? Math.round(base * (1 + override.percent / 100) * 100) / 100
         : sched.newAmount != null
           ? Number(sched.newAmount)
           : sched.percent != null
-            ? Math.round(prev * (1 + Number(sched.percent) / 100) * 100) / 100
-            : prev;
+            ? Math.round(base * (1 + Number(sched.percent) / 100) * 100) / 100
+            : base;
+    const newAmount = Math.round((newBase + utilities) * 100) / 100;
 
     await db.rentChange.create({
       data: { leaseId: lease.id, effectiveDate: sched.effectiveDate, previousAmount: prev, newAmount, note: sched.note || 'Scheduled increase applied' },

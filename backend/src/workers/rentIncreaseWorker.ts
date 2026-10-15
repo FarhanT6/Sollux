@@ -28,13 +28,18 @@ export async function applyDueRentIncreases(now = new Date()): Promise<number> {
     const lease = await db.lease.findUnique({ where: { id: si.leaseId } });
     if (!lease) continue;
 
+    // An increase is to the rent; utilities billed on top of it stay as they are.
     const prev = Number(lease.rentAmount);
-    const newAmount = si.newAmount != null
+    const charges = await db.leaseUtilityCharge.aggregate({ where: { leaseId: lease.id }, _sum: { amount: true } });
+    const utilities = Number(charges._sum.amount ?? 0);
+    const base = prev - utilities;
+    const newBase = si.newAmount != null
       ? Number(si.newAmount)
       : si.percent != null
-        ? Math.round(prev * (1 + Number(si.percent) / 100) * 100) / 100
+        ? Math.round(base * (1 + Number(si.percent) / 100) * 100) / 100
         : null;
-    if (newAmount == null) continue; // nothing actionable
+    if (newBase == null) continue; // nothing actionable
+    const newAmount = Math.round((newBase + utilities) * 100) / 100;
 
     await db.rentChange.create({
       data: {

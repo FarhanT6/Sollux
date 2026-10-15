@@ -179,8 +179,10 @@ function LeaseCard({ lease, maintenance, onChanged }: {
   onChanged: () => void;
 }) {
   const [editing, setEditing] = useState(false);
+  // The rent field is the rent; utilities billed on top are added back when saving.
+  const utilities = (lease.utilityCharges ?? []).reduce((s, c) => s + Number(c.amount), 0);
   const [form, setForm] = useState({
-    rentAmount: String(lease.rentAmount ?? ''),
+    rentAmount: String(Math.round((Number(lease.rentAmount ?? 0) - utilities) * 100) / 100),
     securityDeposit: String(lease.securityDeposit ?? ''),
     startDate: lease.startDate?.slice(0, 10) ?? '',
     endDate: lease.endDate?.slice(0, 10) ?? '',
@@ -196,7 +198,7 @@ function LeaseCard({ lease, maintenance, onChanged }: {
     setSaving(true);
     try {
       await updateLease(lease.id, {
-        rentAmount: parseFloat(form.rentAmount) || undefined,
+        rentAmount: parseFloat(form.rentAmount) ? Math.round((parseFloat(form.rentAmount) + utilities) * 100) / 100 : undefined,
         securityDeposit: form.securityDeposit ? parseFloat(form.securityDeposit) : null,
         startDate: form.startDate || null,
         endDate: form.endDate || null,
@@ -270,7 +272,7 @@ function LeaseCard({ lease, maintenance, onChanged }: {
               </p></div>
             ))}
             {(lease.utilityCharges?.length ?? 0) > 0 && (
-              <div><p className="text-xs text-gray-500">Of which utilities</p><p className="text-gray-300">{lease.utilityCharges!.map(u => `${u.category.toLowerCase()} ${money(u.amount)}`).join(', ')}</p></div>
+              <div><p className="text-xs text-gray-500">Utilities billed with rent</p><p className="text-gray-300">{lease.utilityCharges!.map(u => `${u.category.toLowerCase()} ${money(u.amount)}`).join(', ')}</p></div>
             )}
             {(lease.paymentAliases?.length ?? 0) > 0 && (
               <div><p className="text-xs text-gray-500">Rent also arrives from</p><p className="text-gray-300">{lease.paymentAliases!.map(a => a.name).join(', ')}</p></div>
