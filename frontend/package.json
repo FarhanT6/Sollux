@@ -10,7 +10,8 @@
     "ios": "npm run build:ios && cap sync ios && cap open ios",
     "ios:sync": "npm run build:ios && cap sync ios",
     "preview": "vite preview",
-    "lint": "eslint src --ext ts,tsx"
+    "lint": "eslint src --ext ts,tsx",
+    "screens": "node scripts/screens.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.20.0",

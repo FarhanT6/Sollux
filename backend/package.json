@@ -10,7 +10,9 @@
     "workers": "tsx watch src/workers/index.ts",
     "prisma:migrate": "prisma migrate dev",
     "prisma:generate": "prisma generate",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "dev:local": "node -r ./scripts/dev/devAuth.cjs --import tsx src/index.ts",
+    "seed:dev": "tsx scripts/dev/seed.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",
