@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { monthRentDue } from '../lib/rentDue';
 import { z } from 'zod';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
@@ -56,7 +57,7 @@ router.get('/preview/:leaseId', async (req, res, next) => {
     const currentPeriodEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
     const payments = await db.rentPayment.findMany({ where: { leaseId: lease.id, periodDate: { gte: currentPeriodStart, lt: currentPeriodEnd } } });
     const credited = payments.reduce((s, p) => s + (Number(p.amount) - Number(p.appliedToArrears)), 0);
-    const currentOwed = Math.max(0, Number(lease.rentAmount) - credited);
+    const currentOwed = Math.max(0, monthRentDue(lease, currentPeriodStart) - credited);
     const lineItems = computeStandardBreakdown(Number(lease.arrearsBalance), currentOwed, Number(lease.rentAmount), currentPeriodStart);
     res.json({ lineItems, totalDue: lineItems.reduce((s, i) => s + i.amount, 0) });
   } catch (err) { next(err); }

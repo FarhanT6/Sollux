@@ -164,6 +164,7 @@ export interface ExtractedLeaseTerms {
   securityDeposit: number | null; leaseType: 'FIXED_TERM' | 'MONTH_TO_MONTH' | null;
   rentDueDay: number | null; lateFeeAmount: number | null; lateFeePercent: number | null;
   lateFeeGraceDays: number | null; tenantNames: string[]; businessName: string | null; notes: string | null;
+  firstMonthRent: number | null;
   tenants: LeasePerson[]; rentSchedule: LeaseRentStep[]; utilityCharges: LeaseUtilityTerm[]; details: LeaseDetails;
 }
 /** Read a lease agreement before the lease exists (New lease form). */

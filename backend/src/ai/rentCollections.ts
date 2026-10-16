@@ -14,6 +14,7 @@
  */
 import Anthropic from '@anthropic-ai/sdk';
 import { db } from '../config/db';
+import { monthRentDue } from '../lib/rentDue';
 import { askClaude, jsonIn } from './models';
 
 const DAY = 86400000;
@@ -39,7 +40,8 @@ export async function lateLeases(userId: string, now = new Date()): Promise<Late
   });
   const out: LateLease[] = [];
   for (const l of leases) {
-    const rent = Number(l.rentAmount) - Number(l.section8Amount ?? 0);
+    // A lease that started partway through this month owes only part of it.
+    const rent = monthRentDue(l, monthStart) - Number(l.section8Amount ?? 0);
     if (rent <= 0) continue;
     // A payment sent to the balance did not pay this month; a late fee already charged is owed with it.
     const paid = l.rentPayments.reduce((s, p) => s + Number(p.amount) - Number(p.appliedToArrears), 0);

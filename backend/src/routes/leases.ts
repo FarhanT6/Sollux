@@ -52,6 +52,8 @@ const LeaseSchema = z.object({
   autoLateFee: z.boolean().optional(),
   // Where a payment goes first when the owner does not choose on the payment.
   paymentsApplyTo: z.enum(['CURRENT', 'ARREARS']).optional(),
+  // Rent for the start month when the lease starts partway through it; null = prorated by days.
+  firstMonthRent: z.number().min(0).optional().nullable(),
   // Commercial: business/entity on the lease.
   businessName: z.string().optional().nullable(),
   // The lease summary read from the agreement (leaseExtract LeaseDetails).
