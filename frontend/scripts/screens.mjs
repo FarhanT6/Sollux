@@ -27,7 +27,9 @@ const ROUTES = only.length ? only : [
 ];
 mkdirSync(outDir, { recursive: true });
 
-const PORT = 5199;
+// A free port each run, so back-to-back runs never collide.
+import { createServer } from 'node:net';
+const PORT = await new Promise(res => { const srv = createServer(); srv.listen(0, () => { const p = srv.address().port; srv.close(() => res(p)); }); });
 const server = spawn('npx', ['vite', '--mode', 'mock', '--port', String(PORT), '--strictPort'], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
 await new Promise((resolve, reject) => {
   const t = setTimeout(() => reject(new Error('vite did not start')), 60000);
@@ -44,6 +46,8 @@ const ctx = await browser.newContext({
   userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1',
   colorScheme: process.env.SCHEME === 'light' ? 'light' : 'dark',
 });
+// The app's own theme choice (Settings / More → Appearance), not the device's.
+await ctx.addInitScript(t => { try { localStorage.setItem('sollux.theme', t); } catch {} }, process.env.SCHEME === 'light' ? 'light' : 'dark');
 // Only the API (not Vite's /src/api/*.ts modules). Outside hosts (fonts) are
 // served nothing, so the run needs no network and no certificates.
 await ctx.route(u => u.hostname !== 'localhost', route => route.fulfill({ status: 200, body: '' }));
@@ -83,6 +87,45 @@ for (const path of ROUTES) {
   if (problems.length) failed = true;
   await page.close();
 }
+// Flows: tap through the phone navigation and check where each tap lands.
+if (!only.length || process.env.FLOWS) {
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  const base = `http://localhost:${PORT}`;
+  const step = async (name, fn) => {
+    try { await fn(); console.log(`✓ flow: ${name}`); }
+    catch (e) { failed = true; console.log(`✗ flow: ${name}\n    ${String(e.message).split('\n')[0]}`); await page.screenshot({ path: join(outDir, `flow-fail-${name.replace(/\W+/g, '-')}.png`) }); }
+  };
+  const expectPath = async (re) => { await page.waitForURL(u => re.test(u.pathname + u.search), { timeout: 5000 }); };
+  await page.goto(`${base}/dashboard`, { waitUntil: 'networkidle' });
+  await step('tab bar → Utilities', async () => { await page.getByRole('link', { name: 'Utilities' }).last().click(); await expectPath(/^\/properties$/); });
+  await step('utility row → account page', async () => { await page.locator('a.ios-row').first().click(); await expectPath(/^\/properties\/[^/]+\/utilities\/[^/]+$/); });
+  await step('browser back → Utilities', async () => { await page.goBack(); await expectPath(/^\/properties$/); await page.locator('.ios-largetitle h1', { hasText: 'Utilities' }).waitFor(); });
+  await step('Finances index → section → back', async () => {
+    await page.getByRole('link', { name: 'Finances' }).last().click(); await expectPath(/^\/finances$/);
+    await page.locator('a.ios-row', { has: page.locator('.ios-row-title', { hasText: /^Loans$/ }) }).first().click(); await expectPath(/tab=loans/);
+    await page.getByRole('button', { name: 'Finances' }).click(); await expectPath(/^\/finances$/);
+  });
+  await step('Payments row opens a sheet, Done closes it', async () => {
+    await page.getByRole('link', { name: 'Payments' }).last().click(); await expectPath(/^\/payments$/);
+    await page.locator('button.ios-row').first().click();
+    await page.locator('.ios-sheet').waitFor({ state: 'visible' });
+    await page.getByRole('button', { name: 'Done' }).click();
+    await page.locator('.ios-sheet').waitFor({ state: 'detached' });
+  });
+  await step('More → Insights', async () => {
+    await page.getByRole('link', { name: 'More' }).last().click(); await expectPath(/^\/more$/);
+    await page.locator('a.ios-row', { hasText: 'Insights' }).click(); await expectPath(/^\/insights$/);
+  });
+  await step('Scan → Library segment', async () => {
+    await page.getByRole('link', { name: 'Scan' }).last().click(); await expectPath(/^\/scan/);
+    await page.getByRole('tab', { name: 'Library' }).click(); await expectPath(/tab=library/);
+  });
+  if (errors.length) { failed = true; console.log(`✗ flow page errors:\n    ${errors.join('\n    ')}`); }
+  await page.close();
+}
+
 await browser.close();
 server.kill();
 process.exit(failed ? 1 : 0);

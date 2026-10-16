@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { format } from 'date-fns';
 import { PageHeader } from '../components/ui';
+import { Screen, Segmented, Section, Row, Sheet, usePhone } from '../ios';
 import { loadOpenCv } from '../lib/opencvLoader';
 import {
   analyzeScannedDocument, confirmScannedDocument,
@@ -26,6 +27,7 @@ interface ScannedPage {
 type Step = 'capture' | 'analyzing' | 'review' | 'saved';
 
 export default function ScanPage() {
+  const phone = usePhone();
   const [searchParams, setSearchParams] = useSearchParams();
   const mainTab = (searchParams.get('tab') as 'capture' | 'library') || 'capture';
 
@@ -191,6 +193,70 @@ export default function ScanPage() {
     setError(null);
   }
 
+  const setTab = (t: 'capture' | 'library') => setSearchParams({ tab: t }, { replace: true });
+
+  // Phone: the iOS screen, a segmented Scan / Library switch, a big capture
+  // button, and the library as a list. The scanning steps are the same.
+  if (phone) {
+    return (
+      <Screen title="Scan" subtitle={mainTab === 'library' ? 'Everything you have scanned' : 'Photograph mail; Sollux files it'}>
+        <Segmented label="Scan or library" value={mainTab} onChange={setTab}
+          options={[{ value: 'capture', label: 'Scan' }, { value: 'library', label: 'Library' }]} />
+        {mainTab === 'library' ? <DocumentLibraryPhone /> : (
+          <>
+            {error && <div className="ios-card ios-red" style={{ marginBottom: 16, fontSize: 15 }}>{error}</div>}
+            {step === 'saved' ? (
+              <div className="ios-empty">
+                <div style={{ fontSize: 44 }}>✓</div>
+                <h3>Document saved</h3>
+                Filed as {DOCUMENT_CATEGORY_LABELS[category]}{propertyId ? '' : ' in Documents'}.
+                <div style={{ marginTop: 20 }}><button className="ios-btn filled" onClick={resetAll}>Scan another</button></div>
+              </div>
+            ) : step === 'review' ? (
+              <ReviewForm pages={pages} title={title} setTitle={setTitle} category={category} setCategory={setCategory}
+                propertyId={propertyId} setPropertyId={setPropertyId} properties={properties} match={match}
+                saving={saving} onSave={handleSave} onBack={() => setStep('capture')} />
+            ) : step === 'analyzing' ? (
+              <div className="ios-empty"><div className="ios-spinner" style={{ margin: '0 auto 12px' }} />Reading the document…</div>
+            ) : capturing ? (
+              <CornerAdjust img={capturing.img} corners={capturing.corners}
+                onChange={corners => setCapturing({ img: capturing.img, corners })} onConfirm={confirmPage} onCancel={() => setCapturing(null)} />
+            ) : (
+              <>
+                <input ref={fileInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFileSelected} />
+                <div className="ios-card" style={{ textAlign: 'center', padding: '28px 20px', marginBottom: 20 }}>
+                  <div style={{ width: 64, height: 64, borderRadius: 18, background: 'var(--ios-tint-soft)', color: 'var(--ios-tint)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px' }}>
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2" /><path d="M7 12h10" /></svg>
+                  </div>
+                  <div style={{ fontSize: 20, fontWeight: 600, marginBottom: 4 }}>{pages.length === 0 ? 'Scan a document' : `${pages.length} page${pages.length > 1 ? 's' : ''} captured`}</div>
+                  <div className="ios-muted" style={{ fontSize: 15, marginBottom: 18 }}>Edges are found and straightened, then it is filed to the right property.</div>
+                  <button className="ios-btn filled" disabled={loadingCv} onClick={() => fileInputRef.current?.click()}>
+                    {loadingCv ? 'Loading scanner…' : pages.length === 0 ? 'Scan' : 'Add a page'}
+                  </button>
+                </div>
+                {pages.length > 0 && (
+                  <>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 20 }}>
+                      {pages.map((pg, i) => (
+                        <div key={pg.id} style={{ position: 'relative', borderRadius: 12, overflow: 'hidden', aspectRatio: '3 / 4', background: 'var(--ios-cell)' }}>
+                          <img src={pg.dataUrl} alt={`Page ${i + 1}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          <button onClick={() => removePage(pg.id)} aria-label="Remove page"
+                            style={{ position: 'absolute', top: 6, right: 6, width: 24, height: 24, borderRadius: 12, border: 0, background: 'rgba(0,0,0,0.6)', color: '#fff' }}>×</button>
+                          <span style={{ position: 'absolute', bottom: 6, left: 8, color: '#fff', fontSize: 12, fontWeight: 600, textShadow: '0 1px 2px rgba(0,0,0,0.6)' }}>{i + 1}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <button className="ios-btn gray" onClick={finishScan}>Done · file {pages.length} page{pages.length > 1 ? 's' : ''}</button>
+                  </>
+                )}
+              </>
+            )}
+          </>
+        )}
+      </Screen>
+    );
+  }
+
   return (
     <div>
       <PageHeader title="Scan" subtitle="Digitize physical mail — auto edge-detect, correct, and file it to the right property" />
@@ -199,7 +265,7 @@ export default function ScanPage() {
         {(['capture', 'library'] as const).map(t => (
           <button
             key={t}
-            onClick={() => setSearchParams({ tab: t }, { replace: true })}
+            onClick={() => setTab(t)}
             className={`text-sm py-3 px-4 border-b-2 transition-colors ${
               mainTab === t
                 ? 'border-amber-400 text-amber-400 font-medium'
@@ -513,4 +579,66 @@ function loadImage(file: File): Promise<HTMLImageElement> {
     img.onerror = () => reject(new Error('Failed to load image'));
     img.src = url;
   });
+}
+
+// ─── Phone library: the scanned documents as a list ──────────────────────────
+
+function DocumentLibraryPhone() {
+  const [documents, setDocuments] = useState<Document[] | null>(null);
+  const [properties, setProperties] = useState<Property[]>([]);
+  const [propertyFilter, setPropertyFilter] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('');
+  const [filtersOpen, setFiltersOpen] = useState(false);
+
+  useEffect(() => { getProperties().then(setProperties).catch(() => {}); }, []);
+  useEffect(() => {
+    getDocuments({ propertyId: propertyFilter || undefined, category: (categoryFilter || undefined) as DocumentCategory | undefined })
+      .then(setDocuments).catch(() => setDocuments([]));
+  }, [propertyFilter, categoryFilter]);
+
+  async function view(doc: Document) { window.open(await getDocumentUrl(doc.id), '_blank'); }
+  async function remove(doc: Document) {
+    if (!confirm(`Delete "${doc.title}"?`)) return;
+    await deleteDocument(doc.id);
+    setDocuments(prev => (prev ?? []).filter(d => d.id !== doc.id));
+  }
+  const filtered = !!(propertyFilter || categoryFilter);
+  const propLabel = (id: string) => { const p = properties.find(x => x.id === id); return p ? (p.nickname || p.address) : ''; };
+
+  return (
+    <>
+      <Section>
+        <Row title="Filter" onClick={() => setFiltersOpen(true)}
+          value={filtered ? [propertyFilter === 'none' ? 'Unfiled' : propLabel(propertyFilter), categoryFilter ? DOCUMENT_CATEGORY_LABELS[categoryFilter as DocumentCategory] : ''].filter(Boolean).join(' · ') : 'All'} />
+      </Section>
+      {documents == null ? <div className="ios-skeleton" style={{ height: 160 }} /> : documents.length === 0 ? (
+        <div className="ios-empty"><h3>No documents</h3>{filtered ? 'Nothing matches these filters.' : 'Scanned mail shows up here.'}</div>
+      ) : (
+        <Section footer="Swipe left on a document to delete it.">
+          {documents.map(d => (
+            <Row key={d.id} onClick={() => void view(d)}
+              title={d.title}
+              subtitle={[DOCUMENT_CATEGORY_LABELS[d.category], d.property ? (d.property.nickname || d.property.address) : 'Unfiled', fmtDate(d.createdAt, 'MMM d')].join(' · ')}
+              swipe={[{ label: 'Delete', color: 'var(--ios-red)', onClick: () => void remove(d) }]}
+            />
+          ))}
+        </Section>
+      )}
+      <Sheet open={filtersOpen} onClose={() => setFiltersOpen(false)} title="Filter" left={{ label: 'Reset', onClick: () => { setPropertyFilter(''); setCategoryFilter(''); } }}
+        right={{ label: 'Done', onClick: () => setFiltersOpen(false) }}>
+        <Section header="Property">
+          {[{ id: '', label: 'All properties' }, { id: 'none', label: 'Unfiled' }, ...properties.map(p => ({ id: p.id, label: p.nickname || p.address }))].map(o => (
+            <Row key={o.id || 'all'} title={o.label} chevron={false} onClick={() => setPropertyFilter(o.id)}
+              value={propertyFilter === o.id ? <span className="ios-tint">✓</span> : undefined} />
+          ))}
+        </Section>
+        <Section header="Category">
+          {[['', 'All categories'] as [string, string], ...Object.entries(DOCUMENT_CATEGORY_LABELS)].map(([k, v]) => (
+            <Row key={k || 'all'} title={v} chevron={false} onClick={() => setCategoryFilter(k)}
+              value={categoryFilter === k ? <span className="ios-tint">✓</span> : undefined} />
+          ))}
+        </Section>
+      </Sheet>
+    </>
+  );
 }

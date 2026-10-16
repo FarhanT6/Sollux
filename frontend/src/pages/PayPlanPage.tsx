@@ -23,15 +23,17 @@ const money = (n: number) =>
 const money0 = (n: number) =>
   `$${Math.abs(n).toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
 
-export default function PayPlanPage() {
+/**
+ * The pay plan's data and actions, shared by this page and the phone screen
+ * (pages/phone/PaymentsScreen.tsx).
+ */
+export function usePayPlan() {
   const [plan, setPlan] = useState<PayPlan | null>(null);
   const [loading, setLoading] = useState(true);
   const [days, setDays] = useState(14);
   const [cushion, setCushion] = useState('');
   const [utilities, setUtilities] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
-  const [addingTo, setAddingTo] = useState<string | null>(null);
-  const [balanceFor, setBalanceFor] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -89,6 +91,14 @@ export default function PayPlanPage() {
   const due = plan?.obligations.filter(o => o.status !== 'SENT') ?? [];
   const sent = plan?.obligations.filter(o => o.status === 'SENT') ?? [];
   const shortCount = due.filter(o => o.status === 'SHORT').length;
+
+  return { plan, loading, days, setDays, cushion, setCushion, utilities, setUtilities, busy, load, acct, acctLabel, markSent, setUsual, clear, remove, due, sent, shortCount };
+}
+
+export default function PayPlanPage() {
+  const { plan, loading, days, setDays, cushion, setCushion, utilities, setUtilities, busy, load, acct, acctLabel, markSent, setUsual, clear, remove, due, sent, shortCount } = usePayPlan();
+  const [addingTo, setAddingTo] = useState<string | null>(null);
+  const [balanceFor, setBalanceFor] = useState<string | null>(null);
 
   return (
     <div>

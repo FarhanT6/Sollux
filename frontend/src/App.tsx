@@ -3,6 +3,12 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from '@clerk/clerk-react';
 import { SignIn, SignUp } from '@clerk/clerk-react';
 import { isNative } from './lib/native';
+import MoreScreen from './pages/phone/MoreScreen';
+import OverviewScreen from './pages/phone/OverviewScreen';
+import UtilitiesScreen from './pages/phone/UtilitiesScreen';
+import FinancesScreen from './pages/phone/FinancesScreen';
+import PaymentsScreen from './pages/phone/PaymentsScreen';
+import { Responsive } from './ios';
 import AppLayout from './components/layout/AppLayout';
 import DashboardPage from './pages/DashboardPage';
 import PropertiesPage from './pages/PropertiesPage';
@@ -88,15 +94,15 @@ export default function App() {
 
         <Route path="/" element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
           <Route index element={<Navigate to="/dashboard" replace />} />
-          <Route path="dashboard" element={<DashboardPage />} />
+          <Route path="dashboard" element={<Responsive phone={<OverviewScreen />} desktop={<DashboardPage />} />} />
 
           {/* Properties */}
-          <Route path="properties" element={<PropertiesPage />} />
+          <Route path="properties" element={<Responsive phone={<UtilitiesScreen />} desktop={<PropertiesPage />} />} />
           <Route path="properties/:id" element={<PropertyDetailPage />} />
           <Route path="properties/:propertyId/utilities/:accountId" element={<UtilityDetailPage />} />
 
           {/* Finances hub */}
-          <Route path="finances" element={<FinancesPage />} />
+          <Route path="finances" element={<Responsive phone={<FinancesScreen />} desktop={<FinancesPage />} />} />
           <Route path="taxes" element={<TaxesPage />} />
           <Route path="personal" element={<PersonalPage />} />
           <Route path="vault" element={<VaultPage />} />
@@ -120,11 +126,13 @@ export default function App() {
           <Route path="legal" element={<LegalPage />} />
 
           {/* Standalone pages */}
-          <Route path="payments" element={<PayPlanPage />} />
+          <Route path="payments" element={<Responsive phone={<PaymentsScreen />} desktop={<PayPlanPage />} />} />
           <Route path="payments/priorities" element={<PaymentPrioritiesPage />} />
           <Route path="operations" element={<OperationsPage />} />
           <Route path="insights" element={<InsightsPage />} />
           <Route path="settings" element={<SettingsPage />} />
+          {/* Phone: everything not in the tab bar. */}
+          <Route path="more" element={<MoreScreen />} />
 
           {/* Import */}
           <Route path="import" element={<ImportPage />} />
