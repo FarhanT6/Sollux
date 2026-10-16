@@ -276,3 +276,6 @@ html[data-theme="dark"] .ios-segmented .thumb, :root:not([data-theme]) .ios-segm
 @media (max-width: 767px) {
   main.app-canvas .px-6 { padding-left: 16px; padding-right: 16px; }
 }
+
+/* A field with no label (a notes box) uses the whole row. */
+.ios-field label:empty { display: none; }

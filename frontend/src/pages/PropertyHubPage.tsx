@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useMemo } from 'react';
 import CompliancePage from './CompliancePage';
-import { useParams, Link, useSearchParams } from 'react-router-dom';
+import { useParams, Link, useSearchParams, useNavigate } from 'react-router-dom';
 import BackLink from '../components/ui/BackLink';
 import { bankAccountLabel } from '../lib/bankAccountLabel';
 import { format } from 'date-fns';
@@ -40,6 +40,8 @@ import type { Document as DocType } from '../types';
 import { fmtDate as fmtDateSafe, monthKey, localMonthKey, todayISO, thisMonthISO } from '../lib/date';
 import LegalPage from './LegalPage';
 import UnitsTab from '../components/UnitsTab';
+import { usePhone, Section, Row } from '../ios';
+import PropertyHubScreen from './phone/PropertyHubScreen';
 
 const LEASE_DOC_CATEGORIES = ['LEASE', 'APPLICATION', 'IDENTITY', 'SCREENING', 'OTHER'] as const;
 
@@ -122,6 +124,7 @@ export default function PropertyHubPage() {
   const { id } = useParams<{ id: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = (searchParams.get('tab') as Tab) || 'Overview';
+  const phone = usePhone();
 
   const [property, setProperty] = useState<Property | null>(null);
   const [loading, setLoading] = useState(true);
@@ -196,6 +199,46 @@ export default function PropertyHubPage() {
   const occ = units.length > 0
     ? Math.round(new Set(activeLeases.map(l => l.unitId)).size / units.length * 100)
     : null;
+
+  // What each section shows, and the dialogs; both layouts render these.
+  const tabContent = (
+    <>
+      {activeTab === 'Overview' && <OverviewTab property={property} pnl={pnl} leases={activeLeases} loans={loans.filter(l => l.isActive)} onPropertyChange={setProperty} />}
+      {activeTab === 'Units' && <UnitsTab propertyId={id!} />}
+      {activeTab === 'Tenants' && <TenantsTab propertyId={id!} leases={leases} setLeases={setLeases} propertyType={property.type} />}
+      {activeTab === 'Turnover' && <TurnoverTab report={turnover} />}
+      {activeTab === 'Loans' && <LoansTab propertyId={id!} loans={loans} setLoans={setLoans} />}
+      {activeTab === 'Expenses' && <ExpensesTab propertyId={id!} expenses={expenses} setExpenses={setExpenses} />}
+      {activeTab === 'Insurance' && <InsuranceTab propertyId={id!} policies={policies} setPolicies={setPolicies} />}
+      {activeTab === 'Maintenance' && <MaintenanceTab propertyId={id!} items={improvements} setItems={setImprovements} />}
+      {activeTab === 'Tax' && <TaxTab propertyId={id!} taxes={taxes} setTaxes={setTaxes} />}
+      {activeTab === 'Compliance' && <div className="px-6 py-5"><CompliancePage propertyId={id!} /></div>}
+      {activeTab === 'Legal' && <LegalPage embedded propertyId={id!} />}
+      {activeTab === 'Documents' && <DocumentsTab propertyId={id!} documents={documents} setDocuments={setDocuments} />}
+    </>
+  );
+  const modals = (
+    <>
+      {showEditProperty && (
+        <PropertyEditModal property={property} onClose={() => setShowEditProperty(false)} onSave={setProperty} />
+      )}
+      {exportModal && (
+        <ReportExportModal
+          kind={exportModal}
+          propertyId={property.id}
+          propertyName={property.nickname || property.address}
+          onClose={() => setExportModal(null)}
+        />
+      )}
+    </>
+  );
+
+  if (phone) return (
+    <PropertyHubScreen property={property} tab={activeTab} tabs={TABS}
+      stats={{ rent: totalRent, arrears: totalArrears, equity, occupancy: occ, units: units.length }}
+      onEdit={() => setShowEditProperty(true)} onExport={setExportModal}
+      content={tabContent} modals={modals} />
+  );
 
   return (
     <div>
@@ -278,31 +321,10 @@ export default function PropertyHubPage() {
 
       {/* Tab content */}
       <div className="px-6 py-5">
-        {activeTab === 'Overview' && <OverviewTab property={property} pnl={pnl} leases={activeLeases} loans={loans.filter(l => l.isActive)} onPropertyChange={setProperty} />}
-        {activeTab === 'Units' && <UnitsTab propertyId={id!} />}
-        {activeTab === 'Tenants' && <TenantsTab propertyId={id!} leases={leases} setLeases={setLeases} propertyType={property.type} />}
-        {activeTab === 'Turnover' && <TurnoverTab report={turnover} />}
-        {activeTab === 'Loans' && <LoansTab propertyId={id!} loans={loans} setLoans={setLoans} />}
-        {activeTab === 'Expenses' && <ExpensesTab propertyId={id!} expenses={expenses} setExpenses={setExpenses} />}
-        {activeTab === 'Insurance' && <InsuranceTab propertyId={id!} policies={policies} setPolicies={setPolicies} />}
-        {activeTab === 'Maintenance' && <MaintenanceTab propertyId={id!} items={improvements} setItems={setImprovements} />}
-        {activeTab === 'Tax' && <TaxTab propertyId={id!} taxes={taxes} setTaxes={setTaxes} />}
-        {activeTab === 'Compliance' && <div className="px-6 py-5"><CompliancePage propertyId={id!} /></div>}
-        {activeTab === 'Legal' && <LegalPage embedded propertyId={id!} />}
-        {activeTab === 'Documents' && <DocumentsTab propertyId={id!} documents={documents} setDocuments={setDocuments} />}
+        {tabContent}
       </div>
 
-      {showEditProperty && (
-        <PropertyEditModal property={property} onClose={() => setShowEditProperty(false)} onSave={setProperty} />
-      )}
-      {exportModal && (
-        <ReportExportModal
-          kind={exportModal}
-          propertyId={property.id}
-          propertyName={property.nickname || property.address}
-          onClose={() => setExportModal(null)}
-        />
-      )}
+      {modals}
     </div>
   );
 }
@@ -1668,8 +1690,8 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex gap-2 items-center">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+        <div className="flex flex-wrap gap-2 items-center">
           <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="input-dark text-sm">
             <option value="">All statuses</option>
             <option value="ACTIVE">Active</option>
@@ -1716,9 +1738,10 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
             return (
               <div key={lease.id} className="card overflow-hidden">
                 <div className="px-4 py-3">
-                  <div className="flex items-start gap-3">
+                  {/* Side by side on a desktop; on a phone the rent column drops below the names. */}
+                  <div className="flex flex-col md:flex-row items-stretch md:items-start gap-1.5 md:gap-3">
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-0.5">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-0.5">
                         <p className="text-sm font-semibold text-white">
                           {leaseTenants.length === 0 ? '—' : leaseTenants.map((lt, i) => (
                             <span key={lt.tenant.id}>
@@ -1729,13 +1752,13 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                             </span>
                           ))}
                         </p>
-                        <span className={`pill text-xs ${lease.status === 'ACTIVE' ? 'pill-green' : lease.status === 'PENDING' ? 'pill-amber' : 'pill-gray'}`}>
+                        <span className={`pill text-xs whitespace-nowrap ${lease.status === 'ACTIVE' ? 'pill-green' : lease.status === 'PENDING' ? 'pill-amber' : 'pill-gray'}`}>
                           {lease.status}
                         </span>
                         {(() => {
                           const term = leaseTermStatus(lease);
                           if (!term || term.pill === 'green') return null;
-                          return <span className={`pill text-xs pill-${term.pill}`} title={term.detail}>{term.label}</span>;
+                          return <span className={`pill text-xs whitespace-nowrap pill-${term.pill}`} title={term.detail}>{term.label}</span>;
                         })()}
                       </div>
                       {lease.businessName && (
@@ -1748,7 +1771,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                         )}
                       </p>
                     </div>
-                    <div className="text-right flex-shrink-0">
+                    <div className="md:text-right flex-shrink-0">
                       <p className="text-sm font-semibold text-white">{money(Number(lease.rentAmount))}/mo</p>
                       {(() => {
                         const { utilities, baseRent } = rentBreakdown(lease);
@@ -1874,7 +1897,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                       })()}
                     </div>
                   </div>
-                  <div className="flex gap-3 mt-2.5">
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2.5 [&>button]:py-1.5 md:[&>button]:py-0 [&>button]:text-sm md:[&>button]:text-xs">
                     {lease.status === 'ACTIVE' && (
                       <button onClick={() => { setPayApplyTo(lease.paymentsApplyTo ?? 'CURRENT'); setPayFor('RENT'); setReimbAlloc({}); setReimbTouched(false); setPayError(null); setShowPayForm(showPayForm === lease.id ? null : lease.id); }}
                         className="text-xs text-amber-400 hover:text-amber-300">
@@ -3363,6 +3386,8 @@ const EMPTY_EXPENSE_FORM = { category: 'REPAIRS_MAINTENANCE', amount: '', date: 
 function ExpensesTab({ propertyId, expenses, setExpenses }: {
   propertyId: string; expenses: Expense[]; setExpenses: (e: Expense[]) => void;
 }) {
+  const phone = usePhone();
+  const navigate = useNavigate();
   const [formMode, setFormMode] = useState<'closed' | 'new' | Expense>('closed');
   const [form, setForm] = useState(EMPTY_EXPENSE_FORM);
   const [saving, setSaving] = useState(false);
@@ -3560,6 +3585,20 @@ function ExpensesTab({ propertyId, expenses, setExpenses }: {
             </table>
           </div>
         </div>
+      ) : phone ? (
+        // A phone gets a list: vendor and what it was, the date and category, the amount.
+        <Section>
+          {filtered.map(e => {
+            const isUtility = e.source === 'utility';
+            const go = () => isUtility ? navigate(`/properties/${e.propertyId}/utilities/${e.utilityAccountId}`) : openEdit(e);
+            return (
+              <Row key={e.id} onClick={go}
+                title={e.vendor || e.description || (EXPENSE_CATEGORY_LABELS[e.category] ?? e.category)}
+                subtitle={[fmtDate(e.date), EXPENSE_CATEGORY_LABELS[e.category] ?? e.category, isUtility ? 'Utility bill' : null, e.isCapEx ? 'CapEx' : null, e.isPersonal ? 'Personal' : null].filter(Boolean).join(' · ')}
+                value={<span className="strong">{money(Number(e.amount))}</span>} />
+            );
+          })}
+        </Section>
       ) : (
         <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
           <div className="overflow-x-auto">
@@ -3580,7 +3619,7 @@ function ExpensesTab({ propertyId, expenses, setExpenses }: {
                   return (
                   <tr key={e.id}
                     onClick={() => isUtility
-                      ? window.open(`/properties/${e.propertyId}/utilities/${e.utilityAccountId}`, '_self')
+                      ? navigate(`/properties/${e.propertyId}/utilities/${e.utilityAccountId}`)
                       : openEdit(e)}
                     className="hover:bg-white/[0.02] cursor-pointer">
                     <td className="px-4 py-3 text-gray-400 text-xs">{fmtDate(e.date)}</td>

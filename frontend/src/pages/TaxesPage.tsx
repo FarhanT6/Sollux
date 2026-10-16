@@ -12,6 +12,7 @@ import { fmtDate, todayISO } from '../lib/date';
 import { fmtMoney } from '../lib/money';
 import { filesToPayload } from '../lib/files';
 import { describeApiError } from '../lib/apiError';
+import { usePhone, Screen, Section, Row, Segmented, Sheet } from '../ios';
 
 /**
  * Property taxes for every property: which years are on file and which are
@@ -52,6 +53,15 @@ type TabKey = typeof TABS[number]['key'];
 export default function TaxesPage() {
   const [params, setParams] = useSearchParams();
   const tab = (params.get('tab') as TabKey) || 'property';
+  const phone = usePhone();
+  if (phone) return (
+    <Screen title="Taxes" back>
+      <Segmented<TabKey> label="Section" value={tab} onChange={t => setParams({ tab: t }, { replace: true })}
+        options={[{ value: 'property', label: 'Property' }, { value: 'income', label: 'Income' }, { value: 'w9', label: '1099s' }, { value: 'schedule-e', label: 'Sched. E' }]} />
+      {tab === 'property' ? <PropertyTaxTab />
+        : <div className="ios-embedded">{tab === 'income' ? <IncomeTaxTab /> : tab === 'w9' ? <ContractorsTab /> : <ScheduleETab />}</div>}
+    </Screen>
+  );
   return (
     <div>
       <PageHeader title="Taxes" subtitle="Property tax, federal and state income tax, and the W-9s and 1099s behind them" />
@@ -81,6 +91,7 @@ function PropertyTaxTab() {
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const phone = usePhone();
 
   async function load() {
     setLoading(true);
@@ -181,6 +192,106 @@ function PropertyTaxTab() {
   }
 
   const propName = (id: string) => { const p = properties.find(x => x.id === id); return p ? (p.nickname || p.address) : '—'; };
+  const removeRecord = async () => { if (form?.id && confirm('Delete this tax record?')) { await deleteTaxAssessment(form.id); setForm(null); await load(); } };
+
+  // The record's fields and the bill reader; inline on a desktop, in a sheet on a phone.
+  const formBody = form && (
+    <>
+      <div className="rounded-lg p-3" style={{ background: 'rgba(255,255,255,0.03)', border: '1px dashed rgba(255,255,255,0.1)' }}>
+        <p className="text-xs text-gray-400 mb-2">Add the tax bill — a PDF from the county site, or photos of the paper bill — and let Sollux fill the record in.</p>
+        <div className="flex items-center gap-2 flex-wrap">
+          <label className="btn text-xs cursor-pointer">Add bill
+            <input type="file" accept="application/pdf,image/*" multiple className="hidden" onChange={async e => { const f = await filesToPayload(e.target.files); setPages(p => [...p, ...f]); e.target.value = ''; }} />
+          </label>
+          {pages.map((p, i) => <span key={i} className="text-xs text-gray-400 px-2 py-1 rounded" style={{ background: 'rgba(255,255,255,0.05)' }}>{p.name} <button onClick={() => setPages(ps => ps.filter((_, j) => j !== i))} className="text-gray-600 hover:text-red-400 ml-1">✕</button></span>)}
+          {pages.length > 0 && <button onClick={autofill} disabled={reading} className="btn btn-primary text-xs disabled:opacity-50">{reading ? 'Reading…' : 'Fill in from bill'}</button>}
+        </div>
+        {note && <p className="text-xs text-emerald-400 mt-2">{note}</p>}
+        {pages.length > 1 && <p className="text-xs text-gray-600 mt-1">All pages are read; the first file is kept as the bill on file.</p>}
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="col-span-2">
+          <span className={label}>Property</span>
+          <select className={input} value={form.propertyId} onChange={e => setF({ propertyId: e.target.value })}>
+            <option value="">— Pick —</option>
+            {properties.map(p => <option key={p.id} value={p.id}>{p.nickname || p.address}{p.city ? `, ${p.city}` : ''}{p.state ? ` ${p.state}` : ''}</option>)}
+          </select>
+        </div>
+        <div><span className={label}>Tax year</span><input className={input} value={form.taxYear} onChange={e => setF({ taxYear: e.target.value })} placeholder="2026-2027" /></div>
+        <div><span className={label}>APN / parcel</span><input className={input} value={form.apn} onChange={e => setF({ apn: e.target.value })} /></div>
+        <div className="col-span-2"><span className={label}>Taxing authority</span><input className={input} value={form.taxingAuthority} onChange={e => setF({ taxingAuthority: e.target.value })} placeholder="San Diego County Treasurer-Tax Collector" /></div>
+        <div><span className={label}>Assessed value</span><input type="number" step="0.01" className={input} value={form.assessedValue} onChange={e => setF({ assessedValue: e.target.value })} /></div>
+        <div><span className={label}>Annual tax</span><input type="number" step="0.01" className={input} value={form.annualTaxAmount} onChange={e => setF({ annualTaxAmount: e.target.value })} /></div>
+        <div><span className={label}>1st installment</span><input type="number" step="0.01" className={input} value={form.installment1Amount} onChange={e => setF({ installment1Amount: e.target.value })} /></div>
+        <div><span className={label}>Due</span><input type="date" className={input} value={form.installment1Due} onChange={e => setF({ installment1Due: e.target.value })} /></div>
+        <div><span className={label}>Paid on</span><input type="date" className={input} value={form.installment1Paid} onChange={e => setF({ installment1Paid: e.target.value })} /></div>
+        <div />
+        <div><span className={label}>2nd installment</span><input type="number" step="0.01" className={input} value={form.installment2Amount} onChange={e => setF({ installment2Amount: e.target.value })} /></div>
+        <div><span className={label}>Due</span><input type="date" className={input} value={form.installment2Due} onChange={e => setF({ installment2Due: e.target.value })} /></div>
+        <div><span className={label}>Paid on</span><input type="date" className={input} value={form.installment2Paid} onChange={e => setF({ installment2Paid: e.target.value })} /></div>
+        <div><span className={label}>Status</span><select className={input} value={form.status} onChange={e => setF({ status: e.target.value as TaxStatus })}>{(Object.keys(STATUS) as TaxStatus[]).map(k => <option key={k} value={k}>{STATUS[k].label}</option>)}</select></div>
+        <div className="col-span-2">
+          <span className={label}>Paid by lender escrow?</span>
+          <select className={input} value={form.escrowLoanId} onChange={e => setF({ escrowLoanId: e.target.value })}>
+            <option value="">No — I pay it</option>
+            {loans.filter(l => !form.propertyId || !l.propertyId || l.propertyId === form.propertyId).map(l => <option key={l.id} value={l.id}>Yes — {l.lender}</option>)}
+          </select>
+        </div>
+        <div className="col-span-2"><span className={label}>Notes</span><input className={input} value={form.notes} onChange={e => setF({ notes: e.target.value })} /></div>
+      </div>
+      {error && <p className="text-xs text-red-400">{error}</p>}
+    </>
+  );
+
+  if (phone) return (
+    <>
+      <div className="ios-chips" style={{ marginBottom: 20 }}>
+        <div className="ios-chip"><div className="k">{latestYear ? `${latestYear} total` : 'Annual total'}</div><div className="v">{fmtMoney(annualTotal)}</div></div>
+        <div className="ios-chip"><div className="k">Installments left</div><div className="v">{upcoming.length}</div></div>
+        <div className="ios-chip"><div className="k">Past due</div><div className={`v ${overdue.length ? 'ios-red' : ''}`}>{overdue.length}</div></div>
+        <div className="ios-chip"><div className="k">Missing {latestYear ?? 'bills'}</div><div className={`v ${missingLatest.length ? 'ios-tint' : ''}`}>{latestYear ? `${missingLatest.length} of ${properties.length}` : properties.length}</div></div>
+      </div>
+      <Section footer="A PDF from the county or photos of the paper bill; Sollux reads the parcel, year, installments and due dates.">
+        <Row title="Add or upload a tax bill" tinted chevron={false} onClick={() => startNew()} />
+      </Section>
+      {upcoming.length > 0 && (
+        <Section header="Due next" footer="Swipe left on an installment once it is paid.">
+          {upcoming.slice(0, 8).map((u, i) => (
+            <Row key={i} onClick={() => startEdit(u.t)} title={propName(u.t.propertyId)}
+              subtitle={<><span className={u.due < today ? 'ios-red' : ''}>{fmtDate(u.due, 'MMM d, yyyy')}</span> · {u.t.taxYear} · {u.n === 1 ? '1st' : '2nd'} installment</>}
+              value={<span className="strong">{u.amount != null ? fmtMoney(u.amount) : '—'}</span>}
+              swipe={[{ label: 'Paid', color: 'var(--ios-green)', onClick: () => void markPaid(u.t, u.n) }]} />
+          ))}
+        </Section>
+      )}
+      {loading && <div className="ios-skeleton" style={{ height: 160 }} />}
+      {!loading && properties.length === 0 && <div className="ios-empty"><h3>No properties</h3>Add properties first.</div>}
+      {!loading && properties.map(p => (
+        <Section key={p.id} header={p.nickname || p.address} action={{ label: 'Add year', onClick: () => startNew(p.id) }}>
+          {years.length === 0 && <Row title="Nothing on file" chevron={false} />}
+          {years.map(y => {
+            const t = byProp.get(p.id)?.get(y);
+            if (!t) return <Row key={y} title={y} tinted subtitle="Not on file — add it" onClick={() => startNew(p.id, y)} />;
+            return (
+              <Row key={y} title={y} onClick={() => startEdit(t)}
+                subtitle={<span className={t.escrowLoanId ? '' : t.status === 'PAID' ? 'ios-green' : t.status === 'DELINQUENT' ? 'ios-red' : t.status === 'PARTIALLY_PAID' ? 'ios-tint' : ''}>{t.escrowLoanId ? 'Paid by escrow' : STATUS[t.status].label}</span>}
+                value={<span className="strong">{fmtMoney(t.annualTaxAmount)}</span>} />
+            );
+          })}
+        </Section>
+      ))}
+      <Sheet open={!!form} onClose={() => setForm(null)} title={form?.id ? 'Tax record' : 'New tax record'}
+        right={{ label: 'Save', onClick: () => void save(), busy: saving }}>
+        <div className="ios-form-legacy">{formBody}</div>
+        {form?.id && (
+          <Section>
+            {taxes.find(t => t.id === form.id)?.hasDocument && <Row title="View the bill" onClick={() => void openBill(taxes.find(t => t.id === form.id)!)} />}
+            <Row title="Delete record" destructive chevron={false} onClick={() => void removeRecord()} />
+          </Section>
+        )}
+      </Sheet>
+    </>
+  );
 
   return (
     <div>
@@ -199,51 +310,9 @@ function PropertyTaxTab() {
               <p className="text-sm font-semibold text-white">{form.id ? 'Edit tax record' : 'New tax record'}</p>
               <button onClick={() => setForm(null)} className="text-xs text-gray-500 hover:text-gray-300">Cancel</button>
             </div>
-            <div className="rounded-lg p-3" style={{ background: 'rgba(255,255,255,0.03)', border: '1px dashed rgba(255,255,255,0.1)' }}>
-              <p className="text-xs text-gray-400 mb-2">Add the tax bill — a PDF from the county site, or photos of the paper bill — and let Sollux fill the record in.</p>
-              <div className="flex items-center gap-2 flex-wrap">
-                <label className="btn text-xs cursor-pointer">Add bill
-                  <input type="file" accept="application/pdf,image/*" multiple className="hidden" onChange={async e => { const f = await filesToPayload(e.target.files); setPages(p => [...p, ...f]); e.target.value = ''; }} />
-                </label>
-                {pages.map((p, i) => <span key={i} className="text-xs text-gray-400 px-2 py-1 rounded" style={{ background: 'rgba(255,255,255,0.05)' }}>{p.name} <button onClick={() => setPages(ps => ps.filter((_, j) => j !== i))} className="text-gray-600 hover:text-red-400 ml-1">✕</button></span>)}
-                {pages.length > 0 && <button onClick={autofill} disabled={reading} className="btn btn-primary text-xs disabled:opacity-50">{reading ? 'Reading…' : 'Fill in from bill'}</button>}
-              </div>
-              {note && <p className="text-xs text-emerald-400 mt-2">{note}</p>}
-              {pages.length > 1 && <p className="text-xs text-gray-600 mt-1">All pages are read; the first file is kept as the bill on file.</p>}
-            </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <div className="col-span-2">
-                <span className={label}>Property</span>
-                <select className={input} value={form.propertyId} onChange={e => setF({ propertyId: e.target.value })}>
-                  <option value="">— Pick —</option>
-                  {properties.map(p => <option key={p.id} value={p.id}>{p.nickname || p.address}{p.city ? `, ${p.city}` : ''}{p.state ? ` ${p.state}` : ''}</option>)}
-                </select>
-              </div>
-              <div><span className={label}>Tax year</span><input className={input} value={form.taxYear} onChange={e => setF({ taxYear: e.target.value })} placeholder="2026-2027" /></div>
-              <div><span className={label}>APN / parcel</span><input className={input} value={form.apn} onChange={e => setF({ apn: e.target.value })} /></div>
-              <div className="col-span-2"><span className={label}>Taxing authority</span><input className={input} value={form.taxingAuthority} onChange={e => setF({ taxingAuthority: e.target.value })} placeholder="San Diego County Treasurer-Tax Collector" /></div>
-              <div><span className={label}>Assessed value</span><input type="number" step="0.01" className={input} value={form.assessedValue} onChange={e => setF({ assessedValue: e.target.value })} /></div>
-              <div><span className={label}>Annual tax</span><input type="number" step="0.01" className={input} value={form.annualTaxAmount} onChange={e => setF({ annualTaxAmount: e.target.value })} /></div>
-              <div><span className={label}>1st installment</span><input type="number" step="0.01" className={input} value={form.installment1Amount} onChange={e => setF({ installment1Amount: e.target.value })} /></div>
-              <div><span className={label}>Due</span><input type="date" className={input} value={form.installment1Due} onChange={e => setF({ installment1Due: e.target.value })} /></div>
-              <div><span className={label}>Paid on</span><input type="date" className={input} value={form.installment1Paid} onChange={e => setF({ installment1Paid: e.target.value })} /></div>
-              <div />
-              <div><span className={label}>2nd installment</span><input type="number" step="0.01" className={input} value={form.installment2Amount} onChange={e => setF({ installment2Amount: e.target.value })} /></div>
-              <div><span className={label}>Due</span><input type="date" className={input} value={form.installment2Due} onChange={e => setF({ installment2Due: e.target.value })} /></div>
-              <div><span className={label}>Paid on</span><input type="date" className={input} value={form.installment2Paid} onChange={e => setF({ installment2Paid: e.target.value })} /></div>
-              <div><span className={label}>Status</span><select className={input} value={form.status} onChange={e => setF({ status: e.target.value as TaxStatus })}>{(Object.keys(STATUS) as TaxStatus[]).map(k => <option key={k} value={k}>{STATUS[k].label}</option>)}</select></div>
-              <div className="col-span-2">
-                <span className={label}>Paid by lender escrow?</span>
-                <select className={input} value={form.escrowLoanId} onChange={e => setF({ escrowLoanId: e.target.value })}>
-                  <option value="">No — I pay it</option>
-                  {loans.filter(l => !form.propertyId || !l.propertyId || l.propertyId === form.propertyId).map(l => <option key={l.id} value={l.id}>Yes — {l.lender}</option>)}
-                </select>
-              </div>
-              <div className="col-span-2"><span className={label}>Notes</span><input className={input} value={form.notes} onChange={e => setF({ notes: e.target.value })} /></div>
-            </div>
-            {error && <p className="text-xs text-red-400">{error}</p>}
+            {formBody}
             <div className="flex justify-end gap-2">
-              {form.id && <button onClick={async () => { if (confirm('Delete this tax record?')) { await deleteTaxAssessment(form.id!); setForm(null); await load(); } }} className="text-xs text-red-400 hover:text-red-300 mr-auto">Delete</button>}
+              {form.id && <button onClick={() => void removeRecord()} className="text-xs text-red-400 hover:text-red-300 mr-auto">Delete</button>}
               <button onClick={() => setForm(null)} className="btn text-xs">Cancel</button>
               <button onClick={save} disabled={saving} className="btn btn-primary text-xs disabled:opacity-50">{saving ? 'Saving…' : 'Save'}</button>
             </div>

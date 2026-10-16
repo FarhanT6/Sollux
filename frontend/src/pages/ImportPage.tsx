@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import { useCallback, useState, useRef, useEffect } from 'react';
 import { openOAuth } from '../lib/native';
 import { format } from 'date-fns';
@@ -677,7 +678,7 @@ function DuplicatesPanel() {
         <div className="max-h-64 overflow-y-auto space-y-1">
           {pairs.map(p => (
             <div key={p.dropId} className="text-xs flex items-center gap-3">
-              <a href={`/properties/${p.propertyId}/utilities/${p.utilityAccountId}`} className="text-gray-300 hover:text-white truncate">{p.provider} · {p.property}</a>
+              <Link to={`/properties/${p.propertyId}/utilities/${p.utilityAccountId}`} className="text-gray-300 hover:text-white truncate">{p.provider} · {p.property}</Link>
               <span className="text-gray-500 truncate">{p.amount != null ? fmtMoney(p.amount) : ''}{p.dueDate ? ` due ${fmtDate(p.dueDate, 'MMM d')}` : ''}: keeps {label(p.keep)}, removes {label(p.drop)}</span>
               <button className="ml-auto text-amber-300 hover:text-amber-200 shrink-0 disabled:opacity-50" disabled={busy} onClick={() => merge({ pairs: [{ keepId: p.keepId, dropId: p.dropId }] })}>Merge</button>
             </div>
@@ -2435,7 +2436,7 @@ export default function ImportPage() {
             </div>
             <div className="flex gap-3">
               <button onClick={reset} className="btn text-sm">Import more</button>
-              <a href="/scan?tab=library" className="btn btn-primary text-sm">View vault</a>
+              <Link to="/scan?tab=library" className="btn btn-primary text-sm">View vault</Link>
             </div>
           </div>
         )}

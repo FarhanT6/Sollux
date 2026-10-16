@@ -15,6 +15,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { PageHeader } from '../components/ui';
+import { usePhone, Screen, Section, Row } from '../ios';
 import api, {
   getGmailConnectUrl,
   getDriveConnectUrl,
@@ -48,6 +49,7 @@ export default function SettingsPage() {
   const { signOut } = useClerk();
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = (searchParams.get('tab') as SettingsTab) || 'account';
+  const phone = usePhone();
   const [gmailStatus, setGmailStatus] = useState<{ connected: boolean; accounts: { id: string; email: string; label?: string }[] } | null>(null);
   const [gmailSuccessMsg, setGmailSuccessMsg] = useState('');
   const [driveStatus, setDriveStatus] = useState<{ connected: boolean; accounts: { id: string; email: string }[] } | null>(null);
@@ -73,6 +75,73 @@ export default function SettingsPage() {
       setSearchParams(params, { replace: true });
     }
   }, []);
+
+  // Connections, shared by both layouts. Closing the sign-in sheet refreshes
+  // the list rather than reloading the app.
+  const refreshGmail = () => api.get('/gmail/status').then(r => setGmailStatus(r.data)).catch(() => {});
+  const refreshDrive = () => api.get('/drive/status').then(r => setDriveStatus(r.data)).catch(() => {});
+  const connectGmail = () => getGmailConnectUrl().then(r => openOAuth(r.url, () => { void refreshGmail(); }));
+  const connectDrive = () => getDriveConnectUrl().then(r => openOAuth(r.url, () => { void refreshDrive(); }));
+  const removeGmail = (id: string) => api.delete(`/gmail/disconnect/${id}`).then(refreshGmail);
+  const removeDrive = (id: string) => api.delete(`/drive/disconnect/${id}`).then(refreshDrive);
+
+  if (phone) {
+    const SECTIONS: Record<Exclude<SettingsTab, 'account'>, { title: string; render: () => JSX.Element }> = {
+      notifications: { title: 'Notifications', render: () => <NotificationsTab /> },
+      banking: { title: 'Bank Accounts', render: () => <BankingTab /> },
+      rates: { title: 'Reference Rates', render: () => <RatesTab /> },
+    };
+    if (tab !== 'account' && SECTIONS[tab]) return (
+      <Screen title={SECTIONS[tab].title} back="/settings" backLabel="Settings" largeTitle={false}>
+        <div className="ios-embedded">{SECTIONS[tab].render()}</div>
+      </Screen>
+    );
+    const initials = [user?.firstName?.[0], user?.lastName?.[0]].filter(Boolean).join('') || '•';
+    return (
+      <Screen title="Settings" back>
+        <Section>
+          <Row icon={{ bg: 'var(--ios-tint)', glyph: <span style={{ fontWeight: 700, fontSize: 13, color: '#000' }}>{initials}</span> }}
+            title={user?.fullName || 'Your account'} subtitle={user?.primaryEmailAddress?.emailAddress} chevron={false} />
+        </Section>
+        <Section>
+          <Row title="Notifications" to="/settings?tab=notifications" icon={{ bg: '#ff453a', glyph: <span style={{ fontWeight: 700 }}>!</span> }} />
+          <Row title="Bank accounts" to="/settings?tab=banking" icon={{ bg: '#30d158', glyph: <span style={{ fontWeight: 700 }}>$</span> }} />
+          <Row title="Reference rates" subtitle="For variable-rate loans" to="/settings?tab=rates" icon={{ bg: '#0a84ff', glyph: <span style={{ fontWeight: 700 }}>%</span> }} />
+        </Section>
+        <Section header="Gmail" footer="Sollux reads bill and notice emails from these inboxes.">
+          {(gmailStatus?.accounts ?? []).map(a => (
+            <Row key={a.id} title={a.email} subtitle={a.label} chevron={false} value={<span className="ios-green">Connected</span>}
+              swipe={[{ label: 'Remove', color: 'var(--ios-red)', onClick: () => { if (confirm(`Disconnect ${a.email}?`)) void removeGmail(a.id); } }]} />
+          ))}
+          <Row title={gmailStatus?.connected ? 'Add another Gmail account' : 'Connect Gmail'} tinted chevron={false} onClick={() => void connectGmail()} />
+        </Section>
+        <Section header="Google Drive" footer="Import statements in bulk from a Drive folder.">
+          {(driveStatus?.accounts ?? []).map(a => (
+            <Row key={a.id} title={a.email} chevron={false} value={<span className="ios-green">Connected</span>}
+              swipe={[{ label: 'Remove', color: 'var(--ios-red)', onClick: () => { if (confirm(`Disconnect ${a.email}?`)) void removeDrive(a.id); } }]} />
+          ))}
+          <Row title={driveStatus?.connected ? 'Add another Drive account' : 'Connect Google Drive'} tinted chevron={false} onClick={() => void connectDrive()} />
+        </Section>
+        <div className="ios-embedded" style={{ marginBottom: 20 }}>
+          <div className="card p-4 mb-4">
+            <p className="text-xs text-gray-400 mb-1">Mobile for alerts</p>
+            <AlertPhoneField />
+          </div>
+          <SignInSecurityCard />
+          <PhoneLockCard />
+          <SharedAccessCard />
+          <LetterheadCard />
+          <ClickUpCard />
+        </div>
+        <Section header="Plan">
+          <Row title="Pro" subtitle="Up to 10 properties · AI engine · Email and SMS" chevron={false} value={<span className="ios-green">Active</span>} />
+        </Section>
+        <Section>
+          <Row title="Sign out" destructive chevron={false} onClick={() => void signOut()} />
+        </Section>
+      </Screen>
+    );
+  }
 
   return (
     <div>
@@ -172,8 +241,7 @@ export default function SettingsPage() {
                 <span className="pill pill-green">&#x2713; Connected</span>
                 <button
                   className="btn text-xs text-red-400 border-red-500/30 hover:bg-red-500/10"
-                  onClick={() => api.delete(`/gmail/disconnect/${acct.id}`)
-                    .then(() => api.get('/gmail/status').then(r => setGmailStatus(r.data)))}
+                  onClick={() => void removeGmail(acct.id)}
                 >
                   Remove
                 </button>
@@ -190,7 +258,7 @@ export default function SettingsPage() {
             </div>
             <button
               className="btn text-xs"
-              onClick={() => getGmailConnectUrl().then(r => openOAuth(r.url, () => { api.get('/gmail/status').then(x => setGmailStatus(x.data)).catch(() => {}); }))}
+              onClick={connectGmail}
             >
               + Connect
             </button>
@@ -212,8 +280,7 @@ export default function SettingsPage() {
                 <span className="pill pill-green">&#x2713; Connected</span>
                 <button
                   className="btn text-xs text-red-400 border-red-500/30 hover:bg-red-500/10"
-                  onClick={() => api.delete(`/drive/disconnect/${acct.id}`)
-                    .then(() => api.get('/drive/status').then(r => setDriveStatus(r.data)))}
+                  onClick={() => void removeDrive(acct.id)}
                 >
                   Remove
                 </button>
@@ -229,7 +296,7 @@ export default function SettingsPage() {
             </div>
             <button
               className="btn text-xs"
-              onClick={() => getDriveConnectUrl().then(r => openOAuth(r.url, () => window.location.reload()))}
+              onClick={connectDrive}
             >
               + Connect
             </button>

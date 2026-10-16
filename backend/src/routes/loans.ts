@@ -282,7 +282,7 @@ router.get('/:id', async (req, res, next) => {
       include: {
         property: { select: { id: true, address: true, nickname: true } },
         loanPayments: { orderBy: { date: 'desc' } },
-        utilityAccount: { select: { id: true, providerName: true, category: true } },
+        utilityAccount: { select: { id: true, providerName: true, category: true, propertyId: true } },
         loanExtensions: { orderBy: { extendedAt: 'desc' } },
         components: COMPONENTS_INCLUDE,
       },

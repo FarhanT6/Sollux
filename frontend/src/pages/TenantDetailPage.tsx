@@ -13,6 +13,8 @@ import { DOCUMENT_CATEGORY_LABELS } from '../types';
 import { fmtDate } from '../lib/date';
 import UtilityReimbursementPanel from '../components/tenant/UtilityReimbursementPanel';
 import LeaseSummary from '../components/tenant/LeaseSummary';
+import { usePhone, Screen, Section, Row, Sheet, Field, BarButton, Icon } from '../ios';
+import { openUrl } from '../lib/native';
 
 const money = (n?: number | string | null) =>
   n == null ? '—' : Number(n).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
@@ -50,6 +52,8 @@ export default function TenantDetailPage() {
   const [contactForm, setContactForm] = useState({ fullName: '', email: '', phone: '', notes: '' });
   const [savingContact, setSavingContact] = useState(false);
   const [maintenanceByLease, setMaintenanceByLease] = useState<Record<string, Improvement[]>>({});
+  const phone = usePhone();
+  const [actions, setActions] = useState(false);
 
   function load() {
     if (!id) return;
@@ -111,6 +115,51 @@ export default function TenantDetailPage() {
   if (loading) return <div className="p-6 text-gray-500 text-sm">Loading…</div>;
   if (!tenant) return <div className="p-6 text-gray-500 text-sm">Tenant not found</div>;
 
+  const leases = tenant.leaseTenants.filter(lt => lt.lease);
+
+  // A phone: contact you can tap to call or email, then each lease.
+  if (phone) return (
+    <Screen title={tenant.fullName} back
+      right={<BarButton label="Tenant actions" onClick={() => setActions(true)}><Icon.Ellipsis /></BarButton>}>
+      <Section header="Contact">
+        <Row title="Phone" chevron={false}
+          value={tenant.phone ? <span className="ios-tint">{formatPhone(tenant.phone)}</span> : '—'}
+          onClick={tenant.phone ? () => void openUrl(telHref(tenant.phone)) : undefined} />
+        <Row title="Email" chevron={false}
+          value={tenant.email ? <span className="ios-tint">{tenant.email}</span> : '—'}
+          onClick={tenant.email ? () => void openUrl(`mailto:${tenant.email}`) : undefined} />
+        {tenant.notes && <Row title={tenant.notes} wrap chevron={false} />}
+      </Section>
+
+      {leases.length === 0 && <Section header="Leases"><Row title="No leases on file" chevron={false} /></Section>}
+      {leases.map(lt => (
+        <LeaseCard key={lt.lease!.id} lease={lt.lease!} maintenance={maintenanceByLease[lt.lease!.id] ?? []} onChanged={load} />
+      ))}
+
+      <Sheet open={actions} onClose={() => setActions(false)} title={tenant.fullName} left={null}
+        right={{ label: 'Done', onClick: () => setActions(false) }}>
+        <Section>
+          <Row title="Edit contact" onClick={() => { setActions(false); setEditingContact(true); }} />
+        </Section>
+        <Section footer="Removes them from every lease. This cannot be undone.">
+          <Row title="Delete tenant" destructive chevron={false} onClick={() => { setActions(false); void handleDeleteTenant(); }} />
+        </Section>
+      </Sheet>
+
+      <Sheet open={editingContact} onClose={() => { setEditingContact(false); load(); }} title="Contact"
+        right={{ label: 'Save', onClick: () => void saveContact(), disabled: !contactForm.fullName, busy: savingContact }}>
+        <Section>
+          <Field label="Name"><input value={contactForm.fullName} onChange={e => setContactForm(f => ({ ...f, fullName: e.target.value }))} /></Field>
+          <Field label="Phone"><input type="tel" inputMode="tel" value={contactForm.phone} onChange={e => setContactForm(f => ({ ...f, phone: e.target.value }))} /></Field>
+          <Field label="Email"><input type="email" inputMode="email" autoCapitalize="off" value={contactForm.email} onChange={e => setContactForm(f => ({ ...f, email: e.target.value }))} /></Field>
+        </Section>
+        <Section header="Notes">
+          <Field label=""><textarea value={contactForm.notes} onChange={e => setContactForm(f => ({ ...f, notes: e.target.value }))} /></Field>
+        </Section>
+      </Sheet>
+    </Screen>
+  );
+
   return (
     <div className="p-6 max-w-5xl">
       {/* Header */}
@@ -163,7 +212,7 @@ export default function TenantDetailPage() {
         <p className="text-sm text-gray-500">No leases on file for this tenant.</p>
       ) : (
         <div className="space-y-4">
-          {tenant.leaseTenants.filter(lt => lt.lease).map(lt => (
+          {leases.map(lt => (
             <LeaseCard key={lt.lease!.id} lease={lt.lease!} maintenance={maintenanceByLease[lt.lease!.id] ?? []} onChanged={load} />
           ))}
         </div>
@@ -194,6 +243,7 @@ function LeaseCard({ lease, maintenance, onChanged }: {
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const property = lease.unit?.property;
+  const phone = usePhone();
 
   async function save() {
     setSaving(true);
@@ -223,10 +273,99 @@ function LeaseCard({ lease, maintenance, onChanged }: {
 
   async function viewDocument() {
     const { url } = await getLeaseDocumentUrl(lease.id);
-    window.open(url, '_blank');
+    void openUrl(url);
   }
 
   const arrears = Number(lease.arrearsBalance ?? 0);
+  const term = lease.leaseType === 'FIXED_TERM' ? `${fmtDate(lease.startDate)} – ${fmtDate(lease.endDate)}` : (lease.startDate ? `Month-to-month from ${fmtDate(lease.startDate)}` : 'Month-to-month');
+  const ordinal = (d: number) => `${d}${d === 1 || d === 21 || d === 31 ? 'st' : d === 2 || d === 22 ? 'nd' : d === 3 || d === 23 ? 'rd' : 'th'}`;
+
+  if (phone) return (
+    <>
+      <Section header={[property?.nickname || property?.address || 'Lease', lease.unit?.unitLabel ? `Unit ${lease.unit.unitLabel}` : null].filter(Boolean).join(' · ')}
+        action={property ? { label: 'Property', to: `/portfolio/${property.id}?tab=Tenants` } : undefined}>
+        <Row title="Rent" chevron={false} value={<span className="strong">{money(lease.rentAmount)}/mo{lease.rentDueDay ? ` · ${ordinal(lease.rentDueDay)}` : ''}</span>} />
+        <Row title="Status" chevron={false} value={<span className={lease.status === 'ACTIVE' ? 'ios-green' : lease.status === 'PENDING' ? 'ios-tint' : ''}>{lease.status.charAt(0) + lease.status.slice(1).toLowerCase()}</span>} />
+        <Row title="Term" chevron={false} wrap subtitle={term} />
+        {lease.status === 'ACTIVE' && lease.endDate && new Date(lease.endDate) < new Date() && <Row title="Holdover since" chevron={false} value={<span className="ios-red">{fmtDate(lease.endDate)}</span>} />}
+        <Row title="Security deposit" chevron={false} value={money(lease.securityDeposit)} />
+        <Row title="Arrears" chevron={false} value={<span className={arrears > 0 ? 'ios-red strong' : ''}>{money(arrears)}</span>} />
+        {(lease.leaseTenants?.length ?? 0) > 1 && <Row title="On this lease" wrap chevron={false} subtitle={lease.leaseTenants!.map(lt => lt.tenant?.fullName).filter(Boolean).join(', ')} />}
+        {(lease.lateFeeAmount != null || lease.lateFeePercent != null) && (
+          <Row title="Late fee" chevron={false} value={`${lease.lateFeeAmount != null ? money(lease.lateFeeAmount) : `${lease.lateFeePercent}%`}${lease.lateFeeGraceDays ? ` after ${lease.lateFeeGraceDays}d` : ''}`} />
+        )}
+        {(lease.scheduledIncreases ?? []).filter(i => !i.applied).slice(0, 1).map(i => (
+          <Row key={i.id} title="Next increase" chevron={false}
+            value={<span className="ios-green">{fmtDate(i.effectiveDate)} → {i.newAmount != null ? money(i.newAmount) : i.percent != null ? `+${i.percent}${i.percentMax != null ? `–${i.percentMax}` : ''}%` : '—'}</span>} />
+        ))}
+        {(lease.utilityCharges?.length ?? 0) > 0 && <Row title="Utilities billed with rent" wrap chevron={false} subtitle={lease.utilityCharges!.map(u => `${u.category.toLowerCase()} ${money(u.amount)}`).join(', ')} />}
+        {(lease.paymentAliases?.length ?? 0) > 0 && <Row title="Rent also arrives from" wrap chevron={false} subtitle={lease.paymentAliases!.map(a => a.name).join(', ')} />}
+        {lease.notes && <Row title={lease.notes} wrap chevron={false} />}
+        <Row title="Edit lease" tinted chevron={false} onClick={() => setEditing(true)} />
+      </Section>
+
+      <div className="ios-embedded" style={{ marginBottom: 24 }}>
+        <LeaseSummary details={lease.termsJson} />
+        <LeaseDocuments leaseId={lease.id} legacyUrl={lease.documentUrl} onLegacyRemoved={onChanged} />
+        <UtilityReimbursementPanel leaseId={lease.id} />
+      </div>
+
+      {(lease.rentPayments?.length ?? 0) > 0 && (
+        <Section header="Payments">
+          {lease.rentPayments!.map(p => (
+            <Row key={p.id} chevron={false} title={fmtDate(p.paidDate)} subtitle={[p.method, p.notes].filter(Boolean).join(' · ') || undefined}
+              value={<span className="strong">{money(p.amount)}</span>} />
+          ))}
+        </Section>
+      )}
+      {maintenance.length > 0 && (
+        <Section header="Maintenance during this lease">
+          {maintenance.map(m => (
+            <Row key={m.id} chevron={false} title={m.description} subtitle={[fmtDate(m.startDate), m.category].filter(Boolean).join(' · ')} value={money(m.cost)} />
+          ))}
+        </Section>
+      )}
+
+      <Sheet open={editing} onClose={() => setEditing(false)} title="Edit lease"
+        right={{ label: 'Save', onClick: () => void save(), busy: saving }}>
+        <Section>
+          <Field label="Rent / mo"><input type="number" inputMode="decimal" value={form.rentAmount} onChange={e => setForm(f => ({ ...f, rentAmount: e.target.value }))} /></Field>
+          <Field label="Deposit"><input type="number" inputMode="decimal" value={form.securityDeposit} onChange={e => setForm(f => ({ ...f, securityDeposit: e.target.value }))} /></Field>
+          <Field label="Status">
+            <select value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value as any }))}>
+              {['ACTIVE', 'ENDED', 'PENDING', 'TERMINATED'].map(st => <option key={st} value={st}>{st.charAt(0) + st.slice(1).toLowerCase()}</option>)}
+            </select>
+          </Field>
+          <Field label="Type">
+            <select value={form.leaseType} onChange={e => setForm(f => ({ ...f, leaseType: e.target.value as any }))}>
+              <option value="MONTH_TO_MONTH">Month-to-month</option>
+              <option value="FIXED_TERM">Fixed term</option>
+            </select>
+          </Field>
+          <Field label="Starts"><input type="date" value={form.startDate} onChange={e => setForm(f => ({ ...f, startDate: e.target.value }))} /></Field>
+          <Field label="Ends"><input type="date" value={form.endDate} onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))} /></Field>
+        </Section>
+        <Section header="Notes">
+          <Field label=""><textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} /></Field>
+        </Section>
+        <Section header="Lease agreement">
+          {lease.documentUrl ? (
+            <>
+              <Row title="View lease agreement" onClick={() => void viewDocument()} />
+              <Row title="Remove agreement" destructive chevron={false}
+                onClick={async () => { if (confirm('Remove the lease agreement from this lease?')) { await deleteLeaseAgreement(lease.id); onChanged(); } }} />
+            </>
+          ) : (
+            <label className="ios-row" style={{ cursor: 'pointer' }}>
+              <span className="ios-row-title ios-tint">{uploading ? 'Uploading…' : 'Upload lease agreement (PDF)'}</span>
+              <input type="file" accept="application/pdf" hidden disabled={uploading}
+                onChange={e => e.target.files?.[0] && handleUpload(e.target.files[0])} />
+            </label>
+          )}
+        </Section>
+      </Sheet>
+    </>
+  );
 
   return (
     <div className="card p-4">

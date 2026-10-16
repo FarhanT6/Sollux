@@ -153,6 +153,30 @@ if (!only.length || process.env.FLOWS) {
     await page.getByRole('link', { name: 'Scan' }).last().click(); await expectPath(/^\/scan/);
     await page.getByRole('tab', { name: 'Library' }).click(); await expectPath(/tab=library/);
   });
+  await step('property: section opens, Back names the property', async () => {
+    await page.goto(`${base}/portfolio`, { waitUntil: 'networkidle' });
+    await page.locator('a[href^="/portfolio/"]').first().click(); await expectPath(/^\/portfolio\/[^/?]+$/);
+    const name = (await page.locator('.ios-largetitle h1').textContent())?.trim() ?? '';
+    await page.locator('a.ios-row', { has: page.locator('.ios-row-title', { hasText: /^Tenants$/ }) }).click(); await expectPath(/tab=Tenants/);
+    await page.getByRole('button', { name }).click(); await expectPath(/^\/portfolio\/[^/?]+$/);
+  });
+  await step('Settings → Notifications → Back', async () => {
+    await page.goto(`${base}/settings`, { waitUntil: 'networkidle' });
+    await page.locator('a.ios-row', { hasText: 'Notifications' }).click(); await expectPath(/tab=notifications/);
+    await page.getByRole('button', { name: 'Settings' }).click(); await expectPath(/^\/settings$/);
+  });
+  await step('Personal: segments switch sections', async () => {
+    await page.goto(`${base}/personal`, { waitUntil: 'networkidle' });
+    await page.getByRole('tab', { name: 'Cards' }).click(); await expectPath(/tab=cards/);
+    await page.getByRole('tab', { name: 'Loans' }).click(); await expectPath(/tab=loans/);
+  });
+  await step('Taxes: add opens the form in a sheet', async () => {
+    await page.goto(`${base}/taxes`, { waitUntil: 'networkidle' });
+    await page.locator('button.ios-row', { hasText: 'Add or upload a tax bill' }).click();
+    await page.locator('.ios-sheet select').first().waitFor();
+    await page.locator('.ios-sheet').getByRole('button', { name: 'Cancel' }).click();
+    await page.locator('.ios-sheet').waitFor({ state: 'detached' });
+  });
   if (errors.length) { failed = true; console.log(`✗ flow page errors:\n    ${errors.join('\n    ')}`); }
   await page.close();
 }

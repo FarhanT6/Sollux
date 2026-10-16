@@ -80,14 +80,19 @@ export function previousEntry(): string | null {
  */
 export function usePhoneBack(fallback?: { back?: string; backLabel?: string }) {
   const navigate = useNavigate();
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const meta = { ...phoneRoute(pathname), ...stripUndefined(fallback) };
   const prev = previousEntry();
-  const prevPath = prev?.split('?')[0];
-  const fromApp = !!prevPath && prevPath !== pathname;
+  // A section of the same page (?tab=…) counts as its own screen.
+  const fromApp = !!prev && prev !== pathname + search;
+  // The screen's own name for its parent when that is where Back goes
+  // (a property's name, say); otherwise the previous screen's title.
+  const label = !fromApp || (meta.back && prev === meta.back)
+    ? meta.backLabel ?? 'Back'
+    : phoneRoute(prev!.split('?')[0]).title;
   return {
     show: !!meta.back,
-    label: fromApp ? phoneRoute(prevPath!).title : meta.backLabel ?? 'Back',
+    label,
     go: () => (fromApp ? navigate(-1) : navigate(meta.back ?? '/dashboard')),
   };
 }
