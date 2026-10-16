@@ -1,4 +1,5 @@
 import { db } from '../config/db';
+import { monthRentDue } from './rentDue';
 import { Prisma } from '@prisma/client';
 
 /**
@@ -76,7 +77,7 @@ export async function getCashflow(year: number, userId: string, propertyId?: str
     }),
     db.lease.findMany({
       where: { unit: { propertyId: { in: ids } }, OR: [{ startDate: null }, { startDate: { lt: yearEnd } }], AND: { OR: [{ status: 'ACTIVE' }, { endDate: null }, { endDate: { gt: yearStart } }] } },
-      select: { unitId: true, startDate: true, endDate: true, rentAmount: true, status: true, unit: { select: { propertyId: true } } },
+      select: { unitId: true, startDate: true, endDate: true, rentAmount: true, firstMonthRent: true, status: true, unit: { select: { propertyId: true } } },
     }),
     db.loan.findMany({
       where: { propertyId: { in: ids }, isPersonal: false },
@@ -126,7 +127,7 @@ export async function getCashflow(year: number, userId: string, propertyId?: str
         const cur = perUnit.get(l.unitId);
         if (!cur || (l.status === 'ACTIVE' && cur.status !== 'ACTIVE') || (l.status === cur.status && (l.startDate?.getTime() ?? 0) > (cur.startDate?.getTime() ?? 0))) perUnit.set(l.unitId, l);
       }
-      const rentExpected = [...perUnit.values()].reduce((s, l) => s + toNum(l.rentAmount), 0);
+      const rentExpected = [...perUnit.values()].reduce((s, l) => s + monthRentDue(l, mStart), 0);
 
       const loanRows: CashflowMonth['detail']['loans'] = [];
       let loansScheduled = false;

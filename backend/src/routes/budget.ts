@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { monthRentDue } from '../lib/rentDue';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { Decimal } from '@prisma/client/runtime/library';
@@ -39,7 +40,7 @@ router.get('/monthly', async (req, res, next) => {
     });
 
     const rentRows = activeLeases.map(lease => {
-      const expected  = toNum(lease.rentAmount);
+      const expected  = monthRentDue(lease, new Date(Date.UTC(year, month - 1, 1)));
       const collected = lease.rentPayments.reduce((s, p) => s + toNum(p.amount), 0);
       // Money sent to the balance from earlier months did not pay this month.
       const towardMonth = lease.rentPayments.reduce((s, p) => s + toNum(p.amount) - toNum(p.appliedToArrears), 0);

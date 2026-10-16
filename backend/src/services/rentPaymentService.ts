@@ -1,5 +1,6 @@
 import { db } from '../config/db';
 import type { RentPaymentMethod } from '@prisma/client';
+import { monthRentDue } from '../lib/rentDue';
 
 // How a rent payment is recorded, whether typed in by hand or applied from a
 // matched bank transaction. Both paths go through here so the arrears split
@@ -70,7 +71,7 @@ export async function splitPayment(
 ): Promise<number> {
   const lease = await db.lease.findUnique({
     where: { id: leaseId },
-    select: { rentAmount: true, arrearsBalance: true, paymentsApplyTo: true, arrearsCaughtUpThrough: true },
+    select: { rentAmount: true, arrearsBalance: true, paymentsApplyTo: true, arrearsCaughtUpThrough: true, startDate: true, firstMonthRent: true },
   });
   if (!lease) return 0;
   const arrears = Math.max(0, Number(lease.arrearsBalance));
@@ -78,7 +79,7 @@ export async function splitPayment(
   const order = applyTo ?? (lease.paymentsApplyTo === 'ARREARS' ? 'ARREARS' : 'CURRENT');
   if (rolledIn || order === 'ARREARS') return round2(Math.min(amount, arrears));
 
-  const due = Number(lease.rentAmount) + await chargesFor(leaseId, periodDate) - await creditedTo(leaseId, periodDate, excludePaymentId);
+  const due = monthRentDue(lease, periodDate) + await chargesFor(leaseId, periodDate) - await creditedTo(leaseId, periodDate, excludePaymentId);
   const excess = Math.max(0, amount - Math.max(0, due));
   return round2(Math.min(excess, arrears));
 }

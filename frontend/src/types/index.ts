@@ -170,6 +170,8 @@ export interface Lease {
   lateFeeAmount?: number | null;
   lateFeePercent?: number | null;
   lateFeeGraceDays?: number | null;
+  /** Rent for the start month when the lease starts partway through it; null = prorated by days. */
+  firstMonthRent?: number | null;
   /** Charge the late fee automatically when the month is late. */
   autoLateFee?: boolean;
   /** Where a payment goes first unless chosen on the payment. */

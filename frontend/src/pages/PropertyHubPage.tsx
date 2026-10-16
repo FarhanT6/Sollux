@@ -27,6 +27,7 @@ import {
 import type { PaymentApplyTo } from '../types';
 import type { ReimbursableItem, ReimbursableBills, ReimbursementPaymentRow, LeaseDetails, ExtractedLeaseTerms } from '../api/client';
 import { rentPlan, summaryOf } from '../lib/leaseTerms';
+import { monthRentDue, autoProrated } from '../lib/rentDue';
 import LeaseSummary from '../components/tenant/LeaseSummary';
 import type {
   Property, Lease, Loan, Expense, InsurancePolicy, TaxAssessment,
@@ -1018,7 +1019,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
     leaseType: 'MONTH_TO_MONTH', status: 'ACTIVE', arrearsBalance: '', notes: '',
     rentEffectiveDate: '',
     lateFeeAmount: '', lateFeePercent: '', lateFeeGraceDays: '', businessName: '', rentDueDay: '',
-    autoLateFee: false, paymentsApplyTo: 'CURRENT',
+    autoLateFee: false, paymentsApplyTo: 'CURRENT', firstMonthRent: '',
   });
   // Inline "add scheduled increase" form (date + amount OR percent/range + note)
   const [siForm, setSiForm] = useState({ effectiveDate: '', newAmount: '', percent: '', percentMax: '', note: '' });
@@ -1074,6 +1075,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
       rentDueDay: lease.rentDueDay != null ? String(lease.rentDueDay) : '',
       autoLateFee: !!lease.autoLateFee,
       paymentsApplyTo: lease.paymentsApplyTo ?? 'CURRENT',
+      firstMonthRent: lease.firstMonthRent != null ? String(lease.firstMonthRent) : '',
     });
     setSiForm({ effectiveDate: '', newAmount: '', percent: '', percentMax: '', note: '' });
     setUcForm({ category: 'WATER', amount: '', note: '' });
@@ -1288,6 +1290,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
         rentDueDay: editForm.rentDueDay ? parseInt(editForm.rentDueDay) : null,
         autoLateFee: editForm.autoLateFee && !!(editForm.lateFeeAmount || editForm.lateFeePercent),
         paymentsApplyTo: editForm.paymentsApplyTo,
+        firstMonthRent: editForm.firstMonthRent !== '' ? parseFloat(editForm.firstMonthRent) : null,
       });
       const updated = await getLeases({ propertyId });
       setLeases(updated);
@@ -1386,6 +1389,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
       startDate: t.startDate || f.startDate,
       endDate: t.endDate ?? f.endDate,
       rentAmount: plan.currentRent != null ? String(plan.currentRent) : f.rentAmount,
+      firstMonthRent: t.firstMonthRent != null ? String(t.firstMonthRent) : f.firstMonthRent,
       securityDeposit: t.securityDeposit != null ? String(t.securityDeposit) : f.securityDeposit,
       leaseType: t.leaseType || f.leaseType,
       rentDueDay: t.rentDueDay != null ? String(t.rentDueDay) : f.rentDueDay,
@@ -1784,7 +1788,13 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                         // Late fees charged on this month are owed with it.
                         const charges = (lease.rentCharges ?? []).filter(c => monthKey(c.periodDate) === thisMonth);
                         const feeTotal = charges.reduce((s, c) => s + Number(c.amount), 0);
-                        const dueThisMonth = Number(lease.rentAmount) + feeTotal;
+                        // A lease starting partway through this month owes only part of it.
+                        const rentThisMonth = monthRentDue(lease, thisMonth);
+                        const firstMonth = !!lease.startDate && lease.startDate.slice(0, 7) === thisMonth && rentThisMonth !== Number(lease.rentAmount);
+                        if (lease.startDate && lease.startDate.slice(0, 7) > thisMonth) {
+                          return <p className="text-xs text-gray-500">Starts {fmtDateSafe(lease.startDate, 'MMM d')}</p>;
+                        }
+                        const dueThisMonth = rentThisMonth + feeTotal;
                         const owed = Math.max(0, Math.round((dueThisMonth - paidThisPeriod) * 100) / 100);
                         const toArrears = thisMonthPayments
                           .filter(p => p.status !== 'PENDING')
@@ -1818,12 +1828,16 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
 
                         const dueDay = lease.rentDueDay ?? 1;
                         const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-                        const dueDate = new Date(now.getFullYear(), now.getMonth(), Math.min(dueDay, daysInMonth));
+                        // The start month is due on the start date.
+                        const dueDate = firstMonth && lease.startDate
+                          ? new Date(Number(lease.startDate.slice(0, 4)), Number(lease.startDate.slice(5, 7)) - 1, Number(lease.startDate.slice(8, 10)))
+                          : new Date(now.getFullYear(), now.getMonth(), Math.min(dueDay, daysInMonth));
                         const overdue = now > dueDate;
                         const partial = paidThisPeriod > 0;
                         return (
                           <p className={`text-xs ${overdue ? 'text-red-400' : 'text-gray-500'}`}>
                             {money(owed)} {overdue ? `overdue for ${monthName}` : `due ${fmtDateSafe(dueDate.toISOString(), 'MMM d')}`}
+                            {firstMonth && <span className="text-gray-500"> · first month, from the {fmtDateSafe(lease.startDate, 'do')}</span>}
                             {feeNote}
                             {partial && <span className="text-gray-500"> · {money(paidThisPeriod)} paid</span>}
                             {toArrears > 0 && <span className="text-gray-500"> · {money(toArrears)} to arrears</span>}
@@ -2103,6 +2117,19 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                         <span className="text-xs text-gray-500">→ logged to rent history (defaults to today)</span>
                       </div>
                     )}
+                      {(() => {
+                        // A lease that starts partway through a month owes only part of that month.
+                        if (!editForm.startDate || editForm.startDate.slice(8, 10) === '01') return null;
+                        const total = (parseFloat(editForm.rentAmount || '0') || rentBreakdown(lease).baseRent) + rentBreakdown(lease).utilities;
+                        const auto = autoProrated(total, editForm.startDate);
+                        return (
+                          <Field label={`First month (${fmtDateSafe(editForm.startDate, 'MMM yyyy')})`}
+                            hint={`The lease starts on the ${fmtDateSafe(editForm.startDate, 'do')}. Blank = by days (${auto != null ? money(auto) : '—'}); type the amount if the lease says otherwise, e.g. half a month.`}>
+                            <input type="number" placeholder={auto != null ? String(auto) : ''} value={editForm.firstMonthRent}
+                              onChange={e => setEditForm(f => ({ ...f, firstMonthRent: e.target.value }))} className="input-dark text-xs w-40" />
+                          </Field>
+                        );
+                      })()}
                       <Field label="Utilities billed on top of rent" hint="Leave empty if utilities are included in the rent" saved>
                         <div className="space-y-1 mb-2">
                         {(lease.utilityCharges ?? []).length === 0 && <span className="text-xs text-gray-600">None — full amount is rent</span>}
@@ -2675,6 +2702,7 @@ function NewLeaseModal({ propertyId, isCommercial, onClose, onCreated }: {
     rentAmount: '', securityDeposit: '', startDate: todayISO(),
     endDate: '', leaseType: 'MONTH_TO_MONTH', status: 'ACTIVE', notes: '',
     rentDueDay: '', lateFeeAmount: '', lateFeePercent: '', lateFeeGraceDays: '', businessName: '', arrearsBalance: '',
+    firstMonthRent: '',
   });
   const [increases, setIncreases] = useState<IncreaseRow[]>([]);
   // Everything the edit form knows, so a lease is complete the day it is
@@ -2717,6 +2745,7 @@ function NewLeaseModal({ propertyId, isCommercial, onClose, onCreated }: {
         lateFeeGraceDays: t.lateFeeGraceDays != null ? str(t.lateFeeGraceDays) : f.lateFeeGraceDays,
         businessName: t.businessName || f.businessName,
         notes: t.notes || f.notes,
+        firstMonthRent: t.firstMonthRent != null ? str(t.firstMonthRent) : f.firstMonthRent,
       }));
       filled.push('dates', 'rent', 'deposit', 'late fee');
       // Tenants: an existing tenant by the same name is linked, anyone else is added with their contact details.
@@ -2858,6 +2887,7 @@ function NewLeaseModal({ propertyId, isCommercial, onClose, onCreated }: {
         lateFeeGraceDays: form.lateFeeGraceDays ? parseInt(form.lateFeeGraceDays, 10) : undefined,
         businessName: form.businessName.trim() || undefined,
         arrearsBalance: form.arrearsBalance ? parseFloat(form.arrearsBalance) : undefined,
+        firstMonthRent: form.firstMonthRent !== '' ? parseFloat(form.firstMonthRent) : undefined,
         tenantIds,
         ...(readFrom ? { termsJson: readFrom.summary } : {}),
       });
@@ -3000,6 +3030,18 @@ function NewLeaseModal({ propertyId, isCommercial, onClose, onCreated }: {
               <input type="number" min={1} max={31} placeholder="Rent due day (default 1st)" value={form.rentDueDay}
                 onChange={e => setForm(f => ({ ...f, rentDueDay: e.target.value }))} className="input-dark text-sm"
                 title="Day of the month rent is due" />
+              {form.startDate && form.startDate.slice(8, 10) !== '01' && (() => {
+                // Starting partway through a month: only part of that month is owed.
+                const auto = autoProrated(rentNum + chargesTotal, form.startDate);
+                return (
+                  <div className="col-span-2">
+                    <label className="block text-[11px] text-gray-600 mb-0.5">First month ({fmtDateSafe(form.startDate, 'MMM d')} to month end)</label>
+                    <input type="number" placeholder={auto != null ? `${auto} (by days)` : ''} value={form.firstMonthRent}
+                      onChange={e => setForm(f => ({ ...f, firstMonthRent: e.target.value }))} className="input-dark text-sm w-full" />
+                    <p className="text-[11px] text-gray-600 mt-0.5">Blank = by days{auto != null ? ` (${money(auto)})` : ''}. Type the amount if the lease says otherwise, e.g. half a month.</p>
+                  </div>
+                );
+              })()}
               <input type="number" placeholder="Arrears balance already owed" value={form.arrearsBalance}
                 onChange={e => setForm(f => ({ ...f, arrearsBalance: e.target.value }))} className="input-dark text-sm"
                 title="Unpaid rent the tenant already owes when this lease is entered" />

@@ -1,4 +1,5 @@
 import { db } from '../config/db';
+import { monthRentDue } from './rentDue';
 import { Prisma } from '@prisma/client';
 
 export type DateRange = { start: Date; end: Date };
@@ -68,7 +69,7 @@ function monthsOverlap(range: DateRange, from?: Date | null, to?: Date | null): 
  * An active lease past its end date is a holdover — still paying — and is
  * counted, exactly as the rent roll counts it.
  */
-type LeaseLike = { unitId: string; startDate: Date | null; endDate: Date | null; rentAmount: Prisma.Decimal | number; status: string };
+type LeaseLike = { unitId: string; startDate: Date | null; endDate: Date | null; rentAmount: Prisma.Decimal | number; status: string; firstMonthRent?: Prisma.Decimal | number | null };
 
 function monthsInRange(range: DateRange): number {
   const now = new Date();
@@ -97,12 +98,12 @@ function scheduledRent(leases: LeaseLike[], range: DateRange): number {
       // Active beats ended; among equals the later start is the current one.
       if (!cur || (l.status === 'ACTIVE' && cur.status !== 'ACTIVE') || (l.status === cur.status && (l.startDate?.getTime() ?? 0) > (cur.startDate?.getTime() ?? 0))) perUnit.set(l.unitId, l);
     }
-    for (const l of perUnit.values()) total += toNum(l.rentAmount);
+    for (const l of perUnit.values()) total += monthRentDue(l, m);
   }
   return total;
 }
 
-const leaseSelect = { unitId: true, startDate: true, endDate: true, rentAmount: true, status: true } as const;
+const leaseSelect = { unitId: true, startDate: true, endDate: true, rentAmount: true, status: true, firstMonthRent: true } as const;
 
 /**
  * Insurance is recorded twice by design: as a UtilityAccount, which carries the

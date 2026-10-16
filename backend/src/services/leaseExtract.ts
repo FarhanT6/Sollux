@@ -74,6 +74,7 @@ export interface ExtractedLeaseTerms {
   startDate: string | null;      // YYYY-MM-DD
   endDate: string | null;        // YYYY-MM-DD, null for month-to-month
   rentAmount: number | null;     // the first monthly rent of the term
+  firstMonthRent: number | null; // rent for a partial first month, when the lease states or shows it
   securityDeposit: number | null;
   leaseType: 'FIXED_TERM' | 'MONTH_TO_MONTH' | null;
   rentDueDay: number | null;     // 1-31
@@ -99,6 +100,7 @@ const PROMPT = `You are reading a residential or commercial LEASE AGREEMENT (oft
   "rentSchedule": [
     { "effectiveDate": "YYYY-MM-DD — when this rent starts", "amount": "number or null — the new monthly base rent if stated", "percent": "number or null — the increase in percent if stated that way", "recurring": "true if it repeats every year after (e.g. 'then 6% each year thereafter'), else false", "note": "short source wording" }
   ],
+  "firstMonthRent": "number or null — when the term starts partway through a month, the rent due for that first partial month if the lease states it or its payments table shows it (e.g. 'Rent from 10/15 to 11/30 $9,000' at $6,000/month means $3,000 for October). null if the term starts on the 1st or it is not stated",
   "securityDeposit": "number or null",
   "rentDueDay": "number 1-31 or null — day of month rent is due (e.g. 'payable in advance on the 1st' = 1)",
   "lateFeeAmount": "number or null — flat late fee in dollars",
@@ -188,7 +190,7 @@ function normalize(d: any): ExtractedLeaseTerms {
   const names = tenants.length ? tenants.map(t => t.fullName) : (Array.isArray(d.tenantNames) ? d.tenantNames.filter((x: unknown) => typeof x === 'string') : []);
   return {
     startDate: day(d.startDate), endDate: day(d.endDate),
-    rentAmount: num(d.rentAmount), securityDeposit: num(d.securityDeposit),
+    rentAmount: num(d.rentAmount), firstMonthRent: num(d.firstMonthRent), securityDeposit: num(d.securityDeposit),
     leaseType: d.leaseType === 'FIXED_TERM' || d.leaseType === 'MONTH_TO_MONTH' ? d.leaseType : null,
     rentDueDay: (() => { const n = num(d.rentDueDay); return n && n >= 1 && n <= 31 ? Math.round(n) : null; })(),
     lateFeeAmount: num(d.lateFeeAmount), lateFeePercent: num(d.lateFeePercent), lateFeeGraceDays: num(d.lateFeeGraceDays),

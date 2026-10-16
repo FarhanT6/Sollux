@@ -1,4 +1,5 @@
 import { db } from '../config/db';
+import { monthRentDue } from '../lib/rentDue';
 
 // Auto-apply scheduled rent increases whose effective date has passed.
 //
@@ -90,7 +91,7 @@ export async function accrueOverdueRent(now = new Date()): Promise<number> {
       .filter(x => inPeriod(x.periodDate, p) && x.status === 'RECEIVED')
       .reduce((s, x) => s + Number(x.amount) - Number(x.appliedToArrears), 0);
     const charges = lease.rentCharges.filter(c => inPeriod(c.periodDate, p)).reduce((s, c) => s + Number(c.amount), 0);
-    return Math.max(0, Math.round((Number(lease.rentAmount) + charges - credited) * 100) / 100);
+    return Math.max(0, Math.round((monthRentDue(lease, p) + charges - credited) * 100) / 100);
   };
 
   let accrued = 0;

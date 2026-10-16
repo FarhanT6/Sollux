@@ -750,6 +750,9 @@ model Lease {
   // Where a payment goes first when the owner does not say: CURRENT = this
   // month's rent, then the balance; ARREARS = the balance, then this month.
   paymentsApplyTo        String      @default("CURRENT")
+  // Rent owed for the start month when the lease starts partway through it.
+  // Null = prorated by days from the start date (lib/rentDue.ts).
+  firstMonthRent         Decimal?    @db.Decimal(10, 2)
   // Commercial leases: the business/entity on the lease alongside the person.
   businessName           String?
   // What was read from the lease agreement beyond the fields above: landlord

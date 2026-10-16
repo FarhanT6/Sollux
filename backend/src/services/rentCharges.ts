@@ -9,6 +9,7 @@
  * owner can waive it.
  */
 import { db } from '../config/db';
+import { monthRentDue } from '../lib/rentDue';
 
 const DAY = 24 * 3600 * 1000;
 
@@ -43,13 +44,19 @@ export async function assessLateFees(now = new Date(), leaseId?: string): Promis
     if (l.rentCharges.length) continue;
     const fee = lateFeeFor(l);
     if (!fee) continue;
-    const deadline = lateFrom(period, l.rentDueDay, l.lateFeeGraceDays);
+    // The start month is due on the start date, not the usual due day before it.
+    const due = monthRentDue(l, period);
+    if (due <= 0) continue;
+    const startsThisMonth = !!l.startDate && l.startDate.getUTCFullYear() === period.getUTCFullYear() && l.startDate.getUTCMonth() === period.getUTCMonth();
+    const deadline = startsThisMonth
+      ? new Date(Date.UTC(l.startDate!.getUTCFullYear(), l.startDate!.getUTCMonth(), l.startDate!.getUTCDate() + (l.lateFeeGraceDays ?? 0) + 1))
+      : lateFrom(period, l.rentDueDay, l.lateFeeGraceDays);
     if (now < deadline) continue;
     // Paid in full by the deadline means on time, whatever came after.
     const onTime = l.rentPayments
       .filter(p => p.paidDate < deadline)
       .reduce((s, p) => s + Number(p.amount) - Number(p.appliedToArrears), 0);
-    if (onTime >= Number(l.rentAmount) - 0.005) continue;
+    if (onTime >= due - 0.005) continue;
     await db.rentCharge.create({ data: { leaseId: l.id, periodDate: period, kind: 'LATE_FEE', amount: fee } }).catch(() => {});
     added++;
   }

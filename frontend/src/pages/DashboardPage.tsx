@@ -1,4 +1,5 @@
 import UrgentNotices from '../components/UrgentNotices';
+import { monthRentDue } from '../lib/rentDue';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useUser } from '@clerk/clerk-react';
@@ -360,11 +361,11 @@ function RentSummaryCard({ leases, payments }: { leases: Lease[]; payments: Rent
     paidByLease.set(p.leaseId, (paidByLease.get(p.leaseId) ?? 0) + Number(p.amount) - Number(p.appliedToArrears ?? 0));
   }
   // This month's rent plus any late fee charged on it.
-  const dueFor = (l: Lease) => Number(l.rentAmount)
+  const dueFor = (l: Lease) => monthRentDue(l, ym)
     + (l.rentCharges ?? []).filter(c => String(c.periodDate).slice(0, 7) === ym).reduce((s, c) => s + Number(c.amount), 0);
 
-  const expected = leases.reduce((s, l) => s + Number(l.rentAmount), 0);
-  const collected = leases.reduce((s, l) => s + Math.min(paidByLease.get(l.id) ?? 0, Number(l.rentAmount)), 0);
+  const expected = leases.reduce((s, l) => s + monthRentDue(l, ym), 0);
+  const collected = leases.reduce((s, l) => s + Math.min(paidByLease.get(l.id) ?? 0, monthRentDue(l, ym)), 0);
   const arrears = leases.reduce((s, l) => s + Number(l.arrearsBalance ?? 0), 0);
   const unpaid = leases
     .filter(l => (paidByLease.get(l.id) ?? 0) + 0.01 < dueFor(l))
