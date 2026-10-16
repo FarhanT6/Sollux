@@ -12,11 +12,12 @@ interface PageHeaderProps {
 
 export function PageHeader({ title, subtitle, action, breadcrumb }: PageHeaderProps) {
   return (
-    <div className="px-6 py-4 flex items-center justify-between sticky top-0 z-10"
+    <div className="px-4 md:px-6 py-3 md:py-4 flex flex-wrap items-center justify-between gap-2 md:sticky top-0 z-10"
       style={{ background: '#1e1e1e', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
       <div>
         {breadcrumb && (
-          <nav className="flex items-center gap-1.5 text-xs text-gray-500 mb-1">
+          // On a phone the navigation bar's Back replaces the trail.
+          <nav className="hidden md:flex items-center gap-1.5 text-xs text-gray-500 mb-1">
             {breadcrumb.map((b, i) => (
               <span key={i} className="flex items-center gap-1.5">
                 {i > 0 && <span>›</span>}
@@ -31,7 +32,7 @@ export function PageHeader({ title, subtitle, action, breadcrumb }: PageHeaderPr
         <h1 className="text-base font-semibold text-white">{title}</h1>
         {subtitle && <p className="text-xs text-gray-500 mt-0.5">{subtitle}</p>}
       </div>
-      {action && <div>{action}</div>}
+      {action && <div className="max-w-full">{action}</div>}
     </div>
   );
 }

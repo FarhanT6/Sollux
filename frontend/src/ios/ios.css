@@ -229,3 +229,50 @@ html[data-theme="dark"] .ios-segmented .thumb, :root:not([data-theme]) .ios-segm
 .ios-embedded { min-width: 0; max-width: 100%; overflow-x: hidden; font-family: var(--ios-font); }
 .ios-embedded table { display: block; overflow-x: auto; max-width: 100%; }
 .ios-embedded .px-6 { padding-left: 0; padding-right: 0; }
+
+/* The app shell's bar over pages not yet built on Screen. */
+.ios-shellbar { color: var(--ios-label); font-family: var(--ios-font); -webkit-font-smoothing: antialiased; }
+
+/* iOS zooms the page when an input under 16px takes focus, and never zooms
+   back. Every field on a phone is 16px, whichever page it is on. */
+@media (max-width: 767px) {
+  input, select, textarea { font-size: 16px !important; }
+}
+
+/* Desktop form fields shown inside a sheet: full width, thumb height. */
+.ios-form-legacy .grid { gap: 10px !important; }
+.ios-form-legacy .input-dark, .ios-form-legacy input:not([type="checkbox"]):not([type="radio"]), .ios-form-legacy select {
+  width: 100%; min-height: 44px; border-radius: 10px; padding: 0 12px;
+  background: var(--ios-fill); color: var(--ios-label); border: 0;
+}
+.ios-form-legacy textarea { width: 100%; border-radius: 10px; padding: 10px 12px; background: var(--ios-fill); color: var(--ios-label); border: 0; }
+.ios-form-legacy p, .ios-form-legacy span { font-size: 13px; }
+
+/* A select sitting in a row's value: reads as tinted text with a chevron. */
+.ios-inline-select { background: transparent; border: 0; color: var(--ios-tint); text-align: right; text-align-last: right; padding: 0; -webkit-appearance: none; appearance: none; }
+
+.ios-footnote { font-size: 13px; color: var(--ios-label-2); margin: -12px 16px 16px; }
+
+/* Every desktop dialog (fixed, centred over a dimmed page) becomes a bottom
+   sheet on a phone: full width, rising from the bottom, clear of the home
+   indicator, above the tab bar and any iOS sheet. One rule, so a dialog added
+   to any page later gets it too. */
+@media (max-width: 767px) {
+  .fixed.inset-0.items-center.justify-center:not(.flex-col) {
+    align-items: flex-end !important; padding: var(--safe-top) 0 0 !important; z-index: 70 !important;
+    overflow: hidden !important;
+  }
+  .fixed.inset-0.items-center.justify-center:not(.flex-col) > div:not(.absolute) {
+    width: 100% !important; max-width: none !important; max-height: calc(100dvh - var(--safe-top) - 10px) !important;
+    overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+    border-radius: 14px 14px 0 0 !important; border-bottom: 0 !important;
+    padding-bottom: calc(var(--safe-bottom) + 8px);
+    animation: ios-sheet-in 320ms cubic-bezier(0.2, 0.9, 0.3, 1) both;
+  }
+}
+
+/* Pages not yet rebuilt on Screen: the iOS 16px side margin instead of the
+   desktop's 24px, so content lines up with the navigation bar. */
+@media (max-width: 767px) {
+  main.app-canvas .px-6 { padding-left: 16px; padding-right: 16px; }
+}

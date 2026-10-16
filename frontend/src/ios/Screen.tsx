@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { tap } from '../lib/native';
 import { useOwnHeader, scrollRootOf } from './chrome';
 import { Back } from './icons';
+import { usePhoneBack } from './routes';
 
 /**
  * A phone screen: navigation bar, large title that folds into the bar as the
@@ -12,11 +12,11 @@ import { Back } from './icons';
  *   <Screen title="SDG&E" back="/properties" largeTitle={false}>…</Screen>
  */
 export default function Screen({
-  title, subtitle, back, backLabel = 'Back', left, right, largeTitle = true, onRefresh, children, flush,
+  title, subtitle, back, backLabel, left, right, largeTitle = true, onRefresh, children, flush,
 }: {
   title: string;
   subtitle?: ReactNode;
-  /** true = go back in history (falling back to /dashboard); a path = go there. */
+  /** Show Back: to the previous screen, or on a deep link to this path (true = the route table's parent). */
   back?: true | string;
   backLabel?: string;
   left?: ReactNode;
@@ -28,7 +28,6 @@ export default function Screen({
   flush?: boolean;
 }) {
   useOwnHeader();
-  const navigate = useNavigate();
   const sentinel = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const [collapsed, setCollapsed] = useState(!largeTitle);
@@ -73,28 +72,10 @@ export default function Screen({
     return () => { root.removeEventListener('touchstart', start); root.removeEventListener('touchmove', move); root.removeEventListener('touchend', end); };
   }, [onRefresh]);
 
-  const goBack = () => {
-    void tap();
-    if (typeof back === 'string') navigate(back);
-    else if (window.history.length > 1) navigate(-1);
-    else navigate('/dashboard');
-  };
-
   return (
     <div ref={rootRef} className="ios-screen ios-enter">
-      <header className="ios-navbar" data-collapsed={collapsed} data-compact={!largeTitle}>
-        <div className="ios-navbar-row">
-          <div className="ios-navbar-side">
-            {back ? (
-              <button className="ios-barbtn" onClick={goBack} aria-label={backLabel} style={{ paddingLeft: 0 }}>
-                <Back /> <span style={{ maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{backLabel}</span>
-              </button>
-            ) : left}
-          </div>
-          <div className="ios-navbar-title">{title}</div>
-          <div className="ios-navbar-side right">{right}</div>
-        </div>
-      </header>
+      <NavBar title={title} collapsed={collapsed} compact={!largeTitle} left={left} right={right}
+        back={back ? { back: typeof back === 'string' ? back : undefined, backLabel } : false} />
       {onRefresh && (
         <div className="ios-ptr" style={{ height: pull, transition: pull === 0 || refreshing ? 'height 220ms ease' : 'none' }}>
           {pull > 0 && <div className="ios-spinner" style={{ marginBottom: 14, animationPlayState: refreshing ? 'running' : 'paused', transform: `rotate(${pull * 4}deg)` }} />}
@@ -120,5 +101,38 @@ export function BarButton({ children, onClick, label, bold }: { children: ReactN
     <button className={`ios-barbtn${bold ? ' bold' : ''}`} onClick={() => { void tap(); onClick(); }} aria-label={label}>
       {children}
     </button>
+  );
+}
+
+/**
+ * The navigation bar: Back (or a left action), the title, right actions.
+ * Shared by Screen and by the app shell for pages not built on Screen, so
+ * every screen has the same bar and Back behaves the same everywhere.
+ */
+export function NavBar({ title, collapsed = true, compact = true, left, right, back }: {
+  title: string;
+  collapsed?: boolean;
+  compact?: boolean;
+  left?: ReactNode;
+  right?: ReactNode;
+  /** false = no Back; otherwise an optional fallback for deep links. */
+  back: false | { back?: string; backLabel?: string };
+}) {
+  const nav = usePhoneBack(back || undefined);
+  const showBack = back !== false && (nav.show || !!back.back);
+  return (
+    <header className="ios-navbar" data-collapsed={collapsed} data-compact={compact}>
+      <div className="ios-navbar-row">
+        <div className="ios-navbar-side">
+          {showBack ? (
+            <button className="ios-barbtn" onClick={() => { void tap(); nav.go(); }} aria-label={nav.label} style={{ paddingLeft: 0 }}>
+              <Back /> <span style={{ maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nav.label}</span>
+            </button>
+          ) : left}
+        </div>
+        <div className="ios-navbar-title">{title}</div>
+        <div className="ios-navbar-side right">{right}</div>
+      </div>
+    </header>
   );
 }

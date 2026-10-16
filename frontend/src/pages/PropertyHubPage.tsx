@@ -244,7 +244,7 @@ export default function PropertyHubPage() {
           </div>
 
           {/* Quick stats */}
-          <div className="flex gap-6 pb-3 text-xs">
+          <div className="flex flex-wrap gap-x-6 gap-y-2 pb-3 text-xs">
             {[
               { label: 'Rent/mo', value: money(totalRent), color: 'text-white' },
               { label: 'Arrears', value: money(totalArrears), color: totalArrears > 0 ? 'text-red-400' : 'text-gray-600' },
@@ -764,7 +764,7 @@ function OverviewTab({ property, pnl, leases, loans, onPropertyChange }: {
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-5">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         {/* Property details */}
         <div>
           <p className="section-label">Property details</p>
