@@ -53,7 +53,7 @@ function NativeSignInNote() {
   return (
     <p className="max-w-xs text-center text-xs text-gray-500">
       In the app, sign in with your email and password. If your account was made with Google,
-      set a password first on the website: profile picture → Manage account → Security.
+      set a password first on the website: Settings → Account → Sign-in &amp; security → Set a password.
     </p>
   );
 }

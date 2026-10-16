@@ -41,6 +41,11 @@ const BILL_POSTED = /\bnew (bill|statement|invoice)|\b(bill|e-?statement|stateme
 // are bill wording too; without them T-Mobile's bill email was skipped.
 const BILL_WORDS = /amount due|total due|balance due|new balance|\bbalance\b|statement date|billing period|service period|billing cycle|due date|invoice|premium|past due|minimum payment|autopay is scheduled|account\s*(number|no|#)/i;
 const MONEY = /\$\s?\d[\d,]*\.\d{2}/;
+// A shut-off, interruption, suspension or past-due notice. Often a short email
+// whose amount is in a picture ("Attention required. Service interruption
+// notice." from WM), so it is read even with no amount in its text.
+const SERVICE_NOTICE = /service (interruption|suspension|disconnection|termination)|interrupt(ion)? (of )?service|disconnect|shut[\s-]?off|suspen(d|sion)|past[\s-]?due|delinquen|final notice|termination notice|collection(s)? (activity|notice)|cancell?ation notice|notice of (cancell?ation|non-?renewal)/i;
+const SERVICE_NOTICE_BODY = /service (interruption|suspension|disconnection|termination)|(will be|has been|may have already been) (interrupted|disconnected|shut off|suspended)|shut[\s-]?off notice|disconnection notice|final notice/i;
 // Money received through Zelle, Venmo, Cash App, PayPal or Apple Cash: rent, read without Claude.
 const P2P_HINT = /zelle|venmo|cash ?app|paypal|apple cash|sent you|paid you|received money|got money|been paid/i;
 const P2P_SENDER = /@(\w+\.)*(venmo\.com|cash\.app|square\.com|squareup\.com)\b/i;
@@ -80,7 +85,13 @@ export function htmlToText(html: string): string {
 /** Whether an email with no attachment is itself a bill worth reading. */
 export function isBillEmail(subject: string, body: string): boolean {
   if (PAYMENT_CONFIRMATION.test(subject)) return false;
+  if (isServiceNoticeEmail(subject, body)) return true;
   return BILL_SUBJECT.test(subject) && MONEY.test(body) && BILL_WORDS.test(body);
+}
+/** A shut-off / interruption / past-due notice, with or without an amount in its text. */
+export function isServiceNoticeEmail(subject: string, body: string): boolean {
+  // In the body only the strong words count: nearly every bill prints "past due".
+  return SERVICE_NOTICE.test(subject) || (BILL_SUBJECT.test(subject) && SERVICE_NOTICE_BODY.test(body.slice(0, 4000)));
 }
 /** Whether an attached PDF is a bill, judged from its text before paying for a read. */
 export function looksLikeBill(text: string): boolean {
@@ -184,7 +195,9 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
         const recheck = (m: { outcome: string; detail: string | null; subject: string | null }) =>
           m.outcome === 'skipped' && (
             (!!token.backfillFrom && (!m.detail || /no amount or bill wording|^skipped|empty email/.test(m.detail)))
-            || (/payment confirmation|no amount or bill wording/.test(m.detail ?? '') && P2P_HINT.test(m.subject ?? '')));
+            || (/payment confirmation|no amount or bill wording/.test(m.detail ?? '') && P2P_HINT.test(m.subject ?? ''))
+            // Notices skipped before notices without an amount were read.
+            || (/no amount or bill wording/.test(m.detail ?? '') && SERVICE_NOTICE.test(m.subject ?? '')));
         const seen = new Set(prior.filter(m => m.outcome !== 'error' && !recheck(m)).map(m => m.messageId));
         // A message is retried once. If it fails again it is marked failed and
         // left alone, so one bad email cannot cost a read every night.

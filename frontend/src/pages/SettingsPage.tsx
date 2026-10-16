@@ -133,6 +133,8 @@ export default function SettingsPage() {
           </div>
         </div>
 
+        <SignInSecurityCard />
+
         <SharedAccessCard />
         <PhoneLockCard />
 
@@ -1192,6 +1194,31 @@ function PhoneLockCard() {
         Require {name} to open Sollux
       </label>
       {msg && <p className="text-xs text-gray-400 mt-2">{msg}</p>}
+    </div>
+  );
+}
+
+/**
+ * Password, sign-in emails, connected Google login, two-step verification and
+ * signed-in devices: Clerk's own account panel. The iPhone app signs in with
+ * email and password (Google refuses its sign-in inside apps), so an account
+ * made with Google sets a password here first.
+ */
+function SignInSecurityCard() {
+  const { user } = useUser();
+  const { openUserProfile } = useClerk();
+  const hasPassword = !!user?.passwordEnabled;
+  return (
+    <div className="card p-5 mb-4">
+      <h2 className="text-sm font-semibold text-white mb-1">Sign-in &amp; security</h2>
+      <p className="text-xs text-gray-500 mb-3">
+        {hasPassword
+          ? 'You can sign in with your email and password, including in the iPhone app.'
+          : 'No password yet: you sign in with Google. Set a password to sign in to the iPhone app, which cannot use Google sign-in.'}
+      </p>
+      <button className="btn btn-primary text-xs" onClick={() => openUserProfile()}>
+        {hasPassword ? 'Change password, emails, devices' : 'Set a password'}
+      </button>
     </div>
   );
 }
