@@ -66,6 +66,8 @@ export async function tap(): Promise<void> {
 export async function openUrl(url: string): Promise<void> {
   if (!url) return;
   if (!isNative) { window.open(url, '_blank', 'noopener,noreferrer'); return; }
+  // A full link to a Sollux page is a page of the app too.
+  if (url.startsWith(window.location.origin + '/')) url = url.slice(window.location.origin.length);
   if (url.startsWith('/') && !url.startsWith('//')) {
     window.history.pushState({}, '', url);
     window.dispatchEvent(new PopStateEvent('popstate'));
