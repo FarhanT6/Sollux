@@ -18,14 +18,16 @@ import {
   getDocuments, getDocumentUrl, deleteDocument, confirmScannedDocument, downloadRentRoll, downloadT12,
   getT12Manifest, RENT_ROLL_COLUMNS,
   getRentChanges, addRentChange, deleteRentChange, uploadLeaseDocument,
-  getLeaseDocuments, addLeaseDocument, getLeaseDocumentViewUrl, deleteLeaseDocument, extractLeaseTerms,
+  getLeaseDocuments, addLeaseDocument, getLeaseDocumentViewUrl, deleteLeaseDocument, extractLeaseTerms, extractLeaseTermsFromFile,
   addScheduledIncrease, applyScheduledIncrease, deleteScheduledIncrease,
   addLeaseUtilityCharge, deleteLeaseUtilityCharge, getTurnover, getBankAccounts,
-  addPaymentAlias, deletePaymentAlias, deleteRentPayment, updateRentPayment,
+  addPaymentAlias, deletePaymentAlias, deleteRentPayment, updateRentPayment, updateTenant,
   addLeaseDeposit, deleteLeaseDeposit,
 } from '../api/client';
 import type { PaymentApplyTo } from '../types';
-import type { ReimbursableItem, ReimbursableBills, ReimbursementPaymentRow } from '../api/client';
+import type { ReimbursableItem, ReimbursableBills, ReimbursementPaymentRow, LeaseDetails, ExtractedLeaseTerms } from '../api/client';
+import { rentPlan, summaryOf } from '../lib/leaseTerms';
+import LeaseSummary from '../components/tenant/LeaseSummary';
 import type {
   Property, Lease, Loan, Expense, InsurancePolicy, TaxAssessment,
   Improvement, PropertyPnL, Tenant, Unit, Document, DocumentCategory, PropertyType, RentChange, ScheduledRentIncrease, LeaseUtilityCharge,
@@ -1036,7 +1038,8 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   const [docCategory, setDocCategory] = useState<string>('LEASE');
   const [leaseDocs, setLeaseDocs] = useState<Record<string, DocType[]>>({});
   // AI-suggested lease terms from an uploaded lease agreement (user confirms)
-  const [suggested, setSuggested] = useState<{ leaseId: string; terms: any } | null>(null);
+  const [suggested, setSuggested] = useState<{ leaseId: string; terms: ExtractedLeaseTerms; file: string } | null>(null);
+  const [applyingTerms, setApplyingTerms] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [showNewLease, setShowNewLease] = useState(false);
   const [units, setUnits] = useState<Unit[]>([]);
@@ -1323,7 +1326,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
         try {
           const terms = await extractLeaseTerms(leaseId, base64, file.name);
           if (terms.startDate || terms.endDate || terms.rentAmount) {
-            setSuggested({ leaseId, terms });
+            setSuggested({ leaseId, terms, file: file.name });
           }
         } catch { /* extraction is a convenience; the upload already succeeded */ }
         finally { setExtracting(false); }
@@ -1338,14 +1341,51 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
 
   // Copy AI-read lease terms into the edit form. Only fills fields the
   // document actually stated; nothing is saved until "Save changes".
-  function applySuggestedTerms() {
+  //
+  // The rest is added to the lease straight away, skipping anything it
+  // already has: rent steps still to come (by date), utilities billed with
+  // rent (by utility), guarantors as expected payer names, tenants' missing
+  // email and phone, and the summary of the agreement.
+  async function applySuggestedTerms() {
     if (!suggested) return;
     const t = suggested.terms;
+    const plan = rentPlan(t);
+    const lease = leases.find(l => l.id === suggested.leaseId);
+    if (lease) {
+      setApplyingTerms(true);
+      try {
+        const haveDates = new Set((lease.scheduledIncreases ?? []).map(si => String(si.effectiveDate).slice(0, 10)));
+        for (const st of plan.futureSteps.filter(x => !haveDates.has(x.effectiveDate))) {
+          await addScheduledIncrease(lease.id, { effectiveDate: st.effectiveDate, newAmount: st.newAmount, percent: st.newAmount == null ? st.percent : null, note: st.note });
+        }
+        const haveUtil = new Set((lease.utilityCharges ?? []).map(u => u.category));
+        for (const u of t.utilityCharges.filter(x => !haveUtil.has(x.category))) {
+          await addLeaseUtilityCharge(lease.id, { category: u.category, amount: u.amount, note: u.note });
+        }
+        const havePayers = new Set([...(lease.paymentAliases ?? []).map(a => a.name.toLowerCase()), ...(lease.leaseTenants ?? []).map(lt => lt.tenant.fullName.toLowerCase())]);
+        for (const g of t.details.guarantors.filter(g => !havePayers.has(g.fullName.toLowerCase()))) {
+          await addPaymentAlias(lease.id, { name: g.fullName, note: 'Guarantor' });
+        }
+        for (const p of t.tenants) {
+          const words = p.fullName.toLowerCase().split(/\s+/).filter(w => w.length > 1);
+          const lt = (lease.leaseTenants ?? []).find(x => { const n = x.tenant.fullName.toLowerCase(); return words.filter(w => n.includes(w)).length >= Math.min(2, words.length); });
+          if (!lt) continue;
+          const patch: { email?: string; phone?: string } = {};
+          if (p.email && !lt.tenant.email) patch.email = p.email;
+          if (p.phone && !lt.tenant.phone) patch.phone = p.phone;
+          if (Object.keys(patch).length) await updateTenant(lt.tenant.id, patch);
+        }
+        await updateLease(lease.id, { termsJson: summaryOf(t, suggested.file) });
+        setLeases(await getLeases({ propertyId }));
+      } catch (err: any) {
+        alert(err?.response?.data?.error ?? 'Some of the lease terms could not be added.');
+      } finally { setApplyingTerms(false); }
+    }
     setEditForm(f => ({
       ...f,
       startDate: t.startDate || f.startDate,
       endDate: t.endDate ?? f.endDate,
-      rentAmount: t.rentAmount != null ? String(t.rentAmount) : f.rentAmount,
+      rentAmount: plan.currentRent != null ? String(plan.currentRent) : f.rentAmount,
       securityDeposit: t.securityDeposit != null ? String(t.securityDeposit) : f.securityDeposit,
       leaseType: t.leaseType || f.leaseType,
       rentDueDay: t.rentDueDay != null ? String(t.rentDueDay) : f.rentDueDay,
@@ -2146,6 +2186,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                               ['Late fee', suggested.terms.lateFeePercent != null ? `${suggested.terms.lateFeePercent}%` : suggested.terms.lateFeeAmount != null ? money(suggested.terms.lateFeeAmount) : null],
                               ['Grace days', suggested.terms.lateFeeGraceDays != null ? String(suggested.terms.lateFeeGraceDays) : null],
                               ['Business', suggested.terms.businessName],
+                              ['Rent today', (() => { const c = rentPlan(suggested.terms).currentRent; return c != null && c !== suggested.terms.rentAmount ? money(c) : null; })()],
                             ].filter(([, v]) => v).map(([label, v]) => (
                               <div key={String(label)} className="flex justify-between text-xs">
                                 <span className="text-gray-500">{label}</span>
@@ -2153,11 +2194,27 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                               </div>
                             ))}
                           </div>
-                          {suggested.terms.notes && <p className="text-xs text-gray-500 mb-2">{suggested.terms.notes}</p>}
-                          <div className="flex gap-2">
-                            <button onClick={applySuggestedTerms} className="btn btn-primary text-xs">Fill these in</button>
+                          {(() => {
+                            const t = suggested.terms;
+                            const steps = rentPlan(t).futureSteps;
+                            const extra: [string, string][] = [
+                              ['Tenants', t.tenants.map(p => [p.fullName, p.phone, p.email].filter(Boolean).join(' · ')).join('; ')],
+                              ['Rent steps to come', steps.map(st => `${fmtDate(st.effectiveDate)} ${st.newAmount != null ? money(st.newAmount) : `+${st.percent}%`}`).join(' · ')],
+                              ['Utilities billed with rent', t.utilityCharges.map(u => `${u.category.toLowerCase()} ${money(u.amount)}`).join(' · ')],
+                              ['Guarantor', t.details.guarantors.map(g => g.fullName).join(', ')],
+                            ];
+                            return extra.filter(([, v]) => v).map(([label, v]) => (
+                              <div key={label} className="grid grid-cols-[150px_1fr] gap-3 text-xs mb-0.5">
+                                <span className="text-gray-500">{label}</span><span className="text-gray-200">{v}</span>
+                              </div>
+                            ));
+                          })()}
+                          {suggested.terms.notes && <p className="text-xs text-gray-500 my-2">{suggested.terms.notes}</p>}
+                          <LeaseSummary details={summaryOf(suggested.terms, suggested.file)} />
+                          <div className="flex gap-2 mt-2">
+                            <button onClick={applySuggestedTerms} disabled={applyingTerms} className="btn btn-primary text-xs disabled:opacity-50">{applyingTerms ? 'Adding…' : 'Fill these in'}</button>
                             <button onClick={() => setSuggested(null)} className="text-xs text-gray-500 hover:text-gray-300">Ignore</button>
-                            <span className="text-xs text-gray-600 self-center">Review, then Save changes</span>
+                            <span className="text-xs text-gray-600 self-center">Rent steps, utilities, payer names, contacts and the summary are added now; the fields above wait for Save changes</span>
                           </div>
                         </div>
                       )}
@@ -2186,6 +2243,8 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                           ))
                         )}
                       </div>
+                      {/* What the agreement says beyond the fields above */}
+                      <LeaseSummary details={lease.termsJson} />
                     </div>
 
                     <div className="flex items-center justify-between pt-1">
@@ -2599,6 +2658,83 @@ function NewLeaseModal({ propertyId, isCommercial, onClose, onCreated }: {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
+  // The lease agreement, read when it is attached: the form fills itself in
+  // and the rest of what it says is saved as the lease's summary.
+  const [reading, setReading] = useState<string | null>(null);
+  const [readFrom, setReadFrom] = useState<{ file: string; summary: LeaseDetails; filled: string[] } | null>(null);
+
+  async function readAgreement(file: File) {
+    setReading(file.name); setError(null);
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const t = await extractLeaseTermsFromFile(base64, file.name);
+      const plan = rentPlan(t);
+      const filled: string[] = [];
+      const str = (v: number | string | null | undefined) => (v == null ? '' : String(v));
+      setForm(f => ({
+        ...f,
+        startDate: t.startDate || f.startDate,
+        endDate: t.endDate || f.endDate,
+        leaseType: t.leaseType || (t.endDate ? 'FIXED_TERM' : f.leaseType),
+        rentAmount: plan.currentRent != null ? str(plan.currentRent) : f.rentAmount,
+        securityDeposit: t.securityDeposit != null ? str(t.securityDeposit) : f.securityDeposit,
+        rentDueDay: t.rentDueDay != null ? str(t.rentDueDay) : f.rentDueDay,
+        lateFeeAmount: t.lateFeePercent == null && t.lateFeeAmount != null ? str(t.lateFeeAmount) : f.lateFeeAmount,
+        lateFeePercent: t.lateFeePercent != null ? str(t.lateFeePercent) : f.lateFeePercent,
+        lateFeeGraceDays: t.lateFeeGraceDays != null ? str(t.lateFeeGraceDays) : f.lateFeeGraceDays,
+        businessName: t.businessName || f.businessName,
+        notes: t.notes || f.notes,
+      }));
+      filled.push('dates', 'rent', 'deposit', 'late fee');
+      // Tenants: an existing tenant by the same name is linked, anyone else is added with their contact details.
+      if (t.tenants.length) {
+        setTenantRows(t.tenants.map(p => {
+          const existing = allTenants.find(x => x.fullName.trim().toLowerCase() === p.fullName.trim().toLowerCase());
+          return existing
+            ? { mode: 'existing' as const, tenantId: existing.id, fullName: existing.fullName, email: '', phone: '' }
+            : { mode: 'new' as const, tenantId: '', fullName: p.fullName, email: p.email ?? '', phone: p.phone ?? '' };
+        }));
+        filled.push(`${t.tenants.length} tenant${t.tenants.length === 1 ? '' : 's'}`);
+      }
+      if (plan.futureSteps.length) {
+        setIncreases(plan.futureSteps.map(st => ({
+          effectiveDate: st.effectiveDate, newAmount: st.newAmount != null ? String(st.newAmount) : '',
+          percent: st.newAmount == null && st.percent != null ? String(st.percent) : '', percentMax: '', note: st.note ?? '',
+        })));
+        filled.push(`${plan.futureSteps.length} rent step${plan.futureSteps.length === 1 ? '' : 's'}`);
+      }
+      if (t.utilityCharges.length) {
+        setCharges(t.utilityCharges.map(u => ({ category: u.category, amount: String(u.amount), note: u.note ?? '' })));
+        filled.push('utilities billed with rent');
+      }
+      // Guarantors who are not tenants pay rent too sometimes: expected payer names.
+      const tenantNames = new Set(t.tenants.map(p => p.fullName.toLowerCase()));
+      const payers = t.details.guarantors.filter(g => !tenantNames.has(g.fullName.toLowerCase()));
+      if (payers.length) {
+        setAliases(a => [...a, ...payers.filter(g => !a.some(x => x.name.toLowerCase() === g.fullName.toLowerCase())).map(g => ({ name: g.fullName, note: 'Guarantor' }))]);
+        filled.push('guarantor as a payer name');
+      }
+      // The unit the lease names, when the property has one by that name.
+      const label = (t.details.unitLabel ?? '').toLowerCase();
+      if (label && !unitId) {
+        const match = units.find(u => u.unitLabel.toLowerCase().includes(label) || label.includes(u.unitLabel.toLowerCase()));
+        if (match) setUnitId(match.id); else if (!units.length) setNewUnitLabel(t.details.unitLabel!);
+      }
+      setReadFrom({ file: file.name, summary: summaryOf(t, file.name), filled });
+    } catch (err: any) {
+      setError(err?.response?.data?.error ?? 'Could not read that lease. Fill the form in by hand, or try the PDF again.');
+    } finally { setReading(null); }
+  }
+
+  function attachDoc(f: File, category: string) {
+    setDocs(d => [...d, { file: f, category }]);
+    if (category === 'LEASE') readAgreement(f);
+  }
 
   const rentNum = parseFloat(form.rentAmount || '0') || 0;
   const chargesTotal = charges.reduce((s, c) => s + (parseFloat(c.amount) || 0), 0);
@@ -2695,6 +2831,7 @@ function NewLeaseModal({ propertyId, isCommercial, onClose, onCreated }: {
         businessName: form.businessName.trim() || undefined,
         arrearsBalance: form.arrearsBalance ? parseFloat(form.arrearsBalance) : undefined,
         tenantIds,
+        ...(readFrom ? { termsJson: readFrom.summary } : {}),
       });
       // Rent steps are stored as scheduled increases; the worker applies each
       // on its date and the card shows the ladder in the meantime.
@@ -2742,6 +2879,28 @@ function NewLeaseModal({ propertyId, isCommercial, onClose, onCreated }: {
 
         <div className="px-6 py-5 space-y-5">
           {error && <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">{error}</div>}
+
+          {/* Start from the agreement: it fills the form in. */}
+          <div className="rounded-lg p-3" style={{ background: 'rgba(245,166,35,0.06)', border: '1px solid rgba(245,166,35,0.25)' }}>
+            {reading ? (
+              <p className="text-xs text-amber-400">Reading {reading}… this takes up to a minute.</p>
+            ) : readFrom ? (
+              <>
+                <p className="text-xs text-amber-400 font-medium">Filled in from {readFrom.file}</p>
+                <p className="text-xs text-gray-400 mt-0.5">{readFrom.filled.join(' · ')}. Check each section, then Create lease. The rest of the agreement is saved as the lease summary:</p>
+                <LeaseSummary details={readFrom.summary} />
+              </>
+            ) : (
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs text-gray-400">Have the signed lease? Attach it and the form fills itself in: tenants and contacts, term, rent and rent steps, deposit, late fee, utilities, and a summary of the rest.</p>
+                <label className="btn btn-primary text-xs cursor-pointer flex-shrink-0">
+                  Attach lease
+                  <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png"
+                    onChange={e => { const f = e.target.files?.[0]; if (f) attachDoc(f, 'LEASE'); e.target.value = ''; }} />
+                </label>
+              </div>
+            )}
+          </div>
 
           <div>
             <p className="text-xs text-gray-500 mb-2 font-medium uppercase tracking-wide">Unit</p>
@@ -2901,7 +3060,7 @@ function NewLeaseModal({ propertyId, isCommercial, onClose, onCreated }: {
                   <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png"
                     onChange={e => {
                       const f = e.target.files?.[0];
-                      if (f) setDocs(d => [...d, { file: f, category: docCategory }]);
+                      if (f) attachDoc(f, docCategory);
                       e.target.value = '';
                     }} />
                 </label>

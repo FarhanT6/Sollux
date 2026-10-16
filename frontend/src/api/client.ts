@@ -144,14 +144,33 @@ export const addLeaseDocument = (leaseId: string, data: { fileData: string; file
   api.post<Document>(`/leases/${leaseId}/documents`, data).then(r => r.data);
 export const getLeaseDocumentViewUrl = (leaseId: string, docId: string) =>
   api.get<{ url: string }>(`/leases/${leaseId}/documents/${docId}/url`).then(r => r.data);
+export interface LeasePerson { fullName: string; email: string | null; phone: string | null; address: string | null }
+export interface LeaseRentStep { effectiveDate: string; amount: number | null; percent: number | null; recurring: boolean; note: string | null }
+export interface LeaseUtilityTerm { category: string; amount: number; note: string | null }
+/** Everything else read from a lease agreement; saved as the lease's summary (termsJson). */
+export interface LeaseDetails {
+  leaseDate: string | null; premises: string | null; unitLabel: string | null; use: string | null;
+  landlord: { name: string | null; signer: string | null; payTo: string | null; payToAddress: string | null; phone: string | null; email: string | null } | null;
+  guarantors: LeasePerson[]; depositIncreasesWithRent: boolean | null; lateInterestPercent: number | null; nsfFee: number | null;
+  utilities: string | null; operatingExpenses: string | null; propertyTaxes: string | null; maintenance: string | null;
+  insurance: string | null; parking: string | null; storage: string | null; earlyPossession: string | null;
+  renewal: string | null; afterTerm: string | null; condition: string | null;
+  moveInCosts: { label: string; amount: number; dueDate: string | null }[]; otherTerms: string[];
+  /** Set when saved: the agreement it came from, and the rent schedule as written. */
+  source?: string | null; rentSchedule?: LeaseRentStep[]; utilityCharges?: LeaseUtilityTerm[];
+}
 export interface ExtractedLeaseTerms {
   startDate: string | null; endDate: string | null; rentAmount: number | null;
   securityDeposit: number | null; leaseType: 'FIXED_TERM' | 'MONTH_TO_MONTH' | null;
   rentDueDay: number | null; lateFeeAmount: number | null; lateFeePercent: number | null;
   lateFeeGraceDays: number | null; tenantNames: string[]; businessName: string | null; notes: string | null;
+  tenants: LeasePerson[]; rentSchedule: LeaseRentStep[]; utilityCharges: LeaseUtilityTerm[]; details: LeaseDetails;
 }
+/** Read a lease agreement before the lease exists (New lease form). */
+export const extractLeaseTermsFromFile = (fileData: string, filename: string) =>
+  api.post<ExtractedLeaseTerms>('/leases/extract-terms', { fileData, filename }, { timeout: 180000 }).then(r => r.data);
 export const extractLeaseTerms = (leaseId: string, fileData: string, filename: string) =>
-  api.post<ExtractedLeaseTerms>(`/leases/${leaseId}/extract-terms`, { fileData, filename }).then(r => r.data);
+  api.post<ExtractedLeaseTerms>(`/leases/${leaseId}/extract-terms`, { fileData, filename }, { timeout: 180000 }).then(r => r.data);
 export const deleteLeaseAgreement = (leaseId: string) =>
   api.delete(`/leases/${leaseId}/document`);
 export const deleteLeaseDocument = (leaseId: string, docId: string) =>

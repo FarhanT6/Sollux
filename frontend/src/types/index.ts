@@ -175,6 +175,8 @@ export interface Lease {
   /** Where a payment goes first unless chosen on the payment. */
   paymentsApplyTo?: PaymentApplyTo;
   rentCharges?: RentCharge[];
+  /** What was read from the lease agreement beyond the fields above. */
+  termsJson?: import('../api/client').LeaseDetails | null;
   businessName?: string | null;
   createdAt: string;
   leaseTenants?: LeaseTenant[];
