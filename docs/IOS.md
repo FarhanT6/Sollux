@@ -20,9 +20,14 @@
 Nothing here can be compiled without Xcode on a Mac; everything up to that
 point is in the repo and builds (`npm run build:ios`).
 
-The iOS app is the web app in a native shell (Capacitor). The React bundle
-that Vercel serves is copied into an Xcode project and loaded from disk; it
-talks to the same API and the same Clerk instance. Every screen, import
+The iOS app is the web app in a native shell (Capacitor). The shell opens the
+live site (`server.url` in `capacitor.config.ts`, https://sollux-mu.vercel.app)
+with the native plugins injected, so a web deploy reaches the phone on its next
+launch with no rebuild. It used to load a copy of the bundle from disk at
+`capacitor://localhost`, but WKWebView keeps no cookies for that address and
+Clerk's session lives in a cookie: signing in bounced back to Sign in. The
+`.env.ios` file and Clerk's `capacitor://localhost` origin are no longer needed.
+Rebuild in Xcode only when the native side changes (plugins, icon, config). Every screen, import
 path and rule that works on the web works on the phone, and a fix ships to
 both at once. On a phone the layout swaps the sidebar for a drawer and a
 bottom tab bar (Overview · Utilities · Scan · Finances · Payments · More).
