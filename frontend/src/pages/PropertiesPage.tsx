@@ -16,6 +16,7 @@ import { PROPERTY_TYPE_LABELS } from '../types';
 import AddPropertyModal from '../components/property/AddPropertyModal';
 import { computePortfolioSpend } from '../lib/monthlySpend';
 import { accountView } from '../lib/paidState';
+import { accountStatus } from '../lib/accountStatus';
 import { fmtDate } from '../lib/date';
 
 const TYPE_COLORS: Record<string, string> = {
@@ -423,34 +424,16 @@ function PropertyCard({ property, onEdit, onDelete }: { property: Property; onEd
       <Link to={`/properties/${property.id}`} className="block p-4 hover:bg-white/2 transition-colors">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5 mb-3">
           {accounts.slice(0, 6).map(account => {
-            const latest = account.statements?.[0];
-            const raw = latest?.rawDataJson as Record<string, unknown> | undefined;
-            const dueDate = latest?.dueDate ? new Date(latest.dueDate) : null;
-            const now = new Date();
-
-            // Determine true status — uses the same recent-payment reconciliation as the
-            // property header. isPaid wins over Past due / Due soon so a payment that's
-            // still propagating on the provider side doesn't display as overdue.
-            const isPaid = isAccountPaid(account);
-            const isPastDue = !isPaid && (raw?.isPastDue === true || (dueDate && dueDate < now));
-            const isDueSoon = !isPaid && !isPastDue && dueDate && dueDate <= new Date(now.getTime() + 7 * 86400000);
-            const pastDueAmt = viewOf(account).pastDue;
+            // One status rule for this card and the phone list (lib/accountStatus.ts).
+            const st = accountStatus(account as any);
+            const isPaid = st.isPaid;
+            const pastDueAmt = st.pastDue;
             const hasPastDueBalance = !isPaid && pastDueAmt > 0;
-
-            // Display current charge only (amountDue); past due shown separately below.
-            // When paid, show $0 so the tile matches the reconciled state.
-            const displayAmt = isPaid ? 0
-              : latest?.amountDue != null ? Number(latest.amountDue)
-              : null;
-
-            let statusLabel = '—';
-            let statusColor = 'text-gray-500';
-            if (!latest) { statusLabel = 'No data'; statusColor = 'text-gray-600'; }
-            else if (isPaid) { statusLabel = 'Paid'; statusColor = 'text-emerald-500'; }
-            else if (isPastDue) { statusLabel = 'Past due'; statusColor = 'text-red-400'; }
-            else if (isDueSoon) { statusLabel = 'Due soon'; statusColor = 'text-amber-500'; }
-            else if (dueDate) { statusLabel = `Due ${dueDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`; statusColor = 'text-blue-400'; }
-            else { statusLabel = 'Unpaid'; statusColor = 'text-amber-400'; }
+            // Current charge only; past due shown separately below. $0 when paid.
+            const displayAmt = st.amount;
+            const statusLabel = st.label;
+            const statusColor = { green: 'text-emerald-500', red: 'text-red-400', amber: 'text-amber-500', blue: 'text-blue-400', gray: 'text-gray-500' }[st.tone];
+            const now = new Date();
 
             return (
               <div key={account.id} className="bg-white/5 rounded-lg p-2">

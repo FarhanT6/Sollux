@@ -8,9 +8,9 @@ import { getServiceNotices, resolveServiceNotice, type ServiceNotice } from '../
 import { fmtMoney } from '../lib/money';
 import { fmtDate, todayISO } from '../lib/date';
 
-const KIND: Record<string, string> = { DISCONNECTION: 'Disconnection', CANCELLATION: 'Cancellation', PAST_DUE: 'Past due' };
+export const KIND: Record<string, string> = { DISCONNECTION: 'Disconnection', CANCELLATION: 'Cancellation', PAST_DUE: 'Past due' };
 
-function countdown(n: ServiceNotice): { text: string; urgent: boolean } {
+export function countdown(n: ServiceNotice): { text: string; urgent: boolean } {
   if (!n.cutoffDate) return { text: 'no cut-off date stated', urgent: false };
   const cut = n.cutoffDate.slice(0, 10);
   const days = Math.round((Date.parse(cut) - Date.parse(todayISO())) / 86400000);

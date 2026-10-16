@@ -1,6 +1,7 @@
 import { Outlet, NavLink, useLocation } from 'react-router-dom';
 import { useUser, useClerk } from '@clerk/clerk-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { PhoneChromeContext } from '../../ios';
 import { getDashboardSummary } from '../../api/client';
 import type { DashboardSummary } from '../../types';
 import { tap } from '../../lib/native';
@@ -15,7 +16,7 @@ function Ico({ d, children, size = 16 }: { d?: string; children?: React.ReactNod
   );
 }
 
-const NAV = [
+export const NAV = [
   {
     to: '/dashboard', label: 'Overview',
     icon: (z: number) => <Ico size={z}><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></Ico>,
@@ -79,7 +80,7 @@ const NAV = [
 ];
 
 /** The five that fit a thumb; everything else lives behind "More". */
-const TAB_BAR = ['/dashboard', '/properties', '/scan', '/finances', '/payments'];
+export const TAB_BAR = ['/dashboard', '/properties', '/scan', '/finances', '/payments'];
 
 /**
  * One layout, two shapes. Wide screens get the sidebar they always had. On a
@@ -96,6 +97,9 @@ export default function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [themeChoice, setThemeChoice] = useThemeChoice();
+  // A phone screen built on the iOS layer draws its own navigation bar.
+  const [ownHeader, setOwnHeader] = useState(false);
+  const chrome = useMemo(() => ({ setOwnHeader }), []);
 
   useEffect(() => {
     getDashboardSummary().then(setSummary).catch(() => {});
@@ -106,6 +110,10 @@ export default function AppLayout() {
 
   const section = '/' + location.pathname.split('/')[1];
   const moreActive = !TAB_BAR.includes(section);
+  const summaryBadge = (to: string) => {
+    const b = badge(to);
+    return b ? b.n : null;
+  };
 
   const badge = (to: string) =>
     to === '/insights' && summary?.unreadInsights ? { n: summary.unreadInsights, color: 'pill-red' }
@@ -168,6 +176,7 @@ export default function AppLayout() {
   );
 
   return (
+    <PhoneChromeContext.Provider value={chrome}>
     <div className="app-canvas flex h-screen overflow-hidden" style={{ background: '#1e1e1e', height: '100dvh' }}>
       {/* ── Desktop sidebar ─────────────────────────────────────── */}
       {!sidebarOpen && (
@@ -197,7 +206,7 @@ export default function AppLayout() {
 
       {/* ── Phone: top bar + drawer + tab bar ───────────────────── */}
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="app-chrome md:hidden pt-safe flex-shrink-0" style={{ background: '#161616', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+        {!ownHeader && <header className="app-chrome md:hidden pt-safe flex-shrink-0" style={{ background: '#161616', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
           <div className="h-11 px-3 flex items-center justify-between">
             {logo}
             <button onClick={() => { tap(); setDrawerOpen(true); }}
@@ -205,7 +214,7 @@ export default function AppLayout() {
               <Ico d="M3 6h18M3 12h18M3 18h18" size={18} />
             </button>
           </div>
-        </header>
+        </header>}
 
         {drawerOpen && (
           <div className="md:hidden fixed inset-0 z-50 flex">
@@ -221,32 +230,38 @@ export default function AppLayout() {
           </div>
         )}
 
-        <main className={`app-canvas flex-1 overflow-y-auto ${!sidebarOpen ? 'md:pt-12' : ''}`} style={{ background: '#1e1e1e', WebkitOverflowScrolling: 'touch' }}>
+        <main data-scroll-root className={`${ownHeader ? '' : 'app-canvas'} flex-1 overflow-y-auto ${!sidebarOpen ? 'md:pt-12' : ''}`}
+          style={{ background: ownHeader ? 'var(--ios-bg)' : '#1e1e1e', WebkitOverflowScrolling: 'touch', overscrollBehaviorY: 'contain' }}>
           <Outlet />
-          {/* Keep the last row above the tab bar on phones. */}
-          <div className="md:hidden h-20" />
+          {/* Keep the last row clear of the tab bar on pages not yet on the iOS layer. */}
+          {!ownHeader && <div className="md:hidden h-20" />}
         </main>
 
-        <nav className="app-chrome md:hidden pb-safe flex-shrink-0 flex items-stretch" style={{ background: '#161616', borderTop: '1px solid rgba(255,255,255,0.07)' }}>
+        {/* The iOS tab bar: five destinations and More, translucent over the content. */}
+        <nav className="ios-tabbar md:hidden" aria-label="Tabs">
           {TAB_BAR.map(to => {
             const n = NAV.find(x => x.to === to)!;
-            const b = badge(to);
+            const b = summaryBadge(to);
             return (
-              <NavLink key={to} to={to} onClick={() => tap()} className={({ isActive }) => `tabbar-link ${isActive ? 'active' : ''}`}>
-                <span className="relative">
-                  {n.icon(20)}
-                  {b && <span className={`absolute -top-1 -right-2 pill ${b.color} text-[9px] px-1 py-0 leading-4`}>{b.n}</span>}
+              <NavLink key={to} to={to} onClick={() => tap()} className={({ isActive }) => `ios-tab ${isActive ? 'active' : ''}`}>
+                <span style={{ position: 'relative' }}>
+                  {n.icon(24)}
+                  {b != null && <span className="ios-tab-badge">{b}</span>}
                 </span>
                 <span>{n.label}</span>
               </NavLink>
             );
           })}
-          <button onClick={() => { tap(); setDrawerOpen(true); }} className={`tabbar-link ${moreActive ? 'active' : ''}`}>
-            <Ico size={20}><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></Ico>
+          <NavLink to="/more" onClick={() => tap()} className={`ios-tab ${moreActive ? 'active' : ''}`}>
+            <span style={{ position: 'relative' }}>
+              <Ico size={24}><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></Ico>
+              {(summary?.unreadInsights ?? 0) > 0 && <span className="ios-tab-badge">{summary!.unreadInsights}</span>}
+            </span>
             <span>More</span>
-          </button>
+          </NavLink>
         </nav>
       </div>
     </div>
+    </PhoneChromeContext.Provider>
   );
 }

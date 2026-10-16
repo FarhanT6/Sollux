@@ -114,9 +114,11 @@ app.use(cors({
   credentials: true,
 }));
 
+// Per client IP (trust proxy above). One app screen makes ~5 calls, so 200
+// starved an active phone user pulling to refresh; 1000 still stops abuse.
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 200,
+  max: Number(process.env.RATE_LIMIT_MAX) || 1000,
   standardHeaders: true,
   legacyHeaders: false,
 });
