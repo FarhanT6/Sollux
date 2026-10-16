@@ -9,6 +9,7 @@ import StatementImport from '../components/cards/StatementImport';
 import { fmtMoney } from '../lib/money';
 import { fmtDate } from '../lib/date';
 import { simulatePayoff, type Strategy } from '../lib/payoff';
+import { usePhone, Screen, Section, Row, Segmented } from '../ios';
 
 /**
  * Personal finance, apart from the rental portfolio: credit cards, personal
@@ -46,6 +47,7 @@ function CardsTab({ cards, summary, sources, reload }: { cards: CreditCardT[]; s
   const [budget, setBudget] = useState('');
   const [showClosed, setShowClosed] = useState(false);
   const nav = useNavigate();
+  const phone = usePhone();
   const open = cards.filter(c => c.status !== 'CLOSED');
 
   const payoff = useMemo(() => {
@@ -76,7 +78,16 @@ function CardsTab({ cards, summary, sources, reload }: { cards: CreditCardT[]; s
         </div>
       )}
 
-      <div className="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-5">
+      {phone && (
+        <div className="ios-chips" style={{ marginBottom: 20 }}>
+          <div className="ios-chip"><div className="k">Card debt</div><div className="v">{fmtMoney(summary.debt)}</div><div className="k">{summary.cards} open</div></div>
+          <div className="ios-chip"><div className="k">Utilization</div><div className={`v ${utilTone(summary.utilization)}`}>{summary.utilization != null ? `${summary.utilization}%` : '—'}</div></div>
+          <div className="ios-chip"><div className="k">Interest / mo</div><div className={`v ${summary.monthlyInterest > 0 ? 'ios-red' : ''}`}>{fmtMoney(summary.monthlyInterest)}</div></div>
+          <div className="ios-chip"><div className="k">Due in 30 days</div><div className="v">{fmtMoney(summary.minimumsDue30d)}</div></div>
+          <div className="ios-chip"><div className="k">Rewards</div><div className="v ios-green">{fmtMoney(summary.rewardsValue)}</div></div>
+        </div>
+      )}
+      <div className="hidden md:grid grid-cols-2 lg:grid-cols-6 gap-3 mb-5">
         <div className="stat-card"><p className="text-xs text-gray-500">Card debt</p><p className="text-lg font-semibold text-white">{fmtMoney(summary.debt)}</p><p className="text-xs text-gray-500">{summary.cards} open cards</p></div>
         <div className="stat-card"><p className="text-xs text-gray-500">Utilization</p><p className={`text-lg font-semibold ${utilTone(summary.utilization)}`}>{summary.utilization != null ? `${summary.utilization}%` : '—'}</p><p className="text-xs text-gray-500">of {fmtMoney(summary.limits)}</p></div>
         <div className="stat-card"><p className="text-xs text-gray-500">Interest / month</p><p className={`text-lg font-semibold ${summary.monthlyInterest > 0 ? 'text-red-400' : 'text-white'}`}>{fmtMoney(summary.monthlyInterest)}</p><p className="text-xs text-gray-500">{fmtMoney(summary.interestYtd)} this year</p></div>
@@ -85,7 +96,19 @@ function CardsTab({ cards, summary, sources, reload }: { cards: CreditCardT[]; s
         <div className="stat-card"><p className="text-xs text-gray-500">Annual fees</p><p className="text-lg font-semibold text-white">{fmtMoney(summary.annualFees)}</p>{summary.promosEnding60d > 0 && <p className="text-xs text-amber-400">{summary.promosEnding60d} promo rate ending soon</p>}</div>
       </div>
 
-      {cards.length === 0 ? <EmptyState icon="💳" title="No cards yet" body="Upload a statement and the card sets itself up, with its limit, rates, cycle, rewards and every transaction." />
+      {phone && cards.length > 0 ? (
+        <Section action={cards.some(c => c.status === 'CLOSED') ? { label: showClosed ? 'Hide closed' : 'Show closed', onClick: () => setShowClosed(v => !v) } : undefined}>
+          {cards.filter(c => showClosed || c.status !== 'CLOSED').map(c => {
+            const p = c.position;
+            const st = p.statementStatus ? STATUS_PILL[p.statementStatus] : null;
+            return (
+              <Row key={c.id} to={`/personal/cards/${c.id}`} title={`${c.name}${c.last4 ? ` ••${c.last4}` : ''}`}
+                subtitle={<>{p.nextDueDate ? <span className={p.statementStatus === 'PAST_DUE' ? 'ios-red' : ''}>Due {fmtDate(p.nextDueDate, 'MMM d')}{p.minimumRemaining > 0 ? ` · min ${fmtMoney(p.minimumRemaining)}` : ''}</span> : (st?.label ?? (c.status !== 'ACTIVE' ? c.status.toLowerCase() : ''))}</>}
+                value={<><span className="strong">{fmtMoney(p.balance)}</span>{p.utilization != null && <span className={`small ${utilTone(p.utilization)}`}>{p.utilization}% used</span>}</>} />
+            );
+          })}
+        </Section>
+      ) : cards.length === 0 ? <EmptyState icon="💳" title="No cards yet" body="Upload a statement and the card sets itself up, with its limit, rates, cycle, rewards and every transaction." />
         : (
           <div className="space-y-2 mb-6">
             {cards.filter(c => showClosed || c.status !== 'CLOSED').map(c => {
@@ -154,12 +177,22 @@ function CardsTab({ cards, summary, sources, reload }: { cards: CreditCardT[]; s
 }
 
 function LoansTab() {
+  const phone = usePhone();
   const [loans, setLoans] = useState<Loan[] | null>(null);
   useEffect(() => { void getLoans({ isPersonal: true }).then(l => setLoans(l as any)); }, []);
   if (loans == null) return <p className="text-sm text-gray-500">Loading…</p>;
   if (!loans.length) return <EmptyState icon="🧾" title="No personal loans" body="Auto loans, student loans and personal loans marked Personal on the Loans tab appear here." />;
   const total = loans.reduce((t, l: any) => t + Number(l.currentBalance ?? 0), 0);
   const monthly = loans.reduce((t, l: any) => t + Number(l.monthlyPayment ?? 0), 0);
+  if (phone) return (
+    <Section header={`${fmtMoney(total)} owed · ${fmtMoney(monthly)} a month`}>
+      {loans.map((l: any) => (
+        <Row key={l.id} to={`/loans/${l.id}`} title={l.lender}
+          subtitle={[String(l.loanType).replace('_', ' ').toLowerCase(), l.interestRate != null ? `${Number(l.interestRate)}%` : null, l.monthlyPayment != null ? `${fmtMoney(l.monthlyPayment)}/mo` : null].filter(Boolean).join(' · ')}
+          value={<span className="strong">{l.currentBalance != null ? fmtMoney(l.currentBalance) : '—'}</span>} />
+      ))}
+    </Section>
+  );
   return (
     <div>
       <div className="grid grid-cols-2 gap-3 mb-4 max-w-md">
@@ -181,6 +214,7 @@ function LoansTab() {
 }
 
 function OverviewTab({ cards, summary, go }: { cards: CreditCardT[]; summary: CardsSummary; go: (t: TabKey) => void }) {
+  const phone = usePhone();
   const [loans, setLoans] = useState<any[]>([]);
   const [spent, setSpent] = useState<{ month: number; last: number } | null>(null);
   useEffect(() => {
@@ -201,6 +235,32 @@ function OverviewTab({ cards, summary, go }: { cards: CreditCardT[]; summary: Ca
     ...cards.filter(c => (c.position.utilization ?? 0) >= 30).map(c => ({ tone: 'text-amber-400', text: `${c.name} is at ${c.position.utilization}% utilization. Below 30% is better for your credit score`, id: c.id })),
     ...cards.filter(c => c.position.nextAnnualFee && (+new Date(c.position.nextAnnualFee) - Date.now()) < 45 * 86400000).map(c => ({ tone: 'text-gray-300', text: `${c.name}: ${fmtMoney(c.annualFee)} annual fee posts ${fmtDate(c.position.nextAnnualFee!, 'MMMM yyyy')}`, id: c.id })),
   ];
+  if (phone) return (
+    <>
+      <div className="ios-card" style={{ marginBottom: 12 }}>
+        <div className="ios-hero-label">Personal debt</div>
+        <div className="ios-hero-value">{fmtMoney(summary.debt + loanDebt)}</div>
+        <div className="ios-hero-sub">{fmtMoney(summary.debt)} on cards · {fmtMoney(loanDebt)} in {loans.length} loan{loans.length === 1 ? '' : 's'}</div>
+      </div>
+      <div className="ios-chips" style={{ marginBottom: 20 }}>
+        <button className="ios-chip" style={{ textAlign: 'left', border: 0 }} onClick={() => go('cards')}><div className="k">Utilization</div><div className={`v ${utilTone(summary.utilization)}`}>{summary.utilization != null ? `${summary.utilization}%` : '—'}</div></button>
+        <button className="ios-chip" style={{ textAlign: 'left', border: 0 }} onClick={() => go('expenses')}><div className="k">Spent this month</div><div className="v">{spent ? fmtMoney(spent.month) : '—'}</div>{spent && <div className="k">{fmtMoney(spent.last)} last month</div>}</button>
+      </div>
+      {alerts.length > 0 && (
+        <Section header="Needs attention">
+          {alerts.map((a, i) => <Row key={i} to={`/personal/cards/${a.id}`} wrap title={<span className={a.tone}>{a.text}</span>} />)}
+        </Section>
+      )}
+      <Section header="Card payments coming up">
+        {upcoming.length === 0 && <Row title="Nothing due" chevron={false} />}
+        {upcoming.map(c => (
+          <Row key={c.id} to={`/personal/cards/${c.id}`} title={c.name}
+            subtitle={<><span className={c.position.statementStatus === 'PAST_DUE' ? 'ios-red' : ''}>{fmtDate(c.position.nextDueDate!, 'MMM d')}</span> · {c.autopay !== 'NONE' ? 'autopay' : 'pay manually'}</>}
+            value={<><span className="strong">{fmtMoney(c.position.minimumRemaining)}</span><span className="small">{fmtMoney(c.position.statementRemaining)} statement</span></>} />
+        ))}
+      </Section>
+    </>
+  );
   return (
     <div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
@@ -234,10 +294,23 @@ function OverviewTab({ cards, summary, go }: { cards: CreditCardT[]; summary: Ca
 export default function PersonalPage() {
   const [params, setParams] = useSearchParams();
   const tab = (params.get('tab') as TabKey) || 'overview';
+  const phone = usePhone();
   const [data, setData] = useState<Awaited<ReturnType<typeof getCreditCards>> | null>(null);
   const reload = async () => setData(await getCreditCards());
   useEffect(() => { void reload(); }, []);
   const go = (t: TabKey) => setParams({ tab: t });
+  const content = tab === 'expenses' ? <PersonalExpensesPage embedded />
+    : tab === 'loans' ? <LoansTab />
+    : data == null ? <p className="text-sm text-gray-500">Loading…</p>
+    : tab === 'cards' ? <CardsTab cards={data.cards} summary={data.summary} sources={data.paymentSourceCards} reload={reload} />
+    : <OverviewTab cards={data.cards} summary={data.summary} go={go} />;
+  if (phone) return (
+    <Screen title="Personal" back onRefresh={reload}>
+      <Segmented<TabKey> label="Section" value={tab} onChange={t => setParams({ tab: t }, { replace: true })}
+        options={TABS.map(t => ({ value: t.key, label: t.key === 'cards' ? 'Cards' : t.label }))} />
+      {tab === 'expenses' ? <div className="ios-embedded">{content}</div> : content}
+    </Screen>
+  );
   return (
     <div>
       <PageHeader title="Personal" subtitle="Your own money, apart from the rental portfolio: credit cards, expenses and loans" />
@@ -248,11 +321,7 @@ export default function PersonalPage() {
         ))}
       </div>
       <div className="px-6 py-5">
-        {tab === 'expenses' ? <PersonalExpensesPage embedded />
-          : tab === 'loans' ? <LoansTab />
-          : data == null ? <p className="text-sm text-gray-500">Loading…</p>
-          : tab === 'cards' ? <CardsTab cards={data.cards} summary={data.summary} sources={data.paymentSourceCards} reload={reload} />
-          : <OverviewTab cards={data.cards} summary={data.summary} go={go} />}
+        {content}
       </div>
     </div>
   );

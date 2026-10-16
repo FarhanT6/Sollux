@@ -10,6 +10,7 @@ import {
   newRecoveryKey, normalizeRecoveryKey, passphraseProblem, randomBytes, toB64,
 } from '../lib/vaultCrypto';
 import { describeApiError } from '../lib/apiError';
+import { usePhone, Screen, Section, Row, Segmented, Sheet, Field as IosField, BarButton, Icon } from '../ios';
 
 /**
  * The vault — bank accounts, cards, logins, ID numbers — encrypted in this
@@ -62,6 +63,7 @@ export default function VaultPage() {
   const [dataKey, setDataKey] = useState<CryptoKey | null>(null);
   const [items, setItems] = useState<Rec[]>([]);
   const lockTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const phone = usePhone();
   const hiddenAt = useRef<number | null>(null);
 
   const loadInfo = useCallback(() => getVaultKey().then(setInfo).catch(e => setErr(describeApiError(e, 'Could not reach the vault.'))), []);
@@ -98,13 +100,22 @@ export default function VaultPage() {
   if (err && !info) return <div className="p-6 text-sm text-red-400">{err}</div>;
   if (!info) return <div className="p-6 text-sm text-gray-500">Loading…</div>;
 
+  const body = !info.setUp ? <Setup onDone={async (key) => { await loadInfo(); setDataKey(key); setItems([]); }} />
+    : !dataKey ? <Unlock info={info} onOpen={async (key) => { setDataKey(key); await openAll(key); }} onRekeyed={loadInfo} />
+    : <Open dataKey={dataKey} info={info} items={items} setItems={setItems} onLock={lock} onRekeyed={loadInfo} />;
+
+  if (phone) return (
+    <Screen title="Vault" back subtitle={dataKey ? <span className="ios-green">Unlocked · locks after 5 idle minutes</span> : 'Encrypted on this device'}
+      right={dataKey ? <BarButton label="Lock vault" onClick={lock}><LockGlyph /></BarButton> : undefined}>
+      {dataKey ? body : <div className="ios-embedded">{body}</div>}
+    </Screen>
+  );
+
   return (
     <div>
       <PageHeader title="Vault" subtitle="Bank accounts, cards, logins and ID numbers — encrypted in your browser; only your vault passphrase opens them" />
       <div className="px-6 py-5 max-w-5xl">
-        {!info.setUp ? <Setup onDone={async (key) => { await loadInfo(); setDataKey(key); setItems([]); }} />
-          : !dataKey ? <Unlock info={info} onOpen={async (key) => { setDataKey(key); await openAll(key); }} onRekeyed={loadInfo} />
-          : <Open dataKey={dataKey} info={info} items={items} setItems={setItems} onLock={lock} onRekeyed={loadInfo} />}
+        {body}
       </div>
     </div>
   );
@@ -267,6 +278,9 @@ function Open({ dataKey, info, items, setItems, onLock, onRekeyed }: {
   const [tab, setTab] = useState<'items' | 'activity' | 'settings'>('items');
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const phone = usePhone();
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
 
   const reveal = (id: string, key: string) => {
     const k = `${id}:${key}`;
@@ -312,6 +326,99 @@ function Open({ dataKey, info, items, setItems, onLock, onRekeyed }: {
 
   const q = search.trim().toLowerCase();
   const shown = useMemo(() => items.filter(i => !q || Object.entries(i.data).some(([k, v]) => !KIND[i.kind]?.fields.find(f => f.key === k)?.secret && v.toLowerCase().includes(q))), [items, q]);
+
+  // A phone: records as lists by kind; a record opens in a sheet with its
+  // fields masked, Show and Copy (the same reveal and copy as above, logged
+  // and timed the same); adding and editing in a sheet.
+  if (phone) {
+    const open = openId ? items.find(i => i.id === openId) ?? null : null;
+    const summary = (i: Rec) => [i.data.bank, i.data.issuer, i.data.type, i.data.url].filter(Boolean)[0] ?? '';
+    return (
+      <>
+        <Segmented<'items' | 'activity' | 'settings'> label="Vault" value={tab} onChange={setTab}
+          options={[{ value: 'items', label: 'Records' }, { value: 'activity', label: 'Access log' }, { value: 'settings', label: 'Security' }]} />
+        {err && <p className="ios-footnote ios-red" style={{ margin: '0 16px 12px' }}>{err}</p>}
+
+        {tab === 'items' && (
+          <>
+            <div className="ios-search">
+              <Icon.Search />
+              <input type="search" placeholder="Search names, banks, sites" value={search} onChange={e => setSearch(e.target.value)} />
+            </div>
+            <Section>
+              <Row title="Add a record" tinted chevron={false} onClick={() => setPicking(true)} />
+            </Section>
+            {KINDS.map(k => {
+              const group = shown.filter(i => i.kind === k.kind);
+              if (!group.length) return null;
+              return (
+                <Section key={k.kind} header={k.label}>
+                  {group.map(i => <Row key={i.id} title={i.data.label} subtitle={summary(i) || undefined} onClick={() => setOpenId(i.id)} />)}
+                </Section>
+              );
+            })}
+            {items.length === 0 && <div className="ios-empty"><h3>Nothing stored yet</h3>Add a bank account, card, login, ID number or note.</div>}
+          </>
+        )}
+        {tab === 'activity' && <div className="ios-embedded"><Activity items={items} /></div>}
+        {tab === 'settings' && <div className="ios-embedded"><Security dataKey={dataKey} info={info} onRekeyed={onRekeyed} /></div>}
+
+        <Sheet open={picking} onClose={() => setPicking(false)} title="Add to vault">
+          <Section>
+            {KINDS.map(k => <Row key={k.kind} title={k.label.replace(/s$/, '').replace(/ numbers$/, ' number')} onClick={() => { setPicking(false); setEditing({ kind: k.kind, data: {} }); }} />)}
+          </Section>
+        </Sheet>
+
+        <Sheet open={!!open} onClose={() => setOpenId(null)} title={open?.data.label} left={null}
+          right={{ label: 'Done', onClick: () => setOpenId(null) }}>
+          {open && (
+            <>
+              <Section header={KIND[open.kind]?.label.replace(/s$/, '')}>
+                {KIND[open.kind].fields.filter(f => f.key !== 'label' && open.data[f.key]).map(f => {
+                  const v = open.data[f.key]!; const visible = !f.secret || revealed.has(`${open.id}:${f.key}`);
+                  return (
+                    <Row key={f.key} chevron={false} wrap title={f.label}
+                      subtitle={<span style={{ fontFamily: f.multiline ? undefined : 'ui-monospace, monospace', whiteSpace: f.multiline ? 'pre-wrap' : undefined, wordBreak: 'break-all' }}>{visible ? v : f.multiline ? '••••••' : mask(v)}</span>}
+                      value={<span style={{ display: 'flex', gap: 14 }}>
+                        {f.secret && !visible && <button className="ios-tint" style={{ background: 'none', border: 0, fontSize: 15 }} onClick={() => reveal(open.id, f.key)}>Show</button>}
+                        <button className="ios-tint" style={{ background: 'none', border: 0, fontSize: 15 }} onClick={() => void copy(open.id, f.key, v)}>{copied === `${open.id}:${f.key}` ? 'Copied' : 'Copy'}</button>
+                      </span>} />
+                  );
+                })}
+              </Section>
+              <Section footer="Shown values hide again after 20 seconds; copied values leave the clipboard after 30.">
+                <Row title="Edit" chevron={false} tinted onClick={() => { const r = open; setOpenId(null); setEditing({ kind: r.kind, id: r.id, data: { ...r.data } }); }} />
+                <Row title="Delete" destructive chevron={false} onClick={() => { const id = open.id; setOpenId(null); void remove(id); }} />
+              </Section>
+            </>
+          )}
+        </Sheet>
+
+        <Sheet open={!!editing} onClose={() => setEditing(null)} title={editing ? `${editing.id ? 'Edit' : 'New'} ${KIND[editing.kind].label.replace(/s$/, '').replace(/ numbers$/, ' number').toLowerCase()}` : ''}
+          right={{ label: 'Save', onClick: () => void save() }}>
+          {editing && (
+            <>
+              <Section footer={editing.kind === 'CARD' ? "There's no place for the security code (CVV) on purpose: card rules say never to store it." : 'Encrypted on this device before it is sent.'}>
+                {KIND[editing.kind].fields.filter(f => !f.multiline).map(f => (
+                  <IosField key={f.key} label={f.label}>
+                    <input type={f.secret ? 'password' : 'text'} autoComplete="off" autoCapitalize="off" placeholder={f.placeholder}
+                      value={editing.data[f.key] ?? ''} onChange={e => setEditing(ed => ed && { ...ed, data: { ...ed.data, [f.key]: e.target.value } })} />
+                  </IosField>
+                ))}
+              </Section>
+              {KIND[editing.kind].fields.filter(f => f.multiline).map(f => (
+                <Section key={f.key} header={f.label}>
+                  <IosField label=""><textarea value={editing.data[f.key] ?? ''} onChange={e => setEditing(ed => ed && { ...ed, data: { ...ed.data, [f.key]: e.target.value } })} /></IosField>
+                </Section>
+              ))}
+              {Object.entries(editing.data).some(([k, v]) => looksLikeCvv(k) || (editing.kind === 'CARD' && k === 'notes' && /\b(cvv|cvc)\b/i.test(v))) && <p className="ios-footnote ios-tint">Please don't store the card's security code.</p>}
+              {err && <p className="ios-footnote ios-red">{err}</p>}
+            </>
+          )}
+        </Sheet>
+      </>
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -456,3 +563,9 @@ function Security({ dataKey, info, onRekeyed }: { dataKey: CryptoKey; info: Vaul
     </div>
   );
 }
+
+const LockGlyph = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <rect x="4" y="10" width="16" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" />
+  </svg>
+);

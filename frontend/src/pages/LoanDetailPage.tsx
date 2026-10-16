@@ -1,4 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
+import { usePhone } from '../ios';
+import LoanScreen from './phone/LoanScreen';
 import { useParams, Link } from 'react-router-dom';
 import BackLink from '../components/ui/BackLink';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
@@ -31,7 +33,7 @@ const LOAN_TYPE_LABELS: Record<string, string> = {
   SELLER_FINANCING: 'Seller Financing', DSCR: 'DSCR', COMMERCIAL: 'Commercial', HARD_MONEY: 'Hard Money', OTHER: 'Other',
 };
 
-interface AmortizationResponse {
+export interface AmortizationResponse {
   balance: { balance: number; asOfDate: string; method: string };
   amortization: {
     isAmortizing: boolean;
@@ -687,6 +689,7 @@ export default function LoanDetailPage() {
   const [chartFullRange, setChartFullRange] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [showExtend, setShowExtend] = useState(false);
+  const phone = usePhone();
 
   const reload = () => {
     if (!id) return Promise.resolve();
@@ -741,6 +744,112 @@ export default function LoanDetailPage() {
     .map(r => ({ date: r.date, balance: r.balance, kind: 'projected' as const }));
   const chartData = [...history, { date: balance.asOfDate, balance: balance.balance, kind: 'actual' as const }, ...projected];
 
+  // Shared by both layouts.
+  const negWarning = (
+    <>
+      {amortization.negativeAmortization && (
+        <div className="mt-4 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-4 py-2.5">
+          The payment on file doesn't cover the monthly interest — unpaid interest is capitalizing into the balance instead of paying it down.
+          {reachesBalloonPayoff && lastScheduleRow ? (
+            <> Balance grows to <span className="font-medium">{money(peakBalanceRow?.balance ?? 0)}</span> by{' '}
+            <span className="font-medium">{fmtDate(peakBalanceRow?.date ?? lastScheduleRow.date, 'MMM yyyy')}</span>, then the{' '}
+            <span className="font-medium">{money(lastScheduleRow.paymentAmount)}</span> balloon payment due{' '}
+            <span className="font-medium">{fmtDate(lastScheduleRow.date, 'MMM yyyy')}</span> pays it off.</>
+          ) : amortization.scheduleEndsAt && (
+            <> Projected through <span className="font-medium">{fmtDate(amortization.scheduleEndsAt, 'MMM yyyy')}</span>, that adds up to{' '}
+            <span className="font-medium">{moneyPrecise(amortization.totalDeferredInterest)}</span> of deferred interest added to the balance.</>
+          )}
+        </div>
+      )}
+    </>
+  );
+  const ioWarning = (
+    <>
+      {amortization.isInterestOnly && (
+        <div className="mt-4 text-xs text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-lg px-4 py-2.5">
+          Payments aren't reducing principal — this loan is interest-only{loan.paymentStructureChangedAt ? ` as of ${fmtDate(loan.paymentStructureChangedAt, 'MMMM yyyy')}` : ''}.
+          {amortization.scheduleEndsAt && (
+            <> Balance projected to stay flat at <span className="font-medium">{money(balance.balance)}</span> through{' '}
+            <span className="font-medium">{fmtDate(amortization.scheduleEndsAt, 'MMM yyyy')}</span>.</>
+          )}
+        </div>
+      )}
+    </>
+  );
+  const chart = (
+    <>
+      {/* Balance over time chart */}
+      {chartData.length > 1 && (
+        <div className="card p-4 mb-6">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs text-gray-500">Balance over time — actual payments + projected payoff path</p>
+            {amortization.schedule.length > CHART_DEFAULT_MONTHS && (
+              <button onClick={() => setChartFullRange(v => !v)} className="text-xs text-amber-400 hover:text-amber-300">
+                {chartFullRange ? 'Show 10yr window' : `Show full ${Math.ceil(amortization.schedule.length / 12)}yr term`}
+              </button>
+            )}
+          </div>
+          <ResponsiveContainer width="100%" height={220}>
+            <AreaChart data={chartData}>
+              <defs>
+                <linearGradient id="balanceFill" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#f87171" stopOpacity={0.25} />
+                  <stop offset="100%" stopColor="#f87171" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false} />
+              <XAxis dataKey="date" tickFormatter={d => fmtDate(d, 'MMM yy')} stroke="#6b7280" fontSize={11} tickLine={false} axisLine={false} minTickGap={40} />
+              <YAxis tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} stroke="#6b7280" fontSize={11} tickLine={false} axisLine={false} width={48} />
+              <Tooltip
+                contentStyle={{ background: '#242424', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 12 }}
+                labelFormatter={d => fmtDate(d, 'MMM d, yyyy')}
+                formatter={(v: number) => [moneyPrecise(v), 'Balance']}
+              />
+              <Area type="monotone" dataKey="balance" stroke="#f87171" strokeWidth={2} fill="url(#balanceFill)" dot={false} />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+    </>
+  );
+  const modals = (
+    <>
+      {/* Edit modal */}
+      {showEdit && (
+        <EditModal
+          loan={loan}
+          properties={properties}
+          onClose={() => setShowEdit(false)}
+          onSave={updated => { setLoan(updated); reload(); }}
+        />
+      )}
+
+      {/* Extend modal */}
+      {showExtend && loan.maturityDate && (
+        <ExtendLoanModal
+          loan={loan}
+          onClose={() => setShowExtend(false)}
+          onSave={async () => { setShowExtend(false); await reload(); }}
+        />
+      )}
+    </>
+  );
+
+  if (phone) return (
+    <LoanScreen loan={loan} amortization={amortization}
+      typeLabel={LOAN_TYPE_LABELS[loan.loanType] ?? loan.loanType} methodLabel={BALANCE_METHOD_LABELS[balance.method]} balance={balance} hasBalanceData={hasBalanceData}
+      currentBalance={currentBalance} originalAmount={originalAmount} paidOff={paidOff}
+      reachesBalloonPayoff={reachesBalloonPayoff} lastRow={lastScheduleRow} peakRow={peakBalanceRow}
+      warnings={<>{negWarning}{ioWarning}</>} chart={chart} modals={modals}
+      panels={<>
+        {(loan.loanType === 'STUDENT' || (loan.components?.length ?? 0) > 0) && <LoanComponentsPanel loan={loan} onChange={onLoanChange} />}
+        <HowPaidPanel loan={loan} onSave={updated => setLoan(updated)} />
+        <PrepaymentCard loan={loan} currentBalance={currentBalance} />
+      </>}
+      onEdit={() => setShowEdit(true)} onExtend={loan.maturityDate ? () => setShowExtend(true) : undefined}
+      onRefresh={reload} />
+  );
+
   return (
     <div className="p-6 max-w-6xl">
       {/* Header */}
@@ -764,7 +873,7 @@ export default function LoanDetailPage() {
               <> &middot; <Link to={`/properties/${loan.property.id}`} className="text-amber-400 hover:text-amber-300">{loan.property.nickname || loan.property.address}</Link></>
             )}
             {(loan as any).utilityAccount && (
-              <> &middot; <Link to={`/utilities/${(loan as any).utilityAccount.id}`} className="text-indigo-400 hover:text-indigo-300">
+              <> &middot; <Link to={`/properties/${(loan as any).utilityAccount.propertyId}/utilities/${(loan as any).utilityAccount.id}`} className="text-indigo-400 hover:text-indigo-300">
                 Linked: {(loan as any).utilityAccount.providerName}
               </Link></>
             )}
@@ -789,34 +898,13 @@ export default function LoanDetailPage() {
         </p>
       )}
 
-      {amortization.negativeAmortization && (
-        <div className="mt-4 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-4 py-2.5">
-          The payment on file doesn't cover the monthly interest — unpaid interest is capitalizing into the balance instead of paying it down.
-          {reachesBalloonPayoff && lastScheduleRow ? (
-            <> Balance grows to <span className="font-medium">{money(peakBalanceRow?.balance ?? 0)}</span> by{' '}
-            <span className="font-medium">{fmtDate(peakBalanceRow?.date ?? lastScheduleRow.date, 'MMM yyyy')}</span>, then the{' '}
-            <span className="font-medium">{money(lastScheduleRow.paymentAmount)}</span> balloon payment due{' '}
-            <span className="font-medium">{fmtDate(lastScheduleRow.date, 'MMM yyyy')}</span> pays it off.</>
-          ) : amortization.scheduleEndsAt && (
-            <> Projected through <span className="font-medium">{fmtDate(amortization.scheduleEndsAt, 'MMM yyyy')}</span>, that adds up to{' '}
-            <span className="font-medium">{moneyPrecise(amortization.totalDeferredInterest)}</span> of deferred interest added to the balance.</>
-          )}
-        </div>
-      )}
+      {negWarning}
 
       {(loan.loanType === 'STUDENT' || (loan.components?.length ?? 0) > 0) && (
         <LoanComponentsPanel loan={loan} onChange={onLoanChange} />
       )}
 
-      {amortization.isInterestOnly && (
-        <div className="mt-4 text-xs text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-lg px-4 py-2.5">
-          Payments aren't reducing principal — this loan is interest-only{loan.paymentStructureChangedAt ? ` as of ${fmtDate(loan.paymentStructureChangedAt, 'MMMM yyyy')}` : ''}.
-          {amortization.scheduleEndsAt && (
-            <> Balance projected to stay flat at <span className="font-medium">{money(balance.balance)}</span> through{' '}
-            <span className="font-medium">{fmtDate(amortization.scheduleEndsAt, 'MMM yyyy')}</span>.</>
-          )}
-        </div>
-      )}
+      {ioWarning}
 
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-5">
@@ -959,38 +1047,7 @@ export default function LoanDetailPage() {
         </div>
       )}
 
-      {/* Balance over time chart */}
-      {chartData.length > 1 && (
-        <div className="card p-4 mb-6">
-          <div className="flex items-center justify-between mb-3">
-            <p className="text-xs text-gray-500">Balance over time — actual payments + projected payoff path</p>
-            {amortization.schedule.length > CHART_DEFAULT_MONTHS && (
-              <button onClick={() => setChartFullRange(v => !v)} className="text-xs text-amber-400 hover:text-amber-300">
-                {chartFullRange ? 'Show 10yr window' : `Show full ${Math.ceil(amortization.schedule.length / 12)}yr term`}
-              </button>
-            )}
-          </div>
-          <ResponsiveContainer width="100%" height={220}>
-            <AreaChart data={chartData}>
-              <defs>
-                <linearGradient id="balanceFill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#f87171" stopOpacity={0.25} />
-                  <stop offset="100%" stopColor="#f87171" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false} />
-              <XAxis dataKey="date" tickFormatter={d => fmtDate(d, 'MMM yy')} stroke="#6b7280" fontSize={11} tickLine={false} axisLine={false} minTickGap={40} />
-              <YAxis tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} stroke="#6b7280" fontSize={11} tickLine={false} axisLine={false} width={48} />
-              <Tooltip
-                contentStyle={{ background: '#242424', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 12 }}
-                labelFormatter={d => fmtDate(d, 'MMM d, yyyy')}
-                formatter={(v: number) => [moneyPrecise(v), 'Balance']}
-              />
-              <Area type="monotone" dataKey="balance" stroke="#f87171" strokeWidth={2} fill="url(#balanceFill)" dot={false} />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-      )}
+      {chart}
 
       {/* Amortization schedule */}
       {amortization.isAmortizing && amortization.schedule.length > 0 && (
@@ -1095,24 +1152,7 @@ export default function LoanDetailPage() {
         )}
       </div>
 
-      {/* Edit modal */}
-      {showEdit && (
-        <EditModal
-          loan={loan}
-          properties={properties}
-          onClose={() => setShowEdit(false)}
-          onSave={updated => { setLoan(updated); reload(); }}
-        />
-      )}
-
-      {/* Extend modal */}
-      {showExtend && loan.maturityDate && (
-        <ExtendLoanModal
-          loan={loan}
-          onClose={() => setShowExtend(false)}
-          onSave={async () => { setShowExtend(false); await reload(); }}
-        />
-      )}
+      {modals}
     </div>
   );
 }
