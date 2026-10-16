@@ -1885,280 +1885,12 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                 </div>
 
                 {editLease === lease.id && (
-                  <div className="px-4 py-3 space-y-3" style={{ background: 'rgba(255,255,255,0.03)', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                      <select value={editForm.unitId} onChange={e => setEditForm(f => ({ ...f, unitId: e.target.value }))} className="input-dark text-xs">
-                        {/* The lease carries its own unit, so offer it even when
-                            the units list hasn't caught up — a select with no
-                            matching option renders blank. */}
-                        {!units.some(u => u.id === lease.unitId) && lease.unit && (
-                          <option value={lease.unitId}>{lease.unit.unitLabel}</option>
-                        )}
-                        {units.map(u => <option key={u.id} value={u.id}>{u.unitLabel}</option>)}
-                      </select>
-                      <input type="number" placeholder="Rent/mo" title="Rent, before utilities billed on top" value={editForm.rentAmount} onChange={e => setEditForm(f => ({ ...f, rentAmount: e.target.value }))} className="input-dark text-xs" />
-                      <input type="number" placeholder="Security deposit" value={editForm.securityDeposit} onChange={e => setEditForm(f => ({ ...f, securityDeposit: e.target.value }))} className="input-dark text-xs" />
-                      <select value={editForm.status} onChange={e => setEditForm(f => ({ ...f, status: e.target.value }))} className="input-dark text-xs">
-                        {['ACTIVE', 'ENDED', 'PENDING', 'TERMINATED'].map(s => <option key={s} value={s}>{s}</option>)}
-                      </select>
-                      <input type="date" value={editForm.startDate} onChange={e => setEditForm(f => ({ ...f, startDate: e.target.value }))} className="input-dark text-xs" />
-                      <input type="date" value={editForm.endDate} onChange={e => setEditForm(f => ({ ...f, endDate: e.target.value }))} className="input-dark text-xs" placeholder="End date" />
-                      <select value={editForm.leaseType} onChange={e => setEditForm(f => ({ ...f, leaseType: e.target.value }))} className="input-dark text-xs">
-                        <option value="MONTH_TO_MONTH">Month-to-month</option>
-                        <option value="FIXED_TERM">Fixed term</option>
-                      </select>
-                      <div>
-                        <label className="block text-xs text-gray-500 mb-0.5">Arrears balance</label>
-                        <input type="number" placeholder="0" value={editForm.arrearsBalance} onChange={e => setEditForm(f => ({ ...f, arrearsBalance: e.target.value }))} className="input-dark text-xs w-full" />
-                      </div>
-                      <div>
-                        <label className="block text-xs text-gray-500 mb-0.5">Rent due day</label>
-                        <input type="number" min={1} max={31} placeholder="1" value={editForm.rentDueDay}
-                          onChange={e => setEditForm(f => ({ ...f, rentDueDay: e.target.value }))}
-                          className="input-dark text-xs w-full"
-                          title="Day of the month rent is due. This month's rent only becomes arrears after this day passes unpaid." />
-                      </div>
-                    </div>
-                    <p className="text-xs text-gray-600 -mt-1">
-                      This month's rent isn't counted as arrears until day {editForm.rentDueDay || '1'} passes unpaid — then the unpaid amount rolls into the arrears balance.
-                    </p>
-
-                    {/* When rent changed, capture the effective date for the history log */}
-                    {parseFloat(editForm.rentAmount || '0') !== rentBreakdown(lease).baseRent && (
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <label className="text-xs text-gray-400">This rent change took effect on</label>
-                        <input type="date" value={editForm.rentEffectiveDate} onChange={e => setEditForm(f => ({ ...f, rentEffectiveDate: e.target.value }))} className="input-dark text-xs" />
-                        <span className="text-xs text-gray-500">→ logged to rent history (defaults to today)</span>
-                      </div>
-                    )}
-
-                    {/* Co-tenants */}
-                    <div>
-                      <label className="block text-xs text-gray-500 mb-1">Tenants on this lease</label>
-                      <div className="flex flex-wrap gap-1.5 mb-1">
-                        {editTenantIds.length === 0 && <span className="text-xs text-gray-600">No tenants</span>}
-                        {editTenantIds.map((tid, i) => {
-                          // Prefer the tenant record the lease already carries —
-                          // allTenants is fetched on mount and may not include
-                          // someone created since, which rendered a bare "…".
-                          const t = (lease.leaseTenants ?? []).find(lt => lt.tenantId === tid)?.tenant
-                            ?? allTenants.find(x => x.id === tid);
-                          return (
-                            <span key={tid} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.08)' }}>
-                              {i === 0 && <span className="text-amber-400" title="Primary">★</span>}
-                              {t?.fullName ?? '…'}
-                              <button onClick={() => setEditTenantIds(prev => prev.filter(x => x !== tid))}
-                                title="Remove from this lease (saved with Save changes)"
-                                className="text-gray-500 hover:text-red-400">✕</button>
-                              <button onClick={() => deleteTenantRecord(tid)} disabled={deletingTenant === tid}
-                                title="Delete this tenant permanently"
-                                className="text-gray-600 hover:text-red-500 disabled:opacity-40">
-                                {deletingTenant === tid ? '…' : '🗑'}
-                              </button>
-                            </span>
-                          );
-                        })}
-                      </div>
-                      <p className="text-xs text-gray-600 mb-2">✕ takes them off this lease · 🗑 deletes the tenant everywhere</p>
-                      <div className="flex gap-2 flex-wrap items-center">
-                        <select value="" onChange={e => { if (e.target.value) setEditTenantIds(prev => prev.includes(e.target.value) ? prev : [...prev, e.target.value]); }} className="input-dark text-xs">
-                          <option value="">+ Add existing tenant…</option>
-                          {allTenants.filter(t => !editTenantIds.includes(t.id)).map(t => <option key={t.id} value={t.id}>{t.fullName}</option>)}
-                        </select>
-                        <input value={newTenantName} onChange={e => setNewTenantName(e.target.value)} placeholder="…or new tenant name" className="input-dark text-xs" />
-                        <button onClick={addCoTenant} disabled={!newTenantName.trim()} className="btn text-xs disabled:opacity-40">Add</button>
-                      </div>
-                    </div>
-
-                    {/* Commercial: business/entity on the lease */}
-                    {isCommercial && (
-                      <div>
-                        <label className="block text-xs text-gray-500 mb-1">Business name (commercial lease)</label>
-                        <input placeholder="e.g. Acme Coffee LLC" value={editForm.businessName}
-                          onChange={e => setEditForm(f => ({ ...f, businessName: e.target.value }))}
-                          className="input-dark text-xs w-full" />
-                      </div>
-                    )}
-
-                    {/* Late fee — flat amount or percent of rent, with grace period */}
-                    <div>
-                      <label className="block text-xs text-gray-500 mb-1">Late fee (leave blank if none)</label>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                        <input type="number" placeholder="Flat amount $" value={editForm.lateFeeAmount}
-                          onChange={e => setEditForm(f => ({ ...f, lateFeeAmount: e.target.value, lateFeePercent: e.target.value ? '' : f.lateFeePercent }))}
-                          className="input-dark text-xs" />
-                        <input type="number" placeholder="% of rent" value={editForm.lateFeePercent}
-                          onChange={e => setEditForm(f => ({ ...f, lateFeePercent: e.target.value, lateFeeAmount: e.target.value ? '' : f.lateFeeAmount }))}
-                          className="input-dark text-xs" />
-                        <input type="number" placeholder="Grace days" value={editForm.lateFeeGraceDays}
-                          onChange={e => setEditForm(f => ({ ...f, lateFeeGraceDays: e.target.value }))}
-                          className="input-dark text-xs" title="Days after the due date before the fee applies" />
-                      </div>
-                      {(() => {
-                        const rentNow = (parseFloat(editForm.rentAmount || '0') || rentBreakdown(lease).baseRent) + rentBreakdown(lease).utilities;
-                        const fee = editForm.lateFeePercent
-                          ? round2(rentNow * parseFloat(editForm.lateFeePercent) / 100)
-                          : editForm.lateFeeAmount ? parseFloat(editForm.lateFeeAmount) : null;
-                        if (fee == null || Number.isNaN(fee)) return null;
-                        return (
-                          <p className="text-xs text-gray-400 mt-1.5">
-                            Late fee: <span className="font-medium text-white">{money(fee)}</span>
-                            {editForm.lateFeePercent && <span className="text-gray-600"> ({editForm.lateFeePercent}% of {money(rentNow)})</span>}
-                            {editForm.lateFeeGraceDays && <span className="text-gray-600"> · after {editForm.lateFeeGraceDays} day grace</span>}
-                          </p>
-                        );
-                      })()}
-                      {(editForm.lateFeeAmount || editForm.lateFeePercent) && (
-                        <label className="flex items-start gap-2 text-xs text-gray-300 mt-2 cursor-pointer">
-                          <input type="checkbox" className="mt-0.5" checked={editForm.autoLateFee}
-                            onChange={e => setEditForm(f => ({ ...f, autoLateFee: e.target.checked }))} />
-                          <span>
-                            Charge it automatically
-                            <span className="block text-gray-500">
-                              When the month isn't paid in full by the due day{editForm.lateFeeGraceDays ? ` plus ${editForm.lateFeeGraceDays} grace days` : ''}, the fee is added to that month's overdue amount, and rolls into arrears with it if still unpaid at month end.
-                            </span>
-                          </span>
-                        </label>
-                      )}
-                    </div>
-
-                    {/* Where a payment goes first */}
-                    <div>
-                      <label className="block text-xs text-gray-500 mb-1">Payments go to</label>
-                      <select value={editForm.paymentsApplyTo} onChange={e => setEditForm(f => ({ ...f, paymentsApplyTo: e.target.value }))}
-                        className="input-dark text-xs">
-                        <option value="CURRENT">This month's rent first, then arrears</option>
-                        <option value="ARREARS">Arrears first, then this month</option>
-                      </select>
-                      <p className="text-xs text-gray-600 mt-1">The default for this tenant; each payment can still be sent the other way when you log it.</p>
-                    </div>
-
-                    {/* Expected payer names — drives Plaid auto-logging */}
-                    <div>
-                      <label className="block text-xs text-gray-500 mb-1">
-                        Expected payer names — rent from these names is logged automatically
-                      </label>
-                      <div className="flex flex-wrap gap-1.5 mb-2">
-                        {(lease.paymentAliases ?? []).length === 0 && (
-                          <span className="text-xs text-gray-600">None — only the tenants' own names are recognised</span>
-                        )}
-                        {(lease.paymentAliases ?? []).map(a => (
-                          <span key={a.id} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.08)' }}>
-                            {a.name}
-                            {a.note && <span className="text-gray-500">({a.note})</span>}
-                            <button onClick={() => removeAlias(lease.id, a.id)} className="text-gray-500 hover:text-red-400">✕</button>
-                          </span>
-                        ))}
-                      </div>
-                      <div className="flex gap-2 flex-wrap items-center">
-                        <input value={aliasForm.name} onChange={e => setAliasForm(f => ({ ...f, name: e.target.value }))}
-                          placeholder="Name on the transfer, e.g. Jose Contreras" className="input-dark text-xs w-56" />
-                        <input value={aliasForm.note} onChange={e => setAliasForm(f => ({ ...f, note: e.target.value }))}
-                          placeholder="Who they are (optional)" className="input-dark text-xs w-44" />
-                        <button onClick={() => addAlias(lease.id)} disabled={!aliasForm.name.trim()} className="btn text-xs disabled:opacity-40">Add name</button>
-                      </div>
-                      <p className="text-xs text-gray-600 mt-1">
-                        Rent often arrives from a spouse, a relative or an employer. A bank transfer naming
-                        someone listed here is matched to this lease and logged without asking; anything else
-                        waits for you in <Link to="/finances?tab=incoming" className="text-amber-400 hover:text-amber-300">Payments</Link>.
-                      </p>
-                    </div>
-
-                    {/* Utility contributions — portion of the payment that isn't rent */}
-                    <div>
-                      <label className="block text-xs text-gray-500 mb-1">
-                        Utilities billed with rent (added on top of the rent — leave empty if utilities are included in rent)
-                      </label>
-                      <div className="space-y-1 mb-2">
-                        {(lease.utilityCharges ?? []).length === 0 && <span className="text-xs text-gray-600">None — full amount is rent</span>}
-                        {(lease.utilityCharges ?? []).map(uc => (
-                          <div key={uc.id} className="flex items-center gap-2 text-xs group">
-                            <span className="px-1.5 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.08)' }}>
-                              {CATEGORY_LABELS[uc.category as keyof typeof CATEGORY_LABELS] ?? uc.category}
-                            </span>
-                            <span className="font-medium text-white">{money(Number(uc.amount))}/mo</span>
-                            {uc.note && <span className="text-gray-600">· {uc.note}</span>}
-                            <button onClick={() => removeUtilCharge(lease.id, uc.id)} className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 ml-auto">✕</button>
-                          </div>
-                        ))}
-                      </div>
-                      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
-                        <select value={ucForm.category} onChange={e => setUcForm(f => ({ ...f, category: e.target.value }))} className="input-dark text-xs">
-                          {UTILITY_CHARGE_CATEGORIES.map(c => (
-                            <option key={c} value={c}>{CATEGORY_LABELS[c as keyof typeof CATEGORY_LABELS] ?? c}</option>
-                          ))}
-                        </select>
-                        <input type="number" placeholder="Amount $/mo" value={ucForm.amount} onChange={e => setUcForm(f => ({ ...f, amount: e.target.value }))} className="input-dark text-xs" />
-                        <input placeholder="Note" value={ucForm.note} onChange={e => setUcForm(f => ({ ...f, note: e.target.value }))} className="input-dark text-xs" />
-                        <button onClick={() => addUtilCharge(lease.id)} disabled={!ucForm.amount} className="btn text-xs disabled:opacity-40">Add utility</button>
-                      </div>
-                      {(() => {
-                        const { utilities, baseRent } = rentBreakdown(lease);
-                        const rentNow = parseFloat(editForm.rentAmount || '') || baseRent;
-                        const pendingAmt = ucForm.amount ? parseFloat(ucForm.amount) : 0;
-                        const projUtil = utilities + (Number.isNaN(pendingAmt) ? 0 : pendingAmt);
-                        return (
-                          <p className="text-xs text-gray-400 mt-1.5">
-                            Rent <span className="font-medium text-white">{money(rentNow)}</span>
-                            {projUtil > 0 && <> + utilities <span className="font-medium text-white">{money(projUtil)}</span></>}
-                            {' = total '}<span className="font-medium text-amber-400">{money(round2(rentNow + projUtil))}</span>
-                            {projUtil !== utilities && <span className="text-gray-600"> (incl. the amount you're adding)</span>}
-                          </p>
-                        );
-                      })()}
-                    </div>
-
-                    {/* Scheduled (future) rent increases — multiple, chained */}
-                    <div>
-                      <label className="block text-xs text-gray-500 mb-1">Scheduled rent increases (planned — each builds on the previous)</label>
-                      <div className="space-y-1 mb-2">
-                        {(lease.scheduledIncreases ?? []).length === 0 && <span className="text-xs text-gray-600">None scheduled</span>}
-                        {chainProjections(rentBreakdown(lease).baseRent, lease.scheduledIncreases ?? []).map(({ si, base, low, high }) => (
-                          <div key={si.id} className="flex items-center gap-2 text-xs group flex-wrap">
-                            <span className="text-gray-500 w-24">{fmtDate(si.effectiveDate)}</span>
-                            <span className="text-gray-300">
-                              {si.percent != null && (
-                                <span className="text-amber-400">+{si.percent}{si.percentMax != null ? `–${si.percentMax}` : ''}%</span>
-                              )}
-                              {' → '}
-                              <span className="font-medium text-white">{money(low)}{high !== low ? `–${money(high)}` : ''}</span>
-                              <span className="text-gray-600"> (from {money(base)})</span>
-                            </span>
-                            {si.note && <span className="text-gray-600">· {si.note}</span>}
-                            <button onClick={() => applySchedIncrease(lease.id, si)} className="text-emerald-400 hover:text-emerald-300 ml-auto">Apply now</button>
-                            <button onClick={() => removeSchedIncrease(lease.id, si.id)} className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400">✕</button>
-                          </div>
-                        ))}
-                      </div>
-                      {/* Add a scheduled increase with live, chained calculator */}
-                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">
-                        <input type="date" value={siForm.effectiveDate} onChange={e => setSiForm(f => ({ ...f, effectiveDate: e.target.value }))} className="input-dark text-xs" title="Effective date" />
-                        <input type="number" placeholder="New amount $" value={siForm.newAmount} onChange={e => setSiForm(f => ({ ...f, newAmount: e.target.value, percent: e.target.value ? '' : f.percent, percentMax: e.target.value ? '' : f.percentMax }))} className="input-dark text-xs" />
-                        <input type="number" placeholder="% (or range min)" value={siForm.percent} onChange={e => setSiForm(f => ({ ...f, percent: e.target.value, newAmount: e.target.value ? '' : f.newAmount }))} className="input-dark text-xs" />
-                        <input type="number" placeholder="% max (range)" value={siForm.percentMax} onChange={e => setSiForm(f => ({ ...f, percentMax: e.target.value, newAmount: e.target.value ? '' : f.newAmount }))} className="input-dark text-xs" title="Optional — set for a range like 6%–10%" />
-                        <input placeholder="Note" value={siForm.note} onChange={e => setSiForm(f => ({ ...f, note: e.target.value }))} className="input-dark text-xs" />
-                      </div>
-                      <div className="flex items-center gap-3 mt-1.5">
-                        {(() => {
-                          const base = baseForNew(rentBreakdown(lease).baseRent, lease.scheduledIncreases ?? [], siForm.effectiveDate);
-                          const low = targetFrom(base, siForm.newAmount ? parseFloat(siForm.newAmount) : null, siForm.percent ? parseFloat(siForm.percent) : null);
-                          const high = siForm.percentMax ? round2(base * (1 + parseFloat(siForm.percentMax) / 100)) : low;
-                          return low != null ? (
-                            <span className="text-xs text-gray-400">
-                              New rent: <span className="font-medium text-white">{money(low)}{high != null && high !== low ? `–${money(high)}` : ''}</span>
-                              <span className="text-gray-600"> (from {money(base)}{siForm.percent ? ` + ${siForm.percent}${siForm.percentMax ? `–${siForm.percentMax}` : ''}%` : ''})</span>
-                            </span>
-                          ) : <span className="text-xs text-gray-600">Enter an amount, a %, or a % range</span>;
-                        })()}
-                        <button onClick={() => addSchedIncrease(lease.id)} disabled={!siForm.effectiveDate || (!siForm.newAmount && !siForm.percent)} className="btn text-xs disabled:opacity-40 ml-auto">Add increase</button>
-                      </div>
-                    </div>
-
-                    <input placeholder="Notes" value={editForm.notes} onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))} className="input-dark text-xs w-full" />
-
-                    {/* Documents — lease agreement, application, ID, screening, etc. */}
-                    <div>
-                      <label className="block text-xs text-gray-500 mb-1">Documents</label>
+                  <div className="px-4 py-4 space-y-4" style={{ background: 'rgba(255,255,255,0.03)', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                    {/* Laid out the way a lease reads: the agreement, who is on it, the
+                        term, the rent, the balance and late fees, then notes. Sections
+                        marked "saved as you go" save on their own; the rest waits for
+                        Save changes at the bottom. */}
+                    <EditSection title="Lease agreement" hint="Attach the signed lease and Sollux reads it: terms, tenants, rent steps, utilities and a summary.">
                       <div className="flex items-center gap-2 flex-wrap mb-2">
                         <select value={docCategory} onChange={e => setDocCategory(e.target.value)} className="input-dark text-xs">
                           {LEASE_DOC_CATEGORIES.map(c => <option key={c} value={c}>{DOCUMENT_CATEGORY_LABELS[c]}</option>)}
@@ -2168,7 +1900,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                           <input type="file" accept="application/pdf,image/*" className="hidden" disabled={uploadingDoc || extracting}
                             onChange={e => { const f = e.target.files?.[0]; if (f) handleLeaseDocUpload(lease.id, f); e.target.value = ''; }} />
                         </label>
-                        {docCategory === 'LEASE' && <span className="text-xs text-gray-600">dates are read from the agreement automatically</span>}
+                        {docCategory === 'LEASE' && <span className="text-xs text-gray-600">read automatically when attached</span>}
                       </div>
 
                       {/* AI-read lease terms — review before applying */}
@@ -2214,7 +1946,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                           <div className="flex gap-2 mt-2">
                             <button onClick={applySuggestedTerms} disabled={applyingTerms} className="btn btn-primary text-xs disabled:opacity-50">{applyingTerms ? 'Adding…' : 'Fill these in'}</button>
                             <button onClick={() => setSuggested(null)} className="text-xs text-gray-500 hover:text-gray-300">Ignore</button>
-                            <span className="text-xs text-gray-600 self-center">Rent steps, utilities, payer names, contacts and the summary are added now; the fields above wait for Save changes</span>
+                            <span className="text-xs text-gray-600 self-center">Rent steps, utilities, payer names, contacts and the summary are added now; terms and rent wait for Save changes</span>
                           </div>
                         </div>
                       )}
@@ -2245,14 +1977,283 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                       </div>
                       {/* What the agreement says beyond the fields above */}
                       <LeaseSummary details={lease.termsJson} />
-                    </div>
+                    </EditSection>
 
-                    <div className="flex items-center justify-between pt-1">
+                    <EditSection title="Tenants">
+                      <Field label="On this lease" hint="✕ takes them off this lease · 🗑 deletes the tenant everywhere · ★ primary">
+                        <div className="flex flex-wrap gap-1.5 mb-1">
+                        {editTenantIds.length === 0 && <span className="text-xs text-gray-600">No tenants</span>}
+                        {editTenantIds.map((tid, i) => {
+                          // Prefer the tenant record the lease already carries —
+                          // allTenants is fetched on mount and may not include
+                          // someone created since, which rendered a bare "…".
+                          const t = (lease.leaseTenants ?? []).find(lt => lt.tenantId === tid)?.tenant
+                            ?? allTenants.find(x => x.id === tid);
+                          return (
+                            <span key={tid} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.08)' }}>
+                              {i === 0 && <span className="text-amber-400" title="Primary">★</span>}
+                              {t?.fullName ?? '…'}
+                              <button onClick={() => setEditTenantIds(prev => prev.filter(x => x !== tid))}
+                                title="Remove from this lease (saved with Save changes)"
+                                className="text-gray-500 hover:text-red-400">✕</button>
+                              <button onClick={() => deleteTenantRecord(tid)} disabled={deletingTenant === tid}
+                                title="Delete this tenant permanently"
+                                className="text-gray-600 hover:text-red-500 disabled:opacity-40">
+                                {deletingTenant === tid ? '…' : '🗑'}
+                              </button>
+                            </span>
+                          );
+                        })}
+                      </div>
+                      <div className="flex gap-2 flex-wrap items-center">
+                        <select value="" onChange={e => { if (e.target.value) setEditTenantIds(prev => prev.includes(e.target.value) ? prev : [...prev, e.target.value]); }} className="input-dark text-xs">
+                          <option value="">+ Add existing tenant…</option>
+                          {allTenants.filter(t => !editTenantIds.includes(t.id)).map(t => <option key={t.id} value={t.id}>{t.fullName}</option>)}
+                        </select>
+                        <input value={newTenantName} onChange={e => setNewTenantName(e.target.value)} placeholder="…or new tenant name" className="input-dark text-xs" />
+                        <button onClick={addCoTenant} disabled={!newTenantName.trim()} className="btn text-xs disabled:opacity-40">Add</button>
+                      </div>
+                      </Field>
+                      {isCommercial && (
+                        <Field label="Business name">
+                          <input placeholder="e.g. Acme Coffee LLC" value={editForm.businessName}
+                            onChange={e => setEditForm(f => ({ ...f, businessName: e.target.value }))}
+                            className="input-dark text-xs w-full" />
+                        </Field>
+                      )}
+                      <Field label="Also pays rent (expected payer names)" saved>
+                        <div className="flex flex-wrap gap-1.5 mb-2">
+                        {(lease.paymentAliases ?? []).length === 0 && (
+                          <span className="text-xs text-gray-600">None — only the tenants' own names are recognised</span>
+                        )}
+                        {(lease.paymentAliases ?? []).map(a => (
+                          <span key={a.id} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.08)' }}>
+                            {a.name}
+                            {a.note && <span className="text-gray-500">({a.note})</span>}
+                            <button onClick={() => removeAlias(lease.id, a.id)} className="text-gray-500 hover:text-red-400">✕</button>
+                          </span>
+                        ))}
+                      </div>
+                      <div className="flex gap-2 flex-wrap items-center">
+                        <input value={aliasForm.name} onChange={e => setAliasForm(f => ({ ...f, name: e.target.value }))}
+                          placeholder="Name on the transfer, e.g. Jose Contreras" className="input-dark text-xs w-56" />
+                        <input value={aliasForm.note} onChange={e => setAliasForm(f => ({ ...f, note: e.target.value }))}
+                          placeholder="Who they are (optional)" className="input-dark text-xs w-44" />
+                        <button onClick={() => addAlias(lease.id)} disabled={!aliasForm.name.trim()} className="btn text-xs disabled:opacity-40">Add name</button>
+                      </div>
+                      <p className="text-xs text-gray-600 mt-1">
+                        Rent often arrives from a spouse, a relative or an employer. A bank transfer naming
+                        someone listed here is matched to this lease and logged without asking; anything else
+                        waits for you in <Link to="/finances?tab=incoming" className="text-amber-400 hover:text-amber-300">Payments</Link>.
+                      </p>
+                      </Field>
+                    </EditSection>
+
+                    <EditSection title="Term">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                        <Field label="Unit">
+                          <select value={editForm.unitId} onChange={e => setEditForm(f => ({ ...f, unitId: e.target.value }))} className="input-dark text-xs w-full">
+                        {/* The lease carries its own unit, so offer it even when
+                            the units list hasn't caught up — a select with no
+                            matching option renders blank. */}
+                        {!units.some(u => u.id === lease.unitId) && lease.unit && (
+                          <option value={lease.unitId}>{lease.unit.unitLabel}</option>
+                        )}
+                        {units.map(u => <option key={u.id} value={u.id}>{u.unitLabel}</option>)}
+                      </select>
+                        </Field>
+                        <Field label="Status">
+                          <select value={editForm.status} onChange={e => setEditForm(f => ({ ...f, status: e.target.value }))} className="input-dark text-xs w-full">
+                            {['ACTIVE', 'ENDED', 'PENDING', 'TERMINATED'].map(s => <option key={s} value={s}>{s.charAt(0) + s.slice(1).toLowerCase()}</option>)}
+                          </select>
+                        </Field>
+                        <Field label="Type">
+                          <select value={editForm.leaseType} onChange={e => setEditForm(f => ({ ...f, leaseType: e.target.value }))} className="input-dark text-xs w-full">
+                            <option value="MONTH_TO_MONTH">Month-to-month</option>
+                            <option value="FIXED_TERM">Fixed term</option>
+                          </select>
+                        </Field>
+                        <Field label="Start">
+                          <input type="date" value={editForm.startDate} onChange={e => setEditForm(f => ({ ...f, startDate: e.target.value }))} className="input-dark text-xs w-full" />
+                        </Field>
+                        <Field label="End" hint={editForm.leaseType === 'MONTH_TO_MONTH' ? 'Blank for month-to-month' : undefined}>
+                          <input type="date" value={editForm.endDate} onChange={e => setEditForm(f => ({ ...f, endDate: e.target.value }))} className="input-dark text-xs w-full" />
+                        </Field>
+                      </div>
+                    </EditSection>
+
+                    <EditSection title="Rent">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <Field label="Rent / month" hint="Before utilities billed on top">
+                          <input type="number" placeholder="0" value={editForm.rentAmount} onChange={e => setEditForm(f => ({ ...f, rentAmount: e.target.value }))} className="input-dark text-xs w-full" />
+                        </Field>
+                        <Field label="Due on day" hint="Of each month">
+                          <input type="number" min={1} max={31} placeholder="1" value={editForm.rentDueDay}
+                            onChange={e => setEditForm(f => ({ ...f, rentDueDay: e.target.value }))}
+                            className="input-dark text-xs w-full" />
+                        </Field>
+                        <Field label="Security deposit">
+                          <input type="number" placeholder="0" value={editForm.securityDeposit} onChange={e => setEditForm(f => ({ ...f, securityDeposit: e.target.value }))} className="input-dark text-xs w-full" />
+                        </Field>
+                      </div>
+                      {parseFloat(editForm.rentAmount || '0') !== rentBreakdown(lease).baseRent && (
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <label className="text-xs text-gray-400">This rent change took effect on</label>
+                        <input type="date" value={editForm.rentEffectiveDate} onChange={e => setEditForm(f => ({ ...f, rentEffectiveDate: e.target.value }))} className="input-dark text-xs" />
+                        <span className="text-xs text-gray-500">→ logged to rent history (defaults to today)</span>
+                      </div>
+                    )}
+                      <Field label="Utilities billed on top of rent" hint="Leave empty if utilities are included in the rent" saved>
+                        <div className="space-y-1 mb-2">
+                        {(lease.utilityCharges ?? []).length === 0 && <span className="text-xs text-gray-600">None — full amount is rent</span>}
+                        {(lease.utilityCharges ?? []).map(uc => (
+                          <div key={uc.id} className="flex items-center gap-2 text-xs group">
+                            <span className="px-1.5 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.08)' }}>
+                              {CATEGORY_LABELS[uc.category as keyof typeof CATEGORY_LABELS] ?? uc.category}
+                            </span>
+                            <span className="font-medium text-white">{money(Number(uc.amount))}/mo</span>
+                            {uc.note && <span className="text-gray-600">· {uc.note}</span>}
+                            <button onClick={() => removeUtilCharge(lease.id, uc.id)} className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 ml-auto">✕</button>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+                        <select value={ucForm.category} onChange={e => setUcForm(f => ({ ...f, category: e.target.value }))} className="input-dark text-xs">
+                          {UTILITY_CHARGE_CATEGORIES.map(c => (
+                            <option key={c} value={c}>{CATEGORY_LABELS[c as keyof typeof CATEGORY_LABELS] ?? c}</option>
+                          ))}
+                        </select>
+                        <input type="number" placeholder="Amount $/mo" value={ucForm.amount} onChange={e => setUcForm(f => ({ ...f, amount: e.target.value }))} className="input-dark text-xs" />
+                        <input placeholder="Note" value={ucForm.note} onChange={e => setUcForm(f => ({ ...f, note: e.target.value }))} className="input-dark text-xs" />
+                        <button onClick={() => addUtilCharge(lease.id)} disabled={!ucForm.amount} className="btn text-xs disabled:opacity-40">Add utility</button>
+                      </div>
+                      {(() => {
+                        const { utilities, baseRent } = rentBreakdown(lease);
+                        const rentNow = parseFloat(editForm.rentAmount || '') || baseRent;
+                        const pendingAmt = ucForm.amount ? parseFloat(ucForm.amount) : 0;
+                        const projUtil = utilities + (Number.isNaN(pendingAmt) ? 0 : pendingAmt);
+                        return (
+                          <p className="text-xs text-gray-400 mt-1.5">
+                            Rent <span className="font-medium text-white">{money(rentNow)}</span>
+                            {projUtil > 0 && <> + utilities <span className="font-medium text-white">{money(projUtil)}</span></>}
+                            {' = total '}<span className="font-medium text-amber-400">{money(round2(rentNow + projUtil))}</span>
+                            {projUtil !== utilities && <span className="text-gray-600"> (incl. the amount you're adding)</span>}
+                          </p>
+                        );
+                      })()}
+                      </Field>
+                      <Field label="Planned rent increases" hint="Each builds on the one before" saved>
+                        <div className="space-y-1 mb-2">
+                        {(lease.scheduledIncreases ?? []).length === 0 && <span className="text-xs text-gray-600">None scheduled</span>}
+                        {chainProjections(rentBreakdown(lease).baseRent, lease.scheduledIncreases ?? []).map(({ si, base, low, high }) => (
+                          <div key={si.id} className="flex items-center gap-2 text-xs group flex-wrap">
+                            <span className="text-gray-500 w-24">{fmtDate(si.effectiveDate)}</span>
+                            <span className="text-gray-300">
+                              {si.percent != null && (
+                                <span className="text-amber-400">+{si.percent}{si.percentMax != null ? `–${si.percentMax}` : ''}%</span>
+                              )}
+                              {' → '}
+                              <span className="font-medium text-white">{money(low)}{high !== low ? `–${money(high)}` : ''}</span>
+                              <span className="text-gray-600"> (from {money(base)})</span>
+                            </span>
+                            {si.note && <span className="text-gray-600">· {si.note}</span>}
+                            <button onClick={() => applySchedIncrease(lease.id, si)} className="text-emerald-400 hover:text-emerald-300 ml-auto">Apply now</button>
+                            <button onClick={() => removeSchedIncrease(lease.id, si.id)} className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400">✕</button>
+                          </div>
+                        ))}
+                      </div>
+                      {/* Add a scheduled increase with live, chained calculator */}
+                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">
+                        <input type="date" value={siForm.effectiveDate} onChange={e => setSiForm(f => ({ ...f, effectiveDate: e.target.value }))} className="input-dark text-xs" title="Effective date" />
+                        <input type="number" placeholder="New amount $" value={siForm.newAmount} onChange={e => setSiForm(f => ({ ...f, newAmount: e.target.value, percent: e.target.value ? '' : f.percent, percentMax: e.target.value ? '' : f.percentMax }))} className="input-dark text-xs" />
+                        <input type="number" placeholder="% (or range min)" value={siForm.percent} onChange={e => setSiForm(f => ({ ...f, percent: e.target.value, newAmount: e.target.value ? '' : f.newAmount }))} className="input-dark text-xs" />
+                        <input type="number" placeholder="% max (range)" value={siForm.percentMax} onChange={e => setSiForm(f => ({ ...f, percentMax: e.target.value, newAmount: e.target.value ? '' : f.newAmount }))} className="input-dark text-xs" title="Optional — set for a range like 6%–10%" />
+                        <input placeholder="Note" value={siForm.note} onChange={e => setSiForm(f => ({ ...f, note: e.target.value }))} className="input-dark text-xs" />
+                      </div>
+                      <div className="flex items-center gap-3 mt-1.5">
+                        {(() => {
+                          const base = baseForNew(rentBreakdown(lease).baseRent, lease.scheduledIncreases ?? [], siForm.effectiveDate);
+                          const low = targetFrom(base, siForm.newAmount ? parseFloat(siForm.newAmount) : null, siForm.percent ? parseFloat(siForm.percent) : null);
+                          const high = siForm.percentMax ? round2(base * (1 + parseFloat(siForm.percentMax) / 100)) : low;
+                          return low != null ? (
+                            <span className="text-xs text-gray-400">
+                              New rent: <span className="font-medium text-white">{money(low)}{high != null && high !== low ? `–${money(high)}` : ''}</span>
+                              <span className="text-gray-600"> (from {money(base)}{siForm.percent ? ` + ${siForm.percent}${siForm.percentMax ? `–${siForm.percentMax}` : ''}%` : ''})</span>
+                            </span>
+                          ) : <span className="text-xs text-gray-600">Enter an amount, a %, or a % range</span>;
+                        })()}
+                        <button onClick={() => addSchedIncrease(lease.id)} disabled={!siForm.effectiveDate || (!siForm.newAmount && !siForm.percent)} className="btn text-xs disabled:opacity-40 ml-auto">Add increase</button>
+                      </div>
+                      </Field>
+                    </EditSection>
+
+                    <EditSection title="Balance & late fees">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <Field label="Arrears balance" hint="Owed from months before this one">
+                          <input type="number" placeholder="0" value={editForm.arrearsBalance} onChange={e => setEditForm(f => ({ ...f, arrearsBalance: e.target.value }))} className="input-dark text-xs w-full" />
+                        </Field>
+                        <Field label="Payments go to" hint="Each payment can still be sent the other way when you log it">
+                          <select value={editForm.paymentsApplyTo} onChange={e => setEditForm(f => ({ ...f, paymentsApplyTo: e.target.value }))}
+                            className="input-dark text-xs w-full">
+                            <option value="CURRENT">This month's rent first, then arrears</option>
+                            <option value="ARREARS">Arrears first, then this month</option>
+                          </select>
+                        </Field>
+                      </div>
+                      <Field label="Late fee" hint="A flat amount or a percent of rent, after the grace days. Leave blank if none.">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                        <input type="number" placeholder="Flat amount $" value={editForm.lateFeeAmount}
+                          onChange={e => setEditForm(f => ({ ...f, lateFeeAmount: e.target.value, lateFeePercent: e.target.value ? '' : f.lateFeePercent }))}
+                          className="input-dark text-xs" />
+                        <input type="number" placeholder="% of rent" value={editForm.lateFeePercent}
+                          onChange={e => setEditForm(f => ({ ...f, lateFeePercent: e.target.value, lateFeeAmount: e.target.value ? '' : f.lateFeeAmount }))}
+                          className="input-dark text-xs" />
+                        <input type="number" placeholder="Grace days" value={editForm.lateFeeGraceDays}
+                          onChange={e => setEditForm(f => ({ ...f, lateFeeGraceDays: e.target.value }))}
+                          className="input-dark text-xs" title="Days after the due date before the fee applies" />
+                      </div>
+                        {(() => {
+                        const rentNow = (parseFloat(editForm.rentAmount || '0') || rentBreakdown(lease).baseRent) + rentBreakdown(lease).utilities;
+                        const fee = editForm.lateFeePercent
+                          ? round2(rentNow * parseFloat(editForm.lateFeePercent) / 100)
+                          : editForm.lateFeeAmount ? parseFloat(editForm.lateFeeAmount) : null;
+                        if (fee == null || Number.isNaN(fee)) return null;
+                        return (
+                          <p className="text-xs text-gray-400 mt-1.5">
+                            Late fee: <span className="font-medium text-white">{money(fee)}</span>
+                            {editForm.lateFeePercent && <span className="text-gray-600"> ({editForm.lateFeePercent}% of {money(rentNow)})</span>}
+                            {editForm.lateFeeGraceDays && <span className="text-gray-600"> · after {editForm.lateFeeGraceDays} day grace</span>}
+                          </p>
+                        );
+                      })()}
+                      {(editForm.lateFeeAmount || editForm.lateFeePercent) && (
+                        <label className="flex items-start gap-2 text-xs text-gray-300 mt-2 cursor-pointer">
+                          <input type="checkbox" className="mt-0.5" checked={editForm.autoLateFee}
+                            onChange={e => setEditForm(f => ({ ...f, autoLateFee: e.target.checked }))} />
+                          <span>
+                            Charge it automatically
+                            <span className="block text-gray-500">
+                              When the month isn't paid in full by the due day{editForm.lateFeeGraceDays ? ` plus ${editForm.lateFeeGraceDays} grace days` : ''}, the fee is added to that month's overdue amount, and rolls into arrears with it if still unpaid at month end.
+                            </span>
+                          </span>
+                        </label>
+                      )}
+                      </Field>
+                    </EditSection>
+
+                    <EditSection title="Notes">
+                      <textarea rows={2} placeholder="Anything else about this lease" value={editForm.notes} onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))} className="input-dark text-xs w-full" />
+                    </EditSection>
+
+                    <div className="flex items-center justify-between pt-3 sticky bottom-0" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                       <button onClick={() => deleteLeaseRecord(lease)} disabled={deletingLease === lease.id}
                         className="text-xs text-red-400 hover:text-red-300 disabled:opacity-40">
                         {deletingLease === lease.id ? 'Deleting…' : 'Delete lease'}
                       </button>
-                      <button onClick={() => saveEditLease(lease.id)} disabled={savingEdit} className="btn btn-primary text-xs">{savingEdit ? '…' : 'Save changes'}</button>
+                      <div className="flex items-center gap-3">
+                        <span className="text-xs text-gray-600 hidden sm:inline">Term, rent, balance, late fee, tenants and notes save here</span>
+                        <button onClick={() => saveEditLease(lease.id)} disabled={savingEdit} className="btn btn-primary text-xs">{savingEdit ? '…' : 'Save changes'}</button>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -2617,6 +2618,33 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Lease edit form building blocks ────────────────────────────────────────
+function EditSection({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <section className="rounded-xl p-3 space-y-3" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
+      <div>
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-300">{title}</h4>
+        {hint && <p className="text-xs text-gray-600 mt-0.5">{hint}</p>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/** A labelled field. `saved` marks parts that save as they are added, not with Save changes. */
+function Field({ label, hint, saved, children }: { label: string; hint?: string; saved?: boolean; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="flex items-baseline gap-2 mb-1">
+        <label className="text-xs text-gray-400">{label}</label>
+        {saved && <span className="text-[10px] text-gray-600">saved as you go</span>}
+      </div>
+      {children}
+      {hint && <p className="text-[11px] text-gray-600 mt-1">{hint}</p>}
     </div>
   );
 }
