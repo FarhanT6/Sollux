@@ -3,7 +3,8 @@
  * affected. See ios.css for the tokens (light and dark) and sizes.
  */
 import './ios.css';
-export { default as Screen, BarButton } from './Screen';
+export { default as Screen, BarButton, NavBar } from './Screen';
+export { phoneRoute, rememberEntry, usePhoneBack } from './routes';
 export { Section, Row, type SwipeAction } from './List';
 export { default as Sheet, Field } from './Sheet';
 export { default as Segmented } from './Segmented';

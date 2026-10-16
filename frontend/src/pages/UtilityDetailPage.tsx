@@ -26,6 +26,8 @@ import BillPicker, { emptyBillPick, splitAllocations, type BillPickerValue } fro
 import PaymentSourcePicker, { emptyNewCard, resolvePaymentSource, type NewCardForm } from '../components/payments/PaymentSourcePicker';
 import { operatingCost } from '../lib/operatingCost';
 import ChargeAnalyticsPanel from '../components/utility/ChargeAnalyticsPanel';
+import { usePhone } from '../ios';
+import UtilityAccountScreen from './phone/UtilityAccountScreen';
 
 const CATEGORY_ICONS: Record<string, string> = {
   ELECTRIC: '⚡', GAS: '🔥', WATER: '💧', SEWER: '🚿',
@@ -652,6 +654,7 @@ function PaymentPlanCard({
 export default function UtilityDetailPage() {
   const { propertyId, accountId } = useParams<{ propertyId: string; accountId: string }>();
   const navigate = useNavigate();
+  const phone = usePhone();
   const [account, setAccount] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -1099,8 +1102,163 @@ export default function UtilityDetailPage() {
   const property = account.property;
   const propertyLabel = property?.nickname || property?.address || 'Property';
 
-  return (
-    <div>
+  // The payment form's fields; the desktop shows them inline, the phone in a sheet.
+  const paymentFields = (
+    <>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+              <input type="number" value={payForm.amount} onChange={e => setPayForm(f => ({ ...f, amount: e.target.value }))}
+                placeholder="Amount *" className="input-dark text-xs" />
+              <input type="number" value={payForm.feeAmount} onChange={e => setPayForm(f => ({ ...f, feeAmount: e.target.value }))}
+                placeholder="Transaction fee (optional)" title="A processing or convenience fee paid on top — not part of the bill" className="input-dark text-xs" />
+              <input type="date" value={payForm.paymentDate} onChange={e => setPayForm(f => ({ ...f, paymentDate: e.target.value }))}
+                className="input-dark text-xs" />
+              <select value={payForm.paymentMethod} onChange={e => setPayForm(f => ({ ...f, paymentMethod: e.target.value }))}
+                className="input-dark text-xs">
+                {UTILITY_PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+              <select value={payForm.status} onChange={e => setPayForm(f => ({ ...f, status: e.target.value }))}
+                className="input-dark text-xs">
+                {['PAID', 'PENDING', 'PARTIAL', 'FAILED'].map(st => (
+                  <option key={st} value={st}>{PAYMENT_STATUS_LABELS[st]}</option>
+                ))}
+              </select>
+
+              {/* Linking to a statement is what marks that bill paid. Bills
+                  already settled say so, so a payment for the newest bill is
+                  not filed against the one before it by mistake. */}
+              <BillPicker className="sm:col-span-2" statements={statements} payments={payments}
+                amount={parseFloat(payForm.amount) || 0} value={bill} onChange={setBill} />
+              <PaymentSourcePicker accounts={bankAccounts} paymentMethod={payForm.paymentMethod}
+                value={payForm.bankAccountId} onChange={id => setPayForm(f => ({ ...f, bankAccountId: id }))}
+                card={newCard} onCardChange={setNewCard} />
+              <input value={payForm.confirmationNumber} onChange={e => setPayForm(f => ({ ...f, confirmationNumber: e.target.value }))}
+                placeholder="Confirmation #" className="input-dark text-xs" />
+              <input type="number" value={payForm.lateFee} onChange={e => setPayForm(f => ({ ...f, lateFee: e.target.value }))}
+                placeholder="Late fee (optional)" title="A late fee the provider charged because this payment was late — added to the bill it pays"
+                className="input-dark text-xs" />
+              <input value={payForm.notes} onChange={e => setPayForm(f => ({ ...f, notes: e.target.value }))}
+                placeholder="Notes" className="input-dark text-xs sm:col-span-2 lg:col-span-3" />
+            </div>
+            {/* Paid after the bill's due date: say so, and offer the fee this
+                account charged last time. The fee goes on the bill and the
+                amount paid grows by it. */}
+            {(() => {
+              const target = statements.find((s: any) => s.id === bill.statementId) as any;
+              if (!target?.dueDate || !payForm.paymentDate) return null;
+              const due = String(target.dueDate).slice(0, 10);
+              if (payForm.paymentDate <= due) return null;
+              const daysLate = Math.round((Date.parse(payForm.paymentDate) - Date.parse(due)) / 86400000);
+              const lastFee = [...payments].map((p: any) => Number(p.lateFeeAdded ?? 0)).find(v => v > 0)
+                ?? [...statements].sort((a: any, b: any) => String(b.statementDate).localeCompare(String(a.statementDate)))
+                  .map((x: any) => Number(x.penaltiesFees ?? 0)).find(v => v > 0);
+              return (
+                <div className="flex flex-wrap items-center gap-3 mt-2 text-xs">
+                  <span className="text-amber-400">
+                    Paid {daysLate} day{daysLate === 1 ? '' : 's'} after the {fmtDate(due, 'MMM d')} due date.
+                    {!payForm.lateFee && ' Did the provider charge a late fee?'}
+                  </span>
+                  {!payForm.lateFee && lastFee != null && (
+                    <button type="button" className="text-amber-300 underline hover:text-amber-200"
+                      onClick={() => setPayForm(f => ({
+                        ...f, lateFee: lastFee.toFixed(2),
+                        amount: f.amount && !Number.isNaN(parseFloat(f.amount)) ? (parseFloat(f.amount) + lastFee).toFixed(2) : f.amount,
+                      }))}>
+                      Add {fmtMoney(lastFee)} late fee (last charged)
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
+            {Number(payForm.lateFee) > 0 && (
+              <p className="text-xs text-gray-500 mt-1">
+                {fmtMoney(Number(payForm.lateFee))} is added to the bill's penalties and balance. Include it in the amount if you paid it with this payment.
+              </p>
+            )}
+    </>
+  );
+
+  // Why the balance is what it is: paid, past due, on a plan, deferred to
+  // the true-up, the penalty date. Shared by the desktop stats and the phone.
+  const balanceSub = latestStmt && coveredByCredit(latestStmt)
+              ? (
+                <span className="text-emerald-400">
+                  No payment due · {fmtMoney(Number(latestStmt.amountDue ?? 0))} charge covered by credit
+                  {latestOwed != null && latestOwed < -0.01 && <span className="block">{fmtMoney(-latestOwed)} credit remains on the account</span>}
+                </span>
+              )
+              : isLatestPaid
+              ? <span className="text-emerald-400">Paid</span>
+              : (
+                <span>
+                  {(() => {
+                    const carried = latestPastDue ?? 0;
+                    const active = plan && plan.status === 'ACTIVE' ? plan : null;
+                    const installmentBilled = Number(latestStmt?.paymentPlanAmount ?? 0) > 0;
+                    // Under an arrangement the deferred balance is owed, not
+                    // overdue. When the bill charges the installment itself
+                    // (SDG&E) the total already includes it; otherwise (an
+                    // HOA ledger) the deferred part is inside "past due" and
+                    // one installment joins this month's payment.
+                    const onPlan = active ? (installmentBilled ? Number(active.remainingBalance) : Math.min(Math.max(carried, 0), Number(active.remainingBalance))) : 0;
+                    const offPlan = active && !installmentBilled ? carried - onPlan : carried;
+                    return (
+                      <>
+                        {offPlan > 0.01 && <span className="text-red-400">{fmtMoney(offPlan)} past due</span>}
+                        {carried < -0.01 && <span className="text-emerald-400">{fmtMoney(-carried)} credit applied</span>}
+                        {active && onPlan > 0.01 && (
+                          <span className="text-amber-400 block">
+                            {fmtMoney(onPlan)} deferred on payment plan · {fmtMoney(Number(active.monthlyAmount))}/mo{Number(active.installmentFee ?? 0) > 0 ? ` + ${fmtMoney(Number(active.installmentFee))} fee` : ''}
+                            {installmentBilled
+                              ? ' included in this bill'
+                              : ` · pay ${fmtMoney((latestAmt ?? 0) + Math.max(offPlan, 0) + Math.min(Number(active.monthlyAmount), onPlan) + Number(active.installmentFee ?? 0))} this month`}
+                          </span>
+                        )}
+                        {active && installmentBilled && latestTotalDue != null && (
+                          <span className="text-gray-500 block">Account balance {fmtMoney(latestTotalDue + onPlan)} incl. plan</span>
+                        )}
+                        {/* Net metering: what this bill deferred, the deferred
+                            balance, and when it settles. */}
+                        {latestStmt?.trueUpDeferred != null && (
+                          <span className="text-sky-400 block">
+                            {fmtMoney(Number(latestStmt.trueUpDeferred))} of this bill's {fmtMoney(latestAmt ?? 0)} deferred to true-up
+                            {latestStmt.trueUpBalance != null ? ` · ${fmtMoney(Number(latestStmt.trueUpBalance))} deferred in all` : ''}
+                            {latestStmt.trueUpDate || account.trueUpDate ? ` · settles ${fmtDate(latestStmt.trueUpDate ?? account.trueUpDate, 'MMM d, yyyy')}` : ''}
+                          </span>
+                        )}
+                      </>
+                    );
+                  })()}
+                  {/* The bill's own penalty deadline — "Late penalty assessed
+                      09/09/2026" — is the date that actually costs money, and
+                      it always comes from the newest bill, so it rolls
+                      forward on its own as each new bill imports. */}
+                  {latestStmt?.penaltyDate && !isLatestPaid && (
+                    <span className="block text-amber-400">
+                      {new Date(latestStmt.penaltyDate) >= new Date()
+                        ? `Pay by ${fmtDate(latestStmt.penaltyDate, 'MMM d')} to avoid a penalty`
+                        : `Penalty applied ${fmtDate(latestStmt.penaltyDate, 'MMM d')}`}
+                    </span>
+                  )}
+                </span>
+              );
+
+  async function setCadence(billingCadence: string) {
+    try {
+      await updateUtility(accountId!, { billingCadence } as any);
+      setAccount((prev: any) => prev ? { ...prev, billingCadence } : prev);
+    } catch { alert('Could not update the billing schedule.'); }
+  }
+
+  async function openPdf(s: any) {
+    try {
+      const res = await getStatementDownloadUrl(s.id);
+      window.open(res.url, '_blank', 'noopener,noreferrer');
+    } catch { alert('Could not open PDF.'); }
+  }
+
+  // The dialogs, shared by both layouts.
+  const modals = (
+    <>
       {showPlanModal && (
         <PaymentPlanModal accountId={accountId!} existing={plan}
           onClose={() => setShowPlanModal(false)}
@@ -1111,6 +1269,62 @@ export default function UtilityDetailPage() {
           onClose={() => setShowLoanModal(false)}
           onSave={l => { setLoan(l); setShowLoanModal(false); }} />
       )}
+      {editingStatement !== null && accountId && (
+        <StatementModal
+          accountId={accountId}
+          statement={editingStatement}
+          onClose={() => setEditingStatement(null)}
+          onSaved={() => { setEditingStatement(null); getUtility(accountId).then(a => { setAccount(a); setLoan((a as any).loan ?? null); }); }}
+        />
+      )}
+    </>
+  );
+
+  if (phone) return (
+    <UtilityAccountScreen
+      account={account} propertyLabel={propertyLabel}
+      statements={statements} payments={payments}
+      latestId={latestStmt?.id ?? null}
+      balance={isLatestPaid ? 0 : (latestTotalDue ?? latestAmt)}
+      isLatestPaid={isLatestPaid} balanceSub={balanceSub}
+      momPct={momPct} ytdOperating={ytdTotal} totalPaid={totalPaid} totalFees={totalFees}
+      feesData={feesData as any}
+      statusOf={(s, idx) => statementStatus(s, payments, statements[idx - 1], s.id === latestStmt?.id, resolvedByFuture, paidMap)}
+      isPaid={s => isEffectivelyPaid(s, payments, resolvedByFuture, paidMap)}
+      totalDueOf={s => openBalanceOf(s)}
+      markingPaid={markingPaid} markPaid={s => void handleMarkPaid(s)} markUnpaid={s => void handleMarkUnpaid(s)}
+      openPdf={s => void openPdf(s)} editStatement={setEditingStatement}
+      reload={reloadAccount} sync={() => void handleSync()} syncing={syncing}
+      setCadence={c => void setCadence(c)} toggleActive={() => void toggleActive()} remove={() => void handleDelete()}
+      revealNumber={() => void toggleAccountNumber()} revealedNumber={revealedAccountNumber}
+      payment={{
+        open: showPayForm || !!editPaymentId, editing: !!editPaymentId, saving: savingPayment, canSave: !!payForm.amount,
+        fields: paymentFields,
+        start: () => { setEditPaymentId(null); resetPayForm(); setShowPayForm(true); },
+        edit: openPaymentEdit,
+        close: () => { setEditPaymentId(null); setShowPayForm(false); },
+        save: () => void savePayment(),
+        remove: p => void removePayment(p),
+      }}
+      arrangements={(loan || plan || account.category === 'INSURANCE') ? (
+        <div className="ios-embedded" style={{ marginBottom: 12 }}>
+          {loan && <LoanCard loan={loan} accountId={accountId!} arrears={latestPastDue} onUpdate={setLoan} onDelete={() => setLoan(null)} />}
+          {account.category === 'INSURANCE' && (
+            <PolicyCard accountId={accountId!} propertyId={propertyId!} carrier={account.providerName} account={account}
+              onAccountChange={patch => setAccount((prev: any) => prev ? { ...prev, ...patch } : prev)} />
+          )}
+          {plan && <PaymentPlanCard plan={plan} accountId={accountId!} onUpdate={setPlan} onDelete={() => setPlan(null)} />}
+        </div>
+      ) : null}
+      addPlan={() => setShowPlanModal(true)} addLoan={() => setShowLoanModal(true)} hasPlan={!!plan} hasLoan={!!loan}
+      charges={<ChargeAnalyticsPanel accountId={account.id} />}
+      modals={modals}
+    />
+  );
+
+  return (
+    <div>
+      {modals}
 
       {/* Header */}
       <div className="px-6 py-4 sticky top-0 z-10 flex items-center justify-between"
@@ -1136,13 +1350,7 @@ export default function UtilityDetailPage() {
                 figure derived from it was double. */}
             <select
               value={account.billingCadence ?? 'MONTHLY'}
-              onChange={async e => {
-                const billingCadence = e.target.value;
-                try {
-                  await updateUtility(accountId!, { billingCadence } as any);
-                  setAccount((prev: any) => prev ? { ...prev, billingCadence } : prev);
-                } catch { alert('Could not update the billing schedule.'); }
-              }}
+              onChange={e => void setCadence(e.target.value)}
               title="How often this provider bills — drives the monthly-equivalent maths"
               className="text-xs px-1.5 py-0.5 rounded-md text-gray-400 focus:outline-none cursor-pointer"
               style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)' }}
@@ -1243,68 +1451,7 @@ export default function UtilityDetailPage() {
             value: fmtMoney(isLatestPaid ? 0 : (latestTotalDue ?? latestAmt)),
             // In credit: nothing to pay, and the provider holds the rest. The
             // bill's own charge still shows so the month's cost is visible.
-            sub: latestStmt && coveredByCredit(latestStmt)
-              ? (
-                <span className="text-emerald-400">
-                  No payment due · {fmtMoney(Number(latestStmt.amountDue ?? 0))} charge covered by credit
-                  {latestOwed != null && latestOwed < -0.01 && <span className="block">{fmtMoney(-latestOwed)} credit remains on the account</span>}
-                </span>
-              )
-              : isLatestPaid
-              ? <span className="text-emerald-400">Paid</span>
-              : (
-                <span>
-                  {(() => {
-                    const carried = latestPastDue ?? 0;
-                    const active = plan && plan.status === 'ACTIVE' ? plan : null;
-                    const installmentBilled = Number(latestStmt?.paymentPlanAmount ?? 0) > 0;
-                    // Under an arrangement the deferred balance is owed, not
-                    // overdue. When the bill charges the installment itself
-                    // (SDG&E) the total already includes it; otherwise (an
-                    // HOA ledger) the deferred part is inside "past due" and
-                    // one installment joins this month's payment.
-                    const onPlan = active ? (installmentBilled ? Number(active.remainingBalance) : Math.min(Math.max(carried, 0), Number(active.remainingBalance))) : 0;
-                    const offPlan = active && !installmentBilled ? carried - onPlan : carried;
-                    return (
-                      <>
-                        {offPlan > 0.01 && <span className="text-red-400">{fmtMoney(offPlan)} past due</span>}
-                        {carried < -0.01 && <span className="text-emerald-400">{fmtMoney(-carried)} credit applied</span>}
-                        {active && onPlan > 0.01 && (
-                          <span className="text-amber-400 block">
-                            {fmtMoney(onPlan)} deferred on payment plan · {fmtMoney(Number(active.monthlyAmount))}/mo{Number(active.installmentFee ?? 0) > 0 ? ` + ${fmtMoney(Number(active.installmentFee))} fee` : ''}
-                            {installmentBilled
-                              ? ' included in this bill'
-                              : ` · pay ${fmtMoney((latestAmt ?? 0) + Math.max(offPlan, 0) + Math.min(Number(active.monthlyAmount), onPlan) + Number(active.installmentFee ?? 0))} this month`}
-                          </span>
-                        )}
-                        {active && installmentBilled && latestTotalDue != null && (
-                          <span className="text-gray-500 block">Account balance {fmtMoney(latestTotalDue + onPlan)} incl. plan</span>
-                        )}
-                        {/* Net metering: what this bill deferred, the deferred
-                            balance, and when it settles. */}
-                        {latestStmt?.trueUpDeferred != null && (
-                          <span className="text-sky-400 block">
-                            {fmtMoney(Number(latestStmt.trueUpDeferred))} of this bill's {fmtMoney(latestAmt ?? 0)} deferred to true-up
-                            {latestStmt.trueUpBalance != null ? ` · ${fmtMoney(Number(latestStmt.trueUpBalance))} deferred in all` : ''}
-                            {latestStmt.trueUpDate || account.trueUpDate ? ` · settles ${fmtDate(latestStmt.trueUpDate ?? account.trueUpDate, 'MMM d, yyyy')}` : ''}
-                          </span>
-                        )}
-                      </>
-                    );
-                  })()}
-                  {/* The bill's own penalty deadline — "Late penalty assessed
-                      09/09/2026" — is the date that actually costs money, and
-                      it always comes from the newest bill, so it rolls
-                      forward on its own as each new bill imports. */}
-                  {latestStmt?.penaltyDate && !isLatestPaid && (
-                    <span className="block text-amber-400">
-                      {new Date(latestStmt.penaltyDate) >= new Date()
-                        ? `Pay by ${fmtDate(latestStmt.penaltyDate, 'MMM d')} to avoid a penalty`
-                        : `Penalty applied ${fmtDate(latestStmt.penaltyDate, 'MMM d')}`}
-                    </span>
-                  )}
-                </span>
-              ),
+            sub: balanceSub,
           },
           {
             label: 'Month over month',
@@ -1436,15 +1583,6 @@ export default function UtilityDetailPage() {
             </div>
           )}
         </div>
-
-        {editingStatement !== null && accountId && (
-          <StatementModal
-            accountId={accountId}
-            statement={editingStatement}
-            onClose={() => setEditingStatement(null)}
-            onSaved={() => { setEditingStatement(null); getUtility(accountId).then(a => { setAccount(a); setLoan((a as any).loan ?? null); }); }}
-          />
-        )}
 
         {/* ── Statements ───────────────────────────────────── */}
         {tab === 'statements' && (
@@ -1713,12 +1851,7 @@ export default function UtilityDetailPage() {
                         )}
                         {s.pdfS3Key && (
                           <button
-                            onClick={async () => {
-                              try {
-                                const res = await getStatementDownloadUrl(s.id);
-                                window.open(res.url, '_blank', 'noopener,noreferrer');
-                              } catch { alert('Could not open PDF.'); }
-                            }}
+                            onClick={() => void openPdf(s)}
                             className="text-xs px-2 py-1 rounded transition-colors hover:opacity-80"
                             style={{ background: 'rgba(245,166,35,0.12)', border: '1px solid rgba(245,166,35,0.3)', color: '#F5A623' }}
                           >
@@ -1756,75 +1889,7 @@ export default function UtilityDetailPage() {
             <p className="text-xs font-medium text-gray-300 mb-2">
               {editPaymentId ? 'Edit payment' : 'Log a payment toward this account'}
             </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
-              <input type="number" value={payForm.amount} onChange={e => setPayForm(f => ({ ...f, amount: e.target.value }))}
-                placeholder="Amount *" className="input-dark text-xs" />
-              <input type="number" value={payForm.feeAmount} onChange={e => setPayForm(f => ({ ...f, feeAmount: e.target.value }))}
-                placeholder="Transaction fee (optional)" title="A processing or convenience fee paid on top — not part of the bill" className="input-dark text-xs" />
-              <input type="date" value={payForm.paymentDate} onChange={e => setPayForm(f => ({ ...f, paymentDate: e.target.value }))}
-                className="input-dark text-xs" />
-              <select value={payForm.paymentMethod} onChange={e => setPayForm(f => ({ ...f, paymentMethod: e.target.value }))}
-                className="input-dark text-xs">
-                {UTILITY_PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
-              </select>
-              <select value={payForm.status} onChange={e => setPayForm(f => ({ ...f, status: e.target.value }))}
-                className="input-dark text-xs">
-                {['PAID', 'PENDING', 'PARTIAL', 'FAILED'].map(st => (
-                  <option key={st} value={st}>{PAYMENT_STATUS_LABELS[st]}</option>
-                ))}
-              </select>
-
-              {/* Linking to a statement is what marks that bill paid. Bills
-                  already settled say so, so a payment for the newest bill is
-                  not filed against the one before it by mistake. */}
-              <BillPicker className="sm:col-span-2" statements={statements} payments={payments}
-                amount={parseFloat(payForm.amount) || 0} value={bill} onChange={setBill} />
-              <PaymentSourcePicker accounts={bankAccounts} paymentMethod={payForm.paymentMethod}
-                value={payForm.bankAccountId} onChange={id => setPayForm(f => ({ ...f, bankAccountId: id }))}
-                card={newCard} onCardChange={setNewCard} />
-              <input value={payForm.confirmationNumber} onChange={e => setPayForm(f => ({ ...f, confirmationNumber: e.target.value }))}
-                placeholder="Confirmation #" className="input-dark text-xs" />
-              <input type="number" value={payForm.lateFee} onChange={e => setPayForm(f => ({ ...f, lateFee: e.target.value }))}
-                placeholder="Late fee (optional)" title="A late fee the provider charged because this payment was late — added to the bill it pays"
-                className="input-dark text-xs" />
-              <input value={payForm.notes} onChange={e => setPayForm(f => ({ ...f, notes: e.target.value }))}
-                placeholder="Notes" className="input-dark text-xs sm:col-span-2 lg:col-span-3" />
-            </div>
-            {/* Paid after the bill's due date: say so, and offer the fee this
-                account charged last time. The fee goes on the bill and the
-                amount paid grows by it. */}
-            {(() => {
-              const target = statements.find((s: any) => s.id === bill.statementId) as any;
-              if (!target?.dueDate || !payForm.paymentDate) return null;
-              const due = String(target.dueDate).slice(0, 10);
-              if (payForm.paymentDate <= due) return null;
-              const daysLate = Math.round((Date.parse(payForm.paymentDate) - Date.parse(due)) / 86400000);
-              const lastFee = [...payments].map((p: any) => Number(p.lateFeeAdded ?? 0)).find(v => v > 0)
-                ?? [...statements].sort((a: any, b: any) => String(b.statementDate).localeCompare(String(a.statementDate)))
-                  .map((x: any) => Number(x.penaltiesFees ?? 0)).find(v => v > 0);
-              return (
-                <div className="flex flex-wrap items-center gap-3 mt-2 text-xs">
-                  <span className="text-amber-400">
-                    Paid {daysLate} day{daysLate === 1 ? '' : 's'} after the {fmtDate(due, 'MMM d')} due date.
-                    {!payForm.lateFee && ' Did the provider charge a late fee?'}
-                  </span>
-                  {!payForm.lateFee && lastFee != null && (
-                    <button type="button" className="text-amber-300 underline hover:text-amber-200"
-                      onClick={() => setPayForm(f => ({
-                        ...f, lateFee: lastFee.toFixed(2),
-                        amount: f.amount && !Number.isNaN(parseFloat(f.amount)) ? (parseFloat(f.amount) + lastFee).toFixed(2) : f.amount,
-                      }))}>
-                      Add {fmtMoney(lastFee)} late fee (last charged)
-                    </button>
-                  )}
-                </div>
-              );
-            })()}
-            {Number(payForm.lateFee) > 0 && (
-              <p className="text-xs text-gray-500 mt-1">
-                {fmtMoney(Number(payForm.lateFee))} is added to the bill's penalties and balance. Include it in the amount if you paid it with this payment.
-              </p>
-            )}
+            {paymentFields}
             <div className="flex justify-end gap-3 mt-2">
               <button onClick={() => { setEditPaymentId(null); setShowPayForm(false); }}
                 className="text-xs text-gray-500 hover:text-gray-300">Cancel</button>

@@ -1,7 +1,7 @@
 import { Outlet, NavLink, useLocation } from 'react-router-dom';
 import { useUser, useClerk } from '@clerk/clerk-react';
 import { useEffect, useMemo, useState } from 'react';
-import { PhoneChromeContext } from '../../ios';
+import { PhoneChromeContext, NavBar, phoneRoute, rememberEntry } from '../../ios';
 import { getDashboardSummary } from '../../api/client';
 import type { DashboardSummary } from '../../types';
 import { tap } from '../../lib/native';
@@ -84,10 +84,10 @@ export const TAB_BAR = ['/dashboard', '/properties', '/scan', '/finances', '/pay
 
 /**
  * One layout, two shapes. Wide screens get the sidebar they always had. On a
- * phone — the iOS app, or Safari — the sidebar becomes a drawer, the five
- * most-used destinations sit in a bottom tab bar inside the home-indicator
- * safe area, and the top of the page keeps clear of the notch. Nothing
- * inside the pages changes; they already reflow.
+ * phone — the iOS app, or Safari — it is an iOS app: five tabs and More at
+ * the bottom inside the home-indicator safe area, and a navigation bar at the
+ * top with the screen's title and Back (src/ios/routes.ts). Screens built on
+ * the iOS layer draw their own bar; the shell draws it for the rest.
  */
 export default function AppLayout() {
   const { user } = useUser();
@@ -95,7 +95,6 @@ export default function AppLayout() {
   const location = useLocation();
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [drawerOpen, setDrawerOpen] = useState(false);
   const [themeChoice, setThemeChoice] = useThemeChoice();
   // A phone screen built on the iOS layer draws its own navigation bar.
   const [ownHeader, setOwnHeader] = useState(false);
@@ -105,8 +104,8 @@ export default function AppLayout() {
     getDashboardSummary().then(setSummary).catch(() => {});
   }, []);
 
-  // A navigation closes the drawer; a phone never shows two screens.
-  useEffect(() => { setDrawerOpen(false); }, [location.pathname]);
+  // Remember which screen each history entry was, so Back can name it.
+  useEffect(() => { rememberEntry(location.pathname + location.search); }, [location.key, location.pathname, location.search]);
 
   const section = '/' + location.pathname.split('/')[1];
   const moreActive = !TAB_BAR.includes(section);
@@ -204,29 +203,12 @@ export default function AppLayout() {
         {account}
       </aside>
 
-      {/* ── Phone: top bar + drawer + tab bar ───────────────────── */}
+      {/* ── Phone: navigation bar + tab bar ─────────────────────── */}
       <div className="flex-1 flex flex-col min-w-0">
-        {!ownHeader && <header className="app-chrome md:hidden pt-safe flex-shrink-0" style={{ background: '#161616', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
-          <div className="h-11 px-3 flex items-center justify-between">
-            {logo}
-            <button onClick={() => { tap(); setDrawerOpen(true); }}
-              className="w-9 h-9 flex items-center justify-center rounded-lg text-gray-400 active:text-white" aria-label="Menu">
-              <Ico d="M3 6h18M3 12h18M3 18h18" size={18} />
-            </button>
-          </div>
-        </header>}
-
-        {drawerOpen && (
-          <div className="md:hidden fixed inset-0 z-50 flex">
-            <div className="absolute inset-0" style={{ background: 'rgba(0,0,0,0.6)' }} onClick={() => setDrawerOpen(false)} />
-            <aside className="app-chrome relative w-72 max-w-[85vw] h-full flex flex-col pt-safe pb-safe" style={{ background: '#161616', borderRight: '1px solid rgba(255,255,255,0.07)' }}>
-              <div className="px-4 py-4 flex items-center justify-between" style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
-                {logo}
-                <button onClick={() => setDrawerOpen(false)} className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-500" aria-label="Close">✕</button>
-              </div>
-              {navList}
-              {account}
-            </aside>
+        {/* Pages not built on the iOS layer still get the iOS bar: title and Back from the route table. */}
+        {!ownHeader && (
+          <div className="ios-shellbar md:hidden flex-shrink-0">
+            <NavBar title={phoneRoute(location.pathname).title} back={{}} />
           </div>
         )}
 

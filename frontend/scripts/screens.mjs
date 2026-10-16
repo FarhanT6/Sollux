@@ -23,7 +23,8 @@ const { chromium } = require('playwright');
 const [outDir = join(root, '.screens'), ...only] = process.argv.slice(2);
 const ROUTES = only.length ? only : [
   '/dashboard', '/properties', '/scan', '/finances', '/payments', '/more',
-  '/portfolio', '/settings', '/import', '/insights',
+  '/portfolio', '/settings', '/import', '/insights', '/tenants', '/personal', '/vault',
+  '/taxes', '/compliance', '/projects', '/operations', '/legal', '/payments/priorities',
 ];
 mkdirSync(outDir, { recursive: true });
 
@@ -102,6 +103,36 @@ if (!only.length || process.env.FLOWS) {
   await step('tab bar → Utilities', async () => { await page.getByRole('link', { name: 'Utilities' }).last().click(); await expectPath(/^\/properties$/); });
   await step('utility row → account page', async () => { await page.locator('a.ios-row').first().click(); await expectPath(/^\/properties\/[^/]+\/utilities\/[^/]+$/); });
   await step('browser back → Utilities', async () => { await page.goBack(); await expectPath(/^\/properties$/); await page.locator('.ios-largetitle h1', { hasText: 'Utilities' }).waitFor(); });
+  await step('account: Back is named for where you came from', async () => {
+    await page.locator('a.ios-row').first().click(); await expectPath(/\/utilities\//);
+    await page.getByRole('button', { name: 'Utilities' }).waitFor();
+  });
+  await step('account: a bill opens its sheet', async () => {
+    await page.locator('button.ios-row').first().click();
+    await page.locator('.ios-sheet').getByRole('button', { name: /Mark as (paid|unpaid)/ }).waitFor();
+    await page.getByRole('button', { name: 'Done' }).click();
+    await page.locator('.ios-sheet').waitFor({ state: 'detached' });
+  });
+  await step('account: Log payment opens the form in a sheet', async () => {
+    await page.getByRole('tab', { name: 'Payments' }).click();
+    await page.getByRole('button', { name: 'Log payment' }).click();
+    await page.locator('.ios-sheet input').first().waitFor();
+    await page.locator('.ios-sheet').getByRole('button', { name: 'Cancel' }).click();
+    await page.locator('.ios-sheet').waitFor({ state: 'detached' });
+  });
+  await step('account: actions sheet', async () => {
+    await page.getByRole('button', { name: 'Account actions' }).click();
+    await page.locator('.ios-sheet').getByText('Delete account').waitFor();
+    await page.getByRole('button', { name: 'Done' }).click();
+    await page.locator('.ios-sheet').waitFor({ state: 'detached' });
+  });
+  await step('account: Back returns to Utilities', async () => {
+    await page.getByRole('button', { name: 'Utilities' }).click(); await expectPath(/^\/properties$/);
+  });
+  await step('deep link to a page: Back goes to its parent', async () => {
+    await page.goto(`${base}/tenants`, { waitUntil: 'networkidle' });
+    await page.getByRole('button', { name: 'More' }).click(); await expectPath(/^\/more$/);
+  });
   await step('Finances index → section → back', async () => {
     await page.getByRole('link', { name: 'Finances' }).last().click(); await expectPath(/^\/finances$/);
     await page.locator('a.ios-row', { has: page.locator('.ios-row-title', { hasText: /^Loans$/ }) }).first().click(); await expectPath(/tab=loans/);

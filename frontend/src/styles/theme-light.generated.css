@@ -84,7 +84,6 @@ html[data-theme="light"] [class~="text-red-600"] { color: #991b1b !important; }
 html[data-theme="light"] [class~="text-sky-300"] { color: #0369a1 !important; }
 html[data-theme="light"] [class~="text-sky-400"] { color: #0369a1 !important; }
 html[data-theme="light"] [class~="text-white"] { color: #1c2230 !important; }
-html[data-theme="light"] [class~="active:text-white"]:active { color: #1c2230 !important; }
 html[data-theme="light"] [class~="focus:text-amber-400"]:focus { color: #b45309 !important; }
 html[data-theme="light"] .group:hover [class~="group-hover:text-amber-400"] { color: #b45309 !important; }
 html[data-theme="light"] .group:hover [class~="group-hover:text-white"] { color: #1c2230 !important; }
