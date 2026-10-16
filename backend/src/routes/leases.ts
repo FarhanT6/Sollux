@@ -54,6 +54,8 @@ const LeaseSchema = z.object({
   paymentsApplyTo: z.enum(['CURRENT', 'ARREARS']).optional(),
   // Commercial: business/entity on the lease.
   businessName: z.string().optional().nullable(),
+  // The lease summary read from the agreement (leaseExtract LeaseDetails).
+  termsJson: z.record(z.any()).optional(),
 });
 
 const RentChangeSchema = z.object({
@@ -495,6 +497,20 @@ router.post('/:id/documents', async (req, res, next) => {
     });
     res.status(201).json(doc);
   } catch (err) { next(err); }
+});
+
+// POST /api/leases/extract-terms — read a lease agreement before the lease
+// exists (the New lease form fills itself in from it). A suggestion only.
+router.post('/extract-terms', async (req, res, next) => {
+  try {
+    const { fileData, filename } = req.body as { fileData?: string; filename?: string };
+    if (!fileData) return res.status(400).json({ error: 'fileData (base64) is required' });
+    const b64 = fileData.includes(',') ? fileData.slice(fileData.indexOf(',') + 1) : fileData;
+    res.json(await extractLeaseTerms(Buffer.from(b64, 'base64'), filename || 'lease.pdf'));
+  } catch (err: any) {
+    if (err?.message?.includes('ANTHROPIC_API_KEY')) return res.status(503).json({ error: 'AI extraction is not configured on the server.' });
+    next(err);
+  }
 });
 
 // POST /api/leases/:id/extract-terms — read lease dates/terms out of a lease

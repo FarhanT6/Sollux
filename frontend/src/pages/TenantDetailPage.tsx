@@ -12,6 +12,7 @@ import type { Tenant, Lease, LeaseTenant, RentPayment, Improvement, Document } f
 import { DOCUMENT_CATEGORY_LABELS } from '../types';
 import { fmtDate } from '../lib/date';
 import UtilityReimbursementPanel from '../components/tenant/UtilityReimbursementPanel';
+import LeaseSummary from '../components/tenant/LeaseSummary';
 
 const money = (n?: number | string | null) =>
   n == null ? '—' : Number(n).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
@@ -279,6 +280,7 @@ function LeaseCard({ lease, maintenance, onChanged }: {
             )}
             {lease.notes && <div className="sm:col-span-2 lg:col-span-3"><p className="text-xs text-gray-500">Notes</p><p className="text-gray-300">{lease.notes}</p></div>}
           </div>
+          <LeaseSummary details={lease.termsJson} />
           <LeaseDocuments leaseId={lease.id} legacyUrl={lease.documentUrl} onLegacyRemoved={onChanged} />
         </>
       ) : (

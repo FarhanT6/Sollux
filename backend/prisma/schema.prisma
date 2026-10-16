@@ -752,6 +752,10 @@ model Lease {
   paymentsApplyTo        String      @default("CURRENT")
   // Commercial leases: the business/entity on the lease alongside the person.
   businessName           String?
+  // What was read from the lease agreement beyond the fields above: landlord
+  // and pay-to, guarantors, use, insurance, maintenance, utilities, operating
+  // expenses, renewal and after-term rent, move-in costs, other clauses.
+  termsJson              Json?
   createdAt              DateTime    @default(now())
   updatedAt              DateTime    @updatedAt
 
