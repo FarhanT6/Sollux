@@ -10,6 +10,11 @@ import path from 'path';
 const REQUIRED_ENV = ['VITE_CLERK_PUBLISHABLE_KEY'];
 
 export default defineConfig(({ command, mode }) => {
+  // `vite --mode mock`: local screen testing with a stand-in for Clerk
+  // (src/dev/clerkMock.tsx) and the API served by scripts/screens.mjs.
+  // Refused for builds so it can never ship.
+  const mock = mode === 'mock';
+  if (mock && command === 'build') throw new Error('mock mode is for the dev server only');
   if (command === 'build') {
     const env = loadEnv(mode, process.cwd(), 'VITE_');
     const missing = REQUIRED_ENV.filter(k => !env[k] && !process.env[k]);
@@ -24,7 +29,10 @@ export default defineConfig(({ command, mode }) => {
   return {
     plugins: [react()],
     resolve: {
-      alias: { '@': path.resolve(__dirname, './src') },
+      alias: {
+        '@': path.resolve(__dirname, './src'),
+        ...(mock ? { '@clerk/clerk-react': path.resolve(__dirname, './src/dev/clerkMock.tsx') } : {}),
+      },
     },
     server: {
       port: 5173,
