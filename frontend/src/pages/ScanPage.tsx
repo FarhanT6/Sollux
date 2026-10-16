@@ -330,7 +330,7 @@ function DocumentLibrary() {
   }
 
   return (
-    <div className="p-6 max-w-3xl mx-auto">
+    <div className="p-4 sm:p-6 max-w-3xl mx-auto">
       <div className="flex gap-3 mb-4">
         <select value={propertyFilter} onChange={e => setPropertyFilter(e.target.value)} className="field-input flex-1">
           <option value="">All properties</option>
@@ -350,10 +350,11 @@ function DocumentLibrary() {
       ) : (
         <div className="space-y-2">
           {documents.map(d => (
-            <div key={d.id} className="card p-3 flex items-center justify-between">
-              <div>
-                <div className="flex items-center gap-2 mb-0.5">
-                  <p className="text-sm font-semibold text-white">{d.title}</p>
+            <div key={d.id} className="card p-3 flex items-center justify-between gap-3">
+              {/* min-w-0 + truncate: a long file name used to push the row, and the page, wider than a phone. */}
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                  <p className="text-sm font-semibold text-white truncate max-w-full">{d.title}</p>
                   <span className="text-xs px-2 py-0.5 rounded-full bg-white/10 text-gray-300">{DOCUMENT_CATEGORY_LABELS[d.category]}</span>
                   {!d.propertyId && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-900/40 text-amber-400">Unfiled</span>}
                 </div>
@@ -386,7 +387,8 @@ function CornerAdjust({ img, corners, onChange, onConfirm, onCancel }: {
   const containerRef = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState<keyof Corners | null>(null);
 
-  const displayW = 480;
+  // Fits the screen on a phone (a fixed 480px pushed the page sideways).
+  const displayW = Math.min(480, (typeof window !== "undefined" ? window.innerWidth : 480) - 48);
   const displayH = (img.naturalHeight / img.naturalWidth) * displayW;
 
   function toDisplay(pt: { x: number; y: number }) {
