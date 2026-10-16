@@ -2,6 +2,7 @@ import { PrivacyPage, TermsPage } from './pages/PolicyPage';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from '@clerk/clerk-react';
 import { SignIn, SignUp } from '@clerk/clerk-react';
+import { isNative } from './lib/native';
 import AppLayout from './components/layout/AppLayout';
 import DashboardPage from './pages/DashboardPage';
 import PropertiesPage from './pages/PropertiesPage';
@@ -38,6 +39,25 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+// Inside the iOS app the page's address is capacitor://localhost. Clerk's
+// "Continue with Google" (and any sign-in that comes back through a link)
+// must send the browser back to an https address, and refuses this one
+// ("Invalid URL scheme ... redirect_url"); Google also blocks its sign-in
+// inside embedded web views. So the app offers email and password (or a
+// code) only.
+const nativeAuthAppearance = isNative
+  ? { elements: { socialButtonsRoot: { display: 'none' }, dividerRow: { display: 'none' } } }
+  : undefined;
+
+function NativeSignInNote() {
+  return (
+    <p className="max-w-xs text-center text-xs text-gray-500">
+      In the app, sign in with your email and password. If your account was made with Google,
+      set a password first on the website: profile picture → Manage account → Security.
+    </p>
+  );
+}
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -47,12 +67,18 @@ export default function App() {
         <Route path="/terms" element={<TermsPage />} />
         <Route path="/sign-in/*" element={
           <div className="flex h-screen items-center justify-center bg-[#161616]">
-            <SignIn routing="path" path="/sign-in" afterSignInUrl="/dashboard" />
+            <div className="flex flex-col items-center gap-3">
+              <SignIn routing="path" path="/sign-in" afterSignInUrl="/dashboard" appearance={nativeAuthAppearance} />
+              {isNative && <NativeSignInNote />}
+            </div>
           </div>
         } />
         <Route path="/sign-up/*" element={
           <div className="flex h-screen items-center justify-center bg-[#161616]">
-            <SignUp routing="path" path="/sign-up" afterSignUpUrl="/dashboard" />
+            <div className="flex flex-col items-center gap-3">
+              <SignUp routing="path" path="/sign-up" afterSignUpUrl="/dashboard" appearance={nativeAuthAppearance} />
+              {isNative && <NativeSignInNote />}
+            </div>
           </div>
         } />
 
