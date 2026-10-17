@@ -1,4 +1,5 @@
 import { Worker, Job } from 'bullmq';
+import { withAiContext } from '../ai/meter';
 import { overdueAfterDays, billCycleDays } from '../lib/billCadence';
 import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
@@ -15,6 +16,8 @@ interface ScrapeJobData {
   manual?: boolean;
   /** Why it was queued: a provider's "your bill is ready" email fetches the statement at once. */
   trigger?: 'bill_posted';
+  /** Started from the AI test run: its spend is filed as a test (ai/meter.ts). */
+  test?: boolean;
 }
 
 // Normalise account number for matching (strip dashes/spaces/case)
@@ -57,14 +60,14 @@ const worker = new Worker<ScrapeJobData>(
       if (job.data.trigger === 'bill_posted' && ranToday && !job.data.manual) return;
       await db.utilityAccount.update({ where: { id: utilityAccountId }, data: { lastSyncStatus: 'PENDING' } });
       const syncJob = await db.syncJob.create({ data: { utilityAccountId, status: 'PENDING', startedAt: new Date() } });
-      const r = await runPortalAgent(utilityAccountId, { interactive: !!job.data.manual });
+      const r = await withAiContext({ test: !!job.data.test }, () => runPortalAgent(utilityAccountId, { interactive: !!job.data.manual }));
       await db.utilityAccount.update({
         where: { id: utilityAccountId },
         data: r.ok ? { lastSyncedAt: new Date(), lastSyncStatus: 'SUCCESS', lastSyncError: null } : { lastSyncStatus: 'FAILED', lastSyncError: r.error ?? 'The portal agent stopped.' },
       });
       await db.syncJob.update({ where: { id: syncJob.id }, data: { status: r.ok ? 'SUCCESS' : 'FAILED', completedAt: new Date(), statementsFound: r.filed + r.review, error: r.ok ? null : r.error ?? null } });
       if (r.filed) await insightQueue.add('generate', { propertyId: account.property.id }, { delay: 2000, attempts: 2 });
-      console.log(`[ScrapeWorker] Portal agent ${account.providerName}: ${r.downloads} downloaded, ${r.filed} filed, ${r.review} to review${r.error ? ` — ${r.error}` : ''}`);
+      console.log(`[ScrapeWorker] Portal agent ${account.providerName}: ${r.downloads} downloaded, ${r.filed} filed, ${r.review} to review; ${r.replayed ?? 0} steps replayed, ${r.aiSteps ?? 0} Claude turns, $${(r.costUsd ?? 0).toFixed(3)}${r.error ? ` — ${r.error}` : ''}`);
       return; // never retried automatically: a retry could re-trigger a code or lock the login
     }
 

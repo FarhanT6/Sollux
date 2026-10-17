@@ -83,3 +83,10 @@ export function todayISO(): string {
 export function thisMonthISO(): string {
   return todayISO().slice(0, 7);
 }
+
+/** A moment (a full timestamp, not a date-only string) in local time: "Oct 17, 3:04 PM". */
+export function fmtMoment(iso?: string | null): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '—' : format(d, 'MMM d, h:mm a');
+}

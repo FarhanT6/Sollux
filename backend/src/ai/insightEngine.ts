@@ -63,12 +63,13 @@ async function generateInsightsForAccount(
     const direction = deviation > 0 ? 'higher' : 'lower';
     const pct = Math.abs(Math.round(deviation * 100));
 
-    // Check if this anomaly insight already exists recently
+    // One anomaly note per bill: a high bill already explained is not asked
+    // about (and paid for) again every week until the next one arrives.
     const existing = await db.aIInsight.findFirst({
       where: {
         utilityAccountId: account.id,
         insightType: 'ANOMALY',
-        createdAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) },
+        createdAt: { gte: statements[0].createdAt ?? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) },
       },
     });
 
@@ -106,7 +107,8 @@ async function generateInsightsForAccount(
       where: {
         utilityAccountId: account.id,
         insightType: 'SAVINGS',
-        createdAt: { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+        // A general savings tip twice a year is plenty; monthly repeated itself.
+        createdAt: { gte: new Date(Date.now() - 182 * 24 * 60 * 60 * 1000) },
       },
     });
 
@@ -179,7 +181,7 @@ async function generateDueDateReminders(propertyId: string): Promise<void> {
   }
 }
 
-interface ClaudeInsightRequest {
+export interface ClaudeInsightRequest {
   type: 'anomaly' | 'savings';
   providerName: string;
   category: string;
@@ -215,7 +217,7 @@ const PROVIDER_SERVICE_DESCRIPTIONS: Record<string, string> = {
   'Service Finance': 'solar financing',
 };
 
-async function callClaudeForInsight(data: ClaudeInsightRequest): Promise<ClaudeInsightResponse> {
+export async function callClaudeForInsight(data: ClaudeInsightRequest): Promise<ClaudeInsightResponse> {
   try {
     const serviceDesc = PROVIDER_SERVICE_DESCRIPTIONS[data.providerName]
       ?? `${data.category.toLowerCase()} service`;
@@ -240,7 +242,7 @@ async function callClaudeForInsight(data: ClaudeInsightRequest): Promise<ClaudeI
 
          Respond in JSON: { "body": "...", "recommendation": "...", "estimatedSavings": <number> }`;
 
-    const { text } = await askClaude(anthropic, { label: 'insight', maxTokens: 500, check: needsJson, messages: [{ role: 'user', content: prompt }] });
+    const { text } = await askClaude(anthropic, { label: 'insight', feature: 'insight', maxTokens: 500, check: needsJson, messages: [{ role: 'user', content: prompt }] });
     const parsed = jsonIn(text);
     if (!parsed) throw new Error('no JSON in the insight');
     return parsed;

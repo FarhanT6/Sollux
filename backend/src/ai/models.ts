@@ -11,6 +11,7 @@
  *   CLAUDE_FALLBACK_MODEL  default claude-opus-5-5 ("none" turns fallback off)
  */
 import Anthropic from '@anthropic-ai/sdk';
+import { AiBudgetError, checkBudget, recordUsage } from './meter';
 
 export const PRIMARY_MODEL = process.env.CLAUDE_MODEL?.trim() || 'claude-sonnet-5';
 const fallbackEnv = process.env.CLAUDE_FALLBACK_MODEL?.trim();
@@ -25,6 +26,10 @@ export interface AskOptions {
   check?: (text: string) => string | null;
   /** For log lines: the file or job the call is for. */
   label?: string;
+  /** What the spend is filed under (ai/meter.ts): 'bill-read', 'lease', 'insight'… */
+  feature?: string;
+  /** Cache the prompt for the next call (a tool loop that resends its history). */
+  cache?: boolean;
   /** How hard an always-thinking model thinks. Reading a document needs little. */
   effort?: 'low' | 'medium' | 'high';
 }
@@ -41,6 +46,10 @@ export interface AskResult { text: string; model: string; fellBack: boolean }
 export function paramsFor(model: string, o: AskOptions): Anthropic.MessageCreateParamsNonStreaming {
   const base: Anthropic.MessageCreateParamsNonStreaming = {
     model, max_tokens: o.maxTokens, messages: o.messages, ...(o.system ? { system: o.system } : {}),
+    // Caches everything up to the last block, so the next turn of a loop pays
+    // a tenth for what it resends. Off for one-off calls, where writing the
+    // cache would cost a quarter more and nothing would read it.
+    ...(o.cache ? { cache_control: { type: 'ephemeral' as const } } : {}),
   };
   // Opus 5.5 and Fable always think — thinking can't be turned off, only
   // turned down with effort, and it counts against max_tokens.
@@ -63,8 +72,11 @@ async function once(client: Anthropic, model: string, o: AskOptions): Promise<{ 
   const params = paramsFor(model, o);
   const base = model === PRIMARY_MODEL ? PRIMARY_TIMEOUT_MS : FALLBACK_TIMEOUT_MS;
   const timeout = Math.max(base, params.max_tokens * 15);
+  const feature = o.feature ?? 'other';
+  await checkBudget(feature);
   const res = await client.messages.stream(params, { timeout, maxRetries: 1 }).finalMessage();
-  console.log(`[Claude] ${o.label ?? 'request'}: ${model} ${Math.round((Date.now() - started) / 100) / 10}s, ${res.usage.input_tokens} in / ${res.usage.output_tokens} out`);
+  const cost = await recordUsage(feature, model, res.usage, model !== PRIMARY_MODEL);
+  console.log(`[Claude] ${feature} ${o.label ?? ''}: ${model} ${Math.round((Date.now() - started) / 100) / 10}s, ${res.usage.input_tokens} in / ${res.usage.output_tokens} out, $${cost.toFixed(4)}`);
   const text = textOf(res);
   if (res.stop_reason === 'refusal') return { text, problem: 'refused' };
   if (res.stop_reason === 'max_tokens') return { text, problem: 'cut off at max_tokens' };
@@ -105,8 +117,20 @@ export async function askClaude(client: Anthropic, o: AskOptions): Promise<AskRe
   }
 }
 
+/**
+ * One metered request, for callers that run their own tool loop (the portal
+ * agent, the assistant): budget checked first, spend recorded after.
+ */
+export async function meteredCreate(client: Anthropic, feature: string, params: Anthropic.MessageCreateParamsNonStreaming): Promise<Anthropic.Message> {
+  await checkBudget(feature);
+  const res = await client.messages.create(params);
+  await recordUsage(feature, params.model, res.usage, params.model !== PRIMARY_MODEL);
+  return res;
+}
+
 /** Overloaded, rate-limited, down or a model this key cannot use: another model may answer. */
 export function worthRetrying(err: unknown): boolean {
+  if (err instanceof AiBudgetError) return false;
   const status = (err as { status?: number })?.status;
   if (status == null) return true; // network trouble
   if (status === 401 || status === 403) return false; // the key, not the model

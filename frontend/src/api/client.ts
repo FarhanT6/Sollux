@@ -1172,3 +1172,19 @@ export interface BillingSummary {
 export const getBilling = () => api.get<BillingSummary>('/billing').then(r => r.data);
 export const startCheckout = (plan: PlanKey) => api.post<{ url: string }>('/billing/checkout', { plan }).then(r => r.data);
 export const openBillingPortal = () => api.post<{ url: string }>('/billing/portal').then(r => r.data);
+
+// ─── AI spend and the AI test run (routes/aiSpend.ts) ─────────────
+export interface AiSpendFeature { feature: string; name: string; test: boolean; calls: number; cost: number; avgCost: number; fallbacks: number; cachedShare: number }
+export interface AiSpend {
+  month: string; spent: number; budget: number | null; primaryModel: string; fallbackModel: string | null; portalRecipes: number;
+  features: AiSpendFeature[];
+  recent: { createdAt: string; feature: string; name: string; model: string; costUsd: number; fellBack: boolean; test: boolean; inputTokens: number; outputTokens: number; cacheReadTokens: number }[];
+}
+export interface AiTestResult { key: string; name: string; status: 'pending' | 'running' | 'ok' | 'problem' | 'skipped'; detail?: string; cost?: number; calls?: number; models?: string[]; fellBack?: boolean; ms?: number }
+export interface AiTestState { checks: { key: string; name: string }[]; run: { startedAt: string; finishedAt?: string; results: AiTestResult[] } | null; apiKey: boolean }
+export interface PortalTestAccount { id: string; providerName: string; last4: string | null; place: string; lastSyncStatus: string | null; lastSyncError: string | null; lastAgentRunAt: string | null; recipe: { successes: number; failures: number; updatedAt: string } | null }
+export const getAiSpend = () => api.get<AiSpend>('/ai-spend').then(r => r.data);
+export const getAiTest = () => api.get<AiTestState>('/ai-spend/test').then(r => r.data);
+export const startAiTest = (only?: string) => api.post('/ai-spend/test', only ? { only } : {}).then(r => r.data);
+export const getPortalTests = () => api.get<{ accounts: PortalTestAccount[]; sharedRecipes: { host: string; successes: number; failures: number }[]; monthCalls: number; monthCost: number }>('/ai-spend/test/portal').then(r => r.data);
+export const testPortal = (accountId: string) => api.post(`/ai-spend/test/portal/${accountId}`).then(r => r.data);

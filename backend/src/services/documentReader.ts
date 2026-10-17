@@ -183,7 +183,7 @@ export async function readDocument(kind: ReadKind, files: ReadFile[], userId: st
   content.push({ type: 'text', text: PROMPTS[kind] });
 
   const { text: raw } = await askClaude(anthropic(), {
-    label: kind,
+    label: kind, feature: `read-${kind}`,
     // A statement lists every transaction; it needs room.
     maxTokens: kind === 'card_statement' ? 32000 : kind === 'loan_sheet' ? 16000 : 4096,
     check: needsJson,

@@ -1325,7 +1325,7 @@ async function extractWithClaude(pdfBuffer: Buffer, filename: string): Promise<E
   if (image) {
     console.log(`[PDFImport] ${filename}: ${image} ${Math.round(pdfBuffer.length / 1024)}KB`);
     const { text: raw } = await askClaude(anthropic, {
-      label: filename, maxTokens: 4096, check: billCheck,
+      label: filename, feature: 'bill-read-image', maxTokens: 4096, check: billCheck,
       messages: [{ role: 'user', content: [
         { type: 'image', source: { type: 'base64', media_type: image, data: pdfBuffer.toString('base64') } },
         { type: 'text', text: EXTRACTION_PROMPT },
@@ -1368,7 +1368,7 @@ async function extractWithClaude(pdfBuffer: Buffer, filename: string): Promise<E
   ];
 
   // Sonnet first; Opus when Sonnet's reading is unusable or does not add up.
-  const { text: raw } = await askClaude(anthropic, { label: filename, maxTokens: 4096, check: billCheck, messages: [{ role: 'user', content }] });
+  const { text: raw } = await askClaude(anthropic, { label: filename, feature: 'bill-read', maxTokens: 4096, check: billCheck, messages: [{ role: 'user', content }] });
 
   // Claude may include explanation text or markdown fences around the JSON.
   const parsed = jsonIn(raw);
@@ -1393,7 +1393,7 @@ async function transcribeWithClaude(pdfBuffer: Buffer, filename: string): Promis
   pdfBuffer = await trimPdfForClaude(pdfBuffer, filename);
   console.log(`[PDFImport] ${filename}: no text layer — transcribing`);
   const { text } = await askClaude(anthropic, {
-    label: `${filename} (transcript)`, maxTokens: 8192,
+    label: `${filename} (transcript)`, feature: 'bill-transcribe-scan', maxTokens: 8192,
     check: t => (t.replace(/\s/g, '').length < 100 ? 'transcript came back nearly empty' : null),
     messages: [{ role: 'user', content: [
       { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfBuffer.toString('base64') } } as Anthropic.DocumentBlockParam,

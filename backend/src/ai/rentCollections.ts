@@ -103,7 +103,7 @@ export async function draftRentReminders(userId: string, now = new Date()): Prom
           howToPay: pay || null, signOff: from, stage: firm ? 'firm: past grace, mention the late fee if any and that a 3-day notice to pay rent or quit is the next step' : 'friendly first reminder; allow that it may already be on its way',
         };
         const { text } = await askClaude(client, {
-          label: 'rent reminder', maxTokens: 900, check: t => (jsonIn(t)?.body ? null : 'no draft'),
+          label: 'rent reminder', feature: 'rent-reminder', maxTokens: 900, check: t => (jsonIn(t)?.body ? null : 'no draft'),
           messages: [{ role: 'user', content: `Draft a rent reminder from a small landlord to a tenant, in plain, warm, direct first-person language. Use only these facts; never invent an amount, date, fee or threat not listed. No legal advice.\n\nFacts: ${JSON.stringify(facts)}\n\nReturn ONLY JSON: {"subject": "email subject", "body": "the email, with line breaks", "sms": "a text message under 320 characters"}` }],
         });
         const d = jsonIn(text);

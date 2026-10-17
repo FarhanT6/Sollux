@@ -114,7 +114,7 @@ export async function extractDeclarations(
   console.log(`[Declarations] ${filename}: ${Math.round(pdfBuffer.length / 1024)}KB`);
 
   const { text: raw } = await askClaude(anthropic, {
-    label: filename, maxTokens: 2048, check: needsJson,
+    label: filename, feature: 'insurance-declarations', maxTokens: 2048, check: needsJson,
     messages: [{
       role: 'user',
       content: [
