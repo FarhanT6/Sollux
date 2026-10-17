@@ -31,6 +31,15 @@ function normalizeAcct(s: string) {
   return s.replace(/[-\s]/g, '').toLowerCase();
 }
 
+/**
+ * An error a person can read: the first line, without the browser's launch
+ * log Playwright appends ("Browser logs: <launching> …" ran to thousands of
+ * characters on the page).
+ */
+function readableError(message: string): string {
+  return message.split(/\s*(?:Browser logs:|=+ logs =+|Call log:)/)[0].split('\n')[0].trim().slice(0, 300) || 'The fetch failed.';
+}
+
 /** Every downloaded statement accounted for: filed, waiting for review, applied to a notice or policy, or unreadable. */
 function downloadSummary(r: { downloads: number; filed: number; review: number; applied: number }): string {
   const unread = Math.max(0, r.downloads - r.filed - r.review - r.applied);
@@ -59,12 +68,12 @@ async function agentJob(job: Job<ScrapeJobData>, account: { id: string; provider
       void db.syncJob.update({ where: { id: syncJob.id }, data: { progress: text.slice(0, 300) } }).catch(() => {});
     };
     const r = await withAiContext({ test: !!job.data.test }, () => runPortalAgent(utilityAccountId, { interactive: !!job.data.manual, onProgress }))
-      .catch(err => ({ ok: false, filed: 0, review: 0, applied: 0, downloads: 0, summary: '', error: err instanceof Error ? err.message.split('\n')[0] : String(err) }) as Awaited<ReturnType<typeof runPortalAgent>>);
+      .catch(err => ({ ok: false, filed: 0, review: 0, applied: 0, downloads: 0, summary: '', error: readableError(err instanceof Error ? err.message : String(err)) }) as Awaited<ReturnType<typeof runPortalAgent>>);
     await db.utilityAccount.update({
       where: { id: utilityAccountId },
-      data: r.ok ? { lastSyncedAt: new Date(), lastSyncStatus: 'SUCCESS', lastSyncError: null } : { lastSyncStatus: 'FAILED', lastSyncError: r.error ?? 'The portal agent stopped.' },
+      data: r.ok ? { lastSyncedAt: new Date(), lastSyncStatus: 'SUCCESS', lastSyncError: null } : { lastSyncStatus: 'FAILED', lastSyncError: readableError(r.error ?? 'The portal agent stopped.') },
     });
-    await db.syncJob.update({ where: { id: syncJob.id }, data: { status: r.ok ? 'SUCCESS' : 'FAILED', completedAt: new Date(), statementsFound: r.filed + r.review, costUsd: r.costUsd ?? 0, error: r.ok ? null : r.error ?? null, progress: r.ok ? (r.downloads ? downloadSummary(r) : (r.summary || 'Nothing new on the portal')).slice(0, 300) : null } });
+    await db.syncJob.update({ where: { id: syncJob.id }, data: { status: r.ok ? 'SUCCESS' : 'FAILED', completedAt: new Date(), statementsFound: r.filed + r.review, costUsd: r.costUsd ?? 0, error: r.ok ? null : readableError(r.error ?? 'The portal agent stopped.'), progress: r.ok ? (r.downloads ? downloadSummary(r) : (r.summary || 'Nothing new on the portal')).slice(0, 300) : null } });
     if (r.filed) await insightQueue.add('generate', { propertyId: account.property.id }, { delay: 2000, attempts: 2 });
     console.log(`[ScrapeWorker] Portal agent ${account.providerName}: ${r.downloads} downloaded, ${r.filed} filed, ${r.review} to review; ${r.replayed ?? 0} steps replayed, ${r.aiSteps ?? 0} Claude turns, $${(r.costUsd ?? 0).toFixed(3)}${r.error ? ` — ${r.error}` : ''}`);
 }
@@ -496,7 +505,7 @@ const worker = new Worker<ScrapeJobData>(
       console.log(`[ScrapeWorker] Done: ${totalInserted} new statements across ${sameCredAccounts.length} account(s)`);
 
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
+      const message = readableError(err instanceof Error ? err.message : 'Unknown error');
       console.error(`[ScrapeWorker] Error for ${utilityAccountId}:`, message);
 
       // Mark all same-cred accounts failed

@@ -155,9 +155,13 @@ export default function AiSpendPanel() {
             <p className="mt-0.5">{portal.workers.message}</p>
           </div>
         )}
-        {!portal?.accounts.length ? <p className="text-xs text-gray-500">No account has a portal login yet — add one with “Add portal login” on an account.</p> : (
+        {/* Inactive accounts (syncing off) are not fetched, so they are not listed; just counted. */}
+        {portal && portal.accounts.some(a => !a.syncEnabled) && (
+          <p className="text-xs text-gray-500 mb-2">{portal.accounts.filter(a => !a.syncEnabled).length} inactive account{portal.accounts.filter(a => !a.syncEnabled).length === 1 ? '' : 's'} not shown — turn one back on from its account page to fetch it.</p>
+        )}
+        {!portal?.accounts.some(a => a.syncEnabled) ? <p className="text-xs text-gray-500">No active account has a portal login yet — add one with “Add portal login” on an account.</p> : (
           <div className="space-y-2">
-            {portal.accounts.map(a => {
+            {portal.accounts.filter(a => a.syncEnabled).map(a => {
               const shared = portal.sharedRecipes.length > 0;
               return (
                 <div key={a.id} className="flex items-start justify-between gap-3 py-2 border-t border-white/5 first:border-0">

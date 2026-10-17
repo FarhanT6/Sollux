@@ -2552,3 +2552,14 @@ model WorkerHeartbeat {
 
   @@map("worker_heartbeats")
 }
+
+// A portal's browser memory (cookies), so "remember this device" survives the
+// worker's disk being wiped on every deploy. Encrypted like the login itself;
+// its own table so no account query or endpoint ever carries it.
+model PortalSession {
+  utilityAccountId String   @id
+  stateEnc         String
+  updatedAt        DateTime @updatedAt
+
+  @@map("portal_sessions")
+}
