@@ -15,3 +15,5 @@ frontend/ios/DerivedData/
 
 # Screen-test output (npm run screens)
 frontend/.screens/
+# Crawl failure screenshots (npm run crawl)
+frontend/.crawl/

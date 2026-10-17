@@ -29,6 +29,11 @@ model User {
   // null is a trial that has not been to checkout yet.
   subscriptionStatus   String?
   stripeSubscriptionId String?   @unique
+  // Rent collection: the owner's Stripe Connect (Express) account, which
+  // tenants' rent is paid out to, and whether Stripe lets it take payments yet.
+  stripeConnectId       String?  @unique
+  connectChargesEnabled Boolean  @default(false)
+  connectPayoutsEnabled Boolean  @default(false)
   trialEndsAt          DateTime?
   currentPeriodEnd     DateTime?
   clerkUserId      String?          @unique
@@ -899,6 +904,10 @@ model RentPayment {
   // CURRENT or ARREARS when the owner chose where this payment goes; null =
   // the lease's paymentsApplyTo. Kept so editing the payment keeps the choice.
   applyTo          String?
+  // Paid online through the tenant portal (Stripe): the payment's id, and the
+  // card fee the tenant paid on top of the rent (bank payments carry none).
+  stripePaymentIntentId String?   @unique
+  tenantFee             Decimal?  @db.Decimal(10, 2)
   createdAt        DateTime          @default(now())
 
   @@index([leaseId, periodDate])
@@ -2445,4 +2454,82 @@ model PortalRecipe {
   updatedAt DateTime @updatedAt
 
   @@map("portal_recipes")
+}
+
+
+// ─── TENANT PORTAL ───────────────────────────────────────
+// A tenant's sign-in to the portal: invited by the owner from the tenant's
+// page with a one-time link, claimed by whoever signs in with it. A tenant
+// sees only their own leases, payments and repair requests.
+model TenantPortalAccess {
+  id               String    @id @default(cuid())
+  tenantId         String    @unique
+  ownerUserId      String
+  email            String?
+  inviteToken      String?   @unique
+  inviteExpiresAt  DateTime?
+  invitedAt        DateTime  @default(now())
+  acceptedAt       DateTime?
+  clerkUserId      String?   @unique
+  // Stripe customer on the platform, for saved payment methods and autopay.
+  stripeCustomerId String?
+  autopay          Boolean   @default(false)
+  autopayMethodId  String?
+  // 'card' | 'us_bank_account'
+  autopayMethodType String?
+  autopayLabel     String?   // "Visa ··4242", "Chase ··6789"
+  disabled         Boolean   @default(false)
+
+  @@index([ownerUserId])
+  @@map("tenant_portal_access")
+}
+
+// ─── REPAIR REQUESTS ─────────────────────────────────────
+// Something broken, reported by a tenant from the portal or logged by the
+// owner. Urgency: EMERGENCY | URGENT | ROUTINE. Status: OPEN | SCHEDULED |
+// IN_PROGRESS | COMPLETED | CANCELLED. A completed repair with a cost can be
+// logged as an expense on the property.
+model MaintenanceRequest {
+  id                String    @id @default(cuid())
+  ownerUserId       String
+  propertyId        String
+  unitId            String?
+  leaseId           String?
+  tenantId          String?
+  title             String
+  description       String
+  category          String    @default("OTHER")
+  urgency           String    @default("ROUTINE")
+  status            String    @default("OPEN")
+  // S3 keys of the photos; shown through signed URLs only.
+  photoKeys         Json      @default("[]")
+  permissionToEnter Boolean   @default(false)
+  availability      String?
+  scheduledFor      DateTime?
+  vendor            String?
+  cost              Decimal?  @db.Decimal(10, 2)
+  expenseId         String?
+  completedAt       DateTime?
+  createdBy         String    @default("TENANT") // TENANT | OWNER
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  updates MaintenanceUpdate[]
+
+  @@index([ownerUserId, status])
+  @@index([tenantId])
+  @@map("maintenance_requests")
+}
+
+// A note on a repair request, from the owner or the tenant, in order.
+model MaintenanceUpdate {
+  id        String             @id @default(cuid())
+  requestId String
+  request   MaintenanceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  author    String // OWNER | TENANT
+  body      String
+  createdAt DateTime           @default(now())
+
+  @@index([requestId])
+  @@map("maintenance_updates")
 }

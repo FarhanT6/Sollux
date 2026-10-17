@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { runAutopay } from '../services/rentCollection';
 import '../config/playwrightPath';
 import './scrapeWorker';
 import './insightWorker';
@@ -123,6 +124,20 @@ setTimeout(() => {
   if (first <= new Date()) first.setDate(first.getDate() + 1);
   setTimeout(() => { queueIt(); setInterval(queueIt, 24 * 60 * 60 * 1000); }, first.getTime() - Date.now());
   console.log(`[Bookkeeper] Scheduled — next run at ${first.toLocaleString()}`);
+})();
+
+// Rent autopay: each morning at 9am Pacific (16:00 UTC), tenants enrolled in
+// the portal's autopay are charged what the month still owes, once, from the
+// rent's due day (services/rentCollection.ts).
+(function scheduleAutopay() {
+  const run = () => runAutopay()
+    .then(r => console.log(`[Autopay] ${r.charged} charged, ${r.skipped} not due or nothing owed`))
+    .catch(err => console.warn('[Autopay] failed:', err instanceof Error ? err.message : err));
+  const first = new Date();
+  first.setUTCHours(16, 0, 0, 0);
+  if (first <= new Date()) first.setUTCDate(first.getUTCDate() + 1);
+  setTimeout(() => { run(); setInterval(run, 24 * 60 * 60 * 1000); }, first.getTime() - Date.now());
+  console.log(`[Autopay] Scheduled — next run at ${first.toISOString()}`);
 })();
 
 // Shut-off and cancellation notices: close the ones payments now cover and

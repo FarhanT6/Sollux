@@ -1,6 +1,7 @@
 /**
  * Stripe's webhook: subscription changes land on the account here — a
- * checkout completed, a renewal, a failed card, a cancellation. Mounted
+ * checkout completed, a renewal, a failed card, a cancellation — and so do
+ * rent payments made in the tenant portal (services/rentCollection.ts). Mounted
  * before sign-in (Stripe is not a user) with the raw body, which the
  * signature check needs (index.ts). Anything unsigned is refused.
  */
@@ -9,18 +10,20 @@ import type Stripe from 'stripe';
 import { stripe } from '../config/stripe';
 import { db } from '../config/db';
 import { planForPrice } from '../lib/plans';
+import { handleRentEvent } from '../services/rentCollection';
 
 const router = Router();
 
 router.post('/webhook', async (req, res) => {
   const secret = process.env.STRIPE_WEBHOOK_SECRET;
   if (!stripe || !secret) return res.status(503).json({ error: 'Billing is not set up on this server.' });
-  let event: Stripe.Event;
-  try {
-    event = stripe.webhooks.constructEvent(req.body as Buffer, String(req.headers['stripe-signature'] ?? ''), secret);
-  } catch {
-    return res.status(400).json({ error: 'Bad signature' });
+  // Events about owners' connected accounts come from a Connect endpoint,
+  // signed with its own secret; both are accepted here.
+  let event: Stripe.Event | null = null;
+  for (const s of [secret, process.env.STRIPE_CONNECT_WEBHOOK_SECRET].filter(Boolean) as string[]) {
+    try { event = stripe.webhooks.constructEvent(req.body as Buffer, String(req.headers['stripe-signature'] ?? ''), s); break; } catch { /* try the next */ }
   }
+  if (!event) return res.status(400).json({ error: 'Bad signature' });
   try {
     await handleStripeEvent(event);
     res.json({ received: true });
@@ -32,6 +35,8 @@ router.post('/webhook', async (req, res) => {
 
 /** Apply one Stripe event to the account it belongs to. Exported for tests. */
 export async function handleStripeEvent(event: Stripe.Event): Promise<void> {
+  // Rent paid through the tenant portal, autopay set up, an owner's account updated.
+  if (await handleRentEvent(event)) return;
   switch (event.type) {
     case 'checkout.session.completed': {
       const s = event.data.object as Stripe.Checkout.Session;

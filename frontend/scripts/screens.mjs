@@ -194,6 +194,47 @@ if (!only.length || process.env.FLOWS) {
     await page.locator('.ios-sheet').getByRole('button', { name: 'Cancel' }).click();
     await page.locator('.ios-sheet').waitFor({ state: 'detached' });
   });
+  // Repairs and the tenant portal need the real API (the sample answers have neither).
+  if (realApi) {
+    await step('Repairs: a request opens with its messages', async () => {
+      await page.goto(`${base}/repairs`, { waitUntil: 'networkidle' });
+      const empty = await page.getByText('No open repairs').count();
+      if (!empty) { await page.locator('a[href^="/repairs/"]').first().click(); await expectPath(/^\/repairs\/[^/]+$/); await page.getByText('Messages with the tenant').waitFor(); }
+    });
+    await step('Settings → Rent collection explains who pays what', async () => {
+      await page.goto(`${base}/settings`, { waitUntil: 'networkidle' });
+      await page.locator('a.ios-row', { hasText: 'Rent collection' }).click(); await expectPath(/tab=rent/);
+      await page.getByText('Who pays what').waitFor();
+    });
+    // A tenant's sign-in (the dev stubs switch on localStorage sollux.mockUser).
+    const tctx = await browser.newContext({ viewport: { width: 393, height: 852 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true, colorScheme: 'dark' });
+    await tctx.addInitScript(() => { try { localStorage.setItem('sollux.mockUser', 'tenant'); } catch {} });
+    await tctx.route(u => u.hostname !== 'localhost', route => route.fulfill({ status: 200, body: '' }));
+    const tp = await tctx.newPage();
+    tp.on('pageerror', e => errors.push(`tenant: ${e.message}`));
+    const tstep = async (name, fn) => {
+      try { await fn(); console.log(`✓ flow: ${name}`); }
+      catch (e) { failed = true; console.log(`✗ flow: ${name}\n    ${String(e.message).split('\n')[0]}`); await tp.screenshot({ path: join(outDir, `flow-fail-${name.replace(/\W+/g, '-')}.png`) }); }
+    };
+    await tstep('tenant: an owner page sends them to the portal', async () => {
+      // The app sends them on while the page is still loading, which cuts that load short.
+      await tp.goto(`${base}/dashboard`).catch(() => {});
+      for (let i = 0; i < 40 && new URL(tp.url()).pathname !== '/portal'; i++) await tp.waitForTimeout(200);
+      if (new URL(tp.url()).pathname !== '/portal') throw new Error(`stayed on ${tp.url()}`);
+      await tp.getByText('Your landlord').waitFor();
+      await tp.screenshot({ path: join(outDir, 'portal-home.png') });
+    });
+    await tstep('tenant: Repairs → New request form', async () => {
+      await tp.getByRole('link', { name: 'Repairs' }).click(); await tp.waitForURL(u => u.pathname === '/portal/repairs');
+      await tp.getByRole('button', { name: 'New request' }).click(); await tp.getByText('How urgent').waitFor();
+      await tp.screenshot({ path: join(outDir, 'portal-new-repair.png') });
+    });
+    await tstep('tenant: Payments history', async () => {
+      await tp.goto(`${base}/portal/payments`, { waitUntil: 'networkidle' }); await tp.getByRole('heading', { name: 'Payments' }).waitFor();
+    });
+    await tctx.close();
+  }
+
   if (errors.length) { failed = true; console.log(`✗ flow page errors:\n    ${errors.join('\n    ')}`); }
   await page.close();
 }

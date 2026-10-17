@@ -45,6 +45,11 @@ api.interceptors.response.use(
     }
     // A plan limit or a lapsed plan: say so where it happened.
     if (err.response?.status === 402) toast(err.response.data?.error ?? 'Choose a plan to continue.', 'error');
+    // A tenant's sign-in opened an owner page: their place is the tenant portal.
+    if (err.response?.status === 403 && err.response.data?.code === 'TENANT' && !window.location.pathname.startsWith('/portal')) {
+      window.location.href = '/portal';
+      return new Promise(() => {}); // the page is going away; nothing should toast meanwhile
+    }
     // A page that could not load something says so, wherever it happens;
     // saves and deletes report their own errors where they were made.
     const method = (err.config?.method ?? 'get').toLowerCase();
@@ -1188,3 +1193,59 @@ export const getAiTest = () => api.get<AiTestState>('/ai-spend/test').then(r => 
 export const startAiTest = (only?: string) => api.post('/ai-spend/test', only ? { only } : {}).then(r => r.data);
 export const getPortalTests = () => api.get<{ accounts: PortalTestAccount[]; sharedRecipes: { host: string; successes: number; failures: number }[]; monthCalls: number; monthCost: number }>('/ai-spend/test/portal').then(r => r.data);
 export const testPortal = (accountId: string) => api.post(`/ai-spend/test/portal/${accountId}`).then(r => r.data);
+
+
+// ─── Rent collection, the tenant portal, repairs ──────────────────
+export type PayMethod = 'card' | 'us_bank_account';
+export interface Fees { charge: number; tenantFee: number; ownerReceives: number; stripeFee: number }
+export interface RentCollectionStatus {
+  configured: boolean; connected: boolean; chargesEnabled: boolean; payoutsEnabled: boolean; needsInfo: boolean; error?: string; canManage: boolean;
+  example: { rent: number; card: Fees; bank: Fees }; tenants: { invited: number; joined: number; autopay: number };
+}
+export const getRentCollection = () => api.get<RentCollectionStatus>('/rent-collection').then(r => r.data);
+export const connectRentPayouts = () => api.post<{ url: string }>('/rent-collection/connect').then(r => r.data);
+export const openPayoutsDashboard = () => api.post<{ url: string }>('/rent-collection/dashboard').then(r => r.data);
+export interface PortalInvite { invited: boolean; joined: boolean; autopay?: boolean; invitedAt?: string; acceptedAt?: string | null; email?: string | null; link?: string | null }
+export const getPortalInvite = (tenantId: string) => api.get<PortalInvite>(`/rent-collection/tenants/${tenantId}/invite`).then(r => r.data);
+export const sendPortalInvite = (tenantId: string, body: { email?: string; resetSignIn?: boolean } = {}) => api.post<{ link: string; emailed: boolean; email: string | null }>(`/rent-collection/tenants/${tenantId}/invite`, body).then(r => r.data);
+export const revokePortalInvite = (tenantId: string) => api.delete(`/rent-collection/tenants/${tenantId}/invite`).then(r => r.data);
+
+export interface RepairRow {
+  id: string; title: string; category: string; urgency: 'EMERGENCY' | 'URGENT' | 'ROUTINE'; status: string; createdAt: string; scheduledFor: string | null; completedAt: string | null;
+  cost?: number | null; photos?: number; updates?: number; createdBy?: string; propertyId?: string; property?: string; unit?: string | null; tenant?: string | null;
+}
+export interface RepairUpdate { id: string; author: 'OWNER' | 'TENANT'; body: string; createdAt: string }
+export interface RepairDetail extends RepairRow {
+  description: string; permissionToEnter: boolean; availability: string | null; vendor?: string | null; expenseId?: string | null; tenantId?: string | null;
+  photos: string[] | any; updates: RepairUpdate[] | any; tenant?: any;
+}
+export interface PhotoUpload { name: string; data: string }
+export const getRepairs = (status = 'active') => api.get<RepairRow[]>('/maintenance', { params: { status } }).then(r => r.data);
+export const getRepair = (id: string) => api.get<RepairDetail>(`/maintenance/${id}`).then(r => r.data);
+export const createRepair = (body: { propertyId: string; unitId?: string | null; tenantId?: string | null; title: string; description: string; category: string; urgency: string; photos?: PhotoUpload[] }) => api.post<{ id: string }>('/maintenance', body).then(r => r.data);
+export const updateRepair = (id: string, body: { status?: string; urgency?: string; scheduledFor?: string | null; vendor?: string | null; cost?: number | null; note?: string }) => api.patch(`/maintenance/${id}`, body).then(r => r.data);
+export const addRepairNote = (id: string, body: string) => api.post(`/maintenance/${id}/updates`, { body }).then(r => r.data);
+export const logRepairExpense = (id: string, amount?: number) => api.post<{ expenseId: string }>(`/maintenance/${id}/expense`, amount ? { amount } : {}).then(r => r.data);
+
+// The tenant's own side (routes/portal.ts)
+export interface PortalLease {
+  id: string; rent: number; dueDay: number; startDate: string | null; endDate: string | null; leaseType: string; hasDocument: boolean; lateFee: number | string | null; graceDays: number | null;
+  address: string; city: string; balance: { periodDate: string; thisMonth: number; arrears: number; total: number; pending: number };
+}
+export interface PortalMe {
+  tenant: { fullName: string; email: string | null; phone: string | null } | null; landlord: string; onlinePayments: boolean;
+  autopay: { on: boolean; label: string | null; method: string | null }; leases: PortalLease[];
+}
+export interface PortalPayment { id: string; amount: number; paidDate: string; periodDate: string; method: string; status: 'PENDING' | 'RECEIVED'; tenantFee: number | null; online: boolean }
+export const claimPortalInvite = (token: string) => api.post('/portal/claim', { token }).then(r => r.data);
+export const getPortalMe = () => api.get<PortalMe>('/portal/me').then(r => r.data);
+export const getPortalFees = (amount: number) => api.get<{ card: Fees; bank: Fees }>('/portal/fees', { params: { amount } }).then(r => r.data);
+export const getPortalPayments = () => api.get<PortalPayment[]>('/portal/payments').then(r => r.data);
+export const payRent = (body: { leaseId: string; amount: number; method: PayMethod }) => api.post<{ url: string }>('/portal/pay', body).then(r => r.data);
+export const setupAutopay = (method: PayMethod) => api.post<{ url: string }>('/portal/autopay', { method }).then(r => r.data);
+export const stopAutopay = () => api.delete('/portal/autopay').then(r => r.data);
+export const getPortalLeaseDocument = (leaseId: string) => api.get<{ url: string }>(`/portal/leases/${leaseId}/document`).then(r => r.data);
+export const getPortalRepairs = () => api.get<RepairRow[]>('/portal/requests').then(r => r.data);
+export const getPortalRepair = (id: string) => api.get<RepairDetail>(`/portal/requests/${id}`).then(r => r.data);
+export const createPortalRepair = (body: { leaseId: string; title: string; description: string; category: string; urgency: string; permissionToEnter: boolean; availability?: string; photos: PhotoUpload[] }) => api.post<{ id: string; photosSaved: number; photosFailed: number }>('/portal/requests', body).then(r => r.data);
+export const addPortalRepairNote = (id: string, body: string) => api.post(`/portal/requests/${id}/updates`, { body }).then(r => r.data);

@@ -5,6 +5,7 @@ import ClickUpCard from '../components/settings/ClickUpCard';
 import LetterheadCard from '../components/settings/LetterheadCard';
 import BillingPanel from '../components/BillingPanel';
 import AiSpendPanel from '../components/AiSpendPanel';
+import RentCollectionPanel from '../components/RentCollectionPanel';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { usePlaidLink } from 'react-plaid-link';
@@ -44,7 +45,7 @@ import { getAccount, setAlertPhone, inviteAccountMember, cancelAccountInvite, re
   getNotificationPreferences, updateNotificationPreferences } from '../api/client';
 import type { AccountInfo } from '../api/client';
 
-type SettingsTab = 'account' | 'billing' | 'ai' | 'notifications' | 'banking' | 'rates';
+type SettingsTab = 'account' | 'billing' | 'rent' | 'ai' | 'notifications' | 'banking' | 'rates';
 
 export default function SettingsPage() {
   const { user } = useUser();
@@ -90,6 +91,7 @@ export default function SettingsPage() {
   if (phone) {
     const SECTIONS: Record<Exclude<SettingsTab, 'account'>, { title: string; render: () => JSX.Element }> = {
       billing: { title: 'Plan & Billing', render: () => <BillingPanel /> },
+      rent: { title: 'Rent Collection', render: () => <RentCollectionPanel /> },
       ai: { title: 'AI Usage', render: () => <AiSpendPanel /> },
       notifications: { title: 'Notifications', render: () => <NotificationsTab /> },
       banking: { title: 'Bank Accounts', render: () => <BankingTab /> },
@@ -139,6 +141,7 @@ export default function SettingsPage() {
         </div>
         <Section header="Plan">
           <Row title="Plan & billing" to="/settings?tab=billing" icon={{ bg: 'var(--ios-tint)', glyph: <span style={{ fontWeight: 700, color: '#000' }}>★</span> }} />
+          <Row title="Rent collection" subtitle="Tenants pay online; payouts to your bank" to="/settings?tab=rent" icon={{ bg: '#30d158', glyph: <span style={{ fontWeight: 700 }}>↓</span> }} />
           <Row title="AI usage" subtitle="Spend, budget and a test of every AI feature" to="/settings?tab=ai" icon={{ bg: '#bf5af2', glyph: <span style={{ fontWeight: 700 }}>✦</span> }} />
         </Section>
         <Section>
@@ -157,13 +160,14 @@ export default function SettingsPage() {
           : tab === 'banking'     ? 'Connect bank accounts for automatic daily balance snapshots'
           : tab === 'rates'       ? 'Reference rate history for variable-rate loans (e.g. WSJ Prime Rate)'
           : tab === 'billing'     ? 'Your plan, trial and payment details'
+          : tab === 'rent'        ? 'Tenants pay rent online; payouts go to your bank'
           : tab === 'ai'          ? 'What Claude costs, by feature, and a test of every AI feature'
           : 'Manage your account and subscription'
         }
       />
 
       <div className="flex border-b px-6" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
-        {(['account', 'billing', 'ai', 'notifications', 'banking', 'rates'] as SettingsTab[]).map(t => (
+        {(['account', 'billing', 'rent', 'ai', 'notifications', 'banking', 'rates'] as SettingsTab[]).map(t => (
           <button
             key={t}
             onClick={() => setSearchParams({ tab: t }, { replace: true })}
@@ -173,13 +177,15 @@ export default function SettingsPage() {
                 : 'border-transparent text-gray-500 hover:text-gray-300'
             }`}
           >
-            {t === 'billing' ? 'Plan & billing' : t === 'ai' ? 'AI usage' : t}
+            {t === 'billing' ? 'Plan & billing' : t === 'ai' ? 'AI usage' : t === 'rent' ? 'Rent collection' : t}
           </button>
         ))}
       </div>
 
       {tab === 'billing' ? (
         <div className="px-6 py-5 max-w-3xl"><BillingPanel /></div>
+      ) : tab === 'rent' ? (
+        <div className="px-6 py-5 max-w-3xl"><RentCollectionPanel /></div>
       ) : tab === 'ai' ? (
         <div className="px-6 py-5 max-w-3xl"><AiSpendPanel /></div>
       ) : tab === 'banking' ? (

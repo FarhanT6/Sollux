@@ -40,6 +40,12 @@ import TaxesPage from './pages/TaxesPage';
 import VaultPage from './pages/VaultPage';
 import PersonalPage from './pages/PersonalPage';
 import CreditCardPage from './pages/CreditCardPage';
+import RepairsPage, { RepairDetailPage } from './pages/RepairsPage';
+import PortalLayout from './pages/portal/PortalLayout';
+import PortalJoinPage from './pages/portal/PortalJoinPage';
+import PortalHomePage from './pages/portal/PortalHomePage';
+import PortalRepairsPage, { PortalRepairPage } from './pages/portal/PortalRepairsPage';
+import PortalPaymentsPage from './pages/portal/PortalPaymentsPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isSignedIn, isLoaded } = useAuth();
@@ -97,6 +103,16 @@ export default function App() {
             is the statement and nothing else. */}
         <Route path="/reimbursements/:id" element={<ProtectedRoute><ReimbursementInvoicePage /></ProtectedRoute>} />
 
+        {/* The tenant portal: its own frame, none of the owner's pages.
+            The invite link works signed out (it offers sign-up first). */}
+        <Route path="/portal/join" element={<PortalJoinPage />} />
+        <Route path="/portal" element={<ProtectedRoute><PortalLayout /></ProtectedRoute>}>
+          <Route index element={<PortalHomePage />} />
+          <Route path="repairs" element={<PortalRepairsPage />} />
+          <Route path="repairs/:id" element={<PortalRepairPage />} />
+          <Route path="payments" element={<PortalPaymentsPage />} />
+        </Route>
+
         <Route path="/" element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard" element={<Responsive phone={<OverviewScreen />} desktop={<DashboardPage />} />} />
@@ -125,6 +141,8 @@ export default function App() {
           <Route path="tenants" element={<TenantsHubPage />} />
           <Route path="tenants/:id" element={<TenantDetailPage />} />
           <Route path="notices/:id" element={<NoticeDetailPage />} />
+          <Route path="repairs" element={<RepairsPage />} />
+          <Route path="repairs/:id" element={<RepairDetailPage />} />
 
 
           {/* Legal */}

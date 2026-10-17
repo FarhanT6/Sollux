@@ -37,7 +37,8 @@ const app = readFileSync(join(src, 'App.tsx'), 'utf8');
 const importOf = Object.fromEntries([...app.matchAll(/import\s+(\w+)\s+from\s+'\.\/pages\/([\w/]+)'/g)].map(m => [m[1], m[2]]));
 const routes = [...app.matchAll(/<Route\s+path="([^"*]+)"\s+element=\{(.*)\}\s*\/>/g)]
   .map(m => ({ path: m[1].startsWith('/') ? m[1] : '/' + m[1], pages: [...m[2].matchAll(/<(\w+)/g)].map(x => importOf[x[1]]).filter(Boolean) }))
-  .filter(r => !/^\/(sign-in|sign-up|privacy|terms)/.test(r.path));
+  // The tenant portal is a tenant's sign-in; the crawl is the owner's (screens.mjs walks the portal as a tenant).
+  .filter(r => !/^\/(sign-in|sign-up|privacy|terms|portal)/.test(r.path));
 const patterns = routes.map(r => ({ ...r, re: new RegExp('^' + r.path.replace(/:[A-Za-z]+/g, '[^/]+') + '$') }));
 
 // Sections each page names in its own source: tab === 'x', key: 'x', ?tab=x.

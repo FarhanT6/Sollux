@@ -11,14 +11,19 @@ const user = {
   emailAddresses: [{ emailAddress: 'owner@example.com' }],
   createdAt: new Date('2026-04-01'), passwordEnabled: true,
 };
+// localStorage sollux.mockUser = "tenant" signs in as the seeded tenant instead
+// (the dev API's Clerk stub reads the token).
+const tenant = typeof window !== 'undefined' && (() => { try { return localStorage.getItem('sollux.mockUser') === 'tenant'; } catch { return false; } })();
+const token = tenant ? 'mock-tenant' : 'mock-token';
+if (tenant) Object.assign(user, { id: 'user_tenant_mock', firstName: 'Tina', lastName: 'Tenant', fullName: 'Tina Tenant', primaryEmailAddress: { emailAddress: 'tenant@example.com' }, emailAddresses: [{ emailAddress: 'tenant@example.com' }] });
 const clerk = {
   loaded: true, signOut: async () => {}, openUserProfile: () => {}, openSignIn: () => {},
-  session: { getToken: async () => 'mock-token' },
+  session: { getToken: async () => token },
 };
 if (typeof window !== 'undefined') (window as any).Clerk = clerk;
 
 export function ClerkProvider({ children }: { children: ReactNode; publishableKey?: string }) { return <>{children}</>; }
-export const useAuth = () => ({ isLoaded: true, isSignedIn: true, userId: user.id, getToken: async () => 'mock-token', signOut: clerk.signOut });
+export const useAuth = () => ({ isLoaded: true, isSignedIn: true, userId: user.id, getToken: async () => token, signOut: clerk.signOut });
 export const useUser = () => ({ isLoaded: true, isSignedIn: true, user });
 export const useClerk = () => clerk;
 export const SignedIn = ({ children }: { children: ReactNode }) => <>{children}</>;
