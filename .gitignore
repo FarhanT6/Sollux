@@ -17,3 +17,6 @@ frontend/ios/DerivedData/
 frontend/.screens/
 # Crawl failure screenshots (npm run crawl)
 frontend/.crawl/
+
+# Local Redis snapshot (dev stack)
+dump.rdb

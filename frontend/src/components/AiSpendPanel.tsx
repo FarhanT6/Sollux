@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { getAiSpend, getAiTest, startAiTest, getPortalTests, testPortal, type AiSpend, type AiTestState, type PortalTestAccount, type WorkerStatus } from '../api/client';
+import { getAiSpend, getAiTest, startAiTest, getPortalTests, testPortal, type AiSpend, type AiTestState, type PortalTestAccount, type WorkerStatus, type QueueSnapshot } from '../api/client';
 import { fmtMoney } from '../lib/money';
 import { fmtMoment } from '../lib/date';
 import PortalCodeBanner from './utility/PortalCodeBanner';
@@ -168,7 +168,7 @@ export default function AiSpendPanel() {
                       {a.lastAgentRunAt ? ` · last run ${fmtMoment(a.lastAgentRunAt)}` : ''}
                       {a.lastSyncStatus ? ` · ${a.lastSyncStatus.toLowerCase()}` : ''}
                     </p>
-                    <RunLine a={a} workers={portal.workers} onCodeSent={() => void getPortalTests().then(setPortal)} />
+                    <RunLine a={a} workers={portal.workers} queue={portal.queue} onCodeSent={() => void getPortalTests().then(setPortal)} />
                   </div>
                   <button className="btn text-xs whitespace-nowrap" disabled={!!a.run && (a.run.state === 'queued' || a.run.state === 'running')} onClick={() => void fetchNow(a)}>
                     {a.run && (a.run.state === 'queued' || a.run.state === 'running') ? 'Fetching…' : 'Fetch now'}
@@ -198,7 +198,11 @@ export default function AiSpendPanel() {
 }
 
 /** The account's latest fetch, live: queued, what it is doing now, the code it needs, or how it ended. */
-function RunLine({ a, workers, onCodeSent }: { a: PortalTestAccount; workers?: WorkerStatus; onCodeSent: () => void }) {
+function RunLine({ a, workers, queue, onCodeSent }: { a: PortalTestAccount; workers?: WorkerStatus; queue?: QueueSnapshot | null; onCodeSent: () => void }) {
+  // What the worker is on while this press waits: "fetching SDG&E ··1234 (from the schedule, 3 min)".
+  const busyWith = queue?.active.length
+    ? `The worker is busy with ${queue.active.map(j => `${j.account} (${j.kind}${j.since ? `, ${Math.max(1, Math.round((Date.now() - new Date(j.since).getTime()) / 60000))} min so far` : ''})`).join(', ')}${queue.waiting > 1 ? `; ${queue.waiting - 1} other${queue.waiting === 2 ? '' : 's'} waiting` : ''}. Yours goes next.`
+    : null;
   const r = a.run;
   if (!a.syncEnabled) return <p className="text-xs text-amber-400 mt-0.5">Syncing is turned off for this account (marked inactive).</p>;
   if (!r) return a.lastSyncError && a.lastSyncStatus === 'FAILED' ? <p className="text-xs text-red-400 mt-0.5">{a.lastSyncError}</p> : null;
@@ -207,7 +211,7 @@ function RunLine({ a, workers, onCodeSent }: { a: PortalTestAccount; workers?: W
     <div className="mt-1 space-y-1.5">
       {r.state === 'queued' && (
         <p className="text-xs" style={{ color: r.stuck ? '#ef4444' : '#F5A623' }}>
-          {r.stuck ? `Still queued after 2 minutes. ${workers?.message ?? 'The background worker (sollux-workers on Render) is not running or is busy.'}` : 'Queued — starting in a moment…'}
+          {busyWith ?? (r.stuck ? `Still queued after 2 minutes. ${workers?.message ?? 'The background worker (sollux-workers on Render) is not running or is busy.'}` : 'Queued — starting in a moment…')}
         </p>
       )}
       {r.state === 'running' && <p className="text-xs text-amber-400 flex items-center gap-1.5"><span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />{r.progress ?? 'Working…'}</p>}
