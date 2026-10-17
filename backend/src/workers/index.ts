@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { startHeartbeat } from './heartbeat';
 import { runAutopay } from '../services/rentCollection';
 import '../config/playwrightPath';
-import './scrapeWorker';
+import { handOffActiveJobs } from './scrapeWorker';
 import './insightWorker';
 // The Gmail and Drive-import workers run inside the API (index.ts). Here they
 // only doubled up and cost ~50MB of the worker's 512MB, which Chrome needs.
@@ -17,6 +17,19 @@ import { applyDueRentIncreases, rolloverExpiredLeases, accrueOverdueRent } from 
 import { assessLateFees } from '../services/rentCharges';
 
 console.log('🔧 Sollux Workers started');
+
+// A deploy or restart: hand running fetches to the next worker instead of
+// letting Render kill them mid-sign-in (scrapeWorker.handOffActiveJobs).
+let stopping = false;
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.once(signal, () => {
+    if (stopping) return;
+    stopping = true;
+    console.log(`[Workers] ${signal}: handing running jobs to the next worker`);
+    void handOffActiveJobs().then(n => console.log(`[Workers] ${n} job(s) handed off`)).finally(() => process.exit(0));
+    setTimeout(() => process.exit(0), 20_000).unref();
+  });
+}
 // Inside the API process (RUN_WORKERS_IN_API) the heartbeat says so.
 startHeartbeat(process.env.RUN_WORKERS_IN_API === 'true' ? 'sollux-api' : 'sollux-workers');
 
@@ -208,7 +221,7 @@ setTimeout(() => {
     });
     const stuckJobs = await db.syncJob.updateMany({
       where: { status: 'PENDING', completedAt: null },
-      data: { status: 'FAILED', completedAt: new Date(), error: 'Job interrupted (worker restarted)' },
+      data: { status: 'FAILED', completedAt: new Date(), error: 'Interrupted when the background worker restarted (an update, or it ran out of memory) — it starts again on its own within a few minutes.' },
     });
     if (stuckAccounts.count > 0 || stuckJobs.count > 0) {
       console.log(`[Startup] Cleared ${stuckAccounts.count} stuck account(s) and ${stuckJobs.count} stuck job(s) from previous crash`);
