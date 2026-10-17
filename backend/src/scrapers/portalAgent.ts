@@ -116,16 +116,28 @@ export async function describe(page: Page, secrets: string[]): Promise<string> {
           if (i - start >= limit) break;
           const r = (el as HTMLElement).getBoundingClientRect();
           if (r.width === 0 || r.height === 0 || getComputedStyle(el as HTMLElement).visibility === 'hidden') continue;
-          // A label only when it stands in for a hidden checkbox or radio (an option card); otherwise its field is listed.
+          // A checkbox or radio drawn by the site (Angular Material shrinks the real
+          // one to 1px under a styled box): list its label, which takes the click,
+          // instead of the 1px input, whose click something else intercepts.
+          const ctrl = el.tagName === 'LABEL' ? (el as HTMLLabelElement).control as HTMLInputElement | null : null;
           if (el.tagName === 'LABEL') {
-            const c = (el as HTMLLabelElement).control as HTMLElement | null;
-            if (!c || c.getBoundingClientRect().width > 0) continue;
+            if (!ctrl || (ctrl.type !== 'checkbox' && ctrl.type !== 'radio')) continue;
+            const cb = ctrl.getBoundingClientRect();
+            if (cb.width >= 4 && cb.height >= 4) continue; // a normal checkbox: listed itself
+          }
+          if (el.tagName === 'INPUT' && ((el as HTMLInputElement).type === 'checkbox' || (el as HTMLInputElement).type === 'radio') && (r.width < 4 || r.height < 4)) {
+            const lab = (el as HTMLInputElement).labels?.[0];
+            if (lab && lab.getBoundingClientRect().width > 0) continue; // its label is listed
           }
           const n = ++i;
           el.setAttribute('data-sref', String(n));
           const tag = el.tagName.toLowerCase();
           const inp = el as HTMLInputElement;
-          const label = (el.getAttribute('aria-label') || (inp.labels && inp.labels[0]?.innerText) || inp.placeholder || el.getAttribute('title') || (el as HTMLElement).innerText || inp.name || el.id || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+          let label = (el.getAttribute('aria-label') || (inp.labels && inp.labels[0]?.innerText) || inp.placeholder || el.getAttribute('title') || (el as HTMLElement).innerText || inp.name || el.id || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+          // A bare box (a checkbox drawn at the side of an option card): name it by the card it sits in.
+          for (let up = el.parentElement, k = 0; !label.replace(/[^\w]/g, '') && up && k < 5; up = up.parentElement, k++) {
+            label = (up.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+          }
           let d = `[${n}] ${tag}`;
           if (tag === 'input') d += ` type=${inp.type || 'text'}${inp.type === 'checkbox' || inp.type === 'radio' ? (inp.checked ? ' (checked)' : ' (unchecked)') : inp.value ? ' (filled)' : ''}`;
           // An option card is often a label around a hidden checkbox or radio: its state goes on the label.
@@ -137,6 +149,25 @@ export async function describe(page: Page, secrets: string[]): Promise<string> {
           if (tag === 'a' && (el as HTMLAnchorElement).href) d += ` href=${(el as HTMLAnchorElement).href.slice(0, 120)}`;
           if (tag === 'select') d += ` options=${Array.from((el as HTMLSelectElement).options).slice(0, 15).map(o => o.text.trim()).join(' | ').slice(0, 200)}`;
           out.push(`${d} "${label}"`);
+        }
+      }
+      // Clickable cards with no button, link or role — only a click handler
+      // (Westlake's "SMS / Call / Email" choices): the outermost element that
+      // shows a pointer cursor, has short text, and holds nothing listed above.
+      for (const root of roots) {
+        for (const el of Array.from(root.querySelectorAll('div,span,li,section,article,mat-card,[tabindex]'))) {
+          if (i - start >= limit) break;
+          if (el.hasAttribute('data-sref') || el.closest('[data-sref]') || el.querySelector('[data-sref]')) continue;
+          const r = (el as HTMLElement).getBoundingClientRect();
+          if (r.width < 8 || r.height < 8) continue;
+          const t = ((el as HTMLElement).innerText || '').replace(/\s+/g, ' ').trim();
+          if (!t || t.length > 160) continue;
+          const cs = getComputedStyle(el as HTMLElement);
+          if (cs.cursor !== 'pointer' || cs.visibility === 'hidden') continue;
+          if (el.parentElement && getComputedStyle(el.parentElement).cursor === 'pointer') continue;
+          const n = ++i;
+          el.setAttribute('data-sref', String(n));
+          out.push(`[${n}] ${el.tagName.toLowerCase()} (clickable) "${t.slice(0, 80)}"`);
         }
       }
       const text = [(document.body?.innerText || ''), ...shadowText].join('\n').replace(/\n{2,}/g, '\n').slice(0, 2000);
