@@ -22,8 +22,15 @@ model User {
   passwordHash     String?
   fullName         String
   phone            String?
-  subscriptionTier SubscriptionTier @default(BASIC)
+  subscriptionTier SubscriptionTier @default(STARTER)
   stripeCustomerId String?
+  // Billing (routes/billing.ts, lib/plans.ts). Status mirrors Stripe's
+  // subscription status ('trialing', 'active', 'past_due', 'canceled', …);
+  // null is a trial that has not been to checkout yet.
+  subscriptionStatus   String?
+  stripeSubscriptionId String?   @unique
+  trialEndsAt          DateTime?
+  currentPeriodEnd     DateTime?
   clerkUserId      String?          @unique
   // Shared ("family") access: when set, this user signs in with their own
   // credentials but operates on the owner's data. Every route scopes by the
@@ -62,6 +69,12 @@ enum SubscriptionTier {
   BASIC
   PRO
   BUSINESS
+  /// Up to 3 properties.
+  STARTER
+  /// Unlimited properties.
+  PORTFOLIO
+  /// Complimentary: accounts that predate billing, and staff. No limits, never billed.
+  COMP
 }
 
 // Pending shared-access invite. The invitee signs up with their own login

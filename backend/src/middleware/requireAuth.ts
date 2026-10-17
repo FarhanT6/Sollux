@@ -1,6 +1,10 @@
 import { Request, Response, NextFunction } from 'express';
 import { clerkClient, clerkMiddleware, getAuth } from '@clerk/express';
 import { db } from '../config/db';
+import { TRIAL_DAYS, canWrite } from '../lib/plans';
+
+const WRITE = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+const WRITE_ALWAYS = /^\/api\/(billing|settings|telemetry|account|auth)(\/|$|\?)/;
 
 // Extend Express Request to include userId
 declare global {
@@ -134,6 +138,8 @@ export async function attachDbUser(req: Request, res: Response, next: NextFuncti
             email: primaryEmail,
             fullName,
             phone: primaryPhone,
+            // A new account starts its free trial (lib/plans.ts).
+            trialEndsAt: new Date(Date.now() + TRIAL_DAYS * 86_400_000),
           },
         });
       }
@@ -150,6 +156,16 @@ export async function attachDbUser(req: Request, res: Response, next: NextFuncti
     req.isAccountOwner = !user.ownerUserId;
     // Members operate on the owner's data.
     req.dbUserId = user.ownerUserId ?? user.id;
+
+    // A lapsed plan (trial over, or cancelled) keeps everything readable but
+    // stops changes, until a plan is chosen. Billing itself, settings and
+    // the app's own error reports always go through.
+    if (WRITE.has(req.method) && !WRITE_ALWAYS.test(req.originalUrl)) {
+      const account = user.ownerUserId ? await db.user.findUnique({ where: { id: user.ownerUserId } }) : user;
+      if (account && !canWrite(account)) {
+        return res.status(402).json({ error: 'Your free trial has ended. Choose a plan to keep adding and changing things — everything you have is still here.', code: 'PLAN_REQUIRED' });
+      }
+    }
     next();
   } catch (err) {
     next(err);
