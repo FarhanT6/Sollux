@@ -405,6 +405,11 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   // Why the last email search came up empty, for the error the owner sees.
   let mailNote = '';
   const runStartedAt = Date.now();
+  // When the page was last acted on (a click, a sign-in, Enter): a code sent
+  // because of it arrives after this. Searching from the run's start (less 30s)
+  // picked up a code an earlier run had asked for — Westlake typed 168168,
+  // the code from the run before, and the portal counted it as a wrong try.
+  let actedAt = runStartedAt;
   // After an action: let the page settle, then show it as it is now (saves a look step).
   // The page as Claude last saw it, and whether giving up has been second-guessed yet.
   let lastPage = '';
@@ -489,6 +494,7 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
         else if (u.name === 'select') say(`${n}: choosing "${String(i.label).slice(0, 40)}"`);
         else if (u.name === 'ask_owner_for_code') say(`${n}: the portal sent a verification code`);
         else if (u.name === 'open_emailed_link') say(`${n}: the portal emailed a sign-in link — looking for it in your email`);
+        if (['click', 'fill_login', 'press', 'type', 'select', 'goto', 'type_code'].includes(u.name)) actedAt = Date.now();
         try {
           if (!navDone) {
             if (u.name === 'click' || u.name === 'type' || u.name === 'select') {
@@ -553,7 +559,8 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
             case 'ask_owner_for_code': {
               if (triedCodes.size >= 2) { content = 'Two codes have been rejected — finish with no_code.'; break; }
               const mailHost = new URL(page.url()).hostname || start.hostname;
-              const since = new Date(runStartedAt - 30_000);
+              // Only mail sent after the action that made the portal send the code (a little slack for clocks).
+              const since = new Date(Math.max(runStartedAt, actedAt) - 10_000);
               const report: MailReport = { inboxes: [], errors: [], fromPortal: 0 };
               // A Fetch the owner pressed shows the code box at once: the code is
               // taken from the email or from the owner, whichever comes first, so
@@ -594,7 +601,7 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
               if (triedLinks >= 2) { content = 'Two emailed links have been tried — finish with no_code.'; break; }
               triedLinks++;
               // Only mail sent since this fetch began, from the portal itself.
-              const linkHost = new URL(page.url()).hostname || start.hostname, linkSince = new Date(runStartedAt - 30_000);
+              const linkHost = new URL(page.url()).hostname || start.hostname, linkSince = new Date(Math.max(runStartedAt, actedAt) - 10_000);
               const linkReport: MailReport = { inboxes: [], errors: [], fromPortal: 0 };
               const link = await findEmailedLink(userId, { since: linkSince, host: linkHost, providerName: account.providerName, timeoutMs: 120_000, report: linkReport }).catch(() => null);
               if (!link) { mailNote = mailMiss(linkReport, linkHost, linkSince); content = `No sign-in link: ${mailNote} Finish with no_code.`; break; }
