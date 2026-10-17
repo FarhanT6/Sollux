@@ -3,6 +3,10 @@ export default {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   theme: {
     extend: {
+      // md: the desktop layout. A wide screen, or a computer (mouse or
+      // trackpad) window at least 600px wide; must stay the opposite of
+      // PHONE_QUERY in src/ios/usePhone.ts.
+      screens: { md: { raw: '(min-width: 768px), (min-width: 600px) and (pointer: fine)' } },
       colors: {
         gold: {
           50:  '#FEF9EC',
