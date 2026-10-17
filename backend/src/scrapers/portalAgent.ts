@@ -24,7 +24,7 @@ import { db } from '../config/db';
 import { decrypt, encrypt } from '../crypto/encrypt';
 import { PRIMARY_MODEL, paramsFor, meteredCreate } from '../ai/models';
 import { costOf, withAiContext } from '../ai/meter';
-import { findEmailedCode } from '../services/emailCode';
+import { findEmailedCode, findEmailedLink } from '../services/emailCode';
 import { loadRecipe, saveRecipe, recipeWorked, replay, targetOf, refLocator, setRefFrames, type RecipeStep } from './portalRecipe';
 import { intakeBill, type ReviewItem } from '../services/documentIntake';
 import { BaseScraperProvider } from './base';
@@ -74,6 +74,7 @@ const TOOLS: Anthropic.Tool[] = [
   { name: 'goto', description: "Open a URL on the provider's own site.", input_schema: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } },
   { name: 'download_statement', description: 'Click element [n] that downloads or opens one statement PDF, and keep it. Give the statement date if shown.', input_schema: { type: 'object', properties: { ref: { type: 'number' }, statementDate: { type: 'string' } }, required: ['ref'] } },
   { name: 'ask_owner_for_code', description: "The portal sent a verification code. Reads it from the owner's email (up to 2 minutes), else asks the owner (up to 5 more). Say where it was sent.", input_schema: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] } },
+  { name: 'open_emailed_link', description: 'The portal emailed a link that signs you in, instead of a code ("magic link", "Access your account", "check your email to log in"). Finds that link in the owner\'s email (up to 2 minutes) and opens it in this browser; returns the page afterwards.', input_schema: { type: 'object', properties: {} } },
   { name: 'type_code', description: 'Type the verification code into field [ref], tick [rememberRef] ("remember this device") if given, then click [submitRef].', input_schema: { type: 'object', properties: { ref: { type: 'number' }, rememberRef: { type: 'number' }, submitRef: { type: 'number' } }, required: ['ref'] } },
   { name: 'finish', description: 'Stop. outcome: done (downloaded what was new, or nothing new), bad_login (the portal said the username or password is wrong), captcha, no_code, turned_away (the site refused the browser itself: Access Denied, "invalid request", "unable to process your request" after a sign-in, a bot check), blocked (anything else in the way).', input_schema: { type: 'object', properties: { outcome: { type: 'string', enum: ['done', 'bad_login', 'captcha', 'no_code', 'turned_away', 'blocked'] }, summary: { type: 'string' } }, required: ['outcome', 'summary'] } },
 ];
@@ -265,6 +266,7 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   let usedCode = false;
   // Codes already typed: a second request must bring a new one.
   const triedCodes = new Set<string>();
+  let triedLinks = 0;
   const runStartedAt = Date.now();
   // After an action: let the page settle, then show it as it is now (saves a look step).
   const after = async (what: string) => {
@@ -275,7 +277,7 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
 
   const system = `You operate a web browser for a property owner to collect utility statements from ${account.providerName}'s customer portal. Account ${account.accountNumber ? `ending ${String(account.accountNumber).slice(-4)}` : ''} at ${account.property.address}.
 Goal: log in, open the billing / statement history, and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If there is nothing newer, finish with outcome done.
-Rules: use fill_login for credentials (you never see them). If the portal offers where to send a verification code, choose email over text or a phone call. When a code has been sent, call ask_owner_for_code (it reads the code from the owner's email, or asks the owner), then type_code. Pass any "Remember this device", "Trust this browser", "Keep me signed in" or "Don't ask again" checkbox as rememberRef so the next visit is not asked again. Never pay, enroll, change settings, accept offers or send messages. If a captcha appears, finish with captcha. If the login is rejected, finish with bad_login. If a code you entered is rejected, ask_owner_for_code once more for a fresh one; after a second rejection finish with no_code — never start the login over.
+Rules: use fill_login for credentials (you never see them). If the portal offers where to send a verification code, choose email over text or a phone call. If it emails a sign-in link instead of a code, call open_emailed_link (the owner is never asked for it); if none arrives, finish with no_code. When a code has been sent, call ask_owner_for_code (it reads the code from the owner's email, or asks the owner), then type_code. Pass any "Remember this device", "Trust this browser", "Keep me signed in" or "Don't ask again" checkbox as rememberRef so the next visit is not asked again. Never pay, enroll, change settings, accept offers or send messages. If a captcha appears, finish with captcha. If the login is rejected, finish with bad_login. If a code you entered is rejected, ask_owner_for_code once more for a fresh one; after a second rejection finish with no_code — never start the login over.
 If the site refuses the browser itself (Access Denied, "invalid request", "unable to process your request" after a correct sign-in, a bot check), finish with turned_away at once: never submit the login a second time — each retry makes the site more suspicious and can lock the owner's account.
 Each action returns the page as it is afterwards: do not call look after it. Fill and submit in one step (submitRef). A typical visit is: look, fill_login (with submit), code if asked, open billing/statements, download, finish — aim for about 10 steps. When several accounts are listed, choose the one matching the account number, else the address. The account number is what identifies the account: the address a portal shows is often the owner's mailing address, not the property's, so an account whose number matches is the right one whatever address it shows.`;
   // Every step that changed the page, in order: replayed ones and Claude's.
@@ -337,6 +339,7 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
         else if (u.name === 'type') say(`${n}: typing`);
         else if (u.name === 'select') say(`${n}: choosing "${String(i.label).slice(0, 40)}"`);
         else if (u.name === 'ask_owner_for_code') say(`${n}: the portal sent a verification code`);
+        else if (u.name === 'open_emailed_link') say(`${n}: the portal emailed a sign-in link — looking for it in your email`);
         try {
           if (!navDone) {
             if (u.name === 'click' || u.name === 'type' || u.name === 'select') {
@@ -419,6 +422,19 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
               if (code) secrets.push(code);
               break;
             }
+            case 'open_emailed_link': {
+              if (triedLinks >= 2) { content = 'Two emailed links have been tried — finish with no_code.'; break; }
+              triedLinks++;
+              // Only mail sent since this fetch began, from the portal itself.
+              const link = await findEmailedLink(userId, { since: new Date(runStartedAt - 30_000), host: new URL(page.url()).hostname || start.hostname, providerName: account.providerName, timeoutMs: 120_000 }).catch(() => null);
+              if (!link) { content = 'No sign-in link arrived in the owner\'s email within 2 minutes — finish with no_code.'; break; }
+              secrets.push(link);
+              usedCode = true; // signed in by email: keep the browser's memory like after a code
+              say('Found the sign-in link in your email — opening it');
+              await page.goto(link, { waitUntil: 'domcontentloaded', timeout: 45000 });
+              content = await after('Opened the emailed sign-in link.');
+              break;
+            }
             case 'type_code': {
               if (!code) { content = 'No code yet — call ask_owner_for_code.'; break; }
               await el(i.ref).fill(code);
@@ -433,7 +449,7 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
               finished = true;
               run.ok = i.outcome === 'done';
               run.summary = String(i.summary ?? '').slice(0, 500);
-              if (!run.ok) run.error = { bad_login: 'The portal rejected the username or password.', captcha: 'The portal showed a captcha the agent cannot solve — sync this one by email or upload.', no_code: opts.interactive ? 'The portal asked for a verification code; none arrived in your connected email and none was entered in time.' : 'The portal sent a verification code that did not arrive in your connected email (it may go to your phone) — press Fetch now and enter the code when Sollux asks.', turned_away: 'turned_away', blocked: 'The agent could not get to the statements.' }[String(i.outcome)] + (run.summary ? ` ${run.summary}` : '');
+              if (!run.ok) run.error = { bad_login: 'The portal rejected the username or password.', captcha: 'The portal showed a captcha the agent cannot solve — sync this one by email or upload.', no_code: opts.interactive ? 'The portal asked for a verification code; none arrived in your connected email and none was entered in time.' : 'The portal sent a verification code or sign-in link that did not arrive in your connected Gmail (it may go to your phone, or to an inbox not connected) — press Fetch now and enter the code when Sollux asks.', turned_away: 'turned_away', blocked: 'The agent could not get to the statements.' }[String(i.outcome)] + (run.summary ? ` ${run.summary}` : '');
               break;
             default: content = 'Unknown tool.';
           }

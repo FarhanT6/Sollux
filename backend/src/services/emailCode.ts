@@ -1,12 +1,12 @@
 /**
- * Verification codes from the owner's own inbox. When a portal emails a
- * one-time code, the portal agent asks here before it asks the owner: the
- * connected Gmail accounts are searched for a message that arrived after the
- * code was requested, and the code is read out of it.
+ * Verification codes and sign-in links from the owner's own inbox. When a
+ * portal emails a one-time code, or a link that signs you in ("magic link",
+ * Dignity Memorial's "Access your Account"), the portal agent looks here
+ * before it asks the owner: the connected Gmail accounts are searched for a
+ * message from the portal that arrived after this fetch began.
  *
- * Nothing is kept: the code goes straight to the browser and into the agent's
- * list of secrets (scrubbed from what Claude sees). Only mail newer than the
- * request is read, and only messages that look like a sign-in code.
+ * Nothing is kept: the code or link goes straight to the browser and into the
+ * agent's list of secrets (scrubbed from what Claude sees).
  */
 import { google } from 'googleapis';
 import { db } from '../config/db';
@@ -33,48 +33,85 @@ function senderScore(from: string, host: string, providerName: string): number {
   return word && f.includes(word) ? 1 : 0;
 }
 
+/** One message from the owner's inbox, as the pickers below read it. */
+interface Mail { subject: string; from: string; text: string; html: string; at: number }
+
 /**
- * Wait up to timeoutMs for a code emailed after `since`, checking every few
- * seconds. Prefers mail from the portal's own domain; null when none arrives
- * (a code sent by text, or no Gmail connected).
+ * Wait up to timeoutMs for mail sent after `since` that `pick` finds something
+ * in, checking every few seconds. Only mail from the portal itself (its domain,
+ * or its name in the sender) counts: something from another sign-in that
+ * happened to arrive is never used. Null when nothing arrives (no Gmail
+ * connected, or it went to a phone).
  */
-export async function findEmailedCode(userId: string, o: { since: Date; host: string; providerName: string; timeoutMs?: number; exclude?: string[] }): Promise<string | null> {
+async function waitForMail(userId: string, o: { since: Date; host: string; providerName: string; timeoutMs?: number; query: string }, pick: (m: Mail) => string | null): Promise<string | null> {
   const tokens = await db.gmailToken.findMany({ where: { userId } });
   if (!tokens.length) return null;
   const until = Date.now() + (o.timeoutMs ?? 120_000);
   const after = Math.floor(o.since.getTime() / 1000);
   const seen = new Set<string>();
   while (Date.now() < until) {
-    const found: { code: string; score: number; at: number }[] = [];
+    const found: { value: string; score: number; at: number }[] = [];
     for (const token of tokens) {
       try {
         const gmail = google.gmail({ version: 'v1', auth: oauthFor(token) });
-        const list = await gmail.users.messages.list({ userId: 'me', q: `after:${after} ${KEYWORDS}`, maxResults: 10 });
+        const list = await gmail.users.messages.list({ userId: 'me', q: `after:${after} ${o.query}`, maxResults: 10 });
         for (const m of list.data.messages ?? []) {
           if (!m.id || seen.has(m.id)) continue;
           seen.add(m.id);
           const msg = (await gmail.users.messages.get({ userId: 'me', id: m.id, format: 'full' })).data;
           const at = Number(msg.internalDate ?? 0);
-          if (at < o.since.getTime()) continue; // sent before this fetch began: an old code
+          if (at < o.since.getTime()) continue; // sent before this fetch began: an old one
           const headers = msg.payload?.headers ?? [];
           const subject = headers.find(h => h.name?.toLowerCase() === 'subject')?.value ?? '';
           const from = headers.find(h => h.name?.toLowerCase() === 'from')?.value ?? '';
           const parts = walk(msg.payload ?? undefined);
           const plain = parts.find(p => p.mimeType === 'text/plain' && p.body?.data);
-          const html = parts.find(p => p.mimeType === 'text/html' && p.body?.data);
-          const body = plain ? decode(plain.body!.data).toString('utf8') : html ? htmlToText(decode(html.body!.data).toString('utf8')) : msg.snippet ?? '';
-          const code = codeIn(subject, body);
-          if (code && !o.exclude?.includes(code)) found.push({ code, score: senderScore(from, o.host, o.providerName), at });
+          const htmlPart = parts.find(p => p.mimeType === 'text/html' && p.body?.data);
+          const html = htmlPart ? decode(htmlPart.body!.data).toString('utf8') : '';
+          const text = plain ? decode(plain.body!.data).toString('utf8') : html ? htmlToText(html) : msg.snippet ?? '';
+          const value = pick({ subject, from, text, html, at });
+          if (value) found.push({ value, score: senderScore(from, o.host, o.providerName), at });
         }
       } catch (err) {
         console.warn('[EmailCode] could not read a mailbox:', err instanceof Error ? err.message.split('\n')[0] : err);
       }
     }
-    // Only a code from the portal itself (its domain or its name in the sender):
-    // a code from some other sign-in that happened to arrive is never typed in.
     found.sort((a, b) => b.score - a.score || b.at - a.at);
-    if (found.length && found[0].score > 0) return found[0].code;
+    if (found.length && found[0].score > 0) return found[0].value;
     await new Promise(r => setTimeout(r, 6000));
   }
   return null;
+}
+
+/** A code emailed after `since` (prefers the portal's own domain), not one in `exclude`. */
+export function findEmailedCode(userId: string, o: { since: Date; host: string; providerName: string; timeoutMs?: number; exclude?: string[] }): Promise<string | null> {
+  return waitForMail(userId, { ...o, query: KEYWORDS }, m => {
+    const code = codeIn(m.subject, m.text);
+    return code && !o.exclude?.includes(code) ? code : null;
+  });
+}
+
+const LINK_WORDS = /log ?in|sign ?in|access|verify|confirm|continue|open (my )?account|get started/i;
+const NOT_SIGN_IN = /unsubscribe|privacy|preferences|subscriptions|terms|help|support|contact|facebook|twitter|instagram|linkedin|youtube|view (it )?in (your )?browser|\.(png|jpe?g|gif)(\?|$)/i;
+
+/**
+ * The sign-in link ("magic link") in an email: the button or link whose text
+ * says to log in or access the account (Dignity Memorial's "LOG IN"), else a
+ * link whose address looks like a sign-in. Never an unsubscribe or footer link.
+ */
+export function signInLinkIn(html: string, text: string): string | null {
+  const links: { href: string; label: string }[] = [];
+  for (const m of html.matchAll(/<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
+    links.push({ href: m[1].replace(/&amp;/g, '&'), label: htmlToText(m[2]).replace(/\s+/g, ' ').trim() });
+  }
+  if (!links.length) for (const m of text.matchAll(/https:\/\/[^\s<>"')\]]+/g)) links.push({ href: m[0], label: '' });
+  const ok = links.filter(l => /^https:\/\//i.test(l.href) && !NOT_SIGN_IN.test(l.href) && !NOT_SIGN_IN.test(l.label));
+  return ok.find(l => l.label && LINK_WORDS.test(l.label) && l.label.length < 40)?.href
+    ?? ok.find(l => /login|signin|sign-in|auth|magic|token|verify|access/i.test(l.href))?.href
+    ?? null;
+}
+
+/** A sign-in link the portal emailed after `since`. */
+export function findEmailedLink(userId: string, o: { since: Date; host: string; providerName: string; timeoutMs?: number }): Promise<string | null> {
+  return waitForMail(userId, { ...o, query: '(link OR "log in" OR "sign in" OR login OR access OR verify)' }, m => signInLinkIn(m.html, m.text));
 }
