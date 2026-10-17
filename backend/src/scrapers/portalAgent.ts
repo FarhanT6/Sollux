@@ -30,6 +30,9 @@ import { BaseScraperProvider } from './base';
 // A run that needs more than this is lost, not nearly done; each step resends
 // the conversation (cached), so the last steps cost the most.
 const MAX_STEPS = 20;
+// A first visit (no saved route yet) has to find its way: sign-in, account
+// picker, billing, statements. Prescott and Eternal Hills ran out at 20.
+const MAX_STEPS_FIRST = 32;
 // Stop a run that has cost this much, whatever it is doing (dollars).
 const RUN_MAX_USD = Number(process.env.PORTAL_RUN_MAX_USD) || 0.75;
 const MAX_DOWNLOADS = 6;
@@ -169,7 +172,8 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   await fs.promises.mkdir(profileDir, { recursive: true });
   // The browser a person would use; the session is kept so a trusted device stays trusted.
   const ctx = await chromium.launchPersistentContext(profileDir, {
-    headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled'],
+    // --disable-http2: some portals (Mohela) reset HTTP/2 from automated browsers (ERR_HTTP2_PROTOCOL_ERROR).
+    headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled', '--disable-http2'],
     viewport: { width: 1366, height: 900 }, locale: 'en-US', timezoneId: 'America/Los_Angeles', acceptDownloads: true,
     userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
   });
@@ -207,7 +211,8 @@ Rules: use fill_login for credentials (you never see them); if the portal sends 
       }
     }
     const messages: Anthropic.MessageParam[] = [{ role: 'user', content: opening }];
-    for (let step = 0; step < MAX_STEPS && Date.now() < deadline; step++) {
+    const stepLimit = recipe && run.replayed === recipe.steps.length ? MAX_STEPS : MAX_STEPS_FIRST;
+    for (let step = 0; step < stepLimit && Date.now() < deadline; step++) {
       if ((run.costUsd ?? 0) >= RUN_MAX_USD) { run.error = `Stopped after spending $${(run.costUsd ?? 0).toFixed(2)} without finishing — the portal needs a look.`; break; }
       // Cached: each step resends the run so far, and reads it back at a tenth of the price.
       const res = await meteredCreate(client, 'portal-agent', { ...paramsFor(PRIMARY_MODEL, { maxTokens: 1500, system, messages, cache: true }), tools: TOOLS });
