@@ -209,27 +209,35 @@ setTimeout(() => {
 // NOTE: Removed startup auto-scrape. Scrapes run every 6 hours via setInterval above,
 // or on demand via the Sync button / POST /api/utilities/:id/sync.
 
-// ── Startup cleanup: fix accounts/jobs stuck at PENDING from a previous crash ──
-// If the worker process is killed mid-job (SIGINT, OOM, crash), accounts remain
-// forever in PENDING state and the UI shows "Syncing..." indefinitely.
-// On every worker restart, flip those stale records to FAILED so the UI is honest.
-(async () => {
+// ── Startup cleanup: fetches left "running" by a worker that died ──
+// If the worker process is killed mid-job (OOM, crash), its sync job stays
+// PENDING and the row says "Fetching…" forever. But Render deploys without
+// downtime: this worker starts while the old one is still finishing (and on
+// SIGTERM hands its fetch over), and queued fetches are just waiting. So wait
+// a minute, then mark only fetches that had started and that no worker is
+// running or about to run.
+setTimeout(async () => {
   try {
-    const stuckAccounts = await db.utilityAccount.updateMany({
-      where: { lastSyncStatus: 'PENDING' },
-      data: { lastSyncStatus: 'FAILED', lastSyncError: 'Sync interrupted — worker restarted. Click Sync to retry.' },
-    });
-    const stuckJobs = await db.syncJob.updateMany({
-      where: { status: 'PENDING', completedAt: null },
-      data: { status: 'FAILED', completedAt: new Date(), error: 'Interrupted when the background worker restarted (an update, or it ran out of memory) — it starts again on its own within a few minutes.' },
-    });
-    if (stuckAccounts.count > 0 || stuckJobs.count > 0) {
-      console.log(`[Startup] Cleared ${stuckAccounts.count} stuck account(s) and ${stuckJobs.count} stuck job(s) from previous crash`);
+    const live = await scrapeQueue.getJobs(['active', 'waiting', 'prioritized', 'delayed', 'paused'], 0, 500);
+    const busy = new Set(live.map(j => j.data?.utilityAccountId).filter(Boolean) as string[]);
+    const cutoff = new Date(Date.now() - 60_000);
+    const stuck = await db.syncJob.findMany({ where: { status: 'PENDING', completedAt: null, startedAt: { not: null, lt: cutoff } }, select: { id: true, utilityAccountId: true } });
+    const dead = stuck.filter(j => !busy.has(j.utilityAccountId));
+    if (dead.length) {
+      await db.syncJob.updateMany({
+        where: { id: { in: dead.map(j => j.id) } },
+        data: { status: 'FAILED', completedAt: new Date(), progress: null, error: 'Interrupted when the background worker restarted (it ran out of memory, or an update) — press Fetch now to run it again.' },
+      });
+      await db.utilityAccount.updateMany({
+        where: { id: { in: dead.map(j => j.utilityAccountId) }, lastSyncStatus: 'PENDING' },
+        data: { lastSyncStatus: 'FAILED', lastSyncError: 'Sync interrupted — worker restarted. Press Fetch now or Sync to retry.' },
+      });
+      console.log(`[Startup] Marked ${dead.length} interrupted fetch(es) that no worker is running`);
     }
   } catch (err) {
-    console.warn('[Startup] Could not clean stuck sync state:', err);
+    console.warn('[Startup] Could not clean stuck sync state:', err instanceof Error ? err.message : err);
   }
-})();
+}, 75_000).unref();
 
 // ── One-time cleanup: clear bad placeholder confirmation numbers ─────────────
 (async () => {
