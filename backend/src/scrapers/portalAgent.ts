@@ -127,13 +127,20 @@ export async function capturePdf(ctx: BrowserContext, page: Page, action: () => 
   return b && b.subarray(0, 1024).includes('%PDF-') ? b : null;
 }
 
-export async function runPortalAgent(accountId: string, opts: { interactive?: boolean } = {}): Promise<PortalRun> {
+export interface AgentOptions {
+  interactive?: boolean;
+  /** Called with a short line on what the agent is doing, for a live status. */
+  onProgress?: (text: string) => void;
+}
+
+export async function runPortalAgent(accountId: string, opts: AgentOptions = {}): Promise<PortalRun> {
   // The spend is the account owner's (ai/meter.ts).
   const owner = await db.utilityAccount.findUnique({ where: { id: accountId }, select: { property: { select: { userId: true } } } });
   return withAiContext({ userId: owner?.property.userId ?? null }, () => runAgent(accountId, opts));
 }
 
-async function runAgent(accountId: string, opts: { interactive?: boolean }): Promise<PortalRun> {
+async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRun> {
+  const say = (t: string) => { try { opts.onProgress?.(t); } catch { /* status only */ } };
   const account = await db.utilityAccount.findUnique({
     where: { id: accountId },
     select: {
@@ -183,9 +190,11 @@ Rules: use fill_login for credentials (you never see them); if the portal sends 
   const recipe = await loadRecipe(account.id, host);
 
   try {
+    say(`Opening ${start.hostname}`);
     await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
     let opening = "Start. The browser is open on the provider's login page (or its home page — find Sign in from there).";
     if (recipe) {
+      say(`Replaying the saved route (${recipe.steps.length} steps, no AI)`);
       const done = await replay(page, recipe.steps, { username, password }, h => allowed.has(rootOf(h)));
       run.replayed = done;
       steps.push(...recipe.steps.slice(0, done));
@@ -215,6 +224,13 @@ Rules: use fill_login for credentials (you never see them); if the portal sends 
         let content: Anthropic.ToolResultBlockParam['content'] = 'ok';
         let rec: RecipeStep | null = null;
         if (u.name === 'download_statement' || u.name === 'finish') navDone = true;
+        const n = `Step ${step + 1}`;
+        if (u.name === 'look') say(`${n}: reading the page${await page.title().then(t => (t ? ` "${t.slice(0, 60)}"` : '')).catch(() => '')}`);
+        else if (u.name === 'click') say(`${n}: clicking${await targetOf(page, i.ref).then(t => (t?.label ? ` "${t.label.slice(0, 50)}"` : '')).catch(() => '')}`);
+        else if (u.name === 'fill_login') say(`${n}: signing in`);
+        else if (u.name === 'download_statement') say(`${n}: downloading a statement${i.statementDate ? ` (${String(i.statementDate).slice(0, 20)})` : ''}`);
+        else if (u.name === 'goto') say(`${n}: opening ${String(i.url).replace(/^https?:\/\//, '').slice(0, 60)}`);
+        else if (u.name === 'type_code') say(`${n}: entering your code`);
         try {
           if (!navDone) {
             if (u.name === 'click' || u.name === 'type' || u.name === 'select') {
@@ -261,6 +277,7 @@ Rules: use fill_login for credentials (you never see them); if the portal sends 
             case 'ask_owner_for_code': {
               // A scheduled run has nobody watching; only a Sync the owner pressed waits for a code.
               if (!opts.interactive) { content = 'The owner is not here to give a code on a scheduled run — finish with no_code.'; break; }
+              say(`Waiting for your verification code: ${String(i.prompt).slice(0, 160)}`);
               await db.utilityAccount.update({ where: { id: account.id }, data: { mfaPrompt: String(i.prompt).slice(0, 300), mfaRequestedAt: new Date(), mfaCodeEnc: null } });
               const until = Date.now() + CODE_WAIT_MS;
               while (Date.now() < until && !code) {

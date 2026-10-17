@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { getAiSpend, getAiTest, startAiTest, getPortalTests, testPortal, type AiSpend, type AiTestState, type PortalTestAccount } from '../api/client';
 import { fmtMoney } from '../lib/money';
 import { fmtMoment } from '../lib/date';
+import PortalCodeBanner from './utility/PortalCodeBanner';
 import { toast } from '../lib/toast';
 
 /** A Claude call often costs a fraction of a cent; fmtMoney would show $0.00. */
@@ -25,6 +26,7 @@ export default function AiSpendPanel() {
   const [test, setTest] = useState<AiTestState | null>(null);
   const [portal, setPortal] = useState<Awaited<ReturnType<typeof getPortalTests>> | null>(null);
   const timer = useRef<number | null>(null);
+  const portalTimer = useRef<number | null>(null);
 
   const load = () => {
     getAiSpend().then(setSpend).catch(() => {});
@@ -41,12 +43,25 @@ export default function AiSpendPanel() {
   };
   useEffect(() => { void load().then(t => { if (t?.run && !t.run.finishedAt) poll(); }); return () => { if (timer.current) window.clearTimeout(timer.current); }; }, []);
 
+  // While a fetch is queued or running, refresh its status every few seconds.
+  const fetching = !!portal?.accounts.some(a => a.run && (a.run.state === 'queued' || a.run.state === 'running'));
+  useEffect(() => {
+    if (!fetching) return;
+    portalTimer.current = window.setInterval(() => {
+      getPortalTests().then(p => {
+        setPortal(p);
+        if (!p.accounts.some(a => a.run && (a.run.state === 'queued' || a.run.state === 'running'))) void getAiSpend().then(setSpend).catch(() => {});
+      }).catch(() => {});
+    }, 4000);
+    return () => { if (portalTimer.current) window.clearInterval(portalTimer.current); };
+  }, [fetching]);
+
   async function run(only?: string) {
     try { await startAiTest(only); toast('Test run started — each feature runs once on your own data.'); await load(); poll(); }
     catch (e: any) { toast(e?.response?.data?.error ?? 'Could not start the test run.', 'error'); }
   }
   async function fetchNow(a: PortalTestAccount) {
-    try { await testPortal(a.id); toast(`Fetching ${a.providerName} statements — this takes a few minutes.`); setTimeout(() => void load(), 60000); }
+    try { await testPortal(a.id); await getPortalTests().then(setPortal); }
     catch (e: any) { toast(e?.response?.data?.error ?? 'Could not start it.', 'error'); }
   }
 
@@ -147,9 +162,11 @@ export default function AiSpendPanel() {
                       {a.lastAgentRunAt ? ` · last run ${fmtMoment(a.lastAgentRunAt)}` : ''}
                       {a.lastSyncStatus ? ` · ${a.lastSyncStatus.toLowerCase()}` : ''}
                     </p>
-                    {a.lastSyncError && a.lastSyncStatus === 'FAILED' && <p className="text-xs text-red-400 mt-0.5">{a.lastSyncError}</p>}
+                    <RunLine a={a} onCodeSent={() => void getPortalTests().then(setPortal)} />
                   </div>
-                  <button className="btn text-xs whitespace-nowrap" onClick={() => void fetchNow(a)}>Fetch now</button>
+                  <button className="btn text-xs whitespace-nowrap" disabled={!!a.run && (a.run.state === 'queued' || a.run.state === 'running')} onClick={() => void fetchNow(a)}>
+                    {a.run && (a.run.state === 'queued' || a.run.state === 'running') ? 'Fetching…' : 'Fetch now'}
+                  </button>
                 </div>
               );
             })}
@@ -170,6 +187,27 @@ export default function AiSpendPanel() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/** The account's latest fetch, live: queued, what it is doing now, the code it needs, or how it ended. */
+function RunLine({ a, onCodeSent }: { a: PortalTestAccount; onCodeSent: () => void }) {
+  const r = a.run;
+  if (!a.syncEnabled) return <p className="text-xs text-amber-400 mt-0.5">Syncing is turned off for this account (marked inactive).</p>;
+  if (!r) return a.lastSyncError && a.lastSyncStatus === 'FAILED' ? <p className="text-xs text-red-400 mt-0.5">{a.lastSyncError}</p> : null;
+  const live = r.state === 'queued' || r.state === 'running';
+  return (
+    <div className="mt-1 space-y-1.5">
+      {r.state === 'queued' && (
+        <p className="text-xs" style={{ color: r.stuck ? '#ef4444' : '#F5A623' }}>
+          {r.stuck ? 'Still queued after 2 minutes — the background worker (sollux-workers on Render) is not running or is busy. Check it on Render.' : 'Queued — starting in a moment…'}
+        </p>
+      )}
+      {r.state === 'running' && <p className="text-xs text-amber-400 flex items-center gap-1.5"><span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />{r.progress ?? 'Working…'}</p>}
+      {live && a.mfaPrompt && <PortalCodeBanner accountId={a.id} prompt={a.mfaPrompt} requestedAt={a.mfaRequestedAt} providerName={a.providerName} onSent={onCodeSent} />}
+      {r.state === 'done' && <p className="text-xs text-green-400">Finished {fmtMoment(r.completedAt)}: {r.progress ?? (r.statementsFound ? `${r.statementsFound} statements` : 'nothing new')}{r.costUsd != null ? ` · ${fmtCost(r.costUsd)}` : ''}</p>}
+      {r.state === 'failed' && <p className="text-xs text-red-400">Stopped {r.completedAt ? fmtMoment(r.completedAt) : ''}: {r.error ?? 'the run failed.'}{r.costUsd ? ` · ${fmtCost(r.costUsd)}` : ''}</p>}
     </div>
   );
 }

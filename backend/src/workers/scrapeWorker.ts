@@ -18,11 +18,20 @@ interface ScrapeJobData {
   trigger?: 'bill_posted';
   /** Started from the AI test run: its spend is filed as a test (ai/meter.ts). */
   test?: boolean;
+  /** The sync job the API created when Fetch was pressed, so its status shows at once. */
+  syncJobId?: string;
 }
 
 // Normalise account number for matching (strip dashes/spaces/case)
 function normalizeAcct(s: string) {
   return s.replace(/[-\s]/g, '').toLowerCase();
+}
+
+/** Every downloaded statement accounted for: filed, waiting for review, applied to a notice or policy, or unreadable. */
+function downloadSummary(r: { downloads: number; filed: number; review: number; applied: number }): string {
+  const unread = Math.max(0, r.downloads - r.filed - r.review - r.applied);
+  const parts = [r.filed && `${r.filed} filed`, r.review && `${r.review} to review in Import`, r.applied && `${r.applied} applied`, unread && `${unread} could not be read`].filter(Boolean);
+  return `Downloaded ${r.downloads} statement${r.downloads === 1 ? '' : 's'}: ${parts.join(', ')}`;
 }
 
 const worker = new Worker<ScrapeJobData>(
@@ -40,6 +49,12 @@ const worker = new Worker<ScrapeJobData>(
     if (!account) throw new Error(`Utility account ${utilityAccountId} not found`);
     if (!account.syncEnabled) {
       console.log(`[ScrapeWorker] Sync disabled for ${utilityAccountId}, skipping`);
+      // Pressed by hand: say why nothing happened instead of leaving it pending.
+      if (job.data.manual) {
+        const why = 'Syncing is turned off for this account (it is marked inactive). Turn it back on from the account to fetch statements.';
+        if (job.data.syncJobId) await db.syncJob.update({ where: { id: job.data.syncJobId }, data: { status: 'FAILED', completedAt: new Date(), error: why, progress: null } }).catch(() => {});
+        await db.utilityAccount.update({ where: { id: utilityAccountId }, data: { lastSyncStatus: 'FAILED', lastSyncError: why } });
+      }
       return;
     }
 
@@ -59,13 +74,24 @@ const worker = new Worker<ScrapeJobData>(
       if (!job.data.manual && job.data.trigger !== 'bill_posted' && (notDueYet || ranToday)) return;
       if (job.data.trigger === 'bill_posted' && ranToday && !job.data.manual) return;
       await db.utilityAccount.update({ where: { id: utilityAccountId }, data: { lastSyncStatus: 'PENDING' } });
-      const syncJob = await db.syncJob.create({ data: { utilityAccountId, status: 'PENDING', startedAt: new Date() } });
-      const r = await withAiContext({ test: !!job.data.test }, () => runPortalAgent(utilityAccountId, { interactive: !!job.data.manual }));
+      const syncJob = job.data.syncJobId
+        ? await db.syncJob.update({ where: { id: job.data.syncJobId }, data: { status: 'PENDING', startedAt: new Date(), progress: 'Starting the browser' } }).catch(() => null)
+          ?? await db.syncJob.create({ data: { utilityAccountId, status: 'PENDING', startedAt: new Date() } })
+        : await db.syncJob.create({ data: { utilityAccountId, status: 'PENDING', startedAt: new Date(), progress: 'Starting the browser' } });
+      // The live line where Fetch was pressed; written at most every 2 seconds.
+      let lastWrite = 0;
+      const onProgress = (text: string) => {
+        if (Date.now() - lastWrite < 2000 && !/^Waiting for your/.test(text)) return;
+        lastWrite = Date.now();
+        void db.syncJob.update({ where: { id: syncJob.id }, data: { progress: text.slice(0, 300) } }).catch(() => {});
+      };
+      const r = await withAiContext({ test: !!job.data.test }, () => runPortalAgent(utilityAccountId, { interactive: !!job.data.manual, onProgress }))
+        .catch(err => ({ ok: false, filed: 0, review: 0, applied: 0, downloads: 0, summary: '', error: err instanceof Error ? err.message.split('\n')[0] : String(err) }) as Awaited<ReturnType<typeof runPortalAgent>>);
       await db.utilityAccount.update({
         where: { id: utilityAccountId },
         data: r.ok ? { lastSyncedAt: new Date(), lastSyncStatus: 'SUCCESS', lastSyncError: null } : { lastSyncStatus: 'FAILED', lastSyncError: r.error ?? 'The portal agent stopped.' },
       });
-      await db.syncJob.update({ where: { id: syncJob.id }, data: { status: r.ok ? 'SUCCESS' : 'FAILED', completedAt: new Date(), statementsFound: r.filed + r.review, error: r.ok ? null : r.error ?? null } });
+      await db.syncJob.update({ where: { id: syncJob.id }, data: { status: r.ok ? 'SUCCESS' : 'FAILED', completedAt: new Date(), statementsFound: r.filed + r.review, costUsd: r.costUsd ?? 0, error: r.ok ? null : r.error ?? null, progress: r.ok ? (r.downloads ? downloadSummary(r) : (r.summary || 'Nothing new on the portal')).slice(0, 300) : null } });
       if (r.filed) await insightQueue.add('generate', { propertyId: account.property.id }, { delay: 2000, attempts: 2 });
       console.log(`[ScrapeWorker] Portal agent ${account.providerName}: ${r.downloads} downloaded, ${r.filed} filed, ${r.review} to review; ${r.replayed ?? 0} steps replayed, ${r.aiSteps ?? 0} Claude turns, $${(r.costUsd ?? 0).toFixed(3)}${r.error ? ` — ${r.error}` : ''}`);
       return; // never retried automatically: a retry could re-trigger a code or lock the login

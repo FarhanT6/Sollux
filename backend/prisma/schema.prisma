@@ -626,6 +626,11 @@ model SyncJob {
   error            String?
   statementsFound  Int        @default(0)
   paymentsFound    Int        @default(0)
+  // What a running job is doing right now ("Signing in", "Waiting for your
+  // code"), shown live where the owner pressed Fetch.
+  progress         String?
+  // What the portal agent's Claude calls cost for this run (dollars).
+  costUsd          Decimal?   @db.Decimal(10, 4)
   createdAt        DateTime   @default(now())
 
   @@map("sync_jobs")
