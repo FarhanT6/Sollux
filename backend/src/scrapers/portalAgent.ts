@@ -47,17 +47,17 @@ export interface PortalRun {
 }
 
 const TOOLS: Anthropic.Tool[] = [
-  { name: 'look', description: 'Describe the current page: URL, title, visible text, and numbered interactive elements [n]. Call after every action that changes the page.', input_schema: { type: 'object', properties: {} } },
+  { name: 'look', description: 'Describe the current page: URL, title, visible text, and numbered interactive elements [n]. Every other action already returns the page as it is afterwards, so only call this at the start or if a page was still loading.', input_schema: { type: 'object', properties: {} } },
   { name: 'screenshot', description: 'A picture of the page, when the text description is not enough.', input_schema: { type: 'object', properties: {} } },
   { name: 'click', description: 'Click element [n].', input_schema: { type: 'object', properties: { ref: { type: 'number' } }, required: ['ref'] } },
-  { name: 'type', description: 'Type text into field [n] (not for passwords, usernames or codes).', input_schema: { type: 'object', properties: { ref: { type: 'number' }, text: { type: 'string' } }, required: ['ref', 'text'] } },
+  { name: 'type', description: 'Type text into field [n] (not for passwords, usernames or codes). submit: press Enter afterwards.', input_schema: { type: 'object', properties: { ref: { type: 'number' }, text: { type: 'string' }, submit: { type: 'boolean' } }, required: ['ref', 'text'] } },
   { name: 'select', description: 'Choose an option in dropdown [n] by its visible label.', input_schema: { type: 'object', properties: { ref: { type: 'number' }, label: { type: 'string' } }, required: ['ref', 'label'] } },
-  { name: 'fill_login', description: "Type the owner's username into field [usernameRef] and password into [passwordRef]. You never see them.", input_schema: { type: 'object', properties: { usernameRef: { type: 'number' }, passwordRef: { type: 'number' } }, required: ['passwordRef'] } },
+  { name: 'fill_login', description: "Type the owner's username into [usernameRef] and password into [passwordRef] (you never see them), tick [rememberRef] if given, then click [submitRef]. A site that asks for the username first: give only usernameRef and submitRef, then call again with passwordRef on the next page.", input_schema: { type: 'object', properties: { usernameRef: { type: 'number' }, passwordRef: { type: 'number' }, rememberRef: { type: 'number' }, submitRef: { type: 'number' } } } },
   { name: 'press', description: 'Press a key (Enter, Tab, Escape).', input_schema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] } },
   { name: 'goto', description: "Open a URL on the provider's own site.", input_schema: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } },
   { name: 'download_statement', description: 'Click element [n] that downloads or opens one statement PDF, and keep it. Give the statement date if shown.', input_schema: { type: 'object', properties: { ref: { type: 'number' }, statementDate: { type: 'string' } }, required: ['ref'] } },
   { name: 'ask_owner_for_code', description: "The portal sent a verification code. Reads it from the owner's email (up to 2 minutes), else asks the owner (up to 5 more). Say where it was sent.", input_schema: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] } },
-  { name: 'type_code', description: 'Type the code the owner gave into field [n].', input_schema: { type: 'object', properties: { ref: { type: 'number' } }, required: ['ref'] } },
+  { name: 'type_code', description: 'Type the verification code into field [ref], tick [rememberRef] ("remember this device") if given, then click [submitRef].', input_schema: { type: 'object', properties: { ref: { type: 'number' }, rememberRef: { type: 'number' }, submitRef: { type: 'number' } }, required: ['ref'] } },
   { name: 'finish', description: 'Stop. outcome: done (downloaded what was new, or nothing new), bad_login, captcha, no_code, blocked.', input_schema: { type: 'object', properties: { outcome: { type: 'string', enum: ['done', 'bad_login', 'captcha', 'no_code', 'blocked'] }, summary: { type: 'string' } }, required: ['outcome', 'summary'] } },
 ];
 
@@ -74,7 +74,7 @@ export async function describe(page: Page, secrets: string[]): Promise<string> {
     for (const el of Array.from(els)) {
       const r = (el as HTMLElement).getBoundingClientRect();
       if (r.width === 0 || r.height === 0 || getComputedStyle(el as HTMLElement).visibility === 'hidden') continue;
-      if (i >= 120) break;
+      if (i >= 90) break;
       const n = ++i;
       el.setAttribute('data-sref', String(n));
       const tag = el.tagName.toLowerCase();
@@ -86,7 +86,7 @@ export async function describe(page: Page, secrets: string[]): Promise<string> {
       if (tag === 'select') d += ` options=${Array.from((el as HTMLSelectElement).options).slice(0, 15).map(o => o.text.trim()).join(' | ').slice(0, 200)}`;
       out.push(`${d} "${label}"`);
     }
-    return { url: location.href, title: document.title, text: (document.body?.innerText || '').replace(/\n{2,}/g, '\n').slice(0, 3000), els: out };
+    return { url: location.href, title: document.title, text: (document.body?.innerText || '').replace(/\n{2,}/g, '\n').slice(0, 2000), els: out };
   });
   let text = `URL: ${snap.url}\nTitle: ${snap.title}\n\nVisible text:\n${snap.text}\n\nElements:\n${snap.els.join('\n')}`;
   for (const s of secrets) if (s && s.length >= 3) text = text.split(s).join('[hidden]');
@@ -192,10 +192,20 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   let code: string | null = null;
   // A code was entered this run: the device may now be trusted, so keep the browser's memory.
   let usedCode = false;
+  // Codes already typed: a second request must bring a new one.
+  const triedCodes = new Set<string>();
+  const runStartedAt = Date.now();
+  // After an action: let the page settle, then show it as it is now (saves a look step).
+  const after = async (what: string) => {
+    await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(800);
+    return `${what}\n\n${await describe(page, secrets)}`;
+  };
 
   const system = `You operate a web browser for a property owner to collect utility statements from ${account.providerName}'s customer portal. Account ${account.accountNumber ? `ending ${String(account.accountNumber).slice(-4)}` : ''} at ${account.property.address}.
 Goal: log in, open the billing / statement history, and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If there is nothing newer, finish with outcome done.
-Rules: use fill_login for credentials (you never see them). If the portal offers where to send a verification code, choose email over text or a phone call. When a code has been sent, call ask_owner_for_code (it reads the code from the owner's email, or asks the owner), then type_code. Before submitting a login or a code, tick any "Remember this device", "Trust this browser", "Keep me signed in" or "Don't ask again" option, so the next visit is not asked again. Never pay, enroll, change settings, accept offers or send messages. If a captcha appears, finish with captcha. If the login is rejected, finish with bad_login. Call look after each action. When several accounts are listed, choose the one matching the account number or address. Be efficient.`;
+Rules: use fill_login for credentials (you never see them). If the portal offers where to send a verification code, choose email over text or a phone call. When a code has been sent, call ask_owner_for_code (it reads the code from the owner's email, or asks the owner), then type_code. Pass any "Remember this device", "Trust this browser", "Keep me signed in" or "Don't ask again" checkbox as rememberRef so the next visit is not asked again. Never pay, enroll, change settings, accept offers or send messages. If a captcha appears, finish with captcha. If the login is rejected, finish with bad_login. If a code you entered is rejected, ask_owner_for_code once more for a fresh one; after a second rejection finish with no_code — never start the login over.
+Each action returns the page as it is afterwards: do not call look after it. Fill and submit in one step (submitRef). A typical visit is: look, fill_login (with submit), code if asked, open billing/statements, download, finish — aim for about 10 steps. When several accounts are listed, choose the one matching the account number or address.`;
   // Every step that changed the page, in order: replayed ones and Claude's.
   // The ones before the first download become the recipe for next time.
   const steps: RecipeStep[] = [];
@@ -238,6 +248,7 @@ Rules: use fill_login for credentials (you never see them). If the portal offers
         const el = (ref: number) => page.locator(`[data-sref="${Number(ref)}"]`).first();
         let content: Anthropic.ToolResultBlockParam['content'] = 'ok';
         let rec: RecipeStep | null = null;
+        let recAfter: RecipeStep | null = null; // the submit click that fill_login made
         if (u.name === 'download_statement' || u.name === 'finish') navDone = true;
         const n = `Step ${step + 1}`;
         if (u.name === 'look') say(`${n}: reading the page${await page.title().then(t => (t ? ` "${t.slice(0, 60)}"` : '')).catch(() => '')}`);
@@ -245,34 +256,47 @@ Rules: use fill_login for credentials (you never see them). If the portal offers
         else if (u.name === 'fill_login') say(`${n}: signing in`);
         else if (u.name === 'download_statement') say(`${n}: downloading a statement${i.statementDate ? ` (${String(i.statementDate).slice(0, 20)})` : ''}`);
         else if (u.name === 'goto') say(`${n}: opening ${String(i.url).replace(/^https?:\/\//, '').slice(0, 60)}`);
-        else if (u.name === 'type_code') say(`${n}: entering your code`);
+        else if (u.name === 'type_code') say(`${n}: entering the verification code`);
+        else if (u.name === 'type') say(`${n}: typing`);
+        else if (u.name === 'select') say(`${n}: choosing "${String(i.label).slice(0, 40)}"`);
+        else if (u.name === 'ask_owner_for_code') say(`${n}: the portal sent a verification code`);
         try {
           if (!navDone) {
             if (u.name === 'click' || u.name === 'type' || u.name === 'select') {
               const target = await targetOf(page, i.ref);
               if (target) rec = u.name === 'click' ? { tool: 'click', target } : u.name === 'type' ? { tool: 'type', target, text: String(i.text ?? '') } : { tool: 'select', target, label: String(i.label) };
             } else if (u.name === 'fill_login') {
-              const pass = await targetOf(page, i.passwordRef);
+              const pass = i.passwordRef != null ? await targetOf(page, i.passwordRef) : null;
               const user = i.usernameRef != null ? await targetOf(page, i.usernameRef) : null;
-              if (pass) rec = { tool: 'fill_login', pass, ...(user ? { user } : {}) };
+              if (pass || user) rec = { tool: 'fill_login', ...(pass ? { pass } : {}), ...(user ? { user } : {}) } as RecipeStep;
+              const submit = i.submitRef != null ? await targetOf(page, i.submitRef) : null;
+              if (submit) recAfter = { tool: 'click', target: submit };
             } else if (u.name === 'press') rec = { tool: 'press', key: String(i.key) };
           }
           switch (u.name) {
             case 'look': content = await describe(page, secrets); break;
             case 'screenshot': content = [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: (await page.screenshot({ type: 'png' })).toString('base64') } }]; break;
-            case 'click': await el(i.ref).click({ timeout: 10000 }); await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {}); break;
-            case 'type': await el(i.ref).fill(String(i.text ?? '')); break;
-            case 'select': await el(i.ref).selectOption({ label: String(i.label) }); break;
-            case 'fill_login':
+            case 'click': await el(i.ref).click({ timeout: 10000 }); content = await after('Clicked.'); break;
+            case 'type':
+              await el(i.ref).fill(String(i.text ?? ''));
+              if (i.submit) await el(i.ref).press('Enter');
+              content = await after(i.submit ? 'Typed and submitted.' : 'Typed.'); break;
+            case 'select': await el(i.ref).selectOption({ label: String(i.label) }); content = await after('Selected.'); break;
+            case 'fill_login': {
+              if (i.usernameRef == null && i.passwordRef == null) { content = 'Give usernameRef and/or passwordRef.'; break; }
               if (i.usernameRef != null) await el(i.usernameRef).fill(username);
-              await el(i.passwordRef).fill(password);
-              content = 'Username and password entered.'; break;
-            case 'press': await page.keyboard.press(String(i.key)); await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {}); break;
+              if (i.passwordRef != null) await el(i.passwordRef).fill(password);
+              if (i.rememberRef != null) await el(i.rememberRef).check({ timeout: 3000 }).catch(() => el(i.rememberRef).click({ timeout: 3000 }).catch(() => {}));
+              if (i.submitRef != null) await el(i.submitRef).click({ timeout: 10000 });
+              content = await after(i.submitRef != null ? 'Signed in details entered and submitted.' : 'Entered.'); break;
+            }
+            case 'press': await page.keyboard.press(String(i.key)); content = await after(`Pressed ${i.key}.`); break;
             case 'goto': {
               const url = new URL(String(i.url), page.url());
               if (url.protocol !== 'https:' || !allowed.has(rootOf(url.hostname))) { content = 'Refused: only the provider\'s own site.'; break; }
               await page.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: 30000 });
               if (!navDone) rec = { tool: 'goto', url: url.toString() };
+              content = await after('Opened.');
               break;
             }
             case 'download_statement': {
@@ -292,8 +316,10 @@ Rules: use fill_login for credentials (you never see them). If the portal offers
             case 'ask_owner_for_code': {
               // A scheduled run has nobody watching; only a Sync the owner pressed waits for a code.
               // The owner's inbox first: most portals email the code.
+              if (triedCodes.size >= 2) { content = 'Two codes have been rejected — finish with no_code.'; break; }
               say('Looking for the verification code in your email');
-              const emailed = await findEmailedCode(userId, { since: new Date(Date.now() - 90_000), host: new URL(page.url()).hostname || start.hostname, providerName: account.providerName, timeoutMs: 120_000 }).catch(() => null);
+              // Any code sent since this fetch began (the portal may have emailed it a few steps ago); never one from before.
+              const emailed = await findEmailedCode(userId, { since: new Date(runStartedAt - 30_000), host: new URL(page.url()).hostname || start.hostname, providerName: account.providerName, timeoutMs: 120_000, exclude: [...triedCodes] }).catch(() => null);
               if (emailed) {
                 code = emailed; secrets.push(code); usedCode = true;
                 content = 'The code arrived by email. Use type_code.';
@@ -304,6 +330,7 @@ Rules: use fill_login for credentials (you never see them). If the portal offers
               say(`Waiting for your verification code: ${String(i.prompt).slice(0, 160)}`);
               await db.utilityAccount.update({ where: { id: account.id }, data: { mfaPrompt: String(i.prompt).slice(0, 300), mfaRequestedAt: new Date(), mfaCodeEnc: null } });
               const until = Date.now() + CODE_WAIT_MS;
+              code = null;
               while (Date.now() < until && !code) {
                 await new Promise(r => setTimeout(r, 4000));
                 const a = await db.utilityAccount.findUnique({ where: { id: account.id }, select: { mfaCodeEnc: true } });
@@ -315,7 +342,16 @@ Rules: use fill_login for credentials (you never see them). If the portal offers
               if (code) secrets.push(code);
               break;
             }
-            case 'type_code': if (!code) { content = 'No code yet.'; break; } await el(i.ref).fill(code); content = 'Code entered.'; break;
+            case 'type_code': {
+              if (!code) { content = 'No code yet — call ask_owner_for_code.'; break; }
+              await el(i.ref).fill(code);
+              triedCodes.add(code);
+              if (i.rememberRef != null) await el(i.rememberRef).check({ timeout: 3000 }).catch(() => el(i.rememberRef).click({ timeout: 3000 }).catch(() => {}));
+              if (i.submitRef != null) await el(i.submitRef).click({ timeout: 10000 });
+              content = await after(i.submitRef != null ? 'Code entered and submitted.' : 'Code entered.');
+              code = null; // used: a rejected code is never typed again
+              break;
+            }
             case 'finish':
               finished = true;
               run.ok = i.outcome === 'done';
@@ -325,6 +361,7 @@ Rules: use fill_login for credentials (you never see them). If the portal offers
             default: content = 'Unknown tool.';
           }
           if (rec) steps.push(rec);
+          if (recAfter) steps.push(recAfter);
         } catch (err) {
           content = `Failed: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`;
         }

@@ -38,11 +38,11 @@ function senderScore(from: string, host: string, providerName: string): number {
  * seconds. Prefers mail from the portal's own domain; null when none arrives
  * (a code sent by text, or no Gmail connected).
  */
-export async function findEmailedCode(userId: string, o: { since: Date; host: string; providerName: string; timeoutMs?: number }): Promise<string | null> {
+export async function findEmailedCode(userId: string, o: { since: Date; host: string; providerName: string; timeoutMs?: number; exclude?: string[] }): Promise<string | null> {
   const tokens = await db.gmailToken.findMany({ where: { userId } });
   if (!tokens.length) return null;
   const until = Date.now() + (o.timeoutMs ?? 120_000);
-  const after = Math.floor((o.since.getTime() - 60_000) / 1000);
+  const after = Math.floor(o.since.getTime() / 1000);
   const seen = new Set<string>();
   while (Date.now() < until) {
     const found: { code: string; score: number; at: number }[] = [];
@@ -55,7 +55,7 @@ export async function findEmailedCode(userId: string, o: { since: Date; host: st
           seen.add(m.id);
           const msg = (await gmail.users.messages.get({ userId: 'me', id: m.id, format: 'full' })).data;
           const at = Number(msg.internalDate ?? 0);
-          if (at < o.since.getTime() - 60_000) continue; // before the code was asked for
+          if (at < o.since.getTime()) continue; // sent before this fetch began: an old code
           const headers = msg.payload?.headers ?? [];
           const subject = headers.find(h => h.name?.toLowerCase() === 'subject')?.value ?? '';
           const from = headers.find(h => h.name?.toLowerCase() === 'from')?.value ?? '';
@@ -64,15 +64,16 @@ export async function findEmailedCode(userId: string, o: { since: Date; host: st
           const html = parts.find(p => p.mimeType === 'text/html' && p.body?.data);
           const body = plain ? decode(plain.body!.data).toString('utf8') : html ? htmlToText(decode(html.body!.data).toString('utf8')) : msg.snippet ?? '';
           const code = codeIn(subject, body);
-          if (code) found.push({ code, score: senderScore(from, o.host, o.providerName), at });
+          if (code && !o.exclude?.includes(code)) found.push({ code, score: senderScore(from, o.host, o.providerName), at });
         }
       } catch (err) {
         console.warn('[EmailCode] could not read a mailbox:', err instanceof Error ? err.message.split('\n')[0] : err);
       }
     }
-    // The portal's own mail first, then the newest.
+    // Only a code from the portal itself (its domain or its name in the sender):
+    // a code from some other sign-in that happened to arrive is never typed in.
     found.sort((a, b) => b.score - a.score || b.at - a.at);
-    if (found.length && (found[0].score > 0 || found.length === 1)) return found[0].code;
+    if (found.length && found[0].score > 0) return found[0].code;
     await new Promise(r => setTimeout(r, 6000));
   }
   return null;
