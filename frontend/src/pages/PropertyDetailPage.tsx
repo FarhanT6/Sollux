@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef, useMemo } from 'react';
+import { LogoMark } from '../components/brand/Logo';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import BillPicker, { emptyBillPick, splitAllocations, type BillPickerValue } from '../components/payments/BillPicker';
 import PaymentSourcePicker, { emptyNewCard, resolvePaymentSource, useBankAccounts, type NewCardForm } from '../components/payments/PaymentSourcePicker';
@@ -418,9 +419,7 @@ export default function PropertyDetailPage() {
         {tab === 'insights' && (
           <>
             <div className="mb-4 flex items-center gap-3 bg-amber-500/10 border border-amber-500/20 rounded-xl p-4">
-              <div className="w-10 h-10 rounded-full bg-gold-500 flex items-center justify-center flex-shrink-0">
-                <div className="w-5 h-5 rounded-full bg-white" />
-              </div>
+              <div className="flex-shrink-0"><LogoMark size={36} /></div>
               <div>
                 <p className="text-sm font-medium text-amber-300">Sollux AI is monitoring {accounts.length} utility accounts</p>
                 <p className="text-xs text-amber-400">Last synced {lastSynced ? format(new Date(lastSynced), 'MMM d \'at\' h:mm a') : 'never'} · {insights.length} total insights</p>

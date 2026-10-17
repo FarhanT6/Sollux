@@ -1,23 +1,57 @@
 import axios from 'axios';
+import { toast } from '../lib/toast';
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || '/api',
   withCredentials: true,
 });
 
+// The app's first requests can go out before Clerk has finished starting,
+// with no token at all. Wait for it (briefly) so they are signed.
+async function clerkReady(): Promise<any> {
+  // @ts-ignore — Clerk is loaded globally via ClerkProvider
+  const C = () => window.Clerk;
+  for (let i = 0; i < 50 && !C()?.loaded; i++) await new Promise(r => setTimeout(r, 100));
+  return C();
+}
+
 api.interceptors.request.use(async (config) => {
   try {
-    // @ts-ignore — Clerk is loaded globally via ClerkProvider
-    const token = await window.Clerk?.session?.getToken();
+    const clerk = await clerkReady();
+    const token = await clerk?.session?.getToken();
     if (token) config.headers.Authorization = `Bearer ${token}`;
   } catch { /* no-op */ }
   return config;
 });
 
+// A 401 is usually a session token that went stale while the app sat in the
+// background: get a fresh one and try once more. Only when there is no
+// session at all does the owner need to sign in again.
 api.interceptors.response.use(
   res => res,
-  err => {
-    if (err.response?.status === 401) window.location.href = '/sign-in';
+  async err => {
+    const cfg = err.config as (typeof err.config & { _retried?: boolean }) | undefined;
+    if (err.response?.status === 401 && cfg && !cfg._retried) {
+      cfg._retried = true;
+      try {
+        const clerk = await clerkReady();
+        const token = await clerk?.session?.getToken({ skipCache: true });
+        if (token) {
+          cfg.headers = { ...(cfg.headers ?? {}), Authorization: `Bearer ${token}` } as any;
+          return api.request(cfg);
+        }
+      } catch { /* fall through */ }
+      if (!window.location.pathname.startsWith('/sign-in')) window.location.href = '/sign-in';
+    }
+    // A page that could not load something says so, wherever it happens;
+    // saves and deletes report their own errors where they were made.
+    const method = (err.config?.method ?? 'get').toLowerCase();
+    // Only real failures: a 4xx is an answer the page itself handles (a
+    // deleted record, a bad link), not something that "didn't load".
+    const status = err.response?.status;
+    if (method === 'get' && (!status || status >= 500) && !String(err.config?.url ?? '').startsWith('/telemetry')) {
+      toast(err.response ? "Something didn't load. Pull down or reopen the page to try again." : "You're offline or the server didn't answer. Try again in a moment.", 'error');
+    }
     return Promise.reject(err);
   }
 );

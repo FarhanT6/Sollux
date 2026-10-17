@@ -13,6 +13,7 @@
  * sender, else by its sender name, address or subject naming the provider.
  */
 import { db } from '../config/db';
+import { overdueAfterDays } from '../lib/billCadence';
 import { providersLookAlike, compact } from './providerMatch';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -113,7 +114,7 @@ export async function gmailCoverage(userId: string) {
     if (s.sourceType === 'SCRAPER') return 'portal sync';
     return s.rawDataJson ? 'import' : 'typed in';
   };
-  const cadenceDays = (c: string) => (c === 'BIMONTHLY' ? 75 : c === 'QUARTERLY' ? 110 : c === 'MONTHLY' ? 45 : null);
+  const cadenceDays = overdueAfterDays;
 
   const providers = groups.map((g, i) => {
     const accts = accounts.filter(a => g.accountIds.has(a.id)).map(a => {

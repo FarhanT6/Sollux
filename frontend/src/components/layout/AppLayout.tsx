@@ -2,6 +2,7 @@ import { Outlet, NavLink, useLocation } from 'react-router-dom';
 import { useUser, useClerk } from '@clerk/clerk-react';
 import { useEffect, useMemo, useState } from 'react';
 import { PhoneChromeContext, NavBar, phoneRoute, rememberEntry } from '../../ios';
+import Logo from '../brand/Logo';
 import { getDashboardSummary } from '../../api/client';
 import type { DashboardSummary } from '../../types';
 import { tap } from '../../lib/native';
@@ -163,16 +164,7 @@ export default function AppLayout() {
     </div>
   );
 
-  const logo = (
-    <div className="flex items-center gap-2 min-w-0">
-      <div className="w-7 h-7 rounded-lg bg-gold-500 flex items-center justify-center flex-shrink-0">
-        <div className="w-3 h-3 rounded-full bg-white" />
-      </div>
-      <span className="text-base font-semibold tracking-tight text-white whitespace-nowrap">
-        Sol<span className="text-gold-500">lux</span>
-      </span>
-    </div>
-  );
+  const logo = <Logo size={28} />;
 
   return (
     <PhoneChromeContext.Provider value={chrome}>

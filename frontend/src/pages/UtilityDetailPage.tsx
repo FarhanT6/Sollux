@@ -27,6 +27,7 @@ import PaymentSourcePicker, { emptyNewCard, resolvePaymentSource, type NewCardFo
 import { operatingCost } from '../lib/operatingCost';
 import ChargeAnalyticsPanel from '../components/utility/ChargeAnalyticsPanel';
 import { usePhone } from '../ios';
+import { toast } from '../lib/toast';
 import UtilityAccountScreen from './phone/UtilityAccountScreen';
 
 const CATEGORY_ICONS: Record<string, string> = {
@@ -869,7 +870,15 @@ export default function UtilityDetailPage() {
     if (!accountId) return;
     setSyncing(true);
     try {
-      await syncUtility(accountId);
+      const r: any = await syncUtility(accountId);
+      // Nothing was queued (a Gmail-read account, or no login on file): say
+      // why instead of polling for a sync that is not coming.
+      if (!r?.jobId) {
+        toast(r?.message ?? 'Nothing to sync for this account.');
+        setSyncing(false);
+        if (accountId) setAccount(await getUtility(accountId));
+        return;
+      }
       const poll = async () => {
         const updated = await getUtility(accountId);
         setAccount(updated);

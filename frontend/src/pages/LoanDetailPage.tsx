@@ -855,7 +855,7 @@ export default function LoanDetailPage() {
       {/* Header */}
       <div className="flex items-start justify-between mb-1">
         <div>
-          <BackLink fallback="/loans" className="text-xs text-gray-500 hover:text-gray-300">&larr; Back</BackLink>
+          <BackLink fallback="/finances?tab=loans" className="text-xs text-gray-500 hover:text-gray-300">&larr; Back</BackLink>
           <h1 className="text-xl font-semibold text-white mt-1">{loan.lender}</h1>
           <p className="text-sm text-gray-400 mt-0.5">
             {LOAN_TYPE_LABELS[loan.loanType] ?? loan.loanType}

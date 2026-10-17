@@ -11,7 +11,7 @@ const IGNORE = /ResizeObserver loop|Load failed|Failed to fetch|NetworkError|Abo
 let sent = 0;
 const lastSent = new Map<string, number>();
 
-function report(message: string, stack?: string | null) {
+export function report(message: string, stack?: string | null) {
   if (!message || IGNORE.test(message) || sent >= 10) return;
   const last = lastSent.get(message) ?? 0;
   if (Date.now() - last < 60_000) return;
@@ -31,6 +31,15 @@ export function installErrorReporting(): void {
   });
   window.addEventListener('unhandledrejection', e => {
     const r: any = e.reason;
+    // An API call nobody handled: name the call, which the bare "Request
+    // failed with status code 404" never did. No answer at all is the
+    // network (offline, a deploy restarting), not a bug.
+    if (r?.isAxiosError) {
+      if (!r.response) return;
+      const path = String(r.config?.url ?? '').split('?')[0];
+      report(`API ${String(r.config?.method ?? 'get').toUpperCase()} ${path} → ${r.response.status} (not handled on this page)`, r.stack);
+      return;
+    }
     report(r?.message ? String(r.message) : String(r), r?.stack);
   });
 }

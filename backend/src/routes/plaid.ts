@@ -30,6 +30,11 @@ router.use(attachDbUser);
 
 // POST /api/plaid/link-token — create a Link token for the frontend
 router.post('/link-token', async (req: Request, res: Response, next) => {
+  // Without keys Plaid answers with a bare HTTP error the app cannot explain;
+  // say what is missing instead.
+  if (!process.env.PLAID_CLIENT_ID || !process.env.PLAID_SECRET) {
+    return res.status(503).json({ error: 'Bank linking is not set up on this server yet. Add the account by hand for now.' });
+  }
   try {
     const userId = req.dbUserId!;
     const resp = await plaidClient.linkTokenCreate({
@@ -44,7 +49,10 @@ router.post('/link-token', async (req: Request, res: Response, next) => {
     res.json({ link_token: resp.data.link_token });
   } catch (err: any) {
     const plaidErr = err?.response?.data;
-    if (plaidErr) console.error('[Plaid] link-token error:', JSON.stringify(plaidErr));
+    if (plaidErr) {
+      console.error('[Plaid] link-token error:', JSON.stringify(plaidErr));
+      return res.status(502).json({ error: plaidErr.display_message || plaidErr.error_message || 'The bank connection service did not respond. Try again shortly.' });
+    }
     next(err);
   }
 });

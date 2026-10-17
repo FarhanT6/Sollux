@@ -161,9 +161,9 @@ app.use('/api/stripe', stripeRouter);
 app.use('/api/audit', auditRouter);
 
 // ─── Protected routes ─────────────────────────────────────
-// requireAuth() redirects unauthed requests to "/" — Google's redirect back
-// to our OAuth callbacks obviously isn't authed, so those two paths need to
-// bypass this the same way they bypass clerkMiddleware above.
+// requireAuth answers 401 without a session (middleware/requireAuth.ts).
+// Google's redirect back to our OAuth callbacks isn't signed in, so those
+// paths bypass it the same way they bypass clerkMiddleware above.
 app.use('/api', (req, res, next) => {
   if (req.path === '/gmail/callback' || req.path === '/drive/callback' || req.path === '/clickup/webhook') {
     return next();

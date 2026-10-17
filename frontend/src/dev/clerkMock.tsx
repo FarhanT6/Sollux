@@ -12,7 +12,7 @@ const user = {
   createdAt: new Date('2026-04-01'), passwordEnabled: true,
 };
 const clerk = {
-  signOut: async () => {}, openUserProfile: () => {}, openSignIn: () => {},
+  loaded: true, signOut: async () => {}, openUserProfile: () => {}, openSignIn: () => {},
   session: { getToken: async () => 'mock-token' },
 };
 if (typeof window !== 'undefined') (window as any).Clerk = clerk;

@@ -954,6 +954,7 @@ function BankingTab() {
 function PlaidConnectButton({ onSuccess }: { onSuccess: () => void }) {
   const [linkToken, setLinkToken] = useState<string | null>(null);
   const [loading, setLoading]     = useState(false);
+  const [unavailable, setUnavailable] = useState<string | null>(null);
 
   // Detect OAuth return: Plaid redirects back with ?oauth_state_id=...
   const oauthRedirectUri = window.location.href.includes('oauth_state_id')
@@ -961,7 +962,8 @@ function PlaidConnectButton({ onSuccess }: { onSuccess: () => void }) {
     : undefined;
 
   useEffect(() => {
-    createPlaidLinkToken().then(r => setLinkToken(r.link_token)).catch(() => {});
+    createPlaidLinkToken().then(r => setLinkToken(r.link_token))
+      .catch(e => setUnavailable(e?.response?.data?.error ?? 'Bank linking is unavailable right now.'));
   }, []);
 
   const { open, ready } = usePlaidLink({
@@ -987,6 +989,9 @@ function PlaidConnectButton({ onSuccess }: { onSuccess: () => void }) {
   useEffect(() => {
     if (oauthRedirectUri && ready) open();
   }, [oauthRedirectUri, ready, open]);
+
+  // A button that can never enable is worse than saying why.
+  if (unavailable) return <span className="text-xs text-gray-500 max-w-xs">{unavailable}</span>;
 
   return (
     <button

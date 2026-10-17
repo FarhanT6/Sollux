@@ -329,7 +329,8 @@ router.post('/', async (req, res, next) => {
     // account that exists — so retrying creates a duplicate. A missed initial
     // sync is recoverable from the Sync button; a phantom failure is not.
     try {
-      await scrapeQueue.add('scrape', { utilityAccountId: account.id }, {
+      // A Gmail-read account has no portal; its bills arrive with the mail.
+      if (account.providerSlug !== 'gmail-fallback') await scrapeQueue.add('scrape', { utilityAccountId: account.id }, {
         attempts: 3,
         backoff: { type: 'exponential', delay: 120000 },
       });
@@ -427,6 +428,12 @@ router.post('/:id/sync', async (req, res, next) => {
     });
     if (!account) return res.status(404).json({ error: 'Utility account not found' });
 
+    // Bills for a Gmail-read account come in with the mail; there is no
+    // portal to sync, and the fallback scraper would only report an empty
+    // success.
+    if (account.providerSlug === 'gmail-fallback') {
+      return res.json({ message: 'Bills for this account are read from your Gmail as they arrive — there is no portal to sync.' });
+    }
     if (!account.usernameEnc) {
       // Mark as failed immediately with a clear message rather than queuing a job that will fail
       await db.utilityAccount.update({

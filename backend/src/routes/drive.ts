@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { findExistingBill } from '../services/billMatch';
 import { google, drive_v3 } from 'googleapis';
 import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
@@ -317,7 +318,7 @@ router.post('/stream', attachDbUser, async (req, res) => {
 
         // High-confidence: auto-import to DB, don't need review
         if (utilityAccountId && match.confidence === 'high') {
-          const acct = await db.utilityAccount.findUnique({ where: { id: utilityAccountId }, select: { id: true, propertyId: true, escrowLoanId: true, billingCadence: true } });
+          const acct = await db.utilityAccount.findUnique({ where: { id: utilityAccountId }, select: { id: true, propertyId: true, escrowLoanId: true, billingCadence: true, category: true } });
           if (acct) {
             // A premium the lender pays from escrow, or billed once a term, is the whole term, once.
             settleInFull(ex, acct);
@@ -333,41 +334,10 @@ router.post('/stream', attachDbUser, async (req, res) => {
             // share an issue month; the month lookup called them the same bill
             // and the update overwrote February with March, in place, leaving
             // the count unchanged and the loss invisible.
-            let existing = null;
-            if (ex.billingPeriodStart) {
-              const start = new Date(ex.billingPeriodStart);
-              const window = 7 * 24 * 60 * 60 * 1000;
-              existing = await db.statement.findFirst({
-                where: {
-                  utilityAccountId: acct.id,
-                  billingPeriodStart: {
-                    gte: new Date(start.getTime() - window),
-                    lte: new Date(start.getTime() + window),
-                  },
-                },
-              });
-            }
-            if (!existing) {
-              // Issue-month fallback, restricted to rows that carry no real
-              // period of their own — null from this path's own create, or the
-              // whole-calendar-month shape the confirm path infers. A row with
-              // a genuine period is identified by that period and must never
-              // be claimed by a different bill that merely shares its month.
-              const monthStart = new Date(Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth(), 1));
-              const monthEnd   = new Date(Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth() + 1, 0, 23, 59, 59));
-              const DAY = 24 * 60 * 60 * 1000;
-              const firstOfMonth = Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth(), 1);
-              existing = await db.statement.findFirst({
-                where: {
-                  utilityAccountId: acct.id,
-                  statementDate: { gte: monthStart, lte: monthEnd },
-                  OR: [
-                    { billingPeriodStart: null },
-                    { billingPeriodStart: { gte: new Date(firstOfMonth - DAY), lte: new Date(firstOfMonth + DAY) } },
-                  ],
-                },
-              });
-            }
+            // Already on file? One rule for every importer (services/billMatch.ts):
+            // this path had only the period and month steps, so an insurance
+            // bill (no period of its own) was filed again on every read (#189).
+            let existing = await findExistingBill(acct.id, ex, statementDate, { insuranceBill: !!ex.insurance || acct.category === 'INSURANCE' });
 
             // A "your bill is ready" email and the PDF statement are one bill;
             // a reading thinner than what is on file only confirms it.
