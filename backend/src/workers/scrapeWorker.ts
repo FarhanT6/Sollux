@@ -549,17 +549,37 @@ const worker = new Worker<ScrapeJobData>(
   }
 );
 
-worker.on('active', () => jobStarted());
+// The jobs running right now, so a shutdown can hand them back (handOffActiveJobs).
+const running = new Map<string, ScrapeJobData>();
+worker.on('active', job => { jobStarted(); if (job.id) running.set(job.id, job.data); });
 worker.on('completed', job => {
-  jobEnded();
+  jobEnded(); if (job.id) running.delete(job.id);
   console.log(`[ScrapeWorker] Job ${job.id} completed`);
 });
 
 worker.on('failed', (job, err) => {
-  jobEnded();
+  jobEnded(); if (job?.id) running.delete(job.id);
   console.error(`[ScrapeWorker] Job ${job?.id} failed:`, err.message);
 });
 
 guardWorker('ScrapeWorker', worker);
 
 export default worker;
+
+/**
+ * Render stops the worker for every deploy: a SIGTERM, then a kill 30 seconds
+ * later — too soon for a portal fetch to finish. Stop taking jobs, put each
+ * running fetch back at the front of the queue (same sync job, so its row
+ * says what happened and carries on), and let the new worker start it again.
+ */
+export async function handOffActiveJobs(): Promise<number> {
+  await worker.pause(true).catch(() => {});
+  let n = 0;
+  for (const [id, data] of running) {
+    await scrapeQueue.add('scrape', { ...data }, { jobId: `resume-${data.utilityAccountId}-${Date.now()}`, lifo: true, removeOnComplete: { count: 100 }, removeOnFail: { count: 50 } }).catch(() => {});
+    if (data.syncJobId) await db.syncJob.update({ where: { id: data.syncJobId }, data: { progress: 'Paused for an app update — starts again in a minute' } }).catch(() => {});
+    console.log(`[ScrapeWorker] Handing job ${id} (${data.utilityAccountId}) back to the queue for the next worker`);
+    n++;
+  }
+  return n;
+}
