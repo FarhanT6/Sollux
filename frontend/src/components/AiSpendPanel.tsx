@@ -3,6 +3,7 @@ import { getAiSpend, getAiTest, startAiTest, getPortalTests, testPortal, cancelF
 import { fmtMoney } from '../lib/money';
 import { fmtMoment } from '../lib/date';
 import PortalCodeBanner from './utility/PortalCodeBanner';
+import ConnectorCard from './ConnectorCard';
 import { toast } from '../lib/toast';
 
 /** A Claude call often costs a fraction of a cent; fmtMoney would show $0.00. */
@@ -146,6 +147,8 @@ export default function AiSpendPanel() {
         </div>
         {test?.run?.finishedAt && <p className="text-xs text-gray-400 mt-3">Test run finished {fmtMoment(test.run.finishedAt)} · {fmtCost(testTotal)} in all.</p>}
       </div>
+
+      <ConnectorCard />
 
       <div className="card p-5">
         <h2 className="text-sm font-semibold text-white mb-1">Statement fetching</h2>

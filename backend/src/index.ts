@@ -25,6 +25,8 @@ import analyticsRouter from './routes/analytics';
 import stripeRouter from './routes/stripe';
 import billingRouter from './routes/billing';
 import aiSpendRouter from './routes/aiSpend';
+import connectorRouter from './routes/connector';
+import { attachConnector } from './services/connector';
 import portalRouter from './routes/portal';
 import rentCollectionRouter from './routes/rentCollection';
 import maintenanceRouter from './routes/maintenance';
@@ -236,6 +238,7 @@ app.use('/api/ai', aiRouter);
 app.use('/api/plaid', plaidRouter);
 app.use('/api/billing', billingRouter);
 app.use('/api/ai-spend', aiSpendRouter);
+app.use('/api/connector', connectorRouter);
 app.use('/api/rent-collection', rentCollectionRouter);
 app.use('/api/maintenance', maintenanceRouter);
 // The tenant portal: tenants' own sign-ins, scoped to their own leases (routes/portal.ts).
@@ -244,8 +247,10 @@ app.use('/api/portal', portalRouter);
 // ─── Error handling ───────────────────────────────────────
 app.use(errorHandler);
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`🌅 Sollux API running on http://localhost:${PORT}`);
 });
+// The owner's computers running the connector, and the worker's browser sessions on them.
+attachConnector(server);
 
 export default app;

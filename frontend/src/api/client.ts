@@ -1261,3 +1261,14 @@ export const getPortalRepairs = () => api.get<RepairRow[]>('/portal/requests').t
 export const getPortalRepair = (id: string) => api.get<RepairDetail>(`/portal/requests/${id}`).then(r => r.data);
 export const createPortalRepair = (body: { leaseId: string; title: string; description: string; category: string; urgency: string; permissionToEnter: boolean; availability?: string; photos: PhotoUpload[] }) => api.post<{ id: string; photosSaved: number; photosFailed: number }>('/portal/requests', body).then(r => r.data);
 export const addPortalRepairNote = (id: string, body: string) => api.post(`/portal/requests/${id}/updates`, { body }).then(r => r.data);
+
+// ─── The Sollux connector: portal fetches through a Chrome on the owner's computer ──
+export interface ConnectorDevice { id: string; name: string; createdAt: string; lastSeenAt: string | null; agent: string | null; online: boolean }
+export const getConnectorDevices = () => api.get<{ devices: ConnectorDevice[] }>('/connector').then(r => r.data.devices);
+export const createConnectorDevice = (name: string) => api.post<{ id: string; name: string; token: string }>('/connector', { name }).then(r => r.data);
+export const removeConnectorDevice = (id: string) => api.delete(`/connector/${id}`).then(r => r.data);
+/** The API's own address (no /api), which the connector on the owner's computer dials. */
+export const apiOrigin = () => {
+  const base = (import.meta.env.VITE_API_URL as string | undefined) || '/api';
+  return new URL(base, window.location.origin).toString().replace(/\/api\/?$/, '').replace(/\/+$/, '');
+};
