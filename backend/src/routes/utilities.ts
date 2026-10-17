@@ -450,6 +450,8 @@ router.post('/:id/sync', async (req, res, next) => {
     }
 
     const job = await scrapeQueue.add('scrape', { utilityAccountId: account.id, manual: true }, {
+      // Someone is waiting on this one: the front of the queue, not behind scheduled work.
+      lifo: true,
       attempts: 3,
       backoff: { type: 'exponential', delay: 120000 },
     });

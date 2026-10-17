@@ -41,6 +41,31 @@ const worker = new Worker<ScrapeJobData>(
     const { utilityAccountId } = job.data;
     console.log(`[ScrapeWorker] Starting job for account ${utilityAccountId}`);
 
+    // Work queued long ago with nobody waiting on it (jobs that piled up while
+    // no worker ran) is out of date: the schedule queues a fresh one.
+    if (!job.data.manual && Date.now() - job.timestamp > 12 * 3600_000) {
+      console.log(`[ScrapeWorker] Skipping a stale job queued ${Math.round((Date.now() - job.timestamp) / 3600_000)}h ago for ${utilityAccountId}`);
+      return;
+    }
+    if (job.data.syncJobId) {
+      const mine = await db.syncJob.findUnique({ where: { id: job.data.syncJobId }, select: { createdAt: true } });
+      if (mine) {
+        // A newer press for the same account replaces this one.
+        const newer = await db.syncJob.findFirst({ where: { utilityAccountId, status: 'PENDING', createdAt: { gt: mine.createdAt } }, select: { id: true } });
+        // A fetch of this account that finished after this press was made already did the work.
+        const doneSince = await db.syncJob.findFirst({ where: { utilityAccountId, status: 'SUCCESS', completedAt: { gt: mine.createdAt } }, orderBy: { completedAt: 'desc' }, select: { progress: true } });
+        if (newer || doneSince) {
+          await db.syncJob.update({
+            where: { id: job.data.syncJobId },
+            data: newer
+              ? { status: 'FAILED', completedAt: new Date(), error: 'Replaced by a newer Fetch for this account.', progress: null }
+              : { status: 'SUCCESS', completedAt: new Date(), progress: `Already fetched moments ago — ${doneSince!.progress ?? 'done'}` },
+          });
+          return;
+        }
+      }
+    }
+
     // Fetch the triggering account
     const account = await db.utilityAccount.findUnique({
       where: { id: utilityAccountId },

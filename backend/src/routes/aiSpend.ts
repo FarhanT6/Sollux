@@ -248,9 +248,25 @@ router.post('/test/portal/:accountId', async (req: Request, res: Response) => {
   // The job exists from the moment Fetch is pressed, so the row shows "queued"
   // at once — and says so plainly if the background worker never picks it up.
   const job = await db.syncJob.create({ data: { utilityAccountId: a.id, status: 'PENDING', progress: 'Queued — waiting for the background worker' } });
-  await scrapeQueue.add('scrape', { utilityAccountId: a.id, manual: true, test: true, syncJobId: job.id }, { jobId: `test-${a.id}-${Date.now()}`, removeOnComplete: { count: 20 }, removeOnFail: { count: 20 } });
+  await scrapeQueue.add('scrape', { utilityAccountId: a.id, manual: true, test: true, syncJobId: job.id }, { jobId: `test-${a.id}-${Date.now()}`, lifo: true, removeOnComplete: { count: 20 }, removeOnFail: { count: 20 } });
   res.json({ queued: true, syncJobId: job.id });
 });
+
+/** What the scrape worker is on right now and how much is waiting, so a queued press can say why it waits. */
+async function queueSnapshot() {
+  try {
+    const [counts, active] = await Promise.all([scrapeQueue.getJobCounts('waiting', 'active', 'prioritized', 'delayed'), scrapeQueue.getActive(0, 4)]);
+    const ids = active.map(j => j.data?.utilityAccountId).filter(Boolean) as string[];
+    const names = new Map((await db.utilityAccount.findMany({ where: { id: { in: ids } }, select: { id: true, providerName: true, accountNumber: true } }))
+      .map(a => [a.id, `${a.providerName}${a.accountNumber ? ` ··${String(a.accountNumber).slice(-4)}` : ''}`]));
+    return {
+      waiting: (counts.waiting ?? 0) + (counts.prioritized ?? 0) + (counts.delayed ?? 0),
+      active: active.map(j => ({ account: names.get(j.data?.utilityAccountId) ?? 'an account', since: j.processedOn ? new Date(j.processedOn) : null, kind: j.data?.manual ? 'a Sync or Fetch press' : j.data?.trigger === 'bill_posted' ? 'a bill-ready email' : 'the schedule' })),
+    };
+  } catch {
+    return null; // Redis unreachable: the worker status says so
+  }
+}
 
 /** Accounts the portal agent can be tested on, with how their last runs went. */
 router.get('/test/portal', async (req: Request, res: Response) => {
@@ -264,6 +280,13 @@ router.get('/test/portal', async (req: Request, res: Response) => {
     select: { utilityAccountId: true, status: true, progress: true, error: true, createdAt: true, startedAt: true, completedAt: true, statementsFound: true, costUsd: true },
   });
   const lastJob = new Map(jobs.map(j => [j.utilityAccountId, j]));
+  // A run actually under way wins over a newer press still waiting behind it.
+  const running = await db.syncJob.findMany({
+    where: { utilityAccountId: { in: accounts.map(a => a.id) }, status: 'PENDING', startedAt: { not: null, gte: new Date(Date.now() - 15 * 60_000) } },
+    orderBy: { startedAt: 'desc' }, distinct: ['utilityAccountId'],
+    select: { utilityAccountId: true, status: true, progress: true, error: true, createdAt: true, startedAt: true, completedAt: true, statementsFound: true, costUsd: true },
+  });
+  for (const r of running) lastJob.set(r.utilityAccountId, r);
   const recipes = await db.portalRecipe.findMany({ select: { key: true, host: true, successes: true, failures: true, updatedAt: true } });
   const usage = await db.aiUsage.groupBy({ by: ['userId'], where: { feature: 'portal-agent', userId: req.dbUserId!, createdAt: { gte: monthStart() } }, _sum: { costUsd: true }, _count: { _all: true } });
   res.json({
@@ -287,6 +310,7 @@ router.get('/test/portal', async (req: Request, res: Response) => {
     sharedRecipes: recipes.filter(r => r.key.startsWith('host:')),
     monthCalls: usage[0]?._count._all ?? 0, monthCost: Number(usage[0]?._sum.costUsd ?? 0),
     workers: await workerStatus(),
+    queue: await queueSnapshot(),
   });
 });
 
