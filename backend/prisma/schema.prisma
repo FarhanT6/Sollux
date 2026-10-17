@@ -57,6 +57,7 @@ model User {
   properties              Property[]
   notificationPreferences NotificationPreference[]
   gmailTokens             GmailToken[]
+  connectorDevices        ConnectorDevice[]
   driveTokens             DriveToken[]
   clickupConnection       ClickUpConnection?
   paymentRecipient        PaymentRecipient?
@@ -2562,4 +2563,25 @@ model PortalSession {
   updatedAt        DateTime @updatedAt
 
   @@map("portal_sessions")
+}
+
+/// The owner's own computer running the Sollux connector (connector/sollux-connector.mjs):
+/// portal fetches run in a Chrome there, from the owner's home internet, instead of
+/// on a cloud server that bot protection turns away. Only a hash of its token is kept.
+model ConnectorDevice {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name       String
+  tokenHash  String    @unique
+  createdAt  DateTime  @default(now())
+  /// Set while the helper is connected, every 30 seconds; online = seen in the last 90.
+  lastSeenAt DateTime?
+  /// The API address the helper reached, which the worker connects to for the browser.
+  relayUrl   String?
+  /// What the helper reported: OS and Chrome version.
+  agent      String?
+
+  @@index([userId])
+  @@map("connector_devices")
 }

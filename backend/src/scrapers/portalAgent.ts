@@ -20,6 +20,8 @@ import { websiteFor } from '../lib/providerDirectory';
 import * as fs from 'fs';
 import { BrowserContext, Page, Download, Frame, Locator } from 'playwright';
 import { launchPortalContext, isHttp2Reset } from './browser';
+import { chromium, type Browser } from 'playwright';
+import { connectorFor } from '../services/connector';
 import { db } from '../config/db';
 import { decrypt, encrypt } from '../crypto/encrypt';
 import { PRIMARY_MODEL, paramsFor, meteredCreate } from '../ai/models';
@@ -172,7 +174,22 @@ export async function fillCode(first: Locator, code: string): Promise<void> {
 
 export async function capturePdf(ctx: BrowserContext, page: Page, action: () => Promise<void>): Promise<Buffer | null> {
   let got: Buffer | null = null;
-  const onDownload = async (d: Download) => { try { const p = await d.path(); if (p) { const b = await fs.promises.readFile(p); if (b.subarray(0, 1024).includes('%PDF-')) got = b; } } catch { /* ignore */ } };
+  const onDownload = async (d: Download) => {
+    try { const p = await d.path(); if (p) { const b = await fs.promises.readFile(p); if (b.subarray(0, 1024).includes('%PDF-')) got = b; } } catch { /* ignore */ }
+    // A browser on the owner's computer saves downloads there, out of reach:
+    // fetch the same address from inside the page (its cookies, its internet).
+    if (!got) {
+      const b64 = await page.evaluate(async (url) => {
+        const r = await fetch(url, { credentials: 'include' });
+        const bytes = new Uint8Array(await r.arrayBuffer());
+        let bin = '';
+        for (let k = 0; k < bytes.length; k += 0x8000) bin += String.fromCharCode(...Array.from(bytes.subarray(k, k + 0x8000)));
+        return btoa(bin);
+      }, d.url()).catch(() => null);
+      const b = b64 ? Buffer.from(b64, 'base64') : null;
+      if (b && b.subarray(0, 1024).includes('%PDF-')) got = b;
+    }
+  };
   const onResponse = async (r: import('playwright').Response) => {
     // A PDF opened in a tab reports its viewer's HTML as the body; keep only real PDF bytes.
     try { if (!got && (r.headers()['content-type'] ?? '').includes('application/pdf')) { const b = await r.body(); if (b.subarray(0, 1024).includes('%PDF-')) got = b; } } catch { /* ignore */ }
@@ -244,8 +261,11 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   const allowed = new Set([rootOf(start.hostname)]);
   const userId = account.property.userId;
   const host = rootOf(start.hostname);
+  // The owner's own computer, when its connector is online: a real Chrome on
+  // home internet, which sites that refuse cloud servers let in.
+  const connector = await connectorFor(userId);
   const awayUntil = turnedAway.get(host) ?? 0;
-  if (!opts.interactive && awayUntil > Date.now()) {
+  if (!connector && !opts.interactive && awayUntil > Date.now()) {
     return { ok: false, filed: 0, review: 0, applied: 0, downloads: 0, summary: '', error: `Not tried: ${start.hostname} turned the browser away earlier, so scheduled fetches wait until ${clock(awayUntil)} rather than risk locking the login. Fetch now tries it at once.` };
   }
   const since = account.statements[0]?.statementDate?.toISOString().slice(0, 10) ?? null;
@@ -262,8 +282,19 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   // A browser that looks like the Chrome it is (scrapers/browser.ts), with the
   // saved cookies restored. The agent reads pages as text: images, video and
   // fonts only cost memory (a 512MB worker ran out with Chrome on a heavy portal).
+  let remote: Browser | null = null;
   const prepare = async (http1 = false) => {
-    const c = await launchPortalContext(profileDir, { http1 });
+    let c: BrowserContext | null = null;
+    if (connector && !http1) {
+      try {
+        remote = await chromium.connectOverCDP(connector.wsUrl, { timeout: 30_000 });
+        c = await remote.newContext({ acceptDownloads: true, viewport: { width: 1366, height: 900 }, locale: 'en-US' });
+      } catch (err) {
+        console.warn('[PortalAgent] connector browser unavailable, using the cloud one:', err instanceof Error ? err.message.split('\n')[0] : err);
+        await remote?.close().catch(() => {}); remote = null;
+      }
+    }
+    if (!c) c = await launchPortalContext(profileDir, { http1 });
     // A fresh bot score every run: none from the profile on disk, none from the database.
     await c.clearCookies({ name: BOT_COOKIE }).catch(() => {});
     if (saved) {
@@ -324,7 +355,7 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
   const recipe = await loadRecipe(account.id, host);
 
   try {
-    say(`Opening ${start.hostname}`);
+    say(remote ? `Opening ${start.hostname} on ${connector!.name}` : `Opening ${start.hostname}`);
     const res = await openStart();
     // Refused before any sign-in (Safeco's and Nelnet's Access Denied): nothing for Claude to do.
     const title = await page.title().catch(() => '');
@@ -545,6 +576,7 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
       } catch (err) { console.warn('[PortalAgent] session not saved:', err instanceof Error ? err.message.split('\n')[0] : err); }
     }
     await ctx.close().catch(() => {});
+    await (remote as Browser | null)?.close().catch(() => {});
     await db.utilityAccount.update({ where: { id: account.id }, data: { lastAgentRunAt: new Date(), mfaPrompt: null, mfaRequestedAt: null, mfaCodeEnc: null } }).catch(() => {});
   }
 
@@ -554,7 +586,7 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
     const until = Date.now() + TURNED_AWAY_MS;
     turnedAway.set(host, until);
     const detail = run.error.replace(/^turned_away\s*/, '').replace(/^The agent could not get to the statements\.\s*/, '');
-    run.error = `${account.providerName} turned Sollux's browser away (bot protection, not your password); scheduled fetches wait until ${clock(until)} so the login isn't locked. If it keeps happening the site blocks cloud servers: set PORTAL_PROXY_URL, or bring its bills in by email or upload. ${detail}`;
+    run.error = `${account.providerName} turned Sollux's browser away (bot protection, not your password); scheduled fetches wait until ${clock(until)} so the login isn't locked. If it keeps happening the site blocks cloud servers: turn on Fetch from your computer (Settings → AI usage), or bring its bills in by email or upload. ${detail}`;
   }
 
   if (review.length || run.filed) {
