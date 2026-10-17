@@ -283,14 +283,20 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   // saved cookies restored. The agent reads pages as text: images, video and
   // fonts only cost memory (a 512MB worker ran out with Chrome on a heavy portal).
   let remote: Browser | null = null;
+  // Why the owner's computer was not used although it is connected, for the status and the error.
+  let connectorProblem = '';
   const prepare = async (http1 = false) => {
     let c: BrowserContext | null = null;
     if (connector && !http1) {
       try {
         remote = await chromium.connectOverCDP(connector.wsUrl, { timeout: 30_000 });
-        c = await remote.newContext({ acceptDownloads: true, viewport: { width: 1366, height: 900 }, locale: 'en-US' });
+        // The connector profile's own window, not a private one: what the owner
+        // signs in to there by hand (a site that refuses the agent, a device
+        // to trust) is what the agent finds signed in next time.
+        c = remote.contexts()[0] ?? await remote.newContext({ acceptDownloads: true, viewport: { width: 1366, height: 900 }, locale: 'en-US' });
       } catch (err) {
-        console.warn('[PortalAgent] connector browser unavailable, using the cloud one:', err instanceof Error ? err.message.split('\n')[0] : err);
+        connectorProblem = `${connector.name} is connected but Sollux could not open its Chrome (${err instanceof Error ? err.message.split('\n')[0].slice(0, 120) : String(err)}), so this ran in Sollux's own browser.`;
+        console.warn('[PortalAgent] connector browser unavailable, using the cloud one:', connectorProblem);
         await remote?.close().catch(() => {}); remote = null;
       }
     }
@@ -305,12 +311,20 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
     return c;
   };
   let ctx = await prepare();
-  let page = ctx.pages()[0] ?? await ctx.newPage();
+  // On the owner's computer: a tab of its own, closed afterwards; the window stays.
+  let page = remote ? await ctx.newPage() : ctx.pages()[0] ?? await ctx.newPage();
+  const shutdown = async () => {
+    if (remote) {
+      await page.close().catch(() => {});
+      await ctx.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => {});
+      await (remote as Browser | null)?.close().catch(() => {});
+    } else await ctx.close().catch(() => {});
+  };
   // Cancel: checked every few seconds; closing the browser ends whatever it
   // is waiting on (a page load, a click), and every loop below stops on it.
   let cancelled = false;
   const watch = opts.cancelled ? setInterval(() => {
-    void opts.cancelled!().then(c => { if (c && !cancelled) { cancelled = true; void ctx.close().catch(() => {}); } }).catch(() => {});
+    void opts.cancelled!().then(c => { if (c && !cancelled) { cancelled = true; void shutdown(); } }).catch(() => {});
   }, 3000) : null;
   // A portal that resets HTTP/2 from automated browsers (Mohela) is opened again without it.
   const openStart = async () => {
@@ -355,7 +369,8 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
   const recipe = await loadRecipe(account.id, host);
 
   try {
-    say(remote ? `Opening ${start.hostname} on ${connector!.name}` : `Opening ${start.hostname}`);
+    // Say which browser this is, so a run that was turned away shows why.
+    say(remote ? `Opening ${start.hostname} on ${connector!.name}` : connectorProblem ? `Opening ${start.hostname} in Sollux's browser — ${connectorProblem}` : `Opening ${start.hostname} in Sollux's browser (your computer is not connected)`);
     const res = await openStart();
     // Refused before any sign-in (Safeco's and Nelnet's Access Denied): nothing for Claude to do.
     const title = await page.title().catch(() => '');
@@ -575,8 +590,7 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
         await db.portalSession.upsert({ where: { utilityAccountId: account.id }, create: { utilityAccountId: account.id, stateEnc: encrypt(JSON.stringify({ cookies })) }, update: { stateEnc: encrypt(JSON.stringify({ cookies })) } });
       } catch (err) { console.warn('[PortalAgent] session not saved:', err instanceof Error ? err.message.split('\n')[0] : err); }
     }
-    await ctx.close().catch(() => {});
-    await (remote as Browser | null)?.close().catch(() => {});
+    await shutdown();
     await db.utilityAccount.update({ where: { id: account.id }, data: { lastAgentRunAt: new Date(), mfaPrompt: null, mfaRequestedAt: null, mfaCodeEnc: null } }).catch(() => {});
   }
 
@@ -586,8 +600,12 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
     const until = Date.now() + TURNED_AWAY_MS;
     turnedAway.set(host, until);
     const detail = run.error.replace(/^turned_away\s*/, '').replace(/^The agent could not get to the statements\.\s*/, '');
-    run.error = `${account.providerName} turned Sollux's browser away (bot protection, not your password); scheduled fetches wait until ${clock(until)} so the login isn't locked. If it keeps happening the site blocks cloud servers: turn on Fetch from your computer (Settings → AI usage), or bring its bills in by email or upload. ${detail}`;
+    run.error = (remote as Browser | null)
+      ? `${account.providerName} turned away the Chrome on ${connector!.name} too (bot protection, not your password). Sign in to ${start.hostname} by hand once in that Chrome window — the agent uses that sign-in next time — or bring its bills in by email or upload. ${detail}`
+      : `${account.providerName} turned Sollux's browser away (bot protection, not your password); scheduled fetches wait until ${clock(until)} so the login isn't locked. If it keeps happening the site blocks cloud servers: turn on Fetch from your computer (Settings → AI usage), or bring its bills in by email or upload. ${detail}`;
   }
+
+  if (!run.ok && connectorProblem && run.error) run.error = `${run.error} (${connectorProblem})`;
 
   if (review.length || run.filed) {
     const job = await db.driveImportJob.create({
