@@ -23,6 +23,7 @@ import { db } from '../config/db';
 import { decrypt, encrypt } from '../crypto/encrypt';
 import { PRIMARY_MODEL, paramsFor, meteredCreate } from '../ai/models';
 import { costOf, withAiContext } from '../ai/meter';
+import { findEmailedCode } from '../services/emailCode';
 import { loadRecipe, saveRecipe, recipeWorked, replay, targetOf, type RecipeStep } from './portalRecipe';
 import { intakeBill, type ReviewItem } from '../services/documentIntake';
 import { BaseScraperProvider } from './base';
@@ -55,7 +56,7 @@ const TOOLS: Anthropic.Tool[] = [
   { name: 'press', description: 'Press a key (Enter, Tab, Escape).', input_schema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] } },
   { name: 'goto', description: "Open a URL on the provider's own site.", input_schema: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } },
   { name: 'download_statement', description: 'Click element [n] that downloads or opens one statement PDF, and keep it. Give the statement date if shown.', input_schema: { type: 'object', properties: { ref: { type: 'number' }, statementDate: { type: 'string' } }, required: ['ref'] } },
-  { name: 'ask_owner_for_code', description: 'The portal sent a verification code. Ask the owner for it (waits up to 5 minutes). Say where it was sent.', input_schema: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] } },
+  { name: 'ask_owner_for_code', description: "The portal sent a verification code. Reads it from the owner's email (up to 2 minutes), else asks the owner (up to 5 more). Say where it was sent.", input_schema: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] } },
   { name: 'type_code', description: 'Type the code the owner gave into field [n].', input_schema: { type: 'object', properties: { ref: { type: 'number' } }, required: ['ref'] } },
   { name: 'finish', description: 'Stop. outcome: done (downloaded what was new, or nothing new), bad_login, captcha, no_code, blocked.', input_schema: { type: 'object', properties: { outcome: { type: 'string', enum: ['done', 'bad_login', 'captcha', 'no_code', 'blocked'] }, summary: { type: 'string' } }, required: ['outcome', 'summary'] } },
 ];
@@ -177,15 +178,24 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
     viewport: { width: 1366, height: 900 }, locale: 'en-US', timezoneId: 'America/Los_Angeles', acceptDownloads: true,
     userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
   });
+  // The browser's memory from the last good run ("remember this device"):
+  // the worker's disk is wiped on every deploy, so it is kept in the database.
+  const saved = await db.portalSession.findUnique({ where: { utilityAccountId: account.id } }).catch(() => null);
+  if (saved) {
+    try { await ctx.addCookies(JSON.parse(decrypt(saved.stateEnc)).cookies ?? []); }
+    catch (err) { console.warn('[PortalAgent] saved session not restored:', err instanceof Error ? err.message.split('\n')[0] : err); }
+  }
   const page = ctx.pages()[0] ?? await ctx.newPage();
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const secrets = [password, username];
   const deadline = Date.now() + RUN_MS;
   let code: string | null = null;
+  // A code was entered this run: the device may now be trusted, so keep the browser's memory.
+  let usedCode = false;
 
   const system = `You operate a web browser for a property owner to collect utility statements from ${account.providerName}'s customer portal. Account ${account.accountNumber ? `ending ${String(account.accountNumber).slice(-4)}` : ''} at ${account.property.address}.
 Goal: log in, open the billing / statement history, and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If there is nothing newer, finish with outcome done.
-Rules: use fill_login for credentials (you never see them); if the portal sends a verification code, call ask_owner_for_code, then type_code. Never pay, enroll, change settings, accept offers or send messages. If a captcha appears, finish with captcha. If the login is rejected, finish with bad_login. Call look after each action. When several accounts are listed, choose the one matching the account number or address. Be efficient.`;
+Rules: use fill_login for credentials (you never see them). If the portal offers where to send a verification code, choose email over text or a phone call. When a code has been sent, call ask_owner_for_code (it reads the code from the owner's email, or asks the owner), then type_code. Before submitting a login or a code, tick any "Remember this device", "Trust this browser", "Keep me signed in" or "Don't ask again" option, so the next visit is not asked again. Never pay, enroll, change settings, accept offers or send messages. If a captcha appears, finish with captcha. If the login is rejected, finish with bad_login. Call look after each action. When several accounts are listed, choose the one matching the account number or address. Be efficient.`;
   // Every step that changed the page, in order: replayed ones and Claude's.
   // The ones before the first download become the recipe for next time.
   const steps: RecipeStep[] = [];
@@ -281,7 +291,16 @@ Rules: use fill_login for credentials (you never see them); if the portal sends 
             }
             case 'ask_owner_for_code': {
               // A scheduled run has nobody watching; only a Sync the owner pressed waits for a code.
-              if (!opts.interactive) { content = 'The owner is not here to give a code on a scheduled run — finish with no_code.'; break; }
+              // The owner's inbox first: most portals email the code.
+              say('Looking for the verification code in your email');
+              const emailed = await findEmailedCode(userId, { since: new Date(Date.now() - 90_000), host: new URL(page.url()).hostname || start.hostname, providerName: account.providerName, timeoutMs: 120_000 }).catch(() => null);
+              if (emailed) {
+                code = emailed; secrets.push(code); usedCode = true;
+                content = 'The code arrived by email. Use type_code.';
+                say('Found the code in your email — entering it');
+                break;
+              }
+              if (!opts.interactive) { content = 'No code arrived by email, and the owner is not here on a scheduled run — finish with no_code.'; break; }
               say(`Waiting for your verification code: ${String(i.prompt).slice(0, 160)}`);
               await db.utilityAccount.update({ where: { id: account.id }, data: { mfaPrompt: String(i.prompt).slice(0, 300), mfaRequestedAt: new Date(), mfaCodeEnc: null } });
               const until = Date.now() + CODE_WAIT_MS;
@@ -292,6 +311,7 @@ Rules: use fill_login for credentials (you never see them); if the portal sends 
               }
               await db.utilityAccount.update({ where: { id: account.id }, data: { mfaPrompt: null, mfaRequestedAt: null, mfaCodeEnc: null } });
               content = code ? 'The owner gave the code. Use type_code.' : 'No code within 5 minutes — finish with no_code.';
+              if (code) usedCode = true;
               if (code) secrets.push(code);
               break;
             }
@@ -300,7 +320,7 @@ Rules: use fill_login for credentials (you never see them); if the portal sends 
               finished = true;
               run.ok = i.outcome === 'done';
               run.summary = String(i.summary ?? '').slice(0, 500);
-              if (!run.ok) run.error = { bad_login: 'The portal rejected the username or password.', captcha: 'The portal showed a captcha the agent cannot solve — sync this one by email or upload.', no_code: opts.interactive ? 'The portal asked for a verification code and none was entered in time.' : 'The portal asks for a verification code — press Sync on this account and enter the code when Sollux asks.', blocked: 'The agent could not get to the statements.' }[String(i.outcome)] + (run.summary ? ` ${run.summary}` : '');
+              if (!run.ok) run.error = { bad_login: 'The portal rejected the username or password.', captcha: 'The portal showed a captcha the agent cannot solve — sync this one by email or upload.', no_code: opts.interactive ? 'The portal asked for a verification code; none arrived in your connected email and none was entered in time.' : 'The portal sent a verification code that did not arrive in your connected email (it may go to your phone) — press Fetch now and enter the code when Sollux asks.', blocked: 'The agent could not get to the statements.' }[String(i.outcome)] + (run.summary ? ` ${run.summary}` : '');
               break;
             default: content = 'Unknown tool.';
           }
@@ -328,6 +348,13 @@ Rules: use fill_login for credentials (you never see them); if the portal sends 
   } catch (err) {
     run.error = err instanceof Error ? err.message.split('\n')[0] : String(err);
   } finally {
+    // Keep the cookies after a good run, or once a code got us in (the trusted-device cookie).
+    if (run.ok || usedCode) {
+      try {
+        const state = await ctx.storageState();
+        await db.portalSession.upsert({ where: { utilityAccountId: account.id }, create: { utilityAccountId: account.id, stateEnc: encrypt(JSON.stringify({ cookies: state.cookies })) }, update: { stateEnc: encrypt(JSON.stringify({ cookies: state.cookies })) } });
+      } catch (err) { console.warn('[PortalAgent] session not saved:', err instanceof Error ? err.message.split('\n')[0] : err); }
+    }
     await ctx.close().catch(() => {});
     await db.utilityAccount.update({ where: { id: account.id }, data: { lastAgentRunAt: new Date(), mfaPrompt: null, mfaRequestedAt: null, mfaCodeEnc: null } }).catch(() => {});
   }

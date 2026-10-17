@@ -56,7 +56,7 @@ export interface InboxRunSummary {
   mailboxes: number; read: number; filed: number; review: number; applied: number; skipped: number; errors: string[]; jobId: string | null;
 }
 
-function oauthFor(token: { id: string; accessToken: string; refreshToken: string; expiresAt: Date }) {
+export function oauthFor(token: { id: string; accessToken: string; refreshToken: string; expiresAt: Date }) {
   const client = new google.auth.OAuth2(process.env.GMAIL_CLIENT_ID, process.env.GMAIL_CLIENT_SECRET, process.env.GMAIL_REDIRECT_URI);
   client.setCredentials({ access_token: token.accessToken, refresh_token: token.refreshToken, expiry_date: token.expiresAt.getTime() });
   // Keep the refreshed token so the next run does not start from an expired one.
@@ -70,14 +70,14 @@ function oauthFor(token: { id: string; accessToken: string; refreshToken: string
 }
 
 type Part = gmail_v1.Schema$MessagePart;
-function walk(part: Part | undefined, out: Part[] = []): Part[] {
+export function walk(part: Part | undefined, out: Part[] = []): Part[] {
   if (!part) return out;
   out.push(part);
   for (const p of part.parts ?? []) walk(p, out);
   return out;
 }
 const header = (m: gmail_v1.Schema$Message, name: string) => m.payload?.headers?.find(h => h.name?.toLowerCase() === name.toLowerCase())?.value ?? '';
-const decode = (data?: string | null) => (data ? Buffer.from(data, 'base64url') : Buffer.alloc(0));
+export const decode = (data?: string | null) => (data ? Buffer.from(data, 'base64url') : Buffer.alloc(0));
 
 export function htmlToText(html: string): string {
   return html.replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/gi, ' ').replace(/<br\s*\/?>|<\/(p|div|tr|li|h\d)>/gi, '\n')
