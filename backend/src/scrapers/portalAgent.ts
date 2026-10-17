@@ -18,7 +18,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { websiteFor } from '../lib/providerDirectory';
 import * as fs from 'fs';
-import { chromium, BrowserContext, Page, Download } from 'playwright';
+import { BrowserContext, Page, Download } from 'playwright';
+import { launchPortalContext, isHttp2Reset } from './browser';
 import { db } from '../config/db';
 import { decrypt, encrypt } from '../crypto/encrypt';
 import { PRIMARY_MODEL, paramsFor, meteredCreate } from '../ai/models';
@@ -172,23 +173,35 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   const profileDir = BaseScraperProvider.profileDir(`agent-${account.id}`);
   await fs.promises.mkdir(profileDir, { recursive: true });
   // The browser a person would use; the session is kept so a trusted device stays trusted.
-  const ctx = await chromium.launchPersistentContext(profileDir, {
-    // --disable-http2: some portals (Mohela) reset HTTP/2 from automated browsers (ERR_HTTP2_PROTOCOL_ERROR).
-    headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled', '--disable-http2'],
-    viewport: { width: 1366, height: 900 }, locale: 'en-US', timezoneId: 'America/Los_Angeles', acceptDownloads: true,
-    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-  });
   // The browser's memory from the last good run ("remember this device"):
   // the worker's disk is wiped on every deploy, so it is kept in the database.
   const saved = await db.portalSession.findUnique({ where: { utilityAccountId: account.id } }).catch(() => null);
-  if (saved) {
-    try { await ctx.addCookies(JSON.parse(decrypt(saved.stateEnc)).cookies ?? []); }
-    catch (err) { console.warn('[PortalAgent] saved session not restored:', err instanceof Error ? err.message.split('\n')[0] : err); }
-  }
-  // The agent reads pages as text: images, video and fonts only cost memory
-  // (a 512MB worker ran out with Chrome on a heavy portal).
-  await ctx.route('**/*', r => (['image', 'media', 'font'].includes(r.request().resourceType()) ? r.abort() : r.continue())).catch(() => {});
-  const page = ctx.pages()[0] ?? await ctx.newPage();
+  // A browser that looks like the Chrome it is (scrapers/browser.ts), with the
+  // saved cookies restored. The agent reads pages as text: images, video and
+  // fonts only cost memory (a 512MB worker ran out with Chrome on a heavy portal).
+  const prepare = async (http1 = false) => {
+    const c = await launchPortalContext(profileDir, { http1 });
+    if (saved) {
+      try { await c.addCookies(JSON.parse(decrypt(saved.stateEnc)).cookies ?? []); }
+      catch (err) { console.warn('[PortalAgent] saved session not restored:', err instanceof Error ? err.message.split('\n')[0] : err); }
+    }
+    await c.route('**/*', r => (['image', 'media', 'font'].includes(r.request().resourceType()) ? r.abort() : r.continue())).catch(() => {});
+    return c;
+  };
+  let ctx = await prepare();
+  let page = ctx.pages()[0] ?? await ctx.newPage();
+  // A portal that resets HTTP/2 from automated browsers (Mohela) is opened again without it.
+  const openStart = async () => {
+    try { await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 45000 }); }
+    catch (err) {
+      if (!isHttp2Reset(err)) throw err;
+      console.log(`[PortalAgent] ${start.hostname} reset HTTP/2 — opening it again without`);
+      await ctx.close().catch(() => {});
+      ctx = await prepare(true);
+      page = ctx.pages()[0] ?? await ctx.newPage();
+      await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    }
+  };
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const secrets = [password, username];
   const deadline = Date.now() + RUN_MS;
@@ -218,7 +231,7 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
 
   try {
     say(`Opening ${start.hostname}`);
-    await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    await openStart();
     let opening = "Start. The browser is open on the provider's login page (or its home page — find Sign in from there).";
     if (recipe) {
       say(`Replaying the saved route (${recipe.steps.length} steps, no AI)`);
