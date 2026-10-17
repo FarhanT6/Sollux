@@ -75,6 +75,29 @@ export async function loginClash(accountId: string): Promise<string> {
     return ` Note: ${names} is saved with the same username but a different password. A site has one password per username, so one of them is out of date — if these are separate logins, the username on one of them is wrong. Fix it on the account before fetching again: every rejected try counts against that login.`;
   } catch { return ''; }
 }
+/**
+ * The owner's other accounts on the same login: the same site (by its web
+ * address), the same username and the same password, syncing on. One
+ * sign-in fetches them all.
+ */
+async function sameLogin(accountId: string): Promise<{ id: string; label: string }[]> {
+  const site = { providerName: true, providerSlug: true, loginUrl: true } as const;
+  const me = await db.utilityAccount.findUnique({ where: { id: accountId }, select: { ...site, usernameEnc: true, passwordEnc: true, property: { select: { userId: true } } } });
+  if (!me?.usernameEnc || !me.passwordEnc) return [];
+  const rootOf = (a: { providerName: string; providerSlug: string | null; loginUrl: string | null }) => {
+    try { return new URL(websiteFor(a)!.url).hostname.split('.').slice(-2).join('.'); } catch { return null; }
+  };
+  const mine = rootOf(me);
+  if (!mine) return [];
+  try {
+    const user = decrypt(me.usernameEnc).trim().toLowerCase(), pass = decrypt(me.passwordEnc);
+    const all = await db.utilityAccount.findMany({ where: { id: { not: accountId }, syncEnabled: true, property: { userId: me.property.userId }, usernameEnc: { not: null }, passwordEnc: { not: null } }, select: { ...site, id: true, accountNumber: true, usernameEnc: true, passwordEnc: true } });
+    return all.filter(o => rootOf(o) === mine && decrypt(o.usernameEnc!).trim().toLowerCase() === user && decrypt(o.passwordEnc!) === pass)
+      .slice(0, 9)
+      .map(o => ({ id: o.id, label: o.accountNumber ? `··${String(o.accountNumber).slice(-4)}` : o.providerName }));
+  } catch { return []; }
+}
+
 const REJECTED = /rejected the username or password|login failed|invalid (email|user|username|credentials)|incorrect (password|username)/i;
 
 /**
@@ -83,7 +106,7 @@ const REJECTED = /rejected the username or password|login failed|invalid (email|
  * cost. Never retried automatically: a retry could re-trigger a code or lock
  * the login.
  */
-async function agentJob(job: Job<ScrapeJobData>, account: { id: string; providerName: string; property: { id: string } }): Promise<void> {
+export async function agentJob(job: Job<ScrapeJobData>, account: { id: string; providerName: string; property: { id: string } }): Promise<void> {
   const utilityAccountId = account.id;
     await db.utilityAccount.update({ where: { id: utilityAccountId }, data: { lastSyncStatus: 'PENDING' } });
     const syncJob = job.data.syncJobId
@@ -93,15 +116,33 @@ async function agentJob(job: Job<ScrapeJobData>, account: { id: string; provider
     // The live line where Fetch was pressed: at most one write every 2 seconds,
     // but the latest line always lands (a dropped "Looking for the code in your
     // email" left "clicking Log in" on screen for the two minutes it took).
+    // The same login's other accounts ride along: their rows show this run, and
+    // a Fetch already queued for one of them is answered by it.
+    const also = await sameLogin(utilityAccountId);
+    const me = await db.utilityAccount.findUnique({ where: { id: utilityAccountId }, select: { accountNumber: true } });
+    const myLabel = me?.accountNumber ? `··${String(me.accountNumber).slice(-4)}` : account.providerName;
+    const alsoJobs: string[] = [];
+    for (const o of also) {
+      const pending = await db.syncJob.findMany({ where: { utilityAccountId: o.id, status: 'PENDING' }, select: { id: true } });
+      if (pending.length) alsoJobs.push(...pending.map(j => j.id));
+      else alsoJobs.push((await db.syncJob.create({ data: { utilityAccountId: o.id, status: 'PENDING', startedAt: new Date(), progress: `In the same sign-in as ${myLabel}` } })).id);
+    }
+    if (also.length) await db.utilityAccount.updateMany({ where: { id: { in: also.map(o => o.id) } }, data: { lastSyncStatus: 'PENDING' } });
     let lastWrite = 0, latest = '', timer: NodeJS.Timeout | null = null;
-    const write = () => { timer = null; lastWrite = Date.now(); void db.syncJob.update({ where: { id: syncJob.id }, data: { progress: latest.slice(0, 300) } }).catch(() => {}); };
+    const write = () => {
+      timer = null; lastWrite = Date.now();
+      void db.syncJob.update({ where: { id: syncJob.id }, data: { progress: latest.slice(0, 300) } }).catch(() => {});
+      if (alsoJobs.length) void db.syncJob.updateMany({ where: { id: { in: alsoJobs }, status: 'PENDING' }, data: { progress: `With ${myLabel} (same login) · ${latest}`.slice(0, 300) } }).catch(() => {});
+    };
     const onProgress = (text: string) => {
       latest = text;
       if (timer) return;
       const wait = 2000 - (Date.now() - lastWrite);
       if (wait <= 0) write(); else timer = setTimeout(write, wait);
     };
-    const r = await withAiContext({ test: !!job.data.test }, () => runPortalAgent(utilityAccountId, { interactive: !!job.data.manual, onProgress, cancelled: async () => (await db.syncJob.findUnique({ where: { id: syncJob.id }, select: { status: true } }))?.status === 'FAILED' }))
+    const r = await withAiContext({ test: !!job.data.test }, () => runPortalAgent(utilityAccountId, { interactive: !!job.data.manual, onProgress, also: also.map(o => o.id), cancelled: async () => (await db.syncJob.findUnique({ where: { id: syncJob.id }, select: { status: true } }))?.status === 'FAILED'
+      // Cancel pressed on any account in the sign-in stops it.
+      || (alsoJobs.length > 0 && !!(await db.syncJob.findFirst({ where: { id: { in: alsoJobs }, status: 'FAILED', error: 'Cancelled by you.' }, select: { id: true } }))) }))
       .catch(err => ({ ok: false, filed: 0, review: 0, applied: 0, downloads: 0, summary: '', error: readableError(err instanceof Error ? err.message : String(err)) }) as Awaited<ReturnType<typeof runPortalAgent>>);
     if (timer) clearTimeout(timer); // the final status below replaces any pending progress line
     const clash = !r.ok && r.error && REJECTED.test(r.error) ? await loginClash(utilityAccountId) : '';
@@ -111,7 +152,17 @@ async function agentJob(job: Job<ScrapeJobData>, account: { id: string; provider
       data: r.ok ? { lastSyncedAt: new Date(), lastSyncStatus: 'SUCCESS', lastSyncError: null } : { lastSyncStatus: 'FAILED', lastSyncError: failure },
     });
     await db.syncJob.update({ where: { id: syncJob.id }, data: { status: r.ok ? 'SUCCESS' : 'FAILED', completedAt: new Date(), statementsFound: r.filed + r.review, costUsd: r.costUsd ?? 0, error: r.ok ? null : failure, progress: r.ok ? (r.downloads ? downloadSummary(r) : (r.summary || 'Nothing new on the portal')).slice(0, 300) : null } });
-    if (r.filed) await insightQueue.add('generate', { propertyId: account.property.id }, { delay: 2000, attempts: 2 });
+    // The accounts that rode along: what this sign-in found for each.
+    for (const o of also) {
+      const filed = r.filedFor?.[o.id] ?? 0;
+      const note = r.ok ? (filed ? `Downloaded ${filed} statement${filed === 1 ? '' : 's'} (signed in once with ${myLabel})` : `Nothing new (checked in the same sign-in as ${myLabel})`) : `Fetched with ${myLabel} (same login): ${failure}`;
+      await db.utilityAccount.update({ where: { id: o.id }, data: r.ok ? { lastSyncedAt: new Date(), lastAgentRunAt: new Date(), lastSyncStatus: 'SUCCESS', lastSyncError: null } : { lastAgentRunAt: new Date(), lastSyncStatus: 'FAILED', lastSyncError: note.slice(0, 1000) } }).catch(() => {});
+      await db.syncJob.updateMany({ where: { id: { in: alsoJobs }, utilityAccountId: o.id }, data: { status: r.ok ? 'SUCCESS' : 'FAILED', completedAt: new Date(), statementsFound: filed, error: r.ok ? null : note.slice(0, 1000), progress: r.ok ? note : null } }).catch(() => {});
+    }
+    const filedProps = new Set([...(r.filed ? [account.property.id] : [])]);
+    const filedAlso = also.filter(o => (r.filedFor?.[o.id] ?? 0) > 0).map(o => o.id);
+    if (filedAlso.length) for (const a of await db.utilityAccount.findMany({ where: { id: { in: filedAlso } }, select: { propertyId: true } })) filedProps.add(a.propertyId);
+    for (const propertyId of filedProps) await insightQueue.add('generate', { propertyId }, { delay: 2000, attempts: 2 });
     console.log(`[ScrapeWorker] Portal agent ${account.providerName}: ${r.downloads} downloaded, ${r.filed} filed, ${r.review} to review; ${r.replayed ?? 0} steps replayed, ${r.aiSteps ?? 0} Claude turns, $${(r.costUsd ?? 0).toFixed(3)}${r.error ? ` — ${r.error}` : ''}`);
 }
 

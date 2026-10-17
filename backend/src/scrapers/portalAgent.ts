@@ -63,6 +63,8 @@ export interface PortalRun {
   ok: boolean; filed: number; review: number; applied: number; downloads: number; summary: string; error?: string; jobId?: string | null;
   /** Claude turns this run took, what they cost, and how many recorded steps were replayed without Claude. */
   aiSteps?: number; costUsd?: number; replayed?: number;
+  /** Statements filed, by the account each one was filed to (several accounts on one login). */
+  filedFor?: Record<string, number>;
 }
 
 const TOOLS: Anthropic.Tool[] = [
@@ -278,6 +280,8 @@ export async function capturePdf(ctx: BrowserContext, page: Page, action: () => 
 
 export interface AgentOptions {
   interactive?: boolean;
+  /** Other accounts on the same login: one sign-in fetches them all. */
+  also?: string[];
   /** True once the owner pressed Cancel: the run stops at once and closes its browser. */
   cancelled?: () => Promise<boolean>;
   /** Called with a short line on what the agent is doing, for a live status. */
@@ -323,9 +327,18 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
     return { ok: false, filed: 0, review: 0, applied: 0, downloads: 0, summary: '', error: `Not tried: ${start.hostname} turned the browser away earlier, so scheduled fetches wait until ${clock(awayUntil)} rather than risk locking the login. Fetch now tries it at once.` };
   }
   const since = account.statements[0]?.statementDate?.toISOString().slice(0, 10) ?? null;
+  // The other accounts this login holds: fetched in the same visit — one
+  // sign-in and one code instead of one each (SDG&E turned away twelve
+  // sign-ins in five minutes).
+  const others = opts.also?.length ? await db.utilityAccount.findMany({
+    where: { id: { in: opts.also } },
+    select: { id: true, accountNumber: true, property: { select: { address: true } }, statements: { where: { pdfS3Key: { not: null } }, orderBy: { statementDate: 'desc' }, take: 1, select: { statementDate: true } } },
+  }) : [];
+  const n = 1 + others.length;
+  const maxDownloads = Math.min(MAX_DOWNLOADS * n, 24);
   const batchId = `portal-${account.id}-${Date.now()}`;
   const review: ReviewItem[] = [];
-  const run: PortalRun = { ok: false, filed: 0, review: 0, applied: 0, downloads: 0, summary: '', aiSteps: 0, costUsd: 0, replayed: 0 };
+  const run: PortalRun = { ok: false, filed: 0, review: 0, applied: 0, downloads: 0, summary: '', aiSteps: 0, costUsd: 0, replayed: 0, filedFor: {} };
 
   const profileDir = BaseScraperProvider.profileDir(`agent-${account.id}`);
   await fs.promises.mkdir(profileDir, { recursive: true });
@@ -404,7 +417,9 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   };
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const secrets = [password, username];
-  const deadline = Date.now() + RUN_MS;
+  // More accounts, more room: each one is a switch, a history page and its downloads.
+  const deadline = Date.now() + RUN_MS + (n - 1) * 3 * 60_000;
+  const costCap = RUN_MAX_USD + (n - 1) * 0.35;
   let code: string | null = null;
   // A code was entered this run: the device may now be trusted, so keep the browser's memory.
   let usedCode = false;
@@ -433,7 +448,10 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
 
   const system = `You operate a web browser for a property owner to collect their statements from ${account.providerName}'s customer portal — any bill they track: utilities, phone and internet, insurance, loans and mortgages, HOA dues. Account ${account.accountNumber ? `ending ${String(account.accountNumber).slice(-4)}` : ''} at ${account.property.address}.
 This is the owner's own account, signed in with the owner's own login at the owner's request. Notices shown to everyone before signing in — a government "authorized use only" warning (student-loan servicers), a cookie banner, an "I understand / Accept / Continue" on such a notice — are addressed to the account holder, who is the owner: acknowledge them and carry on. That is not agreeing to anything new on the account.
-Goal: log in, open the billing / statement history, and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If there is nothing newer, finish with outcome done.
+${others.length ? `This login holds several of the owner's accounts. Fetch every one of them in this one visit — sign in once, then for each account open it (account picker, "switch account", or a list of accounts) and its billing / statement history, and download each statement PDF dated after its date, newest first:
+- ${account.accountNumber ? `account ending ${String(account.accountNumber).slice(-4)}` : 'this account'} at ${account.property.address}: after ${since ?? 'the last 12 months'}
+${others.map(o => `- ${o.accountNumber ? `account ending ${String(o.accountNumber).slice(-4)}` : 'an account'} at ${o.property.address}: after ${o.statements[0]?.statementDate?.toISOString().slice(0, 10) ?? 'the last 12 months'}`).join('\n')}
+At most ${maxDownloads} downloads in all. An account the portal does not list is not an error: say so in the summary and carry on. Finish with outcome done when every listed account is checked.` : `Goal: log in, open the billing / statement history, and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If there is nothing newer, finish with outcome done.`}
 Rules: use fill_login for credentials (you never see them). If the portal offers where to send a verification code, choose email over text or a phone call. If it emails a sign-in link instead of a code, call open_emailed_link (the owner is never asked for it); if none arrives, finish with no_code. When a code has been sent, call ask_owner_for_code (it reads the code from the owner's email, or asks the owner), then type_code. Pass any "Remember this device", "Trust this browser", "Keep me signed in" or "Don't ask again" checkbox as rememberRef so the next visit is not asked again. Never pay, enroll, change settings, accept offers or send messages. If a captcha appears, finish with captcha. If the login is rejected, finish with bad_login. If a code you entered is rejected, ask_owner_for_code once more for a fresh one; after a second rejection finish with no_code — never start the login over.
 If the site refuses the browser itself (Access Denied, "invalid request", "unable to process your request" after a correct sign-in, a bot check), finish with turned_away at once: never submit the login a second time — each retry makes the site more suspicious and can lock the owner's account.
 Each action returns the page as it is afterwards: do not call look after it. Fill and submit in one step (submitRef). A typical visit is: look, fill_login (with submit), code if asked, open billing/statements, download, finish — aim for about 10 steps. When several accounts are listed, choose the one matching the account number, else the address. The account number is what identifies the account: the address a portal shows is often the owner's mailing address, not the property's, so an account whose number matches is the right one whatever address it shows.`;
@@ -467,9 +485,9 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
       }
     }
     const messages: Anthropic.MessageParam[] = [{ role: 'user', content: opening }];
-    const stepLimit = recipe && run.replayed === recipe.steps.length ? MAX_STEPS : MAX_STEPS_FIRST;
+    const stepLimit = (recipe && run.replayed === recipe.steps.length ? MAX_STEPS : MAX_STEPS_FIRST) + (n - 1) * 10;
     for (let step = 0; step < stepLimit && Date.now() < deadline && !cancelled; step++) {
-      if ((run.costUsd ?? 0) >= RUN_MAX_USD) { run.error = `Stopped after spending $${(run.costUsd ?? 0).toFixed(2)} without finishing — the portal needs a look.`; break; }
+      if ((run.costUsd ?? 0) >= costCap) { run.error = `Stopped after spending $${(run.costUsd ?? 0).toFixed(2)} without finishing — the portal needs a look.`; break; }
       // Cached: each step resends the run so far, and reads it back at a tenth of the price.
       const res = await meteredCreate(client, 'portal-agent', { ...paramsFor(PRIMARY_MODEL, { maxTokens: 1500, system, messages, cache: true }), tools: TOOLS });
       run.aiSteps = (run.aiSteps ?? 0) + 1;
@@ -552,13 +570,13 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
               break;
             }
             case 'download_statement': {
-              if (run.downloads >= MAX_DOWNLOADS) { content = `Limit of ${MAX_DOWNLOADS} reached — finish.`; break; }
+              if (run.downloads >= maxDownloads) { content = `Limit of ${maxDownloads} reached — finish.`; break; }
               const pdf = await capturePdf(ctx, page, () => el(i.ref).click({ timeout: 10000 }));
               if (!pdf) { content = 'No PDF came back from that click. Try the link that opens or downloads the statement itself.'; break; }
               run.downloads++;
               const name = `${account.providerName.replace(/[^\w]+/g, '_')}_${String(i.statementDate ?? run.downloads).replace(/[^\w-]+/g, '_')}.pdf`;
               const r = await intakeBill(pdf, name, userId, 'ai', batchId, 'portal');
-              if (r.outcome === 'filed') run.filed++;
+              if (r.outcome === 'filed') { run.filed++; run.filedFor![r.utilityAccountId] = (run.filedFor![r.utilityAccountId] ?? 0) + 1; }
               else if (r.outcome === 'review') { run.review++; review.push(r.reviewItem); }
               else if (r.outcome === 'error') content = `Saved, but: ${r.error}`;
               else run.applied++;
@@ -707,7 +725,10 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
       try {
         const state = await ctx.storageState();
         const cookies = state.cookies.filter(k => !BOT_COOKIE.test(k.name));
-        await db.portalSession.upsert({ where: { utilityAccountId: account.id }, create: { utilityAccountId: account.id, stateEnc: encrypt(JSON.stringify({ cookies })) }, update: { stateEnc: encrypt(JSON.stringify({ cookies })) } });
+        // The same login's other accounts share the sign-in (and its trusted device).
+        for (const id of [account.id, ...others.map(o => o.id)]) {
+          await db.portalSession.upsert({ where: { utilityAccountId: id }, create: { utilityAccountId: id, stateEnc: encrypt(JSON.stringify({ cookies })) }, update: { stateEnc: encrypt(JSON.stringify({ cookies })) } });
+        }
       } catch (err) { console.warn('[PortalAgent] session not saved:', err instanceof Error ? err.message.split('\n')[0] : err); }
     }
     await shutdown();
