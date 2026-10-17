@@ -54,10 +54,19 @@ function downloadSummary(r: { downloads: number; filed: number; review: number; 
  * counts against the other's login too (IID ··9413 failing took ··2917 down
  * with it).
  */
-async function loginClash(accountId: string): Promise<string> {
-  const me = await db.utilityAccount.findUnique({ where: { id: accountId }, select: { providerSlug: true, usernameEnc: true, passwordEnc: true, property: { select: { userId: true } } } });
+export async function loginClash(accountId: string): Promise<string> {
+  const site = { providerName: true, providerSlug: true, loginUrl: true } as const;
+  const me = await db.utilityAccount.findUnique({ where: { id: accountId }, select: { ...site, usernameEnc: true, passwordEnc: true, property: { select: { userId: true } } } });
   if (!me?.usernameEnc || !me.passwordEnc) return '';
-  const others = await db.utilityAccount.findMany({ where: { id: { not: accountId }, providerSlug: me.providerSlug, property: { userId: me.property.userId }, usernameEnc: { not: null } }, select: { accountNumber: true, usernameEnc: true, passwordEnc: true, property: { select: { nickname: true, address: true } } } });
+  // The same site, by its web address — not the provider slug, which every
+  // agent-only account shares (SDCCU was compared with AmTrust and CR&R).
+  const rootOf = (a: { providerName: string; providerSlug: string | null; loginUrl: string | null }) => {
+    try { return new URL(websiteFor(a)!.url).hostname.split('.').slice(-2).join('.'); } catch { return null; }
+  };
+  const mine = rootOf(me);
+  if (!mine) return '';
+  const others = (await db.utilityAccount.findMany({ where: { id: { not: accountId }, property: { userId: me.property.userId }, usernameEnc: { not: null } }, select: { ...site, accountNumber: true, usernameEnc: true, passwordEnc: true, property: { select: { nickname: true, address: true } } } }))
+    .filter(o => rootOf(o) === mine);
   try {
     const user = decrypt(me.usernameEnc).trim().toLowerCase(), pass = decrypt(me.passwordEnc);
     const clash = others.filter(o => o.passwordEnc && decrypt(o.usernameEnc!).trim().toLowerCase() === user && decrypt(o.passwordEnc) !== pass);
