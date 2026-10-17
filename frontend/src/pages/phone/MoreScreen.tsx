@@ -10,7 +10,7 @@ import { useThemeChoice, type ThemeChoice } from '../../lib/theme';
 const COLORS: Record<string, string> = {
   '/import': '#0a84ff', '/portfolio': '#5e5ce6', '/personal': '#30b0c7', '/vault': '#636366',
   '/taxes': '#34c759', '/compliance': '#ff9f0a', '/projects': '#a2845e', '/operations': '#64d2ff',
-  '/legal': '#8e8e93', '/insights': '#ff375f',
+  '/legal': '#8e8e93', '/insights': '#ff375f', '/repairs': '#ff9500',
 };
 
 /** Everything that is not in the tab bar, plus the account. */

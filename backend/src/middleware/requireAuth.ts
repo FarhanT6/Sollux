@@ -20,6 +20,8 @@ declare global {
       actingUserId?: string;
       // True when the signed-in person owns the account (not a member).
       isAccountOwner?: boolean;
+      // A tenant signed in to the tenant portal (attachTenant).
+      tenantAccess?: { id: string; tenantId: string; ownerUserId: string; email: string | null; stripeCustomerId: string | null; autopay: boolean; autopayLabel: string | null; autopayMethodType: string | null };
     }
   }
 }
@@ -86,6 +88,12 @@ export async function attachDbUser(req: Request, res: Response, next: NextFuncti
     }
 
     let user = await db.user.findUnique({ where: { clerkUserId } });
+
+    // A tenant's sign-in is for the tenant portal only: it never becomes an
+    // owner account of its own (and so never starts a trial or sees owner pages).
+    if (!user && await db.tenantPortalAccess.findUnique({ where: { clerkUserId }, select: { id: true } })) {
+      return res.status(403).json({ error: 'This sign-in is for the tenant portal.', code: 'TENANT' });
+    }
 
     // Auto-create user record on first request (after Clerk registration).
     // sessionClaims does NOT include email/name by default — Clerk only puts
@@ -169,6 +177,24 @@ export async function attachDbUser(req: Request, res: Response, next: NextFuncti
     }
     // Any Claude call this request makes is filed under this account's spend.
     void withAiContext({ userId: req.dbUserId }, async () => next());
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * The tenant portal's sign-in check: the signed-in person must hold a
+ * portal access their landlord gave them (claimed from an invite link).
+ * Every portal route scopes to that tenant's own leases.
+ */
+export async function attachTenant(req: Request, res: Response, next: NextFunction) {
+  try {
+    const clerkUserId = getAuth(req)?.userId;
+    if (!clerkUserId) return res.status(401).json({ error: 'Not signed in' });
+    const a = await db.tenantPortalAccess.findUnique({ where: { clerkUserId } });
+    if (!a || a.disabled) return res.status(403).json({ error: 'No tenant portal access for this sign-in. Open the invite link your landlord sent.', code: 'NOT_TENANT' });
+    req.tenantAccess = a;
+    next();
   } catch (err) {
     next(err);
   }

@@ -33,14 +33,15 @@ const TABLE: [RegExp, PhoneRoute | ((m: RegExpMatchArray) => PhoneRoute)][] = [
   [/^\/personal\/cards\/[^/]+$/, { title: 'Card', back: '/personal?tab=cards', backLabel: 'Personal' }],
   [/^\/projects\/[^/]+$/, { title: 'Project', back: '/projects', backLabel: 'Projects' }],
   [/^\/notices\/[^/]+$/, { title: 'Notice', back: '/legal', backLabel: 'Legal' }],
-  [/^\/(portfolio|tenants|import|personal|vault|taxes|compliance|projects|operations|legal|insights|settings)$/,
+  [/^\/repairs\/[^/]+$/, { title: 'Repair', back: '/repairs', backLabel: 'Repairs' }],
+  [/^\/(portfolio|tenants|import|personal|vault|taxes|compliance|projects|operations|legal|insights|settings|repairs)$/,
     m => ({ title: TITLES[m[1]], back: '/more', backLabel: 'More' })],
 ];
 
 const TITLES: Record<string, string> = {
   portfolio: 'Portfolio', tenants: 'Tenants', import: 'Import', personal: 'Personal', vault: 'Vault',
   taxes: 'Taxes', compliance: 'Compliance', projects: 'Projects', operations: 'Operations',
-  legal: 'Legal', insights: 'Insights', settings: 'Settings',
+  legal: 'Legal', insights: 'Insights', settings: 'Settings', repairs: 'Repairs',
 };
 
 export function phoneRoute(pathname: string): PhoneRoute {

@@ -25,6 +25,9 @@ import analyticsRouter from './routes/analytics';
 import stripeRouter from './routes/stripe';
 import billingRouter from './routes/billing';
 import aiSpendRouter from './routes/aiSpend';
+import portalRouter from './routes/portal';
+import rentCollectionRouter from './routes/rentCollection';
+import maintenanceRouter from './routes/maintenance';
 import importRouter from './routes/import';
 import unitsRouter from './routes/units';
 import tenantsRouter from './routes/tenants';
@@ -134,6 +137,9 @@ app.use('/api/import', express.json({ limit: '100mb' }));
 app.use('/api/leases', express.json({ limit: '50mb' }));
 app.use('/api/scanned-documents', express.json({ limit: '50mb' }));
 app.use('/api/legal', express.json({ limit: '50mb' }));
+// Repair requests carry up to six photos.
+app.use('/api/portal/requests', express.json({ limit: '60mb' }));
+app.use('/api/maintenance', express.json({ limit: '60mb' }));
 // ClickUp signs webhook deliveries over the raw body; it must not be JSON-parsed first.
 app.use('/api/clickup/webhook', express.raw({ type: '*/*', limit: '1mb' }));
 app.use(express.json({ limit: '10mb' }));
@@ -223,6 +229,10 @@ app.use('/api/ai', aiRouter);
 app.use('/api/plaid', plaidRouter);
 app.use('/api/billing', billingRouter);
 app.use('/api/ai-spend', aiSpendRouter);
+app.use('/api/rent-collection', rentCollectionRouter);
+app.use('/api/maintenance', maintenanceRouter);
+// The tenant portal: tenants' own sign-ins, scoped to their own leases (routes/portal.ts).
+app.use('/api/portal', portalRouter);
 
 // ─── Error handling ───────────────────────────────────────
 app.use(errorHandler);

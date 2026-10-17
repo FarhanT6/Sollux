@@ -20,6 +20,7 @@ sollux/
 - Gmail OAuth is the fast path for providers without a scraper yet
 - BullMQ queues: `scrape`, `insights`, `notifications`, `gmail`
 - Claude calls go through `askClaude` in `backend/src/ai/models.ts`: `claude-sonnet-5` first, `claude-opus-5-5` as the fallback when the first answer fails its check or the call errors (env `CLAUDE_MODEL` / `CLAUDE_FALLBACK_MODEL`)
+- Rent collection and the tenant portal: owners connect Stripe Connect Express (`services/rentCollection.ts`); tenants pay by Checkout (bank free, card fee on the tenant, no platform fee) and the webhook writes `RentPayment` rows (pending → received). Tenants sign in through Clerk but only reach `/api/portal` (`attachTenant`); `attachDbUser` refuses a tenant's sign-in on every owner route. Repairs: `routes/maintenance.ts` (owner) and `/api/portal/requests` (tenant)
 - Every Claude call is metered (`backend/src/ai/meter.ts`): give `askClaude` a `feature`, or use `meteredCreate` for a tool loop; spend lands in `ai_usage`, is capped by `AI_MONTHLY_BUDGET`, and shows on Settings → AI usage, which also runs a test of every AI feature. Reuse answers for unchanged facts with `memoAnswer`; cache tool loops (`cache: true`) and keep their history append-only
 
 ## Agent workflow (the auditor, the build agent, and PRs)

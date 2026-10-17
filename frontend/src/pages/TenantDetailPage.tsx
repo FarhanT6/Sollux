@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import TenantPortalCard from '../components/TenantPortalCard';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import BackLink from '../components/ui/BackLink';
 import { format } from 'date-fns';
@@ -130,6 +131,7 @@ export default function TenantDetailPage() {
           onClick={tenant.email ? () => void openUrl(`mailto:${tenant.email}`) : undefined} />
         {tenant.notes && <Row title={tenant.notes} wrap chevron={false} />}
       </Section>
+      <div className="ios-embedded"><TenantPortalCard tenantId={tenant.id} email={tenant.email ?? null} /></div>
 
       {leases.length === 0 && <Section header="Leases"><Row title="No leases on file" chevron={false} /></Section>}
       {leases.map(lt => (
@@ -205,6 +207,8 @@ export default function TenantDetailPage() {
           </div>
         )}
       </div>
+
+      <TenantPortalCard tenantId={tenant.id} email={tenant.email ?? null} />
 
       {/* Leases */}
       <h2 className="text-sm font-semibold text-white mt-6 mb-2">Leases</h2>

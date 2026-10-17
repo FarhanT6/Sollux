@@ -68,6 +68,10 @@ export const NAV = [
     icon: (z: number) => <Ico size={z}><path d="M4 21V5h7v16"/><path d="M11 9h9v12"/><path d="M7 9h1M7 13h1M7 17h1M14 13h2M14 17h2"/><path d="M2 21h20"/></Ico>,
   },
   {
+    to: '/repairs', label: 'Repairs',
+    icon: (z: number) => <Ico size={z} d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />,
+  },
+  {
     to: '/operations', label: 'Operations',
     icon: (z: number) => <Ico size={z}><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></Ico>,
   },
