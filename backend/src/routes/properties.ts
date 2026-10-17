@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { propertyLimitReached } from '../services/planLimits';
 import { z } from 'zod';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
@@ -194,6 +195,9 @@ router.get('/:id', async (req, res, next) => {
 router.post('/', async (req, res, next) => {
   try {
     const data = PropertySchema.parse(req.body);
+    // The plan's property limit (lib/plans.ts).
+    const over = await propertyLimitReached(req.dbUserId!);
+    if (over) return res.status(402).json({ error: over, code: 'PLAN_LIMIT' });
     const property = await db.property.create({
       data: { ...data, userId: req.dbUserId! },
     });

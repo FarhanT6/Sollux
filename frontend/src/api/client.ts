@@ -43,6 +43,8 @@ api.interceptors.response.use(
       } catch { /* fall through */ }
       if (!window.location.pathname.startsWith('/sign-in')) window.location.href = '/sign-in';
     }
+    // A plan limit or a lapsed plan: say so where it happened.
+    if (err.response?.status === 402) toast(err.response.data?.error ?? 'Choose a plan to continue.', 'error');
     // A page that could not load something says so, wherever it happens;
     // saves and deletes report their own errors where they were made.
     const method = (err.config?.method ?? 'get').toLowerCase();
@@ -1150,3 +1152,23 @@ export interface GmailCoverage {
   unmatched: { from: string; count: number; latest: CoverageMessage }[];
 }
 export const getGmailCoverage = () => api.get<GmailCoverage>('/gmail/coverage').then(r => r.data);
+
+// ─── Billing (routes/billing.ts) ────────────────────────────────────────────
+export type PlanKey = 'STARTER' | 'PRO' | 'PORTFOLIO';
+export interface BillingSummary {
+  access: 'comp' | 'trial' | 'active' | 'lapsed';
+  plan: PlanKey | 'COMP' | null;
+  status: string | null;
+  trialEndsAt: string | null;
+  currentPeriodEnd: string | null;
+  lapsedReason: 'trial_ended' | 'past_due' | 'canceled' | 'unpaid' | null;
+  usage: { properties: number; propertyLimit: number | null };
+  plans: { key: PlanKey; name: string; priceMonthly: number; maxProperties: number | null; blurb: string }[];
+  trialDays: number;
+  billingConfigured: boolean;
+  canManage: boolean;
+  hasCustomer: boolean;
+}
+export const getBilling = () => api.get<BillingSummary>('/billing').then(r => r.data);
+export const startCheckout = (plan: PlanKey) => api.post<{ url: string }>('/billing/checkout', { plan }).then(r => r.data);
+export const openBillingPortal = () => api.post<{ url: string }>('/billing/portal').then(r => r.data);

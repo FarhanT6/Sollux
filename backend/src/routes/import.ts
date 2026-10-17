@@ -3,6 +3,7 @@
  * POST /api/import/confirm  — Save confirmed statements (creates properties/accounts as needed)
  */
 import { Router, Request, Response } from 'express';
+import { propertyLimitReached } from '../services/planLimits';
 import { learnProviderWebsite } from '../services/providerWebsite';
 import { findExistingBill } from '../services/billMatch';
 import { Prisma } from '@prisma/client';
@@ -271,6 +272,9 @@ router.post('/confirm', async (req: Request, res: Response) => {
               propertyId = existingProp.id;
               createdProperties[pKey] = existingProp.id;
             } else {
+              // The plan's property limit applies to imports too.
+              const over = await propertyLimitReached(userId);
+              if (over) { errors.push(`${item.filename}: ${over}`); continue; }
               const prop = await db.property.create({
                 data: {
                   userId,

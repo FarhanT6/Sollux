@@ -1,4 +1,4 @@
-export type SubscriptionTier = 'BASIC' | 'PRO' | 'BUSINESS';
+export type SubscriptionTier = 'STARTER' | 'PRO' | 'PORTFOLIO' | 'COMP' | 'BASIC' | 'BUSINESS';
 export type PropertyType =
   | 'PRIMARY' | 'RENTAL' | 'INVESTMENT' | 'COMMERCIAL' | 'MIXED_USE'
   | 'RESIDENTIAL_SINGLE' | 'RESIDENTIAL_MULTI' | 'LAND' | 'GOLF_COURSE' | 'OTHER';

@@ -3,6 +3,7 @@ import { useUser, useClerk } from '@clerk/clerk-react';
 import { useEffect, useMemo, useState } from 'react';
 import { PhoneChromeContext, NavBar, phoneRoute, rememberEntry } from '../../ios';
 import Logo from '../brand/Logo';
+import PlanBanner from '../PlanBanner';
 import { getDashboardSummary } from '../../api/client';
 import type { DashboardSummary } from '../../types';
 import { tap } from '../../lib/native';
@@ -157,7 +158,7 @@ export default function AppLayout() {
         </div>
         <div className="min-w-0 flex-1">
           <p className="text-xs font-medium text-white truncate">{user?.fullName || user?.emailAddresses[0]?.emailAddress}</p>
-          <p className="text-xs text-gray-500 truncate">{summary ? `${summary.totalProperties} properties` : 'Pro plan'}</p>
+          <p className="text-xs text-gray-500 truncate">{summary ? `${summary.totalProperties} properties` : ''}</p>
         </div>
       </NavLink>
       <button onClick={() => signOut()} className="mt-1 w-full text-left text-xs text-gray-500 hover:text-gray-300 px-1 py-0.5 transition-colors" title="Sign out">Sign out</button>
@@ -206,6 +207,7 @@ export default function AppLayout() {
 
         <main data-scroll-root className={`${ownHeader ? '' : 'app-canvas'} flex-1 overflow-y-auto ${!sidebarOpen ? 'md:pt-12' : ''}`}
           style={{ background: ownHeader ? 'var(--ios-bg)' : '#1e1e1e', WebkitOverflowScrolling: 'touch', overscrollBehaviorY: 'contain' }}>
+          <PlanBanner />
           <Outlet />
           {/* Keep the last row clear of the tab bar on pages not yet on the iOS layer. */}
           {!ownHeader && <div className="md:hidden h-20" />}

@@ -3,6 +3,7 @@ import { faceIdLockEnabled, biometryName, setFaceIdLock } from '../components/Na
 import { openOAuth } from '../lib/native';
 import ClickUpCard from '../components/settings/ClickUpCard';
 import LetterheadCard from '../components/settings/LetterheadCard';
+import BillingPanel from '../components/BillingPanel';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { usePlaidLink } from 'react-plaid-link';
@@ -42,7 +43,7 @@ import { getAccount, setAlertPhone, inviteAccountMember, cancelAccountInvite, re
   getNotificationPreferences, updateNotificationPreferences } from '../api/client';
 import type { AccountInfo } from '../api/client';
 
-type SettingsTab = 'account' | 'notifications' | 'banking' | 'rates';
+type SettingsTab = 'account' | 'billing' | 'notifications' | 'banking' | 'rates';
 
 export default function SettingsPage() {
   const { user } = useUser();
@@ -87,6 +88,7 @@ export default function SettingsPage() {
 
   if (phone) {
     const SECTIONS: Record<Exclude<SettingsTab, 'account'>, { title: string; render: () => JSX.Element }> = {
+      billing: { title: 'Plan & Billing', render: () => <BillingPanel /> },
       notifications: { title: 'Notifications', render: () => <NotificationsTab /> },
       banking: { title: 'Bank Accounts', render: () => <BankingTab /> },
       rates: { title: 'Reference Rates', render: () => <RatesTab /> },
@@ -134,7 +136,7 @@ export default function SettingsPage() {
           <ClickUpCard />
         </div>
         <Section header="Plan">
-          <Row title="Pro" subtitle="Up to 10 properties · AI engine · Email and SMS" chevron={false} value={<span className="ios-green">Active</span>} />
+          <Row title="Plan & billing" to="/settings?tab=billing" icon={{ bg: 'var(--ios-tint)', glyph: <span style={{ fontWeight: 700, color: '#000' }}>★</span> }} />
         </Section>
         <Section>
           <Row title="Sign out" destructive chevron={false} onClick={() => void signOut()} />
@@ -151,12 +153,13 @@ export default function SettingsPage() {
           tab === 'notifications' ? 'Configure how and when Sollux alerts you'
           : tab === 'banking'     ? 'Connect bank accounts for automatic daily balance snapshots'
           : tab === 'rates'       ? 'Reference rate history for variable-rate loans (e.g. WSJ Prime Rate)'
+          : tab === 'billing'     ? 'Your plan, trial and payment details'
           : 'Manage your account and subscription'
         }
       />
 
       <div className="flex border-b px-6" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
-        {(['account', 'notifications', 'banking', 'rates'] as SettingsTab[]).map(t => (
+        {(['account', 'billing', 'notifications', 'banking', 'rates'] as SettingsTab[]).map(t => (
           <button
             key={t}
             onClick={() => setSearchParams({ tab: t }, { replace: true })}
@@ -166,12 +169,14 @@ export default function SettingsPage() {
                 : 'border-transparent text-gray-500 hover:text-gray-300'
             }`}
           >
-            {t}
+            {t === 'billing' ? 'Plan & billing' : t}
           </button>
         ))}
       </div>
 
-      {tab === 'banking' ? (
+      {tab === 'billing' ? (
+        <div className="px-6 py-5 max-w-3xl"><BillingPanel /></div>
+      ) : tab === 'banking' ? (
         <BankingTab />
       ) : tab === 'notifications' ? (
         <NotificationsTab />
@@ -206,21 +211,6 @@ export default function SettingsPage() {
 
         <SharedAccessCard />
         <PhoneLockCard />
-
-        <div className="card p-5 mb-4">
-          <h2 className="text-sm font-semibold text-white mb-4">Subscription</h2>
-          <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4 flex items-center justify-between">
-            <div>
-              <p className="text-sm font-semibold text-amber-300">Pro plan</p>
-              <p className="text-xs text-amber-400">Up to 10 properties · Full AI engine · Email + SMS</p>
-            </div>
-            <span className="pill pill-amber">Active</span>
-          </div>
-          <div className="mt-3 grid grid-cols-2 gap-3">
-            <button className="btn text-xs justify-center">Manage billing</button>
-            <button className="btn text-xs justify-center">Upgrade to Business</button>
-          </div>
-        </div>
 
         <div className="card p-5 mb-4">
           <h2 className="text-sm font-semibold text-white mb-4">Connected accounts</h2>
@@ -309,7 +299,6 @@ export default function SettingsPage() {
         <div className="card p-5">
           <h2 className="text-sm font-semibold text-white mb-4">Account actions</h2>
           <div className="space-y-2">
-            <button className="btn text-xs w-full justify-center text-gray-400">Export all data (CSV)</button>
             <button
               onClick={() => signOut()}
               className="btn text-xs w-full justify-center text-red-400 border-red-500/30 hover:bg-red-500/10"
