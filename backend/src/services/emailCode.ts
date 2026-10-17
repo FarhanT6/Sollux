@@ -33,6 +33,22 @@ function senderScore(from: string, host: string, providerName: string): number {
   return word && f.includes(word) ? 1 : 0;
 }
 
+/**
+ * What a search saw, so a miss can say why: which inboxes were read, which
+ * could not be (an expired Gmail connection), and whether mail from the
+ * portal came in without anything usable in it.
+ */
+export interface MailReport { inboxes: string[]; errors: string[]; fromPortal: number }
+
+/** A sentence for the owner on why no code or link was found. */
+export function mailMiss(r: MailReport, host: string, since: Date): string {
+  const at = since.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' });
+  if (!r.inboxes.length) return 'No Gmail is connected to Sollux, so codes cannot be read automatically — connect the inbox that receives them in Settings.';
+  if (r.errors.length) return `Could not read ${r.errors.join('; ')} — reconnect that Gmail in Settings.`;
+  if (r.fromPortal) return `Mail from ${host} arrived in ${r.inboxes.join(', ')}, but no code or link could be read in it.`;
+  return `Nothing from ${host} arrived in ${r.inboxes.join(', ')} since ${at} — if the code goes to another inbox, connect that one in Settings.`;
+}
+
 /** One message from the owner's inbox, as the pickers below read it. */
 interface Mail { subject: string; from: string; text: string; html: string; at: number }
 
@@ -43,13 +59,14 @@ interface Mail { subject: string; from: string; text: string; html: string; at: 
  * happened to arrive is never used. Null when nothing arrives (no Gmail
  * connected, or it went to a phone).
  */
-async function waitForMail(userId: string, o: { since: Date; host: string; providerName: string; timeoutMs?: number; query: string }, pick: (m: Mail) => string | null): Promise<string | null> {
+async function waitForMail(userId: string, o: MailSearch & { query: string }, pick: (m: Mail) => string | null): Promise<string | null> {
   const tokens = await db.gmailToken.findMany({ where: { userId } });
+  if (o.report) o.report.inboxes = tokens.map(t => t.email);
   if (!tokens.length) return null;
   const until = Date.now() + (o.timeoutMs ?? 120_000);
   const after = Math.floor(o.since.getTime() / 1000);
   const seen = new Set<string>();
-  while (Date.now() < until) {
+  while (Date.now() < until && !o.stop?.()) {
     const found: { value: string; score: number; at: number }[] = [];
     for (const token of tokens) {
       try {
@@ -70,10 +87,15 @@ async function waitForMail(userId: string, o: { since: Date; host: string; provi
           const html = htmlPart ? decode(htmlPart.body!.data).toString('utf8') : '';
           const text = plain ? decode(plain.body!.data).toString('utf8') : html ? htmlToText(html) : msg.snippet ?? '';
           const value = pick({ subject, from, text, html, at });
-          if (value) found.push({ value, score: senderScore(from, o.host, o.providerName), at });
+          const score = senderScore(from, o.host, o.providerName);
+          if (value) found.push({ value, score, at });
+          else if (score > 0 && o.report) o.report.fromPortal++;
         }
       } catch (err) {
-        console.warn('[EmailCode] could not read a mailbox:', err instanceof Error ? err.message.split('\n')[0] : err);
+        const why = err instanceof Error ? err.message.split('\n')[0] : String(err);
+        console.warn(`[EmailCode] could not read ${token.email}:`, why);
+        const line = `${token.email} (${why.slice(0, 80)})`;
+        if (o.report && !o.report.errors.includes(line)) o.report.errors.push(line);
       }
     }
     found.sort((a, b) => b.score - a.score || b.at - a.at);
@@ -83,8 +105,10 @@ async function waitForMail(userId: string, o: { since: Date; host: string; provi
   return null;
 }
 
+interface MailSearch { since: Date; host: string; providerName: string; timeoutMs?: number; report?: MailReport; stop?: () => boolean }
+
 /** A code emailed after `since` (prefers the portal's own domain), not one in `exclude`. */
-export function findEmailedCode(userId: string, o: { since: Date; host: string; providerName: string; timeoutMs?: number; exclude?: string[] }): Promise<string | null> {
+export function findEmailedCode(userId: string, o: MailSearch & { exclude?: string[] }): Promise<string | null> {
   return waitForMail(userId, { ...o, query: KEYWORDS }, m => {
     const code = codeIn(m.subject, m.text);
     return code && !o.exclude?.includes(code) ? code : null;
@@ -112,6 +136,6 @@ export function signInLinkIn(html: string, text: string): string | null {
 }
 
 /** A sign-in link the portal emailed after `since`. */
-export function findEmailedLink(userId: string, o: { since: Date; host: string; providerName: string; timeoutMs?: number }): Promise<string | null> {
+export function findEmailedLink(userId: string, o: MailSearch): Promise<string | null> {
   return waitForMail(userId, { ...o, query: '(link OR "log in" OR "sign in" OR login OR access OR verify)' }, m => signInLinkIn(m.html, m.text));
 }
