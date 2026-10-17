@@ -44,8 +44,6 @@ const PROVIDER_CATEGORIES: Record<string, UtilityCategory> = {
   'Bamboo Insurance': 'INSURANCE', 'Safeco Insurance': 'INSURANCE',
 };
 
-// Providers with a live scraper (vs gmail-fallback only)
-const SCRAPER_SUPPORTED = new Set(['sdge', 'socal-gas', 'iid', 'wm', 'republic-services', 'cox', 'fpl', 'city-brawley']);
 
 interface Props {
   propertyId: string;
@@ -311,11 +309,9 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
             </Select>
           </Field>
 
-          <Field label="Provider" required hint={providersForCategory.length === 0 ? `No saved providers under ${CATEGORY_LABELS[form.category]} yet — pick "Other" below to add one.` : undefined}>
+          <Field label="Provider" required hint={providersForCategory.length === 0 ? `No saved providers under ${CATEGORY_LABELS[form.category]} yet — pick "Other" below to add one.` : 'Any provider with a website login can sync: add the login on the account and Sollux fetches its statements.'}>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5 max-h-52 overflow-y-auto pr-1">
               {providersForCategory.map(name => {
-                const slug = allProviders[name];
-                const hasLiveScraper = SCRAPER_SUPPORTED.has(slug);
                 return (
                   <button
                     key={name}
@@ -327,9 +323,6 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
                     }`}
                   >
                     {name}
-                    {hasLiveScraper && (
-                      <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-emerald-500" title="Auto-sync supported" />
-                    )}
                   </button>
                 );
               })}
