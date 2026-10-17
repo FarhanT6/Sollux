@@ -185,6 +185,9 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
     try { await ctx.addCookies(JSON.parse(decrypt(saved.stateEnc)).cookies ?? []); }
     catch (err) { console.warn('[PortalAgent] saved session not restored:', err instanceof Error ? err.message.split('\n')[0] : err); }
   }
+  // The agent reads pages as text: images, video and fonts only cost memory
+  // (a 512MB worker ran out with Chrome on a heavy portal).
+  await ctx.route('**/*', r => (['image', 'media', 'font'].includes(r.request().resourceType()) ? r.abort() : r.continue())).catch(() => {});
   const page = ctx.pages()[0] ?? await ctx.newPage();
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const secrets = [password, username];

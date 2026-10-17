@@ -4,8 +4,8 @@ import { runAutopay } from '../services/rentCollection';
 import '../config/playwrightPath';
 import './scrapeWorker';
 import './insightWorker';
-import './gmailWorker';
-import './driveImportWorker';
+// The Gmail and Drive-import workers run inside the API (index.ts). Here they
+// only doubled up and cost ~50MB of the worker's 512MB, which Chrome needs.
 import { scrapeQueue, insightQueue, gmailQueue } from './queues';
 import { db } from '../config/db';
 import { runNoticeReminders, importEarlierNotices } from '../services/noticeTracker';
