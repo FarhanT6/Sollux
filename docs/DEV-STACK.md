@@ -17,7 +17,10 @@ npm run seed:dev            # wipes and fills: 3 properties, 7 utilities, 5 leas
 ## 2. API without Clerk
 ```bash
 cd backend
-ENCRYPTION_KEY=$(openssl rand -hex 32) PORT=3001 npm run dev:local
+# one key for this machine, kept: data encrypted under one key cannot be read
+# under another, so a fresh key each run breaks the vault and saved logins
+[ -f .dev-encryption-key ] || openssl rand -hex 32 > .dev-encryption-key
+ENCRYPTION_KEY=$(cat .dev-encryption-key) PORT=3001 npm run dev:local
 ```
 `scripts/dev/devAuth.cjs` swaps `@clerk/express` for a stub, so every request
 is the seeded owner (`owner@example.com`). It refuses to load when

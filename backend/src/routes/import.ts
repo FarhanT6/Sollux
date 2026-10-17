@@ -3,6 +3,7 @@
  * POST /api/import/confirm  — Save confirmed statements (creates properties/accounts as needed)
  */
 import { Router, Request, Response } from 'express';
+import { findExistingBill } from '../services/billMatch';
 import { Prisma } from '@prisma/client';
 import { markEscrowedStatements } from '../services/escrow';
 import { applyPolicyDocument, settleInFull } from '../services/pdfImportService';
@@ -461,135 +462,8 @@ router.post('/confirm', async (req: Request, res: Response) => {
         // it states is the policy's term, shared by every bill of the term,
         // and matching on it collapsed a year of statements into one row.
         const insuranceBill = !!ex.insurance || acct.category === 'INSURANCE';
-        if (hasReliableDate) {
-          if (ex.billingPeriodStart && !insuranceBill) {
-            // Periods shift by a day or two between cycles, so an exact match
-            // is too strict: treat periods starting within a week of each
-            // other as the same bill.
-            const start = new Date(ex.billingPeriodStart);
-            const window = 7 * 24 * 60 * 60 * 1000;
-            existing = await db.statement.findFirst({
-              where: {
-                utilityAccountId,
-                billingPeriodStart: {
-                  gte: new Date(start.getTime() - window),
-                  lte: new Date(start.getTime() + window),
-                },
-              },
-            });
-          }
-          // An insurance installment bill is identified by the installment it
-          // asks for — its due date — and states no period of its own. Earlier
-          // reads of the same bill carried the policy's whole term as the
-          // period and sometimes a shifted issue date, so a re-import found
-          // nothing to update and filed a second copy: a Nationwide account
-          // showed March's bill twice, once labelled "May" by the term it
-          // carried. Every row on the account for this installment — same
-          // due date, or same issue date — is one bill: keep one (the one
-          // with payments on it, else the oldest), move the others' payments
-          // onto it, and let the new read overwrite it below.
-          const installmentBill = insuranceBill && !!ex.dueDate;
-          if (!existing && installmentBill) {
-            const due = new Date(ex.dueDate!);
-            const w = 5 * 86400000;
-            const day = 86400000;
-            const twins = await db.statement.findMany({
-              where: {
-                utilityAccountId, isScheduled: false, isDownPayment: false,
-                OR: [
-                  { dueDate: { gte: new Date(due.getTime() - w), lte: new Date(due.getTime() + w) } },
-                  { statementDate: { gte: new Date(statementDate.getTime() - day), lte: new Date(statementDate.getTime() + day) } },
-                ],
-              },
-              include: { _count: { select: { payments: true } } },
-              orderBy: { createdAt: 'asc' },
-            });
-            if (twins.length) {
-              const survivor = [...twins].sort((a, b) => b._count.payments - a._count.payments)[0]!;
-              for (const t of twins) {
-                if (t.id === survivor.id) continue;
-                await db.payment.updateMany({ where: { statementId: t.id }, data: { statementId: survivor.id } });
-                await db.statement.delete({ where: { id: t.id } });
-              }
-              existing = survivor;
-            }
-          }
-          // Same account, same issue date: the same bill, whatever period an
-          // earlier read gave it. An insurance installment bill re-imported
-          // after its period was corrected from the policy's whole term to
-          // its own month must update that row, not sit beside it.
-          if (!existing && ex.statementDate) {
-            const day = 86400000;
-            existing = await db.statement.findFirst({
-              where: { utilityAccountId, isScheduled: false, isDownPayment: false, statementDate: { gte: new Date(statementDate.getTime() - day), lte: new Date(statementDate.getTime() + day) } },
-            });
-          }
-          // The carrier's bill for an installment that was filed ahead of
-          // time from the policy's payment schedule: the real bill takes the
-          // scheduled row's place rather than sitting beside it.
-          if (!existing && ex.dueDate) {
-            const due = new Date(ex.dueDate);
-            const w = 5 * 86400000;
-            existing = await db.statement.findFirst({
-              where: { utilityAccountId, isScheduled: true, dueDate: { gte: new Date(due.getTime() - w), lte: new Date(due.getTime() + w) } },
-            });
-          }
-          if (!existing) {
-            // Fall back to the issue month, matching only a row that has no
-            // period of its own. Two cases land here, and both want the same
-            // thing:
-            //
-            //   - the new bill states no period either, so the month is all
-            //     there is to go on;
-            //   - the new bill states a period but nothing matched it, and the
-            //     account still holds a period-less row from an older import
-            //     that predates period extraction. That row *is* this bill; it
-            //     just never had a period recorded. Matching it backfills the
-            //     period instead of creating a second copy of the same bill.
-            //
-            // A row that already carries a period is deliberately excluded:
-            // that one is identified by its period, not by its month, and a
-            // drifting cycle puts two distinct bills in one issue month.
-            //
-            // UTC boundaries: statement dates are stored at midnight UTC, so a
-            // local-time window is offset by the server's zone and straddles
-            // the month edge.
-            const monthStart = new Date(Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth(), 1));
-            const monthEnd   = new Date(Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth() + 1, 0, 23, 59, 59));
-
-            // A row whose period was inferred rather than extracted counts as
-            // period-less here, because that is what it is. The importer writes
-            // an inferred period on create (the whole calendar month) but this
-            // lookup used to demand a null one — so a bill whose period cannot
-            // be extracted was written with a period, then never recognised
-            // again, and every single re-import filed another copy of it.
-            //
-            // An inferred period is identifiable by its shape: it runs from the
-            // first of a month to the last day of that same month. A real cycle
-            // effectively never does — providers read meters mid-month — so
-            // this does not swallow genuine periods.
-            // Matched as a window rather than an instant: the inferred period is
-            // built in the server's local zone on write and compared here in
-            // UTC, so on a server that is not UTC the two are a few hours apart
-            // and an equality test would silently never match.
-            const DAY = 24 * 60 * 60 * 1000;
-            const firstOfMonth = Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth(), 1);
-
-            existing = await db.statement.findFirst({
-              where: {
-                utilityAccountId,
-                statementDate: { gte: monthStart, lte: monthEnd },
-                OR: [
-                  { billingPeriodStart: null },
-                  { billingPeriodStart: {
-                      gte: new Date(firstOfMonth - DAY),
-                      lte: new Date(firstOfMonth + DAY),
-                  } },
-                ],
-              },
-            });
-          }
-        }
+        // Already on file? One rule for every importer (services/billMatch.ts).
+        if (hasReliableDate) existing = await findExistingBill(utilityAccountId, ex, statementDate, { insuranceBill });
 
         // Upload PDF to S3
         let pdfS3Key: string | undefined;

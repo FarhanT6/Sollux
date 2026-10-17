@@ -15,6 +15,7 @@ import { fileServiceInvoice, invoiceAmount } from './expenseIntake';
 import { compareWithOwner, keepOwnerFigures, ownerEntered, sameBillByDue, thinnerThan } from './statementConflict';
 import { markEscrowedStatements } from './escrow';
 import { settleInFull, applyPolicyDocument, recordConfirmedPayment, syncPaymentPlanFromBill, syncInsurancePolicyFromBill, syncLoanComponentsFromBill, applyPastDueNotice, parseBill } from './pdfImportService';
+import { findExistingBill } from './billMatch';
 import { findOrCreateUtilityAccount } from './utilityAccountResolver';
 import { uploadDocument, buildStatementKey } from './s3Service';
 
@@ -39,12 +40,15 @@ export type IntakeResult =
   | { outcome: 'skipped'; reason: string }
   | { outcome: 'expense'; expenseId: string; duplicate: boolean };
 
-export function buildRawData(ex: Awaited<ReturnType<typeof parseBill>>['extracted'], source = 'drive_import') {
+export function buildRawData(ex: Awaited<ReturnType<typeof parseBill>>['extracted'], source = 'drive_import', extractedBy?: 'ai' | 'text') {
   const totalDue = (ex.currentCharges != null || ex.previousBalance != null)
     ? (ex.currentCharges ?? 0) + (ex.previousBalance ?? 0)
     : ex.amountDue;
   return {
     source,
+    // Which reader produced these figures; without it the auditor cannot
+    // tell these rows from legacy imports (#241).
+    extractedBy: extractedBy ?? undefined,
     providerName: ex.providerName,
     serviceAddress: ex.serviceAddress,
     accountNumber: ex.accountNumber,
@@ -147,7 +151,7 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
   if (utilityAccountId && (match.confidence === 'high' || autoCreated)) {
     const acct = await db.utilityAccount.findUnique({
       where: { id: utilityAccountId },
-      select: { id: true, propertyId: true, escrowLoanId: true, billingCadence: true },
+      select: { id: true, propertyId: true, escrowLoanId: true, billingCadence: true, category: true },
     });
     if (!acct) throw new Error('account disappeared mid-import');
     // A premium the lender pays from escrow, or billed once a term, is the whole term, once.
@@ -163,36 +167,10 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
     // streaming Drive path: match the period when the bill states
     // one; fall back to the issue month only against rows that carry
     // no real period of their own.
-    let existing = null;
-    if (ex.billingPeriodStart) {
-      const start = new Date(ex.billingPeriodStart);
-      const window = 7 * 24 * 60 * 60 * 1000;
-      existing = await db.statement.findFirst({
-        where: {
-          utilityAccountId: acct.id,
-          billingPeriodStart: {
-            gte: new Date(start.getTime() - window),
-            lte: new Date(start.getTime() + window),
-          },
-        },
-      });
-    }
-    if (!existing) {
-      const monthStart = new Date(Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth(), 1));
-      const monthEnd = new Date(Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth() + 1, 0, 23, 59, 59));
-      const DAY = 24 * 60 * 60 * 1000;
-      const firstOfMonth = Date.UTC(statementDate.getUTCFullYear(), statementDate.getUTCMonth(), 1);
-      existing = await db.statement.findFirst({
-        where: {
-          utilityAccountId: acct.id,
-          statementDate: { gte: monthStart, lte: monthEnd },
-          OR: [
-            { billingPeriodStart: null },
-            { billingPeriodStart: { gte: new Date(firstOfMonth - DAY), lte: new Date(firstOfMonth + DAY) } },
-          ],
-        },
-      });
-    }
+    // Already on file? One rule for every importer (services/billMatch.ts).
+    // This path had only the period and month steps, so a bill filed by hand
+    // with no period was filed again here (#241, #189).
+    let existing = await findExistingBill(acct.id, ex, statementDate, { insuranceBill: !!ex.insurance || acct.category === 'INSURANCE' });
 
     // A "your bill is ready" email and the PDF statement are one bill.
     if (!existing) existing = await sameBillByDue(acct.id, ex);
@@ -213,7 +191,11 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
 
     const key = buildStatementKey(userId, acct.propertyId, acct.id, statementDate, sanitizeFilename(filename));
     const pdfS3Key = docBuffer ? await uploadDocument(key, docBuffer) : null;
-    const rawData = buildRawData(ex, source);
+    const rawData = buildRawData(ex, source, parsed.extractedBy);
+    // What this bill carried in: positive is arrears, negative a credit. This
+    // path never saved it, so a $7,786 SDG&E bill read as its $836 charge
+    // alone (#241). Same rule as routes/drive.ts.
+    const pastDueAmt = ex.previousBalance != null && ex.previousBalance !== 0 ? ex.previousBalance : null;
     if (existing && ownerCheck?.kind === 'same') {
       await keepOwnerFigures(existing, ex, rawData, pdfS3Key);
       await recordConfirmedPayment(acct.id, existing.id, ex);
@@ -235,6 +217,9 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
           billingPeriodEnd: ex.billingPeriodEnd ? new Date(ex.billingPeriodEnd) : existing.billingPeriodEnd,
           amountDue: amountDueCurrent ?? existing.amountDue,
           balance: ex.totalAccountBalance ?? totalBalance ?? existing.balance,
+          pastDueCarried: pastDueAmt ?? existing.pastDueCarried,
+          chargesExcludingFees: ex.currentCharges ?? existing.chargesExcludingFees,
+          penaltiesFees: ex.lateFee ?? existing.penaltiesFees,
           usageValue: ex.usageValue ?? existing.usageValue,
           usageUnit: ex.usageUnit ?? existing.usageUnit,
           ratePlan: ex.ratePlan ?? existing.ratePlan,
@@ -244,7 +229,7 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
         },
       });
       // Late fees logged with payments are not on the PDF; put them back.
-      await restoreLateFees(existing.id);
+      await restoreLateFees(existing.id, ex.lateFee ?? undefined);
       await recordConfirmedPayment(acct.id, existing.id, ex);
       await syncPaymentPlanFromBill(acct.id, ex);
       await syncInsurancePolicyFromBill(acct.id, ex);
@@ -260,6 +245,9 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
           billingPeriodEnd: ex.billingPeriodEnd ? new Date(ex.billingPeriodEnd) : null,
           amountDue: amountDueCurrent ?? null,
           balance: ex.totalAccountBalance ?? totalBalance ?? null,
+          pastDueCarried: pastDueAmt,
+          chargesExcludingFees: ex.currentCharges ?? null,
+          penaltiesFees: ex.lateFee ?? null,
           amountPaid: ex.isPaid ? (totalBalance ?? amountDueCurrent ?? null) : null,
           usageValue: ex.usageValue ?? null,
           usageUnit: ex.usageUnit ?? null,

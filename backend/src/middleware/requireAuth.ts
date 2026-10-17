@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { clerkClient, clerkMiddleware, getAuth, requireAuth as clerkRequireAuth } from '@clerk/express';
+import { clerkClient, clerkMiddleware, getAuth } from '@clerk/express';
 import { db } from '../config/db';
 
 // Extend Express Request to include userId
@@ -21,7 +21,19 @@ declare global {
 
 // Clerk auth middleware
 export { clerkMiddleware };
-export const requireAuth = clerkRequireAuth();
+
+/**
+ * The API's sign-in check. Clerk's own requireAuth() is for pages: with no
+ * valid session it answers 302 to "/", the browser follows it to the API
+ * host's root, and the app sees a 404 it cannot explain. That was the "404
+ * on the first request" the auditor kept finding on /dashboard, /properties
+ * and /portfolio whenever a session token had gone stale (#229). An API
+ * says 401, and the app refreshes its token and retries.
+ */
+export function requireAuth(req: Request, res: Response, next: NextFunction) {
+  if (!getAuth(req)?.userId) return res.status(401).json({ error: 'Not signed in' });
+  next();
+}
 
 // Normalize a phone to digits so "(760) 672-7717", "7606727717" and
 // "+17606727717" all match the same invite.

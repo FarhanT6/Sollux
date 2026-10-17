@@ -1,4 +1,5 @@
 import { Worker, Job } from 'bullmq';
+import { overdueAfterDays } from '../lib/billCadence';
 import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';
@@ -378,17 +379,33 @@ const worker = new Worker<ScrapeJobData>(
           }
         }
 
-        // Mark this account SUCCESS
+        // A sync that signed in but found nothing is only a success while the
+        // account is inside its billing cycle. Past it, the portal most likely
+        // changed (a moved page, a selector that no longer matches) and the
+        // account has gone quiet: SDG&E sat at SUCCESS for 411 days with no
+        // bill (#191). Say so, where the owner and the auditor both look.
+        let silentNote: string | null = null;
+        if (matchingStmts.length === 0) {
+          const limit = acct.escrowLoanId ? null : overdueAfterDays(acct.billingCadence);
+          const last = await db.statement.findFirst({ where: { utilityAccountId: acct.id }, orderBy: { statementDate: 'desc' }, select: { statementDate: true } });
+          const days = last ? Math.floor((Date.now() - last.statementDate.getTime()) / 86_400_000) : null;
+          if (limit != null && days != null && days > limit) {
+            silentNote = `Signed in, but the portal showed no bills — none since ${last!.statementDate.toISOString().slice(0, 10)} (${days} days). The provider's site may have changed; import the latest bill by hand meanwhile.`;
+          }
+        }
+
         await db.utilityAccount.update({
           where: { id: acct.id },
-          data: { lastSyncedAt: new Date(), lastSyncStatus: 'SUCCESS', lastSyncError: null },
+          data: silentNote
+            ? { lastSyncedAt: new Date(), lastSyncStatus: 'FAILED', lastSyncError: silentNote }
+            : { lastSyncedAt: new Date(), lastSyncStatus: 'SUCCESS', lastSyncError: null },
         });
 
         const syncJobForAcct = syncJobs.find(j => j.utilityAccountId === acct.id);
         if (syncJobForAcct) {
           await db.syncJob.update({
             where: { id: syncJobForAcct.id },
-            data: { status: 'SUCCESS', completedAt: new Date(), statementsFound: statementsInserted, paymentsFound: paymentsInserted },
+            data: { status: silentNote ? 'FAILED' : 'SUCCESS', completedAt: new Date(), statementsFound: statementsInserted, paymentsFound: paymentsInserted, error: silentNote },
           });
         }
 

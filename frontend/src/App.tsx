@@ -1,3 +1,6 @@
+import NotFoundPage from './pages/NotFoundPage';
+import Toaster from './components/Toaster';
+import Logo from './components/brand/Logo';
 import { PrivacyPage, TermsPage } from './pages/PolicyPage';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from '@clerk/clerk-react';
@@ -74,6 +77,7 @@ export default function App() {
         <Route path="/sign-in/*" element={
           <div className="flex h-screen items-center justify-center bg-[#161616]">
             <div className="flex flex-col items-center gap-3">
+              <div className="mb-2"><Logo size={40} tagline /></div>
               <SignIn routing="path" path="/sign-in" afterSignInUrl="/dashboard" appearance={nativeAuthAppearance} />
               {isNative && <NativeSignInNote />}
             </div>
@@ -82,6 +86,7 @@ export default function App() {
         <Route path="/sign-up/*" element={
           <div className="flex h-screen items-center justify-center bg-[#161616]">
             <div className="flex flex-col items-center gap-3">
+              <div className="mb-2"><Logo size={40} tagline /></div>
               <SignUp routing="path" path="/sign-up" afterSignUpUrl="/dashboard" appearance={nativeAuthAppearance} />
               {isNative && <NativeSignInNote />}
             </div>
@@ -136,14 +141,16 @@ export default function App() {
 
           {/* Import */}
           <Route path="import" element={<ImportPage />} />
-        <Route path="scan" element={<ScanPage />} />
+          <Route path="scan" element={<ScanPage />} />
 
-          {/* Anything else lands on the dashboard. */}
-          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+          {/* An address with no page says so (and is reported) instead of
+              quietly landing on the dashboard. */}
+          <Route path="*" element={<NotFoundPage />} />
         </Route>
 
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
+      <Toaster />
     </BrowserRouter>
   );
 }

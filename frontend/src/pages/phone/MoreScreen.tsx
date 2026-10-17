@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import Logo from '../../components/brand/Logo';
 import { useUser, useClerk } from '@clerk/clerk-react';
 import { Screen, Section, Row, Segmented } from '../../ios';
 import { NAV, TAB_BAR } from '../../components/layout/AppLayout';
@@ -54,6 +55,7 @@ export default function MoreScreen() {
         <Row to="/settings" title="Settings" icon={{ bg: '#8e8e93', glyph: <Gear /> }} />
         <Row title="Sign Out" destructive chevron={false} onClick={() => { if (confirm('Sign out of Sollux?')) void signOut(); }} />
       </Section>
+      <div style={{ display: 'flex', justifyContent: 'center', padding: '8px 0 24px', opacity: 0.85 }}><Logo size={30} tagline /></div>
     </Screen>
   );
 }

@@ -53,7 +53,9 @@ export function errorHandler(
     return res.status(explicit).json({ error: err.message });
   }
 
-  if (err.name?.startsWith('PrismaClient')) {
+  // findFirstOrThrow / findUniqueOrThrow throw "NotFoundError" (P2025), not
+  // a PrismaClient* error, so a missing record answered 500 instead of 404.
+  if (err.name?.startsWith('PrismaClient') || err.name === 'NotFoundError') {
     const mapped = PRISMA_STATUS[code];
     if (mapped) return res.status(mapped.status).json({ error: mapped.error, code });
     // Previously every Prisma fault became a 400 "Database error" with the

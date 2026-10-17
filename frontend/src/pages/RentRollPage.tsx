@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { getLeases, getProperties } from '../api/client';
 import type { Lease, Property } from '../types';
 import { fmtDate } from '../lib/date';
@@ -18,6 +18,18 @@ export default function RentRollPage({ embedded }: { embedded?: boolean } = {}) 
   const [logFor, setLogFor] = useState<Lease | null>(null);
   const [openLease, setOpenLease] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
+  const navigate = useNavigate();
+  // A lease belongs to a property's unit, so a new one starts from the
+  // property: pick it (or the one filtered to) and open its new-lease form.
+  const newLease = (propertyId: string) => { if (propertyId) navigate(`/portfolio/${propertyId}?tab=Tenants&newLease=1`); };
+  const newLeasePicker = (cls: string) => filterPropId
+    ? <button onClick={() => newLease(filterPropId)} className={cls}>+ New lease</button>
+    : (
+      <select className={`${cls} cursor-pointer`} value="" onChange={e => newLease(e.target.value)} aria-label="New lease at which property">
+        <option value="">+ New lease…</option>
+        {properties.map(p => <option key={p.id} value={p.id}>{p.nickname || p.address}</option>)}
+      </select>
+    );
   useEffect(() => {
     Promise.all([
       getLeases({ status: filterStatus || undefined }),
@@ -49,12 +61,12 @@ export default function RentRollPage({ embedded }: { embedded?: boolean } = {}) 
             <h1 className="text-xl font-semibold text-white">Rent Roll</h1>
             <p className="text-sm text-gray-400 mt-0.5">{filtered.length} leases · {money(totalRent)}/mo · {money(totalArrears)} arrears</p>
           </div>
-          <Link to="/leases/new" className="btn-primary text-sm">+ New Lease</Link>
+          {newLeasePicker('btn-primary text-sm')}
         </div>
       ) : (
         <div className="flex items-center justify-between mb-4">
           <p className="section-label mb-0">{filtered.length} leases · {money(totalRent)}/mo · {money(totalArrears)} arrears</p>
-          <Link to="/leases/new" className="btn text-xs">+ New lease</Link>
+          {newLeasePicker('btn text-xs')}
         </div>
       )}
 

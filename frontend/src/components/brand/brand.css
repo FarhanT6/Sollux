@@ -1,0 +1,8 @@
+/* Sollux brand: the logo lockup. Wordmark in pale cream on the dark UI,
+   charcoal on light. */
+.sollux-logo { display: inline-flex; align-items: center; min-width: 0; }
+.sollux-logo-text { display: flex; flex-direction: column; min-width: 0; line-height: 1; }
+.sollux-wordmark { font-weight: 800; letter-spacing: -0.045em; color: #FFF7E6; white-space: nowrap; }
+.sollux-tagline { margin-top: 3px; font-size: 8px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: #F59E0B; white-space: nowrap; }
+html[data-theme="light"] .sollux-wordmark { color: #1F2937; }
+html[data-theme="light"] .sollux-tagline { color: #B45309; }

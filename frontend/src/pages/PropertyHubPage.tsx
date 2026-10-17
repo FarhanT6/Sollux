@@ -148,47 +148,75 @@ export default function PropertyHubPage() {
     setSearchParams({ tab: t }, { replace: true });
   }
 
-  // Load property on mount
-  useEffect(() => {
+  // Load property on mount. A failed load must end the spinner: a deleted
+  // or merged property (404) says so, anything else offers a retry (#229).
+  const [loadError, setLoadError] = useState<'missing' | 'failed' | null>(null);
+  const loadProperty = () => {
     if (!id) return;
-    getProperty(id).then(p => { setProperty(p); setLoading(false); });
-  }, [id]);
+    setLoading(true); setLoadError(null);
+    getProperty(id)
+      .then(p => setProperty(p))
+      .catch(e => setLoadError(e?.response?.status === 404 ? 'missing' : 'failed'))
+      .finally(() => setLoading(false));
+  };
+  useEffect(loadProperty, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Load tab data lazily
+  // Load tab data lazily. A section that fails to load says so and can be
+  // retried (it is taken off the loaded list), rather than staying empty.
+  const [tabError, setTabError] = useState<Tab | null>(null);
+  const [tabRetry, setTabRetry] = useState(0);
   useEffect(() => {
-    if (!id || !activeTab || loaded.current.has(activeTab)) return;
+    // Sections load once the property itself has; a missing property has none.
+    if (!id || !property || !activeTab || loaded.current.has(activeTab)) return;
     loaded.current.add(activeTab);
+    setTabError(null);
+    const fail = () => { loaded.current.delete(activeTab); setTabError(activeTab); };
+    let p: Promise<unknown> | null = null;
     if (activeTab === 'Overview') {
-      Promise.all([
+      p = Promise.all([
         getLeases({ propertyId: id, status: 'ACTIVE' }),
         getLoans({ propertyId: id, isActive: true }),
         getPropertyPnL(id),
-      ]).then(([l, lo, p]) => { setLeases(l); setLoans(lo); setPnl(p); });
+      ]).then(([l, lo, pl]) => { setLeases(l); setLoans(lo); setPnl(pl); });
     } else if (activeTab === 'Tenants') {
-      getLeases({ propertyId: id }).then(setLeases);
+      p = getLeases({ propertyId: id }).then(setLeases);
     } else if (activeTab === 'Turnover') {
-      getTurnover({ propertyId: id }).then(setTurnover);
+      p = getTurnover({ propertyId: id }).then(setTurnover);
     } else if (activeTab === 'Loans') {
-      getLoans({ propertyId: id }).then(setLoans);
+      p = getLoans({ propertyId: id }).then(setLoans);
     } else if (activeTab === 'Expenses') {
-      getExpenses({ propertyId: id }).then(setExpenses);
+      p = getExpenses({ propertyId: id }).then(setExpenses);
     } else if (activeTab === 'Insurance') {
-      getInsurancePolicies({ propertyId: id }).then(setPolicies);
+      p = getInsurancePolicies({ propertyId: id }).then(setPolicies);
     } else if (activeTab === 'Tax') {
-      getTaxAssessments({ propertyId: id }).then(setTaxes);
+      p = getTaxAssessments({ propertyId: id }).then(setTaxes);
     } else if (activeTab === 'Maintenance') {
-      getImprovements({ propertyId: id }).then(setImprovements);
+      p = getImprovements({ propertyId: id }).then(setImprovements);
     } else if (activeTab === 'Documents') {
-      getDocuments({ propertyId: id }).then(setDocuments);
+      p = getDocuments({ propertyId: id }).then(setDocuments);
     }
-  }, [id, activeTab]);
+    p?.catch(fail);
+  }, [id, property?.id, activeTab, tabRetry]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading) return (
     <div className="flex items-center justify-center h-64 text-gray-500 text-sm">Loading…</div>
   );
   if (!property) return (
-    <div className="flex items-center justify-center h-64 text-gray-500 text-sm">Property not found</div>
+    <div className="flex flex-col items-center justify-center h-64 gap-3 text-sm text-center px-6">
+      <p className="text-gray-300">{loadError === 'failed' ? "Couldn't load this property." : 'This property no longer exists.'}</p>
+      <p className="text-gray-500 text-xs">{loadError === 'failed' ? 'Check your connection and try again.' : 'It may have been deleted or merged into another.'}</p>
+      <div className="flex gap-2">
+        {loadError === 'failed' && <button onClick={loadProperty} className="btn btn-primary text-xs">Try again</button>}
+        <Link to="/portfolio" className="btn text-xs">Back to Portfolio</Link>
+      </div>
+    </div>
   );
+  const tabFailed = tabError === activeTab ? (
+    <div className="card p-4 mb-4 flex items-center justify-between gap-3 text-sm">
+      <span className="text-gray-300">Couldn't load {activeTab.toLowerCase()}.</span>
+      <button onClick={() => setTabRetry(n => n + 1)} className="btn text-xs">Try again</button>
+    </div>
+  ) : null;
 
   const activeLeases = leases.filter(l => l.status === 'ACTIVE');
   const totalRent = activeLeases.reduce((s, l) => s + Number(l.rentAmount), 0);
@@ -203,6 +231,7 @@ export default function PropertyHubPage() {
   // What each section shows, and the dialogs; both layouts render these.
   const tabContent = (
     <>
+      {tabFailed}
       {activeTab === 'Overview' && <OverviewTab property={property} pnl={pnl} leases={activeLeases} loans={loans.filter(l => l.isActive)} onPropertyChange={setProperty} />}
       {activeTab === 'Units' && <UnitsTab propertyId={id!} />}
       {activeTab === 'Tenants' && <TenantsTab propertyId={id!} leases={leases} setLeases={setLeases} propertyType={property.type} />}
@@ -1064,7 +1093,15 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   const [suggested, setSuggested] = useState<{ leaseId: string; terms: ExtractedLeaseTerms; file: string } | null>(null);
   const [applyingTerms, setApplyingTerms] = useState(false);
   const [extracting, setExtracting] = useState(false);
-  const [showNewLease, setShowNewLease] = useState(false);
+  // ?newLease=1 (from the Rent Roll) opens the form straight away.
+  const [leaseParams, setLeaseParams] = useSearchParams();
+  const [showNewLease, setShowNewLease] = useState(() => leaseParams.get('newLease') === '1');
+  useEffect(() => {
+    if (leaseParams.get('newLease') !== '1') return;
+    const next = new URLSearchParams(leaseParams); next.delete('newLease');
+    setLeaseParams(next, { replace: true });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [units, setUnits] = useState<Unit[]>([]);
   const [allTenants, setAllTenants] = useState<Tenant[]>([]);
   const [rentChanges, setRentChanges] = useState<Record<string, RentChange[]>>({});
