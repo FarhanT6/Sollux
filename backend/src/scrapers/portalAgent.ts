@@ -16,7 +16,7 @@
  * (documentIntake): filed on a confident match, staged for review otherwise.
  */
 import Anthropic from '@anthropic-ai/sdk';
-import { websiteFor } from '../lib/providerDirectory';
+import { websiteFor, findProvider } from '../lib/providerDirectory';
 import * as fs from 'fs';
 import { BrowserContext, Page, Download, Frame, Locator } from 'playwright';
 import { launchPortalContext, isHttp2Reset } from './browser';
@@ -367,6 +367,7 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   // The page as Claude last saw it, and whether giving up has been second-guessed yet.
   let lastPage = '';
   let rechecked = false;
+  let triedHome = false;
   const after = async (what: string) => {
     await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
     await page.waitForTimeout(800);
@@ -572,6 +573,22 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
                   content = `Not finished: the page changed after a few seconds. If it now goes on (a code page, the account), carry on; otherwise finish again.\n\n${now}`;
                   break;
                 }
+              }
+              // A saved deep sign-in link (Mohela's login.do?command=…, CRI's
+              // auth page) can answer "invalid request" or "not available" when
+              // not reached from the site itself: start once from the home page.
+              if (['turned_away', 'blocked'].includes(String(i.outcome)) && !triedHome) {
+                triedHome = true;
+                const home = findProvider(account.providerName, account.providerSlug)?.site ?? `${start.origin}/`;
+                try {
+                  const h = new URL(home);
+                  if (h.href !== page.url()) {
+                    allowed.add(rootOf(h.hostname));
+                    await page.goto(h.href, { waitUntil: 'domcontentloaded', timeout: 30000 });
+                    content = await after(`Not finished: the saved sign-in link may only work when reached from the site itself, so the browser is now on ${account.providerName}'s home page. Find Log in / Sign in here and carry on; if this is refused too, finish again.`);
+                    break;
+                  }
+                } catch { /* the home page did not open either: finish */ }
               }
               finished = true;
               run.ok = i.outcome === 'done';

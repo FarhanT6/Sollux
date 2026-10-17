@@ -58,8 +58,10 @@ const DIRECTORY: ProviderSite[] = [
   { match: /prescott|river ranch/i, site: 'https://www.townsq.io', domains: ['townsq.io', 'prescottmgt.com'] },
   { match: /eternal hills|dignity memorial/i, site: 'https://www.dignitymemorial.com', domains: ['dignitymemorial.com'] },
   // Loans and banks
-  { match: /mohela/i, site: 'https://www.mohela.com', domains: ['mohela.com'] },
-  { match: /nelnet/i, site: 'https://www.nelnet.com', domains: ['nelnet.com', 'nelnet.net'] },
+  // Federal student-loan servicers sign in on their studentaid.gov sites now.
+  { match: /mohela/i, site: 'https://mohela.studentaid.gov', domains: ['mohela.com', 'mohela.studentaid.gov'] },
+  { match: /nelnet/i, site: 'https://nelnet.studentaid.gov', domains: ['nelnet.com', 'nelnet.net', 'nelnet.studentaid.gov'] },
+  { match: /\bcri\b|central research/i, site: 'https://cri.studentaid.gov', domains: ['cri.studentaid.gov'] },
   { match: /\bsdccu\b|san diego county credit/i, site: 'https://www.sdccu.com', domains: ['sdccu.com'] },
   { match: /service finance/i, site: 'https://www.svcfin.com', domains: ['svcfin.com'] },
 ];
