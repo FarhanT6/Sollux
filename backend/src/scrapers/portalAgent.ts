@@ -109,20 +109,31 @@ export async function describe(page: Page, secrets: string[]): Promise<string> {
       const out: string[] = [];
       const shadowText: string[] = [];
       let i = start;
-      const sel = 'a,button,input,select,textarea,[role=button],[role=link],[role=tab],[role=menuitem],[role=checkbox],[onclick]';
+      const sel = 'a,button,input,select,textarea,label,[role=button],[role=link],[role=tab],[role=menuitem],[role=checkbox],[role=radio],[role=option],[onclick]';
       for (const root of roots) {
         if (root !== document) for (const c of Array.from(root.children)) { const t = (c as HTMLElement).innerText; if (t) shadowText.push(t); }
         for (const el of Array.from(root.querySelectorAll(sel))) {
           if (i - start >= limit) break;
           const r = (el as HTMLElement).getBoundingClientRect();
           if (r.width === 0 || r.height === 0 || getComputedStyle(el as HTMLElement).visibility === 'hidden') continue;
+          // A label only when it stands in for a hidden checkbox or radio (an option card); otherwise its field is listed.
+          if (el.tagName === 'LABEL') {
+            const c = (el as HTMLLabelElement).control as HTMLElement | null;
+            if (!c || c.getBoundingClientRect().width > 0) continue;
+          }
           const n = ++i;
           el.setAttribute('data-sref', String(n));
           const tag = el.tagName.toLowerCase();
           const inp = el as HTMLInputElement;
           const label = (el.getAttribute('aria-label') || (inp.labels && inp.labels[0]?.innerText) || inp.placeholder || el.getAttribute('title') || (el as HTMLElement).innerText || inp.name || el.id || '').replace(/\s+/g, ' ').trim().slice(0, 80);
           let d = `[${n}] ${tag}`;
-          if (tag === 'input') d += ` type=${inp.type || 'text'}${inp.type === 'checkbox' ? (inp.checked ? ' (checked)' : ' (unchecked)') : inp.value ? ' (filled)' : ''}`;
+          if (tag === 'input') d += ` type=${inp.type || 'text'}${inp.type === 'checkbox' || inp.type === 'radio' ? (inp.checked ? ' (checked)' : ' (unchecked)') : inp.value ? ' (filled)' : ''}`;
+          // An option card is often a label around a hidden checkbox or radio: its state goes on the label.
+          const ctl = tag === 'label' ? (el as HTMLLabelElement).control as HTMLInputElement | null : null;
+          if (ctl && (ctl.type === 'checkbox' || ctl.type === 'radio')) d += ctl.checked ? ' (checked)' : ' (unchecked)';
+          const aria = el.getAttribute('aria-checked') ?? el.getAttribute('aria-selected') ?? el.getAttribute('aria-pressed');
+          if (aria) d += aria === 'true' ? ' (selected)' : ' (not selected)';
+          if ((el as HTMLButtonElement).disabled || el.getAttribute('aria-disabled') === 'true') d += ' (disabled)';
           if (tag === 'a' && (el as HTMLAnchorElement).href) d += ` href=${(el as HTMLAnchorElement).href.slice(0, 120)}`;
           if (tag === 'select') d += ` options=${Array.from((el as HTMLSelectElement).options).slice(0, 15).map(o => o.text.trim()).join(' | ').slice(0, 200)}`;
           out.push(`${d} "${label}"`);
@@ -433,7 +444,12 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
         if (u.name === 'download_statement' || u.name === 'finish') navDone = true;
         const n = `Step ${step + 1}`;
         if (u.name === 'look') say(`${n}: reading the page${await page.title().then(t => (t ? ` "${t.slice(0, 60)}"` : '')).catch(() => '')}`);
-        else if (u.name === 'click') say(`${n}: clicking${await targetOf(page, i.ref).then(t => (t?.label ? ` "${t.label.slice(0, 50)}"` : '')).catch(() => '')}`);
+        else if (u.name === 'click') {
+          // What it clicks, as the page described it when the element has no label of its own (a bare checkbox).
+          const label = await targetOf(page, i.ref).then(t => t?.label ?? '').catch(() => '')
+            || (lastPage.match(new RegExp(`\\[${Number(i.ref)}\\]([^\\n]*)`))?.[1] ?? '').replace(/\s+/g, ' ').trim();
+          say(`${n}: clicking${label ? ` "${label.slice(0, 50)}"` : ''}`);
+        }
         else if (u.name === 'fill_login') say(`${n}: signing in`);
         else if (u.name === 'download_statement') say(`${n}: downloading a statement${i.statementDate ? ` (${String(i.statementDate).slice(0, 20)})` : ''}`);
         else if (u.name === 'goto') say(`${n}: opening ${String(i.url).replace(/^https?:\/\//, '').slice(0, 60)}`);
@@ -458,7 +474,15 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
           switch (u.name) {
             case 'look': content = lastPage = await describe(page, secrets); break;
             case 'screenshot': content = [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: (await page.screenshot({ type: 'png' })).toString('base64') } }]; break;
-            case 'click': await el(i.ref).click({ timeout: 10000 }); content = await after('Clicked.'); break;
+            case 'click': {
+              const before = lastPage;
+              await el(i.ref).click({ timeout: 10000 });
+              content = await after('Clicked.');
+              // A click that changes nothing, said plainly: Westlake's run spent
+              // a dozen steps clicking an option card that never took.
+              if (lastPage === before) content = `Clicked, but nothing on the page changed. If that was an option card or a custom checkbox, click its text or the box itself (or press Space on it); if a Continue button stays disabled, something above it still needs choosing. Do not click the same thing again.\n\n${lastPage}`;
+              break;
+            }
             case 'type':
               await el(i.ref).fill(String(i.text ?? ''));
               if (i.submit) await el(i.ref).press('Enter');
