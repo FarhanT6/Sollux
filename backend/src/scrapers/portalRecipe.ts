@@ -23,7 +23,7 @@ export type RecipeStep =
   | { tool: 'click'; target: Target }
   | { tool: 'type'; target: Target; text: string }
   | { tool: 'select'; target: Target; label: string }
-  | { tool: 'fill_login'; user?: Target; pass: Target }
+  | { tool: 'fill_login'; user?: Target; pass?: Target }
   | { tool: 'press'; key: string }
   | { tool: 'goto'; url: string };
 
@@ -96,8 +96,16 @@ export async function replay(page: Page, steps: RecipeStep[], login: { username:
       } else if (s.tool === 'press') {
         await page.keyboard.press(s.key); await settle(page);
       } else if (s.tool === 'fill_login') {
+        // A username-only page (the password comes on the next one).
+        if (!s.pass) {
+          const user = s.user ? await find(page, s.user) : null;
+          if (!user) { if (await page.locator('input[type=password]').count() === 0 && !(await page.locator('input[type=email]').count())) { done++; continue; } break; }
+          await user.fill(login.username);
+          done++;
+          continue;
+        }
         const pass = await find(page, s.pass);
-        // Already signed in (the browser profile kept the session): skip the login.
+        // Already signed in (the browser kept the session): skip the login.
         if (!pass) { if (await page.locator('input[type=password]').count() === 0) { done++; continue; } break; }
         if (s.user) { const user = await find(page, s.user, 2000); if (user) await user.fill(login.username); }
         await pass.fill(login.password);

@@ -60,15 +60,20 @@ async function agentJob(job: Job<ScrapeJobData>, account: { id: string; provider
       ? await db.syncJob.update({ where: { id: job.data.syncJobId }, data: { status: 'PENDING', startedAt: new Date(), progress: 'Starting the browser' } }).catch(() => null)
         ?? await db.syncJob.create({ data: { utilityAccountId, status: 'PENDING', startedAt: new Date() } })
       : await db.syncJob.create({ data: { utilityAccountId, status: 'PENDING', startedAt: new Date(), progress: 'Starting the browser' } });
-    // The live line where Fetch was pressed; written at most every 2 seconds.
-    let lastWrite = 0;
+    // The live line where Fetch was pressed: at most one write every 2 seconds,
+    // but the latest line always lands (a dropped "Looking for the code in your
+    // email" left "clicking Log in" on screen for the two minutes it took).
+    let lastWrite = 0, latest = '', timer: NodeJS.Timeout | null = null;
+    const write = () => { timer = null; lastWrite = Date.now(); void db.syncJob.update({ where: { id: syncJob.id }, data: { progress: latest.slice(0, 300) } }).catch(() => {}); };
     const onProgress = (text: string) => {
-      if (Date.now() - lastWrite < 2000 && !/^Waiting for your/.test(text)) return;
-      lastWrite = Date.now();
-      void db.syncJob.update({ where: { id: syncJob.id }, data: { progress: text.slice(0, 300) } }).catch(() => {});
+      latest = text;
+      if (timer) return;
+      const wait = 2000 - (Date.now() - lastWrite);
+      if (wait <= 0) write(); else timer = setTimeout(write, wait);
     };
     const r = await withAiContext({ test: !!job.data.test }, () => runPortalAgent(utilityAccountId, { interactive: !!job.data.manual, onProgress }))
       .catch(err => ({ ok: false, filed: 0, review: 0, applied: 0, downloads: 0, summary: '', error: readableError(err instanceof Error ? err.message : String(err)) }) as Awaited<ReturnType<typeof runPortalAgent>>);
+    if (timer) clearTimeout(timer); // the final status below replaces any pending progress line
     await db.utilityAccount.update({
       where: { id: utilityAccountId },
       data: r.ok ? { lastSyncedAt: new Date(), lastSyncStatus: 'SUCCESS', lastSyncError: null } : { lastSyncStatus: 'FAILED', lastSyncError: readableError(r.error ?? 'The portal agent stopped.') },
