@@ -277,20 +277,19 @@ export function statementStatus(s: any, payments: any[] = [], newerStmt?: any, i
   // A scheduled installment whose date has not come: nothing owed yet.
   if (isUpcoming(s)) return { color: 'amber', label: 'Upcoming' };
 
-  // The next bill's carried-in balance tells us whether this one was paid:
-  // 0 carried in = this bill was cleared before the next was issued. Only
-  // when the next bill actually says so — a bill with no carried figure on
-  // file proves nothing, and treating that as zero stamped every older bill
-  // "Paid" while its own Mark paid button still showed.
+  // "Paid" comes only from the paid-state rule above, the same one that
+  // decides whether the row offers Mark paid or Mark unpaid. This used to
+  // guess from the next bill too — less carried in than this bill's charge
+  // read as "Paid" — so a Prescott HOA bill whose arrears were growing
+  // ($130, then $260) showed Paid beside a Mark paid button. The next bill
+  // can still say a part was paid: that is "Part paid", not "Paid".
+  const overdue = !!s.dueDate && isAfter(new Date(), new Date(s.dueDate));
   if (!isLatest && newerStmt && newerStmt.pastDueCarried != null) {
-    const newerCarriedIn = Number(newerStmt.pastDueCarried);
+    const carriedIn = Number(newerStmt.pastDueCarried);
     const thisDue = Number(s.amountDue ?? 0);
-    if (newerCarriedIn <= 0) return { color: 'green', label: 'Paid' };
-    if (thisDue > 0 && newerCarriedIn >= thisDue - 0.01) {
-      const pastDueDate = s.dueDate && isAfter(new Date(), new Date(s.dueDate));
-      return pastDueDate ? { color: 'red', label: 'Overdue' } : { color: 'amber', label: 'Due' };
+    if (carriedIn > 0.01 && thisDue > 0 && carriedIn < thisDue - 0.01) {
+      return { color: overdue ? 'red' : 'amber', label: 'Part paid' };
     }
-    return { color: 'green', label: 'Paid' };
   }
 
   if (s.dueDate && isAfter(new Date(), new Date(s.dueDate))) return { color: 'red', label: 'Overdue' };

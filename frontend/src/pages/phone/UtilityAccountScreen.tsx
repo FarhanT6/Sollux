@@ -45,6 +45,11 @@ export interface UtilityAccountView {
   remove: () => void;
   revealNumber: () => void;
   revealedNumber: string | null;
+  /** The provider's site ("sdge.com"), or null when it is not known yet. */
+  siteLabel: string | null;
+  openWebsite: () => void;
+  saveWebsite: () => void;
+  openPortalLogin: () => void;
   payment: {
     open: boolean; editing: boolean; saving: boolean; canSave: boolean; fields: ReactNode;
     start: () => void; edit: (p: any) => void; close: () => void; save: () => void; remove: (p: any) => void;
@@ -88,6 +93,9 @@ export default function UtilityAccountScreen(v: UtilityAccountView) {
         <div className="ios-hero-label">Current balance</div>
         <div className="ios-hero-value">{fmtMoney(v.balance)}</div>
         <div className="ios-hero-sub">{v.balanceSub}</div>
+        <button className="ios-btn gray" style={{ marginTop: 14, width: '100%' }} onClick={v.openWebsite}>
+          {v.siteLabel ? `Pay on ${v.siteLabel}` : 'Find the provider\'s website'}
+        </button>
         {account.lastSyncStatus === 'FAILED' && account.lastSyncError && !v.syncing && (
           <div className="ios-hero-sub ios-red" style={{ marginTop: 6 }}>Last sync failed: {account.lastSyncError}</div>
         )}
@@ -101,6 +109,12 @@ export default function UtilityAccountScreen(v: UtilityAccountView) {
       </div>
 
       {v.arrangements}
+
+      {!account.hasCredentials && (
+        <Section footer="Sollux signs in to read and download statements only — it can't pay or change anything.">
+          <Row title="Fetch statements automatically" subtitle={`Add your ${account.providerName} login`} tinted onClick={v.openPortalLogin} />
+        </Section>
+      )}
 
       <Segmented<Tab> label="Show" value={tab} onChange={setTab} options={[
         { value: 'bills', label: 'Bills' }, { value: 'payments', label: 'Payments' },
@@ -207,6 +221,10 @@ export default function UtilityAccountScreen(v: UtilityAccountView) {
             <select className="ios-inline-select" aria-label="Billing cadence" value={account.billingCadence ?? 'MONTHLY'} onChange={e => v.setCadence(e.target.value)}>
               {Object.entries(CADENCE_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
             </select>} />
+          <Row title="Portal login" subtitle="Sollux fetches statements from the provider's site" onClick={() => { setActions(false); v.openPortalLogin(); }}
+            value={<span className={account.hasCredentials ? 'ios-green' : 'ios-tint'}>{account.hasCredentials ? 'Saved' : 'Add'}</span>} />
+          <Row title="Website" chevron={false} onClick={() => { setActions(false); v.saveWebsite(); }}
+            value={<span className="ios-tint">{v.siteLabel ?? 'Add'}</span>} />
           {account.accountNumber && (
             <Row title="Account number" chevron={false} onClick={v.revealNumber}
               value={<span style={{ fontVariantNumeric: 'tabular-nums' }}>{v.revealedNumber ?? account.accountNumber}</span>} />

@@ -1,5 +1,5 @@
 import { Worker, Job } from 'bullmq';
-import { overdueAfterDays } from '../lib/billCadence';
+import { overdueAfterDays, billCycleDays } from '../lib/billCadence';
 import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';
@@ -13,6 +13,8 @@ interface ScrapeJobData {
   utilityAccountId: string;
   /** Pressed Sync: the portal agent runs even if it ran recently. */
   manual?: boolean;
+  /** Why it was queued: a provider's "your bill is ready" email fetches the statement at once. */
+  trigger?: 'bill_posted';
 }
 
 // Normalise account number for matching (strip dashes/spaces/case)
@@ -40,13 +42,19 @@ const worker = new Worker<ScrapeJobData>(
 
     // ── No hand-written scraper for this provider: the portal agent ──────
     // Claude drives a browser through the portal. It costs a few cents a
-    // run, so the 6-hourly schedule only runs it when a bill is likely due
-    // (none in 25 days) and not more than once a day; Sync runs it always.
-    if (!getScraperProvider(account.providerSlug)) {
+    // run, so a scheduled run only goes when the account's next bill is due
+    // by its own billing cycle, and never twice in a day. A "your bill is
+    // ready" email (job.data.trigger = 'bill_posted') goes straight away; so
+    // does Sync. An account that was set to read bills from Gmail goes to the
+    // agent too once it has a portal login: most providers' emails only say
+    // a bill is ready, and the statement itself is on the portal.
+    if (!getScraperProvider(account.providerSlug) || (account.providerSlug === 'gmail-fallback' && account.usernameEnc)) {
       const last = await db.statement.findFirst({ where: { utilityAccountId }, orderBy: { statementDate: 'desc' }, select: { statementDate: true } });
-      const recentBill = last && Date.now() - last.statementDate.getTime() < 25 * 86400000;
+      const cycle = billCycleDays(account.billingCadence);
+      const notDueYet = last && Date.now() - last.statementDate.getTime() < (cycle - 3) * 86400000;
       const ranToday = account.lastAgentRunAt && Date.now() - account.lastAgentRunAt.getTime() < 20 * 3600000;
-      if (!job.data.manual && (recentBill || ranToday)) return;
+      if (!job.data.manual && job.data.trigger !== 'bill_posted' && (notDueYet || ranToday)) return;
+      if (job.data.trigger === 'bill_posted' && ranToday && !job.data.manual) return;
       await db.utilityAccount.update({ where: { id: utilityAccountId }, data: { lastSyncStatus: 'PENDING' } });
       const syncJob = await db.syncJob.create({ data: { utilityAccountId, status: 'PENDING', startedAt: new Date() } });
       const r = await runPortalAgent(utilityAccountId, { interactive: !!job.data.manual });

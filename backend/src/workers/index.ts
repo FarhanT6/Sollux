@@ -22,9 +22,10 @@ console.log('🔧 Sollux Workers started');
 // queued per credential group. The worker logs in once and handles all of them.
 async function scheduleAllScrapes() {
   const accounts = await db.utilityAccount.findMany({
-    // Accounts read from Gmail have no portal to sign in to: queued here they
-    // ran the empty fallback scraper and "succeeded" with nothing, forever (#191).
-    where: { syncEnabled: true, providerSlug: { not: 'gmail-fallback' } },
+    // A Gmail-read account is synced only once it has a portal login (the
+    // portal agent fetches its statements); without one it ran the empty
+    // fallback scraper and "succeeded" with nothing, forever (#191).
+    where: { syncEnabled: true, OR: [{ providerSlug: { not: 'gmail-fallback' } }, { usernameEnc: { not: null } }] },
     include: { property: { select: { userId: true } } },
   });
 

@@ -7,6 +7,7 @@
  * files email the same way, with the same duplicate rules.
  */
 import { Prisma } from '@prisma/client';
+import { learnProviderWebsite } from './providerWebsite';
 import { db } from '../config/db';
 import { restoreLateFees } from './lateFees';
 import { fileCardStatement } from './cardIntake';
@@ -201,6 +202,7 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
       await recordConfirmedPayment(acct.id, existing.id, ex);
       await syncPaymentPlanFromBill(acct.id, ex);
       await syncInsurancePolicyFromBill(acct.id, ex);
+      await learnProviderWebsite(acct.id, ex);
       await syncLoanComponentsFromBill(acct.id, ex);
       return { outcome: 'filed', utilityAccountId: acct.id };
     }
@@ -233,6 +235,7 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
       await recordConfirmedPayment(acct.id, existing.id, ex);
       await syncPaymentPlanFromBill(acct.id, ex);
       await syncInsurancePolicyFromBill(acct.id, ex);
+      await learnProviderWebsite(acct.id, ex);
       await syncLoanComponentsFromBill(acct.id, ex);
       await markEscrowedStatements(acct.id);
     } else {
@@ -260,6 +263,7 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
     await recordConfirmedPayment(acct.id, created.id, ex);
     await syncPaymentPlanFromBill(acct.id, ex);
     await syncInsurancePolicyFromBill(acct.id, ex);
+    await learnProviderWebsite(acct.id, ex);
     await syncLoanComponentsFromBill(acct.id, ex);
     await markEscrowedStatements(acct.id);
   }

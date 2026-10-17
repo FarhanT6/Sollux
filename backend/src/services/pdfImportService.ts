@@ -6,6 +6,7 @@
  * account number (primary) or service address + provider name (fallback).
  */
 import fs from 'fs';
+import { websiteFromText } from '../lib/providerDirectory';
 import path from 'path';
 import Anthropic from '@anthropic-ai/sdk';
 import { askClaude, jsonIn } from '../ai/models';
@@ -55,6 +56,8 @@ function getAnthropic() {
 
 export interface ExtractedBillData {
   providerName:       string | null;
+  /** The provider's website as the bill prints it ("Access your account online at nationwide.com"). */
+  providerWebsite?:   string | null;
   serviceAddress:     string | null;
   accountNumber:      string | null;
   statementDate:      string | null;   // YYYY-MM-DD
@@ -280,6 +283,7 @@ Schema (use null for any field not present in the document):
   "utilityType": "electric | gas | water | sewer | trash | solar | internet | phone | other",
   "insurance": object or null — for ANY insurance document, whatever the carrier or kind of cover (auto, homeowners, renters, health, dental, vision, life, umbrella, flood, business) and whatever the document is (billing statement, renewal offer, declarations page, welcome letter, ID card, payment schedule): {"policyNumber": "string", "insuranceType": "PROPERTY | AUTO | RENTERS | LIABILITY | FLOOD | UMBRELLA | HEALTH | DENTAL | VISION | LIFE | BUSINESS | OTHER", "carrier": "underwriter when it differs from the brand, else null", "coverageStart": "YYYY-MM-DD", "coverageEnd": "YYYY-MM-DD", "termPremium": n, "installment": n, "serviceCharge": n, "installmentsRemaining": n, "renewedOn": "YYYY-MM-DD", "autoPay": boolean, "totalCost": n, "payInFull": n, "paymentSchedule": [{"date": "YYYY-MM-DD", "amount": n}], "insuredItems": ["2022 Land Rover Discovery Sport", ...]}. payInFull is the amount printed to pay the whole term at once ("To pay premium in full: $4,479.72", "Pay in full amount", "Full pay"); when it is printed, termPremium is that same whole-term figure, NOT the "Premium" line of a Billing Summary that only totals the first installment. insuranceType from what is covered (vehicles/VINs → AUTO; a dwelling → PROPERTY; medical/dental/vision plan → HEALTH/DENTAL/VISION). coverageStart/End are the "Policy Period" / "Coverage period" dates. termPremium is the premium for the whole term excluding billing fees ("Your 6-month policy premium excluding billing fees is $2,752.28"; on a billing statement the "Renewal" line or Full Balance). installment is one regular payment; serviceCharge the per-payment installment/billing fee ("We included an installment fee of $4.00 in each payment"); totalCost the term total including fees ("$2,776.28 Total Cost"). paymentSchedule is EVERY dated payment line the document prints ("Automatic Payments Schedule", "Payment schedule", "Your Installment Schedule", "Billing Schedule"), in order, including ones already past, each date with the amount on its own row. autoPay true when payments are drafted automatically. On a billing statement's policy table ("Policy / Coverage period / Balance / Installment") the policy number is the alphanumeric code on that row. A different policy number with a later coverage start than earlier documents is a renewal onto a new policy,
   "premiumFinance": object or null — ONLY for a premium finance agreement or its notices (a lender such as Capital Premium Financing, IPFS or First Insurance Funding pays the carrier and is repaid monthly with interest; the document has a "Loan Summary" with Amount Financed, Finance Charge, Annual % Rate): {"lender": "Capital Premium Financing", "loanNumber": "string", "totalPremiums": n, "amountFinanced": n, "downPayment": n, "financeCharge": n, "payment": n, "apr": n, "numberOfPayments": n, "effectiveDate": "YYYY-MM-DD", "firstDueDate": "YYYY-MM-DD", "loanBalance": n}. Put the loan number in accountNumber and the lender in providerName. The lender is the premium finance company on the letterhead (e.g. Capital Premium Financing), not a bank the agreement names as its funding source (e.g. \"Ameris Bank (Lender)\"). Leave serviceAddress null — the address on these is the borrower's mailing address, not the insured property. The signed agreement itself ("Premium Finance Agreement and Disclosure Statement") usually has no loan number yet — only a "Quote" number (e.g. 7925660.1); a quote number is NOT the loan number: leave loanNumber and accountNumber null, and put the insurer from the Schedule of Policies in insurance.carrier. A "Notice of Acceptance" or the agreement itself bills nothing: documentKind 'policy_document', the notice date in statementDate, amountDue and dueDate null. A screenshot of the lender's portal ("Payment Schedule & History" / "Payment History" table with Date, Pmt #, Description, Total, Principal, Interest, Late Charge columns) is the same thing read off a ledger: documentKind 'policy_document'; loanNumber from "Account #"; lender from the page header (Capital Premium Financing); EVERY "Scheduled Payment Due" row into insurance.paymentSchedule as {"date", "amount", "principal", "interest"}; every payment received ("Insured: Installment eCheck", "Installment Credit Card") into ledgerPayments as {"date", "amount", "description"}; every fee row (Late Fee, Convenience Fee, Cancel Fee, NSF Fee) into premiumFinance.fees as {"date", "amount", "label"}, a waived or reversed fee ("($50.00)") as a negative amount; leave amountFinanced, apr and numberOfPayments null when the page does not print them (they are derived from the columns); statementDate is the page's own date if shown, else null,
+  "providerWebsite": string or null — the provider's website or online-account address exactly as printed ("nationwide.com/bill-pay", "www.dignitymemorial.com"); null when none is printed,
   "ledgerPayments": array or null — ONLY for a document that lists payments received one by one on their own dates (an HOA ledger, a premium finance portal's payment history): [{"date": "YYYY-MM-DD", "amount": n, "description": "as printed"}]. A single "payments received" figure on an ordinary bill goes in paymentsReceived instead,
   "transactions": array or null — when the statement prints a table of account activity since the last statement ("Previous Transaction Detail", "Transaction Activity", "Recent Transactions", "Account Activity", a TRANSACTION DATE / DESCRIPTION / AMOUNT table): EVERY row, in order, as {"date": "YYYY-MM-DD", "description": "as printed", "amount": n}. amount is the movement on the account: a charge or fee positive, a payment, reversal, waiver or credit NEGATIVE, whatever sign the statement prints ("08/30/2026 PAYMENT $722.49" → -722.49; "3/11/2024 PRINCIPAL PAYMENT -$613.76" → -613.76; "05/09/2025 REVERSE LATE CHARGE $36.12" → -36.12; "05/09/2025 LATE CHARGE $36.12" → 36.12). A running-balance column is not the amount. These rows are history, not this period's charges: never add them to amountDue or chargeBreakdown,
   "loanGroups": array or null — ONLY for a loan servicer statement that lists MORE THAN ONE loan under the account (a federal student-loan "Account Snapshot" with columns Group AA / Group BB, or "Loan 1-01 / Loan 1-02"): one entry per loan column, [{"label": "Group AA", "loanKind": "DIRECT SUB", "originalPrincipal": n, "outstandingPrincipal": n, "interestRate": n, "monthlyPayment": n, "accruedInterest": n, "disbursedOn": "YYYY-MM-DD", "payoffDate": "YYYY-MM-DD"}]. Read each column: loanKind from the "Loan Type" row, originalPrincipal from "Original Principal Amount", outstandingPrincipal from "Outstanding Principal Balance", interestRate as a percent from "Interest Rate", monthlyPayment from "Regular Monthly Payment Amount" (the Monthly Payment section, not the Account Snapshot's zeros), accruedInterest from "Accrued Interest" / "Estimated Interest Outstanding", disbursedOn from "First Disbursement Date", payoffDate from "Estimated Payoff Date". A statement for a single loan reports null,
@@ -1992,6 +1996,20 @@ export function reconcileWithStatedTotal(ex: ExtractedBillData): void {
 
   if (plan && plan.remaining != null) {
     plan.remaining = Math.abs(plan.remaining);
+    // A plan whose bill is nothing but the installment — Eternal Hills'
+    // pre-need plan: Payment Plan Amount Due 913.95 + Amount Past Due
+    // 5,483.70 = Total Payment Due 6,397.65. The charge IS the installment;
+    // adding the installment to it again made 1,827.90 and left the carried
+    // balance one installment short on every bill (#190).
+    if (installment != null && ex.previousBalance != null
+        && Math.abs(ex.previousBalance + installment - deferred - total) < 0.01
+        && (ex.currentCharges == null || Math.abs(ex.currentCharges - installment) < 0.01)) {
+      ex.currentCharges = installment;
+      ex.amountDue = installment;
+      ex.paymentPlanAmount = installment;
+      if (ex.totalAccountBalance == null) ex.totalAccountBalance = Number((total + plan.remaining + (ex.netMetering?.ytdBalance ?? 0)).toFixed(2));
+      return;
+    }
     // Under an arrangement: charges = current + installment; carried = total − (charges − deferred).
     const current = ex.currentCharges ?? (ex.amountDue != null && installment != null && ex.amountDue > installment ? ex.amountDue - installment : ex.amountDue);
     if (current != null) {
@@ -3556,9 +3574,13 @@ export function applyCreditFromText(text: string, ex: ExtractedBillData): void {
  * it is trusted.
  */
 export function applyLedgerFromText(text: string, ex: ExtractedBillData): void {
-  if (!text || !/balance\s+forward/i.test(text) || !/credits?/i.test(text) || !/balance/i.test(text)) return;
+  // Two shapes: Seabreeze / CINC open with BALANCE FORWARD and a CREDITS
+  // column; Prescott (River Ranch) opens with "Opening Balance" and an
+  // unsigned PAYMENTS column, its header saying "As Of Date".
+  if (!text || !/balance\s+forward|opening\s+balance/i.test(text) || !/credits?|payments/i.test(text) || !/balance/i.test(text)) return;
   const amountDue = findDollarNear(text, [/amount\s+due/i, /pay\s+this\s+amount/i]);
-  const billingDate = findDateNear(text, [/billing\s+date/i]);
+  const billingDate = findDateNear(text, [/billing\s+date/i, /as\s+of\s+date/i]);
+  const dueDate = findDateNear(text, [/due\s+date/i]);
   if (amountDue == null || !billingDate) return;
 
   const money = /\(?-?\$?\s*[\d,]+\.\d{2}\)?/g;
@@ -3567,7 +3589,8 @@ export function applyLedgerFromText(text: string, ex: ExtractedBillData): void {
   let forward: number | null = null;
   for (const raw of text.split('\n')) {
     const line = raw.trim();
-    const dm = line.match(/^(\d{1,2}\/\d{1,2}\/\d{2,4})\s+(.*)$/);
+    // Prescott's text layer runs the date into the description ("07/31/202607-31-2026 …").
+    const dm = line.match(/^(\d{1,2}\/\d{1,2}\/(?:\d{4}|\d{2}))\s*(.*)$/);
     if (!dm) continue;
     const date = parseDate(dm[1]);
     if (!date) continue;
@@ -3576,12 +3599,19 @@ export function applyLedgerFromText(text: string, ex: ExtractedBillData): void {
     if (tokens.length === 0) continue;
     const num = (t: string) => parseFloat(t.replace(/[^\d.]/g, ''));
     const first = tokens[0]!;
-    const desc = rest.slice(0, rest.indexOf(first)).trim();
+    // Prescott repeats the date at the head of each description ("10-01-2026 HOA Assessment").
+    const desc = rest.slice(0, rest.indexOf(first)).trim().replace(/^\d{1,2}-\d{1,2}-\d{2,4}\s*/, '').replace(/([a-z])([A-Z])/g, '$1 · $2');
     const balance = num(tokens[tokens.length - 1]!);
-    if (/balance\s+forward/i.test(desc) && tokens.length === 1) { forward = balance; continue; }
+    if (/balance\s+forward|opening\s+balance/i.test(desc) && forward == null) { forward = balance; continue; }
     if (tokens.length < 2) continue;
-    const isCredit = /^\(/.test(first) || /^-/.test(first.replace(/^\$/, ''));
-    rows.push({ date, desc, charge: isCredit ? 0 : num(first), credit: isCredit ? num(first) : 0, balance });
+    const amt = num(first);
+    // Signed (parentheses, minus) when the statement signs it; otherwise the
+    // running balance says which way the money went.
+    const prev = rows.length ? rows[rows.length - 1].balance : forward;
+    let isCredit = /^\(/.test(first) || /^-/.test(first.replace(/^\$/, ''));
+    if (!isCredit && prev != null && Math.abs(prev - amt - balance) < 0.01 && Math.abs(prev + amt - balance) >= 0.01) isCredit = true;
+    if (!isCredit && prev == null && /payment|credit|receipt/i.test(desc)) isCredit = true;
+    rows.push({ date, desc, charge: isCredit ? 0 : amt, credit: isCredit ? amt : 0, balance });
   }
   if (forward == null || rows.length === 0) return;
 
@@ -3590,7 +3620,14 @@ export function applyLedgerFromText(text: string, ex: ExtractedBillData): void {
   for (const r of rows) running = Number((running + r.charge - r.credit).toFixed(2));
   if (Math.abs(running - amountDue) > 0.01 || Math.abs(rows[rows.length - 1].balance - amountDue) > 0.01) return;
 
-  const billMonth = billingDate.slice(0, 7);
+  // This bill's charges: those dated in the month it is due for, when the
+  // statement lists them ahead (Prescott bills October's assessment on a
+  // 09/11 statement due 10/01); otherwise those in the billing-date month.
+  // Every earlier line is carried in — the next statement lists it again,
+  // and counting it as this bill's charge counted each month two or three
+  // times (#193).
+  const dueMonth = dueDate?.slice(0, 7);
+  const billMonth = dueMonth && rows.some(r => r.charge > 0 && r.date.slice(0, 7) === dueMonth) ? dueMonth : billingDate.slice(0, 7);
   const current = rows.filter(r => r.charge > 0 && r.date.slice(0, 7) === billMonth);
   const currentTotal = Number(current.reduce((s, r) => s + r.charge, 0).toFixed(2));
   if (currentTotal <= 0) return;
@@ -3748,6 +3785,7 @@ export async function parseBill(
     }
     if (text) {
       try {
+        if (!extracted.providerWebsite) extracted.providerWebsite = websiteFromText(text);
         applyLedgerFromText(text, extracted);
         applyNetMeteringFromText(text, extracted);
         applyCreditFromText(text, extracted);

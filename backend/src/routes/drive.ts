@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { learnProviderWebsite } from '../services/providerWebsite';
 import { findExistingBill } from '../services/billMatch';
 import { google, drive_v3 } from 'googleapis';
 import { Prisma } from '@prisma/client';
@@ -409,6 +410,7 @@ router.post('/stream', attachDbUser, async (req, res) => {
               await recordConfirmedPayment(acct.id, existing.id, ex);
               await syncPaymentPlanFromBill(acct.id, ex);
               await syncInsurancePolicyFromBill(acct.id, ex);
+              await learnProviderWebsite(acct.id, ex);
               await syncLoanComponentsFromBill(acct.id, ex);
             } else if (existing) {
               await db.statement.update({ where: { id: existing.id }, data: {
@@ -437,6 +439,7 @@ router.post('/stream', attachDbUser, async (req, res) => {
               await recordConfirmedPayment(acct.id, existing.id, ex);
               await syncPaymentPlanFromBill(acct.id, ex);
               await syncInsurancePolicyFromBill(acct.id, ex);
+              await learnProviderWebsite(acct.id, ex);
               await syncLoanComponentsFromBill(acct.id, ex);
               await markEscrowedStatements(acct.id);
               if (nem) await db.utilityAccount.update({ where: { id: acct.id }, data: { hasTrueUp: true, ...(nem.trueUpDate ? { trueUpDate: new Date(nem.trueUpDate) } : {}) } });
@@ -460,6 +463,7 @@ router.post('/stream', attachDbUser, async (req, res) => {
               await recordConfirmedPayment(acct.id, created.id, ex);
               await syncPaymentPlanFromBill(acct.id, ex);
               await syncInsurancePolicyFromBill(acct.id, ex);
+              await learnProviderWebsite(acct.id, ex);
               await syncLoanComponentsFromBill(acct.id, ex);
               await markEscrowedStatements(acct.id);
               if (nem) await db.utilityAccount.update({ where: { id: acct.id }, data: { hasTrueUp: true, ...(nem.trueUpDate ? { trueUpDate: new Date(nem.trueUpDate) } : {}) } });
