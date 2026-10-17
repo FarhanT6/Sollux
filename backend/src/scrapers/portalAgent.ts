@@ -16,6 +16,7 @@
  * (documentIntake): filed on a confident match, staged for review otherwise.
  */
 import Anthropic from '@anthropic-ai/sdk';
+import { websiteFor } from '../lib/providerDirectory';
 import * as fs from 'fs';
 import { chromium, BrowserContext, Page, Download } from 'playwright';
 import { db } from '../config/db';
@@ -120,17 +121,20 @@ export async function runPortalAgent(accountId: string, opts: { interactive?: bo
   const account = await db.utilityAccount.findUnique({
     where: { id: accountId },
     select: {
-      id: true, providerName: true, loginUrl: true, usernameEnc: true, passwordEnc: true, accountNumber: true,
+      id: true, providerName: true, providerSlug: true, loginUrl: true, usernameEnc: true, passwordEnc: true, accountNumber: true,
       property: { select: { userId: true, address: true } },
       statements: { where: { pdfS3Key: { not: null } }, orderBy: { statementDate: 'desc' }, take: 1, select: { statementDate: true } },
     },
   });
   if (!account) return { ok: false, filed: 0, review: 0, applied: 0, downloads: 0, summary: '', error: 'Account not found' };
-  if (!account.loginUrl || !account.usernameEnc || !account.passwordEnc) {
-    return { ok: false, filed: 0, review: 0, applied: 0, downloads: 0, summary: '', error: 'The portal agent needs the login page address, username and password — open Edit on the account.' };
+  // The login page: the one the owner saved (or a bill printed), else the
+  // provider directory's; the agent finds "Sign in" from a home page.
+  const loginUrl = websiteFor(account)?.url ?? null;
+  if (!loginUrl || !account.usernameEnc || !account.passwordEnc) {
+    return { ok: false, filed: 0, review: 0, applied: 0, downloads: 0, summary: '', error: !loginUrl ? 'Add the provider\'s website (Website on the account) so the agent knows where to sign in.' : 'Add your portal username and password (Edit on the account) so Sollux can fetch statements.' };
   }
   const username = decrypt(account.usernameEnc), password = decrypt(account.passwordEnc);
-  const start = new URL(account.loginUrl);
+  const start = new URL(loginUrl);
   const allowed = new Set([rootOf(start.hostname)]);
   const userId = account.property.userId;
   const since = account.statements[0]?.statementDate?.toISOString().slice(0, 10) ?? null;
@@ -155,10 +159,10 @@ export async function runPortalAgent(accountId: string, opts: { interactive?: bo
   const system = `You operate a web browser for a property owner to collect utility statements from ${account.providerName}'s customer portal. Account ${account.accountNumber ? `ending ${String(account.accountNumber).slice(-4)}` : ''} at ${account.property.address}.
 Goal: log in, open the billing / statement history, and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If there is nothing newer, finish with outcome done.
 Rules: use fill_login for credentials (you never see them); if the portal sends a verification code, call ask_owner_for_code, then type_code. Never pay, enroll, change settings, accept offers or send messages. If a captcha appears, finish with captcha. If the login is rejected, finish with bad_login. Call look after each action. When several accounts are listed, choose the one matching the account number or address. Be efficient.`;
-  const messages: Anthropic.MessageParam[] = [{ role: 'user', content: 'Start. The browser is open on the login page.' }];
+  const messages: Anthropic.MessageParam[] = [{ role: 'user', content: "Start. The browser is open on the provider's login page (or its home page — find Sign in from there)." }];
 
   try {
-    await page.goto(account.loginUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
     for (let step = 0; step < MAX_STEPS && Date.now() < deadline; step++) {
       const res = await client.messages.create({ ...paramsFor(PRIMARY_MODEL, { maxTokens: 1500, system, messages }), tools: TOOLS });
       const uses = res.content.filter((c): c is Anthropic.ToolUseBlock => c.type === 'tool_use');

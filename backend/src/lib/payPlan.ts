@@ -1,4 +1,5 @@
 import { db } from '../config/db';
+import { websiteFor } from './providerDirectory';
 import { getPaymentPriorities } from '../services/paymentPriority';
 
 /**
@@ -208,6 +209,11 @@ export async function buildPayPlan(userId: string, opts: { horizonDays?: number;
         select: { utilityAccountId: true, bankAccountId: true },
       });
       const lastAcct = new Map(lastPaid.map(p => [p.utilityAccountId, p.bankAccountId!]));
+      // Where each account is paid online: the saved page, else the provider directory.
+      const sites = new Map((await db.utilityAccount.findMany({
+        where: { id: { in: priorities.map(p => p.accountId) } },
+        select: { id: true, providerName: true, providerSlug: true, loginUrl: true },
+      })).map(a => [a.id, websiteFor(a)?.url ?? null]));
       for (const p of priorities) {
         const amount = r2(p.payThisMonth > 0 ? p.payThisMonth : p.balanceToCurrent);
         if (amount <= 0 || !p.dueDate) continue;
@@ -219,7 +225,7 @@ export async function buildPayPlan(userId: string, opts: { horizonDays?: number;
           label: p.providerName, detail: [p.serviceLabel, p.propertyName].filter(Boolean).join(' · ') || null,
           propertyId: p.propertyId, amount, dueDate: due.toISOString(), daysUntil,
           status: 'DUE', preferredAccountId: lastAcct.get(p.accountId) ?? null,
-          payFrom: [], reason: '', link: `/properties/${p.propertyId}/utilities/${p.accountId}`, howToPay: null, payUrl: null,
+          payFrom: [], reason: '', link: `/properties/${p.propertyId}/utilities/${p.accountId}`, howToPay: null, payUrl: sites.get(p.accountId) ?? null,
         });
       }
     } catch {

@@ -27,6 +27,8 @@ import PaymentSourcePicker, { emptyNewCard, resolvePaymentSource, type NewCardFo
 import { operatingCost } from '../lib/operatingCost';
 import ChargeAnalyticsPanel from '../components/utility/ChargeAnalyticsPanel';
 import { usePhone } from '../ios';
+import { openUrl } from '../lib/native';
+import PortalLogin from '../components/utility/PortalLogin';
 import { toast } from '../lib/toast';
 import UtilityAccountScreen from './phone/UtilityAccountScreen';
 
@@ -678,6 +680,7 @@ export default function UtilityDetailPage() {
   const [revealedAccountNumber, setRevealedAccountNumber] = useState<string | null>(null);
   const [revealingAccountNumber, setRevealingAccountNumber] = useState(false);
   const [togglingActive, setTogglingActive] = useState(false);
+  const [portalLogin, setPortalLogin] = useState(false);
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
   const [showPayForm, setShowPayForm] = useState(false);
   const [editPaymentId, setEditPaymentId] = useState<string | null>(null);
@@ -1258,6 +1261,23 @@ export default function UtilityDetailPage() {
     } catch { alert('Could not update the billing schedule.'); }
   }
 
+  // The provider's website: saved, read from a bill, or from the directory.
+  // Unknown, a search finds it; Save keeps the one the owner lands on.
+  const website: { url: string; source: string } | null = account?.website ?? null;
+  const siteLabel = website ? new URL(website.url).hostname.replace(/^www\./, '') : null;
+  const openWebsite = () => void openUrl(website?.url ?? `https://www.google.com/search?q=${encodeURIComponent(`${account?.providerName ?? ''} pay bill online login`)}`);
+  async function saveWebsite() {
+    const typed = prompt(`Website for ${account?.providerName} (paste the page you sign in on):`, website?.url ?? 'https://');
+    if (typed == null) return;
+    const url = typed.trim();
+    try {
+      const u = new URL(/^https?:\/\//.test(url) ? url : `https://${url}`);
+      await updateUtility(accountId!, { loginUrl: u.toString() } as any);
+      await reloadAccount();
+      toast('Website saved.');
+    } catch { alert('That does not look like a web address.'); }
+  }
+
   async function openPdf(s: any) {
     try {
       const res = await getStatementDownloadUrl(s.id);
@@ -1268,6 +1288,10 @@ export default function UtilityDetailPage() {
   // The dialogs, shared by both layouts.
   const modals = (
     <>
+      {portalLogin && account && (
+        <PortalLogin account={account} website={account.website?.url ?? null}
+          onClose={() => setPortalLogin(false)} onSaved={() => void reloadAccount()} />
+      )}
       {showPlanModal && (
         <PaymentPlanModal accountId={accountId!} existing={plan}
           onClose={() => setShowPlanModal(false)}
@@ -1306,6 +1330,8 @@ export default function UtilityDetailPage() {
       reload={reloadAccount} sync={() => void handleSync()} syncing={syncing}
       setCadence={c => void setCadence(c)} toggleActive={() => void toggleActive()} remove={() => void handleDelete()}
       revealNumber={() => void toggleAccountNumber()} revealedNumber={revealedAccountNumber}
+      siteLabel={siteLabel} openWebsite={openWebsite} saveWebsite={() => void saveWebsite()}
+      openPortalLogin={() => setPortalLogin(true)}
       payment={{
         open: showPayForm || !!editPaymentId, editing: !!editPaymentId, saving: savingPayment, canSave: !!payForm.amount,
         fields: paymentFields,
@@ -1416,6 +1442,11 @@ export default function UtilityDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <button onClick={openWebsite} className="btn text-xs" title={website ? website.url : 'Search for this provider\'s website'}>
+            {siteLabel ? `${siteLabel} ↗` : 'Find website ↗'}
+          </button>
+          <button onClick={() => void saveWebsite()} className="text-xs text-gray-500 hover:text-gray-300" title="Set the website for this account">{website ? 'Edit' : 'Save'} link</button>
+          <button onClick={() => setPortalLogin(true)} className="btn text-xs" title="Let Sollux fetch statements from the provider's website">{account.hasCredentials ? 'Portal login ✓' : 'Add portal login'}</button>
           <button onClick={handleSync} disabled={syncing || deleting} className="btn btn-primary text-xs">
             {syncing ? 'Syncing…' : 'Sync ↻'}
           </button>

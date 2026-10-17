@@ -3,6 +3,7 @@
  * POST /api/import/confirm  — Save confirmed statements (creates properties/accounts as needed)
  */
 import { Router, Request, Response } from 'express';
+import { learnProviderWebsite } from '../services/providerWebsite';
 import { findExistingBill } from '../services/billMatch';
 import { Prisma } from '@prisma/client';
 import { markEscrowedStatements } from '../services/escrow';
@@ -582,6 +583,7 @@ router.post('/confirm', async (req: Request, res: Response) => {
           await recordConfirmedPayment(utilityAccountId, existing.id, ex);
           await syncPaymentPlanFromBill(utilityAccountId, ex);
           await syncInsurancePolicyFromBill(utilityAccountId, ex);
+          await learnProviderWebsite(utilityAccountId, ex);
           await syncLoanComponentsFromBill(utilityAccountId, ex);
           skipped++;
           continue;
@@ -637,6 +639,7 @@ router.post('/confirm', async (req: Request, res: Response) => {
           await recordConfirmedPayment(utilityAccountId, existing.id, ex);
           await syncPaymentPlanFromBill(utilityAccountId, ex);
           await syncInsurancePolicyFromBill(utilityAccountId, ex);
+          await learnProviderWebsite(utilityAccountId, ex);
           await syncLoanComponentsFromBill(utilityAccountId, ex);
           await syncTrueUpFromBill(utilityAccountId, ex);
           await markEscrowedStatements(utilityAccountId);
@@ -671,6 +674,7 @@ router.post('/confirm', async (req: Request, res: Response) => {
           await recordConfirmedPayment(utilityAccountId, created.id, ex);
           await syncPaymentPlanFromBill(utilityAccountId, ex);
           await syncInsurancePolicyFromBill(utilityAccountId, ex);
+          await learnProviderWebsite(utilityAccountId, ex);
           await syncLoanComponentsFromBill(utilityAccountId, ex);
           await syncTrueUpFromBill(utilityAccountId, ex);
           await markEscrowedStatements(utilityAccountId);

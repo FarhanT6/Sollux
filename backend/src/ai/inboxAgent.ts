@@ -13,6 +13,8 @@
  * Each message is handled once (InboxMessage), so re-running never double
  * files or double bills. Payment confirmations are recorded, not filed.
  */
+import { providerForEmail, findProvider } from '../lib/providerDirectory';
+import { scrapeQueue } from '../workers/queues';
 import { google, gmail_v1 } from 'googleapis';
 import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
@@ -321,7 +323,12 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
                 await handle(pdf, `${(subject || 'e-bill').replace(/[^\w .-]+/g, '').slice(0, 80)}.pdf`, true);
               } else if (BILL_POSTED.test(subject) || BILL_POSTED.test(body.slice(0, 2000))) {
                 outcomes.push('online');
-                skips.push('bill posted on the provider\'s site; the email has no amount. Download it there, or upload the PDF.');
+                // The statement is on the provider's site: fetch it now, with
+                // the portal agent, for the account(s) this sender bills.
+                const fetching = await fetchPostedBill(userId, from).catch(() => [] as string[]);
+                skips.push(fetching.length
+                  ? `bill posted on the provider's site; fetching it from the portal for ${fetching.join(', ')}`
+                  : 'bill posted on the provider\'s site; the email has no amount. Add the portal login on the account and Sollux fetches these itself.');
               } else { outcomes.push('skipped'); skips.push(body ? 'email has no amount or bill wording' : 'empty email'); }
             }
           } catch (err) {
@@ -376,4 +383,27 @@ export async function runInboxAgentForEveryone(): Promise<void> {
     try { await runInboxAgent(userId); }
     catch (err) { console.warn(`[InboxAgent] ${userId} failed:`, err instanceof Error ? err.message : err); }
   }
+}
+
+
+/**
+ * A provider's "your bill is ready" email: queue the portal agent for each
+ * of the owner's accounts with that provider that has a portal login, so the
+ * statement is fetched the day it posts instead of on the next schedule.
+ * The provider is known by the sender's domain (providerDirectory). Returns
+ * the provider names queued. One run per account per day (the job id).
+ */
+async function fetchPostedBill(userId: string, from: string): Promise<string[]> {
+  const site = providerForEmail(from);
+  if (!site) return [];
+  const accounts = await db.utilityAccount.findMany({
+    where: { property: { userId }, syncEnabled: true, isActive: true, usernameEnc: { not: null } },
+    select: { id: true, providerName: true, providerSlug: true },
+  });
+  const mine = accounts.filter(a => findProvider(a.providerName, a.providerSlug) === site);
+  const day = new Date().toISOString().slice(0, 10);
+  for (const a of mine) {
+    await scrapeQueue.add('scrape', { utilityAccountId: a.id, trigger: 'bill_posted' }, { jobId: `bill-posted-${a.id}-${day}`, attempts: 1, removeOnComplete: { count: 100 }, removeOnFail: { count: 50 } });
+  }
+  return [...new Set(mine.map(a => a.providerName))];
 }

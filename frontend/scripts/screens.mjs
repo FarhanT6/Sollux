@@ -108,7 +108,7 @@ if (!only.length || process.env.FLOWS) {
     await page.getByRole('button', { name: 'Utilities' }).waitFor();
   });
   await step('account: a bill opens its sheet', async () => {
-    await page.locator('button.ios-row').first().click();
+    await page.locator('button.ios-row', { hasText: /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w* 20\d\d/ }).first().click();
     await page.locator('.ios-sheet').getByRole('button', { name: /Mark as (paid|unpaid)/ }).waitFor();
     await page.getByRole('button', { name: 'Done' }).click();
     await page.locator('.ios-sheet').waitFor({ state: 'detached' });
@@ -124,6 +124,13 @@ if (!only.length || process.env.FLOWS) {
     await page.getByRole('button', { name: 'Account actions' }).click();
     await page.locator('.ios-sheet').getByText('Delete account').waitFor();
     await page.getByRole('button', { name: 'Done' }).click();
+    await page.locator('.ios-sheet').waitFor({ state: 'detached' });
+  });
+  await step('account: portal login opens in a sheet', async () => {
+    await page.getByRole('button', { name: 'Account actions' }).click();
+    await page.locator('.ios-sheet button.ios-row', { hasText: 'Portal login' }).click();
+    await page.locator('.ios-sheet input[type="password"]').waitFor();
+    await page.locator('.ios-sheet').getByRole('button', { name: 'Cancel' }).click();
     await page.locator('.ios-sheet').waitFor({ state: 'detached' });
   });
   await step('account: Back returns to Utilities', async () => {

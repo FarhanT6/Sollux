@@ -1,8 +1,11 @@
-/* Sollux brand: the logo lockup. Wordmark in pale cream on the dark UI,
-   charcoal on light. */
+/* Sollux brand lockup: Montserrat, bundled (no font request, works offline
+   in the iOS app). Wordmark pale cream on the dark UI, charcoal on light. */
+@import '@fontsource/montserrat/500.css';
+@import '@fontsource/montserrat/800.css';
+
 .sollux-logo { display: inline-flex; align-items: center; min-width: 0; }
 .sollux-logo-text { display: flex; flex-direction: column; min-width: 0; line-height: 1; }
-.sollux-wordmark { font-weight: 800; letter-spacing: -0.045em; color: #FFF7E6; white-space: nowrap; }
-.sollux-tagline { margin-top: 3px; font-size: 8px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: #F59E0B; white-space: nowrap; }
+.sollux-wordmark { font-family: 'Montserrat', system-ui, sans-serif; font-weight: 800; letter-spacing: -0.03em; color: #FFF7E6; white-space: nowrap; }
+.sollux-tagline { font-family: 'Montserrat', system-ui, sans-serif; margin-top: 4px; font-weight: 500; letter-spacing: 0.16em; color: #D6CFC2; white-space: nowrap; }
 html[data-theme="light"] .sollux-wordmark { color: #1F2937; }
-html[data-theme="light"] .sollux-tagline { color: #B45309; }
+html[data-theme="light"] .sollux-tagline { color: #374151; }
