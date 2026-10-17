@@ -240,7 +240,10 @@ export async function runPortalAgent(accountId: string, opts: AgentOptions = {})
 }
 
 async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRun> {
-  const say = (t: string) => { try { opts.onProgress?.(t); } catch { /* status only */ } };
+  // Every status line says which browser it is in: the "Opening …" line alone
+  // was replaced by the next one before anyone could read it.
+  let where = '';
+  const say = (t: string) => { try { opts.onProgress?.(where ? `${where} · ${t}` : t); } catch { /* status only */ } };
   const account = await db.utilityAccount.findUnique({
     where: { id: accountId },
     select: {
@@ -289,18 +292,28 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
     let c: BrowserContext | null = null;
     if (connector && !http1) {
       try {
-        remote = await chromium.connectOverCDP(connector.wsUrl, { timeout: 30_000 });
-        // The connector profile's own window, not a private one: what the owner
-        // signs in to there by hand (a site that refuses the agent, a device
-        // to trust) is what the agent finds signed in next time.
-        c = remote.contexts()[0] ?? await remote.newContext({ acceptDownloads: true, viewport: { width: 1366, height: 900 }, locale: 'en-US' });
+        say(`Connecting to ${connector.name}`);
+        // A computer that stops answering must not hold the fetch: 45 seconds, then Sollux's own browser.
+        const timeout = new Promise<never>((_, no) => setTimeout(() => no(new Error('no answer from the computer in 45 seconds')), 45_000));
+        c = await Promise.race([timeout, (async () => {
+          remote = await chromium.connectOverCDP(connector.wsUrl, { timeout: 30_000 });
+          // The connector profile's own window, not a private one: what the owner
+          // signs in to there by hand (a site that refuses the agent, a device
+          // to trust) is what the agent finds signed in next time.
+          return remote.contexts()[0] ?? await remote.newContext({ acceptDownloads: true, viewport: { width: 1366, height: 900 }, locale: 'en-US' });
+        })()]);
+        where = `On ${connector.name}`;
       } catch (err) {
         connectorProblem = `${connector.name} is connected but Sollux could not open its Chrome (${err instanceof Error ? err.message.split('\n')[0].slice(0, 120) : String(err)}), so this ran in Sollux's own browser.`;
         console.warn('[PortalAgent] connector browser unavailable, using the cloud one:', connectorProblem);
-        await remote?.close().catch(() => {}); remote = null;
+        await (remote as Browser | null)?.close().catch(() => {}); remote = null; c = null;
+        where = "Sollux's browser (couldn't reach your computer)";
       }
     }
-    if (!c) c = await launchPortalContext(profileDir, { http1 });
+    if (!c) {
+      c = await launchPortalContext(profileDir, { http1 });
+      if (!connector) where = "Sollux's browser (your computer isn't connected)";
+    }
     // A fresh bot score every run: none from the profile on disk, none from the database.
     await c.clearCookies({ name: BOT_COOKIE }).catch(() => {});
     if (saved) {
@@ -370,7 +383,7 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
 
   try {
     // Say which browser this is, so a run that was turned away shows why.
-    say(remote ? `Opening ${start.hostname} on ${connector!.name}` : connectorProblem ? `Opening ${start.hostname} in Sollux's browser — ${connectorProblem}` : `Opening ${start.hostname} in Sollux's browser (your computer is not connected)`);
+    say(`Opening ${start.hostname}`);
     const res = await openStart();
     // Refused before any sign-in (Safeco's and Nelnet's Access Denied): nothing for Claude to do.
     const title = await page.title().catch(() => '');
@@ -605,7 +618,8 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
       : `${account.providerName} turned Sollux's browser away (bot protection, not your password); scheduled fetches wait until ${clock(until)} so the login isn't locked. If it keeps happening the site blocks cloud servers: turn on Fetch from your computer (Settings → AI usage), or bring its bills in by email or upload. ${detail}`;
   }
 
-  if (!run.ok && connectorProblem && run.error) run.error = `${run.error} (${connectorProblem})`;
+  // First, so it is not cut off where the error is shown short.
+  if (!run.ok && connectorProblem && run.error) run.error = `${connectorProblem} ${run.error}`;
 
   if (review.length || run.filed) {
     const job = await db.driveImportJob.create({
