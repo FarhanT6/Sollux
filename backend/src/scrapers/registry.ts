@@ -25,7 +25,20 @@ const registry: Record<string, new () => BaseScraperProvider> = {
   'city-brawley': CityBrawleyScraper,
 };
 
+/**
+ * Built-in connectors that no longer get in, so the portal agent does these
+ * sites instead. Every one of them failed on Oct 17 and handed over to the
+ * agent — which means two sign-ins per Fetch, and the failed one counts
+ * against the owner's login (IID rejected a correct password straight after
+ * its old connector failed on selfservice.iid.com; IID now signs in at
+ * myaccount.iid.com with an emailed two-factor code the old connector cannot
+ * enter). SDG&E's and SoCal Gas's sites are behind bot protection that a second
+ * sign-in a few seconds later only makes stricter.
+ */
+const RETIRED = new Set(['iid', 'sdge', 'socal-gas', 'wm']);
+
 export function getScraperProvider(slug: string): BaseScraperProvider | null {
+  if (RETIRED.has(slug)) return null;
   const Provider = registry[slug];
   if (!Provider) return null;
   return new Provider();

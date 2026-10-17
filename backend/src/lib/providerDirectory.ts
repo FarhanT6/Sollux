@@ -27,7 +27,7 @@ const DIRECTORY: ProviderSite[] = [
   // Electric and gas
   { match: /\bsdg\s*&?\s*e\b|san diego gas/i, site: 'https://www.sdge.com', login: 'https://myaccount.sdge.com', domains: ['sdge.com'] },
   { match: /socal\s*gas|southern california gas/i, site: 'https://www.socalgas.com', login: 'https://myaccount.socalgas.com', domains: ['socalgas.com'] },
-  { match: /\biid\b|imperial irrigation/i, site: 'https://www.iid.com', domains: ['iid.com'] },
+  { match: /\biid\b|imperial irrigation/i, site: 'https://www.iid.com', login: 'https://myaccount.iid.com/Portal/default.aspx', domains: ['iid.com'] },
   { match: /\bfpl\b|florida power/i, site: 'https://www.fpl.com', domains: ['fpl.com'] },
   { match: /duke energy/i, site: 'https://www.duke-energy.com', domains: ['duke-energy.com'] },
   { match: /\bpg\s*&?\s*e\b|pacific gas/i, site: 'https://www.pge.com', domains: ['pge.com'] },
