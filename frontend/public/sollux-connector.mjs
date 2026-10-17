@@ -90,6 +90,8 @@ async function startChrome() {
   const proc = spawn(bin, [
     `--user-data-dir=${PROFILE}`, '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1',
     '--no-first-run', '--no-default-browser-check', '--window-size=1280,900',
+    // Sites asking for your location or to send notifications: answered "no" without a prompt over the page.
+    '--deny-permission-prompts', '--disable-notifications',
     ...(flag('hidden') ? ['--headless=new'] : []), 'about:blank',
   ], { stdio: 'ignore' });
   for (let i = 0; i < 100; i++) {
