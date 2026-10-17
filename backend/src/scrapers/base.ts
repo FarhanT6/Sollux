@@ -1,4 +1,5 @@
 import { Browser, BrowserContext, Page, chromium } from 'playwright';
+import { USER_AGENT, portalProxy } from './browser';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -82,7 +83,9 @@ export abstract class BaseScraperProvider {
       '--disable-blink-features=AutomationControlled',
     ];
     const contextOptions = {
-      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+      // The Chrome that is actually running (scrapers/browser.ts): a Mac Chrome 123
+      // agent from Chrome 147 on Linux was a bot tell to the portals' detectors.
+      userAgent: USER_AGENT,
       viewport: { width: 1440, height: 900 } as const,
       locale: 'en-US',
       timezoneId: 'America/Los_Angeles',
@@ -93,11 +96,14 @@ export abstract class BaseScraperProvider {
       // Persistent context — stores cookies, localStorage, and session state on disk.
       // After a provider's MFA is solved once, the device is trusted for future headless runs.
       await fs.promises.mkdir(profileDir, { recursive: true });
+      // Full Chromium in Chrome's own headless mode, not the headless shell detectors recognise.
       this.context = await chromium.launchPersistentContext(profileDir, {
         headless: true,
         args: launchArgs,
         ...contextOptions,
-      });
+        channel: 'chromium',
+        proxy: portalProxy(),
+      }).catch(() => chromium.launchPersistentContext(profileDir, { headless: true, args: launchArgs, ...contextOptions, proxy: portalProxy() }));
     } else {
       // Ephemeral context — used when no accountId is available (e.g. CLI test runs)
       this.browser = await chromium.launch({ headless: true, args: launchArgs });
