@@ -41,6 +41,22 @@ const MAX_DOWNLOADS = 6;
 const RUN_MS = 8 * 60 * 1000;
 const CODE_WAIT_MS = 5 * 60 * 1000;
 
+// Bot-protection cookies (Akamai, Imperva, PerimeterX, DataDome, Cloudflare):
+// the site's score for this browser, not a sign-in. Once a site marks one as a
+// bot it turns away every visit that sends it back — T-Mobile went from asking
+// for a code to "Invalid request, access denied" on every run after its cookies
+// were kept — so they are never kept between runs. Sign-in and trusted-device
+// cookies are.
+const BOT_COOKIE = /^(_abck|bm_[a-z]+|ak_bmsc|_px[a-z0-9_]*|incap_ses_\w*|visid_incap_\w*|nlbi_\w*|reese84|datadome|__cf_bm|cf_clearance)$/i;
+// What a site says when it refuses the browser itself, whatever the password.
+const TURNED_AWAY = /access denied|invalid request|unable to process your request|request (was )?(rejected|blocked)|pardon our interruption|unusual (activity|traffic)|are you a robot|bot protection|akamai/i;
+// Sites that turned the browser away, and when a scheduled fetch may try them
+// again. Retrying a site that is refusing only makes it more suspicious and can
+// lock the login: SDG&E was sent twelve sign-ins in five minutes.
+const turnedAway = new Map<string, number>();
+const TURNED_AWAY_MS = 6 * 3600_000;
+const clock = (t: number) => new Date(t).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' });
+
 export interface PortalRun {
   ok: boolean; filed: number; review: number; applied: number; downloads: number; summary: string; error?: string; jobId?: string | null;
   /** Claude turns this run took, what they cost, and how many recorded steps were replayed without Claude. */
@@ -59,7 +75,7 @@ const TOOLS: Anthropic.Tool[] = [
   { name: 'download_statement', description: 'Click element [n] that downloads or opens one statement PDF, and keep it. Give the statement date if shown.', input_schema: { type: 'object', properties: { ref: { type: 'number' }, statementDate: { type: 'string' } }, required: ['ref'] } },
   { name: 'ask_owner_for_code', description: "The portal sent a verification code. Reads it from the owner's email (up to 2 minutes), else asks the owner (up to 5 more). Say where it was sent.", input_schema: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] } },
   { name: 'type_code', description: 'Type the verification code into field [ref], tick [rememberRef] ("remember this device") if given, then click [submitRef].', input_schema: { type: 'object', properties: { ref: { type: 'number' }, rememberRef: { type: 'number' }, submitRef: { type: 'number' } }, required: ['ref'] } },
-  { name: 'finish', description: 'Stop. outcome: done (downloaded what was new, or nothing new), bad_login, captcha, no_code, blocked.', input_schema: { type: 'object', properties: { outcome: { type: 'string', enum: ['done', 'bad_login', 'captcha', 'no_code', 'blocked'] }, summary: { type: 'string' } }, required: ['outcome', 'summary'] } },
+  { name: 'finish', description: 'Stop. outcome: done (downloaded what was new, or nothing new), bad_login (the portal said the username or password is wrong), captcha, no_code, turned_away (the site refused the browser itself: Access Denied, "invalid request", "unable to process your request" after a sign-in, a bot check), blocked (anything else in the way).', input_schema: { type: 'object', properties: { outcome: { type: 'string', enum: ['done', 'bad_login', 'captcha', 'no_code', 'turned_away', 'blocked'] }, summary: { type: 'string' } }, required: ['outcome', 'summary'] } },
 ];
 
 /** The site and its parent domain: example.com for www.example.com and billing.example.com. */
@@ -197,6 +213,11 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   const start = new URL(loginUrl);
   const allowed = new Set([rootOf(start.hostname)]);
   const userId = account.property.userId;
+  const host = rootOf(start.hostname);
+  const awayUntil = turnedAway.get(host) ?? 0;
+  if (!opts.interactive && awayUntil > Date.now()) {
+    return { ok: false, filed: 0, review: 0, applied: 0, downloads: 0, summary: '', error: `Not tried: ${start.hostname} turned the browser away earlier, so scheduled fetches wait until ${clock(awayUntil)} rather than risk locking the login. Fetch now tries it at once.` };
+  }
   const since = account.statements[0]?.statementDate?.toISOString().slice(0, 10) ?? null;
   const batchId = `portal-${account.id}-${Date.now()}`;
   const review: ReviewItem[] = [];
@@ -213,8 +234,10 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   // fonts only cost memory (a 512MB worker ran out with Chrome on a heavy portal).
   const prepare = async (http1 = false) => {
     const c = await launchPortalContext(profileDir, { http1 });
+    // A fresh bot score every run: none from the profile on disk, none from the database.
+    await c.clearCookies({ name: BOT_COOKIE }).catch(() => {});
     if (saved) {
-      try { await c.addCookies(JSON.parse(decrypt(saved.stateEnc)).cookies ?? []); }
+      try { await c.addCookies((JSON.parse(decrypt(saved.stateEnc)).cookies ?? []).filter((k: { name: string }) => !BOT_COOKIE.test(k.name))); }
       catch (err) { console.warn('[PortalAgent] saved session not restored:', err instanceof Error ? err.message.split('\n')[0] : err); }
     }
     await c.route('**/*', r => (['image', 'media', 'font'].includes(r.request().resourceType()) ? r.abort() : r.continue())).catch(() => {});
@@ -224,14 +247,14 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   let page = ctx.pages()[0] ?? await ctx.newPage();
   // A portal that resets HTTP/2 from automated browsers (Mohela) is opened again without it.
   const openStart = async () => {
-    try { await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 45000 }); }
+    try { return await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 45000 }); }
     catch (err) {
       if (!isHttp2Reset(err)) throw err;
       console.log(`[PortalAgent] ${start.hostname} reset HTTP/2 — opening it again without`);
       await ctx.close().catch(() => {});
       ctx = await prepare(true);
       page = ctx.pages()[0] ?? await ctx.newPage();
-      await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+      return page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
     }
   };
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -253,17 +276,22 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   const system = `You operate a web browser for a property owner to collect utility statements from ${account.providerName}'s customer portal. Account ${account.accountNumber ? `ending ${String(account.accountNumber).slice(-4)}` : ''} at ${account.property.address}.
 Goal: log in, open the billing / statement history, and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If there is nothing newer, finish with outcome done.
 Rules: use fill_login for credentials (you never see them). If the portal offers where to send a verification code, choose email over text or a phone call. When a code has been sent, call ask_owner_for_code (it reads the code from the owner's email, or asks the owner), then type_code. Pass any "Remember this device", "Trust this browser", "Keep me signed in" or "Don't ask again" checkbox as rememberRef so the next visit is not asked again. Never pay, enroll, change settings, accept offers or send messages. If a captcha appears, finish with captcha. If the login is rejected, finish with bad_login. If a code you entered is rejected, ask_owner_for_code once more for a fresh one; after a second rejection finish with no_code — never start the login over.
-Each action returns the page as it is afterwards: do not call look after it. Fill and submit in one step (submitRef). A typical visit is: look, fill_login (with submit), code if asked, open billing/statements, download, finish — aim for about 10 steps. When several accounts are listed, choose the one matching the account number or address.`;
+If the site refuses the browser itself (Access Denied, "invalid request", "unable to process your request" after a correct sign-in, a bot check), finish with turned_away at once: never submit the login a second time — each retry makes the site more suspicious and can lock the owner's account.
+Each action returns the page as it is afterwards: do not call look after it. Fill and submit in one step (submitRef). A typical visit is: look, fill_login (with submit), code if asked, open billing/statements, download, finish — aim for about 10 steps. When several accounts are listed, choose the one matching the account number, else the address. The account number is what identifies the account: the address a portal shows is often the owner's mailing address, not the property's, so an account whose number matches is the right one whatever address it shows.`;
   // Every step that changed the page, in order: replayed ones and Claude's.
   // The ones before the first download become the recipe for next time.
   const steps: RecipeStep[] = [];
   let navDone = false;
-  const host = rootOf(start.hostname);
   const recipe = await loadRecipe(account.id, host);
 
   try {
     say(`Opening ${start.hostname}`);
-    await openStart();
+    const res = await openStart();
+    // Refused before any sign-in (Safeco's and Nelnet's Access Denied): nothing for Claude to do.
+    const title = await page.title().catch(() => '');
+    if (res?.status() === 403 || /access denied|forbidden|attention required/i.test(title)) {
+      throw Object.assign(new Error(`${start.hostname} answered ${res?.status() ?? ''} "${title || 'Access Denied'}" before any sign-in.`), { turnedAway: true });
+    }
     let opening = "Start. The browser is open on the provider's login page (or its home page — find Sign in from there).";
     if (recipe) {
       say(`Replaying the saved route (${recipe.steps.length} steps, no AI)`);
@@ -405,7 +433,7 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
               finished = true;
               run.ok = i.outcome === 'done';
               run.summary = String(i.summary ?? '').slice(0, 500);
-              if (!run.ok) run.error = { bad_login: 'The portal rejected the username or password.', captcha: 'The portal showed a captcha the agent cannot solve — sync this one by email or upload.', no_code: opts.interactive ? 'The portal asked for a verification code; none arrived in your connected email and none was entered in time.' : 'The portal sent a verification code that did not arrive in your connected email (it may go to your phone) — press Fetch now and enter the code when Sollux asks.', blocked: 'The agent could not get to the statements.' }[String(i.outcome)] + (run.summary ? ` ${run.summary}` : '');
+              if (!run.ok) run.error = { bad_login: 'The portal rejected the username or password.', captcha: 'The portal showed a captcha the agent cannot solve — sync this one by email or upload.', no_code: opts.interactive ? 'The portal asked for a verification code; none arrived in your connected email and none was entered in time.' : 'The portal sent a verification code that did not arrive in your connected email (it may go to your phone) — press Fetch now and enter the code when Sollux asks.', turned_away: 'turned_away', blocked: 'The agent could not get to the statements.' }[String(i.outcome)] + (run.summary ? ` ${run.summary}` : '');
               break;
             default: content = 'Unknown tool.';
           }
@@ -424,7 +452,11 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
       // The history is only ever appended to: editing an earlier turn would
       // throw away the cache for everything after it and cost more than it saves.
     }
-    if (!run.summary && !run.error) run.error = 'The agent ran out of steps before finishing.';
+    if (!run.summary && !run.error) {
+      // Where it got stuck, so the next look starts from there.
+      const at = await page.title().catch(() => '');
+      run.error = `The agent ran out of steps before finishing (last on ${at ? `"${at.slice(0, 80)}" — ` : ''}${page.url().slice(0, 120)}).`;
+    }
     if (!run.error) run.ok = true;
     // Reached the statements: keep the way there for next time.
     if (run.ok && navDone) {
@@ -433,16 +465,27 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
     }
   } catch (err) {
     run.error = err instanceof Error ? err.message.split('\n')[0] : String(err);
+    if ((err as { turnedAway?: boolean })?.turnedAway) run.error = `turned_away ${run.error}`;
   } finally {
     // Keep the cookies after a good run, or once a code got us in (the trusted-device cookie).
     if (run.ok || usedCode) {
       try {
         const state = await ctx.storageState();
-        await db.portalSession.upsert({ where: { utilityAccountId: account.id }, create: { utilityAccountId: account.id, stateEnc: encrypt(JSON.stringify({ cookies: state.cookies })) }, update: { stateEnc: encrypt(JSON.stringify({ cookies: state.cookies })) } });
+        const cookies = state.cookies.filter(k => !BOT_COOKIE.test(k.name));
+        await db.portalSession.upsert({ where: { utilityAccountId: account.id }, create: { utilityAccountId: account.id, stateEnc: encrypt(JSON.stringify({ cookies })) }, update: { stateEnc: encrypt(JSON.stringify({ cookies })) } });
       } catch (err) { console.warn('[PortalAgent] session not saved:', err instanceof Error ? err.message.split('\n')[0] : err); }
     }
     await ctx.close().catch(() => {});
     await db.utilityAccount.update({ where: { id: account.id }, data: { lastAgentRunAt: new Date(), mfaPrompt: null, mfaRequestedAt: null, mfaCodeEnc: null } }).catch(() => {});
+  }
+
+  // Turned away (said so, or the summary shows it whatever outcome was picked):
+  // say what it means, and hold scheduled fetches of this site for a while.
+  if (!run.ok && run.error && !/^Not tried/.test(run.error) && (run.error.startsWith('turned_away') || TURNED_AWAY.test(`${run.error} ${run.summary}`))) {
+    const until = Date.now() + TURNED_AWAY_MS;
+    turnedAway.set(host, until);
+    const detail = run.error.replace(/^turned_away\s*/, '').replace(/^The agent could not get to the statements\.\s*/, '');
+    run.error = `${account.providerName} turned Sollux's browser away (bot protection, not your password); scheduled fetches wait until ${clock(until)} so the login isn't locked. If it keeps happening the site blocks cloud servers: set PORTAL_PROXY_URL, or bring its bills in by email or upload. ${detail}`;
   }
 
   if (review.length || run.filed) {
