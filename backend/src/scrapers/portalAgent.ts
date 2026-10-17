@@ -18,14 +18,14 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { websiteFor } from '../lib/providerDirectory';
 import * as fs from 'fs';
-import { BrowserContext, Page, Download } from 'playwright';
+import { BrowserContext, Page, Download, Frame } from 'playwright';
 import { launchPortalContext, isHttp2Reset } from './browser';
 import { db } from '../config/db';
 import { decrypt, encrypt } from '../crypto/encrypt';
 import { PRIMARY_MODEL, paramsFor, meteredCreate } from '../ai/models';
 import { costOf, withAiContext } from '../ai/meter';
 import { findEmailedCode } from '../services/emailCode';
-import { loadRecipe, saveRecipe, recipeWorked, replay, targetOf, type RecipeStep } from './portalRecipe';
+import { loadRecipe, saveRecipe, recipeWorked, replay, targetOf, refLocator, setRefFrames, type RecipeStep } from './portalRecipe';
 import { intakeBill, type ReviewItem } from '../services/documentIntake';
 import { BaseScraperProvider } from './base';
 
@@ -67,29 +67,61 @@ const rootOf = (host: string) => host.split('.').slice(-2).join('.');
 
 /** Numbered interactive elements and visible text, with the login scrubbed out. */
 export async function describe(page: Page, secrets: string[]): Promise<string> {
-  const snap = await page.evaluate(() => {
-    const out: string[] = [];
-    let i = 0;
-    document.querySelectorAll('[data-sref]').forEach(el => el.removeAttribute('data-sref'));
-    const els = document.querySelectorAll('a,button,input,select,textarea,[role=button],[role=link],[role=tab],[role=menuitem],[onclick]');
-    for (const el of Array.from(els)) {
-      const r = (el as HTMLElement).getBoundingClientRect();
-      if (r.width === 0 || r.height === 0 || getComputedStyle(el as HTMLElement).visibility === 'hidden') continue;
-      if (i >= 90) break;
-      const n = ++i;
-      el.setAttribute('data-sref', String(n));
-      const tag = el.tagName.toLowerCase();
-      const inp = el as HTMLInputElement;
-      const label = (el.getAttribute('aria-label') || (inp.labels && inp.labels[0]?.innerText) || inp.placeholder || el.getAttribute('title') || (el as HTMLElement).innerText || inp.name || '').replace(/\s+/g, ' ').trim().slice(0, 80);
-      let d = `[${n}] ${tag}`;
-      if (tag === 'input') d += ` type=${inp.type || 'text'}${inp.value ? ' (filled)' : ''}`;
-      if (tag === 'a' && (el as HTMLAnchorElement).href) d += ` href=${(el as HTMLAnchorElement).href.slice(0, 120)}`;
-      if (tag === 'select') d += ` options=${Array.from((el as HTMLSelectElement).options).slice(0, 15).map(o => o.text.trim()).join(' | ').slice(0, 200)}`;
-      out.push(`${d} "${label}"`);
+  // Every visible frame (sign-in forms often live in an embedded one), each
+  // read including the inside of web components (shadow DOM) — a page search
+  // that stops at either finds no login fields on sites like T-Mobile's.
+  const refs = new Map<number, Frame>();
+  const parts: { url: string; title: string; text: string; els: string[]; inFrame: boolean }[] = [];
+  let next = 0;
+  for (const frame of page.frames()) {
+    if (frame.isDetached()) continue;
+    const inFrame = frame !== page.mainFrame();
+    if (inFrame) {
+      const box = await frame.frameElement().then(e => e.boundingBox()).catch(() => null);
+      if (!box || box.width < 40 || box.height < 20) continue; // trackers and hidden helpers
     }
-    return { url: location.href, title: document.title, text: (document.body?.innerText || '').replace(/\n{2,}/g, '\n').slice(0, 2000), els: out };
-  });
-  let text = `URL: ${snap.url}\nTitle: ${snap.title}\n\nVisible text:\n${snap.text}\n\nElements:\n${snap.els.join('\n')}`;
+    const snap = await frame.evaluate(({ start, limit }) => {
+      // No named helper functions in here: the page runs this as plain source.
+      const roots: (Document | ShadowRoot)[] = [document];
+      for (let k = 0; k < roots.length; k++) {
+        roots[k].querySelectorAll('[data-sref]').forEach(el => el.removeAttribute('data-sref'));
+        for (const el of Array.from(roots[k].querySelectorAll('*'))) if (el.shadowRoot) roots.push(el.shadowRoot);
+      }
+      const out: string[] = [];
+      const shadowText: string[] = [];
+      let i = start;
+      const sel = 'a,button,input,select,textarea,[role=button],[role=link],[role=tab],[role=menuitem],[role=checkbox],[onclick]';
+      for (const root of roots) {
+        if (root !== document) for (const c of Array.from(root.children)) { const t = (c as HTMLElement).innerText; if (t) shadowText.push(t); }
+        for (const el of Array.from(root.querySelectorAll(sel))) {
+          if (i - start >= limit) break;
+          const r = (el as HTMLElement).getBoundingClientRect();
+          if (r.width === 0 || r.height === 0 || getComputedStyle(el as HTMLElement).visibility === 'hidden') continue;
+          const n = ++i;
+          el.setAttribute('data-sref', String(n));
+          const tag = el.tagName.toLowerCase();
+          const inp = el as HTMLInputElement;
+          const label = (el.getAttribute('aria-label') || (inp.labels && inp.labels[0]?.innerText) || inp.placeholder || el.getAttribute('title') || (el as HTMLElement).innerText || inp.name || el.id || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+          let d = `[${n}] ${tag}`;
+          if (tag === 'input') d += ` type=${inp.type || 'text'}${inp.type === 'checkbox' ? (inp.checked ? ' (checked)' : ' (unchecked)') : inp.value ? ' (filled)' : ''}`;
+          if (tag === 'a' && (el as HTMLAnchorElement).href) d += ` href=${(el as HTMLAnchorElement).href.slice(0, 120)}`;
+          if (tag === 'select') d += ` options=${Array.from((el as HTMLSelectElement).options).slice(0, 15).map(o => o.text.trim()).join(' | ').slice(0, 200)}`;
+          out.push(`${d} "${label}"`);
+        }
+      }
+      const text = [(document.body?.innerText || ''), ...shadowText].join('\n').replace(/\n{2,}/g, '\n').slice(0, 2000);
+      return { url: location.href, title: document.title, text, els: out, next: i };
+    }, { start: next, limit: Math.max(0, 90 - next) }).catch(() => null);
+    if (!snap) continue;
+    for (let n = next + 1; n <= snap.next; n++) refs.set(n, frame);
+    next = snap.next;
+    parts.push({ url: snap.url, title: snap.title, text: snap.text, els: snap.els, inFrame });
+  }
+  setRefFrames(page, refs);
+  const main = parts[0] ?? { url: page.url(), title: '', text: '', els: [], inFrame: false };
+  const framed = parts.slice(1).filter(f => f.els.length || f.text.trim());
+  let text = `URL: ${main.url}\nTitle: ${main.title}\n\nVisible text:\n${main.text}\n\nElements:\n${main.els.join('\n')}`;
+  for (const f of framed) text += `\n\nEmbedded frame (${f.url.slice(0, 100)}):\n${f.text.slice(0, 600)}\nElements in it:\n${f.els.join('\n')}`;
   for (const s of secrets) if (s && s.length >= 3) text = text.split(s).join('[hidden]');
   return text;
 }
@@ -261,7 +293,8 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
       let finished = false;
       for (const u of uses) {
         const i = u.input as any;
-        const el = (ref: number) => page.locator(`[data-sref="${Number(ref)}"]`).first();
+        // The element numbered [ref] by the last look, in whichever frame it is in.
+        const el = (ref: number) => refLocator(page, ref);
         let content: Anthropic.ToolResultBlockParam['content'] = 'ok';
         let rec: RecipeStep | null = null;
         let recAfter: RecipeStep | null = null; // the submit click that fill_login made

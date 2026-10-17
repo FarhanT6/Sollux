@@ -15,7 +15,7 @@
  * numbers in what it clicks) is kept per provider site, so everyone on that
  * provider gets it; otherwise it is kept per account.
  */
-import type { Page, Locator } from 'playwright';
+import type { Page, Locator, Frame } from 'playwright';
 import { db } from '../config/db';
 
 export interface Target { tag: string; label: string; href?: string; type?: string; name?: string }
@@ -29,9 +29,19 @@ export type RecipeStep =
 
 const INTERACTIVE = 'a,button,input,select,textarea,[role=button],[role=link],[role=tab],[role=menuitem],[onclick]';
 
+// Which frame each element numbered by describe() is in: a sign-in form in
+// an embedded frame is not reachable from the page's own locator.
+const refFrames = new WeakMap<Page, Map<number, Frame>>();
+export function setRefFrames(page: Page, refs: Map<number, Frame>): void { refFrames.set(page, refs); }
+/** Element [ref], found in its own frame; Playwright's CSS locators see inside open shadow DOM. */
+export function refLocator(page: Page, ref: number): Locator {
+  const frame = refFrames.get(page)?.get(Number(ref)) ?? page.mainFrame();
+  return frame.locator(`[data-sref="${Number(ref)}"]`).first();
+}
+
 /** What element [ref] (as numbered by describe()) looks like to a person. */
 export async function targetOf(page: Page, ref: number): Promise<Target | null> {
-  return page.locator(`[data-sref="${Number(ref)}"]`).first().evaluate((el) => {
+  return refLocator(page, ref).evaluate((el) => {
     const inp = el as HTMLInputElement;
     const label = (el.getAttribute('aria-label') || (inp.labels && inp.labels[0]?.innerText) || inp.placeholder || el.getAttribute('title') || (el as HTMLElement).innerText || inp.name || '').replace(/\s+/g, ' ').trim().slice(0, 80);
     const href = el.tagName === 'A' ? (el as HTMLAnchorElement).getAttribute('href') || undefined : undefined;
@@ -43,14 +53,23 @@ export async function targetOf(page: Page, ref: number): Promise<Target | null> 
 async function find(page: Page, t: Target, waitMs = 8000): Promise<Locator | null> {
   const until = Date.now() + waitMs;
   while (Date.now() < until) {
-    const hit = await page.evaluate(({ t, sel }) => {
-      document.querySelectorAll('[data-rref]').forEach(el => el.removeAttribute('data-rref'));
+    // Every frame, and inside web components (shadow DOM), as describe() reads them.
+    for (const frame of page.frames()) {
+    if (frame.isDetached()) continue;
+    const hit = await frame.evaluate(({ t, sel }) => {
       // No named helper functions in here: the page runs this as plain source,
       // and a dev build's name-keeping wrapper (__name) does not exist there.
+      const roots: (Document | ShadowRoot)[] = [document];
+      for (let k = 0; k < roots.length; k++) {
+        roots[k].querySelectorAll('[data-rref]').forEach(el => el.removeAttribute('data-rref'));
+        for (const el of Array.from(roots[k].querySelectorAll('*'))) if (el.shadowRoot) roots.push(el.shadowRoot);
+      }
+      const candidates: Element[] = [];
+      for (const root of roots) candidates.push(...Array.from(root.querySelectorAll(sel)));
       let wantPath = '';
       try { wantPath = t.href ? new URL(t.href, location.href).pathname : ''; } catch { /* not a URL */ }
       let best: Element | null = null, bestScore = 0;
-      for (const el of Array.from(document.querySelectorAll(sel))) {
+      for (const el of candidates) {
         const r = (el as HTMLElement).getBoundingClientRect();
         if (r.width === 0 || r.height === 0 || getComputedStyle(el as HTMLElement).visibility === 'hidden') continue;
         if (el.tagName.toLowerCase() !== t.tag) continue;
@@ -72,7 +91,8 @@ async function find(page: Page, t: Target, waitMs = 8000): Promise<Locator | nul
       best.setAttribute('data-rref', '1');
       return true;
     }, { t, sel: INTERACTIVE }).catch(() => false);
-    if (hit) return page.locator('[data-rref="1"]').first();
+    if (hit) return frame.locator('[data-rref="1"]').first();
+    }
     await page.waitForTimeout(500);
   }
   return null;
