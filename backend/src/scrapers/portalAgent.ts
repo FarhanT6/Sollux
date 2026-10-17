@@ -364,10 +364,14 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   let mailNote = '';
   const runStartedAt = Date.now();
   // After an action: let the page settle, then show it as it is now (saves a look step).
+  // The page as Claude last saw it, and whether giving up has been second-guessed yet.
+  let lastPage = '';
+  let rechecked = false;
   const after = async (what: string) => {
     await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
     await page.waitForTimeout(800);
-    return `${what}\n\n${await describe(page, secrets)}`;
+    lastPage = await describe(page, secrets);
+    return `${what}\n\n${lastPage}`;
   };
 
   const system = `You operate a web browser for a property owner to collect utility statements from ${account.providerName}'s customer portal. Account ${account.accountNumber ? `ending ${String(account.accountNumber).slice(-4)}` : ''} at ${account.property.address}.
@@ -450,7 +454,7 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
             } else if (u.name === 'press') rec = { tool: 'press', key: String(i.key) };
           }
           switch (u.name) {
-            case 'look': content = await describe(page, secrets); break;
+            case 'look': content = lastPage = await describe(page, secrets); break;
             case 'screenshot': content = [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: (await page.screenshot({ type: 'png' })).toString('base64') } }]; break;
             case 'click': await el(i.ref).click({ timeout: 10000 }); content = await after('Clicked.'); break;
             case 'type':
@@ -555,6 +559,20 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
               break;
             }
             case 'finish':
+              // Before giving up, look once more: T-Mobile flashes "Invalid
+              // request, access denied" for a moment and then moves on to its
+              // code page — the run stopped there with the code already sent.
+              if (['turned_away', 'blocked', 'captcha'].includes(String(i.outcome)) && !rechecked) {
+                rechecked = true;
+                await page.waitForTimeout(5000);
+                await page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
+                const now = await describe(page, secrets).catch(() => lastPage);
+                if (now !== lastPage) {
+                  lastPage = now;
+                  content = `Not finished: the page changed after a few seconds. If it now goes on (a code page, the account), carry on; otherwise finish again.\n\n${now}`;
+                  break;
+                }
+              }
               finished = true;
               run.ok = i.outcome === 'done';
               run.summary = String(i.summary ?? '').slice(0, 500);
