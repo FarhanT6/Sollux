@@ -237,26 +237,50 @@ router.post('/test', (req: Request, res: Response) => {
 
 /** Fetch statements for one account now, as a test: the worker runs it and its spend is marked as a test. */
 router.post('/test/portal/:accountId', async (req: Request, res: Response) => {
-  const a = await db.utilityAccount.findFirst({ where: { id: req.params.accountId, property: { userId: req.dbUserId! } }, select: { id: true, usernameEnc: true } });
+  const a = await db.utilityAccount.findFirst({ where: { id: req.params.accountId, property: { userId: req.dbUserId! } }, select: { id: true, usernameEnc: true, syncEnabled: true } });
   if (!a) return res.status(404).json({ error: 'Account not found' });
   if (!a.usernameEnc) return res.status(400).json({ error: 'Add a portal login to this account first.' });
-  await scrapeQueue.add('scrape', { utilityAccountId: a.id, manual: true, test: true }, { jobId: `test-${a.id}-${Date.now()}`, removeOnComplete: { count: 20 }, removeOnFail: { count: 20 } });
-  res.json({ queued: true });
+  if (!a.syncEnabled) return res.status(400).json({ error: 'Syncing is turned off for this account (it is marked inactive). Turn it back on from the account first.' });
+  // One run at a time: a second would fight the first over the same login.
+  const running = await db.syncJob.findFirst({ where: { utilityAccountId: a.id, status: 'PENDING', createdAt: { gte: new Date(Date.now() - 15 * 60_000) } }, select: { id: true } });
+  if (running) return res.status(409).json({ error: 'A fetch is already running for this account.' });
+  // The job exists from the moment Fetch is pressed, so the row shows "queued"
+  // at once — and says so plainly if the background worker never picks it up.
+  const job = await db.syncJob.create({ data: { utilityAccountId: a.id, status: 'PENDING', progress: 'Queued — waiting for the background worker' } });
+  await scrapeQueue.add('scrape', { utilityAccountId: a.id, manual: true, test: true, syncJobId: job.id }, { jobId: `test-${a.id}-${Date.now()}`, removeOnComplete: { count: 20 }, removeOnFail: { count: 20 } });
+  res.json({ queued: true, syncJobId: job.id });
 });
 
 /** Accounts the portal agent can be tested on, with how their last runs went. */
 router.get('/test/portal', async (req: Request, res: Response) => {
   const accounts = await db.utilityAccount.findMany({
     where: { property: { userId: req.dbUserId! }, usernameEnc: { not: null } },
-    select: { id: true, providerName: true, accountNumber: true, loginUrl: true, lastSyncStatus: true, lastSyncError: true, lastAgentRunAt: true, property: { select: { nickname: true, address: true } } },
+    select: { id: true, providerName: true, accountNumber: true, loginUrl: true, lastSyncStatus: true, lastSyncError: true, lastAgentRunAt: true, syncEnabled: true, mfaPrompt: true, mfaRequestedAt: true, property: { select: { nickname: true, address: true } } },
     orderBy: { providerName: 'asc' },
   });
+  const jobs = await db.syncJob.findMany({
+    where: { utilityAccountId: { in: accounts.map(a => a.id) } }, orderBy: { createdAt: 'desc' }, distinct: ['utilityAccountId'],
+    select: { utilityAccountId: true, status: true, progress: true, error: true, createdAt: true, startedAt: true, completedAt: true, statementsFound: true, costUsd: true },
+  });
+  const lastJob = new Map(jobs.map(j => [j.utilityAccountId, j]));
   const recipes = await db.portalRecipe.findMany({ select: { key: true, host: true, successes: true, failures: true, updatedAt: true } });
   const usage = await db.aiUsage.groupBy({ by: ['userId'], where: { feature: 'portal-agent', userId: req.dbUserId!, createdAt: { gte: monthStart() } }, _sum: { costUsd: true }, _count: { _all: true } });
   res.json({
     accounts: accounts.map(a => ({
       id: a.id, providerName: a.providerName, last4: a.accountNumber ? String(a.accountNumber).slice(-4) : null,
       place: a.property.nickname || a.property.address, lastSyncStatus: a.lastSyncStatus, lastSyncError: a.lastSyncError, lastAgentRunAt: a.lastAgentRunAt,
+      syncEnabled: a.syncEnabled, mfaPrompt: a.mfaPrompt, mfaRequestedAt: a.mfaRequestedAt,
+      run: (() => {
+        const j = lastJob.get(a.id);
+        if (!j) return null;
+        // Pending with no start time: still in the queue. Not picked up in two minutes means no worker is running.
+        let state = j.status === 'PENDING' ? (j.startedAt ? 'running' : 'queued') : j.status === 'SUCCESS' ? 'done' : 'failed';
+        // A run lasts at most 8 minutes; one still "running" well past that was cut off (the worker restarted).
+        const cutOff = state === 'running' && Date.now() - j.startedAt!.getTime() > 15 * 60_000;
+        if (cutOff) state = 'failed';
+        const stuck = state === 'queued' && Date.now() - j.createdAt.getTime() > 2 * 60_000;
+        return { state, stuck, progress: cutOff ? null : j.progress, error: cutOff ? 'The run stopped without finishing (the background worker restarted). Press Fetch now to try again.' : j.error, createdAt: j.createdAt, startedAt: j.startedAt, completedAt: j.completedAt, statementsFound: j.statementsFound, costUsd: j.costUsd == null ? null : Number(j.costUsd) };
+      })(),
       recipe: recipes.find(r => r.key === `acct:${a.id}`) ?? null,
     })),
     sharedRecipes: recipes.filter(r => r.key.startsWith('host:')),

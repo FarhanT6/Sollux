@@ -1187,7 +1187,15 @@ export interface AiSpend {
 }
 export interface AiTestResult { key: string; name: string; status: 'pending' | 'running' | 'ok' | 'problem' | 'skipped'; detail?: string; cost?: number; calls?: number; models?: string[]; fellBack?: boolean; ms?: number }
 export interface AiTestState { checks: { key: string; name: string }[]; run: { startedAt: string; finishedAt?: string; results: AiTestResult[] } | null; apiKey: boolean }
-export interface PortalTestAccount { id: string; providerName: string; last4: string | null; place: string; lastSyncStatus: string | null; lastSyncError: string | null; lastAgentRunAt: string | null; recipe: { successes: number; failures: number; updatedAt: string } | null }
+export interface PortalRunStatus {
+  state: 'queued' | 'running' | 'done' | 'failed'; stuck: boolean; progress: string | null; error: string | null;
+  createdAt: string; startedAt: string | null; completedAt: string | null; statementsFound: number; costUsd: number | null;
+}
+export interface PortalTestAccount {
+  id: string; providerName: string; last4: string | null; place: string; lastSyncStatus: string | null; lastSyncError: string | null; lastAgentRunAt: string | null;
+  recipe: { successes: number; failures: number; updatedAt: string } | null;
+  syncEnabled: boolean; mfaPrompt: string | null; mfaRequestedAt: string | null; run: PortalRunStatus | null;
+}
 export const getAiSpend = () => api.get<AiSpend>('/ai-spend').then(r => r.data);
 export const getAiTest = () => api.get<AiTestState>('/ai-spend/test').then(r => r.data);
 export const startAiTest = (only?: string) => api.post('/ai-spend/test', only ? { only } : {}).then(r => r.data);
