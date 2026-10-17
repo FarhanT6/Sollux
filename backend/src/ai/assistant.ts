@@ -11,7 +11,7 @@
  */
 import Anthropic from '@anthropic-ai/sdk';
 import { db } from '../config/db';
-import { PRIMARY_MODEL, FALLBACK_MODEL, paramsFor, worthRetrying } from './models';
+import { PRIMARY_MODEL, FALLBACK_MODEL, paramsFor, meteredCreate, worthRetrying } from './models';
 import { getPaymentPriorities } from '../services/paymentPriority';
 import { trackerMonth } from '../services/loanTracker';
 import { lateLeases } from './rentCollections';
@@ -138,7 +138,8 @@ export async function runAction(userId: string, a: { tool: string; input: any })
 }
 
 async function create(client: Anthropic, base: { system: string; messages: Anthropic.MessageParam[] }) {
-  const make = (model: string) => client.messages.create({ ...paramsFor(model, { maxTokens: 2000, system: base.system, messages: base.messages }), tools: TOOLS });
+  // Cached: each lookup turn resends the whole conversation so far.
+  const make = (model: string) => meteredCreate(client, 'assistant', { ...paramsFor(model, { maxTokens: 2000, system: base.system, messages: base.messages, cache: true }), tools: TOOLS });
   try { return await make(PRIMARY_MODEL); }
   catch (err) {
     if (!FALLBACK_MODEL || !worthRetrying(err)) throw err;

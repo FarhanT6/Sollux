@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { askClaude } from './models';
+import { memoAnswer, withAiContext } from './meter';
 import { db } from '../config/db';
 import { getPaymentPriorities } from '../services/paymentPriority';
 import { watchDeadlines } from './deadlineWatcher';
@@ -252,13 +253,15 @@ async function writeDigest(userId: string, propertyIds: string[], findings: Find
   if (process.env.ANTHROPIC_API_KEY) {
     try {
       const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-      const { text: digest } = await askClaude(anthropic, {
-        label: 'bookkeeper digest', maxTokens: 400,
+      // The same findings as last night get last night's digest, not a new call.
+      const list = findings.map(f => `- [${f.severity}] ${f.title}. ${f.body}`).join('\n');
+      const digest = await memoAnswer(key, list, async () => (await askClaude(anthropic, {
+        label: 'bookkeeper digest', feature: 'bookkeeper-digest', maxTokens: 400,
         messages: [{
           role: 'user',
-          content: `You are the nightly bookkeeper for a small real-estate portfolio. Write a short digest (4–8 sentences, plain prose, no headers or bullet points, no preamble) of what needs the owner's attention, most urgent first, in dollars and dates. Do not invent anything not in the list. Findings:\n${findings.map(f => `- [${f.severity}] ${f.title}. ${f.body}`).join('\n')}`,
+          content: `You are the nightly bookkeeper for a small real-estate portfolio. Write a short digest (4–8 sentences, plain prose, no headers or bullet points, no preamble) of what needs the owner's attention, most urgent first, in dollars and dates. Do not invent anything not in the list. Findings:\n${list}`,
         }],
-      });
+      })).text);
       if (digest) body = digest;
     } catch (err) {
       console.warn('[Bookkeeper] digest fell back to the plain summary:', err instanceof Error ? err.message : err);
@@ -280,7 +283,7 @@ export async function runBookkeeperForEveryone(): Promise<void> {
   const users = await db.user.findMany({ select: { id: true } });
   for (const u of users) {
     try {
-      const r = await runBookkeeperForUser(u.id);
+      const r = await withAiContext({ userId: u.id }, () => runBookkeeperForUser(u.id));
       console.log(`[Bookkeeper] user ${u.id}: ${r.raised} raised, ${r.refreshed} refreshed, ${r.cleared} cleared`);
     } catch (err) {
       console.error(`[Bookkeeper] user ${u.id} failed:`, err instanceof Error ? err.message : err);

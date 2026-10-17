@@ -155,7 +155,7 @@ export async function extractLeaseTerms(pdfBuffer: Buffer, filename: string): Pr
   console.log(`[LeaseExtract] ${filename}: ${Math.round(pdfBuffer.length / 1024)}KB`);
 
   const { text: raw } = await askClaude(anthropic, {
-    label: filename, maxTokens: 8000, check: needsJson,
+    label: filename, feature: 'lease-extract', maxTokens: 8000, check: needsJson,
     messages: [{
       role: 'user',
       content: [

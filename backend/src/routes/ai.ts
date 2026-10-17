@@ -150,7 +150,7 @@ router.post('/query', async (req: Request, res: Response) => {
     const context = lines.join('\n');
 
     const { text: answer } = await askClaude(anthropic, {
-      label: 'ask', maxTokens: 1024,
+      label: 'ask', feature: 'ask-question', maxTokens: 1024,
       system: `You are a concise property management assistant for a real estate investor.
 Answer questions about their portfolio using only the data provided.
 Use bullet points for lists of items. Include dollar amounts whenever relevant.

@@ -2395,3 +2395,54 @@ model ServiceNotice {
   @@index([utilityAccountId])
   @@map("service_notices")
 }
+
+// ─── AI SPEND ────────────────────────────────────────────
+// One row per Claude call: which feature, which model, the tokens and what
+// they cost. The budget cap and the owner's spend page read it (ai/meter.ts).
+model AiUsage {
+  id               String   @id @default(cuid())
+  createdAt        DateTime @default(now())
+  feature          String
+  model            String
+  userId           String?
+  inputTokens      Int
+  outputTokens     Int
+  cacheReadTokens  Int      @default(0)
+  cacheWriteTokens Int      @default(0)
+  costUsd          Decimal  @db.Decimal(10, 6)
+  fellBack         Boolean  @default(false)
+  // Part of an owner-run test of the AI features, not everyday use.
+  test             Boolean  @default(false)
+
+  @@index([createdAt])
+  @@index([feature, createdAt])
+  @@map("ai_usage")
+}
+
+// The last answer Claude gave for a key and the facts it was given. When the
+// facts have not changed (the same leak, the same nightly findings) the
+// answer is reused instead of asked for again.
+model AiMemo {
+  key       String   @id
+  inputHash String
+  answer    String
+  updatedAt DateTime @updatedAt
+
+  @@map("ai_memos")
+}
+
+// The clicks that got the portal agent from a provider's sign-in page to its
+// statements, replayed without Claude on the next run. key is
+// "acct:<utilityAccountId>", or "host:<site>" for a recipe that holds nothing
+// specific to one account and so serves everyone on that provider.
+model PortalRecipe {
+  key       String   @id
+  host      String
+  steps     Json
+  successes Int      @default(0)
+  failures  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("portal_recipes")
+}

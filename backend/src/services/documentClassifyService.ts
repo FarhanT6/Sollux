@@ -67,7 +67,7 @@ async function classifyWithClaude(pdfBuffer: Buffer): Promise<ClassifiedDocument
     { type: 'text', text: CLASSIFY_PROMPT },
   ];
 
-  const { text: raw } = await askClaude(anthropic, { label: 'classify', maxTokens: 1024, check: needsJson, messages: [{ role: 'user', content }] });
+  const { text: raw } = await askClaude(anthropic, { label: 'classify', feature: 'document-classify', maxTokens: 1024, check: needsJson, messages: [{ role: 'user', content }] });
   const data = jsonIn(raw) as ClassifiedDocument | null;
   if (!data) throw new Error(`Claude returned no JSON. Response (first 400 chars): ${raw.slice(0, 400)}`);
 

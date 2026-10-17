@@ -24,6 +24,7 @@ import prioritiesRouter from './routes/priorities';
 import analyticsRouter from './routes/analytics';
 import stripeRouter from './routes/stripe';
 import billingRouter from './routes/billing';
+import aiSpendRouter from './routes/aiSpend';
 import importRouter from './routes/import';
 import unitsRouter from './routes/units';
 import tenantsRouter from './routes/tenants';
@@ -221,6 +222,7 @@ app.use('/api/budget', budgetRouter);
 app.use('/api/ai', aiRouter);
 app.use('/api/plaid', plaidRouter);
 app.use('/api/billing', billingRouter);
+app.use('/api/ai-spend', aiSpendRouter);
 
 // ─── Error handling ───────────────────────────────────────
 app.use(errorHandler);

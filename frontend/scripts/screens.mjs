@@ -177,6 +177,11 @@ if (!only.length || process.env.FLOWS) {
     await page.locator('a.ios-row', { hasText: 'Plan & billing' }).click(); await expectPath(/tab=billing/);
     await page.getByText(/Complimentary|Free trial|plan/).first().waitFor();
   });
+  await step('Settings → AI usage shows spend and the test run', async () => {
+    await page.goto(`${base}/settings`, { waitUntil: 'networkidle' });
+    await page.locator('a.ios-row', { hasText: 'AI usage' }).click(); await expectPath(/tab=ai/);
+    await page.getByText('Test every AI feature').first().waitFor();
+  });
   await step('Personal: segments switch sections', async () => {
     await page.goto(`${base}/personal`, { waitUntil: 'networkidle' });
     await page.getByRole('tab', { name: 'Cards' }).click(); await expectPath(/tab=cards/);

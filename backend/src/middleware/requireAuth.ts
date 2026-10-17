@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { clerkClient, clerkMiddleware, getAuth } from '@clerk/express';
 import { db } from '../config/db';
 import { TRIAL_DAYS, canWrite } from '../lib/plans';
+import { withAiContext } from '../ai/meter';
 
 const WRITE = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const WRITE_ALWAYS = /^\/api\/(billing|settings|telemetry|account|auth)(\/|$|\?)/;
@@ -166,7 +167,8 @@ export async function attachDbUser(req: Request, res: Response, next: NextFuncti
         return res.status(402).json({ error: 'Your free trial has ended. Choose a plan to keep adding and changing things — everything you have is still here.', code: 'PLAN_REQUIRED' });
       }
     }
-    next();
+    // Any Claude call this request makes is filed under this account's spend.
+    void withAiContext({ userId: req.dbUserId }, async () => next());
   } catch (err) {
     next(err);
   }

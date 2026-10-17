@@ -16,6 +16,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { db } from '../config/db';
 import { askClaude, jsonIn } from './models';
+import { memoAnswer } from './meter';
 import type { Finding } from './bookkeeper';
 
 const DAY = 86400000;
@@ -111,10 +112,12 @@ export async function detectLeaks(userId: string): Promise<Finding[]> {
 
     if (client) {
       try {
-        const { text } = await askClaude(client, {
-          label: 'leak detective', maxTokens: 600, check: t => (jsonIn(t)?.likelyCause ? null : 'no cause'),
-          messages: [{ role: 'user', content: `A rental property's ${a.category.toLowerCase()} account shows unusual use. Facts (computed, do not change the numbers): ${JSON.stringify({ category: a.category, provider: a.providerName, vacant, currentPerDay: found.current, usualPerDay: found.baseline, sameSeasonLastYearPerDay: found.lastYear, ratio: found.ratio === Infinity ? null : found.ratio, highTwoBillsRunning: found.persistent, measuredIn: unitWord })}\n\nReturn ONLY JSON: {"likelyCause": "one sentence, the most likely explanation", "check": ["up to 4 short things for the owner to check, most likely first"]}` }],
-        });
+        const facts = { category: a.category, provider: a.providerName, vacant, currentPerDay: found.current, usualPerDay: found.baseline, sameSeasonLastYearPerDay: found.lastYear, ratio: found.ratio === Infinity ? null : found.ratio, highTwoBillsRunning: found.persistent, measuredIn: unitWord };
+        // The same leak on the same bill, found again tonight, keeps its explanation.
+        const text = await memoAnswer(`leak:${a.id}`, facts, async () => (await askClaude(client, {
+          label: 'leak detective', feature: 'leak-detective', maxTokens: 600, check: t => (jsonIn(t)?.likelyCause ? null : 'no cause'),
+          messages: [{ role: 'user', content: `A rental property's ${a.category.toLowerCase()} account shows unusual use. Facts (computed, do not change the numbers): ${JSON.stringify(facts)}\n\nReturn ONLY JSON: {"likelyCause": "one sentence, the most likely explanation", "check": ["up to 4 short things for the owner to check, most likely first"]}` }],
+        })).text);
         const d = jsonIn(text);
         if (d?.likelyCause) {
           body += ` Likely: ${String(d.likelyCause)}`;

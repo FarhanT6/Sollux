@@ -6,6 +6,7 @@
  * in the Import Bills flow. Moved out of the Drive worker so the inbox agent
  * files email the same way, with the same duplicate rules.
  */
+import { withAiContext } from '../ai/meter';
 import { Prisma } from '@prisma/client';
 import { learnProviderWebsite } from './providerWebsite';
 import { db } from '../config/db';
@@ -81,7 +82,7 @@ export function buildRawData(ex: Awaited<ReturnType<typeof parseBill>>['extracte
 export async function intakeBill(buffer: Buffer, filename: string, userId: string, method: 'ai' | 'regex', batchId: string, source = 'drive_import', opts: { emailBody?: boolean } = {}): Promise<IntakeResult> {
   // parseBill defaults to AI; this path must pass the choice through or
   // every bulk import silently bills per PDF regardless of what was picked.
-  const parsed = await parseBill(buffer, filename, userId, method === 'ai' ? 'ai' : 'regex');
+  const parsed = await withAiContext({ userId }, () => parseBill(buffer, filename, userId, method === 'ai' ? 'ai' : 'regex'));
   const { extracted: ex, match } = parsed;
   if (opts.emailBody) ex.fromEmailBody = true;
   // An email body is read from a printout, but the printout is not a statement:
