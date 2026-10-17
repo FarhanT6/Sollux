@@ -18,13 +18,13 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { websiteFor } from '../lib/providerDirectory';
 import * as fs from 'fs';
-import { BrowserContext, Page, Download, Frame } from 'playwright';
+import { BrowserContext, Page, Download, Frame, Locator } from 'playwright';
 import { launchPortalContext, isHttp2Reset } from './browser';
 import { db } from '../config/db';
 import { decrypt, encrypt } from '../crypto/encrypt';
 import { PRIMARY_MODEL, paramsFor, meteredCreate } from '../ai/models';
 import { costOf, withAiContext } from '../ai/meter';
-import { findEmailedCode, findEmailedLink } from '../services/emailCode';
+import { findEmailedCode, findEmailedLink, mailMiss, type MailReport } from '../services/emailCode';
 import { loadRecipe, saveRecipe, recipeWorked, replay, targetOf, refLocator, setRefFrames, type RecipeStep } from './portalRecipe';
 import { intakeBill, type ReviewItem } from '../services/documentIntake';
 import { BaseScraperProvider } from './base';
@@ -75,7 +75,7 @@ const TOOLS: Anthropic.Tool[] = [
   { name: 'download_statement', description: 'Click element [n] that downloads or opens one statement PDF, and keep it. Give the statement date if shown.', input_schema: { type: 'object', properties: { ref: { type: 'number' }, statementDate: { type: 'string' } }, required: ['ref'] } },
   { name: 'ask_owner_for_code', description: "The portal sent a verification code. Reads it from the owner's email (up to 2 minutes), else asks the owner (up to 5 more). Say where it was sent.", input_schema: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] } },
   { name: 'open_emailed_link', description: 'The portal emailed a link that signs you in, instead of a code ("magic link", "Access your account", "check your email to log in"). Finds that link in the owner\'s email (up to 2 minutes) and opens it in this browser; returns the page afterwards.', input_schema: { type: 'object', properties: {} } },
-  { name: 'type_code', description: 'Type the verification code into field [ref], tick [rememberRef] ("remember this device") if given, then click [submitRef].', input_schema: { type: 'object', properties: { ref: { type: 'number' }, rememberRef: { type: 'number' }, submitRef: { type: 'number' } }, required: ['ref'] } },
+  { name: 'type_code', description: 'Type the verification code into field [ref] (a code split into one-digit boxes: give the first box), tick [rememberRef] ("remember this device") if given, then click [submitRef].', input_schema: { type: 'object', properties: { ref: { type: 'number' }, rememberRef: { type: 'number' }, submitRef: { type: 'number' } }, required: ['ref'] } },
   { name: 'finish', description: 'Stop. outcome: done (downloaded what was new, or nothing new), bad_login (the portal said the username or password is wrong), captcha, no_code, turned_away (the site refused the browser itself: Access Denied, "invalid request", "unable to process your request" after a sign-in, a bot check), blocked (anything else in the way).', input_schema: { type: 'object', properties: { outcome: { type: 'string', enum: ['done', 'bad_login', 'captcha', 'no_code', 'turned_away', 'blocked'] }, summary: { type: 'string' } }, required: ['outcome', 'summary'] } },
 ];
 
@@ -141,6 +141,33 @@ export async function describe(page: Page, secrets: string[]): Promise<string> {
   for (const f of framed) text += `\n\nEmbedded frame (${f.url.slice(0, 100)}):\n${f.text.slice(0, 600)}\nElements in it:\n${f.els.join('\n')}`;
   for (const s of secrets) if (s && s.length >= 3) text = text.split(s).join('[hidden]');
   return text;
+}
+
+/**
+ * Type a code into its field — or across one-digit boxes (IID splits its
+ * six-digit code into six), one digit per box, since filling the first box
+ * with the whole code leaves the rest empty.
+ */
+export async function fillCode(first: Locator, code: string): Promise<void> {
+  const boxes = await first.evaluate((el) => {
+    const inp = el as HTMLInputElement;
+    if (inp.maxLength !== 1) return 0;
+    const root = el.getRootNode() as Document | ShadowRoot;
+    const all = Array.from(root.querySelectorAll('input')).filter(b => b.maxLength === 1 && b.getBoundingClientRect().width > 0);
+    const from = all.indexOf(inp);
+    all.slice(from).forEach((b, k) => b.setAttribute('data-sbox', String(k)));
+    return all.length - from;
+  }).catch(() => 0);
+  if (boxes < 2) { await first.fill(code); return; }
+  // Focus each box in its own document or shadow root, then type the digit as
+  // a keypress (split-box widgets listen for keys and move focus themselves).
+  for (let k = 0; k < Math.min(boxes, code.length); k++) {
+    await first.evaluate((el, n) => {
+      const box = (el.getRootNode() as Document | ShadowRoot).querySelector(`[data-sbox="${n}"]`) as HTMLInputElement | null;
+      if (box) { box.value = ''; box.focus(); }
+    }, k);
+    await first.page().keyboard.type(code[k]);
+  }
 }
 
 export async function capturePdf(ctx: BrowserContext, page: Page, action: () => Promise<void>): Promise<Buffer | null> {
@@ -267,6 +294,8 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   // Codes already typed: a second request must bring a new one.
   const triedCodes = new Set<string>();
   let triedLinks = 0;
+  // Why the last email search came up empty, for the error the owner sees.
+  let mailNote = '';
   const runStartedAt = Date.now();
   // After an action: let the page settle, then show it as it is now (saves a look step).
   const after = async (what: string) => {
@@ -394,40 +423,53 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
               break;
             }
             case 'ask_owner_for_code': {
-              // A scheduled run has nobody watching; only a Sync the owner pressed waits for a code.
-              // The owner's inbox first: most portals email the code.
               if (triedCodes.size >= 2) { content = 'Two codes have been rejected — finish with no_code.'; break; }
-              say('Looking for the verification code in your email');
-              // Any code sent since this fetch began (the portal may have emailed it a few steps ago); never one from before.
-              const emailed = await findEmailedCode(userId, { since: new Date(runStartedAt - 30_000), host: new URL(page.url()).hostname || start.hostname, providerName: account.providerName, timeoutMs: 120_000, exclude: [...triedCodes] }).catch(() => null);
-              if (emailed) {
-                code = emailed; secrets.push(code); usedCode = true;
-                content = 'The code arrived by email. Use type_code.';
-                say('Found the code in your email — entering it');
-                break;
+              const mailHost = new URL(page.url()).hostname || start.hostname;
+              const since = new Date(runStartedAt - 30_000);
+              const report: MailReport = { inboxes: [], errors: [], fromPortal: 0 };
+              // A Fetch the owner pressed shows the code box at once: the code is
+              // taken from the email or from the owner, whichever comes first, so
+              // nobody waits on an email search that cannot find it.
+              if (opts.interactive) await db.utilityAccount.update({ where: { id: account.id }, data: { mfaPrompt: String(i.prompt).slice(0, 300), mfaRequestedAt: new Date(), mfaCodeEnc: null } });
+              say(opts.interactive ? 'Looking for the code in your email — or type it in the box' : 'Looking for the verification code in your email');
+              let stop = false;
+              const fromEmail = findEmailedCode(userId, { since, host: mailHost, providerName: account.providerName, timeoutMs: 120_000, exclude: [...triedCodes], report, stop: () => stop }).catch(() => null)
+                .then(v => { if (!v && !stop && opts.interactive) say(`${mailMiss(report, mailHost, since)} Waiting for you to type the code.`); return v ? { code: v, by: 'email' } : null; });
+              const fromOwner = (async () => {
+                if (!opts.interactive) return null;
+                const until = Date.now() + CODE_WAIT_MS;
+                while (!stop && Date.now() < until) {
+                  await new Promise(r => setTimeout(r, 3000));
+                  const a = await db.utilityAccount.findUnique({ where: { id: account.id }, select: { mfaCodeEnc: true } });
+                  if (a?.mfaCodeEnc) return { code: decrypt(a.mfaCodeEnc), by: 'owner' };
+                }
+                return null;
+              })();
+              const got = await new Promise<{ code: string; by: string } | null>(resolve => {
+                let left = 2;
+                const settle = (v: { code: string; by: string } | null) => { if (v) resolve(v); else if (--left === 0) resolve(null); };
+                void fromEmail.then(settle); void fromOwner.then(settle);
+              });
+              stop = true;
+              if (opts.interactive) await db.utilityAccount.update({ where: { id: account.id }, data: { mfaPrompt: null, mfaRequestedAt: null, mfaCodeEnc: null } });
+              if (got) {
+                code = got.code.trim(); secrets.push(code); usedCode = true;
+                content = got.by === 'email' ? 'The code arrived by email. Use type_code.' : 'The owner gave the code. Use type_code.';
+                say(got.by === 'email' ? 'Found the code in your email — entering it' : 'Got your code — entering it');
+              } else {
+                mailNote = mailMiss(report, mailHost, since);
+                content = `No code: ${mailNote}${opts.interactive ? ' The owner did not type one within 5 minutes either.' : ' Nobody is watching a scheduled run.'} Finish with no_code.`;
               }
-              if (!opts.interactive) { content = 'No code arrived by email, and the owner is not here on a scheduled run — finish with no_code.'; break; }
-              say(`Waiting for your verification code: ${String(i.prompt).slice(0, 160)}`);
-              await db.utilityAccount.update({ where: { id: account.id }, data: { mfaPrompt: String(i.prompt).slice(0, 300), mfaRequestedAt: new Date(), mfaCodeEnc: null } });
-              const until = Date.now() + CODE_WAIT_MS;
-              code = null;
-              while (Date.now() < until && !code) {
-                await new Promise(r => setTimeout(r, 4000));
-                const a = await db.utilityAccount.findUnique({ where: { id: account.id }, select: { mfaCodeEnc: true } });
-                if (a?.mfaCodeEnc) code = decrypt(a.mfaCodeEnc);
-              }
-              await db.utilityAccount.update({ where: { id: account.id }, data: { mfaPrompt: null, mfaRequestedAt: null, mfaCodeEnc: null } });
-              content = code ? 'The owner gave the code. Use type_code.' : 'No code within 5 minutes — finish with no_code.';
-              if (code) usedCode = true;
-              if (code) secrets.push(code);
               break;
             }
             case 'open_emailed_link': {
               if (triedLinks >= 2) { content = 'Two emailed links have been tried — finish with no_code.'; break; }
               triedLinks++;
               // Only mail sent since this fetch began, from the portal itself.
-              const link = await findEmailedLink(userId, { since: new Date(runStartedAt - 30_000), host: new URL(page.url()).hostname || start.hostname, providerName: account.providerName, timeoutMs: 120_000 }).catch(() => null);
-              if (!link) { content = 'No sign-in link arrived in the owner\'s email within 2 minutes — finish with no_code.'; break; }
+              const linkHost = new URL(page.url()).hostname || start.hostname, linkSince = new Date(runStartedAt - 30_000);
+              const linkReport: MailReport = { inboxes: [], errors: [], fromPortal: 0 };
+              const link = await findEmailedLink(userId, { since: linkSince, host: linkHost, providerName: account.providerName, timeoutMs: 120_000, report: linkReport }).catch(() => null);
+              if (!link) { mailNote = mailMiss(linkReport, linkHost, linkSince); content = `No sign-in link: ${mailNote} Finish with no_code.`; break; }
               secrets.push(link);
               usedCode = true; // signed in by email: keep the browser's memory like after a code
               say('Found the sign-in link in your email — opening it');
@@ -437,7 +479,7 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
             }
             case 'type_code': {
               if (!code) { content = 'No code yet — call ask_owner_for_code.'; break; }
-              await el(i.ref).fill(code);
+              await fillCode(el(i.ref), code);
               triedCodes.add(code);
               if (i.rememberRef != null) await el(i.rememberRef).check({ timeout: 3000 }).catch(() => el(i.rememberRef).click({ timeout: 3000 }).catch(() => {}));
               if (i.submitRef != null) await el(i.submitRef).click({ timeout: 10000 });
@@ -449,7 +491,7 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
               finished = true;
               run.ok = i.outcome === 'done';
               run.summary = String(i.summary ?? '').slice(0, 500);
-              if (!run.ok) run.error = { bad_login: 'The portal rejected the username or password.', captcha: 'The portal showed a captcha the agent cannot solve — sync this one by email or upload.', no_code: opts.interactive ? 'The portal asked for a verification code; none arrived in your connected email and none was entered in time.' : 'The portal sent a verification code or sign-in link that did not arrive in your connected Gmail (it may go to your phone, or to an inbox not connected) — press Fetch now and enter the code when Sollux asks.', turned_away: 'turned_away', blocked: 'The agent could not get to the statements.' }[String(i.outcome)] + (run.summary ? ` ${run.summary}` : '');
+              if (!run.ok) run.error = { bad_login: 'The portal rejected the username or password.', captcha: 'The portal showed a captcha the agent cannot solve — sync this one by email or upload.', no_code: `The portal asked for a verification code or sign-in link and none was found. ${mailNote || 'It may go to your phone.'}${opts.interactive ? '' : ' Press Fetch now to type it yourself.'}`, turned_away: 'turned_away', blocked: 'The agent could not get to the statements.' }[String(i.outcome)] + (run.summary ? ` ${run.summary}` : '');
               break;
             default: content = 'Unknown tool.';
           }
