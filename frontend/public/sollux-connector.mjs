@@ -67,7 +67,7 @@ async function runningChrome() {
   try {
     const [port, wsPath] = fs.readFileSync(portFile, 'utf8').trim().split('\n');
     const j = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1500) }).then(r => r.json());
-    return { proc: null, wsUrl: `ws://127.0.0.1:${port}${wsPath}`, version: j.Browser };
+    return { proc: null, port, wsUrl: `ws://127.0.0.1:${port}${wsPath}`, version: j.Browser };
   } catch { return null; }
 }
 async function startChrome() {
@@ -88,7 +88,7 @@ async function startChrome() {
       const [port, wsPath] = fs.readFileSync(portFile, 'utf8').trim().split('\n');
       if (port && wsPath) {
         const version = await fetch(`http://127.0.0.1:${port}/json/version`).then(r => r.json()).then(j => j.Browser).catch(() => 'Chrome');
-        chrome = { proc, wsUrl: `ws://127.0.0.1:${port}${wsPath}`, version };
+        chrome = { proc, port, wsUrl: `ws://127.0.0.1:${port}${wsPath}`, version };
         proc.on('exit', () => { if (chrome?.proc === proc) chrome = null; });
         return chrome;
       }
@@ -96,6 +96,23 @@ async function startChrome() {
   }
   proc.kill();
   throw new Error('Chrome started but did not open its control port.');
+}
+
+/**
+ * Make sure Chrome has a window. On a Mac, closing the last window leaves
+ * Chrome running but unloads its profile, and Sollux then cannot use it
+ * ("Browser context management is not supported"): open a new window, which
+ * loads the profile again.
+ */
+async function ensureWindow({ port }) {
+  const pages = await fetch(`http://127.0.0.1:${port}/json/list`).then(r => r.json()).catch(() => []);
+  if (pages.some(t => t.type === 'page')) return;
+  await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' }).catch(() => {});
+  for (let i = 0; i < 20; i++) {
+    await new Promise(r => setTimeout(r, 250));
+    const now = await fetch(`http://127.0.0.1:${port}/json/list`).then(r => r.json()).catch(() => []);
+    if (now.some(t => t.type === 'page')) return;
+  }
 }
 
 const sessions = new Map(); // id → local WebSocket to Chrome
@@ -123,7 +140,9 @@ function connect() {
     else if (m.type === 'denied') { console.error(m.message); try { fs.unlinkSync(CONFIG); } catch { /* gone */ } process.exit(1); }
     else if (m.type === 'open') {
       try {
-        const { wsUrl } = await startChrome();
+        const c = await startChrome();
+        await ensureWindow(c);
+        const { wsUrl } = c;
         const local = new WebSocket(wsUrl);
         sessions.set(m.id, local);
         local.addEventListener('open', () => { send({ type: 'opened', id: m.id }); console.log(`${new Date().toLocaleTimeString()} Sollux is fetching statements in the Chrome window`); });

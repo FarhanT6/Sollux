@@ -74,7 +74,7 @@ export default function ConnectorCard() {
             <code className="flex-1 break-all rounded bg-black/40 p-2 text-[11px] text-amber-200">{command}</code>
             <button className="btn text-xs" onClick={() => copy(command)}>Copy</button>
           </div>
-          <p>3. A Chrome window opens and the Terminal says “Connected”. Leave it running. Next time, just run <code>node sollux-connector.mjs</code> in the same folder.</p>
+          <p>3. A Chrome window opens and the Terminal says “Connected”. Leave Terminal running (the Chrome window can be minimized or closed — it reopens when needed). Next time, just run <code>node sollux-connector.mjs</code> in the same folder.</p>
           <p className="text-gray-500">This code is shown once and works only for your account. {devices?.some(d => d.online) ? <span className="text-green-400">Connected ✓</span> : 'Waiting for the computer to connect…'}</p>
           <button className="text-gray-400 hover:text-gray-200" onClick={() => setMade(null)}>Done</button>
         </div>
