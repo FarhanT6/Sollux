@@ -76,6 +76,13 @@ import serviceNoticesRouter from './routes/serviceNotices';
 import './workers/driveImportWorker';
 import './workers/gmailWorker';
 console.log('🔧 Inline workers started: driveImport, gmail');
+// Without a separate sollux-workers service on Render, statement fetching,
+// insights, the nightly bookkeeper, autopay and the other scheduled jobs never
+// run. RUN_WORKERS_IN_API=true runs all of them here instead (one portal fetch
+// at a time, to keep memory in check).
+if (process.env.RUN_WORKERS_IN_API === 'true') {
+  void import('./workers/index').then(() => console.log('🔧 All workers running inside the API (RUN_WORKERS_IN_API)'));
+}
 
 const app = express();
 const PORT = process.env.PORT || 3001;

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { workerStatus } from '../workers/heartbeat';
 import { timingSafeEqual } from 'crypto';
 import { db } from '../config/db';
 
@@ -154,6 +155,10 @@ router.get('/report', async (req, res, next) => {
       scheduledInstallmentsOverdue: scheduledOverdue,
       placeholders: { zeroPremiumPolicies: zeroPremium, loanBalanceMissing, loanBalanceUntouched },
       clientErrors,
+      // Whether anything processes queued jobs (statement fetching, insights,
+      // the bookkeeper, autopay). Not 'ok' or 'busy' is a defect to file.
+      workers: await workerStatus(),
+      queuedFetchesWaiting: await db.syncJob.count({ where: { status: 'PENDING', startedAt: null, createdAt: { lt: new Date(Date.now() - 10 * 60_000) } } }),
     });
   } catch (err) { next(err); }
 });

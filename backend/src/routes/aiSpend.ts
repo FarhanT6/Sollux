@@ -23,6 +23,7 @@ import { assistantTurn } from '../ai/assistant';
 import { detectLeaks } from '../ai/leakDetective';
 import { runBookkeeperForUser } from '../ai/bookkeeper';
 import { scrapeQueue } from '../workers/queues';
+import { workerStatus } from '../workers/heartbeat';
 
 const router = Router();
 router.use(attachDbUser);
@@ -285,6 +286,7 @@ router.get('/test/portal', async (req: Request, res: Response) => {
     })),
     sharedRecipes: recipes.filter(r => r.key.startsWith('host:')),
     monthCalls: usage[0]?._count._all ?? 0, monthCost: Number(usage[0]?._sum.costUsd ?? 0),
+    workers: await workerStatus(),
   });
 });
 

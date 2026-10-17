@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { startHeartbeat } from './heartbeat';
 import { runAutopay } from '../services/rentCollection';
 import '../config/playwrightPath';
 import './scrapeWorker';
@@ -16,6 +17,8 @@ import { applyDueRentIncreases, rolloverExpiredLeases, accrueOverdueRent } from 
 import { assessLateFees } from '../services/rentCharges';
 
 console.log('🔧 Sollux Workers started');
+// Inside the API process (RUN_WORKERS_IN_API) the heartbeat says so.
+startHeartbeat(process.env.RUN_WORKERS_IN_API === 'true' ? 'sollux-api' : 'sollux-workers');
 
 // ── Scheduled Jobs ────────────────────────────────────────
 // Run all scrapes every 6 hours.

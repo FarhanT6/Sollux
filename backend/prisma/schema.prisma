@@ -2538,3 +2538,17 @@ model MaintenanceUpdate {
   @@index([requestId])
   @@map("maintenance_updates")
 }
+
+// The background workers saying they are alive, once a minute: whether they
+// run at all, whether Redis trouble has paused them, and how busy they are.
+// Read where a queued job waits (Settings → AI usage) and by the auditor.
+model WorkerHeartbeat {
+  name      String   @id // "sollux-workers", or "sollux-api" when the API runs them (RUN_WORKERS_IN_API)
+  startedAt DateTime
+  seenAt    DateTime
+  paused    Boolean  @default(false)
+  active    Int      @default(0)
+  commit    String?
+
+  @@map("worker_heartbeats")
+}
