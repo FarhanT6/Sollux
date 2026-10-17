@@ -214,23 +214,26 @@ export async function fillCode(first: Locator, code: string): Promise<void> {
   }
 }
 
+/** A PDF fetched by the page itself (its cookies, its internet connection); null if it is not one. */
+async function pdfFromPage(page: Page, url: string): Promise<Buffer | null> {
+  const b64 = await page.evaluate(async (u) => {
+    const r = await fetch(u, { credentials: 'include' });
+    const bytes = new Uint8Array(await r.arrayBuffer());
+    let bin = '';
+    for (let k = 0; k < bytes.length; k += 0x8000) bin += String.fromCharCode(...Array.from(bytes.subarray(k, k + 0x8000)));
+    return btoa(bin);
+  }, url).catch(() => null);
+  const b = b64 ? Buffer.from(b64, 'base64') : null;
+  return b && b.subarray(0, 1024).includes('%PDF-') ? b : null;
+}
+
 export async function capturePdf(ctx: BrowserContext, page: Page, action: () => Promise<void>): Promise<Buffer | null> {
   let got: Buffer | null = null;
   const onDownload = async (d: Download) => {
     try { const p = await d.path(); if (p) { const b = await fs.promises.readFile(p); if (b.subarray(0, 1024).includes('%PDF-')) got = b; } } catch { /* ignore */ }
     // A browser on the owner's computer saves downloads there, out of reach:
     // fetch the same address from inside the page (its cookies, its internet).
-    if (!got) {
-      const b64 = await page.evaluate(async (url) => {
-        const r = await fetch(url, { credentials: 'include' });
-        const bytes = new Uint8Array(await r.arrayBuffer());
-        let bin = '';
-        for (let k = 0; k < bytes.length; k += 0x8000) bin += String.fromCharCode(...Array.from(bytes.subarray(k, k + 0x8000)));
-        return btoa(bin);
-      }, d.url()).catch(() => null);
-      const b = b64 ? Buffer.from(b64, 'base64') : null;
-      if (b && b.subarray(0, 1024).includes('%PDF-')) got = b;
-    }
+    if (!got) got = await pdfFromPage(page, d.url());
   };
   const onResponse = async (r: import('playwright').Response) => {
     // A PDF opened in a tab reports its viewer's HTML as the body; keep only real PDF bytes.
@@ -250,9 +253,15 @@ export async function capturePdf(ctx: BrowserContext, page: Page, action: () => 
       const np = await Promise.race([newPage, new Promise<null>(r => setTimeout(() => r(null), 10))]);
       if (np && !got) {
         await np.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
+        // A tab opened blank and then sent to the PDF: wait for its address.
+        for (let k = 0; k < 20 && !np.url().startsWith('http'); k++) await page.waitForTimeout(250);
         const url = np.url();
         if (url && url.startsWith('http')) {
-          const res = await ctx.request.get(url).catch(() => null);
+          // From inside the portal's own tab first: on the owner's computer that is
+          // their internet and sign-in; the request below comes from Sollux's
+          // server, which SDG&E turns away (its bill PDF opens in a new tab).
+          got = await pdfFromPage(page, url);
+          const res = got ? null : await ctx.request.get(url).catch(() => null);
           if (res && (res.headers()['content-type'] ?? '').includes('pdf')) { const b = Buffer.from(await res.body()); if (b.subarray(0, 1024).includes('%PDF-')) got = b; }
         }
         await np.close().catch(() => {});
