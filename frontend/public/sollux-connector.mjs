@@ -77,6 +77,16 @@ async function startChrome() {
   const bin = findChrome();
   if (!bin) throw new Error('Google Chrome was not found. Install it, or set CHROME_PATH to where it is.');
   try { fs.unlinkSync(portFile); } catch { /* none */ }
+  // Sollux types the logins: Chrome offering to save each password only gets in the way.
+  try {
+    const prefsFile = path.join(PROFILE, 'Default', 'Preferences');
+    fs.mkdirSync(path.dirname(prefsFile), { recursive: true });
+    let prefs = {};
+    try { prefs = JSON.parse(fs.readFileSync(prefsFile, 'utf8')); } catch { /* new profile */ }
+    prefs.credentials_enable_service = false;
+    prefs.profile = { ...(prefs.profile ?? {}), password_manager_enabled: false };
+    fs.writeFileSync(prefsFile, JSON.stringify(prefs));
+  } catch { /* Chrome works without it */ }
   const proc = spawn(bin, [
     `--user-data-dir=${PROFILE}`, '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1',
     '--no-first-run', '--no-default-browser-check', '--window-size=1280,900',
