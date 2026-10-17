@@ -462,6 +462,25 @@ router.post('/:id/sync', async (req, res, next) => {
   }
 });
 
+// POST /api/utilities/:id/cancel-fetch — stop a fetch that is queued or running.
+// The worker checks every few seconds and closes the browser; one still in
+// the queue is taken off it. (Cancelling a deploy on Render does not do this:
+// the running worker keeps going until the new one replaces it.)
+router.post('/:id/cancel-fetch', async (req, res, next) => {
+  try {
+    const account = await db.utilityAccount.findFirst({ where: { id: req.params.id, property: { userId: req.dbUserId! } }, select: { id: true } });
+    if (!account) return res.status(404).json({ error: 'Utility account not found' });
+    const why = 'Cancelled by you.';
+    const { count } = await db.syncJob.updateMany({ where: { utilityAccountId: account.id, status: 'PENDING' }, data: { status: 'FAILED', completedAt: new Date(), error: why, progress: null } });
+    await db.utilityAccount.update({ where: { id: account.id }, data: { lastSyncStatus: 'FAILED', lastSyncError: why, mfaPrompt: null, mfaRequestedAt: null, mfaCodeEnc: null } });
+    try {
+      const queued = await scrapeQueue.getJobs(['waiting', 'prioritized', 'delayed', 'paused'], 0, 500);
+      await Promise.all(queued.filter(j => j.data?.utilityAccountId === account.id).map(j => j.remove().catch(() => {})));
+    } catch { /* Redis unreachable: the worker skips a cancelled job when it gets to it */ }
+    res.json({ cancelled: count });
+  } catch (err) { next(err); }
+});
+
 // PATCH /api/utilities/:id
 router.patch('/:id', async (req, res, next) => {
   try {

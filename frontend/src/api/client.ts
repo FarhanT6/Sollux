@@ -656,6 +656,8 @@ export const deleteUtility = (id: string) =>
   api.delete(`/utilities/${id}`);
 export const syncUtility = (id: string) =>
   api.post<{ jobId: string }>(`/utilities/${id}/sync`).then(r => r.data);
+/** Stop a fetch that is queued or running for this account. */
+export const cancelFetch = (id: string) => api.post<{ cancelled: number }>(`/utilities/${id}/cancel-fetch`).then(r => r.data);
 // The verification code a portal sent, for the portal agent waiting on it.
 export const submitPortalCode = (id: string, code: string) => api.post(`/utilities/${id}/portal-code`, { code });
 export const revealUtilityAccountNumber = (id: string) =>

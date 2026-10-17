@@ -210,6 +210,8 @@ export async function capturePdf(ctx: BrowserContext, page: Page, action: () => 
 
 export interface AgentOptions {
   interactive?: boolean;
+  /** True once the owner pressed Cancel: the run stops at once and closes its browser. */
+  cancelled?: () => Promise<boolean>;
   /** Called with a short line on what the agent is doing, for a live status. */
   onProgress?: (text: string) => void;
 }
@@ -273,6 +275,12 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   };
   let ctx = await prepare();
   let page = ctx.pages()[0] ?? await ctx.newPage();
+  // Cancel: checked every few seconds; closing the browser ends whatever it
+  // is waiting on (a page load, a click), and every loop below stops on it.
+  let cancelled = false;
+  const watch = opts.cancelled ? setInterval(() => {
+    void opts.cancelled!().then(c => { if (c && !cancelled) { cancelled = true; void ctx.close().catch(() => {}); } }).catch(() => {});
+  }, 3000) : null;
   // A portal that resets HTTP/2 from automated browsers (Mohela) is opened again without it.
   const openStart = async () => {
     try { return await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 45000 }); }
@@ -339,7 +347,7 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
     }
     const messages: Anthropic.MessageParam[] = [{ role: 'user', content: opening }];
     const stepLimit = recipe && run.replayed === recipe.steps.length ? MAX_STEPS : MAX_STEPS_FIRST;
-    for (let step = 0; step < stepLimit && Date.now() < deadline; step++) {
+    for (let step = 0; step < stepLimit && Date.now() < deadline && !cancelled; step++) {
       if ((run.costUsd ?? 0) >= RUN_MAX_USD) { run.error = `Stopped after spending $${(run.costUsd ?? 0).toFixed(2)} without finishing — the portal needs a look.`; break; }
       // Cached: each step resends the run so far, and reads it back at a tenth of the price.
       const res = await meteredCreate(client, 'portal-agent', { ...paramsFor(PRIMARY_MODEL, { maxTokens: 1500, system, messages, cache: true }), tools: TOOLS });
@@ -433,12 +441,12 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
               if (opts.interactive) await db.utilityAccount.update({ where: { id: account.id }, data: { mfaPrompt: String(i.prompt).slice(0, 300), mfaRequestedAt: new Date(), mfaCodeEnc: null } });
               say(opts.interactive ? 'Looking for the code in your email — or type it in the box' : 'Looking for the verification code in your email');
               let stop = false;
-              const fromEmail = findEmailedCode(userId, { since, host: mailHost, providerName: account.providerName, timeoutMs: 120_000, exclude: [...triedCodes], report, stop: () => stop }).catch(() => null)
+              const fromEmail = findEmailedCode(userId, { since, host: mailHost, providerName: account.providerName, timeoutMs: 120_000, exclude: [...triedCodes], report, stop: () => stop || cancelled }).catch(() => null)
                 .then(v => { if (!v && !stop && opts.interactive) say(`${mailMiss(report, mailHost, since)} Waiting for you to type the code.`); return v ? { code: v, by: 'email' } : null; });
               const fromOwner = (async () => {
                 if (!opts.interactive) return null;
                 const until = Date.now() + CODE_WAIT_MS;
-                while (!stop && Date.now() < until) {
+                while (!stop && !cancelled && Date.now() < until) {
                   await new Promise(r => setTimeout(r, 3000));
                   const a = await db.utilityAccount.findUnique({ where: { id: account.id }, select: { mfaCodeEnc: true } });
                   if (a?.mfaCodeEnc) return { code: decrypt(a.mfaCodeEnc), by: 'owner' };
@@ -510,6 +518,7 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
       // The history is only ever appended to: editing an earlier turn would
       // throw away the cache for everything after it and cost more than it saves.
     }
+    if (cancelled) run.error = 'Cancelled by you.';
     if (!run.summary && !run.error) {
       // Where it got stuck, so the next look starts from there.
       const at = await page.title().catch(() => '');
@@ -522,9 +531,11 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
       else await saveRecipe(account.id, host, steps);
     }
   } catch (err) {
-    run.error = err instanceof Error ? err.message.split('\n')[0] : String(err);
+    run.error = cancelled ? 'Cancelled by you.' : err instanceof Error ? err.message.split('\n')[0] : String(err);
     if ((err as { turnedAway?: boolean })?.turnedAway) run.error = `turned_away ${run.error}`;
   } finally {
+    if (watch) clearInterval(watch);
+    if (cancelled) { run.ok = false; run.error = 'Cancelled by you.'; }
     // Keep the cookies after a good run, or once a code got us in (the trusted-device cookie).
     if (run.ok || usedCode) {
       try {

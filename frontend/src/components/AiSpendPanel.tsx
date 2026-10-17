@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { getAiSpend, getAiTest, startAiTest, getPortalTests, testPortal, type AiSpend, type AiTestState, type PortalTestAccount, type WorkerStatus, type QueueSnapshot } from '../api/client';
+import { getAiSpend, getAiTest, startAiTest, getPortalTests, testPortal, cancelFetch, type AiSpend, type AiTestState, type PortalTestAccount, type WorkerStatus, type QueueSnapshot } from '../api/client';
 import { fmtMoney } from '../lib/money';
 import { fmtMoment } from '../lib/date';
 import PortalCodeBanner from './utility/PortalCodeBanner';
@@ -59,6 +59,10 @@ export default function AiSpendPanel() {
   async function run(only?: string) {
     try { await startAiTest(only); toast('Test run started — each feature runs once on your own data.'); await load(); poll(); }
     catch (e: any) { toast(e?.response?.data?.error ?? 'Could not start the test run.', 'error'); }
+  }
+  async function cancel(a: PortalTestAccount) {
+    try { await cancelFetch(a.id); toast('Cancelled — it stops within a few seconds.'); await getPortalTests().then(setPortal); }
+    catch (e: any) { toast(e?.response?.data?.error ?? 'Could not cancel it.', 'error'); }
   }
   async function fetchNow(a: PortalTestAccount) {
     try { await testPortal(a.id); await getPortalTests().then(setPortal); }
@@ -174,9 +178,14 @@ export default function AiSpendPanel() {
                     </p>
                     <RunLine a={a} workers={portal.workers} queue={portal.queue} onCodeSent={() => void getPortalTests().then(setPortal)} />
                   </div>
-                  <button className="btn text-xs whitespace-nowrap" disabled={!!a.run && (a.run.state === 'queued' || a.run.state === 'running')} onClick={() => void fetchNow(a)}>
-                    {a.run && (a.run.state === 'queued' || a.run.state === 'running') ? 'Fetching…' : 'Fetch now'}
-                  </button>
+                  {a.run && (a.run.state === 'queued' || a.run.state === 'running') ? (
+                    <div className="flex flex-col items-end gap-1">
+                      <button className="btn text-xs whitespace-nowrap" disabled>Fetching…</button>
+                      <button className="text-xs text-gray-400 hover:text-red-300" onClick={() => void cancel(a)}>Cancel</button>
+                    </div>
+                  ) : (
+                    <button className="btn text-xs whitespace-nowrap" onClick={() => void fetchNow(a)}>Fetch now</button>
+                  )}
                 </div>
               );
             })}

@@ -101,7 +101,7 @@ async function agentJob(job: Job<ScrapeJobData>, account: { id: string; provider
       const wait = 2000 - (Date.now() - lastWrite);
       if (wait <= 0) write(); else timer = setTimeout(write, wait);
     };
-    const r = await withAiContext({ test: !!job.data.test }, () => runPortalAgent(utilityAccountId, { interactive: !!job.data.manual, onProgress }))
+    const r = await withAiContext({ test: !!job.data.test }, () => runPortalAgent(utilityAccountId, { interactive: !!job.data.manual, onProgress, cancelled: async () => (await db.syncJob.findUnique({ where: { id: syncJob.id }, select: { status: true } }))?.status === 'FAILED' }))
       .catch(err => ({ ok: false, filed: 0, review: 0, applied: 0, downloads: 0, summary: '', error: readableError(err instanceof Error ? err.message : String(err)) }) as Awaited<ReturnType<typeof runPortalAgent>>);
     if (timer) clearTimeout(timer); // the final status below replaces any pending progress line
     const clash = !r.ok && r.error && REJECTED.test(r.error) ? await loginClash(utilityAccountId) : '';
@@ -128,7 +128,9 @@ const worker = new Worker<ScrapeJobData>(
       return;
     }
     if (job.data.syncJobId) {
-      const mine = await db.syncJob.findUnique({ where: { id: job.data.syncJobId }, select: { createdAt: true } });
+      const mine = await db.syncJob.findUnique({ where: { id: job.data.syncJobId }, select: { createdAt: true, status: true } });
+      // Cancelled while it waited in the queue.
+      if (mine && mine.status !== 'PENDING') return;
       if (mine) {
         // A newer press for the same account replaces this one.
         const newer = await db.syncJob.findFirst({ where: { utilityAccountId, status: 'PENDING', createdAt: { gt: mine.createdAt } }, select: { id: true } });

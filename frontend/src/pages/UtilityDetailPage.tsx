@@ -6,7 +6,7 @@ import { openBalanceOf, isStatementPaid, computeResolvedByFutureCheckpoint, comp
 import { bankAccountLabel } from '../lib/bankAccountLabel';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
-  getUtility, syncUtility, deleteUtility, updateUtility, getStatementDownloadUrl,
+  getUtility, syncUtility, cancelFetch, deleteUtility, updateUtility, getStatementDownloadUrl,
   getPaymentPlan, createPaymentPlan, updatePaymentPlan, deletePaymentPlan,
   upsertUtilityLoan, deleteUtilityLoan, patchStatement, createStatement, deleteStatement, markStatementUnpaid,
   revealUtilityAccountNumber, createPayment, createSplitPayment, updatePayment, deletePayment,
@@ -1450,6 +1450,9 @@ export default function UtilityDetailPage() {
           <button onClick={handleSync} disabled={syncing || deleting} className="btn btn-primary text-xs">
             {syncing ? 'Syncing…' : 'Sync ↻'}
           </button>
+          {(syncing || account.lastSyncStatus === 'PENDING') && (
+            <button onClick={() => void cancelFetch(account.id).then(() => { toast('Cancelled — the fetch stops within a few seconds.'); setSyncing(false); return getUtility(account.id).then(setAccount); }).catch(() => toast('Could not cancel it.', 'error'))} className="btn text-xs">Cancel</button>
+          )}
           <button
             onClick={toggleActive}
             disabled={togglingActive}
