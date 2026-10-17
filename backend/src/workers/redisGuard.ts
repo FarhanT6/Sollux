@@ -66,6 +66,9 @@ export function guardWorker(name: string, worker: Worker<any, any, any>): void {
   });
 }
 
+/** Whether the guard has paused the workers (reported in the heartbeat). */
+export const isPaused = (): boolean => paused;
+
 /** Reset the backoff once something succeeds, so one bad hour isn't permanent. */
 export function noteHealthy(): void {
   cooldown = MIN_COOLDOWN;

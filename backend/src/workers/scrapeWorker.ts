@@ -1,4 +1,5 @@
 import { Worker, Job } from 'bullmq';
+import { jobStarted, jobEnded } from './heartbeat';
 import { withAiContext } from '../ai/meter';
 import { overdueAfterDays, billCycleDays } from '../lib/billCadence';
 import { Prisma } from '@prisma/client';
@@ -474,16 +475,20 @@ const worker = new Worker<ScrapeJobData>(
   },
   {
     connection: createWorkerConnection(),
-    concurrency: 3,
+    // Each portal-agent job is a Chrome; inside the API (RUN_WORKERS_IN_API) one at a time.
+    concurrency: Number(process.env.SCRAPE_CONCURRENCY) || (process.env.RUN_WORKERS_IN_API === 'true' ? 1 : 3),
     ...workerTuning,
   }
 );
 
+worker.on('active', () => jobStarted());
 worker.on('completed', job => {
+  jobEnded();
   console.log(`[ScrapeWorker] Job ${job.id} completed`);
 });
 
 worker.on('failed', (job, err) => {
+  jobEnded();
   console.error(`[ScrapeWorker] Job ${job?.id} failed:`, err.message);
 });
 

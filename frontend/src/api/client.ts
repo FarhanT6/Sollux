@@ -1199,7 +1199,8 @@ export interface PortalTestAccount {
 export const getAiSpend = () => api.get<AiSpend>('/ai-spend').then(r => r.data);
 export const getAiTest = () => api.get<AiTestState>('/ai-spend/test').then(r => r.data);
 export const startAiTest = (only?: string) => api.post('/ai-spend/test', only ? { only } : {}).then(r => r.data);
-export const getPortalTests = () => api.get<{ accounts: PortalTestAccount[]; sharedRecipes: { host: string; successes: number; failures: number }[]; monthCalls: number; monthCost: number }>('/ai-spend/test/portal').then(r => r.data);
+export interface WorkerStatus { state: 'ok' | 'busy' | 'paused' | 'stopped' | 'never'; name: string | null; lastSeen: string | null; active: number; message: string }
+export const getPortalTests = () => api.get<{ accounts: PortalTestAccount[]; sharedRecipes: { host: string; successes: number; failures: number }[]; monthCalls: number; monthCost: number; workers: WorkerStatus }>('/ai-spend/test/portal').then(r => r.data);
 export const testPortal = (accountId: string) => api.post(`/ai-spend/test/portal/${accountId}`).then(r => r.data);
 
 

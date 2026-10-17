@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { getAiSpend, getAiTest, startAiTest, getPortalTests, testPortal, type AiSpend, type AiTestState, type PortalTestAccount } from '../api/client';
+import { getAiSpend, getAiTest, startAiTest, getPortalTests, testPortal, type AiSpend, type AiTestState, type PortalTestAccount, type WorkerStatus } from '../api/client';
 import { fmtMoney } from '../lib/money';
 import { fmtMoment } from '../lib/date';
 import PortalCodeBanner from './utility/PortalCodeBanner';
@@ -149,6 +149,12 @@ export default function AiSpendPanel() {
           Accounts with a portal login. The first fetch from a portal is Claude working the site out; the steps that got to the statements are saved as a recipe and replayed next time without Claude, so later fetches cost a fraction.
           {portal && ` This month: ${portal.monthCalls} Claude turns, ${fmtCost(portal.monthCost)}.`}
         </p>
+        {portal?.workers && portal.workers.state !== 'ok' && portal.workers.state !== 'busy' && (
+          <div className="rounded-lg p-3 mb-3 text-xs" style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#fca5a5' }}>
+            <p className="font-semibold">Statements can't be fetched right now</p>
+            <p className="mt-0.5">{portal.workers.message}</p>
+          </div>
+        )}
         {!portal?.accounts.length ? <p className="text-xs text-gray-500">No account has a portal login yet — add one with “Add portal login” on an account.</p> : (
           <div className="space-y-2">
             {portal.accounts.map(a => {
@@ -162,7 +168,7 @@ export default function AiSpendPanel() {
                       {a.lastAgentRunAt ? ` · last run ${fmtMoment(a.lastAgentRunAt)}` : ''}
                       {a.lastSyncStatus ? ` · ${a.lastSyncStatus.toLowerCase()}` : ''}
                     </p>
-                    <RunLine a={a} onCodeSent={() => void getPortalTests().then(setPortal)} />
+                    <RunLine a={a} workers={portal.workers} onCodeSent={() => void getPortalTests().then(setPortal)} />
                   </div>
                   <button className="btn text-xs whitespace-nowrap" disabled={!!a.run && (a.run.state === 'queued' || a.run.state === 'running')} onClick={() => void fetchNow(a)}>
                     {a.run && (a.run.state === 'queued' || a.run.state === 'running') ? 'Fetching…' : 'Fetch now'}
@@ -192,7 +198,7 @@ export default function AiSpendPanel() {
 }
 
 /** The account's latest fetch, live: queued, what it is doing now, the code it needs, or how it ended. */
-function RunLine({ a, onCodeSent }: { a: PortalTestAccount; onCodeSent: () => void }) {
+function RunLine({ a, workers, onCodeSent }: { a: PortalTestAccount; workers?: WorkerStatus; onCodeSent: () => void }) {
   const r = a.run;
   if (!a.syncEnabled) return <p className="text-xs text-amber-400 mt-0.5">Syncing is turned off for this account (marked inactive).</p>;
   if (!r) return a.lastSyncError && a.lastSyncStatus === 'FAILED' ? <p className="text-xs text-red-400 mt-0.5">{a.lastSyncError}</p> : null;
@@ -201,7 +207,7 @@ function RunLine({ a, onCodeSent }: { a: PortalTestAccount; onCodeSent: () => vo
     <div className="mt-1 space-y-1.5">
       {r.state === 'queued' && (
         <p className="text-xs" style={{ color: r.stuck ? '#ef4444' : '#F5A623' }}>
-          {r.stuck ? 'Still queued after 2 minutes — the background worker (sollux-workers on Render) is not running or is busy. Check it on Render.' : 'Queued — starting in a moment…'}
+          {r.stuck ? `Still queued after 2 minutes. ${workers?.message ?? 'The background worker (sollux-workers on Render) is not running or is busy.'}` : 'Queued — starting in a moment…'}
         </p>
       )}
       {r.state === 'running' && <p className="text-xs text-amber-400 flex items-center gap-1.5"><span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />{r.progress ?? 'Working…'}</p>}

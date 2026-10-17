@@ -16,7 +16,7 @@ sollux/
 - White background everywhere (`#FFFFFF`), gold accent `#F5A623`
 - All credentials encrypted AES-256-GCM before DB storage (see `backend/src/crypto/encrypt.ts`)
 - Scrapers implement `BaseScraperProvider` from `backend/src/scrapers/base.ts`
-- Workers run separately from the API server: `npm run workers` in `/backend`
+- Workers run separately from the API server: `npm run workers` in `/backend` — or inside the API with `RUN_WORKERS_IN_API=true`. Workers write a heartbeat to `worker_heartbeats` every minute (`workers/heartbeat.ts`); `workerStatus()` says whether queued jobs will run (shown on Settings → AI usage and in the audit report)
 - Gmail OAuth is the fast path for providers without a scraper yet
 - BullMQ queues: `scrape`, `insights`, `notifications`, `gmail`
 - Claude calls go through `askClaude` in `backend/src/ai/models.ts`: `claude-sonnet-5` first, `claude-opus-5-5` as the fallback when the first answer fails its check or the call errors (env `CLAUDE_MODEL` / `CLAUDE_FALLBACK_MODEL`)
