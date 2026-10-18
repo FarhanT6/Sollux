@@ -161,8 +161,14 @@ function accountSpecific(steps: RecipeStep[]): boolean {
  */
 const SHARED_PLATFORMS = /(^|\.)(invoicecloud\.com|paymentus\.com|doxo\.com|xpressbillpay\.com|municipalonlinepayments\.com|papergov\.com|govpaynow\.com|nexbillpay\.com|billerpayments\.com|smartbill\.com)$/i;
 
+/**
+ * The saved route for an account, or for its site. A route recorded on another
+ * site (the account's website was changed since) is never replayed: it would
+ * lead back to the old sign-in.
+ */
 export async function loadRecipe(accountId: string, host: string): Promise<{ key: string; steps: RecipeStep[] } | null> {
-  const r = await db.portalRecipe.findUnique({ where: { key: `acct:${accountId}` } })
+  const own = await db.portalRecipe.findUnique({ where: { key: `acct:${accountId}` } });
+  const r = (own?.host === host ? own : null)
     ?? (SHARED_PLATFORMS.test(host) ? null : await db.portalRecipe.findUnique({ where: { key: `host:${host}` } }));
   return r ? { key: r.key, steps: r.steps as unknown as RecipeStep[] } : null;
 }
@@ -174,7 +180,7 @@ export async function saveRecipe(accountId: string, host: string, steps: RecipeS
   await db.portalRecipe.upsert({
     where: { key },
     create: { key, host, steps: steps as any, successes: 1 },
-    update: { steps: steps as any, successes: { increment: 1 }, failures: 0 },
+    update: { host, steps: steps as any, successes: { increment: 1 }, failures: 0 },
   }).catch(err => console.warn('[PortalRecipe] could not save:', err instanceof Error ? err.message : err));
 }
 
