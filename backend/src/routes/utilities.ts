@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { websiteFor } from '../lib/providerDirectory';
+import { websiteFor, isLookupPage } from '../lib/providerDirectory';
 import { submitPortalCode } from '../scrapers/portalAgent';
 import { z } from 'zod';
 import { db } from '../config/db';
@@ -191,6 +191,7 @@ const UtilitySchema = z.object({
   username: z.string().optional(),
   password: z.string().optional(),
   loginUrl: z.union([z.string().url(), z.literal('')]).optional().transform(v => v === '' ? null : v),
+  lookupName: z.string().max(120).nullable().optional().transform(v => (v == null ? v : v.trim() || null)),
   category: z.enum(['ELECTRIC', 'GAS', 'WATER', 'SEWER', 'TRASH', 'SOLAR',
     'INTERNET', 'PHONE', 'INSURANCE', 'HOA', 'TAXES', 'LOAN', 'CREDIT_CARD', 'OTHER']),
   notes: z.string().optional(),
@@ -437,7 +438,7 @@ router.post('/:id/sync', async (req, res, next) => {
     if (account.providerSlug === 'gmail-fallback' && !account.usernameEnc) {
       return res.json({ message: 'Add your portal login (Edit on the account) and Sollux will fetch the statements from the provider\'s website. Until then, bills come from your Gmail.' });
     }
-    if (!account.usernameEnc) {
+    if (!account.usernameEnc && !isLookupPage(account.loginUrl)) {
       // Mark as failed immediately with a clear message rather than queuing a job that will fail
       await db.utilityAccount.update({
         where: { id: account.id },

@@ -189,6 +189,10 @@ model UtilityAccount {
   usernameEnc      String?
   passwordEnc      String?
   loginUrl         String?
+  // The name the bill is addressed to ("MOHAMMED TALUKDER"), for a biller's
+  // lookup page that finds bills by account number and name without signing
+  // in (InvoiceCloud's "Please Locate Your Account").
+  lookupName       String?
   // Portal agent: a verification code the portal sent, asked of the owner
   // mid-login. The prompt is what the portal said; the code is encrypted and
   // cleared as soon as the agent has typed it.
