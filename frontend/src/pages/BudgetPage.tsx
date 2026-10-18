@@ -576,7 +576,7 @@ function DelinquencyTab({ data, onChanged }: {
                   <td className="py-2 text-center">
                     <button onClick={() => editingLease === t.leaseId ? setEditingLease(null) : openEdit(t)} className="inline-flex items-center gap-1">
                       <LikelihoodBadge likelihood={t.likelihood} />
-                      {t.isManualOverride && <span title={`Flagged manually${t.manualLikelihoodNote ? ': ' + t.manualLikelihoodNote : ''} (auto score says ${t.computedLikelihood})`} className="text-xs text-amber-400">✎</span>}
+                      {t.isManualOverride && <span title={`Flagged manually${t.manualLikelihoodNote ? ': ' + t.manualLikelihoodNote : ''} (auto score says ${t.computedLikelihood})`} className="text-xs text-amber-400">edited</span>}
                     </button>
                   </td>
                   <td className="py-2 text-right font-semibold">

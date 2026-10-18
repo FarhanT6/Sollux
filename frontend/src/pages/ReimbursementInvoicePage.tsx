@@ -355,8 +355,8 @@ export default function ReimbursementInvoicePage() {
         {/* Footer */}
         <div className="inv-footer" style={{ borderTop: `1px solid ${RULE}`, paddingTop: 16, display: 'flex', alignItems: 'center', gap: 28, fontSize: 12, color: MUTED, flexWrap: 'wrap' }}>
           <span style={{ fontWeight: 700, color: INK }}>{fromName}</span>
-          {lh.email && <span>✉ {lh.email}</span>}
-          {lh.phone && <span>☏ {lh.phone}</span>}
+          {lh.email && <span>{lh.email}</span>}
+          {lh.phone && <span>{lh.phone}</span>}
           {lh.address && <span>{lh.address}</span>}
           <span style={{ marginLeft: 'auto' }}>Page 1 of 1</span>
         </div>

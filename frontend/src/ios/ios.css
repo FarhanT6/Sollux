@@ -92,8 +92,9 @@ html[data-theme="light"] {
 
 /* ── Grouped lists ──────────────────────────────────────────────────── */
 .ios-section { margin: 0 0 28px; }
-.ios-section-header { display: flex; align-items: baseline; justify-content: space-between; padding: 0 16px 7px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.02em; color: var(--ios-label-2); }
-.ios-section-header .action { text-transform: none; letter-spacing: 0; font-size: 15px; color: var(--ios-tint); background: none; border: 0; padding: 0; cursor: pointer; }
+/* Sentence-case section titles, as in Apple's own apps (Health, Wallet). */
+.ios-section-header { display: flex; align-items: baseline; justify-content: space-between; padding: 0 16px 8px; font-size: 17px; font-weight: 600; letter-spacing: -0.02em; color: var(--ios-label); }
+.ios-section-header .action { text-transform: none; letter-spacing: 0; font-size: 15px; font-weight: 400; color: var(--ios-tint); background: none; border: 0; padding: 0; cursor: pointer; }
 .ios-section-header.plain { text-transform: none; font-size: 20px; font-weight: 700; color: var(--ios-label); letter-spacing: -0.02em; padding-left: 4px; }
 .ios-section-footer { padding: 7px 16px 0; font-size: 13px; color: var(--ios-label-2); line-height: 1.4; }
 .ios-group { background: var(--ios-cell); border-radius: 12px; overflow: hidden; }
@@ -123,7 +124,7 @@ html[data-theme="light"] {
 
 /* ── Cards and figures ──────────────────────────────────────────────── */
 .ios-card { background: var(--ios-cell); border-radius: 14px; padding: 16px; }
-.ios-hero-label { font-size: 13px; color: var(--ios-label-2); text-transform: uppercase; letter-spacing: 0.02em; }
+.ios-hero-label { font-size: 15px; color: var(--ios-label-2); letter-spacing: -0.01em; }
 .ios-hero-value { font-family: var(--ios-font-display); font-size: 34px; font-weight: 700; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; margin-top: 2px; }
 .ios-hero-sub { font-size: 15px; color: var(--ios-label-2); margin-top: 2px; }
 .ios-chips { display: flex; gap: 8px; overflow-x: auto; margin: 0 -16px; padding: 0 16px; scrollbar-width: none; }

@@ -108,7 +108,7 @@ function CardsTab({ cards, summary, sources, reload }: { cards: CreditCardT[]; s
             );
           })}
         </Section>
-      ) : cards.length === 0 ? <EmptyState icon="💳" title="No cards yet" body="Upload a statement and the card sets itself up, with its limit, rates, cycle, rewards and every transaction." />
+      ) : cards.length === 0 ? <EmptyState title="No cards yet" body="Upload a statement and the card sets itself up, with its limit, rates, cycle, rewards and every transaction." />
         : (
           <div className="space-y-2 mb-6">
             {cards.filter(c => showClosed || c.status !== 'CLOSED').map(c => {
@@ -181,7 +181,7 @@ function LoansTab() {
   const [loans, setLoans] = useState<Loan[] | null>(null);
   useEffect(() => { void getLoans({ isPersonal: true }).then(l => setLoans(l as any)); }, []);
   if (loans == null) return <p className="text-sm text-gray-500">Loading…</p>;
-  if (!loans.length) return <EmptyState icon="🧾" title="No personal loans" body="Auto loans, student loans and personal loans marked Personal on the Loans tab appear here." />;
+  if (!loans.length) return <EmptyState title="No personal loans" body="Auto loans, student loans and personal loans marked Personal on the Loans tab appear here." />;
   const total = loans.reduce((t, l: any) => t + Number(l.currentBalance ?? 0), 0);
   const monthly = loans.reduce((t, l: any) => t + Number(l.monthlyPayment ?? 0), 0);
   if (phone) return (

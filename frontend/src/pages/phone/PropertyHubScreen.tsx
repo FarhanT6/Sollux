@@ -10,7 +10,7 @@ const money0 = (n: number) => fmtMoney(n).replace(/\.\d\d$/, '');
 /** What each section of a property is, for the index. */
 const SECTIONS: Record<string, { bg: string; glyph: string; sub: string }> = {
   Units:       { bg: '#5e5ce6', glyph: '▦', sub: 'Units, beds and baths' },
-  Tenants:     { bg: '#30b0c7', glyph: '☺', sub: 'Leases, rent and payments' },
+  Tenants:     { bg: '#30b0c7', glyph: '◉', sub: 'Leases, rent and payments' },
   Turnover:    { bg: '#64d2ff', glyph: '↻', sub: 'Move-ins, move-outs and vacancy' },
   Loans:       { bg: '#0a84ff', glyph: '$', sub: 'Mortgages and balances' },
   Expenses:    { bg: '#ff9f0a', glyph: '−', sub: 'Repairs, services and supplies' },

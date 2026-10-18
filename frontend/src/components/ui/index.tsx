@@ -143,10 +143,10 @@ export function InsightCard({ insight, onRead, onDismiss }: InsightCardProps) {
 }
 
 // ── Empty state ──────────────────────────────────────────
-export function EmptyState({ icon, title, body }: { icon: string; title: string; body: string }) {
+/** An empty list said in words: a title and a line of help — no picture (the emoji these carried read as a toy). */
+export function EmptyState({ title, body }: { icon?: string; title: string; body: string }) {
   return (
     <div className="flex flex-col items-center justify-center py-16 text-center">
-      <div className="text-4xl mb-3">{icon}</div>
       <p className="text-sm font-medium text-gray-300 mb-1">{title}</p>
       <p className="text-xs text-gray-500 max-w-xs">{body}</p>
     </div>

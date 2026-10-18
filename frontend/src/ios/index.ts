@@ -12,4 +12,4 @@ export { usePhone, isPhoneNow } from './usePhone';
 export { PhoneChromeContext, useOwnHeader } from './chrome';
 export * as Icon from './icons';
 export { default as Responsive } from './Responsive';
-export { categoryIcon } from './category';
+export { categoryIcon, CategoryGlyph } from './category';

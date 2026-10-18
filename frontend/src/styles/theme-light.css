@@ -129,7 +129,9 @@ html[data-theme="light"] .stat-card {
   background: #fff;
   border-color: var(--rule);
 }
-html[data-theme="light"] .section-label { color: var(--muted); }
+html[data-theme="light"] .section-label { color: var(--ink-2); }
+html[data-theme="light"] .row-action { color: var(--muted); }
+html[data-theme="light"] .row-action:hover { color: var(--ink); background: rgba(28, 34, 48, 0.06); }
 html[data-theme="light"] .btn {
   background: #fff;
   border-color: var(--rule);

@@ -2,17 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { getExpenses, createExpense, deleteExpense } from '../api/client';
 import type { Expense, ExpenseCategory } from '../types';
 import { EXPENSE_CATEGORY_LABELS, PERSONAL_EXPENSE_CATEGORIES } from '../types';
+import { CategoryGlyph } from '../ios';
 import { format } from 'date-fns';
 import { PageHeader } from '../components/ui';
 import { fmtDate, todayISO } from '../lib/date';
 
 const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
-
-const CATEGORY_ICONS: Record<ExpenseCategory, string> = {
-  AUTO_LOAN: '🚗', AUTO_INSURANCE: '🛡️', CREDIT_CARD: '💳', MEDICAL: '🩺',
-  PHONE: '📱', STUDENT_LOAN: '🎓', LIFE_INSURANCE: '❤️', SUBSCRIPTIONS: '🔁',
-  OTHER: '📄',
-} as Record<ExpenseCategory, string>;
 
 export default function PersonalExpensesPage({ embedded }: { embedded?: boolean } = {}) {
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -134,7 +129,7 @@ export default function PersonalExpensesPage({ embedded }: { embedded?: boolean 
                     style={{ background: 'rgba(255,255,255,0.04)' }}
                   >
                     <span className="flex items-center gap-2 text-sm font-medium text-white">
-                      <span>{CATEGORY_ICONS[cat] || '📄'}</span>
+                      <span className="text-gray-500"><CategoryGlyph category={cat} size={16} /></span>
                       {EXPENSE_CATEGORY_LABELS[cat]}
                       <span className="text-xs text-gray-500 font-normal">({rows.length})</span>
                     </span>

@@ -59,7 +59,7 @@ export default function PropertyOperations({ propertyId }: { propertyId: string 
   if (loading && connected === null) return <Skeleton className="h-32" />;
   if (connected === false) {
     return (
-      <EmptyState icon="🗂️" title="Operations live in ClickUp"
+      <EmptyState title="Operations live in ClickUp"
         body="Connect ClickUp and choose an operations folder in Settings. This property then gets its own task list there." />
     );
   }

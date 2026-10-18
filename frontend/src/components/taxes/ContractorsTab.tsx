@@ -94,7 +94,7 @@ export default function ContractorsTab() {
                   <td className="text-gray-400">{d.tinLast4 ? `••${d.tinLast4}` : '—'}</td>
                   <td className="text-gray-400">{d.taxYear}</td>
                   <td className="pr-4 text-right whitespace-nowrap">
-                    {(d.documents ?? []).length > 0 && <button onClick={() => openTaxDoc(d.id)} className="text-xs text-amber-400 hover:text-amber-300 mr-3">📄</button>}
+                    {(d.documents ?? []).length > 0 && <button onClick={() => openTaxDoc(d.id)} className="text-xs text-amber-400 hover:text-amber-300 mr-3">PDF</button>}
                     <button onClick={() => setEditing(docToForm(d))} className="text-xs text-gray-500 hover:text-gray-300">Edit</button>
                   </td>
                 </tr>

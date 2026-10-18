@@ -105,7 +105,6 @@ html[data-theme="light"] [class~="hover:text-emerald-300"]:hover { color: #04785
 html[data-theme="light"] [class~="hover:text-gray-200"]:hover { color: #1c2230 !important; }
 html[data-theme="light"] [class~="hover:text-gray-300"]:hover { color: #2b3140 !important; }
 html[data-theme="light"] [class~="hover:text-gray-400"]:hover { color: #4b5563 !important; }
-html[data-theme="light"] [class~="hover:text-green-400"]:hover { color: #15803d !important; }
 html[data-theme="light"] [class~="hover:text-indigo-300"]:hover { color: #4338ca !important; }
 html[data-theme="light"] [class~="hover:text-red-300"]:hover { color: #b91c1c !important; }
 html[data-theme="light"] [class~="hover:text-red-400"]:hover { color: #b91c1c !important; }

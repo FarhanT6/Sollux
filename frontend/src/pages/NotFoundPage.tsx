@@ -18,7 +18,6 @@ export default function NotFoundPage() {
   }, [pathname, search]);
   return (
     <div className="flex flex-col items-center justify-center text-center px-6" style={{ minHeight: '60vh' }}>
-      <p className="text-4xl mb-3" aria-hidden="true">🧭</p>
       <h1 className="text-lg font-semibold text-white">This page doesn't exist</h1>
       <p className="text-sm text-gray-400 mt-1 max-w-sm">
         The link may be out of date. It has been reported so it can be fixed.

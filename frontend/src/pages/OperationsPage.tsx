@@ -140,7 +140,6 @@ export default function OperationsPage() {
         <PageHeader title="Operations" subtitle="Property work, tracked in ClickUp" />
         <div className="px-6 py-10">
           <EmptyState
-            icon="🗂️"
             title={status?.connected ? 'Choose where operations live' : 'Connect ClickUp'}
             body={status?.connected
               ? 'Pick the ClickUp folder that holds property operations. Sollux keeps one list per property inside it.'
@@ -192,7 +191,7 @@ export default function OperationsPage() {
         {error && <p className="text-xs text-red-400">{error}</p>}
 
         {visible.length === 0 && !loading && (
-          <EmptyState icon="✅" title="Nothing here" body={filter === 'open' ? 'No open tasks. Add one to a property below, or sync bill tasks.' : 'No tasks match this view.'} />
+          <EmptyState title="Nothing here" body={filter === 'open' ? 'No open tasks. Add one to a property below, or sync bill tasks.' : 'No tasks match this view.'} />
         )}
 
         {groups.map(g => {

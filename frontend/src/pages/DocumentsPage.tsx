@@ -98,7 +98,7 @@ export default function DocumentsPage({ embedded }: { embedded?: boolean } = {})
             {Array(9).fill(0).map((_, i) => <Skeleton key={i} className="h-28" />)}
           </div>
         ) : filtered.length === 0 ? (
-          <EmptyState icon="📄" title="No statements" body={search || propertyFilter !== 'all' ? 'No statements match your filters.' : 'Statements will appear here automatically once accounts are synced.'} />
+          <EmptyState title="No statements" body={search || propertyFilter !== 'all' ? 'No statements match your filters.' : 'Statements will appear here automatically once accounts are synced.'} />
         ) : (
           <div className="space-y-8">
             {byProperty.map(([propName, stmts]) => (
@@ -117,7 +117,7 @@ export default function DocumentsPage({ embedded }: { embedded?: boolean } = {})
                       <div className={`w-8 h-9 rounded flex items-center justify-center mb-2 ${stmt.pdfS3Key ? 'bg-red-500/10' : 'bg-white/4'}`}>
                         {stmt.pdfS3Key
                           ? <div className="w-3.5 h-4 bg-red-400 rounded-sm" />
-                          : <span className="text-sm">📋</span>
+                          : null
                         }
                       </div>
                       <p className="text-xs font-medium text-gray-200 truncate">
@@ -128,7 +128,7 @@ export default function DocumentsPage({ embedded }: { embedded?: boolean } = {})
                         {stmt.amountDue ? ` · $${Number(stmt.amountDue).toFixed(2)}` : ''}
                       </p>
                       <p className="text-xs mt-1" style={{ color: stmt.pdfS3Key ? '#ef4444' : '#6b7280' }}>
-                        {stmt.pdfS3Key ? '📄 PDF' : 'No PDF'}
+                        {stmt.pdfS3Key ? 'PDF' : 'No PDF'}
                       </p>
                     </div>
                   ))}

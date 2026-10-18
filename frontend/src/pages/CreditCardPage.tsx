@@ -233,7 +233,7 @@ export default function CreditCardPage() {
                     <td className={`text-right ${Number(s.feesCharged ?? 0) > 0 ? 'text-red-400' : ''}`}>{m(s.feesCharged)}</td><td className={`text-right ${Number(s.interestCharged ?? 0) > 0 ? 'text-red-400' : ''}`}>{m(s.interestCharged)}</td>
                     <td className="text-right text-white">{fmtMoney(s.newBalance)}</td><td className="text-right">{m(s.minimumPayment)}</td><td className="text-right text-gray-400">{s.rewardsEarned != null ? `+${Number(s.rewardsEarned).toLocaleString()}` : '—'}</td>
                     <td className="pr-4 text-right whitespace-nowrap">
-                      {s.hasDocument && <button onClick={() => openUrl(() => cardStatementUrl(s.id))} className="text-xs text-amber-400 hover:text-amber-300 mr-2">📄</button>}
+                      {s.hasDocument && <button onClick={() => openUrl(() => cardStatementUrl(s.id))} className="text-xs text-amber-400 hover:text-amber-300 mr-2">PDF</button>}
                       <button onClick={() => { setParams({ tab: 'transactions' }); }} className="text-xs text-gray-500 hover:text-gray-300 mr-2">Lines</button>
                       <button onClick={async () => { if (confirm('Delete this statement and the transactions read from it?')) { await deleteCardStatement(s.id); await load(); } }} className="text-xs text-gray-600 hover:text-red-400">✕</button>
                     </td>

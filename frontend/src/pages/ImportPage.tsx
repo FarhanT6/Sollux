@@ -800,7 +800,7 @@ function InboxPanel({ onStreamStart, onBillStreamed }: {
         {boxes.map(b => (
           <span key={b.id} className="text-xs px-2 py-1 rounded" style={{ background: 'rgba(255,255,255,0.05)' }} title={b.lastScanError ?? ''}>
             <span className="text-gray-300">{b.email}</span>
-            <span className={b.lastScanError ? 'text-amber-400' : 'text-gray-500'}> · {b.backfillFrom ? `backfilling to ${format(new Date(b.backfillFrom), 'MMM d')}` : b.lastScanAt ? `read ${format(new Date(b.lastScanAt), 'MMM d, h:mm a')}` : b.lastScanError ? 'partly read' : 'not read yet'}{b.lastScanError ? ' ⚠' : ''}</span>
+            <span className={b.lastScanError ? 'text-amber-400' : 'text-gray-500'}> · {b.backfillFrom ? `backfilling to ${format(new Date(b.backfillFrom), 'MMM d')}` : b.lastScanAt ? `read ${format(new Date(b.lastScanAt), 'MMM d, h:mm a')}` : b.lastScanError ? 'partly read' : 'not read yet'}{b.lastScanError ? ' (with errors)' : ''}</span>
           </span>
         ))}
       </div>
@@ -1464,7 +1464,7 @@ function BillCard({
         <div className="space-y-1">
           {ex.alerts.map((a, i) => (
             <div key={i} className="flex items-start gap-1.5 text-xs bg-amber-500/10 rounded px-2.5 py-1.5">
-              <span className="text-amber-400 flex-shrink-0">⚠</span>
+              <span className="text-amber-400 flex-shrink-0">!</span>
               <span className="text-amber-200">{a}</span>
             </div>
           ))}

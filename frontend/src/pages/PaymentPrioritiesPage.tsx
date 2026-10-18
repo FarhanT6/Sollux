@@ -79,7 +79,7 @@ export default function PaymentPrioritiesPage() {
         </div>
 
         {loading ? <Skeleton /> : owing.length === 0 ? (
-          <EmptyState icon="✅" title="Nothing outstanding" body="No account has a balance to bring current." />
+          <EmptyState title="Nothing outstanding" body="No account has a balance to bring current." />
         ) : (
           <div className="space-y-2">
             {owing.map(p => {

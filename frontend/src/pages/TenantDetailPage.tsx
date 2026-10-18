@@ -450,7 +450,7 @@ function LeaseCard({ lease, maintenance, onChanged }: {
         <div className="mt-3 flex items-center gap-2 text-xs">
           {lease.documentUrl ? (
             <>
-              <button onClick={viewDocument} className="text-amber-400 hover:text-amber-300">📄 View lease agreement</button>
+              <button onClick={viewDocument} className="text-amber-400 hover:text-amber-300">View lease agreement</button>
               <button onClick={async () => { if (confirm('Remove the lease agreement from this lease?')) { await deleteLeaseAgreement(lease.id); onChanged(); } }}
                 className="text-gray-600 hover:text-red-400">Remove</button>
             </>

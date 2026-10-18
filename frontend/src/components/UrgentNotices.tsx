@@ -36,7 +36,7 @@ export default function UrgentNotices({ utilityAccountId, className = '' }: { ut
 
   return (
     <div className={`rounded-xl p-4 space-y-2 ${className}`} style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.35)' }}>
-      <p className="text-xs font-semibold text-red-300">⚠ {shown.length} urgent notice{shown.length === 1 ? '' : 's'}: pay before the cut-off</p>
+      <p className="text-xs font-semibold text-red-300">{shown.length} urgent notice{shown.length === 1 ? '' : 's'}: pay before the cut-off</p>
       {shown.map(n => {
         const c = countdown(n);
         const where = n.property ?? (n.accountLast4 ? `account ending ${n.accountLast4} (not matched to an account yet)` : 'not matched to an account yet');

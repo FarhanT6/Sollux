@@ -42,7 +42,11 @@ await new Promise((resolve, reject) => {
 import { existsSync } from 'node:fs';
 const exe = process.env.CHROMIUM_PATH || (existsSync('/opt/pw-browsers/chromium') ? '/opt/pw-browsers/chromium' : undefined);
 const browser = await chromium.launch(exe ? { executablePath: exe } : {});
-const ctx = await browser.newContext({
+// DESKTOP=1: a laptop window instead of an iPhone.
+const ctx = await browser.newContext(process.env.DESKTOP ? {
+  viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1,
+  colorScheme: process.env.SCHEME === 'light' ? 'light' : 'dark',
+} : {
   viewport: { width: 393, height: 852 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true,
   userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1',
   colorScheme: process.env.SCHEME === 'light' ? 'light' : 'dark',

@@ -140,7 +140,7 @@ export default function InsightsPage() {
           <button onClick={handleRunBookkeeper} disabled={running}
             className="text-xs px-3 py-1.5 rounded-full border border-white/10 text-gray-300 hover:border-amber-500/40 hover:text-amber-400 disabled:opacity-50 transition-colors"
             title="Goes over every bill, payment, policy and loan and raises what needs a hand. Runs on its own every night at 5am.">
-            {running ? 'Bookkeeper running…' : '🧾 Run bookkeeper now'}
+            {running ? 'Bookkeeper running…' : 'Run bookkeeper now'}
           </button>
           {runNote && <span className="text-xs text-gray-500">{runNote}</span>}
 
@@ -174,7 +174,7 @@ export default function InsightsPage() {
         )}
 
         {loading ? Array(4).fill(0).map((_, i) => <Skeleton key={i} className="h-28 mb-3" />) :
-          filtered.length === 0 ? <EmptyState icon="✨" title="No insights" body="Sollux is monitoring your accounts." /> :
+          filtered.length === 0 ? <EmptyState title="No insights" body="Sollux is monitoring your accounts." /> :
           grouped.map(g => (
             <div key={g.id} className="mb-6">
               <div className="flex items-center gap-3 mb-3">
