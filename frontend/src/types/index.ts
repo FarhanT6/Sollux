@@ -875,6 +875,8 @@ export interface UtilityAccount {
   loginUrl?: string;
   // The name the bill is addressed to, for a lookup page (account number + name, no sign-in).
   lookupName?: string | null;
+  // The website is a bill lookup page: no login, the name on the bill instead.
+  lookupPage?: boolean;
   category: UtilityCategory;
   // Which unit this meter serves, if it serves one. serviceLabel covers the
   // rest — "House meter", "Laundry room" — so several meters for one utility

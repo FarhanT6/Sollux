@@ -375,7 +375,7 @@ router.get('/:id', async (req, res, next) => {
     const { accountNumberEnc, usernameEnc, passwordEnc, mfaCodeEnc, ...rest } = account;
     // The provider's website: the address the owner saved or a bill printed,
     // else the provider directory's.
-    res.json({ ...rest, hasCredentials: !!usernameEnc, website: websiteFor(account) });
+    res.json({ ...rest, hasCredentials: !!usernameEnc, website: websiteFor(account), lookupPage: isLookupPage(websiteFor(account)?.url) });
   } catch (err) { next(err); }
 });
 

@@ -1287,6 +1287,22 @@ export default function UtilityDetailPage() {
     } catch { alert('That does not look like a web address.'); }
   }
 
+  // A bill lookup page (InvoiceCloud's "Please Locate Your Account") finds the
+  // bills by account number and the name on the bill, with no login.
+  const lookupPage = !!account?.lookupPage;
+  async function saveLookupName(name: string) {
+    try {
+      await updateUtility(accountId!, { lookupName: name.trim() || null });
+      await reloadAccount();
+      if (name.trim()) { toast('Saved — looking up the bills now.'); void handleSync(); }
+      else toast('Name removed.');
+    } catch { alert('Could not save the name.'); }
+  }
+  function editLookupName() {
+    const typed = prompt(`Name on the bill for ${account?.providerName} — exactly as the bill prints it:`, account?.lookupName ?? '');
+    if (typed != null) void saveLookupName(typed);
+  }
+
   async function openPdf(s: any) {
     try {
       const res = await getStatementDownloadUrl(s.id);
@@ -1341,6 +1357,7 @@ export default function UtilityDetailPage() {
       revealNumber={() => void toggleAccountNumber()} revealedNumber={revealedAccountNumber}
       siteLabel={siteLabel} openWebsite={openWebsite} saveWebsite={() => void saveWebsite()}
       openPortalLogin={() => setPortalLogin(true)}
+      lookupPage={lookupPage} saveLookupName={saveLookupName}
       payment={{
         open: showPayForm || !!editPaymentId, editing: !!editPaymentId, saving: savingPayment, canSave: !!payForm.amount,
         fields: paymentFields,
@@ -1445,6 +1462,9 @@ export default function UtilityDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-3">
+          {lookupPage && !account.lookupName && (
+            <button onClick={editLookupName} className="btn text-xs" title="The bill lookup page needs the name the bill is addressed to">Add name on the bill</button>
+          )}
           <button onClick={handleSync} disabled={syncing || deleting} className="btn btn-primary">
             {syncing ? 'Syncing…' : 'Sync'}
           </button>
@@ -1453,7 +1473,9 @@ export default function UtilityDetailPage() {
           )}
           {/* Now-and-then actions, out of the way. */}
           <MoreMenu items={[
-            { label: account.hasCredentials ? 'Portal login' : 'Add portal login', onClick: () => setPortalLogin(true), title: "Let Sollux fetch statements from the provider's website" },
+            lookupPage
+              ? { label: account.lookupName ? 'Name on the bill' : 'Add name on the bill', onClick: editLookupName, title: 'The bill lookup page finds the bills by account number and this name' }
+              : { label: account.hasCredentials ? 'Portal login' : 'Add portal login', onClick: () => setPortalLogin(true), title: "Let Sollux fetch statements from the provider's website" },
             { label: `${website ? 'Edit' : 'Save'} website link`, onClick: () => void saveWebsite(), title: 'Set the website for this account' },
             ...(account.category === 'ELECTRIC' || account.category === 'SOLAR' ? [{ label: account.hasTrueUp ? 'Turn off true-up' : 'Set true-up (net metering)', onClick: () => void toggleTrueUp() }] : []),
             ...(!loan ? [{ label: 'Add loan details', onClick: () => setShowLoanModal(true) }] : []),

@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { Screen, Section, Row, Segmented, Sheet, BarButton, Icon, categoryIcon } from '../../ios';
+import { Screen, Section, Row, Segmented, Sheet, Field, BarButton, Icon, categoryIcon } from '../../ios';
 import { fmtMoney } from '../../lib/money';
 import { fmtDate, billMonthLabel } from '../../lib/date';
 import { bankAccountLabel } from '../../lib/bankAccountLabel';
@@ -50,6 +50,9 @@ export interface UtilityAccountView {
   openWebsite: () => void;
   saveWebsite: () => void;
   openPortalLogin: () => void;
+  /** The website is a bill lookup page: the name on the bill instead of a login. */
+  lookupPage: boolean;
+  saveLookupName: (name: string) => Promise<void>;
   payment: {
     open: boolean; editing: boolean; saving: boolean; canSave: boolean; fields: ReactNode;
     start: () => void; edit: (p: any) => void; close: () => void; save: () => void; remove: (p: any) => void;
@@ -68,6 +71,11 @@ const TONE = { green: 'ios-green', amber: 'ios-tint', red: 'ios-red' } as const;
 
 export default function UtilityAccountScreen(v: UtilityAccountView) {
   const { account } = v;
+  // The name on the bill, for a bill lookup page: edited in its own sheet.
+  const [nameSheet, setNameSheet] = useState(false);
+  const [name, setName] = useState('');
+  const [savingName, setSavingName] = useState(false);
+  const editName = () => { setName(account.lookupName ?? ''); setNameSheet(true); };
   const [tab, setTab] = useState<Tab>('bills');
   const [bill, setBill] = useState<any | null>(null);
   const [pay, setPay] = useState<any | null>(null);
@@ -110,7 +118,12 @@ export default function UtilityAccountScreen(v: UtilityAccountView) {
 
       {v.arrangements}
 
-      {!account.hasCredentials && (
+      {v.lookupPage && !account.lookupName && (
+        <Section footer="This provider's website finds the bills by account number and the name the bill is addressed to — no login needed.">
+          <Row title="Add the name on the bill" subtitle="So Sollux can look up the bills" tinted onClick={editName} />
+        </Section>
+      )}
+      {!account.hasCredentials && !v.lookupPage && (
         <Section footer="Sollux signs in to read and download statements only — it can't pay or change anything.">
           <Row title="Fetch statements automatically" subtitle={`Add your ${account.providerName} login`} tinted onClick={v.openPortalLogin} />
         </Section>
@@ -221,8 +234,13 @@ export default function UtilityAccountScreen(v: UtilityAccountView) {
             <select className="ios-inline-select" aria-label="Billing cadence" value={account.billingCadence ?? 'MONTHLY'} onChange={e => v.setCadence(e.target.value)}>
               {Object.entries(CADENCE_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
             </select>} />
-          <Row title="Portal login" subtitle="Sollux fetches statements from the provider's site" onClick={() => { setActions(false); v.openPortalLogin(); }}
-            value={<span className={account.hasCredentials ? 'ios-green' : 'ios-tint'}>{account.hasCredentials ? 'Saved' : 'Add'}</span>} />
+          {v.lookupPage ? (
+            <Row title="Name on the bill" subtitle="Sollux looks up the bills with it — no login" onClick={() => { setActions(false); editName(); }}
+              value={<span className={account.lookupName ? '' : 'ios-tint'}>{account.lookupName || 'Add'}</span>} />
+          ) : (
+            <Row title="Portal login" subtitle="Sollux fetches statements from the provider's site" onClick={() => { setActions(false); v.openPortalLogin(); }}
+              value={<span className={account.hasCredentials ? 'ios-green' : 'ios-tint'}>{account.hasCredentials ? 'Saved' : 'Add'}</span>} />
+          )}
           <Row title="Website" chevron={false} onClick={() => { setActions(false); v.saveWebsite(); }}
             value={<span className="ios-tint">{v.siteLabel ?? 'Add'}</span>} />
           {account.accountNumber && (
@@ -239,6 +257,14 @@ export default function UtilityAccountScreen(v: UtilityAccountView) {
           <Row title={account.isActive === false ? 'Reactivate account' : 'Deactivate account'} chevron={false}
             onClick={() => { setActions(false); v.toggleActive(); }} tinted />
           <Row title="Delete account" destructive chevron={false} onClick={() => { setActions(false); v.remove(); }} />
+        </Section>
+      </Sheet>
+
+      <Sheet open={nameSheet} onClose={() => setNameSheet(false)} title="Name on the bill"
+        right={{ label: 'Save', busy: savingName, disabled: !name.trim() && !account.lookupName,
+          onClick: () => { setSavingName(true); void v.saveLookupName(name).finally(() => { setSavingName(false); setNameSheet(false); }); } }}>
+        <Section header={account.providerName} footer="Exactly as the bill prints it, e.g. JANE SMITH. Sollux types it with the account number into the provider's bill lookup page — no login needed.">
+          <Field label="Name"><input autoCorrect="off" autoCapitalize="characters" placeholder="As on the bill" value={name} onChange={e => setName(e.target.value)} /></Field>
         </Section>
       </Sheet>
 
