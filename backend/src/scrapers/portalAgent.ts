@@ -444,7 +444,9 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   // stopping because "the tab closed".
   const follow = async () => {
     if (!page.isClosed()) return;
-    const next = runPages.filter(p => !p.isClosed()).pop();
+    // The newest tab this run saw, else any open tab on the provider's site.
+    const next = runPages.filter(p => !p.isClosed()).pop()
+      ?? ctx.pages().filter(p => !p.isClosed() && (() => { try { return allowed.has(rootOf(new URL(p.url()).hostname)); } catch { return false; } })()).pop();
     if (next) { page = next; await page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {}); }
   };
   const shutdown = async () => {
@@ -522,7 +524,7 @@ ${others.map(o => `- ${o.accountNumber ? `account ending ${String(o.accountNumbe
 At most ${maxDownloads} downloads in all. An account the portal does not list is not an error: say so and carry on. Finish with outcome done when every listed account is checked, and fill in accounts with each one's result (downloaded, nothing_new, not_listed, or not_checked if you did not get to it) — an account is only nothing_new if you opened its own statement history.` : `Goal: log in, open the billing / statement history, and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If there is nothing newer, finish with outcome done.`}
 Rules: use fill_login for credentials (you never see them). If the portal offers where to send a verification code, choose email over text or a phone call. If it emails a sign-in link instead of a code, call open_emailed_link (the owner is never asked for it); if none arrives, finish with no_code. When a code has been sent, call ask_owner_for_code (it reads the code from the owner's email, or asks the owner), then type_code. Pass any "Remember this device", "Trust this browser", "Keep me signed in" or "Don't ask again" checkbox as rememberRef so the next visit is not asked again. Never pay, enroll, change settings, accept offers or send messages. If a "Verify you are human" / "I'm not a robot" checkbox is on the page, call tick_captcha before submitting. If a captcha still blocks you (a picture puzzle, or the check keeps failing), finish with captcha (on the owner's own computer they may solve it, and you are then shown the page to carry on). If the login is rejected, finish with bad_login. If a code you entered is rejected, ask_owner_for_code once more for a fresh one; after a second rejection finish with no_code — never start the login over.
 If the site refuses the browser itself (Access Denied, "invalid request", "unable to process your request" after a correct sign-in, a bot check), finish with turned_away at once: never submit the login a second time — each retry makes the site more suspicious and can lock the owner's account.
-Each action returns the page as it is afterwards: do not call look after it. Fill and submit in one step (submitRef). A typical visit is: look, fill_login (with submit), code if asked, open billing/statements, download, finish — aim for about 10 steps. When several accounts are listed, choose the one matching the account number, else the address. The account number is what identifies the account: the address a portal shows is often the owner's mailing address, not the property's, so an account whose number matches is the right one whatever address it shows.`;
+Always end with the finish tool, never with a message. If the page seems gone or closed, call look: the browser follows the site to its newest tab. Each action returns the page as it is afterwards: do not call look after it. Fill and submit in one step (submitRef). A typical visit is: look, fill_login (with submit), code if asked, open billing/statements, download, finish — aim for about 10 steps. When several accounts are listed, choose the one matching the account number, else the address. The account number is what identifies the account: the address a portal shows is often the owner's mailing address, not the property's, so an account whose number matches is the right one whatever address it shows.`;
   // Every step that changed the page, in order: replayed ones and Claude's.
   // The ones before the first download become the recipe for next time.
   const steps: RecipeStep[] = [];
@@ -562,7 +564,14 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
       run.costUsd = (run.costUsd ?? 0) + costOf(PRIMARY_MODEL, res.usage);
       const uses = res.content.filter((c): c is Anthropic.ToolUseBlock => c.type === 'tool_use');
       messages.push({ role: 'assistant', content: res.content });
-      if (!uses.length) { run.summary = res.content.map(c => (c.type === 'text' ? c.text : '')).join('').slice(0, 500); break; }
+      // Stopping with a note instead of finish is not a finished fetch: Blue
+      // Shield's run wrote "the browser session has been fully terminated" and
+      // was shown as a success.
+      if (!uses.length) {
+        const note = res.content.map(c => (c.type === 'text' ? c.text : '')).join('').replace(/\s+/g, ' ').trim();
+        run.error = `The agent stopped without finishing: ${note.slice(0, 400) || 'no reason given'}`;
+        break;
+      }
       const results: Anthropic.ToolResultBlockParam[] = [];
       let finished = false;
       for (const u of uses) {
