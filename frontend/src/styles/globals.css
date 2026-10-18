@@ -136,6 +136,12 @@
     color: #8e8e93;
   }
   .row-action:hover { color: #f2f2f2; background: rgba(255,255,255,0.06); }
+  /* A row's actions stay out of sight until the row is pointed at; on touch
+     screens (no hover) they are always shown. */
+  @media (hover: hover) {
+    .group .row-actions { opacity: 0; transition: opacity .12s; }
+    .group:hover .row-actions, .group:focus-within .row-actions { opacity: 1; }
+  }
   .btn-ghost {
     @apply inline-flex items-center px-3 py-1.5 rounded-lg text-sm cursor-pointer transition-colors;
     color: #9ca3af;

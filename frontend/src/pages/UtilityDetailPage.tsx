@@ -1106,6 +1106,20 @@ export default function UtilityDetailPage() {
 
   const color = (CATEGORY_COLORS as Record<string, string>)[account.category] || '#888';
   const icon = <CategoryGlyph category={account.category} size={20} />;
+  // Net metering on or off (from the More menu, or the line under the name).
+  const toggleTrueUp = async () => {
+                const next = !account.hasTrueUp;
+                let trueUpDate: string | null | undefined = undefined;
+                if (next) {
+                  const typed = prompt('True-up (settlement) date, YYYY-MM-DD — leave blank if unknown:', (account.trueUpDate ?? '').slice(0, 10));
+                  if (typed === null) return;
+                  trueUpDate = typed.trim() || null;
+                }
+                try {
+                  await updateUtility(accountId!, { hasTrueUp: next, ...(trueUpDate !== undefined ? { trueUpDate } : {}) } as any);
+                  setAccount((prev: any) => prev ? { ...prev, hasTrueUp: next, ...(trueUpDate !== undefined ? { trueUpDate } : {}) } : prev);
+                } catch { alert('Could not update the true-up setting.'); }
+              };
   const property = account.property;
   const propertyLabel = property?.nickname || property?.address || 'Property';
 
@@ -1372,7 +1386,10 @@ export default function UtilityDetailPage() {
               {icon}
             </div>
             <h1 className="text-[28px] leading-9 font-semibold text-white tracking-tight">{account.providerName}</h1>
-            <span className="text-xs text-gray-500">{(CATEGORY_LABELS as Record<string, string>)[account.category]}</span>
+          </div>
+          {/* The account's particulars on one quiet line under the name. */}
+          <div className="flex items-center flex-wrap gap-x-3 gap-y-1 mt-2 text-[13px] text-gray-500">
+            <span>{(CATEGORY_LABELS as Record<string, string>)[account.category]}</span>
             {/* Billing cadence, editable in place. It was only settable at
                 creation, so an account filed as monthly stayed monthly even
                 once its bills proved it bi-monthly — and every monthly
@@ -1381,8 +1398,7 @@ export default function UtilityDetailPage() {
               value={account.billingCadence ?? 'MONTHLY'}
               onChange={e => void setCadence(e.target.value)}
               title="How often this provider bills — drives the monthly-equivalent maths"
-              className="text-xs px-1.5 py-0.5 rounded-md text-gray-400 focus:outline-none cursor-pointer"
-              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)' }}
+              className="text-[13px] bg-transparent text-gray-500 hover:text-gray-300 focus:outline-none cursor-pointer -ml-1"
             >
               {Object.entries(CADENCE_LABELS).map(([v, l]) => (
                 <option key={v} value={v}>{l}</option>
@@ -1394,22 +1410,10 @@ export default function UtilityDetailPage() {
             {/* Net metering: energy charges accrue monthly and settle once a
                 year. Set on import from the bill's net-metering summary, or
                 by hand here. Only offered where it can apply (electric, solar). */}
-            {(account.hasTrueUp || account.category === 'ELECTRIC' || account.category === 'SOLAR') && <button
-              onClick={async () => {
-                const next = !account.hasTrueUp;
-                let trueUpDate: string | null | undefined = undefined;
-                if (next) {
-                  const typed = prompt('True-up (settlement) date, YYYY-MM-DD — leave blank if unknown:', (account.trueUpDate ?? '').slice(0, 10));
-                  if (typed === null) return;
-                  trueUpDate = typed.trim() || null;
-                }
-                try {
-                  await updateUtility(accountId!, { hasTrueUp: next, ...(trueUpDate !== undefined ? { trueUpDate } : {}) } as any);
-                  setAccount((prev: any) => prev ? { ...prev, hasTrueUp: next, ...(trueUpDate !== undefined ? { trueUpDate } : {}) } : prev);
-                } catch { alert('Could not update the true-up setting.'); }
-              }}
+            {account.hasTrueUp && <button
+              onClick={() => void toggleTrueUp()}
               title={account.hasTrueUp ? 'Net-metering account: charges settle at the annual true-up. Click to turn off.' : 'Mark this as a net-metering (solar) account with an annual true-up'}
-              className={`text-xs px-1.5 py-0.5 rounded-full border transition-colors ${account.hasTrueUp ? 'text-amber-400 border-amber-500/40 bg-amber-500/10' : 'text-gray-600 border-white/10 hover:text-gray-400'}`}
+              className="hover:text-gray-300 transition-colors"
             >
               {account.hasTrueUp ? `True-up${account.trueUpDate ? ` ${fmtDate(account.trueUpDate, 'MMM d, yyyy')}` : ''}` : 'Set true-up'}
             </button>}
@@ -1420,7 +1424,7 @@ export default function UtilityDetailPage() {
             )}
             {account.accountNumber && (
               <span className="flex items-center gap-1">
-                <span className="font-mono text-xs text-gray-600">
+                <span className="tabular-nums">
                   {revealedAccountNumber != null ? revealedAccountNumber : account.accountNumber}
                 </span>
                 <button
@@ -1433,22 +1437,25 @@ export default function UtilityDetailPage() {
                 </button>
               </span>
             )}
+            <button onClick={openWebsite} className="hover:text-gray-300 transition-colors" title={website ? website.url : 'Search for this provider\'s website'}>
+              {siteLabel ? `${siteLabel} ↗` : 'Find website ↗'}
+            </button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button onClick={openWebsite} className="btn text-xs" title={website ? website.url : 'Search for this provider\'s website'}>
-            {siteLabel ? `${siteLabel} ↗` : 'Find website ↗'}
-          </button>
-          <button onClick={() => setPortalLogin(true)} className="btn text-xs" title="Let Sollux fetch statements from the provider's website">{account.hasCredentials ? 'Portal login ✓' : 'Add portal login'}</button>
-          <button onClick={handleSync} disabled={syncing || deleting} className="btn btn-primary text-xs">
-            {syncing ? 'Syncing…' : 'Sync ↻'}
+        <div className="flex items-center gap-3">
+          <button onClick={handleSync} disabled={syncing || deleting} className="btn btn-primary">
+            {syncing ? 'Syncing…' : 'Sync'}
           </button>
           {(syncing || account.lastSyncStatus === 'PENDING') && (
             <button onClick={() => void cancelFetch(account.id).then(() => { toast('Cancelled — the fetch stops within a few seconds.'); setSyncing(false); return getUtility(account.id).then(setAccount); }).catch(() => toast('Could not cancel it.', 'error'))} className="btn text-xs">Cancel</button>
           )}
           {/* Now-and-then actions, out of the way. */}
           <MoreMenu items={[
+            { label: account.hasCredentials ? 'Portal login' : 'Add portal login', onClick: () => setPortalLogin(true), title: "Let Sollux fetch statements from the provider's website" },
             { label: `${website ? 'Edit' : 'Save'} website link`, onClick: () => void saveWebsite(), title: 'Set the website for this account' },
+            ...(account.category === 'ELECTRIC' || account.category === 'SOLAR' ? [{ label: account.hasTrueUp ? 'Turn off true-up' : 'Set true-up (net metering)', onClick: () => void toggleTrueUp() }] : []),
+            ...(!loan ? [{ label: 'Add loan details', onClick: () => setShowLoanModal(true) }] : []),
+            ...(!plan ? [{ label: 'Add payment plan', onClick: () => setShowPlanModal(true) }] : []),
             { label: togglingActive ? '…' : account.isActive === false ? 'Reactivate account' : 'Deactivate account', onClick: () => void toggleActive(), disabled: togglingActive, title: account.isActive === false ? 'Reactivate this account' : 'Mark inactive — keeps all history, pauses syncing' },
             { label: deleting ? 'Deleting…' : 'Delete account', onClick: () => void handleDelete(), danger: true, disabled: deleting || syncing },
           ]} />
@@ -1496,7 +1503,8 @@ export default function UtilityDetailPage() {
             color: totalFees > 0 ? 'text-orange-400' : 'text-white',
             sub: totalFees > 0 ? `across ${feesData.length} bills` : undefined,
           },
-        ].map(({ label, value, color: c, sub }) => (
+        // A figure with nothing to show (no fees yet) is left out, not shown as a dash.
+        ].filter(t => t.value !== '—').map(({ label, value, color: c, sub }) => (
           <div key={label} className="stat-card">
             <p className="text-[13px] text-gray-500 mb-2">{label}</p>
             <p className={`text-[24px] leading-none font-semibold tracking-tight tabular-nums ${c || 'text-white'}`}>{value}</p>
@@ -1511,15 +1519,7 @@ export default function UtilityDetailPage() {
         {loan ? (
           <LoanCard loan={loan} accountId={accountId!} arrears={latestPastDue}
             onUpdate={setLoan} onDelete={() => setLoan(null)} />
-        ) : (
-          <button
-            onClick={() => setShowLoanModal(true)}
-            className="w-full mb-4 py-2.5 rounded-xl text-xs text-gray-500 hover:text-gray-300 transition-colors text-left px-4"
-            style={{ background: 'rgba(255,255,255,0.03)', border: '1px dashed rgba(255,255,255,0.1)' }}
-          >
-            + Add loan details (interest rate, term, maturity date, etc.)
-          </button>
-        )}
+        ) : null /* added from More ⋯ */}
 
         {account.category === 'INSURANCE' && (
           <PolicyCard accountId={accountId!} propertyId={propertyId!} carrier={account.providerName} account={account}
@@ -1530,52 +1530,43 @@ export default function UtilityDetailPage() {
         {plan ? (
           <PaymentPlanCard plan={plan} accountId={accountId!}
             onUpdate={setPlan} onDelete={() => setPlan(null)} />
-        ) : (
-          <button
-            onClick={() => setShowPlanModal(true)}
-            className="w-full mb-4 py-2.5 rounded-xl text-xs text-gray-500 hover:text-gray-300 transition-colors text-left px-4"
-            style={{ background: 'rgba(255,255,255,0.03)', border: '1px dashed rgba(255,255,255,0.1)' }}
-          >
-            + Add payment plan (for arrears / installment arrangements)
-          </button>
-        )}
+        ) : null /* added from More ⋯ */}
 
         {/* Tabs + search */}
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex gap-1">
+        <div className="flex items-end justify-between mb-5 border-b border-white/[0.07]">
+          {/* Tabs as an underline, not filled gold buttons. */}
+          <div className="flex gap-6">
             {([
-              ['statements', `Statements (${statements.length})`],
-              ['payments',   `Payments (${payments.length})`],
-              ['fees',       `Fees & Penalties${feesData.length > 0 ? ` (${feesData.length})` : ''}`],
+              ['statements', `Statements`],
+              ['payments',   `Payments`],
+              ['fees',       `Fees`],
               ['charges',    'Charge breakdown'],
             ] as [Tab, string][]).map(([t, label]) => (
               <button key={t} onClick={() => { setTab(t); setYearFilter('all'); setSearch(''); }}
-                className={`px-4 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                  tab === t ? 'bg-[#F5A623] text-black' : 'text-gray-400 hover:text-white'
-                }`}
-                style={tab !== t ? { background: 'rgba(255,255,255,0.06)' } : {}}>
+                className={`pb-3 -mb-px text-sm transition-colors border-b-2 ${
+                  tab === t ? 'text-white font-medium border-white' : 'text-gray-500 hover:text-gray-300 border-transparent'
+                }`}>
                 {label}
               </button>
             ))}
           </div>
           {tab !== 'fees' && tab !== 'charges' && (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 pb-2">
               <input type="text"
                 placeholder={tab === 'statements' ? 'Search by month, amount…' : 'Search by date, confirmation…'}
                 value={search} onChange={e => setSearch(e.target.value)}
-                className="text-xs px-3 py-1.5 rounded-lg text-gray-300 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-amber-500/50"
-                style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)', width: 220 }}
+                className="text-[13px] px-3 py-1.5 rounded-lg text-gray-300 placeholder-gray-500 focus:outline-none"
+                style={{ background: 'rgba(255,255,255,0.05)', width: 180 }}
               />
               <select value={yearFilter} onChange={e => setYearFilter(e.target.value)}
-                className="text-xs px-3 py-1.5 rounded-lg text-gray-300 focus:outline-none"
-                style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                className="text-[13px] px-1 py-1.5 bg-transparent text-gray-400 hover:text-gray-200 focus:outline-none cursor-pointer">
                 <option value="all">All years</option>
                 {years.map(y => <option key={y} value={y}>{y}</option>)}
               </select>
               {tab === 'statements' && !selecting && (
                 <>
-                  <button onClick={() => setEditingStatement({})} className="btn text-xs">+ Add statement</button>
-                  <button onClick={() => setSelecting(true)} className="btn text-xs" title="Select statements to delete">Select</button>
+                  <button onClick={() => setSelecting(true)} className="row-action text-[13px]" title="Select statements to delete">Select</button>
+                  <button onClick={() => setEditingStatement({})} className="btn text-[13px]">Add</button>
                 </>
               )}
               {tab === 'statements' && selecting && (
@@ -1611,7 +1602,8 @@ export default function UtilityDetailPage() {
           filteredStatements.length === 0
             ? <EmptyState title="No statements" body={search || yearFilter !== 'all' ? 'No statements match your filter.' : 'Sync this account to pull statement history.'} />
             : (
-              <div className="space-y-2 pb-8">
+              /* One list with hairlines between bills, not a stack of outlined boxes. */
+              <div className="mb-8 rounded-2xl overflow-hidden" style={{ background: 'rgba(255,255,255,0.025)' }}>
                 {filteredStatements.map((s, idx) => {
                   // filteredStatements sorted DESC; [idx-1] is more recent; idx===0 is latest
                   const isLatest = latestStmt?.id === s.id && yearFilter === 'all' && !search;
@@ -1636,12 +1628,9 @@ export default function UtilityDetailPage() {
                   const liveCarried = pastDue != null && pastDue > 0 ? Number((pastDue - arrearsPaid).toFixed(2)) : liveCarriedOf(s, payments, statements);
                   const owedNow = totalDue != null && paidSince > 0.005 ? Math.max(0, Number((totalDue - Math.min(totalDue, paidSince)).toFixed(2))) : null;
                   return (
-                    <div key={s.id} className="rounded-xl px-5 py-4 flex items-center gap-4"
+                    <div key={s.id} className="group px-5 py-4 flex items-center gap-4 border-b border-white/[0.06] last:border-0"
                       style={{
-                        background: selectedIds.has(s.id) ? 'rgba(255,60,60,0.06)' : '#1e1e1e',
-                        border: selectedIds.has(s.id)
-                          ? '1px solid rgba(255,80,80,0.4)'
-                          : isLatest ? '1px solid rgba(255,255,255,0.14)' : '1px solid rgba(255,255,255,0.06)',
+                        background: selectedIds.has(s.id) ? 'rgba(255,60,60,0.06)' : undefined,
                       }}>
                       {selecting && (
                         <input
@@ -1667,7 +1656,7 @@ export default function UtilityDetailPage() {
                         {s.statementDate && (
                           <p className="text-xs text-gray-600">billed {fmtDate(s.statementDate, 'MMM d')}</p>
                         )}
-                        {isLatest && <p className="text-xs text-amber-500 mt-0.5">Latest</p>}
+                        {isLatest && <p className="text-xs text-gray-500 mt-0.5">Latest</p>}
                         {s.isScheduled && (
                           <p className="text-xs text-sky-400 mt-0.5" title="From the policy's payment schedule; the carrier's bill replaces it when imported.">Scheduled</p>
                         )}
@@ -1848,7 +1837,8 @@ export default function UtilityDetailPage() {
                         <Pill color={sc}>{sl}</Pill>
                       </div>
 
-                      <div className="flex-shrink-0 flex items-center gap-1.5">
+                      {/* Row actions appear when the row is pointed at (always on touch screens). */}
+                      <div className="flex-shrink-0 flex items-center gap-1 row-actions">
                         {!isPaid && (
                           <button
                             onClick={() => handleMarkPaid(s)}
