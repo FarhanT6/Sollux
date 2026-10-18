@@ -16,7 +16,7 @@
  * (documentIntake): filed on a confident match, staged for review otherwise.
  */
 import Anthropic from '@anthropic-ai/sdk';
-import { websiteFor, findProvider } from '../lib/providerDirectory';
+import { websiteFor, findProvider, isLookupPage } from '../lib/providerDirectory';
 import * as fs from 'fs';
 import { BrowserContext, Page, Download, Frame, Locator } from 'playwright';
 import { launchPortalContext, isHttp2Reset } from './browser';
@@ -80,7 +80,7 @@ const TOOLS: Anthropic.Tool[] = [
   { name: 'click', description: 'Click element [n].', input_schema: { type: 'object', properties: { ref: { type: 'number' } }, required: ['ref'] } },
   { name: 'type', description: 'Type text into field [n] (not for passwords, usernames or codes). submit: press Enter afterwards.', input_schema: { type: 'object', properties: { ref: { type: 'number' }, text: { type: 'string' }, submit: { type: 'boolean' } }, required: ['ref', 'text'] } },
   { name: 'select', description: 'Choose an option in dropdown [n] by its visible label.', input_schema: { type: 'object', properties: { ref: { type: 'number' }, label: { type: 'string' } }, required: ['ref', 'label'] } },
-  { name: 'fill_account_number', description: "Type the account's full number into field [ref] (you never see it) — for a portal's lookup without signing in (\"pay as guest\", \"view bill by account number\", InvoiceCloud's customer lookup). part: 'full' (default), or 'first'/'second' for a number printed in two parts (\"177299-182052\": customer number, then account number). submitRef: click it afterwards.", input_schema: { type: 'object', properties: { ref: { type: 'number' }, part: { type: 'string', enum: ['full', 'first', 'second'] }, submitRef: { type: 'number' } }, required: ['ref'] } },
+  { name: 'fill_account_number', description: "Type the account's full number into field [ref] (you never see it) — for a portal's lookup without signing in (\"pay as guest\", \"view bill by account number\", InvoiceCloud's customer lookup). part: 'full' (default), or 'first'/'second' for a number printed in two parts (\"177299-182052\": customer number, then account number), or 'name' for the name the bill is addressed to (\"Customer or Business Name\"). submitRef: click it afterwards.", input_schema: { type: 'object', properties: { ref: { type: 'number' }, part: { type: 'string', enum: ['full', 'first', 'second', 'name'] }, submitRef: { type: 'number' } }, required: ['ref'] } },
   { name: 'fill_login', description: "Type the owner's username into [usernameRef] and password into [passwordRef] (you never see them), tick [rememberRef] if given, then click [submitRef]. A site that asks for the username first: give only usernameRef and submitRef, then call again with passwordRef on the next page.", input_schema: { type: 'object', properties: { usernameRef: { type: 'number' }, passwordRef: { type: 'number' }, rememberRef: { type: 'number' }, submitRef: { type: 'number' } } } },
   { name: 'press', description: 'Press a key (Enter, Tab, Escape).', input_schema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] } },
   { name: 'goto', description: "Open a URL on the provider's own site.", input_schema: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } },
@@ -90,6 +90,69 @@ const TOOLS: Anthropic.Tool[] = [
   { name: 'type_code', description: 'Type the verification code into field [ref] (a code split into one-digit boxes: give the first box), tick [rememberRef] ("remember this device") if given, then click [submitRef].', input_schema: { type: 'object', properties: { ref: { type: 'number' }, rememberRef: { type: 'number' }, submitRef: { type: 'number' } }, required: ['ref'] } },
   { name: 'finish', description: 'Stop. outcome: done (downloaded what was new, or nothing new), bad_login (the portal said the username or password is wrong), captcha, no_code, turned_away (the site refused the browser itself: Access Denied, "invalid request", "unable to process your request" after a sign-in, a bot check), blocked (anything else in the way).', input_schema: { type: 'object', properties: { outcome: { type: 'string', enum: ['done', 'bad_login', 'captcha', 'no_code', 'turned_away', 'blocked'] }, summary: { type: 'string' }, accounts: { type: 'array', description: 'When several accounts were listed: what you found for each one.', items: { type: 'object', properties: { account: { type: 'string', description: 'last 4 of the account number' }, result: { type: 'string', enum: ['downloaded', 'nothing_new', 'not_listed', 'not_checked'] } }, required: ['account', 'result'] } } }, required: ['outcome', 'summary'] } },
 ];
+
+/** The tools for an account found by its biller's lookup page: no way to sign in. */
+const LOOKUP_TOOLS = TOOLS.filter(t => !['fill_login', 'ask_owner_for_code', 'open_emailed_link', 'type_code'].includes(t.name));
+const SIGN_IN_URL = /log-?in|log-?on|sign-?in|sign-?on|register|auth/i;
+/** A sign-in page, whatever its address: a password box is showing. */
+const onSignIn = (page: Page) => page.locator('input[type="password"]').first().isVisible().catch(() => false);
+
+/**
+ * A biller's lookup page filled in by code, not by Claude: the account number
+ * (split into customer and account number when the bill prints two) and the
+ * name on the bill, matched to the fields by their labels, then Search. Left
+ * to Claude, a page asking for a name it had no way to type was abandoned for
+ * the sign-in (City of Imperial's InvoiceCloud page, every time).
+ */
+async function fillLookup(page: Page, number: string, name: string): Promise<{ filled: string[]; missing: string[]; searched: boolean; captcha: boolean }> {
+  const parts = number.split(/[\s-]+/).filter(Boolean);
+  const out = { filled: [] as string[], missing: [] as string[], searched: false, captcha: false };
+  for (const frame of page.frames()) {
+    if (/challenges\.cloudflare\.com|recaptcha|hcaptcha|turnstile/i.test(frame.url())) { out.captcha = true; continue; }
+    const fields = await frame.evaluate(`(function () {
+      var out = [];
+      Array.prototype.slice.call(document.querySelectorAll('input')).forEach(function (el, i) {
+        var t = (el.getAttribute('type') || 'text').toLowerCase();
+        if (['text', 'tel', 'number', 'search'].indexOf(t) < 0) return;
+        var r = el.getBoundingClientRect(); if (!r.width || !r.height) return;
+        var label = '';
+        if (el.id) { var l = document.querySelector('label[for="' + CSS.escape(el.id) + '"]'); if (l) label = l.textContent || ''; }
+        if (!label && el.closest('label')) label = el.closest('label').textContent || '';
+        if (!label) label = el.getAttribute('aria-label') || el.getAttribute('placeholder') || '';
+        for (var p = el.parentElement, k = 0; !label && p && k < 3; p = p.parentElement, k++) {
+          var txt = (p.textContent || '').replace(/\\s+/g, ' ').trim();
+          if (txt && txt.length < 80) label = txt;
+        }
+        el.setAttribute('data-sollux-lookup', String(i));
+        out.push({ i: i, label: label.replace(/\\s+/g, ' ').trim().slice(0, 80) });
+      });
+      return out;
+    })()`).catch(() => []) as { i: number; label: string }[];
+    for (const f of fields) {
+      const what = /account\s*(number|no\b|#|id)/i.test(f.label) ? 'account number'
+        : /customer\s*(number|no\b|#|id)/i.test(f.label) ? 'customer number'
+        : /name/i.test(f.label) && !/user\s*name|e-?mail/i.test(f.label) ? 'name on the bill' : null;
+      if (!what) continue;
+      const value = what === 'account number' ? (parts.length > 1 ? parts[parts.length - 1] : number)
+        : what === 'customer number' ? (parts.length > 1 ? parts[0] : '')
+        : name;
+      if (!value) { out.missing.push(what); continue; }
+      await frame.locator(`[data-sollux-lookup="${f.i}"]`).fill(value).then(() => out.filled.push(what)).catch(() => out.missing.push(what));
+    }
+  }
+  if (!out.captcha) out.captcha = await page.locator('iframe[src*="challenges.cloudflare.com"], iframe[src*="recaptcha"], iframe[src*="hcaptcha"], .cf-turnstile, .g-recaptcha').count().then(c => c > 0).catch(() => false);
+  if (out.filled.includes('account number') && !out.missing.length && !out.captcha) {
+    const search = page.locator('button, a, input[type="submit"], input[type="button"]')
+      .filter({ hasText: /search invoices|search bills|^\s*search\s*$|find (my )?(bill|account|invoice)|look ?up|view bill/i }).first();
+    const submit = await search.count() ? search : page.locator('input[type="submit"]').first();
+    if (await submit.count()) {
+      await submit.click({ timeout: 10000 }).then(() => { out.searched = true; }).catch(() => {});
+      await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
+      await page.waitForTimeout(1500);
+    }
+  }
+  return out;
+}
 
 /** The site and its parent domain: example.com for www.example.com and billing.example.com. */
 const rootOf = (host: string) => host.split('.').slice(-2).join('.');
@@ -336,7 +399,7 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   const account = await db.utilityAccount.findUnique({
     where: { id: accountId },
     select: {
-      id: true, providerName: true, providerSlug: true, loginUrl: true, usernameEnc: true, passwordEnc: true, accountNumber: true, accountNumberEnc: true,
+      id: true, providerName: true, providerSlug: true, loginUrl: true, lookupName: true, usernameEnc: true, passwordEnc: true, accountNumber: true, accountNumberEnc: true,
       property: { select: { userId: true, address: true } },
       statements: { where: { pdfS3Key: { not: null } }, orderBy: { statementDate: 'desc' }, take: 1, select: { statementDate: true } },
     },
@@ -345,13 +408,19 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   // The login page: the one the owner saved (or a bill printed), else the
   // provider directory's; the agent finds "Sign in" from a home page.
   const loginUrl = websiteFor(account)?.url ?? null;
-  if (!loginUrl || !account.usernameEnc || !account.passwordEnc) {
-    return { ok: false, filed: 0, review: 0, applied: 0, downloads: 0, summary: '', error: !loginUrl ? 'Add the provider\'s website (Website on the account) so the agent knows where to sign in.' : 'Add your portal username and password (Edit on the account) so Sollux can fetch statements.' };
-  }
-  const username = decrypt(account.usernameEnc), password = decrypt(account.passwordEnc);
+  // The website is the biller's lookup page: the bills are found there by
+  // account number and name, and this run never signs in — no sign-in tool,
+  // no saved route, no going to a sign-in page.
+  const lookup = isLookupPage(loginUrl);
   // The full account number, for a lookup without signing in. Not hidden from the
   // page text: the agent picks the right account on a portal by its number.
   const fullNumber = (() => { try { return account.accountNumberEnc ? decrypt(account.accountNumberEnc).trim() : ''; } catch { return ''; } })();
+  const lookupName = account.lookupName?.trim() ?? '';
+  const fail = (error: string): PortalRun => ({ ok: false, filed: 0, review: 0, applied: 0, downloads: 0, summary: '', error });
+  if (!loginUrl) return fail('Add the provider\'s website (Website on the account) so the agent knows where to sign in.');
+  if (lookup && !fullNumber) return fail('This account\'s website is a bill lookup page, which needs the full account number: add it on the account (Edit).');
+  if (!lookup && (!account.usernameEnc || !account.passwordEnc)) return fail('Add your portal username and password (Edit on the account) so Sollux can fetch statements.');
+  const username = account.usernameEnc ? decrypt(account.usernameEnc) : '', password = account.passwordEnc ? decrypt(account.passwordEnc) : '';
   const start = new URL(loginUrl);
   const allowed = new Set([rootOf(start.hostname)]);
   const userId = account.property.userId;
@@ -525,7 +594,7 @@ This is the owner's own account, signed in with the owner's own login at the own
 ${others.length ? `This login holds several of the owner's accounts. Fetch every one of them in this one visit — sign in once, then for each account open it (account picker, "switch account", or a list of accounts) and its billing / statement history, and download each statement PDF dated after its date, newest first:
 - ${account.accountNumber ? `account ending ${String(account.accountNumber).slice(-4)}` : 'this account'} at ${account.property.address}: after ${since ?? 'the last 12 months'}
 ${others.map(o => `- ${o.accountNumber ? `account ending ${String(o.accountNumber).slice(-4)}` : 'an account'} at ${o.property.address}: after ${o.statements[0]?.statementDate?.toISOString().slice(0, 10) ?? 'the last 12 months'}`).join('\n')}
-At most ${maxDownloads} downloads in all. An account the portal does not list is not an error: say so and carry on. Finish with outcome done when every listed account is checked, and fill in accounts with each one's result (downloaded, nothing_new, not_listed, or not_checked if you did not get to it) — an account is only nothing_new if you opened its own statement history.` : `Goal: log in, open the billing / statement history, and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If there is nothing newer, finish with outcome done.`}
+At most ${maxDownloads} downloads in all. An account the portal does not list is not an error: say so and carry on. Finish with outcome done when every listed account is checked, and fill in accounts with each one's result (downloaded, nothing_new, not_listed, or not_checked if you did not get to it) — an account is only nothing_new if you opened its own statement history.` : lookup ? `Goal: this account's bills are found on the biller's lookup page you start on, by account number and the name on the bill — never by signing in. Do not open a sign-in or register page, even if one is offered. Sollux fills in the lookup fields and presses Search for you where it can; otherwise fill them with fill_account_number (part 'name' for a name field), then open the invoices / bill history and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If the lookup says the account was not found, finish with blocked and quote what it said. If there is nothing newer, finish with outcome done.` : `Goal: log in, open the billing / statement history, and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If there is nothing newer, finish with outcome done.`}
 Rules: use fill_login for credentials (you never see them). If the portal offers where to send a verification code, choose email over text or a phone call. If it emails a sign-in link instead of a code, call open_emailed_link (the owner is never asked for it); if none arrives, finish with no_code. When a code has been sent, call ask_owner_for_code (it reads the code from the owner's email, or asks the owner), then type_code. Pass any "Remember this device", "Trust this browser", "Keep me signed in" or "Don't ask again" checkbox as rememberRef so the next visit is not asked again. Never pay, enroll, change settings, accept offers or send messages. If a "Verify you are human" / "I'm not a robot" checkbox is on the page, call tick_captcha before submitting. If the page you start on asks for an account number (a bill lookup), use fill_account_number there rather than going to the sign-in. If the sign-in stays blocked by such a check, look for a way in without signing in — "Pay as guest", "Quick pay", "View bill", "Find my account" — and use fill_account_number (with the property's ZIP code if asked); statements found that way count the same. If a captcha still blocks you (a picture puzzle, or the check keeps failing), finish with captcha (on the owner's own computer they may solve it, and you are then shown the page to carry on). If the login is rejected, finish with bad_login. If a code you entered is rejected, ask_owner_for_code once more for a fresh one; after a second rejection finish with no_code — never start the login over.
 If the site refuses the browser itself (Access Denied, "invalid request", "unable to process your request" after a correct sign-in, a bot check), finish with turned_away at once: never submit the login a second time — each retry makes the site more suspicious and can lock the owner's account.
 Always end with the finish tool, never with a message. If the page seems gone or closed, call look: the browser follows the site to its newest tab. Each action returns the page as it is afterwards: do not call look after it. Fill and submit in one step (submitRef). A typical visit is: look, fill_login (with submit), code if asked, open billing/statements, download, finish — aim for about 10 steps. When several accounts are listed, choose the one matching the account number, else the address. The account number is what identifies the account: the address a portal shows is often the owner's mailing address, not the property's, so an account whose number matches is the right one whatever address it shows.`;
@@ -533,7 +602,7 @@ Always end with the finish tool, never with a message. If the page seems gone or
   // The ones before the first download become the recipe for next time.
   const steps: RecipeStep[] = [];
   let navDone = false;
-  const recipe = await loadRecipe(account.id, host);
+  const recipe = lookup ? null : await loadRecipe(account.id, host);
 
   try {
     // Say which browser this is, so a run that was turned away shows why.
@@ -545,6 +614,17 @@ Always end with the finish tool, never with a message. If the page seems gone or
       throw Object.assign(new Error(`${start.hostname} answered ${res?.status() ?? ''} "${title || 'Access Denied'}" before any sign-in.`), { turnedAway: true });
     }
     let opening = "Start. The browser is open on the provider's login page (or its home page — find Sign in from there).";
+    if (lookup) {
+      say('Filling in the bill lookup');
+      const f = await fillLookup(page, fullNumber, lookupName);
+      // Nothing to look up without it: stop here, not on whatever page Claude would try next.
+      if (f.missing.includes('name on the bill') && !lookupName) throw new Error('The lookup page asks for the name on the bill: add it under Portal login on the account (Name on the bill), then Fetch again.');
+      if (f.searched) say('Searching for the bills');
+      opening = `Start. The browser is on ${account.providerName}'s bill lookup page. `
+        + (f.filled.length ? `Sollux filled in ${f.filled.join(' and ')}${f.searched ? ' and pressed Search' : ''}. ` : 'Sollux could not match the lookup fields by their labels: fill them with fill_account_number. ')
+        + (f.captcha ? 'A "Verify you are human" check is on the page: call tick_captcha, then press Search. ' : '')
+        + `Carry on to the invoices from here.\n\n${lastPage = await describe(page, secrets)}`;
+    }
     if (recipe) {
       say(`Replaying the saved route (${recipe.steps.length} steps, no AI)`);
       const done = await replay(page, recipe.steps, { username, password }, h => allowed.has(rootOf(h)));
@@ -563,7 +643,7 @@ Always end with the finish tool, never with a message. If the page seems gone or
     for (let step = 0; step < stepLimit && Date.now() < deadline && !cancelled; step++) {
       if ((run.costUsd ?? 0) >= costCap) { run.error = `Stopped after spending $${(run.costUsd ?? 0).toFixed(2)} without finishing — the portal needs a look.`; break; }
       // Cached: each step resends the run so far, and reads it back at a tenth of the price.
-      const res = await meteredCreate(client, 'portal-agent', { ...paramsFor(PRIMARY_MODEL, { maxTokens: 1500, system, messages, cache: true }), tools: TOOLS });
+      const res = await meteredCreate(client, 'portal-agent', { ...paramsFor(PRIMARY_MODEL, { maxTokens: 1500, system, messages, cache: true }), tools: lookup ? LOOKUP_TOOLS : TOOLS });
       run.aiSteps = (run.aiSteps ?? 0) + 1;
       run.costUsd = (run.costUsd ?? 0) + costOf(PRIMARY_MODEL, res.usage);
       const uses = res.content.filter((c): c is Anthropic.ToolUseBlock => c.type === 'tool_use');
@@ -628,6 +708,12 @@ Always end with the finish tool, never with a message. If the page seems gone or
               content = await after('Clicked.');
               // A click that changes nothing, said plainly: Westlake's run spent
               // a dozen steps clicking an option card that never took.
+              // A lookup account never signs in: a click that lands on a sign-in page is undone.
+              if (lookup && await onSignIn(page)) {
+                await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+                content = await after('That opened a sign-in page, which this account never uses: the browser is back on the lookup page. Fill it in (fill_account_number) and press Search.');
+                break;
+              }
               if (lastPage === before) content = `Clicked, but nothing on the page changed. If that was an option card or a custom checkbox, click its text or the box itself (or press Space on it); if a Continue button stays disabled, something above it still needs choosing. Do not click the same thing again.\n\n${lastPage}`;
               break;
             }
@@ -637,9 +723,10 @@ Always end with the finish tool, never with a message. If the page seems gone or
               content = await after(i.submit ? 'Typed and submitted.' : 'Typed.'); break;
             case 'select': await el(i.ref).selectOption({ label: String(i.label) }); content = await after('Selected.'); break;
             case 'fill_account_number': {
-              if (!fullNumber) { content = 'No full account number is saved for this account — sign in instead, or finish with blocked.'; break; }
+              if (i.part === 'name' && !lookupName) { content = 'No name on the bill is saved for this account: finish with blocked and say "Add the name on the bill (Portal login on the account)".'; break; }
+              if (i.part !== 'name' && !fullNumber) { content = 'No full account number is saved for this account — sign in instead, or finish with blocked.'; break; }
               const parts = fullNumber.split(/[\s-]+/).filter(Boolean);
-              const value = i.part === 'first' ? parts[0] : i.part === 'second' ? (parts[1] ?? parts[0]) : fullNumber;
+              const value = i.part === 'name' ? lookupName : i.part === 'first' ? parts[0] : i.part === 'second' ? (parts[1] ?? parts[0]) : fullNumber;
               await el(i.ref).fill(value);
               if (i.submitRef != null) await el(i.submitRef).click({ timeout: 10000 });
               content = await after(i.submitRef != null ? 'Account number entered and submitted.' : 'Account number entered.');
@@ -657,7 +744,13 @@ Always end with the finish tool, never with a message. If the page seems gone or
             case 'goto': {
               const url = new URL(String(i.url), page.url());
               if (url.protocol !== 'https:' || !allowed.has(rootOf(url.hostname))) { content = 'Refused: only the provider\'s own site.'; break; }
+              if (lookup && SIGN_IN_URL.test(url.pathname)) { content = 'Refused: this account is found with the lookup page, never by signing in.'; break; }
               await page.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: 30000 });
+              if (lookup && await onSignIn(page)) {
+                await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+                content = await after('That is a sign-in page, which this account never uses: the browser is back on the lookup page. Fill it in (fill_account_number) and press Search.');
+                break;
+              }
               if (!navDone) rec = { tool: 'goto', url: url.toString() };
               content = await after('Opened.');
               break;
@@ -818,7 +911,7 @@ Always end with the finish tool, never with a message. If the page seems gone or
               // A saved deep sign-in link (Mohela's login.do?command=…, CRI's
               // auth page) can answer "invalid request" or "not available" when
               // not reached from the site itself: start once from the home page.
-              if (['turned_away', 'blocked'].includes(String(i.outcome)) && !triedHome) {
+              if (['turned_away', 'blocked'].includes(String(i.outcome)) && !triedHome && !lookup) {
                 triedHome = true;
                 const home = findProvider(account.providerName, account.providerSlug)?.site ?? `${start.origin}/`;
                 try {
@@ -862,7 +955,7 @@ Always end with the finish tool, never with a message. If the page seems gone or
     }
     if (!run.error) run.ok = true;
     // Reached the statements: keep the way there for next time.
-    if (run.ok && navDone) {
+    if (run.ok && navDone && !lookup) {
       if (recipe && run.replayed === recipe.steps.length) await recipeWorked(recipe.key, true);
       else await saveRecipe(account.id, host, steps);
     }

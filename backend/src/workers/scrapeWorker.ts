@@ -10,7 +10,7 @@ import { runPortalAgent } from '../scrapers/portalAgent';
 import { uploadDocument, buildStatementKey } from '../services/s3Service';
 import { guardWorker } from './redisGuard';
 import { insightQueue, scrapeQueue, createWorkerConnection, workerTuning } from './queues';
-import { websiteFor } from '../lib/providerDirectory';
+import { websiteFor, isLookupPage } from '../lib/providerDirectory';
 
 interface ScrapeJobData {
   utilityAccountId: string;
@@ -83,7 +83,8 @@ export async function loginClash(accountId: string): Promise<string> {
 async function sameLogin(accountId: string): Promise<{ id: string; label: string; last4: string }[]> {
   const site = { providerName: true, providerSlug: true, loginUrl: true } as const;
   const me = await db.utilityAccount.findUnique({ where: { id: accountId }, select: { ...site, usernameEnc: true, passwordEnc: true, property: { select: { userId: true } } } });
-  if (!me?.usernameEnc || !me.passwordEnc) return [];
+  // A lookup page finds one account at a time, by its own number: nothing to share.
+  if (!me?.usernameEnc || !me.passwordEnc || isLookupPage(me.loginUrl)) return [];
   const rootOf = (a: { providerName: string; providerSlug: string | null; loginUrl: string | null }) => {
     try { return new URL(websiteFor(a)!.url).hostname.split('.').slice(-2).join('.'); } catch { return null; }
   };

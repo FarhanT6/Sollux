@@ -81,6 +81,17 @@ export function websiteFor(account: { providerName: string; providerSlug?: strin
   return p ? { url: p.login ?? p.site, source: 'directory' } : null;
 }
 
+/**
+ * A biller's lookup page: bills found by account number (and the name on the
+ * bill) without signing in — InvoiceCloud's customer locator, "quick pay",
+ * "pay as guest". An account whose website is one never signs in.
+ */
+export function isLookupPage(url: string | null | undefined): boolean {
+  if (!url) return false;
+  return /invoicecloud\.com\/.*customerlocator/i.test(url)
+    || /\/(quick-?pay|guest-?pay|pay-?as-?guest|bill-?lookup|find-?my-?(bill|account))\b/i.test(url);
+}
+
 /** The provider a sender's address belongs to, by domain (bills@e.sdge.com → SDG&E). */
 export function providerForEmail(from: string): ProviderSite | null {
   const domain = (from.match(/@([\w.-]+)/)?.[1] ?? '').toLowerCase();

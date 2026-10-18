@@ -873,6 +873,8 @@ export interface UtilityAccount {
   providerSlug: string;
   accountNumber?: string;
   loginUrl?: string;
+  // The name the bill is addressed to, for a lookup page (account number + name, no sign-in).
+  lookupName?: string | null;
   category: UtilityCategory;
   // Which unit this meter serves, if it serves one. serviceLabel covers the
   // rest — "House meter", "Laundry room" — so several meters for one utility
