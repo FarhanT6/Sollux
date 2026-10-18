@@ -304,7 +304,7 @@ export default function PropertyDetailPage() {
               <button onClick={() => setShowAddUtility(true)} className="btn btn-primary text-xs">+ Add utility</button>
             </div>
             {accounts.length === 0 ? (
-              <EmptyState icon="⚡" title="No utility accounts" body="Add a utility account to start tracking bills for this property." />
+              <EmptyState title="No utility accounts" body="Add a utility account to start tracking bills for this property." />
             ) : activeAccounts.length === 0 ? (
               <p className="text-sm text-gray-500 py-4">No active utility accounts.</p>
             ) : (
@@ -377,7 +377,7 @@ export default function PropertyDetailPage() {
               />
             )}
             {payments.length === 0 ? (
-              <EmptyState icon="💳" title="No payments yet" body="Log a payment above, or import a bill that confirms one." />
+              <EmptyState title="No payments yet" body="Log a payment above, or import a bill that confirms one." />
             ) : (
               <div className="overflow-x-auto">
                 <table className="table-base">
@@ -426,7 +426,7 @@ export default function PropertyDetailPage() {
               </div>
             </div>
             {insights.length === 0 ? (
-              <EmptyState icon="✨" title="No active insights" body="Sollux will surface anomalies and savings tips here once enough data is collected." />
+              <EmptyState title="No active insights" body="Sollux will surface anomalies and savings tips here once enough data is collected." />
             ) : (
               insights.map(insight => (
                 <InsightCard
@@ -459,7 +459,7 @@ export default function PropertyDetailPage() {
           return (
             <>
               {allGroups.length === 0 ? (
-                <EmptyState icon="📄" title="No statements yet" body="Statements will appear here automatically once accounts are synced." />
+                <EmptyState title="No statements yet" body="Statements will appear here automatically once accounts are synced." />
               ) : (
                 <div className="space-y-6 pb-8">
                   {allGroups.map(({ acct, stmts }) => (
@@ -486,7 +486,7 @@ export default function PropertyDetailPage() {
                             <div className={`w-8 h-9 rounded flex items-center justify-center mb-2 ${stmt.pdfS3Key ? 'bg-red-500/10' : 'bg-white/4'}`}>
                               {stmt.pdfS3Key
                                 ? <div className="w-3.5 h-4 bg-red-400 rounded-sm" />
-                                : <span className="text-sm">📋</span>
+                                : null
                               }
                             </div>
                             <p className="text-xs font-medium text-gray-200 truncate">
@@ -497,7 +497,7 @@ export default function PropertyDetailPage() {
                               {stmt.dueDate ? ` · Due ${fmtDate(stmt.dueDate, 'MMM d')}` : ''}
                             </p>
                             <p className="text-xs mt-1" style={{ color: stmt.pdfS3Key ? '#ef4444' : '#6b7280' }}>
-                              {stmt.pdfS3Key ? '📄 PDF' : 'No PDF'}
+                              {stmt.pdfS3Key ? 'PDF' : 'No PDF'}
                             </p>
                           </div>
                         ))}
@@ -697,7 +697,7 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
                   title={revealedAccountNumber != null ? 'Hide account number' : 'Show full account number'}
                   className="text-gray-500 hover:text-gray-300 transition-colors disabled:opacity-40"
                 >
-                  {revealingAccountNumber ? '…' : revealedAccountNumber != null ? '🙈' : '👁'}
+                  {revealingAccountNumber ? '…' : revealedAccountNumber != null ? 'Hide' : 'Show'}
                 </button>
               </div>
             )}
@@ -732,7 +732,7 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
                       title={revealedPassword != null ? 'Hide password' : 'Show current password'}
                       className="text-gray-500 hover:text-gray-300 transition-colors disabled:opacity-40 flex-shrink-0"
                     >
-                      {revealingPassword ? '…' : revealedPassword != null ? '🙈' : '👁'}
+                      {revealingPassword ? '…' : revealedPassword != null ? 'Hide' : 'Show'}
                     </button>
                   </div>
                 )}
@@ -1050,7 +1050,7 @@ function UtilityAccountCard({
                   title={revealedAccountNumber != null ? 'Hide account number' : 'Show full account number'}
                   className="text-gray-500 hover:text-gray-300 transition-colors disabled:opacity-40"
                 >
-                  {revealingAccountNumber ? '…' : revealedAccountNumber != null ? '🙈' : '👁'}
+                  {revealingAccountNumber ? '…' : revealedAccountNumber != null ? 'Hide' : 'Show'}
                 </button>
               </p>
             ) : (

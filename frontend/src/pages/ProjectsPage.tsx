@@ -84,7 +84,7 @@ function ProjectList() {
       <div className="px-6 py-5">
         {creating && <ProjectEditor initial={EMPTY_PROJECT} onCancel={() => setCreating(false)} onSaved={id => nav(`/projects/${id}`)} />}
         {projects == null ? <p className="text-sm text-gray-500">Loading…</p>
-          : projects.length === 0 && !creating ? <EmptyState icon="🏗️" title="No projects yet" body="Add the build you are funding, then log each transfer you send for it." />
+          : projects.length === 0 && !creating ? <EmptyState title="No projects yet" body="Add the build you are funding, then log each transfer you send for it." />
           : (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
               {projects.map(p => (
@@ -236,7 +236,7 @@ function ProjectDetail({ id }: { id: string }) {
             <div className="flex items-center justify-between">
               <p className="text-sm font-semibold text-white">{tf.id ? 'Edit transfer' : 'New transfer'}</p>
               <label className="btn text-xs cursor-pointer">
-                {reading ? 'Reading…' : receipt ? `📎 ${receipt.name}` : 'Attach receipt (fills the form)'}
+                {reading ? 'Reading…' : receipt ? receipt.name : 'Attach receipt (fills the form)'}
                 <input type="file" accept="application/pdf,image/*" className="hidden" onChange={e => { void pickReceipt(e.target.files?.[0]); e.target.value = ''; }} />
               </label>
             </div>
@@ -266,7 +266,7 @@ function ProjectDetail({ id }: { id: string }) {
           <p className="section-label mb-0">Transfers{purposeFilter ? ` — ${TRANSFER_PURPOSE_LABELS[purposeFilter] ?? purposeFilter}` : ''}</p>
           {purposeFilter && <button onClick={() => setPurposeFilter('')} className="text-xs text-gray-500 hover:text-gray-300">Show all</button>}
         </div>
-        {transfers.length === 0 ? <EmptyState icon="💸" title="No transfers yet" body="Log each transfer you send — attach the Remitly, Wise or bank receipt and the amounts fill in." />
+        {transfers.length === 0 ? <EmptyState title="No transfers yet" body="Log each transfer you send — attach the Remitly, Wise or bank receipt and the amounts fill in." />
           : (
             <div className="card overflow-x-auto">
               <table className="table-base">
@@ -283,7 +283,7 @@ function ProjectDetail({ id }: { id: string }) {
                       <td className="text-right">{x.amountLocalComputed != null ? fmtCurrency(x.amountLocalComputed, cur) : '—'}</td>
                       <td className="text-gray-400">{x.recipient ?? '—'}{x.reference ? <span className="block text-xs text-gray-600">#{x.reference}</span> : null}</td>
                       <td className="pr-4 text-right whitespace-nowrap">
-                        {x.hasDocument && <button onClick={() => openReceipt(x)} className="text-xs text-amber-400 hover:text-amber-300 mr-3">📄</button>}
+                        {x.hasDocument && <button onClick={() => openReceipt(x)} className="text-xs text-amber-400 hover:text-amber-300 mr-3">Receipt</button>}
                         <button onClick={() => edit(x)} className="text-xs text-gray-500 hover:text-gray-300">Edit</button>
                       </td>
                     </tr>

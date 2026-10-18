@@ -427,7 +427,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
           {form.category === 'INSURANCE' && (
             <div className="mb-4 p-3 bg-white/5 rounded-lg">
               <p className="text-xs text-gray-400 mb-2">
-                🔗 This will also appear under <span className="text-gray-300 font-medium">Portfolio → Insurance</span> for this property — add the premium amount and dates there. Deactivating this account later marks that policy inactive too.
+                This will also appear under <span className="text-gray-300 font-medium">Portfolio → Insurance</span> for this property — add the premium amount and dates there. Deactivating this account later marks that policy inactive too.
               </p>
               <label className="text-xs text-gray-400 block mb-1">Insurance type</label>
               <Select value={insuranceType} onChange={e => setInsuranceType(e.target.value)}>
@@ -468,7 +468,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
           {(form.category === 'LOAN' || form.category === 'CREDIT_CARD') ? (
             <div className="mb-4 p-3 bg-white/5 rounded-lg">
               <p className="text-xs text-gray-400 mb-2">
-                🔗 This will also appear under <span className="text-gray-300 font-medium">Portfolio → Loans</span> for this property — if a loan with this lender name already exists there unlinked, it'll link to it instead of creating a duplicate. Add the balance/rate/payment there.
+                This will also appear under <span className="text-gray-300 font-medium">Portfolio → Loans</span> for this property — if a loan with this lender name already exists there unlinked, it'll link to it instead of creating a duplicate. Add the balance/rate/payment there.
               </p>
               <label className="text-xs text-gray-400 block mb-1">Loan type</label>
               <Select value={loanType} onChange={e => setLoanType(e.target.value)}>
@@ -489,7 +489,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
                   className="mt-0.5"
                 />
                 <span className="text-xs text-gray-300">
-                  <span className="font-medium">This is also a loan</span> (auto, student, solar financing, etc.) — 🔗 links it under <span className="text-gray-300 font-medium">Portfolio → Loans</span> too. Add the balance/rate/payment there.
+                  <span className="font-medium">This is also a loan</span> (auto, student, solar financing, etc.) — links it under <span className="text-gray-300 font-medium">Portfolio → Loans</span> too. Add the balance/rate/payment there.
                 </span>
               </label>
               {isLoan && (

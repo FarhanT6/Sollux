@@ -586,7 +586,7 @@ function PropertyEditModal({ property, onClose, onSave }: {
               <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">Property details</p>
               <button onClick={fillDetailsFromRentCast} disabled={lookingUpDetails || !form.address}
                 className="text-xs text-amber-400 hover:text-amber-300 disabled:opacity-40">
-                {lookingUpDetails ? 'Looking up…' : '⚡ Auto-fill from RentCast'}
+                {lookingUpDetails ? 'Looking up…' : 'Auto-fill from RentCast'}
               </button>
             </div>
             <div className="grid grid-cols-2 gap-3">
@@ -654,7 +654,7 @@ function PropertyEditModal({ property, onClose, onSave }: {
               <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">Purchase & valuation</p>
               <button onClick={fillValueFromRentCast} disabled={lookingUpValue || !form.address}
                 className="text-xs text-amber-400 hover:text-amber-300 disabled:opacity-40">
-                {lookingUpValue ? 'Estimating…' : '⚡ Get automated valuation'}
+                {lookingUpValue ? 'Estimating…' : 'Get automated valuation'}
               </button>
             </div>
             <div className="grid grid-cols-2 gap-3">
@@ -2054,7 +2054,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                     </EditSection>
 
                     <EditSection title="Tenants">
-                      <Field label="On this lease" hint="✕ takes them off this lease · 🗑 deletes the tenant everywhere · ★ primary">
+                      <Field label="On this lease" hint="✕ takes them off this lease · Delete removes the tenant everywhere · ★ primary">
                         <div className="flex flex-wrap gap-1.5 mb-1">
                         {editTenantIds.length === 0 && <span className="text-xs text-gray-600">No tenants</span>}
                         {editTenantIds.map((tid, i) => {
@@ -2073,7 +2073,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                               <button onClick={() => deleteTenantRecord(tid)} disabled={deletingTenant === tid}
                                 title="Delete this tenant permanently"
                                 className="text-gray-600 hover:text-red-500 disabled:opacity-40">
-                                {deletingTenant === tid ? '…' : '🗑'}
+                                {deletingTenant === tid ? '…' : 'Delete'}
                               </button>
                             </span>
                           );
@@ -3772,7 +3772,7 @@ function InsuranceTab({ propertyId, policies, setPolicies }: {
           <div className="col-span-4 text-xs font-medium text-gray-400 mb-1">{isEditing ? 'Edit policy' : 'New policy'}</div>
           {isLinked && (
             <p className="col-span-4 text-xs text-amber-400/80 bg-amber-500/5 border border-amber-500/20 rounded-lg px-3 py-2 -mt-1 mb-1">
-              🔗 This policy is linked to a utility account. Carrier name and active status are controlled from Utilities — edit them there. Premium, dates, and notes are still yours to manage here.
+              This policy is linked to a utility account. Carrier name and active status are controlled from Utilities — edit them there. Premium, dates, and notes are still yours to manage here.
             </p>
           )}
           <input
@@ -3820,7 +3820,7 @@ function InsuranceTab({ propertyId, policies, setPolicies }: {
                       {p.carrier}
                       {p.utilityAccountId && (
                         <span className="text-xs px-1.5 py-0.5 rounded-full text-amber-400 border border-amber-500/20 bg-amber-500/10" title="Synced from a utility account — carrier name and active status are managed there">
-                          🔗 Linked
+                          Linked
                         </span>
                       )}
                     </p>

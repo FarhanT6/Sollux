@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
+import { CategoryGlyph } from '../ios';
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
   type DragEndEvent,
@@ -265,7 +266,7 @@ export default function PropertiesPage() {
             {Array(6).fill(0).map((_, i) => <Skeleton key={i} className="h-56" />)}
           </div>
         ) : filtered.length === 0 ? (
-          <EmptyState icon="🏠" title="No properties found" body="Add your first property to start tracking utility bills." />
+          <EmptyState title="No properties found" body="Add your first property to start tracking utility bills." />
         ) : (
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
             <SortableContext items={filtered.map(p => p.id)} strategy={rectSortingStrategy}>
@@ -375,7 +376,7 @@ function PropertyCard({ property, onEdit, onDelete }: { property: Property; onEd
       {/* Header */}
       <Link to={`/properties/${property.id}`} className="p-4 border-b border-white/8 flex items-start gap-3 hover:bg-white/2 transition-colors block">
         <div className={`w-10 h-10 rounded-xl ${TYPE_COLORS[property.type] || 'bg-white/5'} flex items-center justify-center text-lg flex-shrink-0`}>
-          {property.type === 'PRIMARY' ? '🏠' : property.type === 'RENTAL' ? '🏡' : property.type === 'COMMERCIAL' ? '🏢' : '🏘'}
+          <CategoryGlyph category="HOA" size={18} />
         </div>
         <div className="flex-1 min-w-0">
           <p className="text-sm font-semibold text-white truncate">

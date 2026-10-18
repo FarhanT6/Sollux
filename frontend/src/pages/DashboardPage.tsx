@@ -1,6 +1,7 @@
 import UrgentNotices from '../components/UrgentNotices';
 import { monthRentDue } from '../lib/rentDue';
 import { useEffect, useState } from 'react';
+import { CategoryGlyph } from '../ios';
 import { Link } from 'react-router-dom';
 import { useUser } from '@clerk/clerk-react';
 import { getDashboardSummary, getRecentActivity, getInsights, getPlaidItems, getBankAccounts, getLeases, getRentPayments } from '../api/client';
@@ -160,7 +161,7 @@ export default function DashboardPage() {
             {loading ? (
               <div className="space-y-2">{Array(4).fill(0).map((_, i) => <Skeleton key={i} className="h-16" />)}</div>
             ) : activity?.upcomingBills?.length === 0 ? (
-              <EmptyState icon="🏠" title="No properties yet" body="Add your first property to get started." />
+              <EmptyState title="No properties yet" body="Add your first property to get started." />
             ) : (
               <div className="space-y-2">
                 {(activity?.upcomingBills || []).map((bill: any) => (
@@ -169,9 +170,9 @@ export default function DashboardPage() {
                     to={`/properties/${bill.utilityAccount?.property?.id || ''}`}
                     className="card p-3 flex items-center gap-3 hover:border-gold-300 transition-colors block"
                   >
-                    <div className="w-9 h-9 rounded-lg flex items-center justify-center text-base flex-shrink-0"
-                      style={{ background: 'rgba(245,166,35,0.15)' }}>
-                      🏠
+                    <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 text-gray-400"
+                      style={{ background: 'rgba(255,255,255,0.06)' }}>
+                      <CategoryGlyph category="HOA" size={17} />
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-white truncate">
@@ -200,7 +201,7 @@ export default function DashboardPage() {
             {loading ? (
               <div className="space-y-2">{Array(3).fill(0).map((_, i) => <Skeleton key={i} className="h-24" />)}</div>
             ) : insights.length === 0 ? (
-              <EmptyState icon="✨" title="All clear" body="No new alerts. Sollux is monitoring your accounts." />
+              <EmptyState title="All clear" body="No new alerts. Sollux is monitoring your accounts." />
             ) : (
               <div>
                 {insights.map(insight => (

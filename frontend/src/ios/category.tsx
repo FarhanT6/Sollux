@@ -15,8 +15,26 @@ const P: Record<string, JSX.Element> = {
   TAXES: <><path d="M3 21h18M4 10h16M12 3l9 5H3z" /></>,
   LOAN: <><path d="M3 10l9-6 9 6M5 10v10h14V10" /></>,
   CREDIT_CARD: <><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M2 10h20" /></>,
+  TV: <><rect x="3" y="5" width="18" height="12" rx="2" /><path d="M8 21h8" /></>,
+  MEDICAL: <path d="M12 6v12M6 12h12" />,
   OTHER: <circle cx="12" cy="12" r="3" />,
 };
+
+// Personal-expense categories, drawn with the nearest utility glyph.
+const ALIAS: Record<string, string> = {
+  AUTO_LOAN: 'LOAN', STUDENT_LOAN: 'LOAN', AUTO_INSURANCE: 'INSURANCE', LIFE_INSURANCE: 'INSURANCE',
+  SUBSCRIPTIONS: 'OTHER', MORTGAGE: 'LOAN',
+};
+
+/**
+ * A category's line icon in the surrounding text colour — the desktop's
+ * stand-in for the emoji it used to show (⚡ 🔥 💧 🛡️), which read as a toy.
+ */
+export function CategoryGlyph({ category, size = 18 }: { category?: string | null; size?: number }) {
+  const c = String(category ?? 'OTHER');
+  const d = P[c] ?? P[ALIAS[c] ?? 'OTHER'] ?? P.OTHER;
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{d}</svg>;
+}
 
 export function categoryIcon(category?: string | null) {
   const c = (category ?? 'OTHER') as UtilityCategory;

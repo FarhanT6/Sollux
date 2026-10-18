@@ -336,7 +336,7 @@ function PropertyTaxTab() {
         )}
 
         {loading ? <p className="text-sm text-gray-500">Loading…</p>
-          : properties.length === 0 ? <EmptyState icon="🏛️" title="No properties" body="Add properties first." />
+          : properties.length === 0 ? <EmptyState title="No properties" body="Add properties first." />
           : (
             <div className="card overflow-x-auto">
               <table className="table-base">
@@ -365,7 +365,7 @@ function PropertyTaxTab() {
                               <span className="block text-white">{fmtMoney(t.annualTaxAmount)}</span>
                               <span className={`pill ${t.escrowLoanId ? 'pill-blue' : STATUS[t.status].pill}`}>{t.escrowLoanId ? 'Escrow' : STATUS[t.status].label}</span>
                             </button>
-                            {t.hasDocument && <button onClick={() => openBill(t)} className="block ml-auto text-xs text-amber-400 hover:text-amber-300 mt-0.5">📄 Bill</button>}
+                            {t.hasDocument && <button onClick={() => openBill(t)} className="block ml-auto text-xs text-amber-400 hover:text-amber-300 mt-0.5">Bill</button>}
                           </td>
                         );
                       })}

@@ -280,7 +280,7 @@ export default function IncomeTaxTab() {
                   <td className="text-gray-400">{d.property ? (d.property.nickname || d.property.address) : '—'}</td>
                   <td className="text-right text-white">{d.amount != null ? fmtMoney(d.amount) : '—'}{d.refundOrDue != null && <span className={`block text-xs ${Number(d.refundOrDue) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{Number(d.refundOrDue) >= 0 ? 'refund' : 'owed'} {fmtMoney(Math.abs(Number(d.refundOrDue)))}</span>}</td>
                   <td className="text-right text-gray-400">{d.federalWithheld != null || d.stateWithheld != null ? fmtMoney(Number(d.federalWithheld ?? 0) + Number(d.stateWithheld ?? 0)) : '—'}</td>
-                  <td>{(d.documents ?? []).length > 0 && <button onClick={() => openTaxDoc(d.id)} className="text-xs text-amber-400 hover:text-amber-300">📄</button>}</td>
+                  <td>{(d.documents ?? []).length > 0 && <button onClick={() => openTaxDoc(d.id)} className="text-xs text-amber-400 hover:text-amber-300">PDF</button>}</td>
                   <td className="pr-4 text-right"><button onClick={() => setEditing(docToForm(d))} className="text-xs text-gray-500 hover:text-gray-300">Edit</button></td>
                 </tr>
               ))}

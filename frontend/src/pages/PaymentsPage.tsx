@@ -3,14 +3,9 @@ import { Link } from 'react-router-dom';
 import { getPayments } from '../api/client';
 import type { Payment } from '../types/index';
 import { PageHeader, Pill, EmptyState, Skeleton } from '../components/ui';
+import { CategoryGlyph } from '../ios';
 import { format } from 'date-fns';
 import { fmtDate } from '../lib/date';
-
-const CATEGORY_ICONS: Record<string, string> = {
-  ELECTRIC: '⚡', GAS: '🔥', WATER: '💧', SEWER: '🚿',
-  INTERNET: '🌐', PHONE: '📱', TV: '📺', TRASH: '🗑️',
-  SOLAR: '☀️', INSURANCE: '🛡️', HOA: '🏘️', TAXES: '🏛️', OTHER: '📄',
-};
 
 interface ServiceGroup {
   providerName: string;
@@ -110,7 +105,7 @@ export default function PaymentsPage({ embedded }: { embedded?: boolean } = {}) 
             {[1, 2].map(i => <Skeleton key={i} className="h-48" />)}
           </div>
         ) : filtered.length === 0 ? (
-          <EmptyState icon="💳" title="No payments yet" body="Payment history will appear here after accounts are synced." />
+          <EmptyState title="No payments yet" body="Payment history will appear here after accounts are synced." />
         ) : (
           <div className="space-y-4 pb-8">
             {groups.map(propGroup => (
@@ -147,7 +142,7 @@ export default function PaymentsPage({ embedded }: { embedded?: boolean } = {}) 
                     const detailUrl = svcGroup.propertyId
                       ? `/properties/${svcGroup.propertyId}/utilities/${svcGroup.utilityAccountId}`
                       : null;
-                    const icon = CATEGORY_ICONS[(svcGroup.payments[0]?.utilityAccount?.category) || ''] || '💳';
+                    const icon = <CategoryGlyph category={svcGroup.payments[0]?.utilityAccount?.category} size={16} />;
 
                     return (
                       <div key={svcGroup.utilityAccountId}>

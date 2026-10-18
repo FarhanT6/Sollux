@@ -148,7 +148,7 @@ export default function PayPlanPage() {
             <div className="xl:col-span-3">
               <p className="text-sm font-medium text-white mb-2">Pay these</p>
               {due.length === 0 ? (
-                <EmptyState icon="✅" title="Nothing due in this window" body="Widen the window, or check that loans have a monthly payment and due day on file." />
+                <EmptyState title="Nothing due in this window" body="Widen the window, or check that loans have a monthly payment and due day on file." />
               ) : (
                 <div className="space-y-2">
                   {due.map(o => {

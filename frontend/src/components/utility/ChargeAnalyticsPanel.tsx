@@ -107,7 +107,6 @@ export default function ChargeAnalyticsPanel({ accountId }: { accountId: string 
   if (!data || data.lines.length === 0) {
     return (
       <EmptyState
-        icon="🧾"
         title="No itemised charges yet"
         body="Bills on this account have not been imported with a charge breakdown. Re-import them to see where the money goes."
       />

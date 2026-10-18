@@ -27,17 +27,11 @@ import BillPicker, { emptyBillPick, splitAllocations, type BillPickerValue } fro
 import PaymentSourcePicker, { emptyNewCard, resolvePaymentSource, type NewCardForm } from '../components/payments/PaymentSourcePicker';
 import { operatingCost } from '../lib/operatingCost';
 import ChargeAnalyticsPanel from '../components/utility/ChargeAnalyticsPanel';
-import { usePhone } from '../ios';
+import { usePhone, CategoryGlyph } from '../ios';
 import { openUrl } from '../lib/native';
 import PortalLogin from '../components/utility/PortalLogin';
 import { toast } from '../lib/toast';
 import UtilityAccountScreen from './phone/UtilityAccountScreen';
-
-const CATEGORY_ICONS: Record<string, string> = {
-  ELECTRIC: '⚡', GAS: '🔥', WATER: '💧', SEWER: '🚿',
-  INTERNET: '🌐', PHONE: '📱', TV: '📺', TRASH: '🗑️',
-  SOLAR: '☀️', INSURANCE: '🛡️', HOA: '🏘️', TAXES: '🏛️', OTHER: '📄',
-};
 
 // The name a bill goes by everywhere on this page: the period it covers, not
 // the month it was issued in. Insurance and haulers bill in advance, so two
@@ -345,7 +339,7 @@ function LoanCard({ loan, accountId, arrears, onUpdate, onDelete }: {
         <div className="flex items-start justify-between mb-3">
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-white">🏦 {loan.lender}</span>
+              <span className="text-sm font-semibold text-white">{loan.lender}</span>
               <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: 'rgba(99,102,241,0.15)', color: '#a5b4fc' }}>
                 {LOAN_TYPE_LABELS[loan.loanType] || loan.loanType}
               </span>
@@ -430,7 +424,7 @@ function EscrowControl({ account, onChange, onReload }: {
       <button onClick={() => setOpen(v => !v)} disabled={saving}
         title={on ? `Paid by ${account.escrowLoan?.lender ?? 'the lender'} out of the mortgage escrow. Click to change.` : 'Paid by the lender out of the mortgage escrow?'}
         className={`text-xs px-1.5 py-0.5 rounded-full border transition-colors ${on ? 'text-emerald-400 border-emerald-500/40 bg-emerald-500/10' : 'text-gray-600 border-white/10 hover:text-gray-400'}`}>
-        {on ? `🏦 Escrow · ${account.escrowLoan?.lender ?? 'lender'}` : '🏦 Paid via escrow?'}
+        {on ? `Escrow · ${account.escrowLoan?.lender ?? 'lender'}` : 'Paid via escrow?'}
       </button>
       {open && (
         <div className="absolute left-0 top-7 z-20 w-72 rounded-xl p-3 shadow-xl space-y-2" style={{ background: '#252525', border: '1px solid rgba(255,255,255,0.1)' }}>
@@ -581,11 +575,11 @@ function PaymentPlanCard({
         <PaymentPlanModal accountId={accountId} existing={plan}
           onClose={() => setShowEdit(false)} onSave={onUpdate} />
       )}
-      <div className="rounded-xl px-5 py-4 mb-4" style={{ background: '#1e1e1e', border: '1px solid rgba(245,166,35,0.25)' }}>
+      <div className="rounded-xl px-5 py-4 mb-4" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.08)' }}>
         <div className="flex items-start justify-between mb-3">
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-white">📋 Payment Plan</span>
+              <span className="text-sm font-semibold text-white">Payment plan</span>
               {isCompleted
                 ? <Pill color="green">Completed</Pill>
                 : <Pill color="amber">Active</Pill>}
@@ -1111,7 +1105,7 @@ export default function UtilityDetailPage() {
   if (!account) return <div className="p-6 text-gray-400">Account not found</div>;
 
   const color = (CATEGORY_COLORS as Record<string, string>)[account.category] || '#888';
-  const icon = CATEGORY_ICONS[account.category as string] || '📄';
+  const icon = <CategoryGlyph category={account.category} size={20} />;
   const property = account.property;
   const propertyLabel = property?.nickname || property?.address || 'Property';
 
@@ -1617,7 +1611,7 @@ export default function UtilityDetailPage() {
         {/* ── Statements ───────────────────────────────────── */}
         {tab === 'statements' && (
           filteredStatements.length === 0
-            ? <EmptyState icon="📄" title="No statements" body={search || yearFilter !== 'all' ? 'No statements match your filter.' : 'Sync this account to pull statement history.'} />
+            ? <EmptyState title="No statements" body={search || yearFilter !== 'all' ? 'No statements match your filter.' : 'Sync this account to pull statement history.'} />
             : (
               <div className="space-y-2 pb-8">
                 {filteredStatements.map((s, idx) => {
@@ -1649,7 +1643,7 @@ export default function UtilityDetailPage() {
                         background: selectedIds.has(s.id) ? 'rgba(255,60,60,0.06)' : '#1e1e1e',
                         border: selectedIds.has(s.id)
                           ? '1px solid rgba(255,80,80,0.4)'
-                          : isLatest ? '1px solid rgba(245,166,35,0.3)' : '1px solid rgba(255,255,255,0.06)',
+                          : isLatest ? '1px solid rgba(255,255,255,0.14)' : '1px solid rgba(255,255,255,0.06)',
                       }}>
                       {selecting && (
                         <input
@@ -1694,7 +1688,7 @@ export default function UtilityDetailPage() {
                               ✓ Past due on statement {fmtMoney(pastDue)} · {liveCarried <= 0.01 ? 'paid since' : `${fmtMoney(arrearsPaid)} paid since, ${fmtMoney(liveCarried)} still owed`}
                             </p>
                           ) : (
-                            <p className={`text-xs mt-0.5 ${isPaid ? 'text-gray-500' : 'text-red-400'}`}>{isPaid ? '' : '⚠ '}Past due on statement: {fmtMoney(pastDue)}</p>
+                            <p className={`text-xs mt-0.5 ${isPaid ? 'text-gray-500' : 'text-red-400'}`}>Past due on statement: {fmtMoney(pastDue)}</p>
                           )
                         )}
                         {pastDue != null && pastDue < 0 && (
@@ -1704,7 +1698,7 @@ export default function UtilityDetailPage() {
                           <p className={`text-xs mt-0.5 ${new Date(s.penaltyDate) >= new Date() ? 'text-amber-400' : 'text-red-400'}`}>
                             {new Date(s.penaltyDate) >= new Date()
                               ? `⏰ Penalty after ${fmtDate(s.penaltyDate, 'MMM d, yyyy')}`
-                              : `⚠ Penalty assessed ${fmtDate(s.penaltyDate, 'MMM d, yyyy')}`}
+                              : `Penalty assessed ${fmtDate(s.penaltyDate, 'MMM d, yyyy')}`}
                           </p>
                         )}
                         {s.usageValue && (
@@ -1911,7 +1905,7 @@ export default function UtilityDetailPage() {
         )}
 
         {tab === 'payments' && (showPayForm || editPaymentId) && (
-          <div className="rounded-xl px-5 py-4 mb-3" style={{ background: '#1e1e1e', border: '1px solid rgba(245,166,35,0.25)' }}>
+          <div className="rounded-xl px-5 py-4 mb-3" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.08)' }}>
             <p className="text-xs font-medium text-gray-300 mb-2">
               {editPaymentId ? 'Edit payment' : 'Log a payment toward this account'}
             </p>
@@ -1929,7 +1923,7 @@ export default function UtilityDetailPage() {
 
         {tab === 'payments' && (
           filteredPayments.length === 0
-            ? <EmptyState icon="💳" title="No payments" body={search || yearFilter !== 'all' ? 'No payments match your filter.' : 'Nothing recorded yet — use "Log payment" above.'} />
+            ? <EmptyState title="No payments" body={search || yearFilter !== 'all' ? 'No payments match your filter.' : 'Nothing recorded yet — use "Log payment" above.'} />
             : (
               <div className="space-y-2 pb-8">
                 {filteredPayments.map(p => (
@@ -1990,7 +1984,7 @@ export default function UtilityDetailPage() {
         {/* ── Fees & Penalties ─────────────────────────────── */}
         {tab === 'fees' && (
           feesData.length === 0
-            ? <EmptyState icon="🧾" title="No fees or penalties" body="No fees, penalties, or adjustments found across your statements." />
+            ? <EmptyState title="No fees or penalties" body="No fees, penalties, or adjustments found across your statements." />
             : (
               <div className="space-y-4 pb-8">
                 {/* Summary cards */}
@@ -2252,7 +2246,7 @@ function PolicyCard({ accountId, propertyId, carrier, account, onAccountChange }
   return (
     <div className="mx-6 mb-4 rounded-xl p-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
       <div className="flex items-center justify-between mb-2">
-        <p className="text-sm font-semibold text-white">🛡 Policy</p>
+        <p className="text-sm font-semibold text-white">Policy</p>
         {current && <span className={`pill ${daysLeft != null && daysLeft < 45 ? 'pill-amber' : 'pill-green'}`}>{daysLeft != null && daysLeft < 0 ? 'Expired' : 'Active'}</span>}
       </div>
       {current ? (

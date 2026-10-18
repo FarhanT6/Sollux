@@ -306,7 +306,7 @@ export default function CompliancePage({ propertyId: fixedPropertyId }: { proper
         {/* ── List ── */}
         {loading ? <p className="text-sm text-gray-500">Loading…</p>
           : shown.length === 0 ? (
-            <EmptyState icon="📋" title={filter === 'open' ? 'Nothing open' : 'Nothing recorded'} body="Add a citation, an order to comply, a permit or an inspection — photograph the pages and Sollux fills in the rest." />
+            <EmptyState title={filter === 'open' ? 'Nothing open' : 'Nothing recorded'} body="Add a citation, an order to comply, a permit or an inspection — photograph the pages and Sollux fills in the rest." />
           ) : (
             <div className="space-y-2">
               {shown.map(i => {
@@ -344,7 +344,7 @@ export default function CompliancePage({ propertyId: fixedPropertyId }: { proper
                         {(i.documents ?? []).length > 0 && (
                           <p className="text-xs mt-1">
                             {(i.documents ?? []).map((d, n) => (
-                              <button key={n} onClick={() => openDoc(i, n)} className="text-amber-400 hover:text-amber-300 mr-3">📄 {(i.documents ?? []).length > 1 ? `Page ${n + 1}` : 'View document'}</button>
+                              <button key={n} onClick={() => openDoc(i, n)} className="text-amber-400 hover:text-amber-300 mr-3">{(i.documents ?? []).length > 1 ? `Page ${n + 1}` : 'View document'}</button>
                             ))}
                           </p>
                         )}

@@ -243,7 +243,7 @@ function Unlock({ info, onOpen, onRekeyed }: { info: VaultKeyInfo; onOpen: (key:
   }
   return (
     <div className="card p-5 max-w-md space-y-3">
-      <p className="text-sm font-semibold text-white">🔒 Vault locked</p>
+      <p className="text-sm font-semibold text-white">Vault locked</p>
       {mode === 'pass' ? (
         <form onSubmit={e => { e.preventDefault(); if (secret) unlock(); }} className="space-y-2">
           <input type="password" autoComplete="current-password" autoFocus className="input-dark w-full text-sm" placeholder="Vault passphrase" value={secret} onChange={e => setSecret(e.target.value)} />
@@ -426,8 +426,8 @@ function Open({ dataKey, info, items, setItems, onLock, onRekeyed }: {
         {(['items', 'activity', 'settings'] as const).map(t => (
           <button key={t} onClick={() => setTab(t)} className={`text-xs px-3 py-1.5 rounded-lg ${tab === t ? 'bg-amber-500/20 text-amber-300' : 'text-gray-400 hover:text-gray-200'}`}>{t === 'items' ? 'Records' : t === 'activity' ? 'Access log' : 'Security'}</button>
         ))}
-        <span className="text-xs text-emerald-400 ml-2">🔓 Unlocked · locks after 5 idle minutes</span>
-        <button onClick={onLock} className="btn text-xs ml-auto">🔒 Lock now</button>
+        <span className="text-xs text-emerald-400 ml-2">Unlocked · locks after 5 idle minutes</span>
+        <button onClick={onLock} className="btn text-xs ml-auto">Lock now</button>
       </div>
       {err && <p className="text-xs text-red-400">{err}</p>}
 
@@ -444,7 +444,7 @@ function Open({ dataKey, info, items, setItems, onLock, onRekeyed }: {
               <div className="grid md:grid-cols-2 gap-3">
                 {KIND[editing.kind].fields.map(f => (
                   <div key={f.key} className={f.multiline ? 'md:col-span-2' : ''}>
-                    <span className="block text-xs text-gray-500 mb-1">{f.label}{f.secret ? ' 🔒' : ''}</span>
+                    <span className="block text-xs text-gray-500 mb-1">{f.label}{f.secret ? ' · secret' : ''}</span>
                     {f.multiline
                       ? <textarea rows={3} className="input-dark w-full text-sm" value={editing.data[f.key] ?? ''} onChange={e => setEditing(ed => ed && { ...ed, data: { ...ed.data, [f.key]: e.target.value } })} />
                       : <input type={f.secret ? 'password' : 'text'} autoComplete="off" className="input-dark w-full text-sm" placeholder={f.placeholder} value={editing.data[f.key] ?? ''} onChange={e => setEditing(ed => ed && { ...ed, data: { ...ed.data, [f.key]: e.target.value } })} />}
