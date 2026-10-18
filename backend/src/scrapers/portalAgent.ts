@@ -51,6 +51,10 @@ const CODE_WAIT_MS = 5 * 60 * 1000;
 // cookies are.
 const BOT_COOKIE = /^(_abck|bm_[a-z]+|ak_bmsc|_px[a-z0-9_]*|incap_ses_\w*|visid_incap_\w*|nlbi_\w*|reese84|datadome|__cf_bm|cf_clearance)$/i;
 // What a site says when it refuses the browser itself, whatever the password.
+// The frames that hold a checkbox-style human check: Cloudflare Turnstile,
+// reCAPTCHA's checkbox, hCaptcha's checkbox. The box itself sits in a closed
+// frame the page reader cannot see into.
+const CAPTCHA_FRAME = /challenges\.cloudflare\.com|(google\.com|recaptcha\.net)\/recaptcha\/(api2|enterprise)\/anchor|hcaptcha\.com\/.*checkbox/i;
 const TURNED_AWAY = /access denied|invalid request|unable to process your request|request (was )?(rejected|blocked)|pardon our interruption|unusual (activity|traffic)|are you a robot|bot protection|akamai/i;
 // Sites that turned the browser away, and when a scheduled fetch may try them
 // again. Retrying a site that is refusing only makes it more suspicious and can
@@ -70,6 +74,7 @@ export interface PortalRun {
 }
 
 const TOOLS: Anthropic.Tool[] = [
+  { name: 'tick_captcha', description: 'Tick the "Verify you are human" / "I\'m not a robot" checkbox on the page (Cloudflare, reCAPTCHA, hCaptcha) with a real mouse click. Call it before submitting a form that has one.', input_schema: { type: 'object', properties: {} } },
   { name: 'look', description: 'Describe the current page: URL, title, visible text, and numbered interactive elements [n]. Every other action already returns the page as it is afterwards, so only call this at the start or if a page was still loading.', input_schema: { type: 'object', properties: {} } },
   { name: 'screenshot', description: 'A picture of the page, when the text description is not enough.', input_schema: { type: 'object', properties: {} } },
   { name: 'click', description: 'Click element [n].', input_schema: { type: 'object', properties: { ref: { type: 'number' } }, required: ['ref'] } },
@@ -185,8 +190,11 @@ export async function describe(page: Page, secrets: string[]): Promise<string> {
   setRefFrames(page, refs);
   const main = parts[0] ?? { url: page.url(), title: '', text: '', els: [], inFrame: false };
   const framed = parts.slice(1).filter(f => f.els.length || f.text.trim());
+  const checks = page.frames().filter(f => CAPTCHA_FRAME.test(f.url()));
+  const checkNote = checks.length ? `\n\nSecurity check on this page: ${checks.map(f => /cloudflare/.test(f.url()) ? 'Cloudflare "Verify you are human"' : /hcaptcha/.test(f.url()) ? 'hCaptcha "I am human"' : 'reCAPTCHA "I\'m not a robot"').join(', ')} checkbox — use tick_captcha before submitting.` : '';
   let text = `URL: ${main.url}\nTitle: ${main.title}\n\nVisible text:\n${main.text}\n\nElements:\n${main.els.join('\n')}`;
   for (const f of framed) text += `\n\nEmbedded frame (${f.url.slice(0, 100)}):\n${f.text.slice(0, 600)}\nElements in it:\n${f.els.join('\n')}`;
+  text += checkNote;
   for (const s of secrets) if (s && s.length >= 3) text = text.split(s).join('[hidden]');
   return text;
 }
@@ -245,6 +253,7 @@ export async function capturePdf(ctx: BrowserContext, page: Page, action: () => 
   };
   // A statement that opens in a new tab arrives as that tab's download.
   const onPage = (p: Page) => p.on('download', onDownload);
+  const popups: Page[] = [];
   page.on('download', onDownload);
   ctx.on('response', onResponse);
   ctx.on('page', onPage);
@@ -276,14 +285,25 @@ export async function capturePdf(ctx: BrowserContext, page: Page, action: () => 
           // their internet and sign-in; the request below comes from Sollux's
           // server, which SDG&E turns away (its bill PDF opens in a new tab).
           got = await pdfFromPage(page, url);
+          // A pop-up that is a page holding the bill (CR&R's View/Print): the
+          // PDF is whatever it embeds or links, fetched from inside the pop-up.
+          if (!got) {
+            const inner = await np.evaluate(() => Array.from(document.querySelectorAll('embed[src],iframe[src],object[data],a[href]'))
+              .map(e => (e as HTMLEmbedElement).src || (e as HTMLObjectElement).data || (e as HTMLAnchorElement).href)
+              .filter(u => /^https?:/.test(u) && (/pdf|bill|print|invoice|statement|document|view/i.test(u)))
+              .slice(0, 6)).catch(() => [] as string[]);
+            for (const u of inner) { got = await pdfFromPage(np, u); if (got) break; }
+          }
           const res = got ? null : await ctx.request.get(url).catch(() => null);
           if (res && (res.headers()['content-type'] ?? '').includes('pdf')) { const b = Buffer.from(await res.body()); if (b.subarray(0, 1024).includes('%PDF-')) got = b; }
         }
-        await np.close().catch(() => {});
+        // Left open until the end: a pop-up closed now would cancel a download still arriving.
+        popups.push(np);
       }
     }
   } finally {
     page.off('download', onDownload);
+    for (const p of popups) await p.close().catch(() => {});
     ctx.off('response', onResponse);
     ctx.off('page', onPage);
   }
@@ -414,9 +434,23 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   let ctx = await prepare();
   // On the owner's computer: a tab of its own, closed afterwards; the window stays.
   let page = remote ? await ctx.newPage() : ctx.pages()[0] ?? await ctx.newPage();
+  // Every tab this run opened or the site opened for it, oldest first.
+  const runPages: Page[] = [page];
+  let tabsAtAction = 1;
+  const onNewTab = (p: Page) => { runPages.push(p); };
+  ctx.on('page', onNewTab);
+  // A site that moves the sign-in to a new tab and closes the old one (Blue
+  // Shield's 2-step page): carry on in the newest tab still open, instead of
+  // stopping because "the tab closed".
+  const follow = async () => {
+    if (!page.isClosed()) return;
+    const next = runPages.filter(p => !p.isClosed()).pop();
+    if (next) { page = next; await page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {}); }
+  };
   const shutdown = async () => {
+    ctx.off('page', onNewTab);
     if (remote) {
-      await page.close().catch(() => {});
+      for (const p of runPages) await p.close().catch(() => {});
       await ctx.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => {});
       await (remote as Browser | null)?.close().catch(() => {});
     } else await ctx.close().catch(() => {});
@@ -465,6 +499,15 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   let triedHome = false;
   let askedCaptcha = false;
   const after = async (what: string) => {
+    // The next step opened in a new tab (a link, or a sign-in button): work there.
+    await page.waitForTimeout(500);
+    const opened = runPages.length > tabsAtAction ? runPages[runPages.length - 1] : null;
+    if (opened && opened !== page && !opened.isClosed()) {
+      await opened.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
+      if (/^https?:/.test(opened.url()) && !/\.pdf(\?|$)/i.test(opened.url())) { page = opened; what += ' It opened in a new tab; you are now on that tab.'; }
+    }
+    tabsAtAction = runPages.length;
+    await follow();
     await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
     await page.waitForTimeout(800);
     lastPage = await describe(page, secrets);
@@ -477,7 +520,7 @@ ${others.length ? `This login holds several of the owner's accounts. Fetch every
 - ${account.accountNumber ? `account ending ${String(account.accountNumber).slice(-4)}` : 'this account'} at ${account.property.address}: after ${since ?? 'the last 12 months'}
 ${others.map(o => `- ${o.accountNumber ? `account ending ${String(o.accountNumber).slice(-4)}` : 'an account'} at ${o.property.address}: after ${o.statements[0]?.statementDate?.toISOString().slice(0, 10) ?? 'the last 12 months'}`).join('\n')}
 At most ${maxDownloads} downloads in all. An account the portal does not list is not an error: say so and carry on. Finish with outcome done when every listed account is checked, and fill in accounts with each one's result (downloaded, nothing_new, not_listed, or not_checked if you did not get to it) — an account is only nothing_new if you opened its own statement history.` : `Goal: log in, open the billing / statement history, and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If there is nothing newer, finish with outcome done.`}
-Rules: use fill_login for credentials (you never see them). If the portal offers where to send a verification code, choose email over text or a phone call. If it emails a sign-in link instead of a code, call open_emailed_link (the owner is never asked for it); if none arrives, finish with no_code. When a code has been sent, call ask_owner_for_code (it reads the code from the owner's email, or asks the owner), then type_code. Pass any "Remember this device", "Trust this browser", "Keep me signed in" or "Don't ask again" checkbox as rememberRef so the next visit is not asked again. Never pay, enroll, change settings, accept offers or send messages. If a captcha appears, finish with captcha (on the owner's own computer they may solve it, and you are then shown the page to carry on). If the login is rejected, finish with bad_login. If a code you entered is rejected, ask_owner_for_code once more for a fresh one; after a second rejection finish with no_code — never start the login over.
+Rules: use fill_login for credentials (you never see them). If the portal offers where to send a verification code, choose email over text or a phone call. If it emails a sign-in link instead of a code, call open_emailed_link (the owner is never asked for it); if none arrives, finish with no_code. When a code has been sent, call ask_owner_for_code (it reads the code from the owner's email, or asks the owner), then type_code. Pass any "Remember this device", "Trust this browser", "Keep me signed in" or "Don't ask again" checkbox as rememberRef so the next visit is not asked again. Never pay, enroll, change settings, accept offers or send messages. If a "Verify you are human" / "I'm not a robot" checkbox is on the page, call tick_captcha before submitting. If a captcha still blocks you (a picture puzzle, or the check keeps failing), finish with captcha (on the owner's own computer they may solve it, and you are then shown the page to carry on). If the login is rejected, finish with bad_login. If a code you entered is rejected, ask_owner_for_code once more for a fresh one; after a second rejection finish with no_code — never start the login over.
 If the site refuses the browser itself (Access Denied, "invalid request", "unable to process your request" after a correct sign-in, a bot check), finish with turned_away at once: never submit the login a second time — each retry makes the site more suspicious and can lock the owner's account.
 Each action returns the page as it is afterwards: do not call look after it. Fill and submit in one step (submitRef). A typical visit is: look, fill_login (with submit), code if asked, open billing/statements, download, finish — aim for about 10 steps. When several accounts are listed, choose the one matching the account number, else the address. The account number is what identifies the account: the address a portal shows is often the owner's mailing address, not the property's, so an account whose number matches is the right one whatever address it shows.`;
   // Every step that changed the page, in order: replayed ones and Claude's.
@@ -545,8 +588,10 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
         else if (u.name === 'type') say(`${n}: typing`);
         else if (u.name === 'select') say(`${n}: choosing "${String(i.label).slice(0, 40)}"`);
         else if (u.name === 'ask_owner_for_code') say(`${n}: the portal sent a verification code`);
+        else if (u.name === 'tick_captcha') say(`${n}: ticking "Verify you are human"`);
         else if (u.name === 'open_emailed_link') say(`${n}: the portal emailed a sign-in link — looking for it in your email`);
-        if (['click', 'fill_login', 'press', 'type', 'select', 'goto', 'type_code'].includes(u.name)) actedAt = Date.now();
+        if (['click', 'fill_login', 'press', 'type', 'select', 'goto', 'type_code'].includes(u.name)) { actedAt = Date.now(); tabsAtAction = runPages.length; }
+        await follow();
         try {
           if (!navDone) {
             if (u.name === 'click' || u.name === 'type' || u.name === 'select') {
@@ -662,6 +707,24 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
               say('Found the sign-in link in your email — opening it');
               await page.goto(link, { waitUntil: 'domcontentloaded', timeout: 45000 });
               content = await after('Opened the emailed sign-in link.');
+              break;
+            }
+            case 'tick_captcha': {
+              const boxes = page.frames().filter(f => CAPTCHA_FRAME.test(f.url()));
+              if (!boxes.length) { content = await after('There is no checkbox check on this page.'); break; }
+              for (const f of boxes) {
+                const owner = await f.frameElement().catch(() => null);
+                const box = owner ? await owner.boundingBox().catch(() => null) : null;
+                if (!box || box.width < 20) continue;
+                // The checkbox sits at the left of the widget; get there the way a hand would.
+                const x = box.x + Math.min(30, box.width / 4), y = box.y + box.height / 2;
+                await page.mouse.move(x - 60 - Math.random() * 30, y + 20 + Math.random() * 10, { steps: 6 });
+                await page.mouse.move(x + Math.random() * 3, y + Math.random() * 3, { steps: 14 });
+                await page.waitForTimeout(150 + Math.random() * 250);
+                await page.mouse.click(x, y);
+              }
+              await page.waitForTimeout(5000);
+              content = await after('Ticked the check. If it passed (no error, or a green tick), carry on; if a picture puzzle or "complete the security check" remains, finish with captcha.');
               break;
             }
             case 'type_code': {

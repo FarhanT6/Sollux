@@ -235,7 +235,14 @@ const worker = new Worker<ScrapeJobData>(
     // does Sync. An account that was set to read bills from Gmail goes to the
     // agent too once it has a portal login: most providers' emails only say
     // a bill is ready, and the statement itself is on the portal.
-    if (job.data.forceAgent || !getScraperProvider(account.providerSlug) || (account.providerSlug === 'gmail-fallback' && account.usernameEnc)) {
+    // City of Oceanside water with the bill's customer and account numbers
+    // ("177299-182052"): InvoiceCloud's customer lookup gives the bills with
+    // those two numbers alone — no login, no emailed code, no Claude — where
+    // WaterSmart wanted an email login and a verification code.
+    const fullNumber = (() => { try { return account.accountNumberEnc ? decrypt(account.accountNumberEnc).trim() : ''; } catch { return ''; } })();
+    const invoiceCloud = /oceanside/i.test(account.providerName) && /^\d{5,8}\s*-\s*\d{5,8}$/.test(fullNumber);
+    const slug = invoiceCloud ? 'city-oceanside-ic' : account.providerSlug;
+    if (job.data.forceAgent || !getScraperProvider(slug) || (slug === 'gmail-fallback' && account.usernameEnc)) {
       const last = await db.statement.findFirst({ where: { utilityAccountId }, orderBy: { statementDate: 'desc' }, select: { statementDate: true } });
       const cycle = billCycleDays(account.billingCadence);
       const notDueYet = last && Date.now() - last.statementDate.getTime() < (cycle - 3) * 86400000;
@@ -266,7 +273,8 @@ const worker = new Worker<ScrapeJobData>(
     // Same username and same password: a different password under the same
     // username is a stale entry, and signing in with the wrong one would mark
     // (and lock) the others too.
-    const sameCredAccounts = allProviderAccounts.filter(a => {
+    // InvoiceCloud looks up one account at a time by its own numbers.
+    const sameCredAccounts = invoiceCloud ? allProviderAccounts.filter(a => a.id === utilityAccountId).concat(allProviderAccounts.some(a => a.id === utilityAccountId) ? [] : [account]) : allProviderAccounts.filter(a => {
       if (a.id === utilityAccountId) return true;
       if (!a.usernameEnc || !a.passwordEnc) return false;
       try { return decrypt(a.usernameEnc) === username && decrypt(a.passwordEnc) === password; } catch { return false; }
@@ -292,7 +300,7 @@ const worker = new Worker<ScrapeJobData>(
     );
 
     try {
-      const scraper = getScraperProvider(account.providerSlug);
+      const scraper = getScraperProvider(slug);
       if (!scraper) throw new Error(`No scraper found for provider: ${account.providerSlug}`);
 
       // Pass all tracked account numbers so the scraper only drills into those,
@@ -333,7 +341,7 @@ const worker = new Worker<ScrapeJobData>(
       // that don't yet support per-account maps, e.g. single-account scrapers).
       const latestStatementDate = latestStmts.length > 0 ? latestStmts[0].statementDate : undefined;
 
-      const credentials = { username, password, accountNumbers, latestStatementDate, latestStatementDates, knownStatementDates };
+      const credentials = { username, password, accountNumbers, latestStatementDate, latestStatementDates, knownStatementDates, ...(invoiceCloud ? { accountNumber: fullNumber } : {}) };
       const result = await scraper.run(credentials, utilityAccountId);
 
       if (!result.success) throw new Error(result.error || 'Scraper returned failure');
