@@ -85,6 +85,11 @@ for (const path of ROUTES) {
     return wide.slice(0, 3).map(el => `${el.tagName.toLowerCase()}.${String(el.className).slice(0, 60)} right=${Math.round(el.getBoundingClientRect().right)}`);
   });
   if (overflow.length) problems.push(`sideways overflow: ${overflow.join(' | ')}`);
+  // TAP="More|Name on the bill": tap each text in turn before the screenshot (a sheet, a menu).
+  for (const t of (process.env.TAP ?? '').split('|').filter(Boolean)) {
+    await page.getByText(t, { exact: true }).last().click({ timeout: 5000 }).catch(e => problems.push(`tap "${t}": ${String(e.message).split('\n')[0]}`));
+    await page.waitForTimeout(600);
+  }
   const file = join(outDir, `${path.replace(/\//g, '_').replace(/^_/, '') || 'root'}.png`);
   await page.screenshot({ path: file });
   console.log(`${problems.length ? '✗' : '✓'} ${path} → ${file}`);

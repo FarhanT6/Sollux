@@ -618,7 +618,7 @@ Always end with the finish tool, never with a message. If the page seems gone or
       say('Filling in the bill lookup');
       const f = await fillLookup(page, fullNumber, lookupName);
       // Nothing to look up without it: stop here, not on whatever page Claude would try next.
-      if (f.missing.includes('name on the bill') && !lookupName) throw new Error('The lookup page asks for the name on the bill: add it under Portal login on the account (Name on the bill), then Fetch again.');
+      if (f.missing.includes('name on the bill') && !lookupName) throw new Error('The lookup page asks for the name on the bill: add it on the account (Name on the bill), then Sync again.');
       if (f.searched) say('Searching for the bills');
       opening = `Start. The browser is on ${account.providerName}'s bill lookup page. `
         + (f.filled.length ? `Sollux filled in ${f.filled.join(' and ')}${f.searched ? ' and pressed Search' : ''}. ` : 'Sollux could not match the lookup fields by their labels: fill them with fill_account_number. ')
