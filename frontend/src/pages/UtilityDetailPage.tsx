@@ -1399,6 +1399,8 @@ export default function UtilityDetailPage() {
               onChange={e => void setCadence(e.target.value)}
               title="How often this provider bills — drives the monthly-equivalent maths"
               className="text-[13px] bg-transparent text-gray-500 hover:text-gray-300 focus:outline-none cursor-pointer -ml-1"
+              // As wide as the chosen frequency, not the longest one in the list.
+              style={{ width: `${((CADENCE_LABELS as Record<string, string>)[account.billingCadence ?? 'MONTHLY'] ?? 'Monthly').length + 3}ch` }}
             >
               {Object.entries(CADENCE_LABELS).map(([v, l]) => (
                 <option key={v} value={v}>{l}</option>
