@@ -154,16 +154,23 @@ function accountSpecific(steps: RecipeStep[]): boolean {
   return steps.some(s => s.tool === 'type' || ('target' in s && (digits.test(s.target.label) || digits.test(s.target.href ?? ''))));
 }
 
+/**
+ * Payment platforms that host many billers on one site (InvoiceCloud serves
+ * City of Imperial and City of Oceanside alike): a route through one biller's
+ * pages is not a route through another's, so these are never shared per site.
+ */
+const SHARED_PLATFORMS = /(^|\.)(invoicecloud\.com|paymentus\.com|doxo\.com|xpressbillpay\.com|municipalonlinepayments\.com|papergov\.com|govpaynow\.com|nexbillpay\.com|billerpayments\.com|smartbill\.com)$/i;
+
 export async function loadRecipe(accountId: string, host: string): Promise<{ key: string; steps: RecipeStep[] } | null> {
   const r = await db.portalRecipe.findUnique({ where: { key: `acct:${accountId}` } })
-    ?? await db.portalRecipe.findUnique({ where: { key: `host:${host}` } });
+    ?? (SHARED_PLATFORMS.test(host) ? null : await db.portalRecipe.findUnique({ where: { key: `host:${host}` } }));
   return r ? { key: r.key, steps: r.steps as unknown as RecipeStep[] } : null;
 }
 
 /** Keep the steps of a run that reached the statements. */
 export async function saveRecipe(accountId: string, host: string, steps: RecipeStep[]): Promise<void> {
   if (!steps.length) return;
-  const key = accountSpecific(steps) ? `acct:${accountId}` : `host:${host}`;
+  const key = accountSpecific(steps) || SHARED_PLATFORMS.test(host) ? `acct:${accountId}` : `host:${host}`;
   await db.portalRecipe.upsert({
     where: { key },
     create: { key, host, steps: steps as any, successes: 1 },

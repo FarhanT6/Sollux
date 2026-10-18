@@ -13,20 +13,25 @@ export default function PortalCodeBanner({ accountId, prompt, requestedAt, provi
   const [code, setCode] = useState('');
   const [state, setState] = useState<'idle' | 'sending' | 'sent'>('idle');
   const [err, setErr] = useState<string | null>(null);
+  // The agent has let go of the Chrome window so the owner can tick a
+  // "Verify you are human" check there: one Done button, no code.
+  const handOff = /^Tick "Verify you are human"/.test(prompt);
   const minutesLeft = requestedAt ? Math.max(0, 5 - Math.floor((Date.now() - new Date(requestedAt).getTime()) / 60000)) : null;
 
   async function send() {
     setState('sending'); setErr(null);
-    try { await submitPortalCode(accountId, code); setState('sent'); onSent?.(); }
+    try { await submitPortalCode(accountId, handOff ? 'done' : code); setState('sent'); onSent?.(); }
     catch (e) { setState('idle'); setErr(describeApiError(e, 'Could not send the code.')); }
   }
 
   return (
     <div className="mx-6 mt-4 rounded-xl p-4" style={{ background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.35)' }}>
-      <p className="text-sm font-medium text-amber-300">{providerName} sent a verification code</p>
+      <p className="text-sm font-medium text-amber-300">{handOff ? `Your turn in the Chrome window` : `${providerName} sent a verification code`}</p>
       <p className="text-xs text-gray-400 mt-0.5">{prompt}{minutesLeft != null ? ` · about ${minutesLeft} min left` : ''}</p>
       {state === 'sent' ? (
-        <p className="text-xs text-emerald-400 mt-2">Code sent — Sollux is entering it now.</p>
+        <p className="text-xs text-emerald-400 mt-2">{handOff ? 'Thanks — Sollux is taking the window back.' : 'Code sent — Sollux is entering it now.'}</p>
+      ) : handOff ? (
+        <button onClick={() => void send()} disabled={state === 'sending'} className="btn btn-primary text-xs mt-2 disabled:opacity-50">{state === 'sending' ? '…' : 'Done'}</button>
       ) : (
         <form onSubmit={e => { e.preventDefault(); if (code.trim()) send(); }} className="flex gap-2 mt-2">
           <input value={code} onChange={e => setCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" placeholder="Code" className="input-dark text-sm w-40" autoFocus />
