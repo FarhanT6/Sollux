@@ -101,6 +101,20 @@ async function sameLogin(accountId: string): Promise<{ id: string; label: string
 const REJECTED = /rejected the username or password|login failed|invalid (email|user|username|credentials)|incorrect (password|username)/i;
 
 /**
+ * A sign-in that fetched several accounts, said for the account it ran from:
+ * its own bills, then the others' (Blue Shield Dental read "Downloaded 5
+ * statements" — two were its own, three were Primary's).
+ */
+function groupSummary(r: { downloads: number; filed: number; review: number; filedFor?: Record<string, number> }, mine: string, also: { id: string; label: string }[]): string {
+  const own = r.filedFor?.[mine] ?? 0;
+  const theirs = also.map(o => ({ label: o.label, n: r.filedFor?.[o.id] ?? 0 })).filter(o => o.n > 0);
+  const parts = [`${own} statement${own === 1 ? '' : 's'} filed here`, ...theirs.map(o => `${o.n} for ${o.label}`)];
+  const unfiled = r.downloads - r.filed;
+  if (unfiled > 0) parts.push(`${unfiled} to review in Import`);
+  return `Downloaded ${r.downloads} in one sign-in: ${parts.join(', ')}`;
+}
+
+/**
  * One portal-agent run for an account: the sync job (the one Fetch created,
  * or a new one) shows live progress, and ends with what came back and what it
  * cost. Never retried automatically: a retry could re-trigger a code or lock
@@ -151,7 +165,7 @@ export async function agentJob(job: Job<ScrapeJobData>, account: { id: string; p
       where: { id: utilityAccountId },
       data: r.ok ? { lastSyncedAt: new Date(), lastSyncStatus: 'SUCCESS', lastSyncError: null } : { lastSyncStatus: 'FAILED', lastSyncError: failure },
     });
-    await db.syncJob.update({ where: { id: syncJob.id }, data: { status: r.ok ? 'SUCCESS' : 'FAILED', completedAt: new Date(), statementsFound: r.filed + r.review, costUsd: r.costUsd ?? 0, error: r.ok ? null : failure, progress: r.ok ? (r.downloads ? downloadSummary(r) : (r.summary || 'Nothing new on the portal')).slice(0, 300) : null } });
+    await db.syncJob.update({ where: { id: syncJob.id }, data: { status: r.ok ? 'SUCCESS' : 'FAILED', completedAt: new Date(), statementsFound: r.filed + r.review, costUsd: r.costUsd ?? 0, error: r.ok ? null : failure, progress: r.ok ? (r.downloads ? (also.length ? groupSummary(r, utilityAccountId, also) : downloadSummary(r)) : (r.summary || 'Nothing new on the portal')).slice(0, 300) : null } });
     // The accounts that rode along: what this sign-in found for each.
     // Only what the agent says it did for each account counts: SDG&E ··70 3
     // was marked "nothing new" though its Oct 2 bill was on the portal — the
