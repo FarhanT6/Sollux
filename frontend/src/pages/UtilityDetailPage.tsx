@@ -18,6 +18,7 @@ import { CATEGORY_LABELS, CATEGORY_COLORS, LOAN_TYPE_LABELS,
   UTILITY_PAYMENT_METHODS, PAYMENT_STATUS_LABELS } from '../types';
 import type { BankAccount } from '../types';
 import { Pill, Skeleton, EmptyState } from '../components/ui';
+import MoreMenu from '../components/ui/MoreMenu';
 import { format, isAfter } from 'date-fns';
 import { monthKey, fmtDate, yearOf, todayISO, billMonthLabel } from '../lib/date';
 import { projectLoanBalance } from '../lib/loanMath';
@@ -1399,8 +1400,8 @@ export default function UtilityDetailPage() {
             )}
             {/* Net metering: energy charges accrue monthly and settle once a
                 year. Set on import from the bill's net-metering summary, or
-                by hand here. */}
-            <button
+                by hand here. Only offered where it can apply (electric, solar). */}
+            {(account.hasTrueUp || account.category === 'ELECTRIC' || account.category === 'SOLAR') && <button
               onClick={async () => {
                 const next = !account.hasTrueUp;
                 let trueUpDate: string | null | undefined = undefined;
@@ -1417,8 +1418,8 @@ export default function UtilityDetailPage() {
               title={account.hasTrueUp ? 'Net-metering account: charges settle at the annual true-up. Click to turn off.' : 'Mark this as a net-metering (solar) account with an annual true-up'}
               className={`text-xs px-1.5 py-0.5 rounded-full border transition-colors ${account.hasTrueUp ? 'text-amber-400 border-amber-500/40 bg-amber-500/10' : 'text-gray-600 border-white/10 hover:text-gray-400'}`}
             >
-              {account.hasTrueUp ? `☀ True-up${account.trueUpDate ? ` ${fmtDate(account.trueUpDate, 'MMM d, yyyy')}` : ''}` : '☀ Set true-up'}
-            </button>
+              {account.hasTrueUp ? `True-up${account.trueUpDate ? ` ${fmtDate(account.trueUpDate, 'MMM d, yyyy')}` : ''}` : 'Set true-up'}
+            </button>}
             {/* Paid by the lender from the mortgage escrow: bills kept for the
                 record, nothing owed here, left out of costs. The mortgage wins. */}
             {(account.category === 'INSURANCE' || account.category === 'TAXES' || account.escrowLoanId) && (
@@ -1433,9 +1434,9 @@ export default function UtilityDetailPage() {
                   onClick={toggleAccountNumber}
                   disabled={revealingAccountNumber}
                   title={revealedAccountNumber != null ? 'Hide account number' : 'Show full account number'}
-                  className="text-gray-500 hover:text-gray-300 transition-colors disabled:opacity-40"
+                  className="text-xs text-gray-500 hover:text-gray-300 transition-colors disabled:opacity-40"
                 >
-                  {revealingAccountNumber ? '…' : revealedAccountNumber != null ? '🙈' : '👁'}
+                  {revealingAccountNumber ? '…' : revealedAccountNumber != null ? 'Hide' : 'Show'}
                 </button>
               </span>
             )}
@@ -1445,7 +1446,6 @@ export default function UtilityDetailPage() {
           <button onClick={openWebsite} className="btn text-xs" title={website ? website.url : 'Search for this provider\'s website'}>
             {siteLabel ? `${siteLabel} ↗` : 'Find website ↗'}
           </button>
-          <button onClick={() => void saveWebsite()} className="text-xs text-gray-500 hover:text-gray-300" title="Set the website for this account">{website ? 'Edit' : 'Save'} link</button>
           <button onClick={() => setPortalLogin(true)} className="btn text-xs" title="Let Sollux fetch statements from the provider's website">{account.hasCredentials ? 'Portal login ✓' : 'Add portal login'}</button>
           <button onClick={handleSync} disabled={syncing || deleting} className="btn btn-primary text-xs">
             {syncing ? 'Syncing…' : 'Sync ↻'}
@@ -1453,25 +1453,12 @@ export default function UtilityDetailPage() {
           {(syncing || account.lastSyncStatus === 'PENDING') && (
             <button onClick={() => void cancelFetch(account.id).then(() => { toast('Cancelled — the fetch stops within a few seconds.'); setSyncing(false); return getUtility(account.id).then(setAccount); }).catch(() => toast('Could not cancel it.', 'error'))} className="btn text-xs">Cancel</button>
           )}
-          <button
-            onClick={toggleActive}
-            disabled={togglingActive}
-            title={account.isActive === false ? 'Reactivate this account' : 'Mark inactive — keeps all history, pauses syncing'}
-            className={`text-xs px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40 ${
-              account.isActive === false
-                ? 'text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10'
-                : 'text-gray-400 hover:text-white hover:bg-white/10'
-            }`}
-          >
-            {togglingActive ? '…' : account.isActive === false ? 'Reactivate' : 'Deactivate'}
-          </button>
-          <button
-            onClick={handleDelete}
-            disabled={deleting || syncing}
-            className="text-xs px-3 py-1.5 rounded-lg text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors disabled:opacity-40"
-          >
-            {deleting ? 'Deleting…' : 'Delete'}
-          </button>
+          {/* Now-and-then actions, out of the way. */}
+          <MoreMenu items={[
+            { label: `${website ? 'Edit' : 'Save'} website link`, onClick: () => void saveWebsite(), title: 'Set the website for this account' },
+            { label: togglingActive ? '…' : account.isActive === false ? 'Reactivate account' : 'Deactivate account', onClick: () => void toggleActive(), disabled: togglingActive, title: account.isActive === false ? 'Reactivate this account' : 'Mark inactive — keeps all history, pauses syncing' },
+            { label: deleting ? 'Deleting…' : 'Delete account', onClick: () => void handleDelete(), danger: true, disabled: deleting || syncing },
+          ]} />
         </div>
       </div>
 
@@ -1875,10 +1862,9 @@ export default function UtilityDetailPage() {
                             onClick={() => handleMarkPaid(s)}
                             disabled={markingPaid === s.id}
                             title="Mark as paid"
-                            className="text-xs px-2 py-1 rounded transition-colors disabled:opacity-30 text-gray-500 hover:text-green-400"
-                            style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
+                            className="row-action"
                           >
-                            {markingPaid === s.id ? '…' : '✓ Mark paid'}
+                            {markingPaid === s.id ? '…' : 'Mark paid'}
                           </button>
                         )}
                         {isPaid && (
@@ -1886,26 +1872,23 @@ export default function UtilityDetailPage() {
                             onClick={() => handleMarkUnpaid(s)}
                             disabled={markingPaid === s.id}
                             title="This bill is not paid — reopen it"
-                            className="text-xs px-2 py-1 rounded transition-colors disabled:opacity-30 text-gray-600 hover:text-amber-400"
-                            style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}
+                            className="row-action"
                           >
-                            {markingPaid === s.id ? '…' : '↺ Unpaid'}
+                            {markingPaid === s.id ? '…' : 'Unpaid'}
                           </button>
                         )}
                         {s.pdfS3Key && (
                           <button
                             onClick={() => void openPdf(s)}
-                            className="text-xs px-2 py-1 rounded transition-colors hover:opacity-80"
-                            style={{ background: 'rgba(245,166,35,0.12)', border: '1px solid rgba(245,166,35,0.3)', color: '#F5A623' }}
+                            className="row-action"
                           >
-                            📄 PDF
+                            PDF
                           </button>
                         )}
                         <button
                           onClick={() => setEditingStatement(s)}
                           title="Edit statement"
-                          className="text-xs px-2 py-1 rounded transition-colors text-gray-500 hover:text-white"
-                          style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
+                          className="row-action"
                         >
                           Edit
                         </button>

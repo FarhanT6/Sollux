@@ -59,7 +59,7 @@ export default function DashboardPage() {
         style={{ background: '#1e1e1e', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
         <div>
           <h1 className="text-base font-semibold text-white">
-            {greeting}, {user?.firstName || 'there'} ☀️
+            {greeting}, {user?.firstName || 'there'}
           </h1>
           <p className="text-xs text-gray-500 mt-0.5">
             {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
