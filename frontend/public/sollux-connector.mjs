@@ -26,6 +26,7 @@ import * as path from 'node:path';
 const HOME = path.join(os.homedir(), '.sollux');
 const CONFIG = path.join(HOME, 'connector.json');
 const PROFILE = path.join(HOME, 'chrome-profile');
+const DOWNLOADS = path.join(HOME, 'downloads');
 
 if (typeof WebSocket === 'undefined') {
   console.error('The Sollux connector needs Node.js 22 or newer — this is ' + process.version + '. Install it from https://nodejs.org and run this again.');
@@ -84,6 +85,10 @@ async function startChrome() {
     let prefs = {};
     try { prefs = JSON.parse(fs.readFileSync(prefsFile, 'utf8')); } catch { /* new profile */ }
     prefs.credentials_enable_service = false;
+    // Statement PDFs are saved, not shown in Chrome's viewer (which gives
+    // nothing back): each one is then passed to Sollux (see relayDownloads).
+    prefs.plugins = { ...(prefs.plugins ?? {}), always_open_pdf_externally: true };
+    prefs.download = { ...(prefs.download ?? {}), prompt_for_download: false, default_directory: DOWNLOADS };
     prefs.profile = { ...(prefs.profile ?? {}), password_manager_enabled: false };
     fs.writeFileSync(prefsFile, JSON.stringify(prefs));
   } catch { /* Chrome works without it */ }
@@ -128,6 +133,44 @@ async function ensureWindow({ port }) {
 }
 
 const sessions = new Map(); // id → local WebSocket to Chrome
+const downloadNames = new Map(); // download guid → file name
+
+/**
+ * Sollux asks Chrome to save downloads in a folder on its own server, which
+ * does not exist here: point them at ~/.sollux/downloads instead.
+ */
+function toChrome(d) {
+  if (!d.includes('Browser.setDownloadBehavior')) return d;
+  try {
+    const msg = JSON.parse(d);
+    if (msg.method === 'Browser.setDownloadBehavior' && msg.params?.downloadPath) {
+      fs.mkdirSync(DOWNLOADS, { recursive: true });
+      msg.params.downloadPath = DOWNLOADS;
+      return JSON.stringify(msg);
+    }
+  } catch { /* pass it on as it is */ }
+  return d;
+}
+
+/** A download Chrome finished for Sollux: send the file itself up the tunnel, then delete it here. */
+function relayDownloads(d, id, send) {
+  if (!d.includes('Browser.download')) return;
+  try {
+    const msg = JSON.parse(d);
+    if (msg.method === 'Browser.downloadWillBegin') downloadNames.set(msg.params.guid, msg.params.suggestedFilename);
+    if (msg.method === 'Browser.downloadProgress' && msg.params?.state === 'completed') {
+      const file = path.join(DOWNLOADS, msg.params.guid);
+      setTimeout(() => {
+        try {
+          const data = fs.readFileSync(file);
+          if (data.length < 25 * 1024 * 1024) send({ type: 'file', id, name: downloadNames.get(msg.params.guid) ?? 'statement.pdf', data: data.toString('base64') });
+          fs.unlinkSync(file);
+        } catch { /* gone or unreadable */ }
+        downloadNames.delete(msg.params.guid);
+      }, 300);
+    }
+  } catch { /* not ours */ }
+}
 let server = null;
 let backoff = 1000;
 
@@ -158,14 +201,18 @@ function connect() {
         const local = new WebSocket(wsUrl);
         sessions.set(m.id, local);
         local.addEventListener('open', () => { send({ type: 'opened', id: m.id }); console.log(`${new Date().toLocaleTimeString()} Sollux is fetching statements in the Chrome window`); });
-        local.addEventListener('message', e => send({ type: 'data', id: m.id, d: typeof e.data === 'string' ? e.data : Buffer.from(e.data).toString('utf8') }));
+        local.addEventListener('message', e => {
+          const d = typeof e.data === 'string' ? e.data : Buffer.from(e.data).toString('utf8');
+          send({ type: 'data', id: m.id, d });
+          relayDownloads(d, m.id, send);
+        });
         local.addEventListener('close', () => { if (sessions.delete(m.id)) send({ type: 'closed', id: m.id }); });
         local.addEventListener('error', () => {});
       } catch (e) {
         send({ type: 'closed', id: m.id, reason: String(e.message ?? e) });
       }
     }
-    else if (m.type === 'data') sessions.get(m.id)?.send(m.d);
+    else if (m.type === 'data') sessions.get(m.id)?.send(toChrome(m.d));
     else if (m.type === 'close') { const s = sessions.get(m.id); sessions.delete(m.id); s?.close(); }
   });
 

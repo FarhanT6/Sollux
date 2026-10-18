@@ -80,7 +80,7 @@ export async function loginClash(accountId: string): Promise<string> {
  * address), the same username and the same password, syncing on. One
  * sign-in fetches them all.
  */
-async function sameLogin(accountId: string): Promise<{ id: string; label: string }[]> {
+async function sameLogin(accountId: string): Promise<{ id: string; label: string; last4: string }[]> {
   const site = { providerName: true, providerSlug: true, loginUrl: true } as const;
   const me = await db.utilityAccount.findUnique({ where: { id: accountId }, select: { ...site, usernameEnc: true, passwordEnc: true, property: { select: { userId: true } } } });
   if (!me?.usernameEnc || !me.passwordEnc) return [];
@@ -94,7 +94,7 @@ async function sameLogin(accountId: string): Promise<{ id: string; label: string
     const all = await db.utilityAccount.findMany({ where: { id: { not: accountId }, syncEnabled: true, property: { userId: me.property.userId }, usernameEnc: { not: null }, passwordEnc: { not: null } }, select: { ...site, id: true, accountNumber: true, usernameEnc: true, passwordEnc: true } });
     return all.filter(o => rootOf(o) === mine && decrypt(o.usernameEnc!).trim().toLowerCase() === user && decrypt(o.passwordEnc!) === pass)
       .slice(0, 9)
-      .map(o => ({ id: o.id, label: o.accountNumber ? `··${String(o.accountNumber).slice(-4)}` : o.providerName }));
+      .map(o => ({ id: o.id, label: o.accountNumber ? `··${String(o.accountNumber).slice(-4)}` : o.providerName, last4: String(o.accountNumber ?? '').replace(/\D/g, '').slice(-4) }));
   } catch { return []; }
 }
 
@@ -153,11 +153,21 @@ export async function agentJob(job: Job<ScrapeJobData>, account: { id: string; p
     });
     await db.syncJob.update({ where: { id: syncJob.id }, data: { status: r.ok ? 'SUCCESS' : 'FAILED', completedAt: new Date(), statementsFound: r.filed + r.review, costUsd: r.costUsd ?? 0, error: r.ok ? null : failure, progress: r.ok ? (r.downloads ? downloadSummary(r) : (r.summary || 'Nothing new on the portal')).slice(0, 300) : null } });
     // The accounts that rode along: what this sign-in found for each.
+    // Only what the agent says it did for each account counts: SDG&E ··70 3
+    // was marked "nothing new" though its Oct 2 bill was on the portal — the
+    // run had never opened that account.
     for (const o of also) {
       const filed = r.filedFor?.[o.id] ?? 0;
-      const note = r.ok ? (filed ? `Downloaded ${filed} statement${filed === 1 ? '' : 's'} (signed in once with ${myLabel})` : `Nothing new (checked in the same sign-in as ${myLabel})`) : `Fetched with ${myLabel} (same login): ${failure}`;
-      await db.utilityAccount.update({ where: { id: o.id }, data: r.ok ? { lastSyncedAt: new Date(), lastAgentRunAt: new Date(), lastSyncStatus: 'SUCCESS', lastSyncError: null } : { lastAgentRunAt: new Date(), lastSyncStatus: 'FAILED', lastSyncError: note.slice(0, 1000) } }).catch(() => {});
-      await db.syncJob.updateMany({ where: { id: { in: alsoJobs }, utilityAccountId: o.id }, data: { status: r.ok ? 'SUCCESS' : 'FAILED', completedAt: new Date(), statementsFound: filed, error: r.ok ? null : note.slice(0, 1000), progress: r.ok ? note : null } }).catch(() => {});
+      const said = o.last4 ? r.accountResults?.[o.last4] : undefined;
+      const ok = r.ok && (filed > 0 || said === 'nothing_new' || said === 'downloaded');
+      const note = !r.ok ? `Fetched with ${myLabel} (same login): ${failure}`
+        : filed ? `Downloaded ${filed} statement${filed === 1 ? '' : 's'} (signed in once with ${myLabel})`
+        : said === 'downloaded' ? `Downloaded in the same sign-in as ${myLabel} — not filed to this account yet; see Import`
+        : said === 'nothing_new' ? `Nothing new (checked in the same sign-in as ${myLabel})`
+        : said === 'not_listed' ? `The portal does not list this account under the login it shares with ${myLabel} — check the login on this account`
+        : `Not reached in the same sign-in as ${myLabel} — press Fetch now on it`;
+      await db.utilityAccount.update({ where: { id: o.id }, data: ok ? { lastSyncedAt: new Date(), lastAgentRunAt: new Date(), lastSyncStatus: 'SUCCESS', lastSyncError: null } : { lastSyncStatus: 'FAILED', lastSyncError: note.slice(0, 1000), ...(r.ok ? {} : { lastAgentRunAt: new Date() }) } }).catch(() => {});
+      await db.syncJob.updateMany({ where: { id: { in: alsoJobs }, utilityAccountId: o.id }, data: { status: ok ? 'SUCCESS' : 'FAILED', completedAt: new Date(), statementsFound: filed, error: ok ? null : note.slice(0, 1000), progress: ok ? note : null } }).catch(() => {});
     }
     const filedProps = new Set([...(r.filed ? [account.property.id] : [])]);
     const filedAlso = also.filter(o => (r.filedFor?.[o.id] ?? 0) > 0).map(o => o.id);

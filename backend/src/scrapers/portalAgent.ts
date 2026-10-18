@@ -21,7 +21,7 @@ import * as fs from 'fs';
 import { BrowserContext, Page, Download, Frame, Locator } from 'playwright';
 import { launchPortalContext, isHttp2Reset } from './browser';
 import { chromium, type Browser } from 'playwright';
-import { connectorFor } from '../services/connector';
+import { connectorFor, filesUrlFor } from '../services/connector';
 import { db } from '../config/db';
 import { decrypt, encrypt } from '../crypto/encrypt';
 import { PRIMARY_MODEL, paramsFor, meteredCreate } from '../ai/models';
@@ -65,6 +65,8 @@ export interface PortalRun {
   aiSteps?: number; costUsd?: number; replayed?: number;
   /** Statements filed, by the account each one was filed to (several accounts on one login). */
   filedFor?: Record<string, number>;
+  /** What the agent reported for each account, by the last 4 of its number (several accounts on one login). */
+  accountResults?: Record<string, string>;
 }
 
 const TOOLS: Anthropic.Tool[] = [
@@ -80,7 +82,7 @@ const TOOLS: Anthropic.Tool[] = [
   { name: 'ask_owner_for_code', description: "The portal sent a verification code. Reads it from the owner's email (up to 2 minutes), else asks the owner (up to 5 more). Say where it was sent.", input_schema: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] } },
   { name: 'open_emailed_link', description: 'The portal emailed a link that signs you in, instead of a code ("magic link", "Access your account", "check your email to log in"). Finds that link in the owner\'s email (up to 2 minutes) and opens it in this browser; returns the page afterwards.', input_schema: { type: 'object', properties: {} } },
   { name: 'type_code', description: 'Type the verification code into field [ref] (a code split into one-digit boxes: give the first box), tick [rememberRef] ("remember this device") if given, then click [submitRef].', input_schema: { type: 'object', properties: { ref: { type: 'number' }, rememberRef: { type: 'number' }, submitRef: { type: 'number' } }, required: ['ref'] } },
-  { name: 'finish', description: 'Stop. outcome: done (downloaded what was new, or nothing new), bad_login (the portal said the username or password is wrong), captcha, no_code, turned_away (the site refused the browser itself: Access Denied, "invalid request", "unable to process your request" after a sign-in, a bot check), blocked (anything else in the way).', input_schema: { type: 'object', properties: { outcome: { type: 'string', enum: ['done', 'bad_login', 'captcha', 'no_code', 'turned_away', 'blocked'] }, summary: { type: 'string' } }, required: ['outcome', 'summary'] } },
+  { name: 'finish', description: 'Stop. outcome: done (downloaded what was new, or nothing new), bad_login (the portal said the username or password is wrong), captcha, no_code, turned_away (the site refused the browser itself: Access Denied, "invalid request", "unable to process your request" after a sign-in, a bot check), blocked (anything else in the way).', input_schema: { type: 'object', properties: { outcome: { type: 'string', enum: ['done', 'bad_login', 'captcha', 'no_code', 'turned_away', 'blocked'] }, summary: { type: 'string' }, accounts: { type: 'array', description: 'When several accounts were listed: what you found for each one.', items: { type: 'object', properties: { account: { type: 'string', description: 'last 4 of the account number' }, result: { type: 'string', enum: ['downloaded', 'nothing_new', 'not_listed', 'not_checked'] } }, required: ['account', 'result'] } } }, required: ['outcome', 'summary'] } },
 ];
 
 /** The site and its parent domain: example.com for www.example.com and billing.example.com. */
@@ -229,7 +231,7 @@ async function pdfFromPage(page: Page, url: string): Promise<Buffer | null> {
   return b && b.subarray(0, 1024).includes('%PDF-') ? b : null;
 }
 
-export async function capturePdf(ctx: BrowserContext, page: Page, action: () => Promise<void>): Promise<Buffer | null> {
+export async function capturePdf(ctx: BrowserContext, page: Page, action: () => Promise<void>, remoteFiles?: () => Promise<Buffer[]>): Promise<Buffer | null> {
   let got: Buffer | null = null;
   const onDownload = async (d: Download) => {
     try { const p = await d.path(); if (p) { const b = await fs.promises.readFile(p); if (b.subarray(0, 1024).includes('%PDF-')) got = b; } } catch { /* ignore */ }
@@ -248,9 +250,20 @@ export async function capturePdf(ctx: BrowserContext, page: Page, action: () => 
   ctx.on('page', onPage);
   const newPage = ctx.waitForEvent('page', { timeout: 15000 }).catch(() => null);
   try {
+    // Anything the owner's Chrome downloaded before this click is not this statement.
+    if (remoteFiles) await remoteFiles().catch(() => []);
     await action();
     const deadline = Date.now() + 20000;
+    let polled = Date.now();
     while (!got && Date.now() < deadline) {
+      // On the owner's computer Chrome saves the PDF there, and the connector
+      // sends it up (a "View/Print" that builds the PDF on the spot, which no
+      // second request can fetch again — CR&R's bill reprints).
+      if (remoteFiles && Date.now() - polled > 1500) {
+        polled = Date.now();
+        const pdf = (await remoteFiles().catch(() => [])).find(b => b.subarray(0, 1024).includes('%PDF-'));
+        if (pdf) { got = pdf; break; }
+      }
       await page.waitForTimeout(500);
       const np = await Promise.race([newPage, new Promise<null>(r => setTimeout(() => r(null), 10))]);
       if (np && !got) {
@@ -350,6 +363,12 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   // saved cookies restored. The agent reads pages as text: images, video and
   // fonts only cost memory (a 512MB worker ran out with Chrome on a heavy portal).
   let remote: Browser | null = null;
+  // The PDFs the owner's Chrome downloaded in this session, collected from the API (services/connector.ts).
+  const remoteFiles = async (): Promise<Buffer[]> => {
+    if (!connector) return [];
+    const r = await fetch(filesUrlFor(connector.wsUrl)).then(x => x.json() as Promise<{ files?: { data: string }[] }>);
+    return (r.files ?? []).map(f => Buffer.from(f.data, 'base64'));
+  };
   // Why the owner's computer was not used although it is connected, for the status and the error.
   let connectorProblem = '';
   const prepare = async (http1 = false) => {
@@ -379,6 +398,11 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
       if (!connector) where = "Sollux's browser (your computer isn't connected)";
     }
     // A fresh bot score every run: none from the profile on disk, none from the database.
+    // The owner's own Chrome keeps its own sign-ins and its standing with each
+    // site: restoring saved cookies over them signed SDG&E out mid-session, and
+    // clearing its bot-check cookie each run brought on reCAPTCHA. Images stay
+    // too — a captcha the owner solves there needs them.
+    if ((remote as Browser | null) && c === (remote as Browser | null)!.contexts()[0]) return c;
     await c.clearCookies({ name: BOT_COOKIE }).catch(() => {});
     if (saved) {
       try { await c.addCookies((JSON.parse(decrypt(saved.stateEnc)).cookies ?? []).filter((k: { name: string }) => !BOT_COOKIE.test(k.name))); }
@@ -439,6 +463,7 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   let lastPage = '';
   let rechecked = false;
   let triedHome = false;
+  let askedCaptcha = false;
   const after = async (what: string) => {
     await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
     await page.waitForTimeout(800);
@@ -451,8 +476,8 @@ This is the owner's own account, signed in with the owner's own login at the own
 ${others.length ? `This login holds several of the owner's accounts. Fetch every one of them in this one visit — sign in once, then for each account open it (account picker, "switch account", or a list of accounts) and its billing / statement history, and download each statement PDF dated after its date, newest first:
 - ${account.accountNumber ? `account ending ${String(account.accountNumber).slice(-4)}` : 'this account'} at ${account.property.address}: after ${since ?? 'the last 12 months'}
 ${others.map(o => `- ${o.accountNumber ? `account ending ${String(o.accountNumber).slice(-4)}` : 'an account'} at ${o.property.address}: after ${o.statements[0]?.statementDate?.toISOString().slice(0, 10) ?? 'the last 12 months'}`).join('\n')}
-At most ${maxDownloads} downloads in all. An account the portal does not list is not an error: say so in the summary and carry on. Finish with outcome done when every listed account is checked.` : `Goal: log in, open the billing / statement history, and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If there is nothing newer, finish with outcome done.`}
-Rules: use fill_login for credentials (you never see them). If the portal offers where to send a verification code, choose email over text or a phone call. If it emails a sign-in link instead of a code, call open_emailed_link (the owner is never asked for it); if none arrives, finish with no_code. When a code has been sent, call ask_owner_for_code (it reads the code from the owner's email, or asks the owner), then type_code. Pass any "Remember this device", "Trust this browser", "Keep me signed in" or "Don't ask again" checkbox as rememberRef so the next visit is not asked again. Never pay, enroll, change settings, accept offers or send messages. If a captcha appears, finish with captcha. If the login is rejected, finish with bad_login. If a code you entered is rejected, ask_owner_for_code once more for a fresh one; after a second rejection finish with no_code — never start the login over.
+At most ${maxDownloads} downloads in all. An account the portal does not list is not an error: say so and carry on. Finish with outcome done when every listed account is checked, and fill in accounts with each one's result (downloaded, nothing_new, not_listed, or not_checked if you did not get to it) — an account is only nothing_new if you opened its own statement history.` : `Goal: log in, open the billing / statement history, and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If there is nothing newer, finish with outcome done.`}
+Rules: use fill_login for credentials (you never see them). If the portal offers where to send a verification code, choose email over text or a phone call. If it emails a sign-in link instead of a code, call open_emailed_link (the owner is never asked for it); if none arrives, finish with no_code. When a code has been sent, call ask_owner_for_code (it reads the code from the owner's email, or asks the owner), then type_code. Pass any "Remember this device", "Trust this browser", "Keep me signed in" or "Don't ask again" checkbox as rememberRef so the next visit is not asked again. Never pay, enroll, change settings, accept offers or send messages. If a captcha appears, finish with captcha (on the owner's own computer they may solve it, and you are then shown the page to carry on). If the login is rejected, finish with bad_login. If a code you entered is rejected, ask_owner_for_code once more for a fresh one; after a second rejection finish with no_code — never start the login over.
 If the site refuses the browser itself (Access Denied, "invalid request", "unable to process your request" after a correct sign-in, a bot check), finish with turned_away at once: never submit the login a second time — each retry makes the site more suspicious and can lock the owner's account.
 Each action returns the page as it is afterwards: do not call look after it. Fill and submit in one step (submitRef). A typical visit is: look, fill_login (with submit), code if asked, open billing/statements, download, finish — aim for about 10 steps. When several accounts are listed, choose the one matching the account number, else the address. The account number is what identifies the account: the address a portal shows is often the owner's mailing address, not the property's, so an account whose number matches is the right one whatever address it shows.`;
   // Every step that changed the page, in order: replayed ones and Claude's.
@@ -571,7 +596,7 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
             }
             case 'download_statement': {
               if (run.downloads >= maxDownloads) { content = `Limit of ${maxDownloads} reached — finish.`; break; }
-              const pdf = await capturePdf(ctx, page, () => el(i.ref).click({ timeout: 10000 }));
+              const pdf = await capturePdf(ctx, page, () => el(i.ref).click({ timeout: 10000 }), (remote as Browser | null) ? remoteFiles : undefined);
               if (!pdf) { content = 'No PDF came back from that click. Try the link that opens or downloads the statement itself.'; break; }
               run.downloads++;
               const name = `${account.providerName.replace(/[^\w]+/g, '_')}_${String(i.statementDate ?? run.downloads).replace(/[^\w-]+/g, '_')}.pdf`;
@@ -650,6 +675,23 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
               break;
             }
             case 'finish':
+              // A captcha on the owner's own computer, with the owner watching:
+              // they can tick it in that Chrome window. Wait for it once.
+              if (String(i.outcome) === 'captcha' && (remote as Browser | null) && opts.interactive && !askedCaptcha) {
+                askedCaptcha = true;
+                say(`Solve the "I'm not a robot" check in the Chrome window on ${connector!.name} — Sollux carries on when it's done`);
+                const until = Date.now() + 180_000;
+                let now = lastPage;
+                while (Date.now() < until && !cancelled && now === lastPage) {
+                  await page.waitForTimeout(3000);
+                  now = await describe(page, secrets).catch(() => lastPage);
+                }
+                if (now !== lastPage) {
+                  lastPage = now;
+                  content = `Not finished: the owner has dealt with the check in the browser. Carry on (sign in again with fill_login if the form is still there).\n\n${now}`;
+                  break;
+                }
+              }
               // Before giving up, look once more: T-Mobile flashes "Invalid
               // request, access denied" for a moment and then moves on to its
               // code page — the run stopped there with the code already sent.
@@ -683,6 +725,7 @@ Each action returns the page as it is afterwards: do not call look after it. Fil
               finished = true;
               run.ok = i.outcome === 'done';
               run.summary = String(i.summary ?? '').slice(0, 500);
+              if (Array.isArray(i.accounts)) run.accountResults = Object.fromEntries(i.accounts.map((a: { account?: unknown; result?: unknown }) => [String(a.account ?? '').replace(/\D/g, '').slice(-4), String(a.result ?? '')]));
               if (!run.ok) run.error = { bad_login: 'The portal rejected the username or password.', captcha: 'The portal showed a captcha the agent cannot solve — sync this one by email or upload.', no_code: `The portal asked for a verification code or sign-in link and none was found. ${mailNote || 'It may go to your phone.'}${opts.interactive ? '' : ' Press Fetch now to type it yourself.'}`, turned_away: 'turned_away', blocked: 'The agent could not get to the statements.' }[String(i.outcome)] + (run.summary ? ` ${run.summary}` : '');
               break;
             default: content = 'Unknown tool.';
