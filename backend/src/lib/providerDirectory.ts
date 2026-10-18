@@ -73,7 +73,10 @@ export function findProvider(name: string | null | undefined, slug?: string | nu
 
 /** Where to send the owner (and the agent): their own saved page, else the directory's. */
 export function websiteFor(account: { providerName: string; providerSlug?: string | null; loginUrl?: string | null }): { url: string; source: 'saved' | 'directory' } | null {
-  if (account.loginUrl) return { url: account.loginUrl, source: 'saved' };
+  // A link copied from an InvoiceCloud-style page carries that visit's session
+  // ("/(S(ljdz3…))/"), which expires and then lands on the sign-in: drop it,
+  // and the site starts a fresh one on the same page.
+  if (account.loginUrl) return { url: account.loginUrl.replace(/\/\(S\([^)\/]*\)\)(?=\/)/i, ''), source: 'saved' };
   const p = findProvider(account.providerName, account.providerSlug);
   return p ? { url: p.login ?? p.site, source: 'directory' } : null;
 }
