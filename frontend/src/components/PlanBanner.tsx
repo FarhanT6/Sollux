@@ -23,10 +23,10 @@ export default function PlanBanner() {
 
   const urgent = b.access === 'lapsed' || b.status === 'past_due';
   return (
-    <div className="flex items-center justify-between gap-3 px-4 py-2 text-xs"
-      style={{ background: urgent ? 'rgba(239,68,68,0.12)' : 'rgba(245,166,35,0.12)', color: urgent ? '#fca5a5' : '#F5A623' }}>
+    <div className="flex items-center justify-between gap-3 px-4 md:px-8 py-2 text-xs"
+      style={{ background: 'rgba(255,255,255,0.04)', color: urgent ? '#fca5a5' : '#a1a1aa', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
       <span>{text}</span>
-      <Link to="/settings?tab=billing" className="font-semibold whitespace-nowrap underline">Choose a plan</Link>
+      <Link to="/settings?tab=billing" className="font-medium whitespace-nowrap text-amber-400 hover:text-amber-300">Choose a plan</Link>
     </div>
   );
 }

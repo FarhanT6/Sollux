@@ -7,7 +7,7 @@ import PlanBanner from '../PlanBanner';
 import { getDashboardSummary } from '../../api/client';
 import type { DashboardSummary } from '../../types';
 import { tap } from '../../lib/native';
-import { useThemeChoice, type ThemeChoice } from '../../lib/theme';
+import { useThemeChoice } from '../../lib/theme';
 
 function Ico({ d, children, size = 16 }: { d?: string; children?: React.ReactNode; size?: number }) {
   return (
@@ -18,70 +18,71 @@ function Ico({ d, children, size = 16 }: { d?: string; children?: React.ReactNod
   );
 }
 
+/** The sidebar, in three groups: the daily few, the properties themselves, and records. */
 export const NAV = [
   {
-    to: '/dashboard', label: 'Overview',
+    group: '', to: '/dashboard', label: 'Overview',
     icon: (z: number) => <Ico size={z}><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></Ico>,
   },
   {
-    to: '/properties', label: 'Utilities',
+    group: '', to: '/properties', label: 'Utilities',
     icon: (z: number) => <Ico size={z}><path d="M3 21h18"/><path d="M6 21V7l6-4 6 4v14"/><path d="M9 21v-9h6v9"/></Ico>,
   },
   {
-    to: '/import', label: 'Import',
-    icon: (z: number) => <Ico size={z}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></Ico>,
-  },
-  {
-    to: '/scan', label: 'Scan',
-    icon: (z: number) => <Ico size={z}><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 3v18"/><path d="M4 12h4"/></Ico>,
-  },
-  {
-    to: '/finances', label: 'Finances',
-    icon: (z: number) => <Ico size={z}><rect x="3" y="13" width="4" height="8" rx="0.5"/><rect x="10" y="7" width="4" height="14" rx="0.5"/><rect x="17" y="3" width="4" height="18" rx="0.5"/></Ico>,
-  },
-  {
-    to: '/portfolio', label: 'Portfolio',
-    icon: (z: number) => <Ico size={z}><path d="M3 21h18"/><path d="M9 21V7H5l7-5 7 5v14"/><rect x="9" y="13" width="2" height="4"/><rect x="13" y="13" width="2" height="4"/></Ico>,
-  },
-  {
-    to: '/payments', label: 'Payments',
+    group: '', to: '/payments', label: 'Payments',
     icon: (z: number) => <Ico size={z}><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></Ico>,
   },
   {
-    to: '/personal', label: 'Personal',
-    icon: (z: number) => <Ico size={z}><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/><path d="M6 15h4"/></Ico>,
+    group: '', to: '/finances', label: 'Finances',
+    icon: (z: number) => <Ico size={z}><rect x="3" y="13" width="4" height="8" rx="0.5"/><rect x="10" y="7" width="4" height="14" rx="0.5"/><rect x="17" y="3" width="4" height="18" rx="0.5"/></Ico>,
   },
   {
-    to: '/vault', label: 'Vault',
-    icon: (z: number) => <Ico size={z}><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><circle cx="12" cy="15.5" r="1.5"/></Ico>,
+    group: '', to: '/insights', label: 'Insights',
+    icon: (z: number) => <Ico size={z} d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z" />,
   },
   {
-    to: '/taxes', label: 'Taxes',
-    icon: (z: number) => <Ico size={z}><path d="M3 21h18"/><path d="M4 10h16"/><path d="M12 3l9 5H3l9-5z"/><path d="M6 10v8M10 10v8M14 10v8M18 10v8"/></Ico>,
+    group: 'Properties', to: '/portfolio', label: 'Portfolio',
+    icon: (z: number) => <Ico size={z}><path d="M3 21h18"/><path d="M9 21V7H5l7-5 7 5v14"/><rect x="9" y="13" width="2" height="4"/><rect x="13" y="13" width="2" height="4"/></Ico>,
   },
   {
-    to: '/compliance', label: 'Compliance',
-    icon: (z: number) => <Ico size={z}><path d="M12 2l8 4v6c0 5-3.5 9-8 10-4.5-1-8-5-8-10V6l8-4z"/><path d="M9 12l2 2 4-4"/></Ico>,
-  },
-  {
-    to: '/projects', label: 'Projects',
-    icon: (z: number) => <Ico size={z}><path d="M4 21V5h7v16"/><path d="M11 9h9v12"/><path d="M7 9h1M7 13h1M7 17h1M14 13h2M14 17h2"/><path d="M2 21h20"/></Ico>,
-  },
-  {
-    to: '/repairs', label: 'Repairs',
+    group: 'Properties', to: '/repairs', label: 'Repairs',
     icon: (z: number) => <Ico size={z} d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />,
   },
   {
-    to: '/operations', label: 'Operations',
+    group: 'Properties', to: '/projects', label: 'Projects',
+    icon: (z: number) => <Ico size={z}><path d="M4 21V5h7v16"/><path d="M11 9h9v12"/><path d="M7 9h1M7 13h1M7 17h1M14 13h2M14 17h2"/><path d="M2 21h20"/></Ico>,
+  },
+  {
+    group: 'Properties', to: '/operations', label: 'Operations',
     icon: (z: number) => <Ico size={z}><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></Ico>,
   },
   {
-    to: '/legal', label: 'Legal',
+    group: 'Properties', to: '/compliance', label: 'Compliance',
+    icon: (z: number) => <Ico size={z}><path d="M12 2l8 4v6c0 5-3.5 9-8 10-4.5-1-8-5-8-10V6l8-4z"/><path d="M9 12l2 2 4-4"/></Ico>,
+  },
+  {
+    group: 'Properties', to: '/legal', label: 'Legal',
     icon: (z: number) => <Ico size={z}><path d="M12 3v18"/><path d="M5 7h14"/><path d="M6 7l-3 6h6z"/><path d="M18 7l-3 6h6z"/></Ico>,
   },
   {
-    to: '/insights', label: 'Insights',
-    icon: (z: number) => <Ico size={z} d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z" />,
+    group: 'Records', to: '/import', label: 'Import',
+    icon: (z: number) => <Ico size={z}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></Ico>,
+  },
+  {
+    group: 'Records', to: '/scan', label: 'Scan',
+    icon: (z: number) => <Ico size={z}><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 3v18"/><path d="M4 12h4"/></Ico>,
+  },
+  {
+    group: 'Records', to: '/taxes', label: 'Taxes',
+    icon: (z: number) => <Ico size={z}><path d="M3 21h18"/><path d="M4 10h16"/><path d="M12 3l9 5H3l9-5z"/><path d="M6 10v8M10 10v8M14 10v8M18 10v8"/></Ico>,
+  },
+  {
+    group: 'Records', to: '/personal', label: 'Personal',
+    icon: (z: number) => <Ico size={z}><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/><path d="M6 15h4"/></Ico>,
+  },
+  {
+    group: 'Records', to: '/vault', label: 'Vault',
+    icon: (z: number) => <Ico size={z}><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><circle cx="12" cy="15.5" r="1.5"/></Ico>,
   },
 ];
 
@@ -126,30 +127,30 @@ export default function AppLayout() {
     : null;
 
   const navList = (
-    <nav className="flex-1 px-2 py-3 overflow-y-auto">
-      {NAV.map(n => {
+    <nav className="flex-1 px-3 py-4 overflow-y-auto">
+      {NAV.map((n, i) => {
         const b = badge(n.to);
+        const heading = n.group && n.group !== NAV[i - 1]?.group ? n.group : null;
         return (
-          <NavLink key={n.to} to={n.to} className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
-            <span className="flex-shrink-0" style={{ opacity: 0.65 }}>{n.icon(16)}</span>
-            <span>{n.label}</span>
-            {b && <span className={`ml-auto pill ${b.color} text-xs px-1.5 py-0`}>{b.n}</span>}
-          </NavLink>
+          <div key={n.to}>
+            {heading && <p className="px-2.5 pt-6 pb-1.5 text-xs font-medium text-gray-500">{heading}</p>}
+            <NavLink to={n.to} className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
+              <span className="flex-shrink-0" style={{ opacity: 0.6 }}>{n.icon(17)}</span>
+              <span>{n.label}</span>
+              {b && <span className="ml-auto text-xs text-gray-500 tabular-nums">{b.n}</span>}
+            </NavLink>
+          </div>
         );
       })}
     </nav>
   );
 
+  // One quiet line instead of a three-way switch: Light → Dark → Auto.
   const themeSwitch = (
-    <div className="mb-2 flex items-center gap-0.5 rounded-lg p-0.5" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }} role="radiogroup" aria-label="Theme">
-      {(['light', 'dark', 'system'] as ThemeChoice[]).map(c => (
-        <button key={c} role="radio" aria-checked={themeChoice === c} onClick={() => setThemeChoice(c)}
-          className={`flex-1 text-[11px] py-1 rounded-md transition-colors ${themeChoice === c ? 'text-white' : 'text-gray-500 hover:text-gray-300'}`}
-          style={themeChoice === c ? { background: 'rgba(255,255,255,0.08)' } : undefined}>
-          {c === 'light' ? 'Light' : c === 'dark' ? 'Dark' : 'Auto'}
-        </button>
-      ))}
-    </div>
+    <button onClick={() => setThemeChoice(themeChoice === 'light' ? 'dark' : themeChoice === 'dark' ? 'system' : 'light')}
+      className="mb-1 w-full text-left text-xs text-gray-500 hover:text-gray-300 px-1 py-1 transition-colors" title="Switch appearance">
+      Appearance: {themeChoice === 'light' ? 'Light' : themeChoice === 'dark' ? 'Dark' : 'Auto'}
+    </button>
   );
 
   const account = (
@@ -186,10 +187,10 @@ export default function AppLayout() {
         </button>
       )}
       <aside
-        className={`app-chrome hidden md:flex flex-shrink-0 flex-col overflow-hidden transition-all duration-200 ${sidebarOpen ? 'w-52' : 'w-0'}`}
+        className={`app-chrome hidden md:flex flex-shrink-0 flex-col overflow-hidden transition-all duration-200 ${sidebarOpen ? 'w-60' : 'w-0'}`}
         style={{ background: '#161616', borderRight: sidebarOpen ? '1px solid rgba(255,255,255,0.07)' : 'none' }}
       >
-        <div className="px-4 py-4 flex items-center justify-between gap-2" style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+        <div className="px-5 pt-5 pb-2 flex items-center justify-between gap-2">
           {logo}
           <button onClick={() => setSidebarOpen(false)}
             className="w-7 h-7 flex-shrink-0 flex items-center justify-center rounded-lg text-gray-500 hover:text-white hover:bg-white/5 transition-colors" title="Hide sidebar">
@@ -212,7 +213,8 @@ export default function AppLayout() {
         <main data-scroll-root className={`${ownHeader ? '' : 'app-canvas'} flex-1 overflow-y-auto ${!sidebarOpen ? 'md:pt-12' : ''}`}
           style={{ background: ownHeader ? 'var(--ios-bg)' : '#1e1e1e', WebkitOverflowScrolling: 'touch', overscrollBehaviorY: 'contain' }}>
           <PlanBanner />
-          <Outlet />
+          {/* A measured column on wide screens, as a reading page has. */}
+          <div className="app-page"><Outlet /></div>
           {/* Keep the last row clear of the tab bar on pages not yet on the iOS layer. */}
           {!ownHeader && <div className="md:hidden h-20" />}
         </main>

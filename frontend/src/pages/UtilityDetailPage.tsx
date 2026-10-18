@@ -1357,8 +1357,7 @@ export default function UtilityDetailPage() {
       {modals}
 
       {/* Header */}
-      <div className="px-6 py-4 sticky top-0 z-10 flex items-center justify-between"
-        style={{ background: '#1e1e1e', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+      <div className="px-8 pt-10 pb-6 flex items-end justify-between gap-4 flex-wrap">
         <div>
           <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-1">
             <Link to="/properties" className="hover:text-gray-300 transition-colors">Properties</Link>
@@ -1368,11 +1367,11 @@ export default function UtilityDetailPage() {
             <span className="text-gray-300">{account.providerName}</span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center text-sm"
-              style={{ background: `${color}22`, border: `1px solid ${color}44` }}>
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center text-gray-300"
+              style={{ background: 'rgba(255,255,255,0.06)' }}>
               {icon}
             </div>
-            <h1 className="text-base font-semibold text-white">{account.providerName}</h1>
+            <h1 className="text-[28px] leading-9 font-semibold text-white tracking-tight">{account.providerName}</h1>
             <span className="text-xs text-gray-500">{(CATEGORY_LABELS as Record<string, string>)[account.category]}</span>
             {/* Billing cadence, editable in place. It was only settable at
                 creation, so an account filed as monthly stayed monthly even
@@ -1467,8 +1466,7 @@ export default function UtilityDetailPage() {
       <UrgentNotices utilityAccountId={account.id} className="mx-6 mt-3" />
 
       {/* Stats bar */}
-      <div className="px-6 py-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3"
-        style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+      <div className="px-8 pb-2 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
         {[
           {
             label: 'Current balance',
@@ -1499,15 +1497,15 @@ export default function UtilityDetailPage() {
             sub: totalFees > 0 ? `across ${feesData.length} bills` : undefined,
           },
         ].map(({ label, value, color: c, sub }) => (
-          <div key={label} className="rounded-xl px-4 py-3" style={{ background: '#161616', border: '1px solid rgba(255,255,255,0.06)' }}>
-            <p className="text-xs text-gray-500 mb-1">{label}</p>
-            <p className={`text-lg font-semibold ${c || 'text-white'}`}>{value}</p>
-            {sub && <p className="text-xs text-gray-600 mt-0.5">{sub}</p>}
+          <div key={label} className="stat-card">
+            <p className="text-[13px] text-gray-500 mb-2">{label}</p>
+            <p className={`text-[24px] leading-none font-semibold tracking-tight tabular-nums ${c || 'text-white'}`}>{value}</p>
+            {sub && <p className="text-xs text-gray-500 mt-2">{sub}</p>}
           </div>
         ))}
       </div>
 
-      <div className="px-6 pt-4">
+      <div className="px-8 pt-6">
         {/* Payment Plan section */}
         {/* Loan Details */}
         {loan ? (

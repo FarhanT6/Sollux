@@ -43,8 +43,12 @@
   .tabbar-link.active { color: #F5A623; }
 
   .sidebar-link {
-    @apply flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-sm text-gray-400
+    @apply flex items-center gap-3 px-2.5 py-[7px] rounded-lg text-sm text-gray-400
            cursor-pointer transition-colors;
+  }
+  /* The page column: wide screens get a measured width with room around it. */
+  @media (min-width: 768px), (min-width: 600px) and (pointer: fine) {
+    .app-page { max-width: 1240px; margin: 0 auto; padding: 0 16px 48px; }
   }
   .sidebar-link:hover {
     background: rgba(255,255,255,0.05);
@@ -56,10 +60,10 @@
     font-weight: 500;
   }
 
+  /* A figure tile: no outline, a faint lift, room for a big number. */
   .stat-card {
-    background: #2a2a2a;
-    border: 1px solid rgba(255,255,255,0.05);
-    @apply rounded-xl p-3.5;
+    background: rgba(255,255,255,0.035);
+    @apply rounded-2xl px-5 py-4;
   }
 
   .pill {

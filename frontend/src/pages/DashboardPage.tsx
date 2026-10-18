@@ -56,28 +56,27 @@ export default function DashboardPage() {
   return (
     <div>
       {/* Top bar */}
-      <div className="px-6 py-4 flex items-center justify-between sticky top-0 z-10"
-        style={{ background: '#1e1e1e', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+      <div className="px-8 pt-10 pb-6 flex items-end justify-between gap-3">
         <div>
-          <h1 className="text-base font-semibold text-white">
+          <h1 className="text-[28px] leading-9 font-semibold text-white tracking-tight">
             {greeting}, {user?.firstName || 'there'}
           </h1>
-          <p className="text-xs text-gray-500 mt-0.5">
+          <p className="text-sm text-gray-500 mt-1">
             {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
             {summary?.billsDueSoon ? ` — ${summary.billsDueSoon} bill${summary.billsDueSoon === 1 ? '' : 's'} due this week` : ''}
           </p>
         </div>
-        <button onClick={() => setShowAddProperty(true)} className="btn btn-primary text-xs">
-          + Add property
+        <button onClick={() => setShowAddProperty(true)} className="btn btn-primary text-sm">
+          Add property
         </button>
       </div>
 
-      <div className="px-6 py-5">
+      <div className="px-8 pb-8">
         {/* Shut-off and cancellation notices come before everything else. */}
         <UrgentNotices className="mb-5" />
         {/* Stats */}
         <p className="section-label mb-2">Portfolio summary</p>
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-10">
           {loading ? Array(4).fill(0).map((_, i) => <Skeleton key={i} className="h-20" />) : (
             <>
               <StatCard
@@ -148,7 +147,7 @@ export default function DashboardPage() {
         {!loading && leases.length > 0 && <RentSummaryCard leases={leases} payments={rentPayments} />}
 
         {/* Ask Sollux */}
-        <div className="mb-6"><AskSollux /></div>
+        <div className="mb-10"><AskSollux /></div>
 
         {/* Two column layout */}
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-5">
@@ -269,7 +268,7 @@ function CashPositionCard({ items, manualAccounts }: { items: PlaidItem[]; manua
   const allDisplayAccounts = [...bankAccounts, ...thirdPartyAccounts, ...cashAccounts, ...creditAccounts];
 
   return (
-    <div className="mb-6">
+    <div className="mb-10">
       <div className="flex items-center justify-between mb-2.5">
         <p className="section-label">Cash position</p>
         <Link to="/settings?tab=banking" className="text-xs text-gold-500 hover:underline">Manage accounts →</Link>
@@ -380,7 +379,7 @@ function RentSummaryCard({ leases, payments }: { leases: Lease[]; payments: Rent
   const pct = expected > 0 ? Math.round((collected / expected) * 100) : 0;
 
   return (
-    <div className="mb-6">
+    <div className="mb-10">
       <div className="flex items-center justify-between mb-2.5">
         <p className="section-label">Rent · {format(now, 'MMMM')}</p>
         <Link to="/tenants?tab=rent-roll" className="text-xs text-gold-500 hover:underline">Rent roll →</Link>
