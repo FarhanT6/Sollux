@@ -49,6 +49,26 @@ interface Session { id: string; worker: WebSocket; helper: Helper; queue: string
 // The helpers connected to this process, by owner (the newest wins), and the open browser sessions.
 const helpers = new Map<string, Helper>();
 const sessions = new Map<string, Session>();
+// Files the owner's Chrome downloaded during a session (statement PDFs), until the worker collects them.
+const files = new Map<string, { name: string; data: Buffer; at: number }[]>();
+
+/** The worker's address for collecting a session's downloads: the session's own signed path. */
+export const filesUrlFor = (wsUrl: string) => wsUrl.replace(/^ws/, 'http').replace('/api/connector/cdp/', '/api/connector/files/');
+
+/** Check a signed session path ("<user>.<nonce>.<sig>") and give its session id, or null. */
+export function verifySession(signed: string): string | null {
+  const m = signed.match(/^([\w-]+)\.([0-9a-f]{16})\.([0-9a-f]{32})$/);
+  if (!m) return null;
+  const id = `${m[1]}.${m[2]}`;
+  return crypto.timingSafeEqual(Buffer.from(sign(id)), Buffer.from(m[3])) ? id : null;
+}
+
+/** The files downloaded in a session since it was last asked; each is handed over once. */
+export function takeFiles(sessionId: string): { name: string; data: Buffer }[] {
+  const got = files.get(sessionId) ?? [];
+  files.delete(sessionId);
+  return got;
+}
 
 const text = (d: RawData) => (Array.isArray(d) ? Buffer.concat(d) : Buffer.from(d as ArrayBuffer)).toString('utf8');
 const send = (ws: WebSocket, m: unknown) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m)); };
@@ -90,6 +110,11 @@ function onHelper(ws: WebSocket, req: IncomingMessage): void {
     else if (m.type === 'opened') { s.open = true; for (const d of s.queue.splice(0)) send(ws, { type: 'data', id: s.id, d }); }
     else if (m.type === 'data' && typeof m.d === 'string') { if (s.worker.readyState === WebSocket.OPEN) s.worker.send(m.d); }
     else if (m.type === 'closed') s.worker.close(1011, String(m.reason ?? 'the browser on the computer closed').slice(0, 100));
+    else if (m.type === 'file' && typeof m.data === 'string') {
+      const list = files.get(s.id) ?? [];
+      list.push({ name: String(m.name ?? 'statement.pdf').slice(0, 200), data: Buffer.from(m.data, 'base64'), at: Date.now() });
+      files.set(s.id, list.slice(-10));
+    }
   });
 
   ws.on('close', () => {
@@ -117,7 +142,10 @@ function onWorker(ws: WebSocket, userId: string, id: string): void {
     const d = text(raw);
     if (s.open) send(helper.ws, { type: 'data', id, d }); else s.queue.push(d);
   });
-  ws.on('close', () => { sessions.delete(id); send(helper.ws, { type: 'close', id }); });
+  ws.on('close', () => {
+    sessions.delete(id); send(helper.ws, { type: 'close', id });
+    setTimeout(() => files.delete(id), 120_000).unref();
+  });
   ws.on('error', () => {});
 }
 
@@ -128,10 +156,9 @@ export function attachConnector(server: Server): void {
   server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     const path = new URL(req.url ?? '/', 'http://x').pathname;
     if (path === '/api/connector/tunnel') return void wss.handleUpgrade(req, socket, head, ws => onHelper(ws, req));
-    const cdp = path.match(/^\/api\/connector\/cdp\/([\w-]+)\.([0-9a-f]{16})\.([0-9a-f]{32})$/);
-    if (cdp && crypto.timingSafeEqual(Buffer.from(sign(`${cdp[1]}.${cdp[2]}`)), Buffer.from(cdp[3]))) {
-      return void wss.handleUpgrade(req, socket, head, ws => onWorker(ws, cdp[1], `${cdp[1]}.${cdp[2]}`));
-    }
+    const cdp = path.match(/^\/api\/connector\/cdp\/(.+)$/);
+    const sessionId = cdp ? verifySession(cdp[1]) : null;
+    if (sessionId) return void wss.handleUpgrade(req, socket, head, ws => onWorker(ws, sessionId.split('.')[0], sessionId));
     socket.destroy();
   });
 }

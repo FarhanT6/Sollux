@@ -26,7 +26,7 @@ import stripeRouter from './routes/stripe';
 import billingRouter from './routes/billing';
 import aiSpendRouter from './routes/aiSpend';
 import connectorRouter from './routes/connector';
-import { attachConnector } from './services/connector';
+import { attachConnector, verifySession, takeFiles } from './services/connector';
 import portalRouter from './routes/portal';
 import rentCollectionRouter from './routes/rentCollection';
 import maintenanceRouter from './routes/maintenance';
@@ -105,6 +105,8 @@ app.use((req, res, next) => {
   if (req.path === '/api/gmail/callback' || req.path === '/api/drive/callback' || req.path === '/api/clickup/webhook') {
     return next();
   }
+  // The worker collecting a connector session's downloads signs with the session, not Clerk.
+  if (req.path.startsWith('/api/connector/files/')) return next();
   return clerkMw(req, res, next);
 });
 app.use(helmet());
@@ -176,6 +178,14 @@ app.use('/api/stripe', stripeRouter);
 // The auditor's quality report: a job, not a person, so it carries a shared
 // secret (x-audit-token) instead of a login. See routes/audit.ts.
 app.use('/api/audit', auditRouter);
+
+// The worker collects the files the owner's Chrome downloaded in a connector
+// session; the signed session path is its credential (services/connector.ts).
+app.get('/api/connector/files/:session', (req, res) => {
+  const id = verifySession(req.params.session);
+  if (!id) return res.status(401).json({ error: 'Not a valid session' });
+  res.json({ files: takeFiles(id).map(f => ({ name: f.name, data: f.data.toString('base64') })) });
+});
 
 // ─── Protected routes ─────────────────────────────────────
 // requireAuth answers 401 without a session (middleware/requireAuth.ts).
