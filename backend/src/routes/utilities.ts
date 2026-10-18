@@ -510,6 +510,11 @@ router.patch('/:id', async (req, res, next) => {
         ...(rest.isActive === true && { syncEnabled: true }),
       },
     });
+    // A new website is a new route: the saved one (a recipe recorded from the
+    // old start page — City of Imperial's sign-in) would take the agent back there.
+    if ('loginUrl' in rest && (rest.loginUrl ?? null) !== (existing.loginUrl ?? null)) {
+      await db.portalRecipe.deleteMany({ where: { key: `acct:${existing.id}` } }).catch(() => {});
+    }
 
     await syncInsurancePolicyForUtility(updated, { policyNumber: accountNumber, policyType: insuranceType });
     await syncLoanForUtility(updated, req.dbUserId!, { loanType });
