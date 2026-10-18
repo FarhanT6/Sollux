@@ -105,11 +105,10 @@ export default function PortfolioPage() {
 
   return (
     <div>
-      <div className="px-6 py-4 flex items-center justify-between sticky top-0 z-10"
-        style={{ background: '#1e1e1e', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+      <div className="px-8 pt-10 pb-6 flex items-end justify-between gap-3">
         <div>
-          <h1 className="text-base font-semibold text-white">Portfolio</h1>
-          <p className="text-xs text-gray-500 mt-0.5">
+          <h1 className="text-[28px] leading-9 font-semibold text-white tracking-tight">Portfolio</h1>
+          <p className="text-sm text-gray-500 mt-1">
             {filtered.length} properties · {money(totals.rent)}/mo · {totals.arrears > 0 ? `${money(totals.arrears)} arrears` : 'No arrears'}
           </p>
         </div>

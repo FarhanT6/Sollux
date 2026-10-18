@@ -56,28 +56,27 @@ export default function DashboardPage() {
   return (
     <div>
       {/* Top bar */}
-      <div className="px-6 py-4 flex items-center justify-between sticky top-0 z-10"
-        style={{ background: '#1e1e1e', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+      <div className="px-8 pt-10 pb-6 flex items-end justify-between gap-3">
         <div>
-          <h1 className="text-base font-semibold text-white">
+          <h1 className="text-[28px] leading-9 font-semibold text-white tracking-tight">
             {greeting}, {user?.firstName || 'there'}
           </h1>
-          <p className="text-xs text-gray-500 mt-0.5">
+          <p className="text-sm text-gray-500 mt-1">
             {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
             {summary?.billsDueSoon ? ` — ${summary.billsDueSoon} bill${summary.billsDueSoon === 1 ? '' : 's'} due this week` : ''}
           </p>
         </div>
-        <button onClick={() => setShowAddProperty(true)} className="btn btn-primary text-xs">
-          + Add property
+        <button onClick={() => setShowAddProperty(true)} className="btn btn-primary text-sm">
+          Add property
         </button>
       </div>
 
-      <div className="px-6 py-5">
+      <div className="px-8 pb-8">
         {/* Shut-off and cancellation notices come before everything else. */}
         <UrgentNotices className="mb-5" />
         {/* Stats */}
         <p className="section-label mb-2">Portfolio summary</p>
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-10">
           {loading ? Array(4).fill(0).map((_, i) => <Skeleton key={i} className="h-20" />) : (
             <>
               <StatCard
@@ -102,7 +101,7 @@ export default function DashboardPage() {
                 >
                   <p className="text-xs text-gray-500 mb-1">Bills due this week</p>
                   <p className="text-xl font-semibold text-white leading-none">{summary?.billsDueSoon ?? '—'}</p>
-                  <p className={`text-xs mt-1 flex items-center gap-1 ${summary?.billsDueSoon ? 'text-red-400' : 'text-emerald-400'}`}>
+                  <p className={`text-xs mt-1 flex items-center gap-1 ${summary?.billsDueSoon ? 'text-red-400' : 'text-gray-500'}`}>
                     {summary?.billsDueSoon ? 'Needs attention' : 'All clear'}
                     {!!summary?.billsDueSoon && <span className="text-gray-500">{showDue ? '▴' : '▾'}</span>}
                   </p>
@@ -127,7 +126,7 @@ export default function DashboardPage() {
                         </div>
                       </Link>
                     ))}
-                    <Link to="/payments/priorities" className="block px-3 py-2 text-[11px] text-gold-500 hover:underline" onClick={() => setShowDue(false)}>All payments →</Link>
+                    <Link to="/payments/priorities" className="block px-3 py-2 text-xs text-gray-400 hover:text-white" onClick={() => setShowDue(false)}>All payments →</Link>
                   </div>
                 )}
               </div>
@@ -148,7 +147,7 @@ export default function DashboardPage() {
         {!loading && leases.length > 0 && <RentSummaryCard leases={leases} payments={rentPayments} />}
 
         {/* Ask Sollux */}
-        <div className="mb-6"><AskSollux /></div>
+        <div className="mb-10"><AskSollux /></div>
 
         {/* Two column layout */}
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-5">
@@ -156,7 +155,7 @@ export default function DashboardPage() {
           <div className="col-span-3">
             <div className="flex items-center justify-between mb-2.5">
               <p className="section-label">My properties</p>
-              <Link to="/properties" className="text-xs text-gold-500 hover:underline">View all →</Link>
+              <Link to="/properties" className="text-[13px] text-gray-400 hover:text-white transition-colors">View all →</Link>
             </div>
             {loading ? (
               <div className="space-y-2">{Array(4).fill(0).map((_, i) => <Skeleton key={i} className="h-16" />)}</div>
@@ -196,7 +195,7 @@ export default function DashboardPage() {
           <div className="col-span-2">
             <div className="flex items-center justify-between mb-2.5">
               <p className="section-label">AI insights</p>
-              <Link to="/insights" className="text-xs text-gold-500 hover:underline">View all →</Link>
+              <Link to="/insights" className="text-[13px] text-gray-400 hover:text-white transition-colors">View all →</Link>
             </div>
             {loading ? (
               <div className="space-y-2">{Array(3).fill(0).map((_, i) => <Skeleton key={i} className="h-24" />)}</div>
@@ -269,10 +268,10 @@ function CashPositionCard({ items, manualAccounts }: { items: PlaidItem[]; manua
   const allDisplayAccounts = [...bankAccounts, ...thirdPartyAccounts, ...cashAccounts, ...creditAccounts];
 
   return (
-    <div className="mb-6">
+    <div className="mb-10">
       <div className="flex items-center justify-between mb-2.5">
         <p className="section-label">Cash position</p>
-        <Link to="/settings?tab=banking" className="text-xs text-gold-500 hover:underline">Manage accounts →</Link>
+        <Link to="/settings?tab=banking" className="text-[13px] text-gray-400 hover:text-white transition-colors">Manage accounts →</Link>
       </div>
       <div className="card p-4">
         {/* Grand total + toggle */}
@@ -380,10 +379,10 @@ function RentSummaryCard({ leases, payments }: { leases: Lease[]; payments: Rent
   const pct = expected > 0 ? Math.round((collected / expected) * 100) : 0;
 
   return (
-    <div className="mb-6">
+    <div className="mb-10">
       <div className="flex items-center justify-between mb-2.5">
         <p className="section-label">Rent · {format(now, 'MMMM')}</p>
-        <Link to="/tenants?tab=rent-roll" className="text-xs text-gold-500 hover:underline">Rent roll →</Link>
+        <Link to="/tenants?tab=rent-roll" className="text-[13px] text-gray-400 hover:text-white transition-colors">Rent roll →</Link>
       </div>
       <div className="card p-4">
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
@@ -394,12 +393,12 @@ function RentSummaryCard({ leases, payments }: { leases: Lease[]; payments: Rent
           </div>
           <div>
             <p className="text-xs text-gray-500 mb-1">Collected</p>
-            <p className="text-xl font-semibold text-emerald-400 leading-none">{money(collected)}</p>
+            <p className="text-xl font-semibold text-white leading-none">{money(collected)}</p>
             <p className="text-xs text-gray-500 mt-1">{pct}% of expected</p>
           </div>
           <div>
             <p className="text-xs text-gray-500 mb-1">Still owed this month</p>
-            <p className={`text-xl font-semibold leading-none ${expected - collected > 0 ? 'text-amber-400' : 'text-white'}`}>{money(Math.max(expected - collected, 0))}</p>
+            <p className={`text-xl font-semibold leading-none text-white`}>{money(Math.max(expected - collected, 0))}</p>
             <p className="text-xs text-gray-500 mt-1">{unpaid.length} lease{unpaid.length === 1 ? '' : 's'} unpaid</p>
           </div>
           <div>
@@ -434,7 +433,7 @@ function RentSummaryCard({ leases, payments }: { leases: Lease[]; payments: Rent
                 </Link>
               );
             })}
-            {unpaid.length > 8 && <Link to="/tenants?tab=rent-roll" className="text-xs text-gold-500 hover:underline px-3 py-2">+{unpaid.length - 8} more →</Link>}
+            {unpaid.length > 8 && <Link to="/tenants?tab=rent-roll" className="text-[13px] text-gray-400 hover:text-white px-3 py-2">+{unpaid.length - 8} more →</Link>}
           </div>
         ) : (
           <p className="text-xs text-emerald-400">Every lease has paid for {format(now, 'MMMM')}.</p>

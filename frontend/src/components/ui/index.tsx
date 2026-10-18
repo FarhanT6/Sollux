@@ -12,8 +12,7 @@ interface PageHeaderProps {
 
 export function PageHeader({ title, subtitle, action, breadcrumb }: PageHeaderProps) {
   return (
-    <div className="px-4 md:px-6 py-3 md:py-4 flex flex-wrap items-center justify-between gap-2 md:sticky top-0 z-10"
-      style={{ background: '#1e1e1e', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+    <div className="px-4 md:px-8 pt-4 md:pt-10 pb-3 md:pb-6 flex flex-wrap items-end justify-between gap-3">
       <div>
         {breadcrumb && (
           // On a phone the navigation bar's Back replaces the trail.
@@ -22,15 +21,15 @@ export function PageHeader({ title, subtitle, action, breadcrumb }: PageHeaderPr
               <span key={i} className="flex items-center gap-1.5">
                 {i > 0 && <span>›</span>}
                 {b.href
-                  ? <a href={b.href} className="text-gold-500 hover:underline">{b.label}</a>
+                  ? <a href={b.href} className="text-gray-400 hover:text-gray-200">{b.label}</a>
                   : <span className={i === breadcrumb.length - 1 ? 'text-gray-200 font-medium' : ''}>{b.label}</span>
                 }
               </span>
             ))}
           </nav>
         )}
-        <h1 className="text-base font-semibold text-white">{title}</h1>
-        {subtitle && <p className="text-xs text-gray-500 mt-0.5">{subtitle}</p>}
+        <h1 className="text-xl md:text-[28px] md:leading-9 font-semibold text-white tracking-tight">{title}</h1>
+        {subtitle && <p className="text-sm text-gray-500 mt-1">{subtitle}</p>}
       </div>
       {action && <div className="max-w-full">{action}</div>}
     </div>
@@ -49,9 +48,9 @@ export function StatCard({ label, value, sub, subColor = 'neutral' }: StatCardPr
   const subClass = subColor === 'red' ? 'text-red-400' : subColor === 'green' ? 'text-emerald-400' : 'text-gray-500';
   return (
     <div className="stat-card">
-      <p className="text-xs text-gray-500 mb-1">{label}</p>
-      <p className="text-xl font-semibold text-white leading-none">{value}</p>
-      {sub && <p className={`text-xs mt-1 ${subClass}`}>{sub}</p>}
+      <p className="text-[13px] text-gray-500 mb-2">{label}</p>
+      <p className="text-[26px] font-semibold text-white leading-none tracking-tight tabular-nums">{value}</p>
+      {sub && <p className={`text-xs mt-2 ${subClass}`}>{sub}</p>}
     </div>
   );
 }
