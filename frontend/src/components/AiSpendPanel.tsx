@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import PortalLogin from './utility/PortalLogin';
 import { getAiSpend, getAiTest, startAiTest, getPortalTests, testPortal, cancelFetch, type AiSpend, type AiTestState, type PortalTestAccount, type WorkerStatus, type QueueSnapshot } from '../api/client';
 import { fmtMoney } from '../lib/money';
 import { fmtMoment } from '../lib/date';
@@ -26,6 +27,9 @@ export default function AiSpendPanel() {
   const [spend, setSpend] = useState<AiSpend | null>(null);
   const [test, setTest] = useState<AiTestState | null>(null);
   const [portal, setPortal] = useState<Awaited<ReturnType<typeof getPortalTests>> | null>(null);
+  // An account without a login, being given one from here.
+  const [loginFor, setLoginFor] = useState<PortalTestAccount | null>(null);
+  const [showUnfetched, setShowUnfetched] = useState(false);
   const timer = useRef<number | null>(null);
   const portalTimer = useRef<number | null>(null);
 
@@ -153,7 +157,7 @@ export default function AiSpendPanel() {
       <div className="card p-5">
         <h2 className="text-sm font-semibold text-white mb-1">Statement fetching</h2>
         <p className="text-xs text-gray-500 mb-3">
-          Accounts with a portal login. The first fetch from a portal is Claude working the site out; the steps that got to the statements are saved as a recipe and replayed next time without Claude, so later fetches cost a fraction.
+          Accounts Sollux can fetch from the provider's website. The first fetch from a portal is Claude working the site out; the steps that got to the statements are saved as a recipe and replayed next time without Claude, so later fetches cost a fraction.
           {portal && ` This month: ${portal.monthCalls} Claude turns, ${fmtCost(portal.monthCost)}.`}
         </p>
         {portal?.workers && portal.workers.state !== 'ok' && portal.workers.state !== 'busy' && (
@@ -166,9 +170,9 @@ export default function AiSpendPanel() {
         {portal && portal.accounts.some(a => !a.syncEnabled) && (
           <p className="text-xs text-gray-500 mb-2">{portal.accounts.filter(a => !a.syncEnabled).length} inactive account{portal.accounts.filter(a => !a.syncEnabled).length === 1 ? '' : 's'} not shown — turn one back on from its account page to fetch it.</p>
         )}
-        {!portal?.accounts.some(a => a.syncEnabled) ? <p className="text-xs text-gray-500">No active account has a portal login yet — add one with “Add portal login” on an account.</p> : (
+        {!portal?.accounts.some(a => a.syncEnabled && !a.needs) ? <p className="text-xs text-gray-500">No active account has a portal login yet — add one below.</p> : (
           <div className="space-y-2">
-            {portal.accounts.filter(a => a.syncEnabled).map(a => {
+            {portal.accounts.filter(a => a.syncEnabled && !a.needs).map(a => {
               const shared = portal.sharedRecipes.length > 0;
               return (
                 <div key={a.id} className="flex items-start justify-between gap-3 py-2 border-t border-white/5 first:border-0">
@@ -193,6 +197,33 @@ export default function AiSpendPanel() {
               );
             })}
           </div>
+        )}
+        {/* Accounts with nothing to fetch with yet: say why, and fix it here. */}
+        {(() => {
+          const rest = (portal?.accounts ?? []).filter(a => a.syncEnabled && (a.needs === 'login' || a.needs === 'name'));
+          if (!rest.length) return null;
+          return (
+            <div className="mt-4 pt-3 border-t border-white/5">
+              <button className="text-left w-full" onClick={() => setShowUnfetched(v => !v)}>
+                <p className="text-xs text-gray-300">{showUnfetched ? '▾' : '▸'} Not fetched yet · {rest.length}</p>
+                <p className="text-xs text-gray-500">No portal login saved, so Sollux can't fetch these from the provider's website. Their bills still come in by email or upload.</p>
+              </button>
+              {showUnfetched && (
+                <div className="mt-2 divide-y divide-white/5">
+                  {rest.map(a => (
+                    <div key={a.id} className="flex items-center justify-between gap-3 py-2">
+                      <p className="text-sm text-gray-200 min-w-0 truncate">{a.providerName}{a.last4 ? ` ··${a.last4}` : ''} <span className="text-gray-500">· {a.place}</span></p>
+                      <button className="btn text-xs whitespace-nowrap" onClick={() => setLoginFor(a)}>{a.needs === 'name' ? 'Add name on the bill' : 'Add login'}</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })()}
+        {loginFor && (
+          <PortalLogin account={{ id: loginFor.id, providerName: loginFor.providerName, hasCredentials: loginFor.hasCredentials, lookupName: loginFor.lookupName }}
+            website={loginFor.website} onClose={() => setLoginFor(null)} onSaved={() => void getPortalTests().then(setPortal)} />
         )}
       </div>
 
