@@ -96,6 +96,9 @@ const LOOKUP_TOOLS = TOOLS.filter(t => !['fill_login', 'ask_owner_for_code', 'op
 const SIGN_IN_URL = /log-?in|log-?on|sign-?in|sign-?on|register|auth/i;
 /** A sign-in page, whatever its address: a password box is showing. */
 const onSignIn = (page: Page) => page.locator('input[type="password"]').first().isVisible().catch(() => false);
+/** Signed in: the page offers Log out / Sign out, has no password box, and is not an error page. */
+const looksSignedIn = async (page: Page, text: string) =>
+  /\b(log ?out|sign ?out|logout|signout)\b/i.test(text) && !TURNED_AWAY.test(text) && !(await onSignIn(page));
 
 /**
  * A biller's lookup page filled in by code, not by Claude: the account number
@@ -573,6 +576,11 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   let rechecked = false;
   let triedHome = false;
   let askedCaptcha = false;
+  // Got past the sign-in (a code accepted, or a sign-in that left no password
+  // box): an error page after this is the site's own trouble — a bill viewer
+  // that fails — not the site turning the browser away. Nationwide's run signed
+  // in, reached the accounts page and was then reported as "bot protection".
+  let signedIn = false;
   const after = async (what: string) => {
     // The next step opened in a new tab (a link, or a sign-in button): work there.
     await page.waitForTimeout(500);
@@ -596,7 +604,7 @@ ${others.length ? `This login holds several of the owner's accounts. Fetch every
 ${others.map(o => `- ${o.accountNumber ? `account ending ${String(o.accountNumber).slice(-4)}` : 'an account'} at ${o.property.address}: after ${o.statements[0]?.statementDate?.toISOString().slice(0, 10) ?? 'the last 12 months'}`).join('\n')}
 At most ${maxDownloads} downloads in all. An account the portal does not list is not an error: say so and carry on. Finish with outcome done when every listed account is checked, and fill in accounts with each one's result (downloaded, nothing_new, not_listed, or not_checked if you did not get to it) — an account is only nothing_new if you opened its own statement history.` : lookup ? `Goal: this account's bills are found on the biller's lookup page you start on, by account number and the name on the bill — never by signing in. Do not open a sign-in or register page, even if one is offered. Sollux fills in the lookup fields and presses Search for you where it can; otherwise fill them with fill_account_number (part 'name' for a name field), then open the invoices / bill history and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If the lookup says the account was not found, finish with blocked and quote what it said. If there is nothing newer, finish with outcome done.` : `Goal: log in, open the billing / statement history, and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If there is nothing newer, finish with outcome done.`}
 Rules: use fill_login for credentials (you never see them). If the portal offers where to send a verification code, choose email over text or a phone call. If it emails a sign-in link instead of a code, call open_emailed_link (the owner is never asked for it); if none arrives, finish with no_code. When a code has been sent, call ask_owner_for_code (it reads the code from the owner's email, or asks the owner), then type_code. Pass any "Remember this device", "Trust this browser", "Keep me signed in" or "Don't ask again" checkbox as rememberRef so the next visit is not asked again. Never pay, enroll, change settings, accept offers or send messages. If a "Verify you are human" / "I'm not a robot" checkbox is on the page, call tick_captcha before submitting. If the page you start on asks for an account number (a bill lookup), use fill_account_number there rather than going to the sign-in. If the sign-in stays blocked by such a check, look for a way in without signing in — "Pay as guest", "Quick pay", "View bill", "Find my account" — and use fill_account_number (with the property's ZIP code if asked); statements found that way count the same. If a captcha still blocks you (a picture puzzle, or the check keeps failing), finish with captcha (on the owner's own computer they may solve it, and you are then shown the page to carry on). If the login is rejected, finish with bad_login. If a code you entered is rejected, ask_owner_for_code once more for a fresh one; after a second rejection finish with no_code — never start the login over.
-If the site refuses the browser itself (Access Denied, "invalid request", "unable to process your request" after a correct sign-in, a bot check), finish with turned_away at once: never submit the login a second time — each retry makes the site more suspicious and can lock the owner's account.
+Once you are signed in (you see the account, a greeting, a Log out button), an error after that — a bill viewer that fails, "unable to process your request" on one page — is not the site refusing the browser: go back and try another way to the statements ("View bill", "Billing history", "Documents", "View policy documents", "Statements"), and finish with blocked, saying which page failed, only when none works. Before signing in: if the site refuses the browser itself (Access Denied, "invalid request", "unable to process your request" right after submitting the sign-in, a bot check), finish with turned_away at once: never submit the login a second time — each retry makes the site more suspicious and can lock the owner's account.
 Always end with the finish tool, never with a message. If the page seems gone or closed, call look: the browser follows the site to its newest tab. Each action returns the page as it is afterwards: do not call look after it. Fill and submit in one step (submitRef). A typical visit is: look, fill_login (with submit), code if asked, open billing/statements, download, finish — aim for about 10 steps. When several accounts are listed, choose the one matching the account number, else the address. The account number is what identifies the account: the address a portal shows is often the owner's mailing address, not the property's, so an account whose number matches is the right one whatever address it shows.`;
   // Every step that changed the page, in order: replayed ones and Claude's.
   // The ones before the first download become the recipe for next time.
@@ -632,6 +640,7 @@ Always end with the finish tool, never with a message. If the page seems gone or
       steps.push(...recipe.steps.slice(0, done));
       try { const h = new URL(page.url()).hostname; if (h) allowed.add(rootOf(h)); } catch { /* about:blank */ }
       if (done === recipe.steps.length) {
+        signedIn = true;
         opening = "Start. A previous run's steps were replayed: the browser should be signed in and on the page with the statement history. Look, then download what is new — or finish if nothing is.";
       } else {
         await recipeWorked(recipe.key, false);
@@ -738,7 +747,9 @@ Always end with the finish tool, never with a message. If the page seems gone or
               if (i.passwordRef != null) await el(i.passwordRef).fill(password);
               if (i.rememberRef != null) await el(i.rememberRef).check({ timeout: 3000 }).catch(() => el(i.rememberRef).click({ timeout: 3000 }).catch(() => {}));
               if (i.submitRef != null) await el(i.submitRef).click({ timeout: 10000 });
-              content = await after(i.submitRef != null ? 'Signed in details entered and submitted.' : 'Entered.'); break;
+              content = await after(i.submitRef != null ? 'Signed in details entered and submitted.' : 'Entered.');
+              if (i.passwordRef != null && i.submitRef != null && await looksSignedIn(page, lastPage)) signedIn = true;
+              break;
             }
             case 'press': await page.keyboard.press(String(i.key)); content = await after(`Pressed ${i.key}.`); break;
             case 'goto': {
@@ -850,6 +861,7 @@ Always end with the finish tool, never with a message. If the page seems gone or
               if (i.rememberRef != null) await el(i.rememberRef).check({ timeout: 3000 }).catch(() => el(i.rememberRef).click({ timeout: 3000 }).catch(() => {}));
               if (i.submitRef != null) await el(i.submitRef).click({ timeout: 10000 });
               content = await after(i.submitRef != null ? 'Code entered and submitted.' : 'Code entered.');
+              if (i.submitRef != null && await looksSignedIn(page, lastPage)) signedIn = true;
               code = null; // used: a rejected code is never typed again
               break;
             }
@@ -982,7 +994,12 @@ Always end with the finish tool, never with a message. If the page seems gone or
 
   // Turned away (said so, or the summary shows it whatever outcome was picked):
   // say what it means, and hold scheduled fetches of this site for a while.
-  if (!run.ok && run.error && !/^Not tried/.test(run.error) && (run.error.startsWith('turned_away') || TURNED_AWAY.test(`${run.error} ${run.summary}`))) {
+  const refused = !!run.error && (run.error.startsWith('turned_away') || TURNED_AWAY.test(`${run.error} ${run.summary}`));
+  if (!run.ok && refused && signedIn) {
+    // Signed in: say what went wrong after it, first, and hold nothing back.
+    const detail = run.error!.replace(/^turned_away\s*/, '').replace(/^The agent could not get to the statements\.\s*/, '');
+    run.error = `Signed in to ${account.providerName}, but the site showed an error on the way to the statements (not bot protection — the sign-in worked). ${detail}`;
+  } else if (!run.ok && run.error && !/^Not tried/.test(run.error) && refused) {
     const until = Date.now() + TURNED_AWAY_MS;
     turnedAway.set(host, until);
     const detail = run.error.replace(/^turned_away\s*/, '').replace(/^The agent could not get to the statements\.\s*/, '');

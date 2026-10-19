@@ -37,7 +37,7 @@ function normalizeAcct(s: string) {
  * characters on the page).
  */
 function readableError(message: string): string {
-  return message.split(/\s*(?:Browser logs:|=+ logs =+|Call log:)/)[0].split('\n')[0].trim().slice(0, 300) || 'The fetch failed.';
+  return message.split(/\s*(?:Browser logs:|=+ logs =+|Call log:)/)[0].split('\n')[0].trim().slice(0, 900) || 'The fetch failed.';
 }
 
 /** Every downloaded statement accounted for: filed, waiting for review, applied to a notice or policy, or unreadable. */
