@@ -59,7 +59,7 @@ await ctx.route(u => u.hostname !== 'localhost', route => route.fulfill({ status
 // The real API when the local dev stack is up (backend on :3001 with
 // scripts/dev/devAuth.cjs and a seeded database; Vite proxies /api to it),
 // else the sample answers in mock-api.mjs.
-const realApi = await fetch('http://localhost:3001/api/dashboard/summary').then(r => r.ok).catch(() => false);
+const realApi = !process.env.MOCK && await fetch('http://localhost:3001/api/dashboard/summary').then(r => r.ok).catch(() => false);
 console.log(realApi ? 'API: local dev stack on :3001' : 'API: mock-api.mjs');
 if (!realApi) await ctx.route(u => u.hostname === 'localhost' && u.pathname.startsWith('/api/'), async route => {
   const req = route.request();
@@ -87,7 +87,8 @@ for (const path of ROUTES) {
   if (overflow.length) problems.push(`sideways overflow: ${overflow.join(' | ')}`);
   // TAP="More|Name on the bill": tap each text in turn before the screenshot (a sheet, a menu).
   for (const t of (process.env.TAP ?? '').split('|').filter(Boolean)) {
-    await page.getByText(t, { exact: true }).last().click({ timeout: 5000 }).catch(e => problems.push(`tap "${t}": ${String(e.message).split('\n')[0]}`));
+    const exact = page.getByText(t, { exact: true });
+    await ((await exact.count()) ? exact : page.getByText(t)).last().click({ timeout: 5000 }).catch(e => problems.push(`tap "${t}": ${String(e.message).split('\n')[0]}`));
     await page.waitForTimeout(600);
   }
   const file = join(outDir, `${path.replace(/\//g, '_').replace(/^_/, '') || 'root'}.png`);
