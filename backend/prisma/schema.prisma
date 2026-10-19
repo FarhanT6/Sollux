@@ -540,6 +540,9 @@ model GmailToken {
   // A backfill the owner asked for: read back to this date, across as many
   // runs as the per-run document limit needs, then cleared.
   backfillFrom  DateTime?
+  // Emails still to look at when a run stopped at its document limit (a
+  // backfill, or a busy day): shown as progress, never as an error.
+  backlog       Int?
   messages      InboxMessage[]
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt

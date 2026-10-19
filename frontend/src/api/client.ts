@@ -728,7 +728,7 @@ export const updateNotificationPreferences = (data: any) =>
 // Gmail
 export const getGmailConnectUrl = () =>
   api.post<{ url: string }>('/gmail/connect').then(r => r.data);
-export interface GmailMailbox { id: string; email: string; label?: string | null; lastScanAt?: string | null; lastScanError?: string | null; backfillFrom?: string | null }
+export interface GmailMailbox { id: string; email: string; label?: string | null; lastScanAt?: string | null; lastScanError?: string | null; backfillFrom?: string | null; backlog?: number | null }
 export const getGmailStatus = () =>
   api.get<{ connected: boolean; accounts: GmailMailbox[] }>('/gmail/status').then(r => r.data);
 export interface InboxActivity {

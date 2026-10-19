@@ -836,12 +836,22 @@ function InboxPanel({ onStreamStart, onBillStreamed }: {
         </div>
       </div>
       <div className="flex flex-wrap gap-2">
-        {boxes.map(b => (
-          <span key={b.id} className="text-xs px-2 py-1 rounded" style={{ background: 'rgba(255,255,255,0.05)' }} title={b.lastScanError ?? ''}>
-            <span className="text-gray-300">{b.email}</span>
-            <span className={b.lastScanError ? 'text-amber-400' : 'text-gray-500'}> · {b.backfillFrom ? `backfilling to ${format(new Date(b.backfillFrom), 'MMM d')}` : b.lastScanAt ? `read ${format(new Date(b.lastScanAt), 'MMM d, h:mm a')}` : b.lastScanError ? 'partly read' : 'not read yet'}{b.lastScanError ? ' (with errors)' : ''}</span>
-          </span>
-        ))}
+        {boxes.map(b => {
+          // A run that stopped at its document limit is progress, not an error
+          // (older runs wrote that into lastScanError).
+          const error = b.lastScanError && !/^Stopped at \d+ documents/.test(b.lastScanError) ? b.lastScanError : null;
+          const left = b.backlog ? ` · ${b.backlog} email${b.backlog === 1 ? '' : 's'} left, continuing` : '';
+          const state = b.backfillFrom ? `reading back to ${format(new Date(b.backfillFrom), 'MMM d')}${left}`
+            : b.backlog ? `catching up${left}`
+            : b.lastScanAt ? `read ${format(new Date(b.lastScanAt), 'MMM d, h:mm a')}` : 'not read yet';
+          return (
+            <span key={b.id} className="text-xs px-2 py-1 rounded" style={{ background: 'rgba(255,255,255,0.05)' }} title={error ?? ''}>
+              <span className="text-gray-300">{b.email}</span>
+              <span className="text-gray-500"> · {state}</span>
+              {error && <span className="text-amber-400"> · last read failed</span>}
+            </span>
+          );
+        })}
       </div>
       {reviewBar}
       {/* How to tell something was missed: accounts that bill every month

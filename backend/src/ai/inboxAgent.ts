@@ -13,6 +13,7 @@
  * Each message is handled once (InboxMessage), so re-running never double
  * files or double bills. Payment confirmations are recorded, not filed.
  */
+import { checkBudget } from './meter';
 import { providerForEmail, findProvider } from '../lib/providerDirectory';
 import { scrapeQueue } from '../workers/queues';
 import { google, gmail_v1 } from 'googleapis';
@@ -155,6 +156,23 @@ async function closeBrowser() {
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+/**
+ * Read the rest of a mailbox's backlog in a few minutes: one more round for
+ * this mailbox, unless one is already waiting or the month's AI budget is
+ * used up (then it carries on with the nightly run).
+ */
+async function continueLater(userId: string, tokenId: string): Promise<void> {
+  try {
+    if (!(await checkBudget('inbox backlog').then(() => true, () => false))) return;
+    const { gmailQueue } = await import('../workers/queues');
+    const waiting = await gmailQueue.getDelayed();
+    if (waiting.some(j => j.data?.tokenId === tokenId)) return;
+    await gmailQueue.add('parse', { userId, tokenId }, { delay: 3 * 60_000, attempts: 1, removeOnComplete: { count: 20 }, removeOnFail: { count: 20 } });
+  } catch (err) {
+    console.warn('[InboxAgent] could not queue the rest of the backlog:', err instanceof Error ? err.message : err);
+  }
+}
+
 export async function runInboxAgent(userId: string, opts: { tokenId?: string } = {}): Promise<InboxRunSummary> {
   const tokens = await db.gmailToken.findMany({ where: { userId, ...(opts.tokenId ? { id: opts.tokenId } : {}) }, orderBy: { createdAt: 'asc' } });
   const sum: InboxRunSummary = { mailboxes: tokens.length, read: 0, filed: 0, review: 0, applied: 0, skipped: 0, errors: [], jobId: null };
@@ -207,8 +225,10 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
         let capped = false;
 
         // Oldest first, so a backlog files in order and a cap leaves the newest for next run.
-        for (const messageId of ids.filter(id => !seen.has(id)).reverse()) {
-          if (documents >= budgetEnd) { capped = true; break; }
+        const todo = ids.filter(id => !seen.has(id)).reverse();
+        let left = 0;
+        for (const [n, messageId] of todo.entries()) {
+          if (documents >= budgetEnd) { capped = true; left = todo.length - n; break; }
           const msg = (await gmail.users.messages.get({ userId: 'me', id: messageId, format: 'full' })).data;
           const subject = header(msg, 'Subject'), from = header(msg, 'From');
           const rfcMessageId = header(msg, 'Message-ID').slice(0, 300) || null;
@@ -344,12 +364,17 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
           // An error says why, so the log can be acted on.
           await record(best, problems.length ? problems.join('; ') : best === 'skipped' || best === 'online' || best === 'filed' ? (skips.join('; ') || (best === 'filed' ? null : 'nothing to read')) : null, accountId);
         }
+        // Stopping at the limit is progress, not an error: it was shown as
+        // "backfilling (with errors)", and a 30-day backfill crept along at
+        // 8 documents a night. The rest is read in rounds a few minutes apart.
         await db.gmailToken.update({ where: { id: token.id }, data: {
           lastScanAt: capped ? token.lastScanAt : startedAt,
-          lastScanError: capped ? `Stopped at ${perMailbox} documents; the rest are read next run (or press Sync now).` : null,
+          lastScanError: null,
+          backlog: capped ? left : null,
           // A backfill is done once a run gets through all of it.
           ...(capped ? {} : { backfillFrom: null }),
         } });
+        if (capped) await continueLater(userId, token.id);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         sum.errors.push(`${token.email}: ${message}`);
