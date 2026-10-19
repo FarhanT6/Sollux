@@ -1156,7 +1156,7 @@ export interface GmailCoverage {
     provider: string; status: 'not_extracted' | 'partial' | 'no_email' | 'ok'; filed: number; notExtractedCount: number; notExtracted: CoverageMessage[];
     accounts: { utilityAccountId: string; propertyId: string; property: string; lastBill: string | null; lastBillSource: string | null; overdue: boolean }[];
   }[];
-  unmatched: { from: string; count: number; latest: CoverageMessage }[];
+  unmatched: { from: string; name: string; domain: string; count: number; latest: CoverageMessage }[];
 }
 export const getGmailCoverage = () => api.get<GmailCoverage>('/gmail/coverage').then(r => r.data);
 

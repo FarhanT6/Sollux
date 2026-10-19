@@ -583,10 +583,10 @@ function GmailCoveragePanel() {
       <button className="text-left w-full" onClick={() => setOpen(v => !v)}>
         <p className="text-sm font-medium text-gray-200">{open ? '▾' : '▸'} What Gmail is and isn't bringing in</p>
         <p className="text-xs text-gray-500 mt-0.5">
-          Last 45 days: <span className="text-emerald-400">{count('ok')} providers coming in from email</span>
+          Last 45 days: <span className="text-emerald-400">{count('ok')} provider{count('ok') === 1 ? '' : 's'} coming in from email</span>
           {missing ? <> · <span className="text-red-300">{missing} with bill emails not extracted</span></> : null}
           {' · '}{count('no_email')} with no bill emails seen{quietNoEmail ? ` (${quietNoEmail} also have no recent bill)` : ''}
-          {data.unmatched.length ? ` · ${data.unmatched.length} senders with no account` : ''}
+          {data.unmatched.length ? ` · ${data.unmatched.length} sender${data.unmatched.length === 1 ? '' : 's'} with no account` : ''}
         </p>
       </button>
       {open && (
@@ -632,20 +632,59 @@ function GmailCoveragePanel() {
               </div>
             );
           })}
-          {data.unmatched.length > 0 && (
-            <div className="pt-2">
-              <p className="text-xs text-gray-400 mb-1">Bill-like emails from senders that match none of your accounts:</p>
-              {data.unmatched.map(u => (
-                <div key={u.from} className="text-xs flex gap-3">
-                  <span className="text-gray-300 truncate">{u.from}</span>
-                  <span className="text-gray-500 truncate">{u.latest.subject}</span>
-                  <span className="text-gray-600 ml-auto shrink-0">{u.count} email{u.count === 1 ? '' : 's'} · {OUTCOME_WHY[u.latest.outcome] ?? u.latest.outcome}</span>
+          {data.unmatched.length > 0 && <UnmatchedSenders list={data.unmatched} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Bill-like mail from senders that match no account, sorted by what it means:
+ * statements kept on the provider's site (an account Sollux could fetch), mail
+ * waiting in review, mail that could not be read. One quiet row per sender.
+ */
+const UNMATCHED_GROUPS: { title: string; hint: string; outcomes: string[] }[] = [
+  { title: 'Statements on the provider\'s site', hint: 'Add the account in Sollux and it can fetch these.', outcomes: ['online'] },
+  { title: 'Waiting in review', hint: 'Read, but not matched to an account yet.', outcomes: ['review'] },
+  { title: 'Could not be read', hint: '', outcomes: ['error', 'failed'] },
+];
+function UnmatchedSenders({ list }: { list: GmailCoverage['unmatched'] }) {
+  const [all, setAll] = useState<Record<string, boolean>>({});
+  const SHOWN = 6;
+  return (
+    <div className="pt-3 space-y-4">
+      <div>
+        <p className="text-xs font-medium text-gray-300">Senders with no account in Sollux</p>
+        <p className="text-xs text-gray-500">Bill-like emails from the last 45 days that match none of your accounts.</p>
+      </div>
+      {UNMATCHED_GROUPS.map(g => {
+        const rows = list.filter(u => g.outcomes.includes(u.latest.outcome));
+        if (!rows.length) return null;
+        const shown = all[g.title] ? rows : rows.slice(0, SHOWN);
+        return (
+          <div key={g.title}>
+            <p className="text-xs text-gray-400">{g.title} <span className="text-gray-600">· {rows.length}</span></p>
+            {g.hint && <p className="text-xs text-gray-600 mb-1">{g.hint}</p>}
+            <div className="divide-y divide-white/5">
+              {shown.map(u => (
+                <div key={u.from} className="flex items-baseline gap-3 py-1.5 text-xs">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate"><span className="text-gray-200">{u.name}</span>{u.domain && u.name !== u.domain && <span className="text-gray-600"> · {u.domain}</span>}</p>
+                    <p className="text-gray-500 truncate">{u.latest.subject || '(no subject)'}</p>
+                  </div>
+                  <span className="text-gray-600 shrink-0 tabular-nums">{u.count > 1 ? `${u.count} emails` : '1 email'}</span>
                 </div>
               ))}
             </div>
-          )}
-        </div>
-      )}
+            {rows.length > SHOWN && (
+              <button onClick={() => setAll(a => ({ ...a, [g.title]: !a[g.title] }))} className="row-action mt-1">
+                {all[g.title] ? 'Show fewer' : `Show all ${rows.length}`}
+              </button>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

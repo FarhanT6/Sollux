@@ -10,7 +10,7 @@
  */
 import Anthropic from '@anthropic-ai/sdk';
 import { askClaude, jsonIn, needsJson } from '../ai/models';
-import { imageMediaType, trimPdfForClaude } from './pdfImportService';
+import { fileBlockForClaude } from './pdfImportService';
 import { matchProperty, type DocumentMatch } from './documentClassifyService';
 import { cleanRow } from './loanPaymentDetails';
 
@@ -163,16 +163,7 @@ function anthropic(): Anthropic {
   return client;
 }
 
-async function blockFor(file: ReadFile): Promise<Anthropic.ContentBlockParam> {
-  let buf: Buffer = Buffer.from(file.data, 'base64');
-  const image = imageMediaType(buf);
-  if (image) return { type: 'image', source: { type: 'base64', media_type: image, data: file.data } };
-  const at = buf.indexOf('%PDF-');
-  if (at < 0) throw new Error(`${file.name} is neither a PDF nor an image.`);
-  if (at > 0) buf = buf.subarray(at);
-  buf = await trimPdfForClaude(buf, file.name);
-  return { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buf.toString('base64') } } as Anthropic.DocumentBlockParam;
-}
+const blockFor = (file: ReadFile) => fileBlockForClaude(Buffer.from(file.data, 'base64'), file.name);
 
 /** The fields of one document read from all its pages, and the property it concerns. */
 export async function readDocument(kind: ReadKind, files: ReadFile[], userId: string): Promise<{ fields: Record<string, any>; match: DocumentMatch | null }> {

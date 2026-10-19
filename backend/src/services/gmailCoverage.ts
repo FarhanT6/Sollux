@@ -28,7 +28,8 @@ export type CoverageStatus = 'not_extracted' | 'partial' | 'no_email' | 'ok';
 function senderParts(from: string | null) {
   const f = from ?? '';
   const address = (f.match(/<([^>]+)>/)?.[1] ?? f).trim().toLowerCase();
-  const name = f.replace(/<[^>]*>/, '').replace(/["']/g, '').trim();
+  // '"\\"Intuit E-Commerce Service\\"" <…>' → 'Intuit E-Commerce Service'
+  const name = f.replace(/<[^>]*>/, '').replace(/[\\"']/g, '').replace(/\s+/g, ' ').trim();
   const domain = address.split('@')[1] ?? '';
   return { address, name, domain };
 }
@@ -88,7 +89,9 @@ export async function gmailCoverage(userId: string) {
   type Msg = { id: string; receivedAt: Date | null; subject: string | null; from: string | null; mailbox: string; outcome: string; detail: string | null };
   const filed = groups.map(() => 0);
   const missed: Msg[][] = groups.map(() => []);
-  const unmatched = new Map<string, { from: string; count: number; latest: Msg }>();
+  const unmatched = new Map<string, { from: string; name: string; domain: string; count: number; latest: Msg }>();
+  // The owner's own inboxes: mail from them is a forward or a note, not a provider.
+  const ownInboxes = new Set(messages.map(m => m.gmailToken.email.toLowerCase()));
   for (const m of messages) {
     const gi = groupFor(m);
     const msg: Msg = { id: m.id, receivedAt: m.receivedAt, subject: m.subject, from: m.fromAddress, mailbox: m.gmailToken.email, outcome: m.outcome, detail: m.detail };
@@ -98,9 +101,12 @@ export async function gmailCoverage(userId: string) {
       else if (notFiled) missed[gi].push(msg);
     } else if (['online', 'error', 'failed', 'review'].includes(m.outcome)) {
       // Bill-like mail from someone who matches no account: maybe an account Sollux does not have.
-      const key = senderParts(m.fromAddress).address || (m.fromAddress ?? '?');
+      // Not a provider: the owner's own address, or something forwarded by hand ("Fwd:", "FW:").
+      const { address, name, domain } = senderParts(m.fromAddress);
+      if (ownInboxes.has(address) || /^\s*(fwd?|fw)\s*:/i.test(m.subject ?? '')) continue;
+      const key = address || (m.fromAddress ?? '?');
       const u = unmatched.get(key);
-      if (u) u.count++; else unmatched.set(key, { from: m.fromAddress ?? key, count: 1, latest: msg });
+      if (u) u.count++; else unmatched.set(key, { from: m.fromAddress ?? key, name: name || address, domain, count: 1, latest: msg });
     }
   }
 
