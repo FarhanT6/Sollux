@@ -73,7 +73,7 @@ router.get('/status', attachDbUser, async (req, res, next) => {
   try {
     const tokens = await db.gmailToken.findMany({
       where: { userId: req.dbUserId! },
-      select: { id: true, email: true, label: true, createdAt: true, lastScanAt: true, lastScanError: true, backfillFrom: true },
+      select: { id: true, email: true, label: true, createdAt: true, lastScanAt: true, lastScanError: true, backfillFrom: true, backlog: true },
       orderBy: { createdAt: 'asc' },
     });
     res.json({ connected: tokens.length > 0, accounts: tokens });
