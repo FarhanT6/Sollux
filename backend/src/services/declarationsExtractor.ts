@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { askClaude, jsonIn, needsJson } from '../ai/models';
+import { fileBlockForClaude } from './pdfImportService';
 
 /**
  * Reads an insurance declarations page.
@@ -118,10 +119,7 @@ export async function extractDeclarations(
     messages: [{
       role: 'user',
       content: [
-        {
-          type: 'document',
-          source: { type: 'base64', media_type: 'application/pdf', data: pdfBuffer.toString('base64') },
-        } as Anthropic.DocumentBlockParam,
+        await fileBlockForClaude(pdfBuffer, filename),
         { type: 'text', text: PROMPT },
       ],
     }],

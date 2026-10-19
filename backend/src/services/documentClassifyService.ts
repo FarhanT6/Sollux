@@ -9,6 +9,7 @@
  */
 import Anthropic from '@anthropic-ai/sdk';
 import { askClaude, jsonIn, needsJson } from '../ai/models';
+import { fileBlockForClaude } from './pdfImportService';
 import { db } from '../config/db';
 
 function loadAnthropicKey(): string {
@@ -60,10 +61,7 @@ async function classifyWithClaude(pdfBuffer: Buffer): Promise<ClassifiedDocument
   const anthropic = getAnthropic();
 
   const content: Anthropic.MessageParam['content'] = [
-    {
-      type: 'document',
-      source: { type: 'base64', media_type: 'application/pdf', data: pdfBuffer.toString('base64') },
-    } as Anthropic.DocumentBlockParam,
+    await fileBlockForClaude(pdfBuffer, 'document'),
     { type: 'text', text: CLASSIFY_PROMPT },
   ];
 

@@ -1316,6 +1316,26 @@ export async function trimPdfForClaude(pdfBuffer: Buffer, filename: string): Pro
   }
 }
 
+/**
+ * A saved file as Claude takes it: a photo as an image, a PDF as a document
+ * (anything before "%PDF-" cut off, oversized pages trimmed). Sending every
+ * file as a PDF failed on a photographed lease or a scanned page with
+ * "The PDF specified was not valid".
+ */
+export async function fileBlockForClaude(buf: Buffer, name: string): Promise<Anthropic.ContentBlockParam> {
+  const image = imageMediaType(buf);
+  if (image) return { type: 'image', source: { type: 'base64', media_type: image, data: buf.toString('base64') } };
+  const at = buf.indexOf('%PDF-');
+  if (at < 0) {
+    const head = buf.subarray(0, 12).toString('latin1');
+    if (/ftyp(heic|heix|mif1|hevc)/.test(head)) throw new Error(`${name} is an iPhone photo (HEIC), which Claude cannot open — save it as JPEG or PDF and upload it again.`);
+    if (head.startsWith('PK')) throw new Error(`${name} is a Word or other Office file — save it as PDF and upload it again.`);
+    throw new Error(`${name} is neither a PDF nor a photo — upload it as a PDF.`);
+  }
+  const pdf = await trimPdfForClaude(at > 0 ? buf.subarray(at) : buf, name);
+  return { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdf.toString('base64') } } as Anthropic.DocumentBlockParam;
+}
+
 async function extractWithClaude(pdfBuffer: Buffer, filename: string): Promise<ExtractedBillData> {
   const anthropic = getAnthropic();
 
