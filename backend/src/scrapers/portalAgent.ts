@@ -460,9 +460,11 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   // fonts only cost memory (a 512MB worker ran out with Chrome on a heavy portal).
   let remote: Browser | null = null;
   // The PDFs the owner's Chrome downloaded in this session, collected from the API (services/connector.ts).
+  // The session on the owner's computer now in use: a new one after a reconnect.
+  let liveWs: string | null = connector?.wsUrl ?? null;
   const remoteFiles = async (): Promise<Buffer[]> => {
     if (!connector) return [];
-    const r = await fetch(filesUrlFor(connector.wsUrl)).then(x => x.json() as Promise<{ files?: { data: string }[] }>);
+    const r = await fetch(filesUrlFor(liveWs ?? connector.wsUrl)).then(x => x.json() as Promise<{ files?: { data: string }[] }>);
     return (r.files ?? []).map(f => Buffer.from(f.data, 'base64'));
   };
   // Why the owner's computer was not used although it is connected, for the status and the error.
@@ -508,6 +510,9 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
     return c;
   };
   let ctx = await prepare();
+  // Sollux's own browser closing under the run (out of memory): nothing more can be done in it.
+  let ctxClosed = false;
+  ctx.on('close', () => { ctxClosed = true; });
   // On the owner's computer: a tab of its own, closed afterwards; the window stays.
   let page = remote ? await ctx.newPage() : ctx.pages()[0] ?? await ctx.newPage();
   // Every tab this run opened or the site opened for it, oldest first.
@@ -581,6 +586,37 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   // that fails — not the site turning the browser away. Nationwide's run signed
   // in, reached the accounts page and was then reported as "bot protection".
   let signedIn = false;
+  let reconnected = false;
+  /**
+   * The browser itself went away mid-run — the owner's computer slept, the
+   * connector stopped, or its Chrome window was closed. Every later step
+   * failed with "Target page, context or browser has been closed" and the run
+   * spent its steps on a dead browser. Reconnect once while the computer is
+   * still online (starting again at the sign-in page); otherwise say why and stop.
+   * Returns true when back, a message to stop with, or null when the browser is fine.
+   */
+  const reopen = async (retry = true): Promise<true | string | null> => {
+    if (remote) {
+      if ((remote as Browser).isConnected()) return null;
+      const gone = `The Chrome on ${connector!.name} stopped answering partway through — the computer went to sleep, the connector stopped, or that Chrome window was closed. Nothing was changed; press Fetch now again once it is back.`;
+      const again = retry && !reconnected && !cancelled ? await connectorFor(userId) : null;
+      if (!again) return gone;
+      reconnected = true;
+      try {
+        say(`${connector!.name}'s Chrome dropped — reconnecting`);
+        remote = await chromium.connectOverCDP(again.wsUrl, { timeout: 30_000 });
+        liveWs = again.wsUrl;
+        ctx = (remote as Browser).contexts()[0] ?? await (remote as Browser).newContext({ acceptDownloads: true, viewport: { width: 1366, height: 900 }, locale: 'en-US' });
+        ctx.on('page', onNewTab);
+        page = await ctx.newPage();
+        runPages.push(page); tabsAtAction = runPages.length;
+        await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+        lastPage = await describe(page, secrets);
+        return true;
+      } catch { return gone; }
+    }
+    return ctxClosed ? "Sollux's browser closed unexpectedly partway through (it may have run out of memory). Nothing was changed; press Fetch now to try again." : null;
+  };
   const after = async (what: string) => {
     // The next step opened in a new tab (a link, or a sign-in button): work there.
     await page.waitForTimeout(500);
@@ -894,6 +930,7 @@ Always end with the finish tool, never with a message. If the page seems gone or
                 const again = await connectorFor(userId);
                 if (again && !cancelled) {
                   remote = await chromium.connectOverCDP(again.wsUrl, { timeout: 30_000 }).catch(() => null);
+                  if (remote) liveWs = again.wsUrl;
                   const back = remote?.contexts()[0];
                   const tab = back?.pages().filter(p => { try { return new URL(p.url()).hostname === host; } catch { return false; } }).pop();
                   if (back && tab) {
@@ -947,7 +984,13 @@ Always end with the finish tool, never with a message. If the page seems gone or
           if (rec) steps.push(rec);
           if (recAfter) steps.push(recAfter);
         } catch (err) {
-          content = `Failed: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`;
+          const why = err instanceof Error ? err.message.split('\n')[0] : String(err);
+          content = `Failed: ${why}`;
+          if (!cancelled && /has been closed|Target closed|browser has disconnected|Connection closed/i.test(why)) {
+            const back = await reopen();
+            if (back === true) content = `The browser closed partway through and was opened again on the sign-in page. Start over from here — the earlier steps did not finish.\n\n${lastPage}`;
+            else if (back) { run.error = back; finished = true; }
+          }
         }
         // A site the portal itself sent the browser to (its sign-in or billing
         // domain) becomes one the agent may open again.
@@ -974,6 +1017,9 @@ Always end with the finish tool, never with a message. If the page seems gone or
   } catch (err) {
     run.error = cancelled ? 'Cancelled by you.' : err instanceof Error ? err.message.split('\n')[0] : String(err);
     if ((err as { turnedAway?: boolean })?.turnedAway) run.error = `turned_away ${run.error}`;
+    else if (!cancelled && /has been closed|Target closed|browser has disconnected|Connection closed/i.test(run.error ?? '')) {
+      run.error = (await reopen(false).then(b => (typeof b === 'string' ? b : null), () => null)) ?? run.error;
+    }
   } finally {
     if (watch) clearInterval(watch);
     if (cancelled) { run.ok = false; run.error = 'Cancelled by you.'; }
