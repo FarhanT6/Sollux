@@ -140,6 +140,7 @@ html[data-theme="light"] {
 .ios-badge.gray { background: var(--ios-fill); color: var(--ios-label-2); }
 .ios-red { color: var(--ios-red); }
 .ios-green { color: var(--ios-green); }
+.ios-blue-text { color: var(--ios-blue); }
 .ios-tint { color: var(--ios-tint); }
 .ios-muted { color: var(--ios-label-2); }
 
