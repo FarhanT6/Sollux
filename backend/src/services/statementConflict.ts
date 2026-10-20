@@ -113,6 +113,13 @@ export async function keepOwnerFigures(existing: Statement, ex: ExtractedBillDat
       billingPeriodEnd: existing.billingPeriodEnd ?? (ex.billingPeriodEnd ? new Date(ex.billingPeriodEnd) : null),
       usageValue: existing.usageValue ?? ex.usageValue ?? null,
       usageUnit: existing.usageUnit ?? ex.usageUnit ?? null,
+      // The owner's charge stands, but what the bill carried in is the bill's
+      // to say: a row kept this way never got its past due (Rincon Water's
+      // Sep bill, 237.82 + 518.67 past due = 756.49, showed 237.82 alone).
+      // Filled only where the row has none.
+      ...(existing.pastDueCarried == null && ex.previousBalance != null && Math.abs(ex.previousBalance) > 0.005 ? { pastDueCarried: ex.previousBalance } : {}),
+      ...(existing.paymentPlanAmount == null && ex.paymentPlanAmount != null && ex.paymentPlanAmount > 0 && !differs ? { paymentPlanAmount: ex.paymentPlanAmount } : {}),
+      ...(existing.penaltyDate == null && ex.penaltyDate ? { penaltyDate: new Date(ex.penaltyDate) } : {}),
       ...(pdfS3Key && !existing.pdfS3Key ? { pdfS3Key } : {}),
       rawDataJson: {
         ...rawData,
