@@ -70,6 +70,26 @@ export function unlinkedPaidSince(s: any, payments: any[] = []): number {
     .reduce((t, p) => t + Number(p.amount ?? 0), 0);
 }
 
+/**
+ * What has been paid since a bill was printed that counts against it, split
+ * the way the provider applies it. Money paid toward an OLDER bill can only
+ * pay this bill's carried-in arrears — never its own charge: Capital Premium
+ * Financing's Sep 15 payment, made toward the September bill, read as paying
+ * October's whole $645.77 ("Owed now: $0.00") although October carried
+ * nothing in. Money filed against no bill pays the arrears first, then this
+ * bill's own charge.
+ */
+export function paidSinceSplit(s: any, payments: any[] = [], statements: any[] = []): { towardArrears: number; towardCharge: number; total: number } {
+  const carried = s?.pastDueCarried != null ? Math.max(0, Number(s.pastDueCarried)) : 0;
+  const older = arrearsPaidSince(s, payments, statements);
+  const unlinked = unlinkedPaidSince(s, payments);
+  const fromOlder = Math.min(carried, older);
+  const fromUnlinked = Math.min(carried - fromOlder, unlinked);
+  const towardArrears = Number((fromOlder + fromUnlinked).toFixed(2));
+  const towardCharge = Number(Math.max(0, unlinked - fromUnlinked).toFixed(2));
+  return { towardArrears, towardCharge, total: Number((towardArrears + towardCharge).toFixed(2)) };
+}
+
 /** What a bill carried in that is still owed: the carried arrears less what has been paid toward older bills since. */
 export function liveCarriedOf(s: any, payments: any[] = [], statements: any[] = []): number {
   const carried = s?.pastDueCarried != null ? Number(s.pastDueCarried) : 0;
