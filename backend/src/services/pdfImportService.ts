@@ -3071,7 +3071,11 @@ export function applyPremiumFinanceFromText(ex: ExtractedBillData, text: string)
   // The agreement and its acceptance notice bill nothing: the payments are
   // the schedule. A monthly billing statement from the lender ("Amount Due",
   // "Please pay") is a bill and is left as one.
-  const billsSomething = /\b(?:total\s+)?amount\s+(?:now\s+)?due\b[^$\n]{0,12}\$\s*[\d,]+\.\d{2}|\bplease\s+pay\b|\bpay\s+this\s+amount\b|\bminimum\s+(?:amount\s+)?due\b[^$\n]{0,12}\$/i.test(text);
+  // A saved portal page prints its label and its figure in separate table
+  // cells, often on separate lines ("Current Amount Due:" / "$645.77"), and
+  // the lender's tabs ("Payment Schedule & History") on every page: a page
+  // that states an amount or a fee due is a bill, whatever tabs it shows.
+  const billsSomething = /\b(?:total\s+|current\s+)?amount\s+(?:now\s+)?due\b\s*:?\s*\$?\s*[\d,]+\.\d{2}|\b(?:total\s+)?amount\s+(?:now\s+)?due\b[^$\n]{0,12}\$\s*[\d,]+\.\d{2}|\blate\s+fees?\s+due\b\s*:?\s*\$?\s*[1-9][\d,]*\.\d{2}|\bplease\s+pay\b|\bpay\s+this\s+amount\b|\bminimum\s+(?:amount\s+)?due\b[^$\n]{0,12}\$/i.test(text);
   const describesLoan = /notice\s*of\s*acceptance|premium\s*finance\s*agreement|loan\s*summary|welcome|payment\s*(?:schedule\s*&?\s*)?history/i.test(text);
   shapePremiumFinance(ex, describesLoan && !billsSomething);
 }
