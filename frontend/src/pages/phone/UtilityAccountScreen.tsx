@@ -289,7 +289,11 @@ function BillDetail({ s, v, status, close }: { s: any; v: UtilityAccountView; st
       <Section>
         {s.billingPeriodStart && s.billingPeriodEnd && <Row title="Service period" chevron={false} value={`${fmtDate(s.billingPeriodStart, 'MMM d')} – ${fmtDate(s.billingPeriodEnd, 'MMM d')}`} />}
         {s.statementDate && <Row title="Billed" chevron={false} value={fmtDate(s.statementDate, 'MMM d, yyyy')} />}
-        <Row title="This bill's charge" chevron={false} value={fmtMoney(charge)} />
+        {/* A payment-agreement installment billed inside this bill: shown on its own, as the bill prints it. */}
+        {Number(s.paymentPlanAmount ?? 0) > 0 ? <>
+          <Row title="Current charges" chevron={false} value={fmtMoney(charge - Number(s.paymentPlanAmount))} />
+          <Row title="Payment agreement" chevron={false} value={<span className={paid ? '' : 'ios-blue-text'}>{fmtMoney(s.paymentPlanAmount)}</span>} />
+        </> : <Row title="This bill's charge" chevron={false} value={fmtMoney(charge)} />}
         {pastDue != null && Math.abs(pastDue) > 0.005 && (
           <Row title={pastDue > 0 ? 'Past due carried in' : 'Credit carried in'} chevron={false}
             value={<span className={pastDue > 0 ? (paid ? '' : 'ios-red') : 'ios-green'}>{pastDue > 0 ? fmtMoney(pastDue) : `−${fmtMoney(-pastDue)}`}</span>} />

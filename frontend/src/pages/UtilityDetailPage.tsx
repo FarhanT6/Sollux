@@ -1705,6 +1705,12 @@ export default function UtilityDetailPage() {
                         {pastDue != null && pastDue < 0 && (
                           <p className="text-xs text-emerald-500 mt-0.5">✓ Credit applied: −{fmtMoney(-pastDue)}</p>
                         )}
+                        {/* An arrangement's installment billed inside this bill
+                            (SDG&E "Agreement amount"): part of the total, shown
+                            on its own the way the bill prints it. */}
+                        {Number(s.paymentPlanAmount ?? 0) > 0 && (
+                          <p className={`text-xs mt-0.5 ${isPaid ? 'text-gray-500' : 'text-sky-400'}`}>Payment agreement: {fmtMoney(Number(s.paymentPlanAmount))}</p>
+                        )}
                         {s.penaltyDate && !isPaid && (
                           <p className={`text-xs mt-0.5 ${new Date(s.penaltyDate) >= new Date() ? 'text-amber-400' : 'text-red-400'}`}>
                             {new Date(s.penaltyDate) >= new Date()
@@ -1805,6 +1811,10 @@ export default function UtilityDetailPage() {
                           const isFullyPaid = isPaid || (totalDue === 0 && Number(s.amountDue ?? 0) > 0);
                           const amt = Number(s.amountDue ?? 0);
                           const primary = totalDue ?? amt;
+                          // "Bill" is this period's own charges: an agreement
+                          // installment inside the charge is on its own line.
+                          const plan = Number(s.paymentPlanAmount ?? 0);
+                          const ownCharge = plan > 0 && amt > plan ? Number((amt - plan).toFixed(2)) : amt;
                           // The subline explains a total that differs from the
                           // charge: arrears rolled in, or a credit taken off.
                           const showBillSubline = Math.abs(primary - amt) > 0.01 && amt > 0;
@@ -1824,8 +1834,8 @@ export default function UtilityDetailPage() {
                           return (
                             <>
                               <p className="text-base font-semibold text-white">{fmtMoney(primary)}</p>
-                              {showBillSubline && (
-                                <p className="text-xs text-gray-500">Bill: {fmtMoney(amt)}</p>
+                              {(showBillSubline || ownCharge !== amt) && (
+                                <p className="text-xs text-gray-500">Bill: {fmtMoney(ownCharge)}</p>
                               )}
                               {/* The statement's total stands above; what is
                                   left of it after payments toward its arrears. */}

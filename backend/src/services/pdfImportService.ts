@@ -290,7 +290,7 @@ Schema (use null for any field not present in the document):
   "statedTotalDue": number or null — the ONE figure the bill asks to be paid now: its "Total Amount Due" / "Amount Due" box. Negative when the account is in credit ("No payment is due. Your account has a credit balance of $0.82" → -0.82). This is the grand total AFTER previous balance, payments, credits and any payment-arrangement deferral; report it exactly as printed,
   "totalAccountBalance": number or null — "Total Account Balance" when printed: everything owed including a balance a payment arrangement has deferred,
   "paymentPlan": object or null — when the bill prints a payment-arrangement box (SDG&E "Pay Agreement Plan": Original Pay Agreement, Down Payment, Installments Billed to Date, Remaining PA Balance, Agreement began, Agreement number, Total Installments, Remaining Installments, Installment amount), report {"original": n, "remaining": n, "installment": n, "installmentsTotal": n, "installmentsRemaining": n, "began": "YYYY-MM-DD", "agreementNumber": "string"}. On such a bill the account summary reads "Previous Balance / Payment Received / Remaining Pay Agreement Balance (subtracted) / Current Charges / Total Amount Due": the Remaining Pay Agreement Balance is NOT past due — it is deferred — so do NOT put it in previousBalance. Report currentCharges as the "Current Charges" line, paymentPlanAmount as the installment amount, statedTotalDue as the Total Amount Due, and leave previousBalance to be derived,
-  "paymentPlanAmount": number or null — an installment on an arrears or payment-plan arrangement charged within this bill, when the bill itemises one (a line reading "Payment Plan", "Installment", "Arrears Payment" or similar). This is repayment of an older debt carried inside a current bill, not this period's service, so report it separately as well as leaving it in the total,
+  "paymentPlanAmount": number or null — an installment on an arrears or payment-plan arrangement charged within this bill, when the bill itemises one (a line reading "Payment Plan", "Installment", "Arrears Payment", "Agreement Amount" or similar). SDG&E's newer layout prints it as "Payment agreement amount of $88.04 due Oct 19" and in the stub as "AGREEMENT AMOUNT 88.04 / CURRENT CHARGES 360.90 / TOTAL AMOUNT DUE 817.17": paymentPlanAmount is 88.04, currentCharges 360.90, statedTotalDue 817.17 (it includes any past-due balance too), and "Remaining account balance covered by the payment agreement $1,760.99" is paymentPlan.remaining. This is repayment of an older debt carried inside a current bill, not this period's service, so report it separately as well as leaving it in the total,
   "penaltyDate": "YYYY-MM-DD" or null — the date a penalty or late fee applies if the bill is unpaid, when the bill states one ("Penalty Date", "Late after", "Penalty applies after"). This is often a day or two later than the due date; report what the bill says, not the due date,
   "amountAfterDueDate": number or null — what the bill says is payable if paid after the due date ("Amount due after 09/15/2026", "After Due Date Pay"). The difference between this and the amount due is the late fee this provider will charge,
   "agingBuckets": object or null — when the bill prints an aging table (commonly "Past Due | 30 Days | 60 Days | 90+ Days"), report it as {"current": n, "days30": n, "days60": n, "days90plus": n}, omitting any bucket the bill does not show. Report each bucket's own figure, not a running total,
@@ -2054,6 +2054,31 @@ export function reconcileWithStatedTotal(ex: ExtractedBillData): void {
       ex.previousBalance = Number((total - ex.amountDue).toFixed(2));
     }
     return;
+  }
+
+  // An arrangement's installment billed inside this bill, with no plan box to
+  // say so: SDG&E's newer summary prints AGREEMENT AMOUNT 88.04 + CURRENT
+  // CHARGES 360.90 (+ the past-due balance 368.23) = TOTAL AMOUNT DUE 817.17.
+  // The installment is part of what this bill charges — the plan branch above
+  // does the same — so a reading of the current charges alone (360.90) left
+  // the row at 729.13, short by the installment.
+  if (installment != null && installment > 0 && ex.amountDue != null) {
+    const charge = ex.currentCharges ?? ex.amountDue;
+    const carried = ex.previousBalance ?? 0;
+    if (Math.abs(charge + installment + carried - deferred - total) < 0.01 && Math.abs(ex.amountDue - (charge + installment)) > 0.01) {
+      ex.currentCharges = Number(charge.toFixed(2));
+      ex.amountDue = Number((charge + installment).toFixed(2));
+      ex.paymentPlanAmount = installment;
+      return;
+    }
+    // Carried balance not read: what the total does not explain beyond charge + installment.
+    if (ex.previousBalance == null && Math.abs(ex.amountDue - charge) < 0.01 && total - (charge + installment - deferred) > 0.01) {
+      ex.currentCharges = Number(charge.toFixed(2));
+      ex.amountDue = Number((charge + installment).toFixed(2));
+      ex.paymentPlanAmount = installment;
+      ex.previousBalance = Number((total - (ex.amountDue - deferred)).toFixed(2));
+      return;
+    }
   }
 
   // No arrangement: the carried balance is what the total does not explain.
