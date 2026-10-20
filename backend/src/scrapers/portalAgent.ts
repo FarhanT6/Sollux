@@ -86,11 +86,36 @@ const TOOLS: Anthropic.Tool[] = [
   { name: 'press', description: 'Press a key (Enter, Tab, Escape).', input_schema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] } },
   { name: 'goto', description: "Open a URL on the provider's own site.", input_schema: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } },
   { name: 'download_statement', description: 'Click element [n] that downloads or opens one statement PDF, and keep it. Give the statement date if shown.', input_schema: { type: 'object', properties: { ref: { type: 'number' }, statementDate: { type: 'string' } }, required: ['ref'] } },
+  { name: 'save_page_as_statement', description: "The portal has no statement PDFs, but the page now open shows the bill itself: the amount due and due date, or a payment schedule / payment history with the latest installment (premium financing, some lenders and insurers). Saves this page as a PDF and files it like a statement. Use it once per account, on the page with the most complete current figures, and only when there is no statement document to download. statementDate: the date of the bill it shows (the current installment's due date), YYYY-MM-DD.", input_schema: { type: 'object', properties: { statementDate: { type: 'string' } }, required: ['statementDate'] } },
   { name: 'ask_owner_for_code', description: "The portal sent a verification code. Reads it from the owner's email (up to 2 minutes), else asks the owner (up to 5 more). Say where it was sent.", input_schema: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] } },
   { name: 'open_emailed_link', description: 'The portal emailed a link that signs you in, instead of a code ("magic link", "Access your account", "check your email to log in"). Finds that link in the owner\'s email (up to 2 minutes) and opens it in this browser; returns the page afterwards.', input_schema: { type: 'object', properties: {} } },
   { name: 'type_code', description: 'Type the verification code into field [ref] (a code split into one-digit boxes: give the first box), tick [rememberRef] ("remember this device") if given, then click [submitRef].', input_schema: { type: 'object', properties: { ref: { type: 'number' }, rememberRef: { type: 'number' }, submitRef: { type: 'number' } }, required: ['ref'] } },
   { name: 'finish', description: 'Stop. outcome: done (downloaded what was new, or nothing new), bad_login (the portal said the username or password is wrong), captcha, no_code, turned_away (the site refused the browser itself: Access Denied, "invalid request", "unable to process your request" after a sign-in, a bot check), blocked (anything else in the way).', input_schema: { type: 'object', properties: { outcome: { type: 'string', enum: ['done', 'bad_login', 'captcha', 'no_code', 'turned_away', 'blocked'] }, summary: { type: 'string' }, accounts: { type: 'array', description: 'When several accounts were listed: what you found for each one.', items: { type: 'object', properties: { account: { type: 'string', description: 'last 4 of the account number' }, result: { type: 'string', enum: ['downloaded', 'nothing_new', 'not_listed', 'not_checked'] } }, required: ['account', 'result'] } } }, required: ['outcome', 'summary'] } },
 ];
+
+/**
+ * The page now open as a PDF, for a portal with no statement documents (a
+ * premium-finance account's payment schedule). Printed as it looks on screen;
+ * where Chrome will not print (a visible window on the owner's computer), a
+ * full-page screenshot laid onto letter pages.
+ */
+export async function pageAsPdf(page: Page): Promise<Buffer | null> {
+  try {
+    await page.emulateMedia({ media: 'screen' }).catch(() => {});
+    const pdf = await page.pdf({ printBackground: true, format: 'Letter', margin: { top: '0.3in', bottom: '0.3in', left: '0.3in', right: '0.3in' } });
+    if (pdf.length > 1000) return Buffer.from(pdf);
+  } catch { /* not printable here: screenshot below */ }
+  try {
+    const png = await page.screenshot({ fullPage: true });
+    const { PDFDocument } = await import('pdf-lib');
+    const doc = await PDFDocument.create();
+    const img = await doc.embedPng(png);
+    const W = 612, H = 792; // US letter, in points
+    const h = img.height * (W / img.width);
+    for (let y = 0; y < h; y += H) doc.addPage([W, H]).drawImage(img, { x: 0, y: H - h + y, width: W, height: h });
+    return Buffer.from(await doc.save());
+  } catch { return null; }
+}
 
 /** The tools for an account found by its biller's lookup page: no way to sign in. */
 const LOOKUP_TOOLS = TOOLS.filter(t => !['fill_login', 'ask_owner_for_code', 'open_emailed_link', 'type_code'].includes(t.name));
@@ -645,6 +670,7 @@ ${others.map(o => `- ${o.accountNumber ? `account ending ${String(o.accountNumbe
 At most ${maxDownloads} downloads in all. An account the portal does not list is not an error: say so and carry on. Finish with outcome done when every listed account is checked, and fill in accounts with each one's result (downloaded, nothing_new, not_listed, or not_checked if you did not get to it) — an account is only nothing_new if you opened its own statement history.` : lookup ? `Goal: this account's bills are found on the biller's lookup page you start on, by account number and the name on the bill — never by signing in. Do not open a sign-in or register page, even if one is offered. Sollux fills in the lookup fields and presses Search for you where it can; otherwise fill them with fill_account_number (part 'name' for a name field), then open the invoices / bill history and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If the lookup says the account was not found, finish with blocked and quote what it said. If there is nothing newer, finish with outcome done.` : `Goal: log in, open the billing / statement history, and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If there is nothing newer, finish with outcome done.`}
 Rules: use fill_login for credentials (you never see them). If the portal offers where to send a verification code, choose email over text or a phone call. If it emails a sign-in link instead of a code, call open_emailed_link (the owner is never asked for it); if none arrives, finish with no_code. When a code has been sent, call ask_owner_for_code (it reads the code from the owner's email, or asks the owner), then type_code. Pass any "Remember this device", "Trust this browser", "Keep me signed in" or "Don't ask again" checkbox as rememberRef so the next visit is not asked again. Never pay, enroll, change settings, accept offers or send messages. If a "Verify you are human" / "I'm not a robot" checkbox is on the page, call tick_captcha before submitting. If the page you start on asks for an account number (a bill lookup), use fill_account_number there rather than going to the sign-in. If the sign-in stays blocked by such a check, look for a way in without signing in — "Pay as guest", "Quick pay", "View bill", "Find my account" — and use fill_account_number (with the property's ZIP code if asked); statements found that way count the same. If a captcha still blocks you (a picture puzzle, or the check keeps failing), finish with captcha (on the owner's own computer they may solve it, and you are then shown the page to carry on). If the login is rejected, finish with bad_login. If a code you entered is rejected, ask_owner_for_code once more for a fresh one; after a second rejection finish with no_code — never start the login over.
 Once you are signed in (you see the account, a greeting, a Log out button), an error after that — a bill viewer that fails, "unable to process your request" on one page — is not the site refusing the browser: go back and try another way to the statements ("View bill", "Billing history", "Documents", "View policy documents", "Statements"), and finish with blocked, saying which page failed, only when none works. Before signing in: if the site refuses the browser itself (Access Denied, "invalid request", "unable to process your request" right after submitting the sign-in, a bot check), finish with turned_away at once: never submit the login a second time — each retry makes the site more suspicious and can lock the owner's account.
+If the portal has no statement documents at all (premium financing, some lenders), open the page with the current amount due and the payment schedule / history and use save_page_as_statement there, once per account.
 Always end with the finish tool, never with a message. If the page seems gone or closed, call look: the browser follows the site to its newest tab. Each action returns the page as it is afterwards: do not call look after it. Fill and submit in one step (submitRef). A typical visit is: look, fill_login (with submit), code if asked, open billing/statements, download, finish — aim for about 10 steps. When several accounts are listed, choose the one matching the account number, else the address. The account number is what identifies the account: the address a portal shows is often the owner's mailing address, not the property's, so an account whose number matches is the right one whatever address it shows.`;
   // Every step that changed the page, in order: replayed ones and Claude's.
   // The ones before the first download become the recipe for next time.
@@ -714,7 +740,7 @@ Always end with the finish tool, never with a message. If the page seems gone or
         let content: Anthropic.ToolResultBlockParam['content'] = 'ok';
         let rec: RecipeStep | null = null;
         let recAfter: RecipeStep | null = null; // the submit click that fill_login made
-        if (u.name === 'download_statement' || u.name === 'finish') navDone = true;
+        if (u.name === 'download_statement' || u.name === 'save_page_as_statement' || u.name === 'finish') navDone = true;
         const n = `Step ${step + 1}`;
         if (u.name === 'look') say(`${n}: reading the page${await page.title().then(t => (t ? ` "${t.slice(0, 60)}"` : '')).catch(() => '')}`);
         else if (u.name === 'click') {
@@ -725,6 +751,7 @@ Always end with the finish tool, never with a message. If the page seems gone or
         }
         else if (u.name === 'fill_login') say(`${n}: signing in`);
         else if (u.name === 'fill_account_number') say(`${n}: looking up the bill by account number`);
+        else if (u.name === 'save_page_as_statement') say(`${n}: saving this page as the statement (${String(i.statementDate ?? '').slice(0, 20)})`);
         else if (u.name === 'download_statement') say(`${n}: downloading a statement${i.statementDate ? ` (${String(i.statementDate).slice(0, 20)})` : ''}`);
         else if (u.name === 'goto') say(`${n}: opening ${String(i.url).replace(/^https?:\/\//, '').slice(0, 60)}`);
         else if (u.name === 'type_code') say(`${n}: entering the verification code`);
@@ -806,6 +833,7 @@ Always end with the finish tool, never with a message. If the page seems gone or
               content = await after('Opened.');
               break;
             }
+            case 'save_page_as_statement':
             case 'download_statement': {
               if (run.downloads >= maxDownloads) { content = `Limit of ${maxDownloads} reached — finish.`; break; }
               const got = [...pdfsSeen.values()].join(', ') || 'none yet';
@@ -815,7 +843,8 @@ Always end with the finish tool, never with a message. If the page seems gone or
                 content = `The ${i.statementDate} statement is already on file — not downloaded. Downloaded this run: ${got}. Move to an older or newer one, or finish.`;
                 break;
               }
-              const pdf = await capturePdf(ctx, page, () => el(i.ref).click({ timeout: 10000 }), (remote as Browser | null) ? remoteFiles : undefined);
+              const pdf = u.name === 'save_page_as_statement' ? await pageAsPdf(page)
+                : await capturePdf(ctx, page, () => el(i.ref).click({ timeout: 10000 }), (remote as Browser | null) ? remoteFiles : undefined);
               if (!pdf) { content = 'No PDF came back from that click. Try the link that opens or downloads the statement itself.'; break; }
               // The same file again (Blue Shield's past bills gave one PDF over
               // and over; the run read it ten times and ran out of steps):
