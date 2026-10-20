@@ -16,6 +16,7 @@
  * (documentIntake): filed on a confident match, staged for review otherwise.
  */
 import Anthropic from '@anthropic-ai/sdk';
+import * as crypto from 'crypto';
 import { websiteFor, findProvider, isLookupPage } from '../lib/providerDirectory';
 import * as fs from 'fs';
 import { BrowserContext, Page, Download, Frame, Locator } from 'playwright';
@@ -586,6 +587,9 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   // that fails — not the site turning the browser away. Nationwide's run signed
   // in, reached the accounts page and was then reported as "bot protection".
   let signedIn = false;
+  // The PDFs downloaded this run, by content, with the date each was taken for.
+  const pdfsSeen = new Map<string, string>();
+  let repeats = 0;
   let reconnected = false;
   /**
    * The browser itself went away mid-run — the owner's computer slept, the
@@ -804,8 +808,35 @@ Always end with the finish tool, never with a message. If the page seems gone or
             }
             case 'download_statement': {
               if (run.downloads >= maxDownloads) { content = `Limit of ${maxDownloads} reached — finish.`; break; }
+              const got = [...pdfsSeen.values()].join(', ') || 'none yet';
+              // Already on file for that date: nothing to click for.
+              const day = /^\d{4}-\d{2}-\d{2}$/.test(String(i.statementDate ?? '')) ? new Date(`${i.statementDate}T12:00:00Z`) : null;
+              if (day && await db.statement.findFirst({ where: { utilityAccountId: { in: [account.id, ...others.map(o => o.id)] }, pdfS3Key: { not: null }, statementDate: { gte: new Date(day.getTime() - 36e5 * 36), lte: new Date(day.getTime() + 36e5 * 36) } }, select: { id: true } })) {
+                content = `The ${i.statementDate} statement is already on file — not downloaded. Downloaded this run: ${got}. Move to an older or newer one, or finish.`;
+                break;
+              }
               const pdf = await capturePdf(ctx, page, () => el(i.ref).click({ timeout: 10000 }), (remote as Browser | null) ? remoteFiles : undefined);
               if (!pdf) { content = 'No PDF came back from that click. Try the link that opens or downloads the statement itself.'; break; }
+              // The same file again (Blue Shield's past bills gave one PDF over
+              // and over; the run read it ten times and ran out of steps):
+              // not read again, and the agent is told so.
+              const hash = crypto.createHash('sha256').update(pdf).digest('hex');
+              if (pdfsSeen.has(hash)) {
+                repeats++;
+                if (repeats >= 3) {
+                  // The third time: stop here, keeping what came in.
+                  finished = true;
+                  run.summary = run.downloads
+                    ? `Downloaded ${run.downloads} statement${run.downloads === 1 ? '' : 's'} (${got}); the site kept giving the same PDF after that, so the fetch stopped there.`
+                    : '';
+                  if (!run.downloads) run.error = 'The site gave the same PDF every time — the agent could not reach the statements themselves.';
+                  content = 'Stopped: the same PDF three times.';
+                  break;
+                }
+                content = `That is the same PDF as one already downloaded this run (${pdfsSeen.get(hash)}) — not saved again. Downloaded this run: ${got}. This link does not give a different statement: try a different row, or finish.`;
+                break;
+              }
+              pdfsSeen.set(hash, String(i.statementDate ?? `statement ${pdfsSeen.size + 1}`));
               run.downloads++;
               const name = `${account.providerName.replace(/[^\w]+/g, '_')}_${String(i.statementDate ?? run.downloads).replace(/[^\w-]+/g, '_')}.pdf`;
               const r = await intakeBill(pdf, name, userId, 'ai', batchId, 'portal');
@@ -813,7 +844,7 @@ Always end with the finish tool, never with a message. If the page seems gone or
               else if (r.outcome === 'review') { run.review++; review.push(r.reviewItem); }
               else if (r.outcome === 'error') content = `Saved, but: ${r.error}`;
               else run.applied++;
-              if (content === 'ok') content = `Statement saved (${r.outcome}).`;
+              if (content === 'ok') content = `Statement saved (${r.outcome}). Downloaded this run: ${[...pdfsSeen.values()].join(', ')}.`;
               break;
             }
             case 'ask_owner_for_code': {
@@ -1003,7 +1034,10 @@ Always end with the finish tool, never with a message. If the page seems gone or
       // throw away the cache for everything after it and cost more than it saves.
     }
     if (cancelled) run.error = 'Cancelled by you.';
-    if (!run.summary && !run.error) {
+    if (!run.summary && !run.error && run.downloads > 0) {
+      // Statements came in before the steps ran out: that is a fetch, not a failure.
+      run.summary = `Downloaded ${run.downloads} statement${run.downloads === 1 ? '' : 's'} (${[...pdfsSeen.values()].join(', ')}); stopped at the step limit before checking for more — press Fetch now to look again.`;
+    } else if (!run.summary && !run.error) {
       // Where it got stuck, so the next look starts from there.
       const at = await page.title().catch(() => '');
       run.error = `The agent ran out of steps before finishing (last on ${at ? `"${at.slice(0, 80)}" — ` : ''}${page.url().slice(0, 120)}).`;
