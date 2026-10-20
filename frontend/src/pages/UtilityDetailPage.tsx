@@ -2,7 +2,7 @@ import UrgentNotices from '../components/UrgentNotices';
 import { useEffect, useState, useMemo } from 'react';
 import PortalCodeBanner from '../components/utility/PortalCodeBanner';
 import PaymentBreakdownLine from '../components/utility/PaymentBreakdownLine';
-import { openBalanceOf, isStatementPaid, computeResolvedByFutureCheckpoint, computePaidMap, isEffectivelyPaid, isPriorStatementPaid, statementStatus, coveredByCredit, liveCarriedOf, newestIssued, arrearsPaidSince, unlinkedPaidSince } from '../lib/paidState';
+import { openBalanceOf, isStatementPaid, computeResolvedByFutureCheckpoint, computePaidMap, isEffectivelyPaid, isPriorStatementPaid, statementStatus, coveredByCredit, liveCarriedOf, newestIssued, arrearsPaidSince, unlinkedPaidSince, paidSinceSplit } from '../lib/paidState';
 import { bankAccountLabel } from '../lib/bankAccountLabel';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
@@ -1647,8 +1647,9 @@ export default function UtilityDetailPage() {
                   // statement's figures; this says how they stand today.
                   // Toward the older bills in its arrears, plus unfiled money
                   // on the account, which pays the running balance oldest first.
-                  const paidSince = Number((arrearsPaidSince(s, payments, statements) + unlinkedPaidSince(s, payments)).toFixed(2));
-                  const arrearsPaid = pastDue != null && pastDue > 0 ? Math.min(pastDue, paidSince) : 0;
+                  const split = paidSinceSplit(s, payments, statements);
+                  const paidSince = split.total;
+                  const arrearsPaid = pastDue != null && pastDue > 0 ? split.towardArrears : 0;
                   const liveCarried = pastDue != null && pastDue > 0 ? Number((pastDue - arrearsPaid).toFixed(2)) : liveCarriedOf(s, payments, statements);
                   const owedNow = totalDue != null && paidSince > 0.005 ? Math.max(0, Number((totalDue - Math.min(totalDue, paidSince)).toFixed(2))) : null;
                   return (
