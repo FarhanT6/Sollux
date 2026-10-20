@@ -27,6 +27,7 @@ const HOME = path.join(os.homedir(), '.sollux');
 const CONFIG = path.join(HOME, 'connector.json');
 const PROFILE = path.join(HOME, 'chrome-profile');
 const DOWNLOADS = path.join(HOME, 'downloads');
+const LOG = path.join(HOME, 'connector.log');
 
 if (typeof WebSocket === 'undefined') {
   console.error('The Sollux connector needs Node.js 22 or newer — this is ' + process.version + '. Install it from https://nodejs.org and run this again.');
@@ -47,6 +48,18 @@ if (!api || !token) {
   process.exit(1);
 }
 fs.writeFileSync(CONFIG, JSON.stringify({ api, token }, null, 2), { mode: 0o600 });
+
+/** A line in ~/.sollux/connector.log (kept short), so a dropped fetch has a reason on record. */
+function note(line) {
+  const at = new Date().toISOString();
+  try {
+    if (fs.existsSync(LOG) && fs.statSync(LOG).size > 512 * 1024) fs.renameSync(LOG, `${LOG}.1`);
+    fs.appendFileSync(LOG, `${at} ${line}\n`);
+  } catch { /* logging must never stop the connector */ }
+}
+// One bad message must not take the connector down mid-fetch: log it and carry on.
+process.on('uncaughtException', e => { note(`error: ${e?.stack ?? e}`); console.error('Sollux connector error (still running):', e?.message ?? e); });
+process.on('unhandledRejection', e => { note(`error: ${e?.stack ?? e}`); });
 
 function findChrome() {
   const candidates = [
@@ -173,12 +186,23 @@ function relayDownloads(d, id, send) {
 }
 let server = null;
 let backoff = 1000;
+// One reconnect scheduled at a time. A failed attempt (the server down for a
+// moment during an update) can raise "error" with no "close" after it; the
+// connector then never tried again and stayed offline until restarted.
+let retryTimer = null;
+function retryIn(ms) {
+  if (retryTimer) return;
+  retryTimer = setTimeout(() => { retryTimer = null; connect(); }, ms);
+}
 
 function connect() {
   const url = api.replace(/^http/, 'ws') + '/api/connector/tunnel';
   const ws = new WebSocket(url);
   server = ws;
   let ping = null;
+  let welcomed = false;
+  // An attempt that neither opens nor fails, or opens and is never welcomed: try again.
+  const watchdog = setTimeout(() => { if (!welcomed) { note('no answer from Sollux in 20s; trying again'); try { ws.close(); } catch { /* gone */ } retryIn(backoff); backoff = Math.min(backoff * 2, 60_000); } }, 20_000);
   const send = m => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m)); };
 
   ws.addEventListener('open', () => {
@@ -191,7 +215,7 @@ function connect() {
   ws.addEventListener('message', async ev => {
     let m;
     try { m = JSON.parse(typeof ev.data === 'string' ? ev.data : Buffer.from(ev.data).toString('utf8')); } catch { return; }
-    if (m.type === 'welcome') { backoff = 1000; console.log(`Connected to Sollux as "${m.name}". Leave this running; press Ctrl+C to stop.`); }
+    if (m.type === 'welcome') { welcomed = true; clearTimeout(watchdog); backoff = 1000; note(`connected as "${m.name}"`); console.log(`Connected to Sollux as "${m.name}". Leave this running; press Ctrl+C to stop.`); }
     else if (m.type === 'denied') { console.error(m.message); try { fs.unlinkSync(CONFIG); } catch { /* gone */ } process.exit(1); }
     else if (m.type === 'open') {
       try {
@@ -206,25 +230,38 @@ function connect() {
           send({ type: 'data', id: m.id, d });
           relayDownloads(d, m.id, send);
         });
-        local.addEventListener('close', () => { if (sessions.delete(m.id)) send({ type: 'closed', id: m.id }); });
+        local.addEventListener('close', ev => {
+          if (!sessions.delete(m.id)) return;
+          note(`Chrome closed its control connection (code ${ev.code}${ev.reason ? `, ${ev.reason}` : ''})`);
+          send({ type: 'closed', id: m.id, reason: `Chrome on this computer closed the connection (code ${ev.code})` });
+        });
         local.addEventListener('error', () => {});
       } catch (e) {
+        note(`could not open Chrome for a fetch: ${e.message ?? e}`);
         send({ type: 'closed', id: m.id, reason: String(e.message ?? e) });
       }
     }
-    else if (m.type === 'data') sessions.get(m.id)?.send(toChrome(m.d));
+    else if (m.type === 'data') { const s = sessions.get(m.id); if (s?.readyState === WebSocket.OPEN) s.send(toChrome(m.d)); }
     else if (m.type === 'close') { const s = sessions.get(m.id); sessions.delete(m.id); s?.close(); }
   });
 
-  ws.addEventListener('close', () => {
+  ws.addEventListener('close', ev => {
+    clearTimeout(watchdog);
     if (ping) clearInterval(ping);
     for (const s of sessions.values()) s.close();
     sessions.clear();
-    console.log(`Disconnected from Sollux — trying again in ${Math.round(backoff / 1000)}s`);
-    setTimeout(connect, backoff);
-    backoff = Math.min(backoff * 2, 60_000);
+    // 1012: Sollux restarting for an update — back on the new server in a moment.
+    const restart = ev.code === 1012;
+    const wait = restart ? 1000 : backoff;
+    note(`disconnected (code ${ev.code}${ev.reason ? `, ${ev.reason}` : ''}); retrying in ${Math.round(wait / 1000)}s`);
+    console.log(restart ? 'Sollux is restarting for an update — reconnecting in a second' : `Disconnected from Sollux — trying again in ${Math.round(wait / 1000)}s`);
+    retryIn(wait);
+    if (!restart) backoff = Math.min(backoff * 2, 60_000);
   });
-  ws.addEventListener('error', () => {});
+  ws.addEventListener('error', () => {
+    // Not connected (refused, unreachable): no "close" may follow, so retry from here too.
+    if (ws.readyState !== WebSocket.OPEN) { clearTimeout(watchdog); retryIn(backoff); backoff = Math.min(backoff * 2, 60_000); }
+  });
 }
 
 process.on('SIGINT', () => { console.log('\nStopping. Sollux will use its own browser until you run this again.'); chrome?.proc?.kill(); process.exit(0); });

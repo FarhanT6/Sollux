@@ -73,6 +73,22 @@ export function takeFiles(sessionId: string): { name: string; data: Buffer }[] {
 const text = (d: RawData) => (Array.isArray(d) ? Buffer.concat(d) : Buffer.from(d as ArrayBuffer)).toString('utf8');
 const send = (ws: WebSocket, m: unknown) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m)); };
 
+// This process is shutting down for a deploy: the computers reconnect to the
+// new one at once, and are not marked offline in between.
+let restarting = false;
+
+/**
+ * A deploy: tell every connected computer the API is restarting (close code
+ * 1012), so its helper reconnects to the new process within a second instead
+ * of backing off. A fetch running through it waits for that and carries on
+ * (portalAgent reopen). Nationwide's fetch died mid-sign-in each time an
+ * update went live: "stopped answering", though the computer was awake.
+ */
+export function closeTunnelsForRestart(): void {
+  restarting = true;
+  for (const h of helpers.values()) h.ws.close(1012, 'Sollux is restarting for an update');
+}
+
 /** Disconnect a device that was removed in Settings. */
 export function disconnectDevice(deviceId: string): void {
   for (const h of helpers.values()) if (h.deviceId === deviceId) h.ws.close(4401, 'removed');
@@ -89,6 +105,8 @@ function onHelper(ws: WebSocket, req: IncomingMessage): void {
   ws.on('message', async raw => {
     let m: any;
     try { m = JSON.parse(text(raw)); } catch { return; }
+    // Shutting down for an update: not here — the helper keeps trying until the new process answers.
+    if (!helper && restarting) return void ws.close(1012, 'Sollux is restarting for an update');
     if (!helper) {
       if (m.type !== 'hello' || typeof m.token !== 'string') return void ws.close(4401, 'hello first');
       const device = await db.connectorDevice.findUnique({ where: { tokenHash: hashToken(m.token) } }).catch(() => null);
@@ -123,8 +141,9 @@ function onHelper(ws: WebSocket, req: IncomingMessage): void {
     if (!helper) return;
     if (helpers.get(helper.userId) === helper) {
       helpers.delete(helper.userId);
-      // Offline at once, not 90 seconds from now: the next fetch uses the cloud browser.
-      void db.connectorDevice.update({ where: { id: helper.deviceId }, data: { lastSeenAt: null } }).catch(() => {});
+      // Offline at once, not 90 seconds from now: the next fetch uses the
+      // cloud browser. Not during a restart: it is back on the new process in a second.
+      if (!restarting) void db.connectorDevice.update({ where: { id: helper.deviceId }, data: { lastSeenAt: null } }).catch(() => {});
     }
     for (const s of sessions.values()) if (s.helper === helper) s.worker.close(1011, 'the computer disconnected');
     console.log('[Connector] a computer disconnected');

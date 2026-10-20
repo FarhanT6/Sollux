@@ -627,13 +627,23 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   const reopen = async (retry = true): Promise<true | string | null> => {
     if (remote) {
       if ((remote as Browser).isConnected()) return null;
-      const gone = `The Chrome on ${connector!.name} stopped answering partway through — the computer went to sleep, the connector stopped, or that Chrome window was closed. Nothing was changed; press Fetch now again once it is back.`;
-      const again = retry && !reconnected && !cancelled ? await connectorFor(userId) : null;
-      if (!again) return gone;
+      const gone = `The Chrome on ${connector!.name} stopped answering partway through and did not come back within 90 seconds — the computer went to sleep, the connector program stopped, or that Chrome window was closed. Nothing was changed; press Fetch now again once it is back.`;
+      // Usually it is Sollux restarting for an update: the computer reconnects
+      // to the new server within seconds. Keep trying for up to 90 seconds.
+      if (!retry || reconnected || cancelled) return gone;
       reconnected = true;
+      say(`Lost the connection to ${connector!.name} — waiting for it to reconnect`);
+      let again: Awaited<ReturnType<typeof connectorFor>> = null;
+      for (const until = Date.now() + 90_000; !cancelled && Date.now() < until;) {
+        await new Promise(r => setTimeout(r, 3000));
+        const c = await connectorFor(userId);
+        if (!c) continue;
+        const b = await chromium.connectOverCDP(c.wsUrl, { timeout: 15_000 }).catch(() => null);
+        if (b) { remote = b; again = c; break; }
+      }
+      if (!again || !remote) return gone;
       try {
-        say(`${connector!.name}'s Chrome dropped — reconnecting`);
-        remote = await chromium.connectOverCDP(again.wsUrl, { timeout: 30_000 });
+        say(`${connector!.name} is back — carrying on`);
         liveWs = again.wsUrl;
         ctx = (remote as Browser).contexts()[0] ?? await (remote as Browser).newContext({ acceptDownloads: true, viewport: { width: 1366, height: 900 }, locale: 'en-US' });
         ctx.on('page', onNewTab);

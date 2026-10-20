@@ -26,7 +26,7 @@ import stripeRouter from './routes/stripe';
 import billingRouter from './routes/billing';
 import aiSpendRouter from './routes/aiSpend';
 import connectorRouter from './routes/connector';
-import { attachConnector, verifySession, takeFiles } from './services/connector';
+import { attachConnector, verifySession, takeFiles, closeTunnelsForRestart } from './services/connector';
 import portalRouter from './routes/portal';
 import rentCollectionRouter from './routes/rentCollection';
 import maintenanceRouter from './routes/maintenance';
@@ -262,5 +262,13 @@ const server = app.listen(PORT, () => {
 });
 // The owner's computers running the connector, and the worker's browser sessions on them.
 attachConnector(server);
+// Render stops this process for every deploy (SIGTERM, then a kill): the
+// computers are told first, so they reconnect to the new one straight away.
+process.once('SIGTERM', () => {
+  console.log('[API] SIGTERM: telling connected computers to reconnect');
+  closeTunnelsForRestart();
+  // With the workers inside the API their own handler exits once their fetches are handed off.
+  if (process.env.RUN_WORKERS_IN_API !== 'true') setTimeout(() => process.exit(0), 1500).unref();
+});
 
 export default app;
