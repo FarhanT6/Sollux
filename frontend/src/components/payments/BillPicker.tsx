@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { billMonthLabel, fmtDate } from '../../lib/date';
-import { computePaidMap, computeResolvedByFutureCheckpoint, openBalanceOf } from '../../lib/paidState';
+import { computePaidMap, computeResolvedByFutureCheckpoint, openBalanceOf, deferredOf } from '../../lib/paidState';
 
 const money = (v: number | string | null | undefined) => `$${Number(v ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -19,14 +19,45 @@ export interface BillPickerValue {
 
 export const emptyBillPick: BillPickerValue = { statementId: '', split: false, alloc: {} };
 
-/** Spread `total` across `ids` oldest-first by open balance; the last takes what is left. */
-export function allocateAcrossBills(statements: any[], total: number, ids: string[]): Record<string, string> {
+const live = (p: any) => p.status !== 'FAILED' && p.status !== 'PENDING';
+
+/**
+ * What one bill adds to the account: its own charges, plus a fee it charged
+ * on the unpaid balance before it. A bill's total also carries every older
+ * unpaid bill, so splitting a payment by totals counted the same money two or
+ * three times: Rincon Water's Sep bill ($756.49) carries Aug's $473.27, which
+ * carries Jul's $194.22. A fee charged on the arrears (Rincon's "delinquent
+ * charge", printed inside the past-due amount) is what the carried balance
+ * grew by beyond the previous bill's unpaid total. Less what was already paid
+ * toward this bill.
+ */
+export function ownShareOf(st: any, statements: any[], payments: any[] = []): { charge: number; fee: number; share: number } {
+  const charge = Number(st.amountDue ?? 0) - deferredOf(st);
+  const asc = [...statements].sort((a, b) => (a.statementDate ?? '').localeCompare(b.statementDate ?? ''));
+  const prev = asc[asc.findIndex(x => x.id === st.id) - 1];
+  let fee = 0;
+  const carried = st.pastDueCarried != null ? Number(st.pastDueCarried) : 0;
+  if (prev && carried > 0) {
+    const from = new Date(prev.statementDate ?? 0).getTime(), to = new Date(st.statementDate ?? 0).getTime();
+    const paidBetween = payments.filter(p => live(p) && new Date(p.paymentDate).getTime() > from && new Date(p.paymentDate).getTime() <= to)
+      .reduce((t, p) => t + Number(p.amount ?? 0), 0);
+    const prevUnpaid = Math.max(0, Number(openBalanceOf(prev) ?? prev.amountDue ?? 0) - paidBetween);
+    fee = Math.max(0, Number((carried - prevUnpaid).toFixed(2)));
+    if (fee > carried) fee = carried;
+  }
+  const paid = payments.filter(p => live(p) && p.statementId === st.id).reduce((t, p) => t + Number(p.amount ?? 0), 0);
+  const share = Math.max(0, Number((charge + fee - paid).toFixed(2)));
+  return { charge: Number(charge.toFixed(2)), fee, share };
+}
+
+/** Spread `total` across `ids` oldest-first by what each bill adds; the last takes what is left. */
+export function allocateAcrossBills(statements: any[], total: number, ids: string[], payments: any[] = []): Record<string, string> {
   const chosen = statements.filter(s => ids.includes(s.id)).slice()
     .sort((a, b) => (a.statementDate ?? '').localeCompare(b.statementDate ?? ''));
   let left = Number((total || 0).toFixed(2));
   const next: Record<string, string> = {};
   chosen.forEach((s, i) => {
-    const open = Math.max(0, Number(openBalanceOf(s) ?? s.amountDue ?? 0));
+    const open = ownShareOf(s, statements, payments).share;
     const take = i === chosen.length - 1 ? left : Math.min(open, left);
     next[s.id] = take.toFixed(2);
     left = Number((left - take).toFixed(2));
@@ -58,8 +89,15 @@ export default function BillPicker({ statements, payments, amount, value, onChan
     return <p className={`text-xs text-gray-600 ${className}`}>No bills on this account yet — the payment is logged against the account alone.</p>;
   }
 
-  const describe = (st: any, open = false) =>
-    `${billMonthLabel(st)} — ${money(open ? openBalanceOf(st) ?? st.amountDue : st.amountDue)} · billed ${fmtDate(st.statementDate, 'MMM d')}${!open && st.dueDate ? ` · due ${fmtDate(st.dueDate, 'MMM d')}` : ''}${paidMap.get(st.id) ? ' · already paid' : ' · open'}`;
+  // Each bill by what it adds — its own charges and any fee it charged — not
+  // its total, which also carries the older bills listed below it.
+  const describe = (st: any, open = false) => {
+    const own = ownShareOf(st, sorted, payments);
+    const figure = open
+      ? `${money(own.share)}${own.fee > 0 ? ` (${money(own.charge)} + ${money(own.fee)} fee)` : ''}`
+      : money(own.charge + own.fee);
+    return `${billMonthLabel(st)} — ${figure} · billed ${fmtDate(st.statementDate, 'MMM d')}${!open && st.dueDate ? ` · due ${fmtDate(st.dueDate, 'MMM d')}` : ''}${paidMap.get(st.id) ? ' · already paid' : ' · open'}`;
+  };
 
   if (!value.split) {
     return (
@@ -70,7 +108,7 @@ export default function BillPicker({ statements, payments, amount, value, onChan
         </select>
         {sorted.length > 1 && (
           <button type="button" className="text-xs text-amber-400 hover:text-amber-300 mt-1"
-            onClick={() => onChange({ statementId: '', split: true, alloc: allocateAcrossBills(sorted, amount, value.statementId ? [value.statementId] : []) })}>
+            onClick={() => onChange({ statementId: '', split: true, alloc: allocateAcrossBills(sorted, amount, value.statementId ? [value.statementId] : [], payments) })}>
             Split across several bills
           </button>
         )}
@@ -86,7 +124,7 @@ export default function BillPicker({ statements, payments, amount, value, onChan
       <div className="flex items-center justify-between mb-1.5">
         <p className="text-xs text-gray-400">Split across these bills</p>
         <div className="flex gap-3 text-xs">
-          <button type="button" className="text-amber-400 hover:text-amber-300" onClick={() => onChange({ ...value, alloc: allocateAcrossBills(sorted, amount, ids) })}>Auto-fill</button>
+          <button type="button" className="text-amber-400 hover:text-amber-300" onClick={() => onChange({ ...value, alloc: allocateAcrossBills(sorted, amount, ids, payments) })}>Auto-fill</button>
           <button type="button" className="text-gray-500 hover:text-gray-300" onClick={() => onChange({ statementId: '', split: false, alloc: {} })}>One bill instead</button>
         </div>
       </div>
@@ -98,7 +136,7 @@ export default function BillPicker({ statements, payments, amount, value, onChan
               <input type="checkbox" checked={checked} className="accent-amber-500"
                 onChange={e => {
                   const next = e.target.checked ? [...ids, st.id] : ids.filter(id => id !== st.id);
-                  onChange({ ...value, alloc: allocateAcrossBills(sorted, amount, next) });
+                  onChange({ ...value, alloc: allocateAcrossBills(sorted, amount, next, payments) });
                 }} />
               <span className={`flex-1 ${paidMap.get(st.id) ? 'text-gray-500' : 'text-gray-300'}`}>{describe(st, true)}</span>
               {checked && (
