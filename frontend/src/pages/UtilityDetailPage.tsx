@@ -2,7 +2,7 @@ import UrgentNotices from '../components/UrgentNotices';
 import { useEffect, useState, useMemo } from 'react';
 import PortalCodeBanner from '../components/utility/PortalCodeBanner';
 import PaymentBreakdownLine from '../components/utility/PaymentBreakdownLine';
-import { openBalanceOf, isStatementPaid, computeResolvedByFutureCheckpoint, computePaidMap, isEffectivelyPaid, isPriorStatementPaid, statementStatus, coveredByCredit, liveCarriedOf, newestIssued, arrearsPaidSince, unlinkedPaidSince, paidSinceSplit } from '../lib/paidState';
+import { openBalanceOf, isStatementPaid, computeResolvedByFutureCheckpoint, computePaidMap, isEffectivelyPaid, isPriorStatementPaid, statementStatus, coveredByCredit, liveCarriedOf, newestIssued, arrearsPaidSince, unlinkedPaidSince, paidSinceSplit, deferredOf } from '../lib/paidState';
 import { bankAccountLabel } from '../lib/bankAccountLabel';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
@@ -1079,7 +1079,11 @@ export default function UtilityDetailPage() {
   const latestPastDue = latestCarried != null && (latestCarried < 0 || !priorToLatestPaid)
     ? latestCarried
     : null;
-  const latestChargesExclFees = latestStmt?.chargesExcludingFees != null ? Number(latestStmt.chargesExcludingFees) : null;
+  // This bill's own charge when the older bills are settled: fees included —
+  // a late fee is this bill's and still owed. Using the charge without its
+  // fees showed Capital Premium Financing's $645.77 installment (615.02 +
+  // 30.75 late fee) as a $615.02 balance.
+  const latestChargesExclFees = latestStmt?.amountDue != null ? Number((Number(latestStmt.amountDue) - deferredOf(latestStmt)).toFixed(2)) : null;
   const latestOwed = (() => {
     const raw = openBalanceOf(latestStmt);
     if (raw == null || latestStmt == null) return raw;
