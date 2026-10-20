@@ -1216,7 +1216,12 @@ export interface Fees { charge: number; tenantFee: number; ownerReceives: number
 export interface RentCollectionStatus {
   configured: boolean; connected: boolean; chargesEnabled: boolean; payoutsEnabled: boolean; needsInfo: boolean; error?: string; canManage: boolean;
   example: { rent: number; card: Fees; bank: Fees }; tenants: { invited: number; joined: number; autopay: number };
+  /** What the tenant portal needs before tenants use it, checked live on the server. */
+  setup?: { key: string; label: string; ok: boolean; detail: string }[];
 }
+export interface PortalInviteCandidate { id: string; fullName: string; email: string | null; place: string }
+export const getInviteAll = () => api.get<{ tenants: PortalInviteCandidate[]; emailConfigured: boolean }>('/rent-collection/invite-all').then(r => r.data);
+export const inviteAll = (tenantIds: string[]) => api.post<{ invited: (PortalInviteCandidate & { link: string; emailed: boolean })[] }>('/rent-collection/invite-all', { tenantIds }).then(r => r.data);
 export const getRentCollection = () => api.get<RentCollectionStatus>('/rent-collection').then(r => r.data);
 export const connectRentPayouts = () => api.post<{ url: string }>('/rent-collection/connect').then(r => r.data);
 export const openPayoutsDashboard = () => api.post<{ url: string }>('/rent-collection/dashboard').then(r => r.data);
