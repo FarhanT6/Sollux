@@ -651,7 +651,11 @@ function PaymentPlanCard({
 
 /** The line a late fee logged with a payment is written to (backend lateFees.ts). */
 const LOGGED_LATE_FEE_LINE = 'Late fee (paid late)';
-const FEE_LINE = /late|penalt|nsf|non[- ]?sufficient|returned (check|payment|item)|dishono|delinquen|reconnect|collection fee|disconnect(ion)? fee/i;
+// What counts as a fee on a bill's itemised charges: late fees, penalties,
+// returned payments, delinquent charges, disconnection / reconnection and
+// contamination charges. Everything else is service. The same rule as the
+// statements trigger (migration 20261021120000_more_fee_kinds).
+const FEE_LINE = /late|penalt|nsf|non[- ]?sufficient|returned (check|payment|item)|dishono|delinquen|reconnect|disconnect|contaminat|collection fee/i;
 /**
  * The late fee a bill itself charged — its charge list's fee lines (an
  * imported "Late Fee 6.07") — not one logged with a payment. A payment toward
@@ -1045,9 +1049,8 @@ export default function UtilityDetailPage() {
 
   // Fees/penalties aggregated across all statements — sourced from the
   // editable penaltiesFees column so it matches what Edit shows and writes.
-  // The fee lines themselves, from the bill's itemised charges, matched the
-  // same way the importer decides what counts as a fee (sanitiseLateFee).
-  const FEE_LINE = /late\s*(?:fee|charge|payment\s*(?:fee|charge|penalty))|penalt|overdue\s*charge|nsf|returned\s*(?:check|payment)|finance\s*charge|interest\s*charge|installment\s*fee|service\s*charge|convenience\s*fee|processing\s*fee|reconnect|disconnect|shut-?off|delinquen|reinstatement/i;
+  // The fee lines themselves, from the bill's itemised charges, matched by
+  // FEE_LINE — the rule that set penaltiesFees.
   const feesData = useMemo(() => statements.map(s => {
     const penalties = s.penaltiesFees != null ? Number(s.penaltiesFees) : null;
     if (penalties == null || penalties === 0) return null;
