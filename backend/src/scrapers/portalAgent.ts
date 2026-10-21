@@ -28,7 +28,7 @@ import { decrypt, encrypt } from '../crypto/encrypt';
 import { PRIMARY_MODEL, paramsFor, meteredCreate } from '../ai/models';
 import { costOf, withAiContext } from '../ai/meter';
 import { findEmailedCode, findEmailedLink, mailMiss, type MailReport } from '../services/emailCode';
-import { loadRecipe, saveRecipe, recipeWorked, replay, targetOf, refLocator, setRefFrames, type RecipeStep } from './portalRecipe';
+import { loadRecipe, saveRecipe, recipeWorked, replay, targetOf, refLocator, setRefFrames, type RecipeStep, typeLikeAPerson, clickLikeAPerson } from './portalRecipe';
 import { intakeBill, type ReviewItem } from '../services/documentIntake';
 import { BaseScraperProvider } from './base';
 
@@ -752,7 +752,9 @@ Always end with the finish tool, never with a message. If the page seems gone or
       steps.push(...recipe.steps.slice(0, done));
       try { const h = new URL(page.url()).hostname; if (h) allowed.add(rootOf(h)); } catch { /* about:blank */ }
       if (done === recipe.steps.length) {
-        signedIn = true;
+        // A replay that ran to the end has not necessarily signed in (the site
+        // may have answered Access Denied): only a page showing the account says so.
+        signedIn = await looksSignedIn(page, await describe(page, secrets).catch(() => ''));
         opening = "Start. A previous run's steps were replayed: the browser should be signed in and on the page with the statement history. Look, then download what is new — or finish if nothing is.";
       } else {
         await recipeWorked(recipe.key, false);
@@ -864,10 +866,10 @@ Always end with the finish tool, never with a message. If the page seems gone or
             }
             case 'fill_login': {
               if (i.usernameRef == null && i.passwordRef == null) { content = 'Give usernameRef and/or passwordRef.'; break; }
-              if (i.usernameRef != null) await el(i.usernameRef).fill(username);
-              if (i.passwordRef != null) await el(i.passwordRef).fill(password);
+              if (i.usernameRef != null) await typeLikeAPerson(page, el(i.usernameRef), username);
+              if (i.passwordRef != null) await typeLikeAPerson(page, el(i.passwordRef), password);
               if (i.rememberRef != null) await el(i.rememberRef).check({ timeout: 3000 }).catch(() => el(i.rememberRef).click({ timeout: 3000 }).catch(() => {}));
-              if (i.submitRef != null) await el(i.submitRef).click({ timeout: 10000 });
+              if (i.submitRef != null) await clickLikeAPerson(page, el(i.submitRef));
               content = await after(i.submitRef != null ? 'Signed in details entered and submitted.' : 'Entered.');
               if (i.passwordRef != null && i.submitRef != null && await looksSignedIn(page, lastPage)) signedIn = true;
               break;
@@ -1017,6 +1019,22 @@ Always end with the finish tool, never with a message. If the page seems gone or
               break;
             }
             case 'finish':
+              // Signed in in another tab (the site moved the account there):
+              // carry on there instead of giving up on the tab left behind.
+              if (['turned_away', 'blocked', 'captcha'].includes(String(i.outcome))) {
+                const moved = await toNewTab();
+                let other: Page | undefined;
+                for (const t of openTabs()) {
+                  if (t === page && !moved) continue;
+                  const txt = await describe(t, secrets).catch(() => '');
+                  if (await looksSignedIn(t, txt)) other = t;
+                }
+                if (other) {
+                  page = other; signedIn = true;
+                  content = await after('Not finished: another tab is signed in to the account — you are now on that tab. Carry on to the statements from here.');
+                  break;
+                }
+              }
               // A captcha on the owner's own computer, with the owner watching:
               // they can tick it in that Chrome window. Wait for it once.
               // A human check on the owner's own computer, with the owner watching.
@@ -1024,13 +1042,21 @@ Always end with the finish tool, never with a message. If the page seems gone or
               // window (City of Imperial: "Verification failed"), so the agent lets
               // go of it, asks the owner to tick it (and sign in or search if they
               // like), then takes the window back.
-              if (String(i.outcome) === 'captcha' && (remote as Browser | null) && opts.interactive && !askedCaptcha) {
+              // The same for a site that refuses the automated sign-in (Akamai's
+              // "Access Denied" on Nationwide): the owner signs in by hand in that
+              // window and the agent carries on from the account. The sign-in stays
+              // in that Chrome, so later fetches usually start signed in.
+              const refusedSignIn = String(i.outcome) === 'turned_away' && !signedIn;
+              if ((String(i.outcome) === 'captcha' || refusedSignIn) && (remote as Browser | null) && opts.interactive && !askedCaptcha) {
                 askedCaptcha = true;
                 const host = new URL(page.url()).hostname;
                 ctx.off('page', onNewTab);
                 await (remote as Browser | null)?.close().catch(() => {});
                 remote = null;
-                const prompt = `Tick "Verify you are human" in the Chrome window on ${connector!.name} — sign in or search there too if you like — then type done here.`;
+                const site = rootOf(host) || start.hostname;
+                const prompt = refusedSignIn
+                  ? `Sign in to ${site} yourself in the Chrome window on ${connector!.name} — the site refused the automated sign-in — then press Done.`
+                  : `Tick "Verify you are human" in the Chrome window on ${connector!.name} — sign in or search there too if you like — then type done here.`;
                 await db.utilityAccount.update({ where: { id: account.id }, data: { mfaPrompt: prompt, mfaRequestedAt: new Date(), mfaCodeEnc: null } });
                 say(prompt);
                 const until = Date.now() + CODE_WAIT_MS;
@@ -1047,31 +1073,21 @@ Always end with the finish tool, never with a message. If the page seems gone or
                   remote = await chromium.connectOverCDP(again.wsUrl, { timeout: 30_000 }).catch(() => null);
                   if (remote) liveWs = again.wsUrl;
                   const back = remote?.contexts()[0];
-                  const tab = back?.pages().filter(p => { try { return new URL(p.url()).hostname === host; } catch { return false; } }).pop();
+                  // The owner's tab on the site — signing in can move to another
+                  // host on it (login.nationwide.com → cam.nationwide.com) or another
+                  // tab: the signed-in one first, else the newest on the site.
+                  const onSite = (back?.pages() ?? []).filter(p => { try { return rootOf(new URL(p.url()).hostname) === rootOf(host); } catch { return false; } });
+                  let tab = onSite[onSite.length - 1];
+                  for (const p of onSite) if (await looksSignedIn(p, await describe(p, secrets).catch(() => ''))) tab = p;
                   if (back && tab) {
-                    ctx = back; page = tab; runPages.push(tab); ctx.on('page', onNewTab);
+                    ctx = back; page = tab; runPages.push(tab); ctx.on('page', onNewTab); tabsShown = runPages.length;
                     lastPage = await describe(page, secrets).catch(() => '');
+                    if (done && await looksSignedIn(page, lastPage)) signedIn = true;
                     content = done
-                      ? `Not finished: the owner dealt with the check in the window (and may have signed in or searched). Carry on from here.\n\n${lastPage}`
-                      : `The owner did not get to the check in time. Finish with captcha.\n\n${lastPage}`;
+                      ? `Not finished: the owner ${refusedSignIn ? 'signed in by hand' : 'dealt with the check'} in the window${refusedSignIn ? '' : ' (and may have signed in or searched)'}. Carry on from here to the statements — do not sign in again.\n\n${lastPage}${await tabsNote()}`
+                      : `The owner did not get to it in time. Finish with ${refusedSignIn ? 'turned_away' : 'captcha'}.\n\n${lastPage}`;
                     if (done) break;
                   }
-                }
-              }
-              // Signed in in another tab (the site moved the account there):
-              // carry on there instead of giving up on the tab left behind.
-              if (['turned_away', 'blocked', 'captcha'].includes(String(i.outcome))) {
-                const moved = await toNewTab();
-                let other: Page | undefined;
-                for (const t of openTabs()) {
-                  if (t === page && !moved) continue;
-                  const txt = await describe(t, secrets).catch(() => '');
-                  if (await looksSignedIn(t, txt)) other = t;
-                }
-                if (other) {
-                  page = other; signedIn = true;
-                  content = await after('Not finished: another tab is signed in to the account — you are now on that tab. Carry on to the statements from here.');
-                  break;
                 }
               }
               // Before giving up, look once more: T-Mobile flashes "Invalid
