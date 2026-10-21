@@ -105,6 +105,36 @@ const settle = (page: Page) => page.waitForLoadState('domcontentloaded', { timeo
  * recipe has means the site changed at that step, and the agent takes over
  * from there.
  */
+const pause = (min: number, max: number) => new Promise(r => setTimeout(r, min + Math.random() * (max - min)));
+/**
+ * Type into a field the way a person does: click into it, then one key at a
+ * time at an uneven pace. Bot checks (Akamai on Nationwide, SDG&E, T-Mobile)
+ * score how a login was entered; a field filled in one instant with no
+ * keystrokes reads as a bot, and Nationwide answered "Access Denied" straight
+ * after the submit. Falls back to filling when the field ends up different
+ * (a masked or formatted input).
+ */
+export async function typeLikeAPerson(page: Page, field: Locator, text: string): Promise<void> {
+  await field.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
+  await field.click({ timeout: 10000 });
+  await field.fill('').catch(() => {});
+  await pause(150, 400);
+  for (const ch of text) {
+    await page.keyboard.type(ch);
+    await pause(45, 140);
+  }
+  const got = await field.inputValue().catch(() => text);
+  if (got !== text) await field.fill(text);
+  await pause(250, 600);
+}
+/** Move to a button and click it, with a moment's hesitation first. */
+export async function clickLikeAPerson(page: Page, target: Locator): Promise<void> {
+  const box = await target.boundingBox().catch(() => null);
+  if (box) await page.mouse.move(box.x + box.width * (0.3 + Math.random() * 0.4), box.y + box.height * (0.3 + Math.random() * 0.4), { steps: 8 + Math.floor(Math.random() * 8) }).catch(() => {});
+  await pause(300, 900);
+  await target.click({ timeout: 10000 });
+}
+
 export async function replay(page: Page, steps: RecipeStep[], login: { username: string; password: string }, allowedHost: (host: string) => boolean): Promise<number> {
   let done = 0;
   for (const s of steps) {
@@ -120,15 +150,15 @@ export async function replay(page: Page, steps: RecipeStep[], login: { username:
         if (!s.pass) {
           const user = s.user ? await find(page, s.user) : null;
           if (!user) { if (await page.locator('input[type=password]').count() === 0 && !(await page.locator('input[type=email]').count())) { done++; continue; } break; }
-          await user.fill(login.username);
+          await typeLikeAPerson(page, user, login.username);
           done++;
           continue;
         }
         const pass = await find(page, s.pass);
         // Already signed in (the browser kept the session): skip the login.
         if (!pass) { if (await page.locator('input[type=password]').count() === 0) { done++; continue; } break; }
-        if (s.user) { const user = await find(page, s.user, 2000); if (user) await user.fill(login.username); }
-        await pass.fill(login.password);
+        if (s.user) { const user = await find(page, s.user, 2000); if (user) await typeLikeAPerson(page, user, login.username); }
+        await typeLikeAPerson(page, pass, login.password);
       } else {
         const el = await find(page, s.target);
         if (!el) {
@@ -136,7 +166,7 @@ export async function replay(page: Page, steps: RecipeStep[], login: { username:
           if (await page.locator('input[type=password]').count() === 0 && /sign ?in|log ?in|submit|continue/i.test(s.target.label)) { done++; continue; }
           break;
         }
-        if (s.tool === 'click') { await el.click({ timeout: 10000 }); await settle(page); }
+        if (s.tool === 'click') { await clickLikeAPerson(page, el); await settle(page); }
         else if (s.tool === 'type') await el.fill(s.text);
         else await el.selectOption({ label: s.label });
       }

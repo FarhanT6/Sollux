@@ -7,6 +7,13 @@ import { describeApiError } from '../../lib/apiError';
  * has sent a verification code. The owner types it here; the agent enters it
  * in the portal. It waits five minutes.
  */
+/**
+ * The agent has let go of the Chrome window on the owner's computer for them
+ * to act there — tick "Verify you are human", or sign in by hand where a site
+ * refused the automated sign-in — then press Done. Not a code.
+ */
+export const isHandOff = (prompt: string) => /^Tick "Verify you are human"|^Sign in to .+ yourself in the Chrome window/.test(prompt);
+
 export default function PortalCodeBanner({ accountId, prompt, requestedAt, providerName, onSent }: {
   accountId: string; prompt: string; requestedAt?: string | null; providerName: string; onSent?: () => void;
 }) {
@@ -15,7 +22,7 @@ export default function PortalCodeBanner({ accountId, prompt, requestedAt, provi
   const [err, setErr] = useState<string | null>(null);
   // The agent has let go of the Chrome window so the owner can tick a
   // "Verify you are human" check there: one Done button, no code.
-  const handOff = /^Tick "Verify you are human"/.test(prompt);
+  const handOff = isHandOff(prompt);
   const minutesLeft = requestedAt ? Math.max(0, 5 - Math.floor((Date.now() - new Date(requestedAt).getTime()) / 60000)) : null;
 
   async function send() {
