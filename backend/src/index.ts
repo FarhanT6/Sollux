@@ -26,7 +26,7 @@ import stripeRouter from './routes/stripe';
 import billingRouter from './routes/billing';
 import aiSpendRouter from './routes/aiSpend';
 import connectorRouter from './routes/connector';
-import { attachConnector, verifySession, takeFiles, closeTunnelsForRestart } from './services/connector';
+import { attachConnector, verifySession, takeFiles, closeTunnelsForRestart, lastDrop } from './services/connector';
 import portalRouter from './routes/portal';
 import rentCollectionRouter from './routes/rentCollection';
 import maintenanceRouter from './routes/maintenance';
@@ -184,7 +184,7 @@ app.use('/api/audit', auditRouter);
 app.get('/api/connector/files/:session', (req, res) => {
   const id = verifySession(req.params.session);
   if (!id) return res.status(401).json({ error: 'Not a valid session' });
-  res.json({ files: takeFiles(id).map(f => ({ name: f.name, data: f.data.toString('base64') })) });
+  res.json({ files: takeFiles(id).map(f => ({ name: f.name, data: f.data.toString('base64') })), drop: lastDrop(id.split('.')[0]) });
 });
 
 // ─── Protected routes ─────────────────────────────────────

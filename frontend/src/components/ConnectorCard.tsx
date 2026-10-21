@@ -8,6 +8,9 @@ import { toast } from '../lib/toast';
  * runs a Chrome on the owner's computer, and portal fetches go through it from
  * their home internet — sites that turn away cloud servers let it in.
  */
+/** The connector version the server expects (frontend/public/sollux-connector.mjs VERSION). */
+const CONNECTOR_VERSION = 2;
+
 export default function ConnectorCard() {
   const [devices, setDevices] = useState<ConnectorDevice[] | null>(null);
   const [name, setName] = useState('My computer');
@@ -58,6 +61,10 @@ export default function ConnectorCard() {
               <span className="text-gray-200 min-w-0 truncate">
                 <span className={d.online ? 'text-green-400' : 'text-gray-600'}>●</span> {d.name}
                 <span className="text-gray-500"> · {d.online ? 'online' : d.lastSeenAt ? `last seen ${fmtMoment(d.lastSeenAt)}` : 'never connected'}{d.agent ? ` · ${d.agent}` : ''}</span>
+                {/* An older connector can stop on an error and not reconnect (fixed in v2). */}
+                {d.agent && Number(d.agent.match(/connector v(\d+)/)?.[1] ?? 0) < CONNECTOR_VERSION && (
+                  <span className="block text-xs text-amber-400">Out of date — download the connector again below and run the new one; the old one can stop mid-fetch.</span>
+                )}
               </span>
               <button className="text-gray-500 hover:text-red-300" onClick={() => void remove(d)}>Remove</button>
             </div>
