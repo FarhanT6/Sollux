@@ -121,6 +121,21 @@ function groupSummary(r: { downloads: number; filed: number; review: number; fil
  * cost. Never retried automatically: a retry could re-trigger a code or lock
  * the login.
  */
+/**
+ * City of Oceanside water bills are found on InvoiceCloud's customer lookup
+ * with the two numbers the bill prints ("177299-182052": customer, account) —
+ * no login, no emailed code. The built-in connector that did this is retired;
+ * the portal agent starts there instead (its bill-lookup mode), unless the
+ * account's website is already a lookup page.
+ */
+const OCEANSIDE_LOOKUP = 'https://www.invoicecloud.com/portal/2/customerlocator.aspx?iti=42&bg=6e845e36-128a-4605-a057-4b50dc1f72b6&vsii=367';
+async function lookupStart(accountId: string): Promise<string | undefined> {
+  const a = await db.utilityAccount.findUnique({ where: { id: accountId }, select: { providerName: true, providerSlug: true, loginUrl: true, accountNumberEnc: true } });
+  if (!a || !/oceanside/i.test(a.providerName) || isLookupPage(websiteFor(a)?.url)) return undefined;
+  const full = (() => { try { return a.accountNumberEnc ? decrypt(a.accountNumberEnc).trim() : ''; } catch { return ''; } })();
+  return /^\d{5,8}\s*-\s*\d{5,8}$/.test(full) ? OCEANSIDE_LOOKUP : undefined;
+}
+
 export async function agentJob(job: Job<ScrapeJobData>, account: { id: string; providerName: string; property: { id: string } }): Promise<void> {
   const utilityAccountId = account.id;
     await db.utilityAccount.update({ where: { id: utilityAccountId }, data: { lastSyncStatus: 'PENDING' } });
@@ -155,7 +170,8 @@ export async function agentJob(job: Job<ScrapeJobData>, account: { id: string; p
       const wait = 2000 - (Date.now() - lastWrite);
       if (wait <= 0) write(); else timer = setTimeout(write, wait);
     };
-    const r = await withAiContext({ test: !!job.data.test }, () => runPortalAgent(utilityAccountId, { interactive: !!job.data.manual, onProgress, also: also.map(o => o.id), cancelled: async () => (await db.syncJob.findUnique({ where: { id: syncJob.id }, select: { status: true } }))?.status === 'FAILED'
+    const startUrl = await lookupStart(utilityAccountId);
+    const r = await withAiContext({ test: !!job.data.test }, () => runPortalAgent(utilityAccountId, { interactive: !!job.data.manual, onProgress, startUrl, also: also.map(o => o.id), cancelled: async () => (await db.syncJob.findUnique({ where: { id: syncJob.id }, select: { status: true } }))?.status === 'FAILED'
       // Cancel pressed on any account in the sign-in stops it.
       || (alsoJobs.length > 0 && !!(await db.syncJob.findFirst({ where: { id: { in: alsoJobs }, status: 'FAILED', error: 'Cancelled by you.' }, select: { id: true } }))) }))
       .catch(err => ({ ok: false, filed: 0, review: 0, applied: 0, downloads: 0, summary: '', error: readableError(err instanceof Error ? err.message : String(err)) }) as Awaited<ReturnType<typeof runPortalAgent>>);

@@ -407,6 +407,8 @@ export async function capturePdf(ctx: BrowserContext, page: Page, action: () => 
 
 export interface AgentOptions {
   interactive?: boolean;
+  /** Start here instead of the account's website (City of Oceanside's InvoiceCloud bill lookup). */
+  startUrl?: string;
   /** Other accounts on the same login: one sign-in fetches them all. */
   also?: string[];
   /** True once the owner pressed Cancel: the run stops at once and closes its browser. */
@@ -437,7 +439,7 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   if (!account) return { ok: false, filed: 0, review: 0, applied: 0, downloads: 0, summary: '', error: 'Account not found' };
   // The login page: the one the owner saved (or a bill printed), else the
   // provider directory's; the agent finds "Sign in" from a home page.
-  const loginUrl = websiteFor(account)?.url ?? null;
+  const loginUrl = opts.startUrl ?? websiteFor(account)?.url ?? null;
   // The website is the biller's lookup page: the bills are found there by
   // account number and name, and this run never signs in — no sign-in tool,
   // no saved route, no going to a sign-in page.

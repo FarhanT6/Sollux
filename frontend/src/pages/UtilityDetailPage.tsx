@@ -1876,8 +1876,12 @@ export default function UtilityDetailPage() {
                         <Pill color={sc}>{sl}</Pill>
                       </div>
 
-                      {/* Row actions appear when the row is pointed at (always on touch screens). */}
-                      <div className="flex-shrink-0 flex items-center gap-1 row-actions">
+                      {/* Row actions appear when the row is pointed at (always on touch screens).
+                          A fixed width, right-aligned: rows have different actions
+                          (Mark paid · Edit vs Unpaid · PDF · Edit), and a group that
+                          sized itself pushed the due date, amount and badge of
+                          some rows out of line with the rest. */}
+                      <div className="flex-shrink-0 w-44 flex items-center justify-end gap-1 row-actions">
                         {!isPaid && (
                           <button
                             onClick={() => handleMarkPaid(s)}
