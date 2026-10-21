@@ -474,7 +474,21 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   if (!connector && !opts.interactive && awayUntil > Date.now()) {
     return { ok: false, filed: 0, review: 0, applied: 0, downloads: 0, summary: '', error: `Not tried: ${start.hostname} turned the browser away earlier, so scheduled fetches wait until ${clock(awayUntil)} rather than risk locking the login. Fetch now tries it at once.` };
   }
-  const since = account.statements[0]?.statementDate?.toISOString().slice(0, 10) ?? null;
+  /**
+   * Where fetching starts for an account: after its newest statement with a
+   * PDF — but never before its second-newest bill of any kind. Months saved
+   * without a PDF (the old built-in connectors kept only the figures) are on
+   * file: Republic Services' agent was sent back a year for PDFs of bills
+   * Sollux already had, on three accounts. Only the newest bill may still
+   * need its PDF fetched.
+   */
+  const fetchFrom = async (id: string, lastPdf: Date | null | undefined): Promise<string | null> => {
+    const rows = await db.statement.findMany({ where: { utilityAccountId: id, isScheduled: false, statementDate: { lte: new Date() } }, orderBy: { statementDate: 'desc' }, take: 2, select: { statementDate: true } });
+    const floor = rows[1]?.statementDate ?? null;
+    const d = [lastPdf ?? null, floor].filter((x): x is Date => !!x).sort((a, b) => b.getTime() - a.getTime())[0];
+    return d ? d.toISOString().slice(0, 10) : null;
+  };
+  const since = await fetchFrom(account.id, account.statements[0]?.statementDate);
   // The other accounts this login holds: fetched in the same visit — one
   // sign-in and one code instead of one each (SDG&E turned away twelve
   // sign-ins in five minutes).
@@ -482,6 +496,7 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
     where: { id: { in: opts.also } },
     select: { id: true, accountNumber: true, property: { select: { address: true } }, statements: { where: { pdfS3Key: { not: null } }, orderBy: { statementDate: 'desc' }, take: 1, select: { statementDate: true } } },
   }) : [];
+  const othersFrom = await Promise.all(others.map(async o => ({ ...o, from: await fetchFrom(o.id, o.statements[0]?.statementDate) })));
   const n = 1 + others.length;
   const maxDownloads = Math.min(MAX_DOWNLOADS * n, 24);
   const batchId = `portal-${account.id}-${Date.now()}`;
@@ -739,7 +754,7 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
 This is the owner's own account, signed in with the owner's own login at the owner's request. Notices shown to everyone before signing in — a government "authorized use only" warning (student-loan servicers), a cookie banner, an "I understand / Accept / Continue" on such a notice — are addressed to the account holder, who is the owner: acknowledge them and carry on. That is not agreeing to anything new on the account.
 ${others.length ? `This login holds several of the owner's accounts. Fetch every one of them in this one visit — sign in once, then for each account open it (account picker, "switch account", or a list of accounts) and its billing / statement history, and download each statement PDF dated after its date, newest first:
 - ${account.accountNumber ? `account ending ${String(account.accountNumber).slice(-4)}` : 'this account'} at ${account.property.address}: after ${since ?? 'the last 12 months'}
-${others.map(o => `- ${o.accountNumber ? `account ending ${String(o.accountNumber).slice(-4)}` : 'an account'} at ${o.property.address}: after ${o.statements[0]?.statementDate?.toISOString().slice(0, 10) ?? 'the last 12 months'}`).join('\n')}
+${othersFrom.map(o => `- ${o.accountNumber ? `account ending ${String(o.accountNumber).slice(-4)}` : 'an account'} at ${o.property.address}: after ${o.from ?? 'the last 12 months'}`).join('\n')}
 At most ${maxDownloads} downloads in all. An account the portal does not list is not an error: say so and carry on. Finish with outcome done when every listed account is checked, and fill in accounts with each one's result (downloaded, nothing_new, not_listed, or not_checked if you did not get to it) — an account is only nothing_new if you opened its own statement history.` : lookup ? `Goal: this account's bills are found on the biller's lookup page you start on, by account number and the name on the bill — never by signing in. Do not open a sign-in or register page, even if one is offered. Sollux fills in the lookup fields and presses Search for you where it can; otherwise fill them with fill_account_number (part 'name' for a name field), then open the invoices / bill history and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If the lookup says the account was not found, finish with blocked and quote what it said. If there is nothing newer, finish with outcome done.` : `Goal: log in, open the billing / statement history, and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If there is nothing newer, finish with outcome done.`}
 Rules: use fill_login for credentials (you never see them). If the portal offers where to send a verification code, choose email over text or a phone call. If it emails a sign-in link instead of a code, call open_emailed_link (the owner is never asked for it); if none arrives, finish with no_code. When a code has been sent, call ask_owner_for_code (it reads the code from the owner's email, or asks the owner), then type_code. Pass any "Remember this device", "Trust this browser", "Keep me signed in" or "Don't ask again" checkbox as rememberRef so the next visit is not asked again. Never pay, enroll, change settings, accept offers or send messages. If a "Verify you are human" / "I'm not a robot" checkbox is on the page, call tick_captcha before submitting. If the page you start on asks for an account number (a bill lookup), use fill_account_number there rather than going to the sign-in. If the sign-in stays blocked by such a check, look for a way in without signing in — "Pay as guest", "Quick pay", "View bill", "Find my account" — and use fill_account_number (with the property's ZIP code if asked); statements found that way count the same. If a captcha still blocks you (a picture puzzle, or the check keeps failing), finish with captcha (on the owner's own computer they may solve it, and you are then shown the page to carry on). If the login is rejected, finish with bad_login. If a code you entered is rejected, ask_owner_for_code once more for a fresh one; after a second rejection finish with no_code — never start the login over.
 Once you are signed in (you see the account, a greeting, a Log out button), an error after that — a bill viewer that fails, "unable to process your request" on one page — is not the site refusing the browser: go back and try another way to the statements ("View bill", "Billing history", "Documents", "View policy documents", "Statements"), and finish with blocked, saying which page failed, only when none works. Before signing in: if the site refuses the browser itself (Access Denied, "invalid request", "unable to process your request" right after submitting the sign-in, a bot check), finish with turned_away at once: never submit the login a second time — each retry makes the site more suspicious and can lock the owner's account.
@@ -923,7 +938,10 @@ Always end with the finish tool, never with a message. If the page seems gone or
               // Already on file for that date: nothing to click for. A saved
               // page is always read again — its fees change after the bill.
               const day = u.name === 'download_statement' && /^\d{4}-\d{2}-\d{2}$/.test(String(i.statementDate ?? '')) ? new Date(`${i.statementDate}T12:00:00Z`) : null;
-              if (day && await db.statement.findFirst({ where: { utilityAccountId: { in: [account.id, ...others.map(o => o.id)] }, pdfS3Key: { not: null }, statementDate: { gte: new Date(day.getTime() - 36e5 * 36), lte: new Date(day.getTime() + 36e5 * 36) } }, select: { id: true } })) {
+              const onFile = day ? await db.statement.findMany({ where: { utilityAccountId: { in: [account.id, ...others.map(o => o.id)] }, isScheduled: false, statementDate: { gte: new Date(day.getTime() - 36e5 * 36), lte: new Date(day.getTime() + 36e5 * 36) } }, select: { utilityAccountId: true, pdfS3Key: true, statementDate: true } }) : [];
+              // On file with its PDF, or an older month on file without one (only the newest may still need its PDF).
+              const settled = await Promise.all(onFile.map(async r => !!r.pdfS3Key || !!(await db.statement.findFirst({ where: { utilityAccountId: r.utilityAccountId, isScheduled: false, statementDate: { gt: new Date(r.statementDate.getTime() + 36e5 * 36), lte: new Date() } }, select: { id: true } }))));
+              if (day && settled.some(Boolean)) {
                 content = `The ${i.statementDate} statement is already on file — not downloaded. Downloaded this run: ${got}. Move to an older or newer one, or finish.`;
                 break;
               }
