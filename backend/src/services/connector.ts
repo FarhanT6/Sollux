@@ -46,6 +46,19 @@ export async function connectorFor(userId: string): Promise<{ wsUrl: string; nam
 interface Helper { ws: WebSocket; deviceId: string; userId: string }
 interface Session { id: string; worker: WebSocket; helper: Helper; queue: string[]; open: boolean }
 
+/** The connector version this API expects; an older helper is shown as out of date. */
+export const CONNECTOR_VERSION = 2;
+
+// Why each owner's last browser session ended, for the fetch's error message:
+// a "stopped answering" with no reason could not be told apart from a computer asleep.
+const drops = new Map<string, { at: number; why: string }>();
+const dropped = (userId: string, why: string) => { drops.set(userId, { at: Date.now(), why }); console.log(`[Connector] ${why}`); };
+/** Why the owner's last session ended, if it was in the last ten minutes. */
+export function lastDrop(userId: string): string | null {
+  const d = drops.get(userId);
+  return d && Date.now() - d.at < 10 * 60_000 ? d.why : null;
+}
+
 // The helpers connected to this process, by owner (the newest wins), and the open browser sessions.
 const helpers = new Map<string, Helper>();
 const sessions = new Map<string, Session>();
@@ -127,7 +140,7 @@ function onHelper(ws: WebSocket, req: IncomingMessage): void {
     else if (!s || s.helper !== helper) return;
     else if (m.type === 'opened') { s.open = true; for (const d of s.queue.splice(0)) send(ws, { type: 'data', id: s.id, d }); }
     else if (m.type === 'data' && typeof m.d === 'string') { if (s.worker.readyState === WebSocket.OPEN) s.worker.send(m.d); }
-    else if (m.type === 'closed') s.worker.close(1011, String(m.reason ?? 'the browser on the computer closed').slice(0, 100));
+    else if (m.type === 'closed') { dropped(helper.userId, `Chrome on the computer closed its connection (${String(m.reason ?? 'no reason given').slice(0, 120)})`); s.worker.close(1011, String(m.reason ?? 'the browser on the computer closed').slice(0, 100)); }
     else if (m.type === 'file' && typeof m.data === 'string') {
       const list = files.get(s.id) ?? [];
       list.push({ name: String(m.name ?? 'statement.pdf').slice(0, 200), data: Buffer.from(m.data, 'base64'), at: Date.now() });
@@ -135,10 +148,14 @@ function onHelper(ws: WebSocket, req: IncomingMessage): void {
     }
   });
 
-  ws.on('close', () => {
+  ws.on('close', (code: number, reason: Buffer) => {
     clearTimeout(hello);
     if (beat) clearInterval(beat);
     if (!helper) return;
+    const why = String(reason ?? '').slice(0, 80);
+    if (!restarting) dropped(helper.userId, code === 1006
+      ? 'the connector program on the computer stopped or lost its internet connection (no goodbye)'
+      : `the connector program disconnected (code ${code}${why ? `, ${why}` : ''})`);
     if (helpers.get(helper.userId) === helper) {
       helpers.delete(helper.userId);
       // Offline at once, not 90 seconds from now: the next fetch uses the
@@ -148,7 +165,7 @@ function onHelper(ws: WebSocket, req: IncomingMessage): void {
     for (const s of sessions.values()) if (s.helper === helper) s.worker.close(1011, 'the computer disconnected');
     console.log('[Connector] a computer disconnected');
   });
-  ws.on('error', () => {});
+  ws.on('error', err => { if (helper) dropped(helper.userId, `the connector's connection failed: ${err.message.slice(0, 120)}`); });
 }
 
 function onWorker(ws: WebSocket, userId: string, id: string): void {
@@ -161,17 +178,19 @@ function onWorker(ws: WebSocket, userId: string, id: string): void {
     const d = text(raw);
     if (s.open) send(helper.ws, { type: 'data', id, d }); else s.queue.push(d);
   });
-  ws.on('close', () => {
+  ws.on('close', (code: number) => {
+    // 1009: a message bigger than the relay takes (a huge screenshot or PDF).
+    if (code === 1009) dropped(userId, 'a message from the browser was too large for the connection');
     sessions.delete(id); send(helper.ws, { type: 'close', id });
     setTimeout(() => files.delete(id), 120_000).unref();
   });
-  ws.on('error', () => {});
+  ws.on('error', err => dropped(userId, `the browser session failed: ${err.message.slice(0, 120)}`));
 }
 
 /** Accept the helpers' tunnels and the worker's browser sessions on the API's server. */
 export function attachConnector(server: Server): void {
   // Screenshots and PDFs travel inside CDP messages.
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 * 1024 });
   server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     const path = new URL(req.url ?? '/', 'http://x').pathname;
     if (path === '/api/connector/tunnel') return void wss.handleUpgrade(req, socket, head, ws => onHelper(ws, req));

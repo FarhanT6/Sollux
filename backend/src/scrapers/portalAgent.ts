@@ -22,7 +22,7 @@ import * as fs from 'fs';
 import { BrowserContext, Page, Download, Frame, Locator } from 'playwright';
 import { launchPortalContext, isHttp2Reset } from './browser';
 import { chromium, type Browser } from 'playwright';
-import { connectorFor, filesUrlFor } from '../services/connector';
+import { connectorFor, filesUrlFor, CONNECTOR_VERSION } from '../services/connector';
 import { db } from '../config/db';
 import { decrypt, encrypt } from '../crypto/encrypt';
 import { PRIMARY_MODEL, paramsFor, meteredCreate } from '../ai/models';
@@ -106,7 +106,7 @@ export async function pageAsPdf(page: Page): Promise<Buffer | null> {
     if (pdf.length > 1000) return Buffer.from(pdf);
   } catch { /* not printable here: screenshot below */ }
   try {
-    const png = await page.screenshot({ fullPage: true });
+    const png = await page.screenshot({ fullPage: true, scale: 'css' });
     const { PDFDocument } = await import('pdf-lib');
     const doc = await PDFDocument.create();
     const img = await doc.embedPng(png);
@@ -624,13 +624,25 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
    * still online (starting again at the sign-in page); otherwise say why and stop.
    * Returns true when back, a message to stop with, or null when the browser is fine.
    */
+  // What the server saw end the session, and whether the computer runs an old connector.
+  const dropNote = async (): Promise<string> => {
+    let note = '';
+    try {
+      const r = await fetch(filesUrlFor(liveWs ?? connector!.wsUrl)).then(x => x.json() as Promise<{ drop?: string | null }>);
+      if (r.drop) note += ` What happened: ${r.drop}.`;
+    } catch { /* the server is unreachable too */ }
+    const d = await db.connectorDevice.findFirst({ where: { userId }, orderBy: { lastSeenAt: 'desc' }, select: { agent: true } }).catch(() => null);
+    const v = Number(d?.agent?.match(/connector v(\d+)/)?.[1] ?? 0);
+    if (v < CONNECTOR_VERSION) note += ' The connector on that computer is an older version that can stop on an error and not reconnect: download it again from Settings → AI usage → Fetch from your computer, and run the new one.';
+    return note;
+  };
   const reopen = async (retry = true): Promise<true | string | null> => {
     if (remote) {
       if ((remote as Browser).isConnected()) return null;
       const gone = `The Chrome on ${connector!.name} stopped answering partway through and did not come back within 90 seconds — the computer went to sleep, the connector program stopped, or that Chrome window was closed. Nothing was changed; press Fetch now again once it is back.`;
       // Usually it is Sollux restarting for an update: the computer reconnects
       // to the new server within seconds. Keep trying for up to 90 seconds.
-      if (!retry || reconnected || cancelled) return gone;
+      if (!retry || reconnected || cancelled) return `${gone}${await dropNote()}`;
       reconnected = true;
       say(`Lost the connection to ${connector!.name} — waiting for it to reconnect`);
       let again: Awaited<ReturnType<typeof connectorFor>> = null;
@@ -641,7 +653,7 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
         const b = await chromium.connectOverCDP(c.wsUrl, { timeout: 15_000 }).catch(() => null);
         if (b) { remote = b; again = c; break; }
       }
-      if (!again || !remote) return gone;
+      if (!again || !remote) return `${gone}${await dropNote()}`;
       try {
         say(`${connector!.name} is back — carrying on`);
         liveWs = again.wsUrl;
@@ -787,7 +799,7 @@ Always end with the finish tool, never with a message. If the page seems gone or
           }
           switch (u.name) {
             case 'look': content = lastPage = await describe(page, secrets); break;
-            case 'screenshot': content = [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: (await page.screenshot({ type: 'png' })).toString('base64') } }]; break;
+            case 'screenshot': content = [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: (await page.screenshot({ type: 'png', scale: 'css' })).toString('base64') } }]; break;
             case 'click': {
               const before = lastPage;
               await el(i.ref).click({ timeout: 10000 });

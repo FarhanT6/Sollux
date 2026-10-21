@@ -28,6 +28,8 @@ const CONFIG = path.join(HOME, 'connector.json');
 const PROFILE = path.join(HOME, 'chrome-profile');
 const DOWNLOADS = path.join(HOME, 'downloads');
 const LOG = path.join(HOME, 'connector.log');
+// Sollux shows an older copy as out of date (Settings → AI usage).
+const VERSION = 2;
 
 if (typeof WebSocket === 'undefined') {
   console.error('The Sollux connector needs Node.js 22 or newer — this is ' + process.version + '. Install it from https://nodejs.org and run this again.');
@@ -207,7 +209,7 @@ function connect() {
 
   ws.addEventListener('open', () => {
     // Say hello at once (Sollux waits 10 seconds for it), then get Chrome ready.
-    send({ type: 'hello', token, agent: `${os.type()} ${os.release()}${chrome ? ` · ${chrome.version}` : ''}` });
+    send({ type: 'hello', token, version: VERSION, agent: `${os.type()} ${os.release()}${chrome ? ` · ${chrome.version}` : ''} · connector v${VERSION}` });
     ping = setInterval(() => send({ type: 'ping' }), 25_000);
     startChrome().catch(e => console.error(String(e.message ?? e)));
   });
