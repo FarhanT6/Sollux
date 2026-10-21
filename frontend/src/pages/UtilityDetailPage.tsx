@@ -1993,7 +1993,11 @@ export default function UtilityDetailPage() {
                     <div className="text-right flex-shrink-0 w-28">
                       <p className="text-base font-semibold text-white">{fmtMoney(p.amount)}</p>
                       {Number(p.feeAmount ?? 0) > 0 && <p className="text-xs text-gray-500">+ {fmtMoney(p.feeAmount)} fee · {fmtMoney(Number(p.amount) + Number(p.feeAmount))} out</p>}
-                      {Number((p as any).lateFeeAdded ?? 0) > 0 && <p className="text-xs text-red-400">incl. {fmtMoney(Number((p as any).lateFeeAdded))} late fee</p>}
+                      {/* The late fee this payment covered: logged with it, or on the bill it paid (an imported late fee). */}
+                      {(() => {
+                        const fee = Number((p as any).lateFeeAdded ?? 0) || Number(p.breakdown?.toFees ?? 0);
+                        return fee > 0 ? <p className="text-xs text-red-400">incl. {fmtMoney(fee)} late fee</p> : null;
+                      })()}
                     </div>
                     <div className="flex-shrink-0 w-20 text-right">
                       <Pill color={p.status === 'PAID' ? 'green' : p.status === 'PENDING' ? 'amber' : 'red'}>{p.status}</Pill>
