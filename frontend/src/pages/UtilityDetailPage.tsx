@@ -1,5 +1,5 @@
 import UrgentNotices from '../components/UrgentNotices';
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import PortalCodeBanner from '../components/utility/PortalCodeBanner';
 import PaymentBreakdownLine from '../components/utility/PaymentBreakdownLine';
 import { openBalanceOf, isStatementPaid, computeResolvedByFutureCheckpoint, computePaidMap, isEffectivelyPaid, isPriorStatementPaid, statementStatus, coveredByCredit, liveCarriedOf, newestIssued, arrearsPaidSince, unlinkedPaidSince, paidSinceSplit, deferredOf } from '../lib/paidState';
@@ -649,6 +649,20 @@ function PaymentPlanCard({
   );
 }
 
+/** The line a late fee logged with a payment is written to (backend lateFees.ts). */
+const LOGGED_LATE_FEE_LINE = 'Late fee (paid late)';
+const FEE_LINE = /late|penalt|nsf|non[- ]?sufficient|returned (check|payment|item)|dishono|delinquen|reconnect|collection fee|disconnect(ion)? fee/i;
+/**
+ * The late fee a bill itself charged — its charge list's fee lines (an
+ * imported "Late Fee 6.07") — not one logged with a payment. A payment toward
+ * that bill already covers it: the form shows it, and does not add it again.
+ */
+export function billOwnLateFee(st: any): number {
+  const lines = (st?.rawDataJson?.chargeBreakdown ?? {}) as Record<string, number>;
+  const fee = Object.entries(lines).filter(([k]) => k !== LOGGED_LATE_FEE_LINE && FEE_LINE.test(k)).reduce((t, [, v]) => t + (Number(v) || 0), 0);
+  return Math.max(0, Number(fee.toFixed(2)));
+}
+
 export default function UtilityDetailPage() {
   const { propertyId, accountId } = useParams<{ propertyId: string; accountId: string }>();
   const navigate = useNavigate();
@@ -699,6 +713,7 @@ export default function UtilityDetailPage() {
   }, [accountId]);
 
   function resetPayForm() {
+    filledFor.current = null; prefilled.current = 0;
     setPayForm({
       amount: '', feeAmount: '', lateFee: '', paymentDate: todayISO(),
       paymentMethod: 'ACH', status: 'PAID', statementId: '',
@@ -709,6 +724,7 @@ export default function UtilityDetailPage() {
   }
 
   function openPaymentEdit(p: any) {
+    filledFor.current = null; prefilled.current = 0;
     setPayForm({
       amount: String(p.amount ?? ''),
       feeAmount: p.feeAmount != null ? String(p.feeAmount) : '',
@@ -755,7 +771,8 @@ export default function UtilityDetailPage() {
         utilityAccountId: accountId,
         amount,
         feeAmount: payForm.feeAmount ? parseFloat(payForm.feeAmount) : null,
-        lateFee: payForm.lateFee ? parseFloat(payForm.lateFee) : null,
+        // The bill's own late fee is already on it (and in the amount): only a fee beyond it is added.
+        lateFee: lateFee - prefilled.current > 0.005 ? Number((lateFee - prefilled.current).toFixed(2)) : null,
         paymentDate: payForm.paymentDate,
         paymentMethod: payForm.paymentMethod || null,
         status: payForm.status,
@@ -950,6 +967,24 @@ export default function UtilityDetailPage() {
     const key = (s: any) => new Date(s.billingPeriodEnd ?? s.statementDate).getTime();
     return [...(account?.statements || [])].sort((a, b) => key(b) - key(a));
   }, [account]);
+  // The bill the payment is toward, and the late fee it already carries.
+  const payTarget = statements.find((s: any) => s.id === bill.statementId) as any;
+  const ownFee = billOwnLateFee(payTarget);
+  // Show that fee in the Late fee box when a bill is picked (once per bill, so clearing the box sticks).
+  const filledFor = useRef<string | null>(null);
+  // The bill's own fee, when it is what filled the box (a fee typed or logged by hand is the owner's).
+  const prefilled = useRef(0);
+  useEffect(() => {
+    if (!bill.statementId || filledFor.current === bill.statementId) return;
+    filledFor.current = bill.statementId;
+    // An empty box, or one still holding the last bill's fee as filled in, follows the bill picked.
+    setPayForm(f => {
+      const untouched = !f.lateFee || (prefilled.current > 0 && Math.abs(Number(f.lateFee) - prefilled.current) < 0.005);
+      if (!untouched) return f;
+      prefilled.current = ownFee;
+      return { ...f, lateFee: ownFee > 0 ? ownFee.toFixed(2) : '' };
+    });
+  }, [bill.statementId, ownFee]);
   const payments: any[] = useMemo(() => account?.payments || [], [account]);
   // Computed from the FULL statement history (not the filtered/searched
   // view) so status stays correct regardless of year filter or search.
@@ -1168,7 +1203,11 @@ export default function UtilityDetailPage() {
                 account charged last time. The fee goes on the bill and the
                 amount paid grows by it. */}
             {(() => {
-              const target = statements.find((s: any) => s.id === bill.statementId) as any;
+              const target = payTarget;
+              // The bill already charged its late fee: say so, and offer nothing to add.
+              if (ownFee > 0) return (
+                <p className="text-xs text-gray-500 mt-2">Includes the {fmtMoney(ownFee)} late fee on the {billMonthLabel(target)} bill — already on that bill, not added again.</p>
+              );
               if (!target?.dueDate || !payForm.paymentDate) return null;
               const due = String(target.dueDate).slice(0, 10);
               if (payForm.paymentDate <= due) return null;
@@ -1194,9 +1233,9 @@ export default function UtilityDetailPage() {
                 </div>
               );
             })()}
-            {Number(payForm.lateFee) > 0 && (
+            {Number(payForm.lateFee) - prefilled.current > 0.005 && (
               <p className="text-xs text-gray-500 mt-1">
-                {fmtMoney(Number(payForm.lateFee))} is added to the bill's penalties and balance. Include it in the amount if you paid it with this payment.
+                {fmtMoney(Number(payForm.lateFee) - prefilled.current)} is added to the bill's penalties and balance. Include it in the amount if you paid it with this payment.
               </p>
             )}
     </>

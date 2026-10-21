@@ -1,5 +1,9 @@
 import type { PaymentBreakdown } from '../../types';
 
+// "2026-08" → "Aug 2026"; anything else as it is.
+const monthName = (label: string) => /^\d{4}-\d{2}$/.test(label)
+  ? new Date(Date.UTC(Number(label.slice(0, 4)), Number(label.slice(5, 7)) - 1, 15)).toLocaleString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' })
+  : label;
 const money = (n: number) => `$${Number(n).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
 
 /**
@@ -20,7 +24,7 @@ export default function PaymentBreakdownLine({ b }: { b?: PaymentBreakdown | nul
   if (parts.length === 0) return null;
   return (
     <p className="text-[11px] mt-0.5">
-      <span className="text-gray-600">Applied{b.statementLabel ? ` to ${b.statementLabel}` : ''}: </span>
+      <span className="text-gray-600">Applied{b.statementLabel ? ` to ${monthName(b.statementLabel)}` : ''}: </span>
       {parts.map((x, i) => (
         <span key={x.label}>
           {i > 0 && <span className="text-gray-700"> · </span>}
