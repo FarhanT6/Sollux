@@ -35,7 +35,12 @@ const registry: Record<string, new () => BaseScraperProvider> = {
  * enter). SDG&E's and SoCal Gas's sites are behind bot protection that a second
  * sign-in a few seconds later only makes stricter.
  */
-const RETIRED = new Set(['iid', 'sdge', 'socal-gas', 'wm']);
+const RETIRED = new Set(['iid', 'sdge', 'socal-gas', 'wm',
+  // Every other site too: the portal agent fetches the statement PDF itself,
+  // where these read figures off the page. Republic Services' connector
+  // reported "1 new statement" for a September row with no billing period
+  // and no PDF. Only the Gmail reader (gmail-fallback) is not a website.
+  'cox', 'fpl', 'republic-services', 'city-oceanside', 'city-oceanside-ic', 'city-brawley']);
 
 export function getScraperProvider(slug: string): BaseScraperProvider | null {
   if (RETIRED.has(slug)) return null;

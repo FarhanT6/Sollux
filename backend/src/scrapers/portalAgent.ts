@@ -76,6 +76,7 @@ export interface PortalRun {
 
 const TOOLS: Anthropic.Tool[] = [
   { name: 'tick_captcha', description: 'Tick the "Verify you are human" / "I\'m not a robot" checkbox on the page (Cloudflare, reCAPTCHA, hCaptcha) with a real mouse click. Call it before submitting a form that has one.', input_schema: { type: 'object', properties: {} } },
+  { name: 'switch_tab', description: 'Work in another open browser tab: give its number from the "Open tabs" list under the page. A site may sign you in, or open the account, in a tab of its own.', input_schema: { type: 'object', properties: { tab: { type: 'number' } }, required: ['tab'] } },
   { name: 'look', description: 'Describe the current page: URL, title, visible text, and numbered interactive elements [n]. Every other action already returns the page as it is afterwards, so only call this at the start or if a page was still loading.', input_schema: { type: 'object', properties: {} } },
   { name: 'screenshot', description: 'A picture of the page, when the text description is not enough.', input_schema: { type: 'object', properties: {} } },
   { name: 'click', description: 'Click element [n].', input_schema: { type: 'object', properties: { ref: { type: 'number' } }, required: ['ref'] } },
@@ -406,6 +407,8 @@ export async function capturePdf(ctx: BrowserContext, page: Page, action: () => 
 
 export interface AgentOptions {
   interactive?: boolean;
+  /** Start here instead of the account's website (City of Oceanside's InvoiceCloud bill lookup). */
+  startUrl?: string;
   /** Other accounts on the same login: one sign-in fetches them all. */
   also?: string[];
   /** True once the owner pressed Cancel: the run stops at once and closes its browser. */
@@ -436,7 +439,7 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   if (!account) return { ok: false, filed: 0, review: 0, applied: 0, downloads: 0, summary: '', error: 'Account not found' };
   // The login page: the one the owner saved (or a bill printed), else the
   // provider directory's; the agent finds "Sign in" from a home page.
-  const loginUrl = websiteFor(account)?.url ?? null;
+  const loginUrl = opts.startUrl ?? websiteFor(account)?.url ?? null;
   // The website is the biller's lookup page: the bills are found there by
   // account number and name, and this run never signs in — no sign-in tool,
   // no saved route, no going to a sign-in page.
@@ -668,20 +671,41 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
     }
     return ctxClosed ? "Sollux's browser closed unexpectedly partway through (it may have run out of memory). Nothing was changed; press Fetch now to try again." : null;
   };
+  // The tabs this run opened that are still open on a web page, oldest first.
+  const openTabs = () => runPages.filter(p => !p.isClosed() && /^https?:/.test(p.url()));
+  // How many of this run's tabs the agent has been shown. A site can open its
+  // signed-in tab long after the click: Nationwide's sign-in ran a minute-long
+  // Akamai check, then opened the account in a new tab while the agent's tab
+  // fell back to the sign-in page — and the run was reported as bot protection.
+  let tabsShown = 1;
+  /** A tab opened since the agent last looked: work there (the site moved on to it). */
+  const toNewTab = async (): Promise<string> => {
+    if (runPages.length <= tabsShown) return '';
+    const fresh = runPages.slice(tabsShown).filter(p => !p.isClosed() && /^https?:/.test(p.url()) && !/\.pdf(\?|$)/i.test(p.url())).pop();
+    tabsShown = runPages.length;
+    if (!fresh || fresh === page) return '';
+    await fresh.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
+    page = fresh;
+    return ' The site opened a new tab; you are now on that tab.';
+  };
+  /** The open tabs, listed under the page when there is more than one. */
+  const tabsNote = async (): Promise<string> => {
+    const open = openTabs();
+    if (open.length <= 1) return '';
+    const lines = await Promise.all(open.map(async (p, i) => `[tab ${i + 1}] ${new URL(p.url()).hostname} — ${(await p.title().catch(() => '')).slice(0, 60)}${p === page ? '  ← you are here' : ''}`));
+    return `\n\nOpen tabs (switch_tab to change):\n${lines.join('\n')}`;
+  };
   const after = async (what: string) => {
     // The next step opened in a new tab (a link, or a sign-in button): work there.
     await page.waitForTimeout(500);
-    const opened = runPages.length > tabsAtAction ? runPages[runPages.length - 1] : null;
-    if (opened && opened !== page && !opened.isClosed()) {
-      await opened.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
-      if (/^https?:/.test(opened.url()) && !/\.pdf(\?|$)/i.test(opened.url())) { page = opened; what += ' It opened in a new tab; you are now on that tab.'; }
-    }
     tabsAtAction = runPages.length;
     await follow();
+    what += await toNewTab();
     await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
     await page.waitForTimeout(800);
     lastPage = await describe(page, secrets);
-    return `${what}\n\n${lastPage}`;
+    if (!signedIn && await looksSignedIn(page, lastPage)) signedIn = true;
+    return `${what}\n\n${lastPage}${await tabsNote()}`;
   };
 
   const system = `You operate a web browser for a property owner to collect their statements from ${account.providerName}'s customer portal — any bill they track: utilities, phone and internet, insurance, loans and mortgages, HOA dues. Account ${account.accountNumber ? `ending ${String(account.accountNumber).slice(-4)}` : ''} at ${account.property.address}.
@@ -772,6 +796,7 @@ Always end with the finish tool, never with a message. If the page seems gone or
           say(`${n}: clicking${label ? ` "${label.slice(0, 50)}"` : ''}`);
         }
         else if (u.name === 'fill_login') say(`${n}: signing in`);
+        else if (u.name === 'switch_tab') say(`${n}: switching to tab ${i.tab}`);
         else if (u.name === 'fill_account_number') say(`${n}: looking up the bill by account number`);
         else if (u.name === 'save_page_as_statement') say(`${n}: saving this page as the statement (${String(i.statementDate ?? '').slice(0, 20)})`);
         else if (u.name === 'download_statement') say(`${n}: downloading a statement${i.statementDate ? ` (${String(i.statementDate).slice(0, 20)})` : ''}`);
@@ -798,7 +823,14 @@ Always end with the finish tool, never with a message. If the page seems gone or
             } else if (u.name === 'press') rec = { tool: 'press', key: String(i.key) };
           }
           switch (u.name) {
-            case 'look': content = lastPage = await describe(page, secrets); break;
+            case 'look': { const moved = await toNewTab(); lastPage = await describe(page, secrets); content = `${moved ? `${moved.trim()}\n\n` : ''}${lastPage}${await tabsNote()}`; break; }
+            case 'switch_tab': {
+              const t = openTabs()[Number(i.tab) - 1];
+              if (!t) { content = `No tab ${i.tab}.${await tabsNote()}`; break; }
+              page = t; await page.bringToFront().catch(() => {});
+              content = await after(`Now on tab ${i.tab}.`);
+              break;
+            }
             case 'screenshot': content = [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: (await page.screenshot({ type: 'png', scale: 'css' })).toString('base64') } }]; break;
             case 'click': {
               const before = lastPage;
@@ -1024,6 +1056,22 @@ Always end with the finish tool, never with a message. If the page seems gone or
                       : `The owner did not get to the check in time. Finish with captcha.\n\n${lastPage}`;
                     if (done) break;
                   }
+                }
+              }
+              // Signed in in another tab (the site moved the account there):
+              // carry on there instead of giving up on the tab left behind.
+              if (['turned_away', 'blocked', 'captcha'].includes(String(i.outcome))) {
+                const moved = await toNewTab();
+                let other: Page | undefined;
+                for (const t of openTabs()) {
+                  if (t === page && !moved) continue;
+                  const txt = await describe(t, secrets).catch(() => '');
+                  if (await looksSignedIn(t, txt)) other = t;
+                }
+                if (other) {
+                  page = other; signedIn = true;
+                  content = await after('Not finished: another tab is signed in to the account — you are now on that tab. Carry on to the statements from here.');
+                  break;
                 }
               }
               // Before giving up, look once more: T-Mobile flashes "Invalid
