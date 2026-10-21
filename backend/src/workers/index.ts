@@ -32,6 +32,11 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
 }
 // Inside the API process (RUN_WORKERS_IN_API) the heartbeat says so.
 startHeartbeat(process.env.RUN_WORKERS_IN_API === 'true' ? 'sollux-api' : 'sollux-workers');
+// Payments taken off a loan in full though part of them paid a bill's late
+// fee: corrected once the fees are on the bills (planApplication.ts).
+void import('../services/planApplication').then(m => m.reapplyLoanPaymentsLessFees())
+  .then(n => { if (n) console.log(`[Workers] ${n} loan payment(s) re-applied without the fees they paid`); })
+  .catch(err => console.warn('[Workers] loan fee re-apply failed:', err instanceof Error ? err.message : err));
 
 // ── Scheduled Jobs ────────────────────────────────────────
 // Run all scrapes every 6 hours.

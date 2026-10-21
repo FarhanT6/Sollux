@@ -1,4 +1,5 @@
 import { db } from '../config/db';
+import { allocateAccountPayments } from '../lib/paymentAllocation';
 
 /**
  * Apply a payment to the account's payment plan.
@@ -62,8 +63,10 @@ export async function applyPaymentToPlan(paymentId: string): Promise<number> {
  * Hills) carries a Loan record on the account. Each payment logged on the
  * account is a payment on that contract, so the loan's balance comes down
  * by it — the whole amount, since these contracts are billed as flat
- * installments; a fee logged on the payment is not part of it. Kept on the
- * payment so an edit or deletion puts it back.
+ * installments — less what the payment spent on the bill's fees: a late fee
+ * is the lender's charge, not repayment (Capital Premium Financing's $127.48
+ * was the $121.41 installment and a $6.07 late fee, and all of it came off
+ * the balance). Kept on the payment so an edit or deletion puts it back.
  */
 export async function applyPaymentToLoan(paymentId: string): Promise<number> {
   const payment = await db.payment.findUnique({
@@ -83,12 +86,37 @@ export async function applyPaymentToLoan(paymentId: string): Promise<number> {
   const balance = Number(loan.currentBalance);
   if (balance <= 0.005) return 0;
 
-  const applied = Number(Math.min(Number(payment.amount), balance).toFixed(2));
+  const toFees = await feesPaidBy(payment.id, payment.utilityAccountId);
+  const applied = Number(Math.min(Number(payment.amount) - toFees, balance).toFixed(2));
   if (applied <= 0) return 0;
   const newBalance = Number((balance - applied).toFixed(2));
   await db.loan.update({ where: { id: loan.id }, data: { currentBalance: newBalance, ...(newBalance <= 0.005 ? { isActive: false } : {}) } });
   await db.payment.update({ where: { id: payment.id }, data: { loanApplied: applied } });
   return applied;
+}
+
+/** What a payment spent on bills' fees, as the account's payment allocation applies it. */
+async function feesPaidBy(paymentId: string, utilityAccountId: string): Promise<number> {
+  const [stmts, pays] = await Promise.all([
+    db.statement.findMany({ where: { utilityAccountId, isDownPayment: false }, select: { id: true, utilityAccountId: true, statementDate: true, billingPeriodEnd: true, amountDue: true, pastDueCarried: true, penaltiesFees: true, paymentPlanAmount: true } }),
+    db.payment.findMany({ where: { utilityAccountId }, select: { id: true, utilityAccountId: true, paymentDate: true, amount: true, feeAmount: true, status: true, statementId: true } }),
+  ]);
+  return Math.max(0, Number(allocateAccountPayments(stmts, pays).get(paymentId)?.toFees ?? 0));
+}
+
+/**
+ * Payments already taken off a loan in full although part of them paid a
+ * bill's fee: taken off again by the rule above. Runs when the workers start;
+ * a payment already right is left alone, so running it again changes nothing.
+ */
+export async function reapplyLoanPaymentsLessFees(): Promise<number> {
+  const paid = await db.payment.findMany({ where: { loanApplied: { gt: 0 } }, select: { id: true, utilityAccountId: true, amount: true, loanApplied: true } });
+  let fixed = 0;
+  for (const p of paid) {
+    const fees = await feesPaidBy(p.id, p.utilityAccountId);
+    if (fees > 0.005 && Math.abs(Number(p.loanApplied) - (Number(p.amount) - fees)) > 0.01) { await applyPaymentToLoan(p.id); fixed++; }
+  }
+  return fixed;
 }
 
 /** Put back on the loan whatever a payment about to be deleted had taken off it. */
