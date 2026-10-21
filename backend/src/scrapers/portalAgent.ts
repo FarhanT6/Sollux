@@ -333,7 +333,7 @@ async function pdfFromPage(page: Page, url: string): Promise<Buffer | null> {
   return b && b.subarray(0, 1024).includes('%PDF-') ? b : null;
 }
 
-export async function capturePdf(ctx: BrowserContext, page: Page, action: () => Promise<void>, remoteFiles?: () => Promise<Buffer[]>): Promise<Buffer | null> {
+export async function capturePdf(ctx: BrowserContext, page: Page, action: () => Promise<void>, remoteFiles?: () => Promise<Buffer[]>, late?: (pdfs: Buffer[]) => Promise<void>): Promise<Buffer | null> {
   let got: Buffer | null = null;
   const onDownload = async (d: Download) => {
     try { const p = await d.path(); if (p) { const b = await fs.promises.readFile(p); if (b.subarray(0, 1024).includes('%PDF-')) got = b; } } catch { /* ignore */ }
@@ -353,10 +353,16 @@ export async function capturePdf(ctx: BrowserContext, page: Page, action: () => 
   ctx.on('page', onPage);
   const newPage = ctx.waitForEvent('page', { timeout: 15000 }).catch(() => null);
   try {
-    // Anything the owner's Chrome downloaded before this click is not this statement.
-    if (remoteFiles) await remoteFiles().catch(() => []);
+    // Anything the owner's Chrome downloaded before this click is not this
+    // statement — but it is a statement: one an earlier click asked for that
+    // arrived late. Dropping it here was why Republic Services' invoices were
+    // downloaded again and again and never reached Sollux.
+    if (remoteFiles) {
+      const before = (await remoteFiles().catch(() => [] as Buffer[])).filter(b => b.subarray(0, 1024).includes('%PDF-'));
+      if (before.length && late) await late(before).catch(() => {});
+    }
     await action();
-    const deadline = Date.now() + 20000;
+    let deadline = Date.now() + 20000;
     let polled = Date.now();
     while (!got && Date.now() < deadline) {
       // On the owner's computer Chrome saves the PDF there, and the connector
@@ -370,6 +376,10 @@ export async function capturePdf(ctx: BrowserContext, page: Page, action: () => 
       await page.waitForTimeout(500);
       const np = await Promise.race([newPage, new Promise<null>(r => setTimeout(() => r(null), 10))]);
       if (np && !got) {
+        // On the owner's computer a tab that builds the PDF ("Preparing your
+        // invoice…") can take a minute before Chrome downloads it: wait for it,
+        // and do not close the tab before then (that cancels the download).
+        if (remoteFiles) deadline = Math.max(deadline, Date.now() + 90_000);
         await np.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
         // A tab opened blank and then sent to the PDF: wait for its address.
         for (let k = 0; k < 20 && !np.url().startsWith('http'); k++) await page.waitForTimeout(250);
@@ -618,6 +628,23 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   // The PDFs downloaded this run, by content, with the date each was taken for.
   const pdfsSeen = new Map<string, string>();
   let repeats = 0;
+  // Statements that finished downloading on the owner's computer after the
+  // click that asked for them had stopped waiting: filed, not dropped.
+  let lateNote = '';
+  const fileLate = async (pdfs: Buffer[]): Promise<void> => {
+    let n = 0;
+    for (const pdf of pdfs) {
+      const hash = crypto.createHash('sha256').update(pdf).digest('hex');
+      if (pdfsSeen.has(hash) || run.downloads >= maxDownloads) continue;
+      pdfsSeen.set(hash, `late download ${pdfsSeen.size + 1}`);
+      run.downloads++; n++;
+      const r = await intakeBill(pdf, `${account.providerName.replace(/[^\w]+/g, '_')}_statement_${run.downloads}.pdf`, userId, 'ai', batchId, 'portal').catch(err => ({ outcome: 'error' as const, error: String(err) }));
+      if (r.outcome === 'filed') { run.filed++; run.filedFor![r.utilityAccountId] = (run.filedFor![r.utilityAccountId] ?? 0) + 1; }
+      else if (r.outcome === 'review') { run.review++; review.push(r.reviewItem); }
+      else if (r.outcome !== 'error') run.applied++;
+    }
+    if (n) lateNote = `Also saved ${n} statement${n === 1 ? '' : 's'} that finished downloading after an earlier click — do not download ${n === 1 ? 'it' : 'them'} again.`;
+  };
   let reconnected = false;
   /**
    * The browser itself went away mid-run — the owner's computer slept, the
@@ -901,7 +928,8 @@ Always end with the finish tool, never with a message. If the page seems gone or
                 break;
               }
               const pdf = u.name === 'save_page_as_statement' ? await pageAsPdf(page)
-                : await capturePdf(ctx, page, () => el(i.ref).click({ timeout: 10000 }), (remote as Browser | null) ? remoteFiles : undefined);
+                : await capturePdf(ctx, page, () => el(i.ref).click({ timeout: 10000 }), (remote as Browser | null) ? remoteFiles : undefined, fileLate);
+              if (lateNote) { content = lateNote; lateNote = ''; }
               if (!pdf) { content = 'No PDF came back from that click. Try the link that opens or downloads the statement itself.'; break; }
               // The same file again (Blue Shield's past bills gave one PDF over
               // and over; the run read it ten times and ran out of steps):
@@ -930,7 +958,7 @@ Always end with the finish tool, never with a message. If the page seems gone or
               else if (r.outcome === 'review') { run.review++; review.push(r.reviewItem); }
               else if (r.outcome === 'error') content = `Saved, but: ${r.error}`;
               else run.applied++;
-              if (content === 'ok') content = `Statement saved (${r.outcome}). Downloaded this run: ${[...pdfsSeen.values()].join(', ')}.`;
+              if (content === 'ok' || content.startsWith('Also saved')) content = `${content === 'ok' ? '' : `${content} `}Statement saved (${r.outcome}). Downloaded this run: ${[...pdfsSeen.values()].join(', ')}.`;
               break;
             }
             case 'ask_owner_for_code': {
@@ -1172,6 +1200,20 @@ Always end with the finish tool, never with a message. If the page seems gone or
     }
   } finally {
     if (watch) clearInterval(watch);
+    // A download still finishing on the owner's computer when the run ended:
+    // give it a few seconds and file it.
+    if ((remote as Browser | null) && !cancelled) {
+      for (let k = 0; k < 4; k++) {
+        const pending = (await remoteFiles().catch(() => [] as Buffer[])).filter(b => b.subarray(0, 1024).includes('%PDF-'));
+        if (pending.length) {
+          const before = run.downloads;
+          await fileLate(pending).catch(() => {});
+          if (run.downloads > before) run.summary = `${run.summary ? `${run.summary} ` : ''}${run.downloads - before} more statement${run.downloads - before === 1 ? '' : 's'} finished downloading at the end and ${run.downloads - before === 1 ? 'was' : 'were'} saved.`;
+          break;
+        }
+        await new Promise(r => setTimeout(r, 2500));
+      }
+    }
     if (cancelled) { run.ok = false; run.error = 'Cancelled by you.'; }
     // Keep the cookies after a good run, or once a code got us in (the trusted-device cookie).
     if (run.ok || usedCode) {
