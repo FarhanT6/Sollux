@@ -875,8 +875,13 @@ export interface UtilityAccount {
   loginUrl?: string;
   // The name the bill is addressed to, for a lookup page (account number + name, no sign-in).
   lookupName?: string | null;
+  /** The customer ID a bill lookup page asks for beside the account number (Tyler Munis). */
+  lookupCustomerId?: string | null;
   // The website is a bill lookup page: no login, the name on the bill instead.
   lookupPage?: boolean;
+  /** What the lookup page asks for beside the account number, and where it is. */
+  lookupKind?: 'customer' | 'name' | null;
+  lookupUrl?: string | null;
   category: UtilityCategory;
   // Which unit this meter serves, if it serves one. serviceLabel covers the
   // rest — "House meter", "Laundry room" — so several meters for one utility

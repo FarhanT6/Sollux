@@ -27,6 +27,8 @@ const DIRECTORY: ProviderSite[] = [
   // Electric and gas
   { match: /\bsdg\s*&?\s*e\b|san diego gas/i, site: 'https://www.sdge.com', login: 'https://myaccount.sdge.com', domains: ['sdge.com'] },
   { match: /socal\s*gas|southern california gas/i, site: 'https://www.socalgas.com', login: 'https://myaccount.socalgas.com', domains: ['socalgas.com'] },
+  // Water: Tyler Munis self service, bills found by account number and customer ID.
+  { match: /city of el centro|\bel centro\b/i, site: 'https://cityofelcentro.org', login: 'https://cityofelcentroca.munisselfservice.com/css/citizens/UtilityBilling/Default.aspx', domains: ['cityofelcentro.org', 'munisselfservice.com'] },
   { match: /\biid\b|imperial irrigation/i, site: 'https://www.iid.com', login: 'https://myaccount.iid.com/Portal/default.aspx', domains: ['iid.com'] },
   { match: /\bfpl\b|florida power/i, site: 'https://www.fpl.com', domains: ['fpl.com'] },
   { match: /duke energy/i, site: 'https://www.duke-energy.com', domains: ['duke-energy.com'] },
@@ -89,7 +91,29 @@ export function websiteFor(account: { providerName: string; providerSlug?: strin
 export function isLookupPage(url: string | null | undefined): boolean {
   if (!url) return false;
   return /invoicecloud\.com\/.*customerlocator/i.test(url)
+    || /munisselfservice\.com\/.*(utilitybilling|customeraccountlink)/i.test(url)
     || /\/(quick-?pay|guest-?pay|pay-?as-?guest|bill-?lookup|find-?my-?(bill|account))\b/i.test(url);
+}
+
+/**
+ * An account fetched from a lookup page rather than by signing in: its
+ * website is one, or it has no login and either a customer ID to look it up
+ * by or a provider with a lookup page (City of El Centro).
+ */
+export function isLookupAccount(a: { providerName: string; providerSlug: string | null; loginUrl: string | null; usernameEnc?: string | null; lookupCustomerId?: string | null }): boolean {
+  return isLookupPage(websiteFor(a)?.url) || (!a.usernameEnc && (!!a.lookupCustomerId?.trim() || isLookupPage(lookupStartFor(a))));
+}
+
+/**
+ * Where a lookup account starts: its website when that is the lookup page,
+ * else the provider's own lookup page from the directory (the saved website
+ * is often the city's home page), else its website.
+ */
+export function lookupStartFor(a: { providerName: string; providerSlug: string | null; loginUrl: string | null }): string | null {
+  const own = websiteFor(a)?.url ?? null;
+  if (isLookupPage(own)) return own;
+  const p = findProvider(a.providerName, a.providerSlug);
+  return p?.login && isLookupPage(p.login) ? p.login : own;
 }
 
 /** The provider a sender's address belongs to, by domain (bills@e.sdge.com → SDG&E). */

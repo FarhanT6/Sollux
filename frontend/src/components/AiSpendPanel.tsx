@@ -213,7 +213,7 @@ export default function AiSpendPanel() {
                   {rest.map(a => (
                     <div key={a.id} className="flex items-center justify-between gap-3 py-2">
                       <p className="text-sm text-gray-200 min-w-0 truncate">{a.providerName}{a.last4 ? ` ··${a.last4}` : ''} <span className="text-gray-500">· {a.place}</span></p>
-                      <button className="btn text-xs whitespace-nowrap" onClick={() => setLoginFor(a)}>{a.needs === 'name' ? 'Add name on the bill' : 'Add login'}</button>
+                      <button className="btn text-xs whitespace-nowrap" onClick={() => setLoginFor(a)}>{a.needs === 'name' ? 'Add lookup details' : 'Add login'}</button>
                     </div>
                   ))}
                 </div>
@@ -222,7 +222,7 @@ export default function AiSpendPanel() {
           );
         })()}
         {loginFor && (
-          <PortalLogin account={{ id: loginFor.id, providerName: loginFor.providerName, hasCredentials: loginFor.hasCredentials, lookupName: loginFor.lookupName }}
+          <PortalLogin account={{ id: loginFor.id, providerName: loginFor.providerName, hasCredentials: loginFor.hasCredentials, lookupName: loginFor.lookupName, lookupCustomerId: loginFor.lookupCustomerId }}
             website={loginFor.website} onClose={() => setLoginFor(null)} onSaved={() => void getPortalTests().then(setPortal)} />
         )}
       </div>

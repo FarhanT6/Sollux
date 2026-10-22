@@ -53,6 +53,9 @@ export interface UtilityAccountView {
   openPortalLogin: () => void;
   /** The website is a bill lookup page: the name on the bill instead of a login. */
   lookupPage: boolean;
+  /** What the lookup page asks for beside the account number ("Customer ID", "Name on the bill"), and its saved value. */
+  lookupLabel: string;
+  lookupValue: string;
   saveLookupName: (name: string) => Promise<void>;
   payment: {
     open: boolean; editing: boolean; saving: boolean; canSave: boolean; fields: ReactNode;
@@ -76,7 +79,8 @@ export default function UtilityAccountScreen(v: UtilityAccountView) {
   const [nameSheet, setNameSheet] = useState(false);
   const [name, setName] = useState('');
   const [savingName, setSavingName] = useState(false);
-  const editName = () => { setName(account.lookupName ?? ''); setNameSheet(true); };
+  const editName = () => { setName(v.lookupValue); setNameSheet(true); };
+  const byCustomer = v.lookupLabel === 'Customer ID';
   const [tab, setTab] = useState<Tab>('bills');
   const [bill, setBill] = useState<any | null>(null);
   const [pay, setPay] = useState<any | null>(null);
@@ -119,9 +123,9 @@ export default function UtilityAccountScreen(v: UtilityAccountView) {
 
       {v.arrangements}
 
-      {v.lookupPage && !account.lookupName && (
-        <Section footer="This provider's website finds the bills by account number and the name the bill is addressed to — no login needed.">
-          <Row title="Add the name on the bill" subtitle="So Sollux can look up the bills" tinted onClick={editName} />
+      {v.lookupPage && !v.lookupValue && (
+        <Section footer={`This provider's website finds the bills by account number and ${byCustomer ? 'customer ID' : 'the name the bill is addressed to'} — no login needed.`}>
+          <Row title={`Add the ${byCustomer ? 'customer ID' : 'name on the bill'}`} subtitle="So Sollux can look up the bills" tinted onClick={editName} />
         </Section>
       )}
       {!account.hasCredentials && !v.lookupPage && (
@@ -236,8 +240,8 @@ export default function UtilityAccountScreen(v: UtilityAccountView) {
               {Object.entries(CADENCE_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
             </select>} />
           {v.lookupPage ? (
-            <Row title="Name on the bill" subtitle="Sollux looks up the bills with it — no login" onClick={() => { setActions(false); editName(); }}
-              value={<span className={account.lookupName ? '' : 'ios-tint'}>{account.lookupName || 'Add'}</span>} />
+            <Row title={v.lookupLabel} subtitle="Sollux looks up the bills with it — no login" onClick={() => { setActions(false); editName(); }}
+              value={<span className={v.lookupValue ? '' : 'ios-tint'}>{v.lookupValue || 'Add'}</span>} />
           ) : (
             <Row title="Portal login" subtitle="Sollux fetches statements from the provider's site" onClick={() => { setActions(false); v.openPortalLogin(); }}
               value={<span className={account.hasCredentials ? 'ios-green' : 'ios-tint'}>{account.hasCredentials ? 'Saved' : 'Add'}</span>} />
@@ -261,11 +265,11 @@ export default function UtilityAccountScreen(v: UtilityAccountView) {
         </Section>
       </Sheet>
 
-      <Sheet open={nameSheet} onClose={() => setNameSheet(false)} title="Name on the bill"
-        right={{ label: 'Save', busy: savingName, disabled: !name.trim() && !account.lookupName,
+      <Sheet open={nameSheet} onClose={() => setNameSheet(false)} title={v.lookupLabel}
+        right={{ label: 'Save', busy: savingName, disabled: !name.trim() && !v.lookupValue,
           onClick: () => { setSavingName(true); void v.saveLookupName(name).finally(() => { setSavingName(false); setNameSheet(false); }); } }}>
-        <Section header={account.providerName} footer="Exactly as the bill prints it, e.g. JANE SMITH. Sollux types it with the account number into the provider's bill lookup page — no login needed.">
-          <Field label="Name"><input autoCorrect="off" autoCapitalize="characters" placeholder="As on the bill" value={name} onChange={e => setName(e.target.value)} /></Field>
+        <Section header={account.providerName} footer={`Exactly as the bill prints it${byCustomer ? '' : ', e.g. JANE SMITH'}. Sollux types it with the account number into the provider's bill lookup page — no login needed.`}>
+          <Field label={byCustomer ? 'Customer ID' : 'Name'}><input autoCorrect="off" autoCapitalize={byCustomer ? 'off' : 'characters'} inputMode={byCustomer ? 'numeric' : undefined} placeholder="As on the bill" value={name} onChange={e => setName(e.target.value)} /></Field>
         </Section>
       </Sheet>
 

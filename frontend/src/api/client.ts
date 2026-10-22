@@ -1195,7 +1195,7 @@ export interface PortalRunStatus {
 }
 export interface PortalTestAccount {
   id: string; providerName: string; last4: string | null; place: string; lastSyncStatus: string | null; lastSyncError: string | null; lastAgentRunAt: string | null;
-  propertyId: string; hasCredentials: boolean; lookupName: string | null; website: string | null;
+  propertyId: string; hasCredentials: boolean; lookupName: string | null; lookupCustomerId?: string | null; website: string | null;
   /** What stands between it and a fetch: a portal login, the name on the bill (lookup page), or nothing to fetch (paid from escrow). */
   needs: 'login' | 'name' | 'escrow' | null;
   recipe: { successes: number; failures: number; updatedAt: string } | null;

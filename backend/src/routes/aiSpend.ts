@@ -24,7 +24,7 @@ import { detectLeaks } from '../ai/leakDetective';
 import { runBookkeeperForUser } from '../ai/bookkeeper';
 import { scrapeQueue } from '../workers/queues';
 import { workerStatus } from '../workers/heartbeat';
-import { websiteFor, isLookupPage } from '../lib/providerDirectory';
+import { websiteFor, isLookupPage, isLookupAccount, lookupStartFor } from '../lib/providerDirectory';
 
 const router = Router();
 router.use(attachDbUser);
@@ -239,10 +239,10 @@ router.post('/test', (req: Request, res: Response) => {
 
 /** Fetch statements for one account now, as a test: the worker runs it and its spend is marked as a test. */
 router.post('/test/portal/:accountId', async (req: Request, res: Response) => {
-  const a = await db.utilityAccount.findFirst({ where: { id: req.params.accountId, property: { userId: req.dbUserId! } }, select: { id: true, usernameEnc: true, syncEnabled: true, providerName: true, providerSlug: true, loginUrl: true } });
+  const a = await db.utilityAccount.findFirst({ where: { id: req.params.accountId, property: { userId: req.dbUserId! } }, select: { id: true, usernameEnc: true, lookupCustomerId: true, syncEnabled: true, providerName: true, providerSlug: true, loginUrl: true } });
   if (!a) return res.status(404).json({ error: 'Account not found' });
   // A bill lookup page needs no login (the name on the bill instead).
-  if (!a.usernameEnc && !isLookupPage(websiteFor(a)?.url)) return res.status(400).json({ error: 'Add a portal login to this account first.' });
+  if (!a.usernameEnc && !isLookupAccount(a)) return res.status(400).json({ error: 'Add a portal login to this account first.' });
   if (!a.syncEnabled) return res.status(400).json({ error: 'Syncing is turned off for this account (it is marked inactive). Turn it back on from the account first.' });
   // One run at a time: a second would fight the first over the same login.
   const running = await db.syncJob.findFirst({ where: { utilityAccountId: a.id, status: 'PENDING', createdAt: { gte: new Date(Date.now() - 15 * 60_000) } }, select: { id: true } });
@@ -279,7 +279,7 @@ async function queueSnapshot() {
 router.get('/test/portal', async (req: Request, res: Response) => {
   const accounts = await db.utilityAccount.findMany({
     where: { property: { userId: req.dbUserId! } },
-    select: { id: true, providerName: true, providerSlug: true, category: true, escrowLoanId: true, usernameEnc: true, lookupName: true, propertyId: true, accountNumber: true, loginUrl: true, lastSyncStatus: true, lastSyncError: true, lastAgentRunAt: true, syncEnabled: true, mfaPrompt: true, mfaRequestedAt: true, property: { select: { nickname: true, address: true } } },
+    select: { id: true, providerName: true, providerSlug: true, category: true, escrowLoanId: true, usernameEnc: true, lookupName: true, lookupCustomerId: true, propertyId: true, accountNumber: true, loginUrl: true, lastSyncStatus: true, lastSyncError: true, lastAgentRunAt: true, syncEnabled: true, mfaPrompt: true, mfaRequestedAt: true, property: { select: { nickname: true, address: true } } },
     orderBy: { providerName: 'asc' },
   });
   const jobs = await db.syncJob.findMany({
@@ -299,11 +299,13 @@ router.get('/test/portal', async (req: Request, res: Response) => {
   res.json({
     accounts: accounts.map(a => ({
       id: a.id, providerName: a.providerName, last4: a.accountNumber ? String(a.accountNumber).slice(-4) : null, propertyId: a.propertyId,
-      hasCredentials: !!a.usernameEnc, lookupName: a.lookupName, website: websiteFor(a)?.url ?? null,
+      hasCredentials: !!a.usernameEnc, lookupName: a.lookupName, lookupCustomerId: a.lookupCustomerId, website: (a.usernameEnc ? websiteFor(a)?.url : lookupStartFor(a)) ?? null,
       // What stands between this account and a fetch.
       needs: (() => {
-        const lookup = isLookupPage(websiteFor(a)?.url);
-        if (lookup) return a.lookupName ? null : 'name';
+        // A customer-ID lookup (Munis) needs no name; InvoiceCloud's does.
+        if (!a.usernameEnc && a.lookupCustomerId) return null;
+        if (!a.usernameEnc && isLookupAccount(a)) return /munisselfservice\.com/i.test(lookupStartFor(a) ?? '') ? 'name' : a.lookupName ? null : 'name';
+        if (isLookupPage(websiteFor(a)?.url)) return a.lookupName ? null : 'name';
         if (!a.usernameEnc) return a.escrowLoanId ? 'escrow' : 'login';
         return null;
       })() as 'login' | 'name' | 'escrow' | null,

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { websiteFor, isLookupPage } from '../lib/providerDirectory';
+import { websiteFor, isLookupPage, isLookupAccount, lookupStartFor } from '../lib/providerDirectory';
 import { allocateAccountPayments } from '../lib/paymentAllocation';
 import { submitPortalCode } from '../scrapers/portalAgent';
 import { z } from 'zod';
@@ -184,6 +184,18 @@ async function assertUnitBelongsToProperty(unitId: string | null | undefined, pr
   }
 }
 
+/**
+ * How a lookup account (bills found without signing in) is looked up: the
+ * page, and what it asks for beside the account number — a customer ID
+ * (Tyler Munis self service) or the name on the bill (InvoiceCloud).
+ */
+function lookupInfo(a: Parameters<typeof isLookupAccount>[0]): { lookupPage: boolean; lookupKind: 'customer' | 'name' | null; lookupUrl: string | null } {
+  if (!isLookupAccount(a)) return { lookupPage: false, lookupKind: null, lookupUrl: null };
+  const url = a.usernameEnc ? websiteFor(a)?.url ?? null : lookupStartFor(a);
+  const kind = a.lookupCustomerId || /munisselfservice\.com/i.test(url ?? '') ? 'customer' : 'name';
+  return { lookupPage: true, lookupKind: kind, lookupUrl: url };
+}
+
 const UtilitySchema = z.object({
   propertyId: z.string(),
   providerName: z.string().min(1),
@@ -193,6 +205,7 @@ const UtilitySchema = z.object({
   password: z.string().optional(),
   loginUrl: z.union([z.string().url(), z.literal('')]).optional().transform(v => v === '' ? null : v),
   lookupName: z.string().max(120).nullable().optional().transform(v => (v == null ? v : v.trim() || null)),
+  lookupCustomerId: z.string().max(60).nullable().optional().transform(v => (v == null ? v : v.trim() || null)),
   category: z.enum(['ELECTRIC', 'GAS', 'WATER', 'SEWER', 'TRASH', 'SOLAR',
     'INTERNET', 'PHONE', 'INSURANCE', 'HOA', 'TAXES', 'LOAN', 'CREDIT_CARD', 'OTHER']),
   notes: z.string().optional(),
@@ -384,7 +397,7 @@ router.get('/:id', async (req, res, next) => {
     const payments = rest.payments.map(p => ({ ...p, breakdown: breakdowns.get(p.id) ?? null }));
     // The provider's website: the address the owner saved or a bill printed,
     // else the provider directory's.
-    res.json({ ...rest, payments, hasCredentials: !!usernameEnc, website: websiteFor(account), lookupPage: isLookupPage(websiteFor(account)?.url) });
+    res.json({ ...rest, payments, hasCredentials: !!usernameEnc, website: websiteFor(account), ...lookupInfo({ ...account, usernameEnc }) });
   } catch (err) { next(err); }
 });
 
@@ -447,7 +460,7 @@ router.post('/:id/sync', async (req, res, next) => {
     if (account.providerSlug === 'gmail-fallback' && !account.usernameEnc) {
       return res.json({ message: 'Add your portal login (Edit on the account) and Sollux will fetch the statements from the provider\'s website. Until then, bills come from your Gmail.' });
     }
-    if (!account.usernameEnc && !isLookupPage(account.loginUrl)) {
+    if (!account.usernameEnc && !isLookupAccount(account)) {
       // Mark as failed immediately with a clear message rather than queuing a job that will fail
       await db.utilityAccount.update({
         where: { id: account.id },

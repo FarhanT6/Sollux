@@ -193,6 +193,10 @@ model UtilityAccount {
   // lookup page that finds bills by account number and name without signing
   // in (InvoiceCloud's "Please Locate Your Account").
   lookupName       String?
+  // The customer ID a lookup page asks for beside the account number
+  // (Tyler Munis self service: "Account Number" and "Customer ID"). With it
+  // and the account number the bills are found without signing in.
+  lookupCustomerId String?
   // Portal agent: a verification code the portal sent, asked of the owner
   // mid-login. The prompt is what the portal said; the code is encrypted and
   // cleared as soon as the agent has typed it.
