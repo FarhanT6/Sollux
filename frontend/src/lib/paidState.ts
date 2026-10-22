@@ -1,4 +1,17 @@
 import { isAfter } from 'date-fns';
+import { paymentFees } from './feeKinds';
+
+/**
+ * What a payment put toward bills. A fee logged on a payment against no bill
+ * (an extra pickup paid on its own) is a charge of its own that the payment
+ * covered, so it never pays down a bill.
+ */
+export function towardBills(p: any): number {
+  const amount = Number(p?.amount ?? 0);
+  if (p?.statementId) return amount;
+  const fees = paymentFees(p).reduce((t, f) => t + f.amount, 0);
+  return Math.max(0, Number((amount - fees).toFixed(2)));
+}
 
 /**
  * Whether a bill is paid, and what an account owes right now — one
@@ -67,7 +80,7 @@ export function unlinkedPaidSince(s: any, payments: any[] = []): number {
   const since = new Date(s.statementDate).getTime() - 86400000;
   return payments
     .filter(p => !p.statementId && p.status !== 'FAILED' && p.status !== 'PENDING' && new Date(p.paymentDate).getTime() >= since)
-    .reduce((t, p) => t + Number(p.amount ?? 0), 0);
+    .reduce((t, p) => t + towardBills(p), 0);
 }
 
 /**
@@ -133,7 +146,7 @@ export function isStatementPaid(s: any, payments: any[] = [], priorSettled = fal
   // logged "toward Jul 2026" must not also count as paying August.
   const sumSinceStmt = payments
     .filter(p => new Date(p.paymentDate) >= stmtDate && (!p.statementId || p.statementId === s.id) && p.status !== 'FAILED' && p.status !== 'PENDING')
-    .reduce((acc, p) => acc + Number(p.amount ?? 0), 0);
+    .reduce((acc, p) => acc + towardBills(p), 0);
   return sumSinceStmt >= openBalance - 0.01;
 }
 
@@ -226,7 +239,7 @@ export function computePaidMap(statements: any[], payments: any[], resolvedByFut
   const counted = (p: any) => p.status !== 'FAILED' && p.status !== 'PENDING';
   const pool = payments
     .filter(p => counted(p) && !p.statementId)
-    .map(p => ({ date: new Date(p.paymentDate).getTime(), left: Number(p.amount ?? 0) }))
+    .map(p => ({ date: new Date(p.paymentDate).getTime(), left: towardBills(p) }))
     .sort((a, b) => a.date - b.date);
   for (let i = statements.length - 1; i >= 0; i--) {
     const s = statements[i];

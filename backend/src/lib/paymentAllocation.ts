@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client';
+import { feesOf, feesTotal } from '../services/lateFees';
 
 /**
  * What a payment actually went toward.
@@ -34,6 +35,10 @@ export interface PaymentForAllocation {
   feeAmount?: Prisma.Decimal | number | null;
   status: string;
   statementId?: string | null;
+  // Fees logged with the payment (lateFees.ts); on a payment against no
+  // bill they are charges of their own, paid by it, not bill balance.
+  lateFeeAdded?: Prisma.Decimal | number | null;
+  feesAddedJson?: unknown;
 }
 
 export interface PaymentBreakdown {
@@ -81,6 +86,13 @@ export function allocateAccountPayments(
   for (const p of ordered) {
     const fee = Math.max(num(p.feeAmount), 0);
     const amount = num(p.amount);
+    // A fee paid on its own (an extra pickup, not on any bill) is what the
+    // payment covered first; only the rest goes toward bills.
+    const standalone = p.statementId || p.status === 'FAILED' ? 0 : Math.min(amount, feesTotal(feesOf(p)));
+    if (standalone > 0 && amount - standalone <= 0.005) {
+      out.set(p.id, { statementId: null, statementLabel: null, toFees: standalone, toPastDue: 0, toInstallment: 0, toCurrent: 0, overpaid: 0, creditUsed: 0, transactionFee: fee, totalOut: amount + fee, remainingAfter: 0 });
+      continue;
+    }
     const target = (p.statementId && statements.find(s => s.id === p.statementId))
       || byDateDesc.find(s => s.statementDate.getTime() <= p.paymentDate.getTime() + 86400000)
       || null;
@@ -99,9 +111,9 @@ export function allocateAccountPayments(
         const take = Math.min(o[k], o.credit); o[k] -= take; o.credit -= take; creditUsed += take;
       }
     }
-    let left = amount;
+    let left = amount - standalone;
     const take = (k: 'fees' | 'pastDue' | 'installment' | 'current') => { const t = Math.min(o[k], left); o[k] -= t; left -= t; return t; };
-    const toFees = take('fees');
+    const toFees = take('fees') + standalone;
     const toPastDue = take('pastDue');
     const toInstallment = take('installment');
     const toCurrent = take('current');

@@ -99,7 +99,7 @@ export async function applyPaymentToLoan(paymentId: string): Promise<number> {
 async function feesPaidBy(paymentId: string, utilityAccountId: string): Promise<number> {
   const [stmts, pays] = await Promise.all([
     db.statement.findMany({ where: { utilityAccountId, isDownPayment: false }, select: { id: true, utilityAccountId: true, statementDate: true, billingPeriodEnd: true, amountDue: true, pastDueCarried: true, penaltiesFees: true, paymentPlanAmount: true } }),
-    db.payment.findMany({ where: { utilityAccountId }, select: { id: true, utilityAccountId: true, paymentDate: true, amount: true, feeAmount: true, status: true, statementId: true } }),
+    db.payment.findMany({ where: { utilityAccountId }, select: { id: true, utilityAccountId: true, paymentDate: true, amount: true, feeAmount: true, status: true, statementId: true, lateFeeAdded: true, feesAddedJson: true } }),
   ]);
   return Math.max(0, Number(allocateAccountPayments(stmts, pays).get(paymentId)?.toFees ?? 0));
 }

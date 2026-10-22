@@ -379,7 +379,7 @@ router.get('/:id', async (req, res, next) => {
     // without it a late fee a payment covered ("incl. $6.07 late fee") was not shown.
     const breakdowns = allocateAccountPayments(
       account.statements.filter(s => !s.isDownPayment).map(s => ({ id: s.id, utilityAccountId: s.utilityAccountId, statementDate: s.statementDate, billingPeriodEnd: s.billingPeriodEnd, amountDue: s.amountDue, pastDueCarried: s.pastDueCarried, penaltiesFees: s.penaltiesFees, paymentPlanAmount: s.paymentPlanAmount })),
-      account.payments.map(p => ({ id: p.id, utilityAccountId: p.utilityAccountId, paymentDate: p.paymentDate, amount: p.amount, feeAmount: p.feeAmount, status: p.status, statementId: p.statementId })),
+      account.payments.map(p => ({ id: p.id, utilityAccountId: p.utilityAccountId, paymentDate: p.paymentDate, amount: p.amount, feeAmount: p.feeAmount, status: p.status, statementId: p.statementId, lateFeeAdded: p.lateFeeAdded, feesAddedJson: p.feesAddedJson })),
     );
     const payments = rest.payments.map(p => ({ ...p, breakdown: breakdowns.get(p.id) ?? null }));
     // The provider's website: the address the owner saved or a bill printed,

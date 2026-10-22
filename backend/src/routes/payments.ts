@@ -65,7 +65,7 @@ router.get('/', async (req, res, next) => {
       }),
       db.payment.findMany({
         where: { utilityAccountId: { in: accountIds } },
-        select: { id: true, utilityAccountId: true, paymentDate: true, amount: true, feeAmount: true, status: true, statementId: true },
+        select: { id: true, utilityAccountId: true, paymentDate: true, amount: true, feeAmount: true, status: true, statementId: true, lateFeeAdded: true, feesAddedJson: true },
       }),
     ]);
     const breakdowns = new Map<string, ReturnType<typeof allocateAccountPayments> extends Map<string, infer B> ? B : never>();
@@ -224,7 +224,6 @@ router.post('/', async (req, res, next) => {
 
     const { lateFee: _lateFee, fees: _fees, ...fields } = data;
     const fees = requestedFees(data);
-    if (fees.length && !fields.statementId) return res.status(400).json({ error: 'Choose the bill these fees were charged on, so they go on it.' });
     const payment = await db.payment.create({
       data: { ...fields, lateFeeAdded: fees.length ? feesTotal(fees) : null, feesAddedJson: fees.length ? (fees as any) : undefined, paymentDate: new Date(fields.paymentDate) },
       include: { bankAccount: { select: { id: true, name: true, bank: true, last4: true, accountType: true, ownerLabel: true, cardNetwork: true } } },
@@ -273,7 +272,6 @@ router.patch('/:id', async (req, res, next) => {
     const oldFees = feesOf(existing);
     const newFees = feeList !== undefined || lateFee !== undefined ? requestedFees(data) : oldFees;
     const newStatementId = fields.statementId !== undefined ? fields.statementId : existing.statementId;
-    if (newFees.length && !newStatementId) return res.status(400).json({ error: 'Choose the bill these fees were charged on, so they go on it.' });
     const same = JSON.stringify(mergeFees(oldFees)) === JSON.stringify(mergeFees(newFees));
     if (!same || newStatementId !== existing.statementId) {
       await applyFees(existing.statementId, oldFees, -1);
