@@ -136,6 +136,38 @@ async function lookupStart(accountId: string): Promise<string | undefined> {
   return /^\d{5,8}\s*-\s*\d{5,8}$/.test(full) ? OCEANSIDE_LOOKUP : undefined;
 }
 
+const DAY = 86400000;
+/**
+ * Why a fetch nobody asked for (the schedule, or a "your bill is ready"
+ * email) should not run now, or null when it should. Each run is a browser,
+ * Claude calls and often a texted code, so:
+ * - not before the next bill is due by the account's cycle; a bill-ready
+ *   email is believed from 10 days before that, not right after a bill was
+ *   filed (Mohela and Blue Shield send reminders saying "view your statement
+ *   online" every few days, and each one started a fetch);
+ * - never twice in a day;
+ * - and once due, runs that found nothing back off: 1, 2, 4, then every 7
+ *   days, until a new statement comes in. A provider that stopped billing,
+ *   or a portal the agent cannot get statements from, was fetched nightly
+ *   for ever.
+ */
+async function scheduledSkip(accountId: string, cadence: string | null, lastRun: Date | null, billPosted: boolean): Promise<string | null> {
+  const last = await db.statement.findFirst({ where: { utilityAccountId: accountId }, orderBy: { statementDate: 'desc' }, select: { statementDate: true, createdAt: true } });
+  const cycle = billCycleDays(cadence);
+  const age = last ? Date.now() - last.statementDate.getTime() : Infinity;
+  if (age < (cycle - (billPosted ? 10 : 3)) * DAY) return `the ${last!.statementDate.toISOString().slice(0, 10)} statement is the latest; the next is not due yet`;
+  const sinceRun = lastRun ? Date.now() - lastRun.getTime() : Infinity;
+  if (sinceRun < 20 * 3600000) return 'already ran today';
+  // Runs since the newest statement came in that brought nothing.
+  const misses = await db.syncJob.count({
+    where: { utilityAccountId: accountId, completedAt: { not: null, gt: last?.createdAt ?? new Date(Date.now() - 60 * DAY) }, statementsFound: 0 },
+  });
+  if (billPosted && misses < 2) return null;
+  const wait = misses === 0 ? 0 : Math.min(2 ** (misses - 1), 7) * DAY;
+  if (sinceRun < wait) return `${misses} run${misses === 1 ? '' : 's'} since the last statement found nothing; next try in ${Math.ceil((wait - sinceRun) / DAY)} day(s)`;
+  return null;
+}
+
 export async function agentJob(job: Job<ScrapeJobData>, account: { id: string; providerName: string; property: { id: string } }): Promise<void> {
   const utilityAccountId = account.id;
     await db.utilityAccount.update({ where: { id: utilityAccountId }, data: { lastSyncStatus: 'PENDING' } });
@@ -274,13 +306,11 @@ const worker = new Worker<ScrapeJobData>(
     const invoiceCloud = /oceanside/i.test(account.providerName) && /^\d{5,8}\s*-\s*\d{5,8}$/.test(fullNumber);
     const slug = invoiceCloud ? 'city-oceanside-ic' : account.providerSlug;
     if (job.data.forceAgent || !getScraperProvider(slug) || (slug === 'gmail-fallback' && account.usernameEnc)) {
-      const last = await db.statement.findFirst({ where: { utilityAccountId }, orderBy: { statementDate: 'desc' }, select: { statementDate: true } });
-      const cycle = billCycleDays(account.billingCadence);
-      const notDueYet = last && Date.now() - last.statementDate.getTime() < (cycle - 3) * 86400000;
-      const ranToday = account.lastAgentRunAt && Date.now() - account.lastAgentRunAt.getTime() < 20 * 3600000;
       // forceAgent: a built-in scraper's run for the whole login failed just now, so it is due.
-      if (!job.data.manual && !job.data.forceAgent && job.data.trigger !== 'bill_posted' && (notDueYet || ranToday)) return;
-      if (job.data.trigger === 'bill_posted' && ranToday && !job.data.manual) return;
+      if (!job.data.manual && !job.data.forceAgent) {
+        const skip = await scheduledSkip(utilityAccountId, account.billingCadence, account.lastAgentRunAt, job.data.trigger === 'bill_posted');
+        if (skip) { console.log(`[ScrapeWorker] ${account.providerName}: not fetching — ${skip}`); return; }
+      }
       await agentJob(job, account);
       return; // never retried automatically: a retry could re-trigger a code or lock the login
     }
