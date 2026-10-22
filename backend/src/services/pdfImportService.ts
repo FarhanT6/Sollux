@@ -1122,6 +1122,11 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string, laye
       breakdownCount++;
     }
   }
+  // A payment credited while pending and taken back (SoCalGas "Pending
+  // Payment 32.13" under Other Charges & Credits): kept as a line, so
+  // takeOutPendingPayment can take it out of the period's charge.
+  const pendingPay = text.match(/^\s*Pending Payment\s*\$?([\d,]+\.\d{2})\s*$/im);
+  if (pendingPay && chargeBreakdown['Pending Payment'] == null) { chargeBreakdown['Pending Payment'] = parseFloat(pendingPay[1].replace(/,/g, '')); breakdownCount++; }
   // Pattern 2: "Label\t$X.XX" or "Label   $X.XX"
   if (breakdownCount < 3) {
     const tabRe = /^(.{3,55}?)\s{2,}\$\s*([\d,]+\.\d{2})$/gm;
@@ -1990,6 +1995,46 @@ export function sanitiseCurrentCharges(ex: ExtractedBillData): void {
 }
 
 /**
+ * SoCalGas, Oct 2026: Amount of Last Bill 13.55 − Payment Received 09/18
+ * 32.13 + Current Charges 53.63 = 35.05, where the current charges hold
+ * "OTHER CHARGES & CREDITS: Pending Payment 32.13". The last bill had
+ * already credited that payment while it was pending; it posts again here
+ * and the pending credit is taken back, so it counts once. The line is not
+ * a charge of this period (the gas was 21.50) and the payment is not a
+ * credit carried in (13.55 was past due): read as printed, the bill showed
+ * a $53.63 charge and an $18.58 credit. Taken out of both, when the bill
+ * still adds up to its total.
+ */
+export function takeOutPendingPayment(ex: ExtractedBillData): void {
+  const lines = ex.chargeBreakdown as Record<string, number> | null | undefined;
+  if (!lines) return;
+  const key = Object.keys(lines).find(k => /^\s*(pending payment|payment pending)\b/i.test(k) && Number(lines[k]) > 0);
+  if (!key) return;
+  const amt = Number(lines[key]);
+  const r2 = (n: number) => Number(n.toFixed(2));
+  // The text reader takes the total as amountDue and the last bill as carried:
+  // 13.55 + (53.63 − 32.13) = 35.05.
+  const total = ex.statedTotalDue;
+  if (total != null && ex.amountDue != null && Math.abs(ex.amountDue - total) < 0.01 && ex.currentCharges != null && ex.previousBalance != null
+      && Math.abs(ex.previousBalance + ex.currentCharges - amt - total) < 0.01) {
+    delete lines[key];
+    ex.currentCharges = r2(ex.currentCharges - amt);
+    ex.amountDue = ex.currentCharges;
+    return;
+  }
+  const charge = ex.amountDue;
+  if (charge == null || charge - amt < -0.005) return;
+  const carried = ex.previousBalance ?? (ex.statedTotalDue != null ? ex.statedTotalDue - charge : null);
+  if (carried == null) return;
+  // The bill must add up before and after: carried + charge = total.
+  if (ex.statedTotalDue != null && Math.abs(carried + charge - ex.statedTotalDue) > 0.01) return;
+  delete lines[key];
+  ex.amountDue = r2(charge - amt);
+  if (ex.currentCharges != null && ex.currentCharges - amt >= -0.005) ex.currentCharges = r2(ex.currentCharges - amt);
+  ex.previousBalance = r2(carried + amt);
+}
+
+/**
  * Make the figures agree with the bill's own arithmetic.
  *
  * An SDG&E bill under a pay agreement reads: Previous Balance 1,936.25 ·
@@ -2006,6 +2051,7 @@ export function sanitiseCurrentCharges(ex: ExtractedBillData): void {
  * deferred money; and a stated installment joins this period's charges.
  */
 export function reconcileWithStatedTotal(ex: ExtractedBillData): void {
+  takeOutPendingPayment(ex);
   const total = ex.statedTotalDue;
   if (total == null) return;
   const plan = ex.paymentPlan;
