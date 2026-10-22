@@ -27,17 +27,18 @@ export const isLoggedFeeLine = (line: string) => LOGGED_LINES.has(line);
 
 // What counts as a fee on a bill's itemised charges: late fees, penalties,
 // returned payments, delinquent charges, disconnection / reconnection,
-// contamination and additional-service (extra pickup) charges, and fees
+// contamination, additional-service (extra pickup) and incidental charges, and fees
 // logged with payments. Everything else is service. The same rule as the
 // statements trigger (migration 20261022090000_additional_service_fee).
-export const FEE_LINE = /late|penalt|nsf|non[- ]?sufficient|returned (check|payment|item)|dishono|delinquen|reconnect|disconnect|contaminat|collection fee|additional (service|pick[- ]?up)|extra (service|pick[- ]?up)|\(logged\)/i;
+export const FEE_LINE = /late|penalt|nsf|non[- ]?sufficient|returned (check|payment|item)|dishono|delinquen|reconnect|disconnect|contaminat|collection fee|additional (service|pick[- ]?up)|extra (service|pick[- ]?up)|incidental|\(logged\)/i;
 
 /** Which kind a fee line is, by its wording. */
 export function feeKindOf(line: string): FeeKind {
   if (/contaminat/i.test(line)) return 'contamination';
   if (/delinquen/i.test(line)) return 'delinquent';
   if (/disconnect|reconnect/i.test(line)) return 'disconnection';
-  if (/additional|extra/i.test(line)) return 'additional';
+  // WM's incidental charges are extra pickups and overages.
+  if (/additional|extra|incidental/i.test(line)) return 'additional';
   if (/nsf|sufficient|returned|dishono/i.test(line)) return 'returned';
   if (/late|penalt/i.test(line)) return 'late';
   return 'other';

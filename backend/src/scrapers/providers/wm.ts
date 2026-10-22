@@ -463,9 +463,11 @@ export class WMScraper extends BaseScraperProvider {
         if (amounts.length === 0) continue;
 
         // WM's Billing Details columns are: Invoice Date | Due Date | Incidental Charges | Current Invoice Charges
-        // The FIRST dollar amount in the row text is the Current Invoice Charges (the bill).
-        // Subsequent amounts on paid rows are payment totals — not what we want for amountDue.
-        const amountDue = amounts[0];
+        // The first dollar amount is the Current Invoice Charges (the bill) — unless the row has
+        // incidental charges ("$109.23 View $374.38"): then the bill is the figure after "View",
+        // and it already includes them. Later amounts on paid rows are payment totals.
+        const incidental = /\$\s*[\d,]+\.\d{2}\s*View/i.test(text) && amounts.length > 1;
+        const amountDue = incidental ? amounts[1] : amounts[0];
         const balance = amountDue;
 
         const r = row as Record<string, unknown>;
