@@ -1,4 +1,5 @@
 import UrgentNotices from '../components/UrgentNotices';
+import { FEE_LINE, FEE_KIND_IDS, FEE_KIND_LABELS, billOwnFees, paymentFees, feeKindPhrase, type FeeKind } from '../lib/feeKinds';
 import { useEffect, useState, useMemo, useRef } from 'react';
 import PortalCodeBanner from '../components/utility/PortalCodeBanner';
 import PaymentBreakdownLine from '../components/utility/PaymentBreakdownLine';
@@ -649,24 +650,8 @@ function PaymentPlanCard({
   );
 }
 
-/** The line a late fee logged with a payment is written to (backend lateFees.ts). */
-const LOGGED_LATE_FEE_LINE = 'Late fee (paid late)';
-// What counts as a fee on a bill's itemised charges: late fees, penalties,
-// returned payments, delinquent charges, disconnection / reconnection,
-// contamination and additional-service (extra pickup) charges. Everything
-// else is service. The same rule as the statements trigger (migration
-// 20261022090000_additional_service_fee).
-const FEE_LINE = /late|penalt|nsf|non[- ]?sufficient|returned (check|payment|item)|dishono|delinquen|reconnect|disconnect|contaminat|collection fee|additional (service|pick[- ]?up)|extra (service|pick[- ]?up)/i;
-/**
- * The late fee a bill itself charged — its charge list's fee lines (an
- * imported "Late Fee 6.07") — not one logged with a payment. A payment toward
- * that bill already covers it: the form shows it, and does not add it again.
- */
-export function billOwnLateFee(st: any): number {
-  const lines = (st?.rawDataJson?.chargeBreakdown ?? {}) as Record<string, number>;
-  const fee = Object.entries(lines).filter(([k]) => k !== LOGGED_LATE_FEE_LINE && FEE_LINE.test(k)).reduce((t, [, v]) => t + (Number(v) || 0), 0);
-  return Math.max(0, Number(fee.toFixed(2)));
-}
+/** A fee row on the payment form: what kind, and how much (as typed). */
+interface FeeRow { kind: FeeKind; amount: string }
 
 export default function UtilityDetailPage() {
   const { propertyId, accountId } = useParams<{ propertyId: string; accountId: string }>();
@@ -700,10 +685,13 @@ export default function UtilityDetailPage() {
   const [editPaymentId, setEditPaymentId] = useState<string | null>(null);
   const [savingPayment, setSavingPayment] = useState(false);
   const [payForm, setPayForm] = useState({
-    amount: '', feeAmount: '', lateFee: '', paymentDate: todayISO(),
+    amount: '', feeAmount: '', paymentDate: todayISO(),
     paymentMethod: 'ACH', status: 'PAID', statementId: '',
     confirmationNumber: '', bankAccountId: '', notes: '',
   });
+  // Fees the provider charged because of this payment (late, contamination,
+  // an extra pickup, …), each added to the bill it pays.
+  const [feeRows, setFeeRows] = useState<FeeRow[]>([]);
   // Which bill(s) the payment goes toward, and a card typed in on the spot.
   const [bill, setBill] = useState<BillPickerValue>(emptyBillPick);
   const [newCard, setNewCard] = useState<NewCardForm>(emptyNewCard);
@@ -718,9 +706,9 @@ export default function UtilityDetailPage() {
   }, [accountId]);
 
   function resetPayForm() {
-    filledFor.current = null; prefilled.current = 0;
+    setFeeRows([]);
     setPayForm({
-      amount: '', feeAmount: '', lateFee: '', paymentDate: todayISO(),
+      amount: '', feeAmount: '', paymentDate: todayISO(),
       paymentMethod: 'ACH', status: 'PAID', statementId: '',
       confirmationNumber: '', bankAccountId: '', notes: '',
     });
@@ -729,11 +717,10 @@ export default function UtilityDetailPage() {
   }
 
   function openPaymentEdit(p: any) {
-    filledFor.current = null; prefilled.current = 0;
+    setFeeRows(paymentFees(p).map(f => ({ kind: f.kind, amount: f.amount.toFixed(2) })));
     setPayForm({
       amount: String(p.amount ?? ''),
       feeAmount: p.feeAmount != null ? String(p.feeAmount) : '',
-      lateFee: p.lateFeeAdded != null ? String(p.lateFeeAdded) : '',
       paymentDate: (p.paymentDate ?? '').slice(0, 10),
       paymentMethod: p.paymentMethod || 'ACH',
       status: p.status || 'PAID',
@@ -764,9 +751,9 @@ export default function UtilityDetailPage() {
       alert('Enter an amount greater than zero.');
       return;
     }
-    const lateFee = payForm.lateFee ? parseFloat(payForm.lateFee) : 0;
-    if (Number.isNaN(lateFee) || lateFee < 0) { alert('Enter the late fee as an amount, or leave it blank.'); return; }
-    if (lateFee > 0 && !bill.statementId && !bill.split) { alert('Choose the bill this payment was late for — the late fee is added to it.'); return; }
+    const fees = feeRows.filter(r => r.amount.trim() !== '').map(r => ({ kind: r.kind, amount: parseFloat(r.amount) }));
+    if (fees.some(f => Number.isNaN(f.amount) || f.amount < 0)) { alert('Enter each fee as an amount, or remove it.'); return; }
+    if (fees.some(f => f.amount > 0) && !bill.statementId && !bill.split) { alert('Choose the bill these fees were charged on — they are added to it.'); return; }
     const split = bill.split && !editPaymentId ? splitAllocations(bill, amount) : null;
     if (split && 'error' in split) { alert(split.error); return; }
     setSavingPayment(true);
@@ -776,8 +763,8 @@ export default function UtilityDetailPage() {
         utilityAccountId: accountId,
         amount,
         feeAmount: payForm.feeAmount ? parseFloat(payForm.feeAmount) : null,
-        // The bill's own late fee is already on it (and in the amount): only a fee beyond it is added.
-        lateFee: lateFee - prefilled.current > 0.005 ? Number((lateFee - prefilled.current).toFixed(2)) : null,
+        // Fees beyond the bill's own (those are already on it, and in the amount).
+        fees: fees.filter(f => f.amount > 0),
         paymentDate: payForm.paymentDate,
         paymentMethod: payForm.paymentMethod || null,
         status: payForm.status,
@@ -972,24 +959,9 @@ export default function UtilityDetailPage() {
     const key = (s: any) => new Date(s.billingPeriodEnd ?? s.statementDate).getTime();
     return [...(account?.statements || [])].sort((a, b) => key(b) - key(a));
   }, [account]);
-  // The bill the payment is toward, and the late fee it already carries.
+  // The bill the payment is toward, and the fees it already charged.
   const payTarget = statements.find((s: any) => s.id === bill.statementId) as any;
-  const ownFee = billOwnLateFee(payTarget);
-  // Show that fee in the Late fee box when a bill is picked (once per bill, so clearing the box sticks).
-  const filledFor = useRef<string | null>(null);
-  // The bill's own fee, when it is what filled the box (a fee typed or logged by hand is the owner's).
-  const prefilled = useRef(0);
-  useEffect(() => {
-    if (!bill.statementId || filledFor.current === bill.statementId) return;
-    filledFor.current = bill.statementId;
-    // An empty box, or one still holding the last bill's fee as filled in, follows the bill picked.
-    setPayForm(f => {
-      const untouched = !f.lateFee || (prefilled.current > 0 && Math.abs(Number(f.lateFee) - prefilled.current) < 0.005);
-      if (!untouched) return f;
-      prefilled.current = ownFee;
-      return { ...f, lateFee: ownFee > 0 ? ownFee.toFixed(2) : '' };
-    });
-  }, [bill.statementId, ownFee]);
+  const ownFees = billOwnFees(payTarget);
   const payments: any[] = useMemo(() => account?.payments || [], [account]);
   // Computed from the FULL statement history (not the filtered/searched
   // view) so status stays correct regardless of year filter or search.
@@ -1197,51 +1169,75 @@ export default function UtilityDetailPage() {
                 card={newCard} onCardChange={setNewCard} />
               <input value={payForm.confirmationNumber} onChange={e => setPayForm(f => ({ ...f, confirmationNumber: e.target.value }))}
                 placeholder="Confirmation #" className="input-dark text-xs" />
-              <input type="number" value={payForm.lateFee} onChange={e => setPayForm(f => ({ ...f, lateFee: e.target.value }))}
-                placeholder="Late fee (optional)" title="A late fee the provider charged because this payment was late — added to the bill it pays"
-                className="input-dark text-xs" />
               <input value={payForm.notes} onChange={e => setPayForm(f => ({ ...f, notes: e.target.value }))}
                 placeholder="Notes" className="input-dark text-xs sm:col-span-2 lg:col-span-3" />
             </div>
-            {/* Paid after the bill's due date: say so, and offer the fee this
-                account charged last time. The fee goes on the bill and the
+            {/* Fees, one row per kind. The bill's own (read from its charges)
+                are shown as already on it; rows added here go on the bill. */}
+            <div className="mt-3 space-y-1.5">
+              {ownFees.map(f => (
+                <div key={`own-${f.kind}`} className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="input-dark text-xs w-48 opacity-60">{FEE_KIND_LABELS[f.kind]}</span>
+                  <span className="input-dark text-xs w-28 opacity-60 text-right">{f.amount.toFixed(2)}</span>
+                  <span className="text-gray-500">on the {billMonthLabel(payTarget)} bill — already in it, not added again</span>
+                </div>
+              ))}
+              {feeRows.map((r, i) => (
+                <div key={i} className="flex flex-wrap items-center gap-2 text-xs">
+                  <select value={r.kind} onChange={e => setFeeRows(rows => rows.map((x, k) => k === i ? { ...x, kind: e.target.value as FeeKind } : x))}
+                    className="input-dark text-xs w-48">
+                    {FEE_KIND_IDS.map(k => <option key={k} value={k}>{FEE_KIND_LABELS[k]}</option>)}
+                  </select>
+                  <input type="number" step="0.01" value={r.amount} placeholder="0.00" autoFocus={!r.amount}
+                    onChange={e => setFeeRows(rows => rows.map((x, k) => k === i ? { ...x, amount: e.target.value } : x))}
+                    className="input-dark text-xs w-28" />
+                  <button type="button" className="text-gray-600 hover:text-red-400" title="Remove this fee"
+                    onClick={() => setFeeRows(rows => rows.filter((_, k) => k !== i))}>✕</button>
+                </div>
+              ))}
+              <button type="button" className="text-xs text-amber-400 hover:text-amber-300"
+                onClick={() => setFeeRows(rows => [...rows, { kind: rows.length || ownFees.length ? 'other' : 'late', amount: '' }])}>
+                + {feeRows.length || ownFees.length ? 'Add another fee' : 'Add a fee'}
+              </button>
+            </div>
+            {/* Paid after the bill's due date: say so, and offer the late fee
+                this account charged last time. It goes on the bill and the
                 amount paid grows by it. */}
             {(() => {
               const target = payTarget;
-              // The bill already charged its late fee: say so, and offer nothing to add.
-              if (ownFee > 0) return (
-                <p className="text-xs text-gray-500 mt-2">Includes the {fmtMoney(ownFee)} late fee on the {billMonthLabel(target)} bill — already on that bill, not added again.</p>
-              );
-              if (!target?.dueDate || !payForm.paymentDate) return null;
+              const hasLate = ownFees.some(f => f.kind === 'late') || feeRows.some(r => r.kind === 'late');
+              if (hasLate || !target?.dueDate || !payForm.paymentDate) return null;
               const due = String(target.dueDate).slice(0, 10);
               if (payForm.paymentDate <= due) return null;
               const daysLate = Math.round((Date.parse(payForm.paymentDate) - Date.parse(due)) / 86400000);
-              const lastFee = [...payments].map((p: any) => Number(p.lateFeeAdded ?? 0)).find(v => v > 0)
+              const lastFee = payments.map((p: any) => paymentFees(p).find(f => f.kind === 'late')?.amount ?? 0).find(v => v > 0)
                 ?? [...statements].sort((a: any, b: any) => String(b.statementDate).localeCompare(String(a.statementDate)))
-                  .map((x: any) => Number(x.penaltiesFees ?? 0)).find(v => v > 0);
+                  .map((x: any) => billOwnFees(x).find(f => f.kind === 'late')?.amount ?? 0).find(v => v > 0);
               return (
                 <div className="flex flex-wrap items-center gap-3 mt-2 text-xs">
                   <span className="text-amber-400">
-                    Paid {daysLate} day{daysLate === 1 ? '' : 's'} after the {fmtDate(due, 'MMM d')} due date.
-                    {!payForm.lateFee && ' Did the provider charge a late fee?'}
+                    Paid {daysLate} day{daysLate === 1 ? '' : 's'} after the {fmtDate(due, 'MMM d')} due date. Did the provider charge a late fee?
                   </span>
-                  {!payForm.lateFee && lastFee != null && (
+                  {lastFee != null && (
                     <button type="button" className="text-amber-300 underline hover:text-amber-200"
-                      onClick={() => setPayForm(f => ({
-                        ...f, lateFee: lastFee.toFixed(2),
-                        amount: f.amount && !Number.isNaN(parseFloat(f.amount)) ? (parseFloat(f.amount) + lastFee).toFixed(2) : f.amount,
-                      }))}>
+                      onClick={() => {
+                        setFeeRows(rows => [...rows, { kind: 'late', amount: lastFee.toFixed(2) }]);
+                        setPayForm(f => ({ ...f, amount: f.amount && !Number.isNaN(parseFloat(f.amount)) ? (parseFloat(f.amount) + lastFee).toFixed(2) : f.amount }));
+                      }}>
                       Add {fmtMoney(lastFee)} late fee (last charged)
                     </button>
                   )}
                 </div>
               );
             })()}
-            {Number(payForm.lateFee) - prefilled.current > 0.005 && (
-              <p className="text-xs text-gray-500 mt-1">
-                {fmtMoney(Number(payForm.lateFee) - prefilled.current)} is added to the bill's penalties and balance. Include it in the amount if you paid it with this payment.
-              </p>
-            )}
+            {(() => {
+              const added = feeRows.reduce((t, r) => t + (parseFloat(r.amount) > 0 ? parseFloat(r.amount) : 0), 0);
+              return added > 0.005 ? (
+                <p className="text-xs text-gray-500 mt-1">
+                  {fmtMoney(added)} in fees is added to the bill's penalties and balance. Include it in the amount if you paid it with this payment.
+                </p>
+              ) : null;
+            })()}
     </>
   );
 
@@ -2036,10 +2032,15 @@ export default function UtilityDetailPage() {
                     <div className="text-right flex-shrink-0 w-28">
                       <p className="text-base font-semibold text-white">{fmtMoney(p.amount)}</p>
                       {Number(p.feeAmount ?? 0) > 0 && <p className="text-xs text-gray-500">+ {fmtMoney(p.feeAmount)} fee · {fmtMoney(Number(p.amount) + Number(p.feeAmount))} out</p>}
-                      {/* The late fee this payment covered: logged with it, or on the bill it paid (an imported late fee). */}
+                      {/* The fees this payment covered, by kind: logged with it, or on the bill it paid (imported fees). */}
                       {(() => {
-                        const fee = Number((p as any).lateFeeAdded ?? 0) || Number(p.breakdown?.toFees ?? 0);
-                        return fee > 0 ? <p className="text-xs text-red-400">incl. {fmtMoney(fee)} late fee</p> : null;
+                        const logged = paymentFees(p);
+                        if (logged.length) return logged.map(f => <p key={f.kind} className="text-xs text-red-400">incl. {fmtMoney(f.amount)} {feeKindPhrase(f.kind)}</p>);
+                        const toFees = Number(p.breakdown?.toFees ?? 0);
+                        if (!(toFees > 0)) return null;
+                        const own = billOwnFees(statements.find((s: any) => s.id === p.statementId));
+                        const label = own.length === 1 ? feeKindPhrase(own[0].kind) : 'fees';
+                        return <p className="text-xs text-red-400">incl. {fmtMoney(toFees)} {label}</p>;
                       })()}
                     </div>
                     <div className="flex-shrink-0 w-20 text-right">

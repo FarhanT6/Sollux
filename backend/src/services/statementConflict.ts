@@ -19,7 +19,7 @@
  */
 import { Prisma, Statement } from '@prisma/client';
 import { db } from '../config/db';
-import { LATE_FEE_LINE } from './lateFees';
+import { loggedLines } from './lateFees';
 import type { ExtractedBillData } from './pdfImportService';
 
 export interface StatementConflict {
@@ -103,8 +103,8 @@ export async function keepOwnerFigures(existing: Statement, ex: ExtractedBillDat
   const breakdown: Record<string, number> = differs
     ? { ...((prior?.chargeBreakdown as Record<string, number> | null) ?? {}) }
     : { ...((rawData.chargeBreakdown as Record<string, number> | null) ?? {}) };
-  // A late fee logged with a payment is on the owner's statement, not the PDF.
-  if (prior?.chargeBreakdown?.[LATE_FEE_LINE] != null) breakdown[LATE_FEE_LINE] = prior.chargeBreakdown[LATE_FEE_LINE];
+  // Fees logged with payments are on the owner's statement, not the PDF.
+  Object.assign(breakdown, loggedLines(prior?.chargeBreakdown));
   await db.statement.update({
     where: { id: existing.id },
     data: {

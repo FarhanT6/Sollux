@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
-import { applyLateFee } from '../services/lateFees';
+import { applyFees, feesOf, feesTotal, mergeFees, FEE_KIND_IDS, type LoggedFee } from '../services/lateFees';
 import { resolveAccountNotices } from '../services/noticeTracker';
 import { attachDbUser } from '../middleware/requireAuth';
 import { allocateAccountPayments } from '../lib/paymentAllocation';
@@ -79,6 +80,12 @@ router.get('/', async (req, res, next) => {
   }
 });
 
+/** The fees a request adds: its list by kind, else its single late fee. */
+function requestedFees(data: { fees?: { kind: LoggedFee['kind']; amount: number }[] | null; lateFee?: number | null }): LoggedFee[] {
+  if (data.fees) return mergeFees(data.fees);
+  return data.lateFee ? [{ kind: 'late', amount: data.lateFee }] : [];
+}
+
 const PaymentSchema = z.object({
   utilityAccountId: z.string(),
   statementId: z.string().optional().nullable(),
@@ -86,6 +93,9 @@ const PaymentSchema = z.object({
   feeAmount: z.number().min(0).optional().nullable(),
   // A late fee to add to the bill this payment is for (see applyLateFee).
   lateFee: z.number().min(0).max(100000).optional().nullable(),
+  // Or several fees by kind (a late fee and a contamination charge, …); when
+  // given, these are what goes on the bill and lateFee is ignored.
+  fees: z.array(z.object({ kind: z.enum(FEE_KIND_IDS), amount: z.number().min(0).max(100000) })).max(20).optional().nullable(),
   // Accepts a plain date ("2026-08-17") as well as a full ISO timestamp — the
   // old .datetime() rule rejected what a <input type="date"> sends.
   paymentDate: z.string(),
@@ -157,7 +167,8 @@ router.post('/split', async (req, res, next) => {
       if (!bank) return res.status(404).json({ error: 'Bank account not found' });
     }
 
-    const { allocations, amount: _total, feeAmount, lateFee, ...shared } = data;
+    const { allocations, amount: _total, feeAmount, lateFee, fees: _fees, ...shared } = data;
+    const fees = requestedFees(data);
     const splitGroupId = `split_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     const created: any[] = [];
     for (const [i, alloc] of allocations.entries()) {
@@ -169,13 +180,14 @@ router.post('/split', async (req, res, next) => {
           // The fee was paid once; it sits on the first part so totals stay right.
           feeAmount: i === 0 ? feeAmount ?? null : null,
           // So is a late fee: it goes on the first bill paid.
-          lateFeeAdded: i === 0 && lateFee ? lateFee : null,
+          lateFeeAdded: i === 0 && fees.length ? feesTotal(fees) : null,
+          feesAddedJson: i === 0 && fees.length ? (fees as any) : undefined,
           splitGroupId,
           paymentDate: new Date(shared.paymentDate),
         },
         include: { bankAccount: { select: { id: true, name: true, bank: true, last4: true, accountType: true, ownerLabel: true, cardNetwork: true } } },
       });
-      if (i === 0 && lateFee) await applyLateFee(alloc.statementId, lateFee);
+      if (i === 0 && fees.length) await applyFees(alloc.statementId, fees);
       await syncStatementPaid(alloc.statementId);
       const planApplied = await applyPaymentToPlan(payment.id);
       const loanApplied = await applyPaymentToLoan(payment.id);
@@ -210,13 +222,14 @@ router.post('/', async (req, res, next) => {
       if (!bank) return res.status(404).json({ error: 'Bank account not found' });
     }
 
-    const { lateFee, ...fields } = data;
-    if (lateFee && !fields.statementId) return res.status(400).json({ error: 'Choose the bill this payment was late for, so the late fee goes on it.' });
+    const { lateFee: _lateFee, fees: _fees, ...fields } = data;
+    const fees = requestedFees(data);
+    if (fees.length && !fields.statementId) return res.status(400).json({ error: 'Choose the bill these fees were charged on, so they go on it.' });
     const payment = await db.payment.create({
-      data: { ...fields, lateFeeAdded: lateFee || null, paymentDate: new Date(fields.paymentDate) },
+      data: { ...fields, lateFeeAdded: fees.length ? feesTotal(fees) : null, feesAddedJson: fees.length ? (fees as any) : undefined, paymentDate: new Date(fields.paymentDate) },
       include: { bankAccount: { select: { id: true, name: true, bank: true, last4: true, accountType: true, ownerLabel: true, cardNetwork: true } } },
     });
-    if (lateFee) await applyLateFee(fields.statementId, lateFee);
+    if (fees.length) await applyFees(fields.statementId, fees);
     await syncStatementPaid(fields.statementId);
     const planApplied = await applyPaymentToPlan(payment.id);
     const loanApplied = await applyPaymentToLoan(payment.id);
@@ -254,23 +267,25 @@ router.patch('/:id', async (req, res, next) => {
       if (!stmt) return res.status(404).json({ error: 'Statement not found on this account' });
     }
 
-    // The late fee moves with the payment: off the bill it was on, onto the
+    // The fees move with the payment: off the bill it was on, onto the
     // bill (and at the amount) the payment now names.
-    const { lateFee, ...fields } = data;
-    const oldFee = Number(existing.lateFeeAdded ?? 0);
-    const newFee = lateFee !== undefined ? Number(lateFee ?? 0) : oldFee;
+    const { lateFee, fees: feeList, ...fields } = data;
+    const oldFees = feesOf(existing);
+    const newFees = feeList !== undefined || lateFee !== undefined ? requestedFees(data) : oldFees;
     const newStatementId = fields.statementId !== undefined ? fields.statementId : existing.statementId;
-    if (newFee && !newStatementId) return res.status(400).json({ error: 'Choose the bill this payment was late for, so the late fee goes on it.' });
-    if (oldFee !== newFee || newStatementId !== existing.statementId) {
-      await applyLateFee(existing.statementId, -oldFee);
-      await applyLateFee(newStatementId, newFee);
+    if (newFees.length && !newStatementId) return res.status(400).json({ error: 'Choose the bill these fees were charged on, so they go on it.' });
+    const same = JSON.stringify(mergeFees(oldFees)) === JSON.stringify(mergeFees(newFees));
+    if (!same || newStatementId !== existing.statementId) {
+      await applyFees(existing.statementId, oldFees, -1);
+      await applyFees(newStatementId, newFees);
     }
 
     const payment = await db.payment.update({
       where: { id: existing.id },
       data: {
         ...fields,
-        lateFeeAdded: newFee || null,
+        lateFeeAdded: newFees.length ? feesTotal(newFees) : null,
+        feesAddedJson: newFees.length ? (newFees as any) : Prisma.DbNull,
         ...(fields.paymentDate ? { paymentDate: new Date(fields.paymentDate) } : {}),
       },
       include: { bankAccount: { select: { id: true, name: true, bank: true, last4: true, accountType: true, ownerLabel: true, cardNetwork: true } } },
@@ -300,8 +315,8 @@ router.delete('/:id', async (req, res, next) => {
     // Whatever it took off the plan or the loan goes back on it.
     await unapplyPaymentFromPlan(existing.id);
     await unapplyPaymentFromLoan(existing.id);
-    // So does a late fee it added to the bill.
-    await applyLateFee(existing.statementId, -Number(existing.lateFeeAdded ?? 0));
+    // So do fees it added to the bill.
+    await applyFees(existing.statementId, feesOf(existing), -1);
     await db.payment.delete({ where: { id: existing.id } });
     // Removing the last payment leaves the statement unpaid again.
     await syncStatementPaid(existing.statementId);
