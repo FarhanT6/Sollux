@@ -1,5 +1,5 @@
 import UrgentNotices from '../components/UrgentNotices';
-import { FEE_LINE, FEE_KIND_IDS, FEE_KIND_LABELS, billOwnFees, paymentFees, feeKindPhrase, type FeeKind } from '../lib/feeKinds';
+import { FEE_LINE, FEE_KIND_IDS, FEE_KIND_LABELS, billOwnFees, paymentFees, feeKindPhrase, feesPaidParts, type FeeKind } from '../lib/feeKinds';
 import { useEffect, useState, useMemo, useRef } from 'react';
 import PortalCodeBanner from '../components/utility/PortalCodeBanner';
 import PaymentBreakdownLine from '../components/utility/PaymentBreakdownLine';
@@ -753,7 +753,6 @@ export default function UtilityDetailPage() {
     }
     const fees = feeRows.filter(r => r.amount.trim() !== '').map(r => ({ kind: r.kind, amount: parseFloat(r.amount) }));
     if (fees.some(f => Number.isNaN(f.amount) || f.amount < 0)) { alert('Enter each fee as an amount, or remove it.'); return; }
-    if (fees.some(f => f.amount > 0) && !bill.statementId && !bill.split) { alert('Choose the bill these fees were charged on — they are added to it.'); return; }
     const split = bill.split && !editPaymentId ? splitAllocations(bill, amount) : null;
     if (split && 'error' in split) { alert(split.error); return; }
     setSavingPayment(true);
@@ -1234,7 +1233,9 @@ export default function UtilityDetailPage() {
               const added = feeRows.reduce((t, r) => t + (parseFloat(r.amount) > 0 ? parseFloat(r.amount) : 0), 0);
               return added > 0.005 ? (
                 <p className="text-xs text-gray-500 mt-1">
-                  {fmtMoney(added)} in fees is added to the bill's penalties and balance. Include it in the amount if you paid it with this payment.
+                  {bill.statementId || bill.split
+                    ? <>{fmtMoney(added)} in fees is added to the bill's penalties and balance. Include it in the amount if you paid it with this payment.</>
+                    : <>{fmtMoney(added)} in fees is recorded on this payment on its own — not added to any bill, and not counted toward a bill's balance.</>}
                 </p>
               ) : null;
             })()}
@@ -2027,20 +2028,24 @@ export default function UtilityDetailPage() {
                         <p className="font-mono text-xs text-gray-500 mt-0.5">Conf# {p.confirmationNumber}</p>
                       )}
                       {p.notes && <p className="text-xs text-gray-600 mt-0.5">{p.notes}</p>}
-                      <PaymentBreakdownLine b={p.breakdown} />
+                      <PaymentBreakdownLine b={p.breakdown} statement={statements.find((s: any) => s.id === p.statementId)} payment={p} />
                     </div>
                     <div className="text-right flex-shrink-0 w-28">
                       <p className="text-base font-semibold text-white">{fmtMoney(p.amount)}</p>
                       {Number(p.feeAmount ?? 0) > 0 && <p className="text-xs text-gray-500">+ {fmtMoney(p.feeAmount)} fee · {fmtMoney(Number(p.amount) + Number(p.feeAmount))} out</p>}
                       {/* The fees this payment covered, by kind: logged with it, or on the bill it paid (imported fees). */}
                       {(() => {
+                        // One total here; the Applied-to line itemises it by kind.
                         const logged = paymentFees(p);
-                        if (logged.length) return logged.map(f => <p key={f.kind} className="text-xs text-red-400">incl. {fmtMoney(f.amount)} {feeKindPhrase(f.kind)}</p>);
                         const toFees = Number(p.breakdown?.toFees ?? 0);
-                        if (!(toFees > 0)) return null;
-                        const own = billOwnFees(statements.find((s: any) => s.id === p.statementId));
-                        const label = own.length === 1 ? feeKindPhrase(own[0].kind) : 'fees';
-                        return <p className="text-xs text-red-400">incl. {fmtMoney(toFees)} {label}</p>;
+                        const parts = logged.length
+                          ? logged.map(f => ({ label: feeKindPhrase(f.kind), amount: f.amount }))
+                          : toFees > 0 ? feesPaidParts(toFees, statements.find((s: any) => s.id === p.statementId)) : [];
+                        if (!parts.length) return null;
+                        const total = parts.reduce((t, f) => t + f.amount, 0);
+                        // Short enough for this column: "late fee", else "fee(s)" — the kinds are on the Applied line.
+                        const word = parts.length > 1 ? 'fees' : parts[0].label === 'late fee' ? 'late fee' : 'fee';
+                        return <p className="text-xs text-red-400">incl. {fmtMoney(total)} {word}</p>;
                       })()}
                     </div>
                     <div className="flex-shrink-0 w-20 text-right">
