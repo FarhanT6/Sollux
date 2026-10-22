@@ -652,10 +652,11 @@ function PaymentPlanCard({
 /** The line a late fee logged with a payment is written to (backend lateFees.ts). */
 const LOGGED_LATE_FEE_LINE = 'Late fee (paid late)';
 // What counts as a fee on a bill's itemised charges: late fees, penalties,
-// returned payments, delinquent charges, disconnection / reconnection and
-// contamination charges. Everything else is service. The same rule as the
-// statements trigger (migration 20261021120000_more_fee_kinds).
-const FEE_LINE = /late|penalt|nsf|non[- ]?sufficient|returned (check|payment|item)|dishono|delinquen|reconnect|disconnect|contaminat|collection fee/i;
+// returned payments, delinquent charges, disconnection / reconnection,
+// contamination and additional-service (extra pickup) charges. Everything
+// else is service. The same rule as the statements trigger (migration
+// 20261022090000_additional_service_fee).
+const FEE_LINE = /late|penalt|nsf|non[- ]?sufficient|returned (check|payment|item)|dishono|delinquen|reconnect|disconnect|contaminat|collection fee|additional (service|pick[- ]?up)|extra (service|pick[- ]?up)/i;
 /**
  * The late fee a bill itself charged — its charge list's fee lines (an
  * imported "Late Fee 6.07") — not one logged with a payment. A payment toward
