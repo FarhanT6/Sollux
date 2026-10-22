@@ -1,9 +1,13 @@
 import { Router } from 'express';
+import { fallenDue, withNextInstallment } from '../lib/nextInstallment';
 import { propertyLimitReached } from '../services/planLimits';
 import { z } from 'zod';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { lookupPropertyRecord, lookupValueEstimate } from '../services/rentcastService';
+
+// What an account card reads of a statement.
+const CARD_STATEMENT = { id: true, amountDue: true, dueDate: true, amountPaid: true, rawDataJson: true, statementDate: true, penaltyDate: true, pastDueCarried: true, penaltiesFees: true, paymentPlanAmount: true, balance: true, paidOverride: true, trueUpDeferred: true, trueUpBalance: true, trueUpDate: true, isScheduled: true } as const;
 
 const router = Router();
 router.use(attachDbUser);
@@ -101,10 +105,12 @@ router.get('/', async (req, res, next) => {
             // depends on whether the one before it is, and the card's
             // "past due" is the carried balance only while that prior bill
             // is still open.
+            // Installments scheduled ahead are left out; the next one is added below.
             statements: {
+              where: fallenDue(),
               orderBy: { statementDate: 'desc' },
               take: 4,
-              select: { id: true, amountDue: true, dueDate: true, amountPaid: true, rawDataJson: true, statementDate: true, penaltyDate: true, pastDueCarried: true, penaltiesFees: true, paymentPlanAmount: true, balance: true, paidOverride: true, trueUpDeferred: true, trueUpBalance: true, trueUpDate: true, isScheduled: true },
+              select: CARD_STATEMENT,
             },
             payments: {
               orderBy: [{ paymentDate: 'desc' }, { createdAt: 'desc' }],
@@ -120,7 +126,10 @@ router.get('/', async (req, res, next) => {
       },
       orderBy: { createdAt: 'asc' },
     });
-    res.json(properties);
+    // Each account's next scheduled installment, so a card shows what is coming up.
+    const next = await withNextInstallment(properties.flatMap(p => p.utilityAccounts), CARD_STATEMENT);
+    const byId = new Map(next.map(a => [a.id, a]));
+    res.json(properties.map(p => ({ ...p, utilityAccounts: p.utilityAccounts.map(a => byId.get(a.id) ?? a) })));
   } catch (err) {
     next(err);
   }
@@ -164,7 +173,7 @@ router.get('/:id', async (req, res, next) => {
       include: {
         utilityAccounts: {
           include: {
-            statements: { orderBy: { statementDate: 'desc' }, take: 6 },
+            statements: { where: fallenDue(), orderBy: { statementDate: 'desc' }, take: 6 },
             // createdAt breaks a same-day tie so "the latest payment" is the
             // one logged last, not whichever row the database returns first.
             payments: { orderBy: [{ paymentDate: 'desc' }, { createdAt: 'desc' }], take: 12, include: { statement: { select: { id: true, statementDate: true } } } },
@@ -181,7 +190,8 @@ router.get('/:id', async (req, res, next) => {
     if (!property) return res.status(404).json({ error: 'Property not found' });
 
     // Never return encrypted credential fields
-    const utilityAccounts = property.utilityAccounts.map(({ accountNumberEnc, usernameEnc, passwordEnc, mfaCodeEnc, ...rest }) => ({
+    const withNext = await withNextInstallment(property.utilityAccounts);
+    const utilityAccounts = withNext.map(({ accountNumberEnc, usernameEnc, passwordEnc, mfaCodeEnc, ...rest }) => ({
       ...rest,
       hasCredentials: !!usernameEnc,
     }));
