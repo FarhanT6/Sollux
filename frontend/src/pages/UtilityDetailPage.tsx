@@ -3,7 +3,7 @@ import { FEE_LINE, FEE_KIND_IDS, FEE_KIND_LABELS, billOwnFees, paymentFees, feeK
 import { useEffect, useState, useMemo, useRef } from 'react';
 import PortalCodeBanner from '../components/utility/PortalCodeBanner';
 import PaymentBreakdownLine from '../components/utility/PaymentBreakdownLine';
-import { openBalanceOf, isStatementPaid, computeResolvedByFutureCheckpoint, computePaidMap, isEffectivelyPaid, isPriorStatementPaid, statementStatus, coveredByCredit, liveCarriedOf, newestIssued, arrearsPaidSince, unlinkedPaidSince, paidSinceSplit, deferredOf } from '../lib/paidState';
+import { openBalanceOf, isStatementPaid, computeResolvedByFutureCheckpoint, computePaidMap, isEffectivelyPaid, isPriorStatementPaid, statementStatus, coveredByCredit, liveCarriedOf, newestIssued, isUpcoming, arrearsPaidSince, unlinkedPaidSince, paidSinceSplit, deferredOf } from '../lib/paidState';
 import { bankAccountLabel } from '../lib/bankAccountLabel';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
@@ -662,6 +662,9 @@ export default function UtilityDetailPage() {
   const [syncing, setSyncing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [tab, setTab] = useState<Tab>('statements');
+  // A payment schedule filed ahead (financed premiums, FAIR Plan): only the
+  // next installment is listed until the owner opens the rest.
+  const [showSchedule, setShowSchedule] = useState(false);
   const [search, setSearch] = useState('');
   const [yearFilter, setYearFilter] = useState<string>('all');
   const [plan, setPlan]           = useState<any>(null);
@@ -1677,7 +1680,25 @@ export default function UtilityDetailPage() {
             : (
               /* One list with hairlines between bills, not a stack of outlined boxes. */
               <div className="mb-8 rounded-2xl overflow-hidden" style={{ background: 'rgba(255,255,255,0.025)' }}>
+                {(() => {
+                  // Installments scheduled ahead: the next one is listed; the rest fold into one row.
+                  const ahead = filteredStatements.filter(isUpcoming);
+                  const later = ahead.slice(0, -1);
+                  if (!later.length) return null;
+                  const first = later[later.length - 1], last = later[0];
+                  return (
+                    <button type="button" onClick={() => setShowSchedule(v => !v)}
+                      className="w-full text-left px-5 py-3 text-xs text-sky-400 hover:text-sky-300" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                      {showSchedule ? '▾' : '▸'} {later.length} more scheduled installment{later.length === 1 ? '' : 's'} · {periodLabel(first)}{later.length > 1 ? ` – ${periodLabel(last)}` : ''}
+                      {!showSchedule && <span className="text-gray-500"> · {fmtMoney(later.reduce((t, x) => t + Number(x.amountDue ?? 0), 0))} in all</span>}
+                    </button>
+                  );
+                })()}
                 {filteredStatements.map((s, idx) => {
+                  // The schedule beyond the next installment is folded away until opened.
+                  const ahead = filteredStatements.filter(isUpcoming);
+                  const nextUp = ahead[ahead.length - 1];
+                  if (!showSchedule && isUpcoming(s) && s.id !== nextUp?.id) return null;
                   // filteredStatements sorted DESC; [idx-1] is more recent; idx===0 is latest
                   const isLatest = latestStmt?.id === s.id && yearFilter === 'all' && !search;
                   const { color: sc, label: sl } = statementStatus(s, payments, filteredStatements[idx - 1], isLatest, resolvedByFuture, paidMap);
@@ -1732,7 +1753,9 @@ export default function UtilityDetailPage() {
                         )}
                         {isLatest && <p className="text-xs text-gray-500 mt-0.5">Latest</p>}
                         {s.isScheduled && (
-                          <p className="text-xs text-sky-400 mt-0.5" title="From the policy's payment schedule; the carrier's bill replaces it when imported.">Scheduled</p>
+                          <p className="text-xs text-sky-400 mt-0.5" title="From the policy's payment schedule; the carrier's bill replaces it when imported.">
+                            {isUpcoming(s) && s.id === filteredStatements.filter(isUpcoming).slice(-1)[0]?.id ? 'Next installment' : 'Scheduled'}
+                          </p>
                         )}
                       </div>
 

@@ -336,15 +336,12 @@ function PropertyCard({ property, onEdit, onDelete }: { property: Property; onEd
   // account page reads them. The card used to trust the extractor's isPaid
   // flag on its own and said Paid while the account page said Overdue.
   const isAccountPaid = (a: typeof accounts[number]): boolean => {
-    const latest = a.statements?.[0];
-    if (!latest) return false;
-    return viewOf(a).isPaid;
+    const v = viewOf(a);
+    return !!v.latest && v.isPaid;
   };
 
-  const monthlyTotal = accounts.reduce((s, a) => {
-    if (isAccountPaid(a)) return s;
-    return s + Number(a.statements?.[0]?.amountDue ?? 0);
-  }, 0);
+  // What each card shows: the newest bill fallen due, or the next installment coming up.
+  const monthlyTotal = accounts.reduce((s, a) => s + Number(accountStatus(a as any).amount ?? 0), 0);
   // Sum past due across all unpaid accounts so the property-level footer can show
   // a rollup matching what each utility card shows individually.
   const totalPastDue = accounts.reduce((s, a) => {
@@ -354,7 +351,7 @@ function PropertyCard({ property, onEdit, onDelete }: { property: Property; onEd
   const hasAlert = (property._count?.insights ?? 0) > 0;
   const hasPastDue = totalPastDue > 0 || accounts.some(a => {
     if (isAccountPaid(a)) return false;
-    const raw = a.statements?.[0]?.rawDataJson as Record<string, unknown> | undefined;
+    const raw = viewOf(a).latest?.rawDataJson as Record<string, unknown> | undefined;
     return raw?.isPastDue === true;
   });
 
@@ -434,7 +431,6 @@ function PropertyCard({ property, onEdit, onDelete }: { property: Property; onEd
             const displayAmt = st.amount;
             const statusLabel = st.label;
             const statusColor = { green: 'text-emerald-500', red: 'text-red-400', amber: 'text-amber-500', blue: 'text-blue-400', gray: 'text-gray-500' }[st.tone];
-            const now = new Date();
 
             return (
               <div key={account.id} className="bg-white/5 rounded-lg p-2">
@@ -447,9 +443,9 @@ function PropertyCard({ property, onEdit, onDelete }: { property: Property; onEd
                 )}
                 {/* The newest bill's own penalty deadline — the date that
                     actually costs money — rolls forward as new bills import. */}
-                {!isPaid && (account.statements?.[0] as any)?.penaltyDate && new Date((account.statements![0] as any).penaltyDate) >= now && (
+                {st.penaltyDate && (
                   <p className="text-xs text-amber-400">
-                    penalty after {new Date((account.statements![0] as any).penaltyDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                    penalty after {st.penaltyDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                   </p>
                 )}
                 <p className={`text-xs mt-0.5 ${statusColor}`}>{statusLabel}</p>

@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { isUpcoming } from '../../lib/paidState';
 import { FEE_KIND_LABELS, paymentFees } from '../../lib/feeKinds';
 import { Screen, Section, Row, Segmented, Sheet, Field, BarButton, Icon, categoryIcon } from '../../ios';
 import { fmtMoney } from '../../lib/money';
@@ -82,6 +83,11 @@ export default function UtilityAccountScreen(v: UtilityAccountView) {
   const editName = () => { setName(v.lookupValue); setNameSheet(true); };
   const byCustomer = v.lookupLabel === 'Customer ID';
   const [tab, setTab] = useState<Tab>('bills');
+  // A payment schedule filed ahead: the next installment shows; the rest fold away.
+  const [showSchedule, setShowSchedule] = useState(false);
+  const ahead = v.statements.filter(isUpcoming);
+  const nextUpId = ahead[ahead.length - 1]?.id;
+  const later = ahead.slice(0, -1);
   const [bill, setBill] = useState<any | null>(null);
   const [pay, setPay] = useState<any | null>(null);
   const [actions, setActions] = useState(false);
@@ -143,12 +149,18 @@ export default function UtilityAccountScreen(v: UtilityAccountView) {
         <Section header={`${v.statements.length} statement${v.statements.length === 1 ? '' : 's'}`}
           action={{ label: 'Add', onClick: () => v.editStatement({}) }}>
           {v.statements.length === 0 && <Row title="No statements yet" subtitle="Sync, scan or import a bill" chevron={false} />}
+          {later.length > 0 && (
+            <Row title={`${showSchedule ? 'Hide' : 'Show'} ${later.length} more scheduled installment${later.length === 1 ? '' : 's'}`}
+              subtitle={`${billMonthLabel(later[later.length - 1])}${later.length > 1 ? ` – ${billMonthLabel(later[0])}` : ''} · ${fmtMoney(later.reduce((t, x) => t + Number(x.amountDue ?? 0), 0))}`}
+              tinted chevron={false} onClick={() => setShowSchedule(x => !x)} />
+          )}
           {v.statements.map((s, idx) => {
+            if (!showSchedule && isUpcoming(s) && s.id !== nextUpId) return null;
             const st = v.statusOf(s, idx);
             const total = v.totalDueOf(s) ?? Number(s.amountDue ?? 0);
             return (
               <Row key={s.id} onClick={() => setBill(s)}
-                title={<>{billMonthLabel(s)}{s.id === v.latestId && <span className="ios-tint" style={{ fontSize: 13, marginLeft: 6 }}>Latest</span>}</>}
+                title={<>{billMonthLabel(s)}{s.id === v.latestId && <span className="ios-tint" style={{ fontSize: 13, marginLeft: 6 }}>Latest</span>}{s.id === nextUpId && <span className="ios-tint" style={{ fontSize: 13, marginLeft: 6 }}>Next installment</span>}</>}
                 subtitle={<><span className={TONE[st.color]}>{st.label}</span>{s.dueDate ? ` · due ${fmtDate(s.dueDate, 'MMM d')}` : ''}</>}
                 value={<span className={total < 0 ? 'ios-green' : 'strong'}>{total < 0 ? `−${fmtMoney(-total)}` : fmtMoney(total)}</span>}
                 swipe={v.isPaid(s)

@@ -9,7 +9,7 @@ import type { Property, Statement, Payment, AIInsight, UtilityAccount } from '..
 import { CATEGORY_LABELS, CATEGORY_COLORS, INSURANCE_TYPE_LABELS, LOAN_TYPE_LABELS, UTILITY_PAYMENT_METHODS, PAYMENT_STATUS_LABELS } from '../types';
 import PaymentBreakdownLine from '../components/utility/PaymentBreakdownLine';
 import { todayISO } from '../lib/date';
-import { accountView, newestIssued } from '../lib/paidState';
+import { accountView, newestIssued, isUpcoming } from '../lib/paidState';
 import { PageHeader, StatCard, InsightCard, Skeleton, EmptyState, Pill, Modal } from '../components/ui';
 import { format } from 'date-fns';
 import AddUtilityModal from '../components/utility/AddUtilityModal';
@@ -944,6 +944,10 @@ function UtilityAccountCard({
   }
 
   const latest = newestIssued(account.statements ?? []) ?? undefined;
+  // The next installment scheduled ahead (a financed premium's whole schedule
+  // is filed in advance): shown once the current one is paid.
+  const nextUp = (account.statements ?? []).filter(isUpcoming)
+    .sort((a: any, b: any) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())[0] as any;
   const dueDate = latest?.dueDate ? new Date(latest.dueDate) : null;
   const color = CATEGORY_COLORS[account.category] || '#888';
 
@@ -1165,6 +1169,12 @@ function UtilityAccountCard({
                       )}
                     </span>
                   </div>
+                )}
+
+                {isPaid && nextUp && (
+                  <p className="mt-0.5 text-xs text-blue-400">
+                    Next: {fmt(Number(nextUp.amountDue ?? 0))} due {format(new Date(nextUp.dueDate), 'MMM d')}
+                  </p>
                 )}
 
                 {/* Past due row — red, due immediately */}
