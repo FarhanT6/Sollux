@@ -1334,16 +1334,21 @@ export default function UtilityDetailPage() {
   // A bill lookup page (InvoiceCloud's "Please Locate Your Account") finds the
   // bills by account number and the name on the bill, with no login.
   const lookupPage = !!account?.lookupPage;
-  async function saveLookupName(name: string) {
+  // What the lookup page asks for beside the account number: a customer ID
+  // (Tyler Munis self service) or the name on the bill (InvoiceCloud).
+  const byCustomer = account?.lookupKind === 'customer';
+  const lookupLabel = byCustomer ? 'Customer ID' : 'Name on the bill';
+  const lookupValue: string = (byCustomer ? account?.lookupCustomerId : account?.lookupName) ?? '';
+  async function saveLookupName(value: string) {
     try {
-      await updateUtility(accountId!, { lookupName: name.trim() || null });
+      await updateUtility(accountId!, byCustomer ? { lookupCustomerId: value.trim() || null } : { lookupName: value.trim() || null });
       await reloadAccount();
-      if (name.trim()) { toast('Saved — looking up the bills now.'); void handleSync(); }
-      else toast('Name removed.');
-    } catch { alert('Could not save the name.'); }
+      if (value.trim()) { toast('Saved — looking up the bills now.'); void handleSync(); }
+      else toast(`${lookupLabel} removed.`);
+    } catch { alert(`Could not save the ${lookupLabel.toLowerCase()}.`); }
   }
   function editLookupName() {
-    const typed = prompt(`Name on the bill for ${account?.providerName} — exactly as the bill prints it:`, account?.lookupName ?? '');
+    const typed = prompt(`${lookupLabel} for ${account?.providerName} — exactly as the bill prints it:`, lookupValue);
     if (typed != null) void saveLookupName(typed);
   }
 
@@ -1358,7 +1363,7 @@ export default function UtilityDetailPage() {
   const modals = (
     <>
       {portalLogin && account && (
-        <PortalLogin account={account} website={account.website?.url ?? null}
+        <PortalLogin account={account} website={account.lookupUrl ?? account.website?.url ?? null}
           onClose={() => setPortalLogin(false)} onSaved={() => void reloadAccount()} />
       )}
       {showPlanModal && (
@@ -1401,7 +1406,7 @@ export default function UtilityDetailPage() {
       revealNumber={() => void toggleAccountNumber()} revealedNumber={revealedAccountNumber}
       siteLabel={siteLabel} openWebsite={openWebsite} saveWebsite={() => void saveWebsite()}
       openPortalLogin={() => setPortalLogin(true)}
-      lookupPage={lookupPage} saveLookupName={saveLookupName}
+      lookupPage={lookupPage} lookupLabel={lookupLabel} lookupValue={lookupValue} saveLookupName={saveLookupName}
       payment={{
         open: showPayForm || !!editPaymentId, editing: !!editPaymentId, saving: savingPayment, canSave: !!payForm.amount,
         fields: paymentFields,
@@ -1506,8 +1511,8 @@ export default function UtilityDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-3">
-          {lookupPage && !account.lookupName && (
-            <button onClick={editLookupName} className="btn text-xs" title="The bill lookup page needs the name the bill is addressed to">Add name on the bill</button>
+          {lookupPage && !lookupValue && (
+            <button onClick={editLookupName} className="btn text-xs" title={`The bill lookup page finds the bills by account number and ${byCustomer ? 'customer ID' : 'the name the bill is addressed to'}`}>Add {byCustomer ? 'customer ID' : 'name on the bill'}</button>
           )}
           <button onClick={handleSync} disabled={syncing || deleting} className="btn btn-primary">
             {syncing ? 'Syncing…' : 'Sync'}
@@ -1518,7 +1523,7 @@ export default function UtilityDetailPage() {
           {/* Now-and-then actions, out of the way. */}
           <MoreMenu items={[
             lookupPage
-              ? { label: account.lookupName ? 'Name on the bill' : 'Add name on the bill', onClick: editLookupName, title: 'The bill lookup page finds the bills by account number and this name' }
+              ? { label: lookupValue ? lookupLabel : `Add ${lookupLabel.toLowerCase()}`, onClick: editLookupName, title: `The bill lookup page finds the bills by account number and this ${byCustomer ? 'customer ID' : 'name'}` }
               : { label: account.hasCredentials ? 'Portal login' : 'Add portal login', onClick: () => setPortalLogin(true), title: "Let Sollux fetch statements from the provider's website" },
             { label: `${website ? 'Edit' : 'Save'} website link`, onClick: () => void saveWebsite(), title: 'Set the website for this account' },
             ...(account.category === 'ELECTRIC' || account.category === 'SOLAR' ? [{ label: account.hasTrueUp ? 'Turn off true-up' : 'Set true-up (net metering)', onClick: () => void toggleTrueUp() }] : []),

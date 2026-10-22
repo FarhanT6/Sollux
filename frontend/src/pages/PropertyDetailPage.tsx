@@ -547,6 +547,8 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
     // Two meters for one provider are otherwise distinguishable only by
     // account number, which is not how anyone thinks about them.
     serviceLabel:  account.serviceLabel || '',
+    // A bill lookup page's second field (City of El Centro's "Customer ID").
+    lookupCustomerId: account.lookupCustomerId || '',
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -606,6 +608,7 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
       if (form.password.trim())      patch.password      = form.password.trim();
       if (form.notes.trim()         !== ((account as any).notes || '')) patch.notes = form.notes.trim();
       if (form.loginUrl.trim()      !== (account.loginUrl || ''))       patch.loginUrl = form.loginUrl.trim();
+      if (form.lookupCustomerId.trim() !== (account.lookupCustomerId || '')) patch.lookupCustomerId = form.lookupCustomerId.trim();
       // Sent even when cleared, so a nickname can be removed as well as set.
       if (form.serviceLabel.trim()  !== (account.serviceLabel || ''))    patch.serviceLabel = form.serviceLabel.trim();
       // Only send insuranceType/loanType if the user actually touched the
@@ -743,6 +746,14 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
                 />
               </div>
             </div>
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">
+              Customer ID <span className="text-gray-600">(if the provider's bill lookup asks for one)</span>
+            </label>
+            <input className={fieldCls} placeholder="e.g. the Customer ID printed on the bill" value={form.lookupCustomerId}
+              onChange={e => setForm(f => ({ ...f, lookupCustomerId: e.target.value }))} />
+            <p className="text-xs text-gray-500 mt-1">With the account number, Sollux looks up the bills on the provider's site — no username or password needed.</p>
           </div>
           <div>
             <label className="text-xs text-gray-400 block mb-1">Pay/login link</label>
