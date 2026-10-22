@@ -79,7 +79,14 @@ export function buildRawData(ex: Awaited<ReturnType<typeof parseBill>>['extracte
  * @param batchId groups staged review copies under pending-review/<user>/<batch>/
  * @param source recorded in the statement's raw data ('drive_import', 'email')
  */
-export async function intakeBill(buffer: Buffer, filename: string, userId: string, method: 'ai' | 'regex', batchId: string, source = 'drive_import', opts: { emailBody?: boolean } = {}): Promise<IntakeResult> {
+export async function intakeBill(buffer: Buffer, filename: string, userId: string, method: 'ai' | 'regex', batchId: string, source = 'drive_import', opts: {
+  emailBody?: boolean;
+  // The accounts a portal fetch was for (id, last 4 of the number): what it
+  // brings back is theirs. A page saved as the statement (City of El
+  // Centro's Munis bill page) does not print enough to be matched alone, and
+  // went to review though Sollux had fetched it for that very account.
+  forAccounts?: { id: string; last4: string }[];
+} = {}): Promise<IntakeResult> {
   // parseBill defaults to AI; this path must pass the choice through or
   // every bulk import silently bills per PDF regardless of what was picked.
   const parsed = await withAiContext({ userId }, () => parseBill(buffer, filename, userId, method === 'ai' ? 'ai' : 'regex'));
@@ -116,6 +123,14 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
 
   let utilityAccountId = match.utilityAccountId;
   let autoCreated = false;
+  let fetchedFor = false;
+  if (opts.forAccounts?.length && !(utilityAccountId && match.confidence === 'high')) {
+    const digits = String(ex.accountNumber ?? '').replace(/\D/g, '');
+    const hits = digits ? opts.forAccounts.filter(a => a.last4 && digits.includes(a.last4)) : [];
+    // By its printed number; a document with none is the one account's the fetch was for.
+    const pick = hits.length === 1 ? hits[0] : !digits && opts.forAccounts.length === 1 ? opts.forAccounts[0] : null;
+    if (pick) { utilityAccountId = pick.id; fetchedFor = true; }
+  }
 
   // Property matched but this utility doesn't have an account yet — create it
   // using the AI-detected type (electric/water/gas/etc.) and provider name.
@@ -150,7 +165,7 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
     return { outcome: 'policy' };
   }
 
-  if (utilityAccountId && (match.confidence === 'high' || autoCreated)) {
+  if (utilityAccountId && (match.confidence === 'high' || autoCreated || fetchedFor)) {
     const acct = await db.utilityAccount.findUnique({
       where: { id: utilityAccountId },
       select: { id: true, propertyId: true, escrowLoanId: true, billingCadence: true, category: true },
