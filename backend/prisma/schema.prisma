@@ -412,6 +412,9 @@ model Payment {
   // put on the statement's penalties and charge, and taken back off if the
   // payment is edited or deleted.
   lateFeeAdded       Decimal?       @db.Decimal(10, 2)
+  // The fees behind lateFeeAdded, by kind: [{ kind, amount }] (lateFees.ts
+  // FEE_KINDS). Null on older payments, whose lateFeeAdded is a late fee.
+  feesAddedJson      Json?
   // How much of this payment was taken off the account's payment plan:
   // what was paid beyond the bill's own charge and the plan's fee. Kept
   // on the payment so an edit or deletion puts it back on the plan.

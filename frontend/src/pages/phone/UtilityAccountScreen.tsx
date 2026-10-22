@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { FEE_KIND_LABELS, paymentFees } from '../../lib/feeKinds';
 import { Screen, Section, Row, Segmented, Sheet, Field, BarButton, Icon, categoryIcon } from '../../ios';
 import { fmtMoney } from '../../lib/money';
 import { fmtDate, billMonthLabel } from '../../lib/date';
@@ -203,7 +204,7 @@ export default function UtilityAccountScreen(v: UtilityAccountView) {
               {pay.bankAccount && <Row title="From" value={bankAccountLabel(pay.bankAccount)} chevron={false} />}
               {pay.statement && <Row title="Toward" value={`${billMonthLabel(pay.statement)} bill`} chevron={false} />}
               {Number(pay.feeAmount ?? 0) > 0 && <Row title="Transaction fee" value={fmtMoney(pay.feeAmount)} chevron={false} />}
-              {Number(pay.lateFeeAdded ?? 0) > 0 && <Row title="Late fee included" value={<span className="ios-red">{fmtMoney(pay.lateFeeAdded)}</span>} chevron={false} />}
+              {paymentFees(pay).map(f => <Row key={f.kind} title={`${FEE_KIND_LABELS[f.kind]} included`} value={<span className="ios-red">{fmtMoney(f.amount)}</span>} chevron={false} />)}
               {Number(pay.planApplied ?? 0) > 0 && <Row title="To payment plan" value={fmtMoney(pay.planApplied)} chevron={false} />}
               {Number(pay.loanApplied ?? 0) > 0 && <Row title="Off the loan" value={fmtMoney(pay.loanApplied)} chevron={false} />}
               {pay.confirmationNumber && <Row title="Confirmation" value={pay.confirmationNumber} chevron={false} />}

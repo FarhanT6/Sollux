@@ -47,7 +47,7 @@ const UNIT_OR_RATE = /(?:kwh|mwh|kw\b|ccf|hcf|mcf|therm|gallon|cu\.?\s*ft|c\.?f\
  * fees and penalties wherever fees are counted, whatever container or service
  * the provider printed them against.
  */
-const FEE_LIKE = /late\s*fee|penalt|contaminated\s*materials?|contamination|overage|returned\s*(?:check|payment)|nsf\b|insufficient\s*funds|interest\s*charge|collection|delinquen|additional\s*(?:service|pick[\s-]*up)|extra\s*(?:service|pick[\s-]*up)|disconnect|reconnect|shut[\s-]*off/i;
+const FEE_LIKE = /late\s*fee|penalt|contaminated\s*materials?|contamination|overage|returned\s*(?:check|payment)|nsf\b|insufficient\s*funds|interest\s*charge|collection|delinquen|additional\s*(?:service|pick[\s-]*up)|extra\s*(?:service|pick[\s-]*up)|disconnect|reconnect|shut[\s-]*off|\(logged\)/i;
 
 export function isFeeLikeCharge(label: string): boolean {
   return FEE_LIKE.test(label);

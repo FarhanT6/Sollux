@@ -990,6 +990,8 @@ export interface Payment {
   feeAmount?: number | null;
   // A late fee this payment added to its bill.
   lateFeeAdded?: number | null;
+  /** The fees behind lateFeeAdded, by kind (lib/feeKinds.ts). */
+  feesAddedJson?: { kind: string; amount: number }[] | null;
   /** What this payment took off the account's payment plan (set server-side). */
   planApplied?: number | null;
   /** What this payment took off the loan linked to the account (set server-side). */
