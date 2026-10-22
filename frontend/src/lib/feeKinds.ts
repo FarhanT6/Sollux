@@ -50,11 +50,11 @@ const round = (n: number) => Number(n.toFixed(2));
  * "Late Fee 6.07", three "Contaminated Materials" pickups) — by kind, not
  * those logged with a payment. A payment toward that bill already covers them.
  */
-export function billOwnFees(st: any): FeeLine[] {
+export function billOwnFees(st: any, withLogged = false): FeeLine[] {
   const lines = (st?.rawDataJson?.chargeBreakdown ?? {}) as Record<string, number>;
   const by = new Map<FeeKind, number>();
   for (const [k, v] of Object.entries(lines)) {
-    if (isLoggedFeeLine(k) || !FEE_LINE.test(k) || !(Number(v) > 0)) continue;
+    if ((!withLogged && isLoggedFeeLine(k)) || !FEE_LINE.test(k) || !(Number(v) > 0)) continue;
     const kind = feeKindOf(k);
     by.set(kind, (by.get(kind) ?? 0) + Number(v));
   }
@@ -73,3 +73,17 @@ export function paymentFees(p: any): FeeLine[] {
 
 /** "late fee", "contaminated materials" — for "incl. $9.79 late fee". */
 export const feeKindPhrase = (kind: FeeKind) => FEE_KIND_LABELS[kind].toLowerCase();
+
+/**
+ * What a payment's `toFees` paid, named by kind from the bill's fee lines
+ * (its own and those logged with payments): "$5.00 late fee · $61.60
+ * contaminated materials" when the lines account for it, the one kind when
+ * there is one, else plain "fees".
+ */
+export function feesPaidParts(toFees: number, st: any): { label: string; amount: number }[] {
+  const lines = billOwnFees(st, true);
+  const sum = round(lines.reduce((t, f) => t + f.amount, 0));
+  if (lines.length > 1 && Math.abs(sum - toFees) < 0.01) return lines.map(f => ({ label: feeKindPhrase(f.kind), amount: f.amount }));
+  if (lines.length === 1 && toFees <= sum + 0.01) return [{ label: feeKindPhrase(lines[0].kind), amount: toFees }];
+  return [{ label: 'fees', amount: toFees }];
+}

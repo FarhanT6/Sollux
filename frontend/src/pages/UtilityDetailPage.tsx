@@ -1,5 +1,5 @@
 import UrgentNotices from '../components/UrgentNotices';
-import { FEE_LINE, FEE_KIND_IDS, FEE_KIND_LABELS, billOwnFees, paymentFees, feeKindPhrase, type FeeKind } from '../lib/feeKinds';
+import { FEE_LINE, FEE_KIND_IDS, FEE_KIND_LABELS, billOwnFees, paymentFees, feeKindPhrase, feesPaidParts, type FeeKind } from '../lib/feeKinds';
 import { useEffect, useState, useMemo, useRef } from 'react';
 import PortalCodeBanner from '../components/utility/PortalCodeBanner';
 import PaymentBreakdownLine from '../components/utility/PaymentBreakdownLine';
@@ -2027,20 +2027,22 @@ export default function UtilityDetailPage() {
                         <p className="font-mono text-xs text-gray-500 mt-0.5">Conf# {p.confirmationNumber}</p>
                       )}
                       {p.notes && <p className="text-xs text-gray-600 mt-0.5">{p.notes}</p>}
-                      <PaymentBreakdownLine b={p.breakdown} />
+                      <PaymentBreakdownLine b={p.breakdown} statement={statements.find((s: any) => s.id === p.statementId)} />
                     </div>
                     <div className="text-right flex-shrink-0 w-28">
                       <p className="text-base font-semibold text-white">{fmtMoney(p.amount)}</p>
                       {Number(p.feeAmount ?? 0) > 0 && <p className="text-xs text-gray-500">+ {fmtMoney(p.feeAmount)} fee · {fmtMoney(Number(p.amount) + Number(p.feeAmount))} out</p>}
                       {/* The fees this payment covered, by kind: logged with it, or on the bill it paid (imported fees). */}
                       {(() => {
+                        // One total here; the Applied-to line itemises it by kind.
                         const logged = paymentFees(p);
-                        if (logged.length) return logged.map(f => <p key={f.kind} className="text-xs text-red-400">incl. {fmtMoney(f.amount)} {feeKindPhrase(f.kind)}</p>);
                         const toFees = Number(p.breakdown?.toFees ?? 0);
-                        if (!(toFees > 0)) return null;
-                        const own = billOwnFees(statements.find((s: any) => s.id === p.statementId));
-                        const label = own.length === 1 ? feeKindPhrase(own[0].kind) : 'fees';
-                        return <p className="text-xs text-red-400">incl. {fmtMoney(toFees)} {label}</p>;
+                        const parts = logged.length
+                          ? logged.map(f => ({ label: feeKindPhrase(f.kind), amount: f.amount }))
+                          : toFees > 0 ? feesPaidParts(toFees, statements.find((s: any) => s.id === p.statementId)) : [];
+                        if (!parts.length) return null;
+                        const total = parts.reduce((t, f) => t + f.amount, 0);
+                        return <p className="text-xs text-red-400">incl. {fmtMoney(total)} {parts.length === 1 ? parts[0].label : 'fees'}</p>;
                       })()}
                     </div>
                     <div className="flex-shrink-0 w-20 text-right">

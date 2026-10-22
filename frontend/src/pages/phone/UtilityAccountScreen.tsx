@@ -210,7 +210,7 @@ export default function UtilityAccountScreen(v: UtilityAccountView) {
               {pay.confirmationNumber && <Row title="Confirmation" value={pay.confirmationNumber} chevron={false} />}
               {pay.notes && <Row title={pay.notes} wrap chevron={false} />}
             </Section>
-            {pay.breakdown && <div style={{ margin: '-12px 4px 20px' }}><PaymentBreakdownLine b={pay.breakdown} /></div>}
+            {pay.breakdown && <div style={{ margin: '-12px 4px 20px' }}><PaymentBreakdownLine b={pay.breakdown} statement={v.statements.find(s => s.id === pay.statementId)} /></div>}
             <div style={{ display: 'grid', gap: 10 }}>
               <button className="ios-btn gray" onClick={() => { const p = pay; setPay(null); v.payment.edit(p); }}>Edit payment</button>
               <button className="ios-btn gray ios-red" disabled={v.payment.saving} onClick={() => { const p = pay; setPay(null); v.payment.remove(p); }}>Delete payment</button>
