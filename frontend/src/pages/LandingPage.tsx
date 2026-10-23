@@ -1,5 +1,6 @@
 /**
- * The public front page: what Sollux does, what it costs, and the way in.
+ * The public front page: what Sollux does — bills, tenants and leases, money
+ * and reporting — what it costs, and the way in.
  * Shown at / to anyone signed out (signed in, / is the dashboard) and at
  * /welcome to anyone. Every claim here is something the product does today;
  * prices come from backend/src/lib/plans.ts.
@@ -15,40 +16,65 @@ const PLANS = [
   { name: 'Portfolio', price: 99, limit: 'Unlimited properties' },
 ];
 
-const FEATURES: { title: string; body: string }[] = [
+/** The three things Sollux runs, each with a screenshot of the app on demo data (public/landing). */
+const PILLARS: { tag: string; title: string; body: string; points: string[]; img: string; alt: string }[] = [
   {
-    title: 'Statements fetched for you',
-    body: 'Sollux signs in to each provider’s portal — electric, gas, water, trash, internet, insurance, lenders — and files every new statement as it posts. No portal? It reads the bill from your email or a photo.',
+    tag: 'Bills & utilities',
+    title: 'Every bill fetched, read and tracked',
+    body: 'Sollux signs in to each provider’s portal — electric, gas, water, trash, internet, insurance, lenders — and files every statement as it posts. No portal? It reads the bill from your email or a photo.',
+    points: [
+      'Charges, past due, payment plans and fees each kept apart',
+      'Late, reinstatement and contamination fees totalled per property',
+      'Payments applied the way the provider does: fees, past due, then this month',
+    ],
+    img: '/landing/bills.jpg',
+    alt: 'Properties with each utility account’s amount due and status',
   },
   {
-    title: 'Every bill read line by line',
-    body: 'Current charges, past due carried in, payment arrangements, late fees, reinstatement and contamination charges — each kept apart, so you can see what you actually paid for service and what you paid in penalties.',
+    tag: 'Tenants & leases',
+    title: 'Rent roll, rent collection and a tenant portal',
+    body: 'See every lease, what it pays and who is behind. Tenants pay online and send repair requests through their own portal.',
+    points: [
+      'Rent by bank transfer free, by card with the fee on the tenant — no Sollux cut',
+      'Autopay, arrears and late fees tracked for each lease',
+      'Scheduled rent increases and month-to-month rollovers applied on their date',
+      'Repair requests and 3-day notices in the same place',
+    ],
+    img: '/landing/tenants.jpg',
+    alt: 'Rent roll with each lease’s rent, arrears and status',
   },
   {
-    title: 'Nothing slips past a due date',
-    body: 'Shut-off and cancellation notices are tracked until they are paid. Due dates, penalty dates and the next installment of every policy and loan show on one screen.',
+    tag: 'Money & reporting',
+    title: 'What each property earns and costs',
+    body: 'Rent, bills, loans and insurance feed one set of books, so the numbers are there when you need them — at tax time or when deciding what to do next.',
+    points: [
+      'P&L, NOI and cash flow by property, monthly or for the year',
+      'Bank accounts synced nightly and reconciled against bills and rent',
+      'Budget, expenses, loan balances and a summary of every fee paid',
+    ],
+    img: '/landing/money.jpg',
+    alt: 'Income and cash flow by property with rental income, expenses and NOI',
   },
-  {
-    title: 'Payments that reconcile',
-    body: 'Log a payment once and Sollux applies it the way the provider does: fees first, then the past-due balance, then this month’s charge. Split one payment across several bills.',
-  },
-  {
-    title: 'Rent and repairs, in the same place',
-    body: 'Tenants pay rent by bank transfer for free, or by card with the fee on them — Sollux takes no cut. They send repair requests through their own portal.',
-  },
-  {
-    title: 'Anomalies flagged',
-    body: 'A water bill that doubles, a charge a provider has never billed before, a month that never arrived: Sollux notices and tells you before it costs you.',
-  },
+];
+
+/** Smaller things it does in the background. */
+const WATCH: { title: string; body: string }[] = [
+  { title: 'Anomalies flagged', body: 'A bill that doubles, a charge never billed before, a month that never arrived.' },
+  { title: 'Deadlines and notices', body: 'Shut-off and cancellation notices tracked until paid; due and penalty dates on one screen.' },
+  { title: 'Insurance and loans', body: 'Policies, installment schedules and loan balances, kept current from their own statements.' },
 ];
 
 const STEPS = [
-  { n: '1', title: 'Add your properties', body: 'And the accounts on each: account numbers, or just forward a bill.' },
-  { n: '2', title: 'Connect the portals', body: 'Your logins are encrypted. Sollux signs in only to read and download statements.' },
-  { n: '3', title: 'Let it run', body: 'New bills are fetched on each account’s billing cycle. You open Sollux to see what is due.' },
+  { n: '1', title: 'Add your properties', body: 'With their units, leases and accounts — or forward a few bills and let Sollux set them up.' },
+  { n: '2', title: 'Connect portals and your bank', body: 'Logins are encrypted, and Sollux signs in only to read statements. Invite tenants to their portal when you are ready.' },
+  { n: '3', title: 'Let it run', body: 'Bills are fetched on each account’s cycle, rent and bank activity sync nightly. You open Sollux to see where things stand.' },
 ];
 
 const FAQ = [
+  {
+    q: 'Do I need to use every part of it?',
+    a: 'No. Start with bills, tenants or the books — whichever you need first. Every plan includes all of it, so the rest is there when you want it.',
+  },
   {
     q: 'Can Sollux pay bills or change my accounts?',
     a: 'No. It signs in only to read and download statements. It never pays, enrolls, changes settings or sends messages on a portal.',
@@ -63,16 +89,16 @@ const FAQ = [
   },
   {
     q: 'What does the trial include?',
-    a: '14 days of everything, with up to 25 properties. Every plan includes all features — plans differ only in how many properties they cover.',
+    a: '14 days of everything, with up to 25 properties. Every plan includes all features — bills, tenants and rent collection, reporting — and plans differ only in how many properties they cover.',
   },
 ];
 
-/** A stand-in of the app: one property with its accounts, invented figures. */
+/** A stand-in of the app: one property's rent and bills, invented figures. */
 function ProductPreview() {
   const rows = [
+    { name: 'Rent · Unit A', amount: '$1,850.00', status: 'Paid by autopay', tone: '#34d399' },
+    { name: 'Rent · Unit B', amount: '$1,750.00', status: '$875 behind', tone: '#f87171' },
     { name: 'Electric', amount: '$184.22', status: 'Due Nov 4', tone: '#60a5fa' },
-    { name: 'Water', amount: '$96.40', status: 'Paid', tone: '#34d399' },
-    { name: 'Trash', amount: '$262.39', status: '+$109.23 past due', tone: '#f87171' },
     { name: 'Insurance', amount: '$234.90', status: 'Next installment Nov 3', tone: '#60a5fa' },
   ];
   return (
@@ -80,9 +106,9 @@ function ProductPreview() {
       <div className="flex items-center justify-between mb-4">
         <div>
           <p className="text-sm font-semibold text-white">Maple Street Duplex</p>
-          <p className="text-xs text-gray-500">4 accounts · 2 units</p>
+          <p className="text-xs text-gray-500">2 units · 4 accounts · NOI $2,940/mo</p>
         </div>
-        <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'rgba(248,113,113,0.12)', color: '#f87171' }}>Past due</span>
+        <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'rgba(248,113,113,0.12)', color: '#f87171' }}>1 tenant behind</span>
       </div>
       <div className="grid grid-cols-2 gap-2">
         {rows.map(r => (
@@ -117,14 +143,13 @@ export default function LandingPage() {
       {/* Hero */}
       <section className="max-w-6xl mx-auto px-4 sm:px-6 pt-10 pb-20 grid lg:grid-cols-2 gap-12 items-center">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: GOLD }}>For property owners</p>
+          <p className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: GOLD }}>For rental property owners</p>
           <h1 className="text-4xl sm:text-5xl font-semibold text-white leading-tight tracking-tight">
-            Every bill for every property, fetched, read and tracked.
+            Run your whole rental portfolio from one place.
           </h1>
           <p className="mt-5 text-base text-gray-400 max-w-xl">
-            Sollux pulls the statements from your utility, insurance and lender portals, separates the
-            charges from the fees, and shows what is due across your whole portfolio — before a late fee
-            or a shut-off notice does.
+            Bills fetched from every provider, rent collected from every tenant, and the books kept for
+            every property — whether you own three units or fifty.
           </p>
           <div className="mt-8 flex flex-wrap items-center gap-3">
             <Link to="/sign-up" className="rounded-lg px-5 py-2.5 font-medium text-black" style={{ background: GOLD }}>Start your 14-day free trial</Link>
@@ -135,12 +160,36 @@ export default function LandingPage() {
         <ProductPreview />
       </section>
 
-      {/* Features */}
+      {/* What it runs: bills, tenants, money */}
+      {PILLARS.map((p, idx) => (
+        <section key={p.tag} className="max-w-6xl mx-auto px-4 sm:px-6 py-16" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+          <div className="grid lg:grid-cols-5 gap-10 items-center">
+            <div className={`lg:col-span-2 ${idx % 2 ? 'lg:order-2' : ''}`}>
+              <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: GOLD }}>{p.tag}</p>
+              <h2 className="text-2xl sm:text-3xl font-semibold text-white">{p.title}</h2>
+              <p className="mt-3 text-gray-400">{p.body}</p>
+              <ul className="mt-5 space-y-2.5">
+                {p.points.map(pt => (
+                  <li key={pt} className="flex gap-2.5 text-sm text-gray-300">
+                    <span className="mt-2 w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: GOLD }} />
+                    {pt}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className={`lg:col-span-3 ${idx % 2 ? 'lg:order-1' : ''}`}>
+              <img src={p.img} alt={p.alt} loading="lazy" className="w-full rounded-2xl shadow-2xl"
+                style={{ border: '1px solid rgba(255,255,255,0.08)' }} />
+            </div>
+          </div>
+        </section>
+      ))}
+
+      {/* Background work */}
       <section className="max-w-6xl mx-auto px-4 sm:px-6 py-16" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-        <h2 className="text-2xl sm:text-3xl font-semibold text-white max-w-2xl">One place for the bills a portfolio runs on</h2>
-        <p className="mt-3 text-gray-400 max-w-2xl">Utilities, insurance, loans, HOA, taxes and rent — read from the source documents, not typed in.</p>
-        <div className="mt-10 grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {FEATURES.map(f => (
+        <h2 className="text-2xl sm:text-3xl font-semibold text-white">Watching while you’re not</h2>
+        <div className="mt-8 grid md:grid-cols-3 gap-4">
+          {WATCH.map(f => (
             <div key={f.title} className="rounded-2xl p-5" style={{ background: '#1b1b1b', border: '1px solid rgba(255,255,255,0.06)' }}>
               <div className="w-8 h-1 rounded-full mb-4" style={{ background: GOLD }} />
               <h3 className="text-base font-semibold text-white">{f.title}</h3>
@@ -167,7 +216,7 @@ export default function LandingPage() {
       {/* Pricing */}
       <section id="pricing" className="max-w-6xl mx-auto px-4 sm:px-6 py-16" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
         <h2 className="text-2xl sm:text-3xl font-semibold text-white">Simple pricing</h2>
-        <p className="mt-3 text-gray-400">Every plan has every feature. Pick by how many properties you own.</p>
+        <p className="mt-3 text-gray-400">Every plan has everything — bills, tenants, rent collection and reporting. Pick by how many properties you own.</p>
         <div className="mt-10 grid md:grid-cols-3 gap-4">
           {PLANS.map(p => (
             <div key={p.name} className="rounded-2xl p-6 flex flex-col"
@@ -207,8 +256,8 @@ export default function LandingPage() {
       {/* Closing call */}
       <section className="max-w-6xl mx-auto px-4 sm:px-6 pb-20">
         <div className="rounded-2xl px-6 py-12 text-center" style={{ background: 'linear-gradient(135deg, rgba(245,166,35,0.14), rgba(245,166,35,0.04))', border: '1px solid rgba(245,166,35,0.25)' }}>
-          <h2 className="text-2xl sm:text-3xl font-semibold text-white">Stop chasing bills across a dozen portals</h2>
-          <p className="mt-3 text-gray-400">Set up your first property in minutes.</p>
+          <h2 className="text-2xl sm:text-3xl font-semibold text-white">Less chasing, more owning</h2>
+          <p className="mt-3 text-gray-400">Bills, tenants and books in one place. Set up your first property in minutes.</p>
           <Link to="/sign-up" className="mt-6 inline-block rounded-lg px-6 py-2.5 font-medium text-black" style={{ background: GOLD }}>Start your free trial</Link>
         </div>
       </section>

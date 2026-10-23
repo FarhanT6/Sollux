@@ -13,7 +13,7 @@
 import { PrismaClient } from '@prisma/client';
 
 const db = new PrismaClient();
-const DEMO_EMAIL = 'farhantalukder69@gmail.com';
+const DEMO_EMAIL = process.env.DEMO_EMAIL ?? 'farhantalukder69@gmail.com';
 
 async function main() {
   const user = await db.user.findUnique({ where: { email: DEMO_EMAIL } });
