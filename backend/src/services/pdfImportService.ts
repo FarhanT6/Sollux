@@ -103,6 +103,13 @@ export interface ExtractedBillData {
     payInFull?: number | null;
     /** Every installment the document lists, date and amount. */
     paymentSchedule?: { date: string; amount: number; principal?: number | null; interest?: number | null }[] | null;
+    /** What the schedule's dates are: 'invoice' when its column is the date
+     *  each installment is billed (AmTrust's "Policy Installments": Invoice
+     *  Date 8/3/2026, the bill due Aug 23), else 'due'. */
+    scheduleDates?: 'invoice' | 'due' | null;
+    /** Fee rows the schedule prints among the installments (AmTrust: "Late
+     *  Fee $20.00 8/28/2026", "Reinstatement Fee $50.00 9/17/2026"). */
+    fees?: { date: string; amount: number; label: string }[] | null;
     /** Vehicles, addresses or people covered, as printed. */
     insuredItems?: string[] | null;
     /** The number was printed under a "Policy Number" label, so it stands
@@ -281,7 +288,7 @@ Schema (use null for any field not present in the document):
   "ratePlan": "string or null — rate schedule, plan name, or tier",
   "isPaid": boolean — true ONLY if balance is $0.00 or document shows 'Paid in Full' / paid stamp. A bill-detail layout with columns Billed / Payments and adjustments / Due where Due and TOTAL DUE are $0.00 is paid: report currentCharges and amountDue as the Billed figure and isPaid true,
   "utilityType": "electric | gas | water | sewer | trash | solar | internet | phone | other",
-  "insurance": object or null — for ANY insurance document, whatever the carrier or kind of cover (auto, homeowners, renters, health, dental, vision, life, umbrella, flood, business) and whatever the document is (billing statement, renewal offer, declarations page, welcome letter, ID card, payment schedule): {"policyNumber": "string", "insuranceType": "PROPERTY | AUTO | RENTERS | LIABILITY | FLOOD | UMBRELLA | HEALTH | DENTAL | VISION | LIFE | BUSINESS | OTHER", "carrier": "underwriter when it differs from the brand, else null", "coverageStart": "YYYY-MM-DD", "coverageEnd": "YYYY-MM-DD", "termPremium": n, "installment": n, "serviceCharge": n, "installmentsRemaining": n, "renewedOn": "YYYY-MM-DD", "autoPay": boolean, "totalCost": n, "payInFull": n, "paymentSchedule": [{"date": "YYYY-MM-DD", "amount": n}], "insuredItems": ["2022 Land Rover Discovery Sport", ...]}. payInFull is the amount printed to pay the whole term at once ("To pay premium in full: $4,479.72", "Pay in full amount", "Full pay"); when it is printed, termPremium is that same whole-term figure, NOT the "Premium" line of a Billing Summary that only totals the first installment. insuranceType from what is covered (vehicles/VINs → AUTO; a dwelling → PROPERTY; medical/dental/vision plan → HEALTH/DENTAL/VISION). coverageStart/End are the "Policy Period" / "Coverage period" dates. termPremium is the premium for the whole term excluding billing fees ("Your 6-month policy premium excluding billing fees is $2,752.28"; on a billing statement the "Renewal" line or Full Balance). installment is one regular payment; serviceCharge the per-payment installment/billing fee ("We included an installment fee of $4.00 in each payment"); totalCost the term total including fees ("$2,776.28 Total Cost"). paymentSchedule is EVERY dated payment line the document prints ("Automatic Payments Schedule", "Payment schedule", "Your Installment Schedule", "Billing Schedule"), in order, including ones already past, each date with the amount on its own row. autoPay true when payments are drafted automatically. On a billing statement's policy table ("Policy / Coverage period / Balance / Installment") the policy number is the alphanumeric code on that row. A different policy number with a later coverage start than earlier documents is a renewal onto a new policy,
+  "insurance": object or null — for ANY insurance document, whatever the carrier or kind of cover (auto, homeowners, renters, health, dental, vision, life, umbrella, flood, business) and whatever the document is (billing statement, renewal offer, declarations page, welcome letter, ID card, payment schedule): {"policyNumber": "string", "insuranceType": "PROPERTY | AUTO | RENTERS | LIABILITY | FLOOD | UMBRELLA | HEALTH | DENTAL | VISION | LIFE | BUSINESS | OTHER", "carrier": "underwriter when it differs from the brand, else null", "coverageStart": "YYYY-MM-DD", "coverageEnd": "YYYY-MM-DD", "termPremium": n, "installment": n, "serviceCharge": n, "installmentsRemaining": n, "renewedOn": "YYYY-MM-DD", "autoPay": boolean, "totalCost": n, "payInFull": n, "paymentSchedule": [{"date": "YYYY-MM-DD", "amount": n}], "scheduleDates": "invoice | due", "fees": [{"date": "YYYY-MM-DD", "amount": n, "label": "Late Fee"}], "insuredItems": ["2022 Land Rover Discovery Sport", ...]}. In a schedule table, only the installments (Downpayment, "Installment 3 of 9", scheduled payments) go into paymentSchedule; a fee row printed among them (Late Fee, Reinstatement Fee, NSF Fee, Cancellation Fee) goes into fees with its own date and label, never into paymentSchedule. scheduleDates is 'invoice' when the schedule's date column is the date each installment is billed ("Invoice Date", "Bill Date"; AmTrust's Policy Installments tab), 'due' when it is the due or draft date. payInFull is the amount printed to pay the whole term at once ("To pay premium in full: $4,479.72", "Pay in full amount", "Full pay"); when it is printed, termPremium is that same whole-term figure, NOT the "Premium" line of a Billing Summary that only totals the first installment. insuranceType from what is covered (vehicles/VINs → AUTO; a dwelling → PROPERTY; medical/dental/vision plan → HEALTH/DENTAL/VISION). coverageStart/End are the "Policy Period" / "Coverage period" dates. termPremium is the premium for the whole term excluding billing fees ("Your 6-month policy premium excluding billing fees is $2,752.28"; on a billing statement the "Renewal" line or Full Balance). installment is one regular payment; serviceCharge the per-payment installment/billing fee ("We included an installment fee of $4.00 in each payment"); totalCost the term total including fees ("$2,776.28 Total Cost"). paymentSchedule is EVERY dated payment line the document prints ("Automatic Payments Schedule", "Payment schedule", "Your Installment Schedule", "Billing Schedule"), in order, including ones already past, each date with the amount on its own row. autoPay true when payments are drafted automatically. On a billing statement's policy table ("Policy / Coverage period / Balance / Installment") the policy number is the alphanumeric code on that row. A different policy number with a later coverage start than earlier documents is a renewal onto a new policy,
   "premiumFinance": object or null — ONLY for a premium finance agreement or its notices (a lender such as Capital Premium Financing, IPFS or First Insurance Funding pays the carrier and is repaid monthly with interest; the document has a "Loan Summary" with Amount Financed, Finance Charge, Annual % Rate): {"lender": "Capital Premium Financing", "loanNumber": "string", "totalPremiums": n, "amountFinanced": n, "downPayment": n, "financeCharge": n, "payment": n, "apr": n, "numberOfPayments": n, "effectiveDate": "YYYY-MM-DD", "firstDueDate": "YYYY-MM-DD", "loanBalance": n}. Put the loan number in accountNumber and the lender in providerName. The lender is the premium finance company on the letterhead (e.g. Capital Premium Financing), not a bank the agreement names as its funding source (e.g. \"Ameris Bank (Lender)\"). Leave serviceAddress null — the address on these is the borrower's mailing address, not the insured property. The signed agreement itself ("Premium Finance Agreement and Disclosure Statement") usually has no loan number yet — only a "Quote" number (e.g. 7925660.1); a quote number is NOT the loan number: leave loanNumber and accountNumber null, and put the insurer from the Schedule of Policies in insurance.carrier. A "Notice of Acceptance" or the agreement itself bills nothing: documentKind 'policy_document', the notice date in statementDate, amountDue and dueDate null. A screenshot of the lender's portal ("Payment Schedule & History" / "Payment History" table with Date, Pmt #, Description, Total, Principal, Interest, Late Charge columns) is the same thing read off a ledger: documentKind 'policy_document'; loanNumber from "Account #"; lender from the page header (Capital Premium Financing); EVERY "Scheduled Payment Due" row into insurance.paymentSchedule as {"date", "amount", "principal", "interest"}; every payment received ("Insured: Installment eCheck", "Installment Credit Card") into ledgerPayments as {"date", "amount", "description"}; every fee row (Late Fee, Convenience Fee, Cancel Fee, NSF Fee) into premiumFinance.fees as {"date", "amount", "label"}, a waived or reversed fee ("($50.00)") as a negative amount; leave amountFinanced, apr and numberOfPayments null when the page does not print them (they are derived from the columns); statementDate is the page's own date if shown, else null,
   "providerWebsite": string or null — the provider's website or online-account address exactly as printed ("nationwide.com/bill-pay", "www.dignitymemorial.com"); null when none is printed,
   "ledgerPayments": array or null — ONLY for a document that lists payments received one by one on their own dates (an HOA ledger, a premium finance portal's payment history): [{"date": "YYYY-MM-DD", "amount": n, "description": "as printed"}]. A single "payments received" figure on an ordinary bill goes in paymentsReceived instead,
@@ -2877,6 +2884,59 @@ export function applyInsuranceFromText(ex: ExtractedBillData, text: string): voi
 }
 
 /**
+ * Scheduled rows standing for an installment whose real bill is on file
+ * (statementId): any payment logged against them moves to the bill, and they
+ * are removed. `around` are the dates such a row may carry as its due date.
+ */
+export async function replaceScheduledRows(utilityAccountId: string, statementId: string, around: Date[]): Promise<number> {
+  const DAY = 86400000;
+  const rows = await db.statement.findMany({
+    where: { utilityAccountId, isScheduled: true, id: { not: statementId }, OR: around.map(d => ({ dueDate: { gte: new Date(d.getTime() - 3 * DAY), lte: new Date(d.getTime() + 3 * DAY) } })) },
+    select: { id: true },
+  });
+  if (!rows.length) return 0;
+  const ids = rows.map(r => r.id);
+  await db.payment.updateMany({ where: { statementId: { in: ids } }, data: { statementId } });
+  await db.statement.deleteMany({ where: { id: { in: ids } } });
+  return ids.length;
+}
+
+/**
+ * Fees a policy's installment table lists after a bill was printed (AmTrust:
+ * "Late Fee $20.00 8/28/2026" after the Aug 3 bill), put on that bill once:
+ * each its own dated line, added to its penalties and its charge. A line
+ * already there (an earlier fetch, or the bill printed it) is not added again.
+ */
+async function addScheduleFees(statementId: string, fees: { label: string; amount: number; date: string }[]): Promise<void> {
+  if (!fees.length) return;
+  const s = await db.statement.findUnique({ where: { id: statementId }, select: { amountDue: true, penaltiesFees: true, rawDataJson: true } });
+  if (!s) return;
+  const raw = (s.rawDataJson && typeof s.rawDataJson === 'object' && !Array.isArray(s.rawDataJson) ? { ...(s.rawDataJson as Record<string, unknown>) } : {}) as Record<string, unknown>;
+  const lines = { ...((raw.chargeBreakdown ?? {}) as Record<string, number>) };
+  let added = 0;
+  for (const f of fees) {
+    const md = f.date.slice(5).replace('-', '/');
+    const key = `${f.label} ${md}`;
+    if (lines[key] != null) continue;
+    // The bill printed this fee itself: same kind of line, same amount.
+    const word = f.label.toLowerCase().split(/\s+/)[0] ?? '';
+    if (Object.entries(lines).some(([k, v]) => k.toLowerCase().includes(word) && Math.abs(Number(v) - f.amount) < 0.01)) continue;
+    lines[key] = f.amount;
+    added += f.amount;
+  }
+  if (!added) return;
+  raw.chargeBreakdown = lines;
+  await db.statement.update({
+    where: { id: statementId },
+    data: {
+      amountDue: Number((Number(s.amountDue ?? 0) + added).toFixed(2)),
+      penaltiesFees: Number((Number(s.penaltiesFees ?? 0) + added).toFixed(2)),
+      rawDataJson: raw as Prisma.InputJsonValue,
+    },
+  });
+}
+
+/**
  * File a policy document: bring the policy up to date and put each
  * scheduled installment on the account as a bill-to-come, so the account
  * shows what is due and when before the carrier's own statement arrives.
@@ -2942,25 +3002,60 @@ export async function applyPolicyDocument(utilityAccountId: string, ex: Extracte
   // before its date; a waived fee (negative) nets against that one.
   const ledger = ex.ledgerPayments ?? [];
   const fromLedger = ledger.length > 0 || (ex.premiumFinance?.fees?.length ?? 0) > 0;
-  const feesByRow = new Map<number, { label: string; amount: number }[]>();
-  for (const f of ex.premiumFinance?.fees ?? []) {
+  // An insurer's installment table lists its fees among the installments
+  // too (AmTrust: Late Fee 8/28, Reinstatement Fee 9/17).
+  const feeRows = ex.premiumFinance?.fees?.length ? ex.premiumFinance.fees : (ins.fees ?? []);
+  const feesByRow = new Map<number, { label: string; amount: number; date: string }[]>();
+  for (const f of feeRows) {
     if (!f.date || !f.amount) continue;
     let idx = -1;
     for (const [j, p] of sorted.entries()) if (p.date <= f.date) idx = j;
     if (idx < 0) idx = 0;
-    feesByRow.set(idx, [...(feesByRow.get(idx) ?? []), { label: f.label || 'Fee', amount: f.amount }]);
+    feesByRow.set(idx, [...(feesByRow.get(idx) ?? []), { label: f.label || 'Fee', amount: f.amount, date: f.date }]);
+  }
+  // A schedule dated by invoice (AmTrust's Policy Installments: 8/3/2026 is
+  // the day the Aug bill was issued, due Aug 23). Read as due dates, no
+  // real bill ever matched its row, and every month showed twice. Each
+  // installment is issued on its date and due as long after as this
+  // account's bills run (20 days when none says).
+  const invoiceDated = ins.scheduleDates === 'invoice';
+  let dueAfter = 20;
+  if (invoiceDated) {
+    const real = await db.statement.findFirst({ where: { utilityAccountId, isScheduled: false, isDownPayment: false, dueDate: { not: null } }, orderBy: { statementDate: 'desc' }, select: { statementDate: true, dueDate: true } });
+    const gap = real?.dueDate ? Math.round((real.dueDate.getTime() - real.statementDate.getTime()) / 86400000) : null;
+    if (gap != null && gap >= 5 && gap <= 45) dueAfter = gap;
   }
   const rowIds: { idx: number; id: string; due: string; amount: number }[] = [];
   let filed = 0;
   for (const [i, p] of sorted.entries()) {
-    const due = new Date(p.date);
+    const issued = new Date(p.date);
+    const due = invoiceDated ? new Date(issued.getTime() + dueAfter * 86400000) : issued;
     const window = 5 * 86400000;
     const existing = await db.statement.findFirst({
-      where: { utilityAccountId, dueDate: { gte: new Date(due.getTime() - window), lte: new Date(due.getTime() + window) }, isDownPayment: false },
+      where: {
+        utilityAccountId, isDownPayment: false,
+        OR: [
+          { dueDate: { gte: new Date(due.getTime() - window), lte: new Date(due.getTime() + window) } },
+          // The carrier's bill issued on the installment's invoice date, or
+          // this installment's row filed before with that date as its due date.
+          ...(invoiceDated ? [
+            { isScheduled: false, statementDate: { gte: new Date(issued.getTime() - 3 * 86400000), lte: new Date(issued.getTime() + 3 * 86400000) } },
+            { isScheduled: true, dueDate: { gte: new Date(issued.getTime() - 3 * 86400000), lte: new Date(issued.getTime() + 3 * 86400000) } },
+          ] : []),
+        ],
+      },
+      orderBy: { isScheduled: 'asc' },
       select: { id: true, isScheduled: true },
     });
-    // The carrier's own bill for this installment is already here; leave it.
-    if (existing && !existing.isScheduled) { rowIds.push({ idx: i, id: existing.id, due: p.date, amount: p.amount }); continue; }
+    // The carrier's own bill for this installment is already here; leave it,
+    // but put on it the fees charged after it was printed.
+    if (existing && !existing.isScheduled) {
+      await addScheduleFees(existing.id, feesByRow.get(i) ?? []);
+      // This installment's scheduled row from before, beside the real bill: its payments move over, it goes.
+      if (invoiceDated) await replaceScheduledRows(utilityAccountId, existing.id, [issued, due]);
+      rowIds.push({ idx: i, id: existing.id, due: due.toISOString().slice(0, 10), amount: p.amount });
+      continue;
+    }
     // What the ledger charged on top of this installment, netted.
     const feeLines = (feesByRow.get(i) ?? []).reduce<Record<string, number>>((acc, f) => { acc[f.label] = Number(((acc[f.label] ?? 0) + f.amount).toFixed(2)); return acc; }, {});
     for (const k of Object.keys(feeLines)) if (Math.abs(feeLines[k]!) < 0.005) delete feeLines[k];
@@ -2977,7 +3072,7 @@ export async function applyPolicyDocument(utilityAccountId: string, ex: Extracte
     // so the rows stagger a month apart and the next one due is the newest
     // that is not still in the future.
     const prev = sorted[i - 1]?.date ? new Date(sorted[i - 1]!.date) : null;
-    const periodStart = prev
+    const periodStart = invoiceDated ? issued : prev
       ? new Date(prev.getTime() + 86400000)
       : (ins.coverageStart && new Date(ins.coverageStart) < due ? new Date(ins.coverageStart) : new Date(due.getFullYear(), due.getMonth() - 1, due.getDate() + 1));
     const periodEnd = due;
@@ -3002,13 +3097,13 @@ export async function applyPolicyDocument(utilityAccountId: string, ex: Extracte
       isScheduled: true,
       sourceType: 'MANUAL' as const,
       notes: `Installment ${i + 1} of ${sorted.length} from the ${ex.statementDate ?? ''} ${fromLedger ? "lender's payment history" : ins.autoPay ? 'automatic payments schedule' : 'payment schedule'}${ins.serviceCharge != null ? ` (includes ${ins.serviceCharge.toFixed(2)} installment fee)` : ''}`,
-      rawDataJson: { scheduled: true, fromDocument: ex.statementDate ?? null, installmentFee: ins.serviceCharge ?? null, chargeBreakdown: breakdown } as Prisma.InputJsonValue,
+      rawDataJson: { scheduled: true, fromDocument: ex.statementDate ?? null, installmentFee: ins.serviceCharge ?? null, scheduleDates: invoiceDated ? 'invoice' : 'due', chargeBreakdown: breakdown } as Prisma.InputJsonValue,
       ...(pdfS3Key ? { pdfS3Key } : {}),
     };
     const row = existing
       ? await db.statement.update({ where: { id: existing.id }, data, select: { id: true } })
       : await db.statement.create({ data: { utilityAccountId, ...data }, select: { id: true } });
-    rowIds.push({ idx: i, id: row.id, due: p.date, amount: rowTotal });
+    rowIds.push({ idx: i, id: row.id, due: due.toISOString().slice(0, 10), amount: rowTotal });
     filed++;
   }
 
