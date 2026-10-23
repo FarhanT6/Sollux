@@ -2,7 +2,8 @@ import NotFoundPage from './pages/NotFoundPage';
 import Toaster from './components/Toaster';
 import Logo from './components/brand/Logo';
 import { PrivacyPage, TermsPage } from './pages/PolicyPage';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import LandingPage from './pages/LandingPage';
 import { useAuth } from '@clerk/clerk-react';
 import { SignIn, SignUp } from '@clerk/clerk-react';
 import { isNative } from './lib/native';
@@ -49,7 +50,10 @@ import PortalPaymentsPage from './pages/portal/PortalPaymentsPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isSignedIn, isLoaded } = useAuth();
+  const { pathname } = useLocation();
   if (!isLoaded) return <div className="flex h-screen items-center justify-center text-gray-400">Loading...</div>;
+  // Signed out, the front door is the landing page (the app opens on sign-in).
+  if (!isSignedIn && pathname === '/' && !isNative) return <LandingPage />;
   if (!isSignedIn) return <Navigate to="/sign-in" replace />;
   return <>{children}</>;
 }
@@ -80,6 +84,7 @@ export default function App() {
         {/* Public: Google's OAuth consent screen links to these. */}
         <Route path="/privacy" element={<PrivacyPage />} />
         <Route path="/terms" element={<TermsPage />} />
+        <Route path="/welcome" element={<LandingPage />} />
         <Route path="/sign-in/*" element={
           <div className="flex h-screen items-center justify-center bg-[#161616]">
             <div className="flex flex-col items-center gap-3">
