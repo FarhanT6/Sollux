@@ -1,4 +1,5 @@
 import { Worker, Job } from 'bullmq';
+import { withAiContext } from '../ai/meter';
 import { Prisma } from '@prisma/client';
 import { google, drive_v3 } from 'googleapis';
 import { guardWorker } from './redisGuard';
@@ -89,7 +90,8 @@ async function downloadFile(drive: drive_v3.Drive, fileId: string): Promise<Buff
 
 const worker = new Worker<DriveImportJobData>(
   'drive-import',
-  async (job: Job<DriveImportJobData>) => {
+  // Its Claude calls count against the importing account's AI allowance.
+  (job: Job<DriveImportJobData>) => withAiContext({ userId: job.data.userId }, async () => {
     console.log(`[DriveImportWorker] Received job ${job.id}`);
 
     const { jobId, tokenId, folderId, fileIds, userId, method } = job.data;
@@ -158,7 +160,7 @@ const worker = new Worker<DriveImportJobData>(
         data: { status: 'FAILED', errorLog: err instanceof Error ? err.message : 'unknown error', finishedAt: new Date() },
       });
     }
-  },
+  }),
   { connection: createWorkerConnection(), concurrency: 1, ...workerTuning }
 );
 

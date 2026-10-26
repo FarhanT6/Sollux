@@ -1,6 +1,7 @@
 import { Worker, Job } from 'bullmq';
 import { runInboxAgent, runInboxAgentForEveryone } from '../ai/inboxAgent';
 import { guardWorker } from './redisGuard';
+import { withAiContext } from '../ai/meter';
 import { createWorkerConnection, workerTuning } from './queues';
 
 interface GmailJobData {
@@ -16,7 +17,7 @@ const worker = new Worker<GmailJobData>(
     if (job.name === 'inbox-all') return runInboxAgentForEveryone();
     if (!job.data.userId) return;
     console.log(`[GmailWorker] Inbox agent for user ${job.data.userId}`);
-    return runInboxAgent(job.data.userId, { tokenId: job.data.tokenId });
+    return withAiContext({ userId: job.data.userId }, () => runInboxAgent(job.data.userId!, { tokenId: job.data.tokenId }));
   },
   { connection: createWorkerConnection(), concurrency: 1, ...workerTuning }
 );

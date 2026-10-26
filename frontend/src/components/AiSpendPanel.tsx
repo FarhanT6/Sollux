@@ -84,7 +84,7 @@ export default function AiSpendPanel() {
       <div className="card p-5">
         <div className="flex items-baseline justify-between">
           <p className="text-sm text-gray-200">Claude this month</p>
-          <p className="text-2xl font-semibold text-white">{fmtCost(spend.spent)}<span className="text-xs text-gray-500">{spend.budget != null ? ` of ${fmtMoney(spend.budget)} budget` : ' · no budget cap'}</span></p>
+          <p className="text-2xl font-semibold text-white">{fmtCost(spend.spent)}<span className="text-xs text-gray-500">{spend.budget != null ? ` of ${fmtMoney(spend.budget)} ${spend.scope === 'account' ? 'included in your plan' : 'budget'}` : ' · no budget cap'}</span></p>
         </div>
         {spend.budget != null && (
           <div className="h-1.5 mt-3 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.08)' }}>
@@ -93,7 +93,9 @@ export default function AiSpendPanel() {
         )}
         <p className="text-xs text-gray-500 mt-3">
           Models: {spend.primaryModel} first{spend.fallbackModel ? `, ${spend.fallbackModel} when an answer fails its check` : ', no fallback'}.
-          When the budget is reached Claude stops for the month and Sollux falls back to plain text reading and templates — change it with AI_MONTHLY_BUDGET on Render.
+          {spend.scope === 'account'
+            ? 'Bill reading, portal fetches and insights draw on this allowance. When it is used up they pause until the 1st; bills can still be added by hand or read as plain text.'
+            : 'App-wide, across every account. When the budget is reached Claude stops for the month and Sollux falls back to plain text reading and templates — change it with AI_MONTHLY_BUDGET on Render. Each customer also has their plan’s own allowance (AI_ALLOWANCE_STARTER / _PRO / _PORTFOLIO).'}
         </p>
       </div>
 

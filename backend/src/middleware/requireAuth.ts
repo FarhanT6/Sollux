@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { clerkClient, clerkMiddleware, getAuth } from '@clerk/express';
 import { db } from '../config/db';
-import { TRIAL_DAYS, canWrite } from '../lib/plans';
+import { TRIAL_DAYS, canWrite, isPlatformAdmin } from '../lib/plans';
 import { withAiContext } from '../ai/meter';
 
 const WRITE = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
@@ -20,6 +20,8 @@ declare global {
       actingUserId?: string;
       // True when the signed-in person owns the account (not a member).
       isAccountOwner?: boolean;
+      /** The person who runs Sollux (lib/plans.ts isPlatformAdmin), not a customer. */
+      isPlatformAdmin?: boolean;
       // A tenant signed in to the tenant portal (attachTenant).
       tenantAccess?: { id: string; tenantId: string; ownerUserId: string; email: string | null; stripeCustomerId: string | null; autopay: boolean; autopayLabel: string | null; autopayMethodType: string | null };
     }
@@ -163,6 +165,7 @@ export async function attachDbUser(req: Request, res: Response, next: NextFuncti
 
     req.actingUserId = user.id;
     req.isAccountOwner = !user.ownerUserId;
+    req.isPlatformAdmin = !user.ownerUserId && isPlatformAdmin(user);
     // Members operate on the owner's data.
     req.dbUserId = user.ownerUserId ?? user.id;
 
