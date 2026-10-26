@@ -12,7 +12,9 @@
     "prisma:generate": "prisma generate",
     "prisma:studio": "prisma studio",
     "dev:local": "node -r ./scripts/dev/devAuth.cjs --import tsx src/index.ts",
-    "seed:dev": "tsx scripts/dev/seed.ts"
+    "seed:dev": "tsx scripts/dev/seed.ts",
+    "test": "node --import tsx --test test/unit/*.test.ts",
+    "test:integration": "node --import tsx --test --test-concurrency=1 test/integration/*.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",

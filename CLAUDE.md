@@ -37,8 +37,11 @@ Two GitHub Actions keep the app improving without the owner having to describe d
   the relabel and the merge; "merge it" in the issue lets the agent merge itself.
 Whether you are one of those agents or an interactive session, ship changes the same way:
 1. Branch from the latest `main`: `git fetch origin main && git checkout -B claude/<short-slug> origin/main`.
-2. Type-check both sides before committing; nothing ships red:
-   `cd backend && npx prisma generate && npx tsc --noEmit -p .` and `cd frontend && npx tsc --noEmit -p .`
+2. Type-check both sides and run the tests before committing; nothing ships red:
+   `cd backend && npx prisma generate && npx tsc --noEmit -p . && npm test` and `cd frontend && npx tsc --noEmit -p .`.
+   Changes to billing, plan limits, account isolation or payments also run `npm run test:integration` with
+   `TEST_DATABASE_URL` set to a disposable local Postgres database (it is wiped) and `REDIS_URL`.
+   Stripe's own end-to-end checks are in `docs/STRIPE-CHECKLIST.md`.
 3. Schema changes: edit `backend/prisma/schema.prisma` AND add a hand-written migration under
    `backend/prisma/migrations/<YYYYMMDDHHMMSS>_<name>/migration.sql` using `IF NOT EXISTS` guards. Render runs
    `prisma migrate deploy` on every build for both the API and the workers.
