@@ -1,5 +1,6 @@
 import { useUser, useClerk } from '@clerk/clerk-react';
 import ModulesCard from '../components/settings/ModulesCard';
+import AuditRequestsPanel from '../components/settings/AuditRequestsPanel';
 import { useModules } from '../lib/modules';
 import { faceIdLockEnabled, biometryName, setFaceIdLock } from '../components/NativeLock';
 import { openOAuth } from '../lib/native';
@@ -47,10 +48,10 @@ import { getAccount, setAlertPhone, inviteAccountMember, cancelAccountInvite, re
   getNotificationPreferences, updateNotificationPreferences } from '../api/client';
 import type { AccountInfo } from '../api/client';
 
-type SettingsTab = 'account' | 'billing' | 'rent' | 'ai' | 'notifications' | 'banking' | 'rates';
+type SettingsTab = 'account' | 'billing' | 'rent' | 'ai' | 'notifications' | 'banking' | 'rates' | 'audits';
 
 export default function SettingsPage() {
-  const { has: modulesHas } = useModules();
+  const { has: modulesHas, isAdmin } = useModules();
   const { user } = useUser();
   const { signOut } = useClerk();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -99,6 +100,7 @@ export default function SettingsPage() {
       notifications: { title: 'Notifications', render: () => <NotificationsTab /> },
       banking: { title: 'Bank Accounts', render: () => <BankingTab /> },
       rates: { title: 'Reference Rates', render: () => <RatesTab /> },
+      audits: { title: 'Audit Requests', render: () => <AuditRequestsPanel /> },
     };
     if (tab !== 'account' && SECTIONS[tab]) return (
       <Screen title={SECTIONS[tab].title} back="/settings" backLabel="Settings" largeTitle={false}>
@@ -147,6 +149,7 @@ export default function SettingsPage() {
           <Row title="Plan & billing" to="/settings?tab=billing" icon={{ bg: 'var(--ios-tint)', glyph: <span style={{ fontWeight: 700, color: '#000' }}>★</span> }} />
           {modulesHas('operations') && <Row title="Rent collection" subtitle="Tenants pay online; payouts to your bank" to="/settings?tab=rent" icon={{ bg: '#30d158', glyph: <span style={{ fontWeight: 700 }}>↓</span> }} />}
           <Row title="AI usage" subtitle="Spend, budget and a test of every AI feature" to="/settings?tab=ai" icon={{ bg: '#bf5af2', glyph: <span style={{ fontWeight: 700 }}>✦</span> }} />
+          {isAdmin && <Row title="Audit requests" subtitle="From the landing page" to="/settings?tab=audits" icon={{ bg: '#ff9f0a', glyph: <span style={{ fontWeight: 700 }}>✉</span> }} />}
         </Section>
         <Section>
           <Row title="Sign out" destructive chevron={false} onClick={() => void signOut()} />
@@ -166,12 +169,13 @@ export default function SettingsPage() {
           : tab === 'billing'     ? 'Your plan, trial and payment details'
           : tab === 'rent'        ? 'Tenants pay rent online; payouts go to your bank'
           : tab === 'ai'          ? 'What Claude costs, by feature, and a test of every AI feature'
+          : tab === 'audits'      ? 'Free portfolio audit requests from the landing page'
           : 'Manage your account and subscription'
         }
       />
 
       <div className="flex border-b px-6" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
-        {(['account', 'billing', 'rent', 'ai', 'notifications', 'banking', 'rates'] as SettingsTab[]).filter(t => t !== 'rent' || modulesHas('operations')).map(t => (
+        {(['account', 'billing', 'rent', 'ai', 'notifications', 'banking', 'rates', 'audits'] as SettingsTab[]).filter(t => (t !== 'rent' || modulesHas('operations')) && (t !== 'audits' || isAdmin)).map(t => (
           <button
             key={t}
             onClick={() => setSearchParams({ tab: t }, { replace: true })}
@@ -181,7 +185,7 @@ export default function SettingsPage() {
                 : 'border-transparent text-gray-500 hover:text-gray-300'
             }`}
           >
-            {t === 'billing' ? 'Plan & billing' : t === 'ai' ? 'AI usage' : t === 'rent' ? 'Rent collection' : t}
+            {t === 'billing' ? 'Plan & billing' : t === 'ai' ? 'AI usage' : t === 'rent' ? 'Rent collection' : t === 'audits' ? 'Audit requests' : t}
           </button>
         ))}
       </div>
@@ -192,6 +196,8 @@ export default function SettingsPage() {
         <div className="px-6 py-5 max-w-3xl"><RentCollectionPanel /></div>
       ) : tab === 'ai' ? (
         <div className="px-6 py-5 max-w-3xl"><AiSpendPanel /></div>
+      ) : tab === 'audits' && isAdmin ? (
+        <div className="px-6 py-5 max-w-3xl"><AuditRequestsPanel /></div>
       ) : tab === 'banking' ? (
         <BankingTab />
       ) : tab === 'notifications' ? (
