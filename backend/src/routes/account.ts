@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
+import { MODULES, modulesOf } from '../lib/modules';
 
 const router = Router();
 router.use(attachDbUser);
@@ -11,6 +12,22 @@ function normalizePhone(p?: string | null): string | null {
   const digits = p.replace(/\D/g, '');
   return digits.length > 10 ? digits.slice(-10) : digits || null;
 }
+
+// The optional modules this account uses (lib/modules.ts). Members see the owner's.
+router.get('/modules', async (req, res, next) => {
+  try {
+    const u = await db.user.findUnique({ where: { id: req.dbUserId! }, select: { modulesJson: true } });
+    res.json({ modules: modulesOf(u ?? {}), isAdmin: !!req.isPlatformAdmin, isOwner: !!req.isAccountOwner });
+  } catch (err) { next(err); }
+});
+router.put('/modules', async (req, res, next) => {
+  try {
+    if (!req.isAccountOwner) return res.status(403).json({ error: 'Only the account owner can change which modules are on.' });
+    const { modules } = z.object({ modules: z.array(z.enum(MODULES)) }).parse(req.body);
+    await db.user.update({ where: { id: req.dbUserId! }, data: { modulesJson: [...new Set(modules)] } });
+    res.json({ modules: [...new Set(modules)] });
+  } catch (err) { next(err); }
+});
 
 // Who rent is payable to on this account's 3-day notices.
 const PayableTo = z.object({

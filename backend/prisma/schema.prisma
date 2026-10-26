@@ -52,6 +52,10 @@ model User {
   // Who rent is payable to on the account's 3-day notices: { name, phone,
   // email, address }, set by the owner on the notice page.
   rentPayableToJson Json?
+  // Which optional modules the account uses (lib/modules.ts): a list such as
+  // ["operations", "books"]. Null is every module — accounts from before
+  // modules existed keep everything; a new account starts with none.
+  modulesJson       Json?
   members          User[]           @relation("AccountMembers")
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt

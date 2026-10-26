@@ -1,4 +1,6 @@
 import { useUser, useClerk } from '@clerk/clerk-react';
+import ModulesCard from '../components/settings/ModulesCard';
+import { useModules } from '../lib/modules';
 import { faceIdLockEnabled, biometryName, setFaceIdLock } from '../components/NativeLock';
 import { openOAuth } from '../lib/native';
 import ClickUpCard from '../components/settings/ClickUpCard';
@@ -48,6 +50,7 @@ import type { AccountInfo } from '../api/client';
 type SettingsTab = 'account' | 'billing' | 'rent' | 'ai' | 'notifications' | 'banking' | 'rates';
 
 export default function SettingsPage() {
+  const { has: modulesHas } = useModules();
   const { user } = useUser();
   const { signOut } = useClerk();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -133,6 +136,7 @@ export default function SettingsPage() {
             <p className="text-xs text-gray-400 mb-1">Mobile for alerts</p>
             <AlertPhoneField />
           </div>
+          <ModulesCard />
           <SignInSecurityCard />
           <PhoneLockCard />
           <SharedAccessCard />
@@ -141,7 +145,7 @@ export default function SettingsPage() {
         </div>
         <Section header="Plan">
           <Row title="Plan & billing" to="/settings?tab=billing" icon={{ bg: 'var(--ios-tint)', glyph: <span style={{ fontWeight: 700, color: '#000' }}>★</span> }} />
-          <Row title="Rent collection" subtitle="Tenants pay online; payouts to your bank" to="/settings?tab=rent" icon={{ bg: '#30d158', glyph: <span style={{ fontWeight: 700 }}>↓</span> }} />
+          {modulesHas('operations') && <Row title="Rent collection" subtitle="Tenants pay online; payouts to your bank" to="/settings?tab=rent" icon={{ bg: '#30d158', glyph: <span style={{ fontWeight: 700 }}>↓</span> }} />}
           <Row title="AI usage" subtitle="Spend, budget and a test of every AI feature" to="/settings?tab=ai" icon={{ bg: '#bf5af2', glyph: <span style={{ fontWeight: 700 }}>✦</span> }} />
         </Section>
         <Section>
@@ -167,7 +171,7 @@ export default function SettingsPage() {
       />
 
       <div className="flex border-b px-6" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
-        {(['account', 'billing', 'rent', 'ai', 'notifications', 'banking', 'rates'] as SettingsTab[]).map(t => (
+        {(['account', 'billing', 'rent', 'ai', 'notifications', 'banking', 'rates'] as SettingsTab[]).filter(t => t !== 'rent' || modulesHas('operations')).map(t => (
           <button
             key={t}
             onClick={() => setSearchParams({ tab: t }, { replace: true })}
@@ -196,6 +200,8 @@ export default function SettingsPage() {
         <RatesTab />
       ) : (
       <div className="px-6 py-5 max-w-2xl">
+
+        <ModulesCard />
 
         <div className="card p-5 mb-4">
           <h2 className="text-sm font-semibold text-white mb-4">Profile</h2>

@@ -151,6 +151,8 @@ export async function attachDbUser(req: Request, res: Response, next: NextFuncti
             phone: primaryPhone,
             // A new account starts its free trial (lib/plans.ts).
             trialEndsAt: new Date(Date.now() + TRIAL_DAYS * 86_400_000),
+            // …with bills and expenses only; the other modules are turned on in Settings (lib/modules.ts).
+            modulesJson: [],
           },
         });
       }
