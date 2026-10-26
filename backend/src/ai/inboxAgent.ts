@@ -13,7 +13,7 @@
  * Each message is handled once (InboxMessage), so re-running never double
  * files or double bills. Payment confirmations are recorded, not filed.
  */
-import { checkBudget } from './meter';
+import { checkBudget, withAiContext } from './meter';
 import { providerForEmail, findProvider } from '../lib/providerDirectory';
 import { scrapeQueue } from '../workers/queues';
 import { google, gmail_v1 } from 'googleapis';
@@ -405,7 +405,8 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
 export async function runInboxAgentForEveryone(): Promise<void> {
   const owners = await db.gmailToken.findMany({ distinct: ['userId'], select: { userId: true } });
   for (const { userId } of owners) {
-    try { await runInboxAgent(userId); }
+    // Each owner's reading counts against their own AI allowance.
+    try { await withAiContext({ userId }, () => runInboxAgent(userId)); }
     catch (err) { console.warn(`[InboxAgent] ${userId} failed:`, err instanceof Error ? err.message : err); }
   }
 }

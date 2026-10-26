@@ -1183,7 +1183,7 @@ export const openBillingPortal = () => api.post<{ url: string }>('/billing/porta
 // ─── AI spend and the AI test run (routes/aiSpend.ts) ─────────────
 export interface AiSpendFeature { feature: string; name: string; test: boolean; calls: number; cost: number; avgCost: number; fallbacks: number; cachedShare: number }
 export interface AiSpend {
-  month: string; spent: number; budget: number | null; primaryModel: string; fallbackModel: string | null; portalRecipes: number;
+  month: string; spent: number; budget: number | null; scope?: 'app' | 'account'; primaryModel: string; fallbackModel: string | null; portalRecipes: number;
   features: AiSpendFeature[];
   recent: { createdAt: string; feature: string; name: string; model: string; costUsd: number; fellBack: boolean; test: boolean; inputTokens: number; outputTokens: number; cacheReadTokens: number }[];
 }

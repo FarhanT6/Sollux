@@ -12,7 +12,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { askClaude, PRIMARY_MODEL, FALLBACK_MODEL } from '../ai/models';
-import { monthlyBudget, monthSpend, withAiContext } from '../ai/meter';
+import { monthlyBudget, monthSpend, withAiContext, accountSpend, allowanceOf } from '../ai/meter';
 import { downloadDocument } from '../services/s3Service';
 import { parseBill } from '../services/pdfImportService';
 import { extractLeaseTerms } from '../services/leaseExtract';
@@ -52,23 +52,30 @@ const FEATURES: Record<string, string> = {
 };
 const nameOf = (f: string) => FEATURES[f] ?? (f.startsWith('read-') ? `Reading a ${f.slice(5)} document` : f);
 
-router.get('/', async (_req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   const since = monthStart();
+  // A customer sees their own account's spend against its plan's allowance;
+  // only the admin (you) sees the whole app's, against AI_MONTHLY_BUDGET.
+  const admin = !!req.isPlatformAdmin;
+  const mine = admin ? {} : { userId: req.dbUserId! };
   const [byFeature, recent, total, recipes] = await Promise.all([
     db.aiUsage.groupBy({
-      by: ['feature', 'test'], where: { createdAt: { gte: since } },
+      by: ['feature', 'test'], where: { createdAt: { gte: since }, ...mine },
       _sum: { costUsd: true, inputTokens: true, outputTokens: true, cacheReadTokens: true }, _count: { _all: true },
     }),
-    db.aiUsage.findMany({ orderBy: { createdAt: 'desc' }, take: 40, select: { createdAt: true, feature: true, model: true, costUsd: true, fellBack: true, test: true, inputTokens: true, outputTokens: true, cacheReadTokens: true } }),
-    monthSpend(),
-    db.portalRecipe.count(),
+    db.aiUsage.findMany({ where: mine, orderBy: { createdAt: 'desc' }, take: 40, select: { createdAt: true, feature: true, model: true, costUsd: true, fellBack: true, test: true, inputTokens: true, outputTokens: true, cacheReadTokens: true } }),
+    admin ? monthSpend() : accountSpend(req.dbUserId!),
+    // Saved routes: all of them for the admin; a customer's own accounts' otherwise.
+    admin ? db.portalRecipe.count() : db.utilityAccount.findMany({ where: { property: { userId: req.dbUserId! } }, select: { id: true } })
+      .then(rows => db.portalRecipe.count({ where: { key: { in: rows.map(r => `acct:${r.id}`) } } })),
   ]);
-  const fallbacks = await db.aiUsage.groupBy({ by: ['feature'], where: { createdAt: { gte: since }, fellBack: true }, _count: { _all: true } });
+  const fallbacks = await db.aiUsage.groupBy({ by: ['feature'], where: { createdAt: { gte: since }, fellBack: true, ...mine }, _count: { _all: true } });
   const fb = new Map(fallbacks.map(f => [f.feature, f._count._all]));
   res.json({
     month: since.toISOString().slice(0, 7),
     spent: total,
-    budget: monthlyBudget(),
+    budget: admin ? monthlyBudget() : await allowanceOf(req.dbUserId!),
+    scope: admin ? 'app' : 'account',
     primaryModel: PRIMARY_MODEL,
     fallbackModel: FALLBACK_MODEL,
     portalRecipes: recipes,
@@ -255,15 +262,16 @@ router.post('/test/portal/:accountId', async (req: Request, res: Response) => {
 });
 
 /** What the scrape worker is on right now and how much is waiting, so a queued press can say why it waits. */
-async function queueSnapshot() {
+async function queueSnapshot(userId: string) {
   try {
     const [counts, active] = await Promise.all([scrapeQueue.getJobCounts('waiting', 'active', 'prioritized', 'delayed'), scrapeQueue.getActive(0, 4)]);
     const ids = active.map(j => j.data?.utilityAccountId).filter(Boolean) as string[];
-    const names = new Map((await db.utilityAccount.findMany({ where: { id: { in: ids } }, select: { id: true, providerName: true, accountNumber: true } }))
+    // Another customer's account is not named: only "another account".
+    const names = new Map((await db.utilityAccount.findMany({ where: { id: { in: ids }, property: { userId } }, select: { id: true, providerName: true, accountNumber: true } }))
       .map(a => [a.id, `${a.providerName}${a.accountNumber ? ` ··${String(a.accountNumber).slice(-4)}` : ''}`]));
     return {
       waiting: (counts.waiting ?? 0) + (counts.prioritized ?? 0) + (counts.delayed ?? 0),
-      active: active.map(j => ({ account: names.get(j.data?.utilityAccountId) ?? 'an account', since: j.processedOn ? new Date(j.processedOn) : null, kind: j.data?.manual ? 'a Sync or Fetch press' : j.data?.trigger === 'bill_posted' ? 'a bill-ready email' : 'the schedule' })),
+      active: active.map(j => ({ account: names.get(j.data?.utilityAccountId) ?? 'another account', since: j.processedOn ? new Date(j.processedOn) : null, kind: j.data?.manual ? 'a Sync or Fetch press' : j.data?.trigger === 'bill_posted' ? 'a bill-ready email' : 'the schedule' })),
     };
   } catch {
     return null; // Redis unreachable: the worker status says so
@@ -295,6 +303,7 @@ router.get('/test/portal', async (req: Request, res: Response) => {
   });
   for (const r of running) lastJob.set(r.utilityAccountId, r);
   const recipes = await db.portalRecipe.findMany({ select: { key: true, host: true, successes: true, failures: true, updatedAt: true } });
+  const myHosts = new Set(accounts.map(a => { try { return new URL(websiteFor(a)?.url ?? '').hostname.split('.').slice(-2).join('.'); } catch { return ''; } }).filter(Boolean));
   const usage = await db.aiUsage.groupBy({ by: ['userId'], where: { feature: 'portal-agent', userId: req.dbUserId!, createdAt: { gte: monthStart() } }, _sum: { costUsd: true }, _count: { _all: true } });
   res.json({
     accounts: accounts.map(a => ({
@@ -324,10 +333,12 @@ router.get('/test/portal', async (req: Request, res: Response) => {
       })(),
       recipe: recipes.find(r => r.key === `acct:${a.id}`) ?? null,
     })),
-    sharedRecipes: recipes.filter(r => r.key.startsWith('host:')),
+    // Routes shared by provider, only for providers this account uses: the
+    // list of every provider any customer has connected is not theirs to see.
+    sharedRecipes: recipes.filter(r => r.key.startsWith('host:') && myHosts.has(r.host)),
     monthCalls: usage[0]?._count._all ?? 0, monthCost: Number(usage[0]?._sum.costUsd ?? 0),
     workers: await workerStatus(),
-    queue: await queueSnapshot(),
+    queue: await queueSnapshot(req.dbUserId!),
   });
 });
 

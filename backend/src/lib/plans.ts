@@ -21,6 +21,29 @@ export const PLANS: Record<PlanKey, { name: string; priceMonthly: number; maxPro
 };
 
 export const TRIAL_DAYS = 14;
+
+/**
+ * What each plan may spend on Claude a month (bill reading, portal fetches,
+ * insights), in dollars. One heavy account runs out of its own allowance
+ * instead of using up the app's budget for everyone. Override on Render
+ * with AI_ALLOWANCE_STARTER / _PRO / _PORTFOLIO. The trial gets Pro's.
+ */
+const AI_ALLOWANCE_DEFAULT: Record<PlanKey, number> = { STARTER: 3, PRO: 8, PORTFOLIO: 15 };
+export function aiAllowance(plan: PlanKey): number {
+  const v = Number(process.env[`AI_ALLOWANCE_${plan}`]);
+  return Number.isFinite(v) && v >= 0 && process.env[`AI_ALLOWANCE_${plan}`]?.trim() ? v : AI_ALLOWANCE_DEFAULT[plan];
+}
+
+/**
+ * The person who runs Sollux (you), not a customer: sees app-wide figures
+ * such as every account's AI spend, and has no per-account AI allowance.
+ * ADMIN_EMAILS on Render (comma-separated); when it is not set, the
+ * accounts that predate billing (COMP) are the admins.
+ */
+export function isPlatformAdmin(u: { email: string; subscriptionTier: string }): boolean {
+  const list = (process.env.ADMIN_EMAILS ?? '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+  return list.length ? list.includes(u.email.toLowerCase()) : u.subscriptionTier === 'COMP';
+}
 /** During the trial: Pro's limits, so the trial shows the product. */
 const TRIAL_MAX_PROPERTIES = PLANS.PRO.maxProperties;
 

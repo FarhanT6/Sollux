@@ -6,7 +6,8 @@
  *
  *   AI_MONTHLY_BUDGET       dollars per calendar month for the whole app
  *                           (default 25; "none" turns the cap off)
- *   AI_USER_MONTHLY_BUDGET  dollars per account per month (default: no cap)
+ *   AI_USER_MONTHLY_BUDGET  dollars per account per month, a ceiling on top
+ *                           of each plan's allowance (lib/plans.ts aiAllowance)
  *
  * When the cap is reached every feature falls back to what it does without
  * Claude (plain-text bill reading, template messages), and nothing is lost.
@@ -15,6 +16,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
 import type Anthropic from '@anthropic-ai/sdk';
 import { db } from '../config/db';
+import { accessOf, aiAllowance, isPlatformAdmin } from '../lib/plans';
 
 /** Dollars per million tokens: [input, output]. Cache writes cost 1.25× input, reads 0.1×. */
 const PRICES: [RegExp, number, number][] = [
@@ -74,17 +76,42 @@ async function spend(): Promise<NonNullable<typeof spent>> {
 
 export async function monthSpend(): Promise<number> { return (await spend()).total; }
 
+/**
+ * An account's AI allowance this month, or null for none (the admin, and
+ * accounts that predate billing): its plan's (the trial gets Pro's), capped
+ * by AI_USER_MONTHLY_BUDGET when that is set. Read at most every 10 minutes.
+ */
+const allowances = new Map<string, { at: number; value: number | null }>();
+export async function allowanceOf(userId: string): Promise<number | null> {
+  const hit = allowances.get(userId);
+  if (hit && Date.now() - hit.at < 600_000) return hit.value;
+  const u = await db.user.findUnique({ where: { id: userId }, select: { email: true, subscriptionTier: true, subscriptionStatus: true, trialEndsAt: true } });
+  let value: number | null = null;
+  if (u && !isPlatformAdmin(u)) {
+    const a = accessOf(u);
+    value = a.kind === 'comp' ? null : a.kind === 'active' ? aiAllowance(a.plan) : a.kind === 'trial' ? aiAllowance('PRO') : 0;
+  }
+  const ceiling = userBudget();
+  if (ceiling != null) value = value == null ? ceiling : Math.min(value, ceiling);
+  allowances.set(userId, { at: Date.now(), value });
+  return value;
+}
+
+/** This account's spend so far this month. */
+export async function accountSpend(userId: string): Promise<number> { return (await spend()).byUser.get(userId) ?? 0; }
+
 /** Throws AiBudgetError when this month's budget (the app's, or this account's) is used up. */
 export async function checkBudget(feature: string): Promise<void> {
-  const cap = monthlyBudget(), perUser = userBudget();
-  if (cap == null && perUser == null) return;
+  const cap = monthlyBudget();
   const s = await spend();
   if (cap != null && s.total >= cap) {
     throw new AiBudgetError(`AI budget for the month reached ($${s.total.toFixed(2)} of $${cap}) — ${feature} skipped. Raise AI_MONTHLY_BUDGET on Render to continue.`);
   }
   const uid = ctx().userId;
-  if (perUser != null && uid && (s.byUser.get(uid) ?? 0) >= perUser) {
-    throw new AiBudgetError(`This account's AI allowance for the month is used up — ${feature} skipped.`);
+  if (!uid) return;
+  const allowance = await allowanceOf(uid);
+  if (allowance != null && (s.byUser.get(uid) ?? 0) >= allowance) {
+    throw new AiBudgetError(`This account's AI allowance for the month ($${allowance}) is used up — ${feature} skipped. It renews on the 1st.`);
   }
 }
 
