@@ -8,6 +8,7 @@ import { getDashboardSummary } from '../../api/client';
 import type { DashboardSummary } from '../../types';
 import { tap } from '../../lib/native';
 import { useThemeChoice } from '../../lib/theme';
+import { useModules, type ModuleKey } from '../../lib/modules';
 
 function Ico({ d, children, size = 16 }: { d?: string; children?: React.ReactNode; size?: number }) {
   return (
@@ -33,7 +34,7 @@ export const NAV = [
     icon: (z: number) => <Ico size={z}><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></Ico>,
   },
   {
-    group: '', to: '/finances', label: 'Finances',
+    group: '', to: '/finances', label: 'Finances', module: 'books' as ModuleKey,
     icon: (z: number) => <Ico size={z}><rect x="3" y="13" width="4" height="8" rx="0.5"/><rect x="10" y="7" width="4" height="14" rx="0.5"/><rect x="17" y="3" width="4" height="18" rx="0.5"/></Ico>,
   },
   {
@@ -45,23 +46,23 @@ export const NAV = [
     icon: (z: number) => <Ico size={z}><path d="M3 21h18"/><path d="M9 21V7H5l7-5 7 5v14"/><rect x="9" y="13" width="2" height="4"/><rect x="13" y="13" width="2" height="4"/></Ico>,
   },
   {
-    group: 'Properties', to: '/repairs', label: 'Repairs',
+    group: 'Properties', to: '/repairs', label: 'Repairs', module: 'operations' as ModuleKey,
     icon: (z: number) => <Ico size={z} d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />,
   },
   {
-    group: 'Properties', folder: 'Property records', to: '/projects', label: 'Projects',
+    group: 'Properties', folder: 'Property records', to: '/projects', label: 'Projects', module: 'operations' as ModuleKey,
     icon: (z: number) => <Ico size={z}><path d="M4 21V5h7v16"/><path d="M11 9h9v12"/><path d="M7 9h1M7 13h1M7 17h1M14 13h2M14 17h2"/><path d="M2 21h20"/></Ico>,
   },
   {
-    group: 'Properties', folder: 'Property records', to: '/operations', label: 'Operations',
+    group: 'Properties', folder: 'Property records', to: '/operations', label: 'Operations', module: 'operations' as ModuleKey,
     icon: (z: number) => <Ico size={z}><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></Ico>,
   },
   {
-    group: 'Properties', folder: 'Property records', to: '/compliance', label: 'Compliance',
+    group: 'Properties', folder: 'Property records', to: '/compliance', label: 'Compliance', module: 'operations' as ModuleKey,
     icon: (z: number) => <Ico size={z}><path d="M12 2l8 4v6c0 5-3.5 9-8 10-4.5-1-8-5-8-10V6l8-4z"/><path d="M9 12l2 2 4-4"/></Ico>,
   },
   {
-    group: 'Properties', folder: 'Property records', to: '/legal', label: 'Legal',
+    group: 'Properties', folder: 'Property records', to: '/legal', label: 'Legal', module: 'operations' as ModuleKey,
     icon: (z: number) => <Ico size={z}><path d="M12 3v18"/><path d="M5 7h14"/><path d="M6 7l-3 6h6z"/><path d="M18 7l-3 6h6z"/></Ico>,
   },
   {
@@ -73,15 +74,15 @@ export const NAV = [
     icon: (z: number) => <Ico size={z}><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 3v18"/><path d="M4 12h4"/></Ico>,
   },
   {
-    group: 'Records', to: '/taxes', label: 'Taxes',
+    group: 'Records', to: '/taxes', label: 'Taxes', module: 'books' as ModuleKey,
     icon: (z: number) => <Ico size={z}><path d="M3 21h18"/><path d="M4 10h16"/><path d="M12 3l9 5H3l9-5z"/><path d="M6 10v8M10 10v8M14 10v8M18 10v8"/></Ico>,
   },
   {
-    group: 'Records', to: '/personal', label: 'Personal',
+    group: 'Records', to: '/personal', label: 'Personal', module: 'personal' as ModuleKey,
     icon: (z: number) => <Ico size={z}><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/><path d="M6 15h4"/></Ico>,
   },
   {
-    group: 'Records', to: '/vault', label: 'Vault',
+    group: 'Records', to: '/vault', label: 'Vault', module: 'personal' as ModuleKey,
     icon: (z: number) => <Ico size={z}><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><circle cx="12" cy="15.5" r="1.5"/></Ico>,
   },
 ];
@@ -98,6 +99,11 @@ export const TAB_BAR = ['/dashboard', '/properties', '/scan', '/finances', '/pay
  */
 export default function AppLayout() {
   const { user } = useUser();
+  // Only the modules this account has turned on (lib/modules.ts).
+  const { has } = useModules();
+  const moduleOf = (to: string) => (NAV.find(x => x.to === to) as { module?: ModuleKey } | undefined)?.module;
+  const nav = NAV.filter(n => has((n as { module?: ModuleKey }).module));
+  const tabs = TAB_BAR.filter(to => has(moduleOf(to)));
   const { signOut } = useClerk();
   const location = useLocation();
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
@@ -116,8 +122,8 @@ export default function AppLayout() {
 
   const section = '/' + location.pathname.split('/')[1];
   const [folderOpen, setFolderOpen] = useState(false);
-  const folderShown = folderOpen || NAV.some(n => (n as { folder?: string }).folder && n.to === section);
-  const moreActive = !TAB_BAR.includes(section);
+  const folderShown = folderOpen || nav.some(n => (n as { folder?: string }).folder && n.to === section);
+  const moreActive = !tabs.includes(section);
   const summaryBadge = (to: string) => {
     const b = badge(to);
     return b ? b.n : null;
@@ -130,13 +136,13 @@ export default function AppLayout() {
 
   const navList = (
     <nav className="flex-1 px-3 py-4 overflow-y-auto">
-      {NAV.map((n, i) => {
+      {nav.map((n, i) => {
         const b = badge(n.to);
-        const heading = n.group && n.group !== NAV[i - 1]?.group ? n.group : null;
+        const heading = n.group && n.group !== nav[i - 1]?.group ? n.group : null;
         const folder = (n as { folder?: string }).folder;
         // The pages used now and then (projects, operations, compliance,
         // legal) sit in one folder, closed until opened or one of them is open.
-        const firstInFolder = folder && (NAV[i - 1] as { folder?: string } | undefined)?.folder !== folder;
+        const firstInFolder = folder && (nav[i - 1] as { folder?: string } | undefined)?.folder !== folder;
         const link = (
           <NavLink to={n.to} className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`} style={folder ? { paddingLeft: 49 } : undefined}>
             {!folder && <span className="flex-shrink-0" style={{ opacity: 0.6 }}>{n.icon(17)}</span>}
@@ -239,7 +245,7 @@ export default function AppLayout() {
 
         {/* The iOS tab bar: five destinations and More, translucent over the content. */}
         <nav className="ios-tabbar md:hidden" aria-label="Tabs">
-          {TAB_BAR.map(to => {
+          {tabs.map(to => {
             const n = NAV.find(x => x.to === to)!;
             const b = summaryBadge(to);
             return (

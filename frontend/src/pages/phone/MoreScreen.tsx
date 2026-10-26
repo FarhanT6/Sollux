@@ -3,6 +3,7 @@ import Logo from '../../components/brand/Logo';
 import { useUser, useClerk } from '@clerk/clerk-react';
 import { Screen, Section, Row, Segmented } from '../../ios';
 import { NAV, TAB_BAR } from '../../components/layout/AppLayout';
+import { useModules, type ModuleKey } from '../../lib/modules';
 import { getDashboardSummary } from '../../api/client';
 import { useThemeChoice, type ThemeChoice } from '../../lib/theme';
 
@@ -22,7 +23,9 @@ export default function MoreScreen() {
   useEffect(() => { getDashboardSummary().then(s => setUnread(s.unreadInsights)).catch(() => {}); }, []);
 
   const initials = `${user?.firstName?.[0] ?? ''}${user?.lastName?.[0] ?? ''}` || '·';
-  const items = NAV.filter(n => !TAB_BAR.includes(n.to));
+  // Pages not on the tab bar, from the modules this account has turned on.
+  const { has } = useModules();
+  const items = NAV.filter(n => !TAB_BAR.includes(n.to) && has((n as { module?: ModuleKey }).module));
 
   return (
     <Screen title="More">
