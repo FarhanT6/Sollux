@@ -63,7 +63,7 @@ export default function AddPropertyModal({ onClose }: Props) {
         </>
       }
     >
-      <Field label="Nickname (optional)" htmlFor="nickname" hint="E.g. 'Vista Verde Home', 'Hunsaker Rentals'">
+      <Field label="Nickname (optional)" htmlFor="nickname" hint="E.g. 'Elm Grove Home', 'Linden Rentals'">
         <Input
           id="nickname"
           value={form.nickname}
@@ -86,7 +86,7 @@ export default function AddPropertyModal({ onClose }: Props) {
           id="address"
           value={form.address}
           onChange={e => set('address', e.target.value)}
-          placeholder="4349 Vista Verde Way"
+          placeholder="1200 Elm Grove Ln"
         />
       </Field>
 

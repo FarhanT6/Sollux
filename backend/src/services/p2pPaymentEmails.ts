@@ -85,7 +85,7 @@ function payerFrom(subject: string, body: string): string | null {
   // "JACOB ADAMS sent you $4,452.00", "Jacob Adams paid you $50.00": up to five
   // capitalised words right before the verb. Subject first: it is the cleanest.
   // Same line only: "Wells Fargo\nJACOB ADAMS sent you" is not from "Wells Fargo JACOB ADAMS".
-  // Digits count: "201 W STATE ST LLC sent you $314.00", "476-498 H ST LLC".
+  // Digits count: "100 MAIN ST LLC sent you $314.00", "200-210 OAK ST LLC".
   const before = /((?:[A-Z0-9][A-Za-z0-9.'&-]*[ \t]+){0,5}[A-Z][A-Za-z0-9.'&-]*)[ \t]+(?:has[ \t]+|just[ \t]+)?(?:sent|paid)[ \t]+you\b/;
   for (const t of [subject, body]) {
     const m = before.exec(t);

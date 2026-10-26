@@ -4,7 +4,7 @@ Things only the owner can do, noted on Oct 15, 2026. Tick them off as you go.
 
 ## Email and text alerts (shut-off and cancellation notices)
 - [ ] **SendGrid (email):** on the onboarding screen, choose *Skip to dashboard*.
-  - **Settings → Sender Authentication → Verify a Single Sender**, using farhantalukder6@gmail.com, then click the link in the email SendGrid sends.
+  - **Settings → Sender Authentication → Verify a Single Sender**, using the address Sollux should send from, then click the link in the email SendGrid sends.
   - **Settings → API Keys → Create API Key**, with Restricted Access and *Mail Send = Full Access*. Copy the `SG.` key; it's only shown once.
 - [ ] **Twilio (texts):** copy the Account SID and Auth Token.
   - **Phone Numbers → Buy a number** with SMS.
@@ -32,4 +32,3 @@ Things only the owner can do, noted on Oct 15, 2026. Tick them off as you go.
 - [ ] **City of Brawley (432 W D St):** delete the "billed Sep 25, billing period —" row, or merge it from the Import page.
 - [ ] **476 H St (Brawley, account 01-1963-03):** check that the September bill ($934.80) came in.
 - [ ] **Westlake Portfolio Management:** re-import the May–Dec 2025 PDFs; the $5.00 rows were a misread. Check the Mar 2025 $0.00 row.
-- [ ] **Bamboo:** the insured property is 4349 Vista Verde Way, but the policy is filed under 432 W D St (UWM escrow). Confirm which is right.

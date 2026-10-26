@@ -185,7 +185,7 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
   try {
     // Each mailbox gets its own share of the run's document allowance. A
     // shared one let the first mailbox's backlog use all of it, and the
-    // second was never read ("not read yet" for fhmtalukder@).
+    // second was never read ("not read yet" for second@).
     const perMailbox = Math.max(5, Math.floor(MAX_DOCUMENTS_PER_RUN / tokens.length));
     for (const token of tokens) {
       const startedAt = new Date();

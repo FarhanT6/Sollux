@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getNotice, deleteNotice } from '../api/client';
+import { getNotice, deleteNotice, getRentPayableTo, saveRentPayableTo, type RentPayableTo } from '../api/client';
 import type { RentNotice } from '../types';
 import { fmtDate as fmtDateSafe } from '../lib/date';
 
@@ -14,19 +14,46 @@ function BU({ children }: { children: React.ReactNode }) {
   return <span style={{ fontWeight: 'bold', textDecoration: 'underline' }}>{children}</span>;
 }
 
-// These are the payable-to details — update to match your account
-const PAYABLE_TO = {
-  name: 'Mohammed Talukder',
-  phone: '(760) 458-4372',
-  email: 'mtalukder5@gmail.com',
-  address: '4349 Vista Verde Way, Oceanside, CA 92057',
-};
+const EMPTY_PAYABLE: RentPayableTo = { name: '', phone: '', email: '', address: '' };
+
+/** Who the rent is payable to, as the account saved it (set here once, used on every notice). */
+function PayableToForm({ value, onSaved, onCancel }: { value: RentPayableTo | null; onSaved: (p: RentPayableTo) => void; onCancel?: () => void }) {
+  const [f, setF] = useState<RentPayableTo>(value ?? EMPTY_PAYABLE);
+  const [busy, setBusy] = useState(false);
+  const field = (k: keyof RentPayableTo, label: string, ph: string) => (
+    <label className="block"><span className="text-xs text-gray-400">{label}</span>
+      <input className="input-dark w-full text-sm mt-1" placeholder={ph} value={f[k]} onChange={e => setF(x => ({ ...x, [k]: e.target.value }))} /></label>
+  );
+  return (
+    <div className="card p-5 mb-6 print:hidden max-w-3xl mx-auto">
+      <p className="text-sm text-white font-medium">Who is the rent payable to?</p>
+      <p className="text-xs text-gray-500 mt-1 mb-4">Printed on every 3-day notice from this account: where and how the tenant pays. Saved once, used on every notice.</p>
+      <div className="grid sm:grid-cols-2 gap-3">
+        {field('name', 'Name', 'Who the rent is paid to')}
+        {field('phone', 'Phone', '(555) 123-4567')}
+        {field('email', 'Email (for Zelle)', 'name@example.com')}
+        {field('address', 'Address (in person and by mail)', 'Street, city, state ZIP')}
+      </div>
+      <div className="flex gap-2 mt-4">
+        <button className="btn-primary text-sm disabled:opacity-40" disabled={busy || !f.name.trim() || !f.address.trim()}
+          onClick={() => { setBusy(true); saveRentPayableTo(f).then(onSaved).catch(() => alert('Could not save these details.')).finally(() => setBusy(false)); }}>
+          {busy ? 'Saving…' : 'Save'}
+        </button>
+        {onCancel && <button className="btn text-sm" onClick={onCancel}>Cancel</button>}
+      </div>
+    </div>
+  );
+}
 
 export default function NoticeDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [notice, setNotice] = useState<RentNotice | null>(null);
   const [loading, setLoading] = useState(true);
+  // The account's payable-to details; undefined while loading, null when never set.
+  const [payable, setPayable] = useState<RentPayableTo | null | undefined>(undefined);
+  const [editingPayable, setEditingPayable] = useState(false);
+  useEffect(() => { getRentPayableTo().then(setPayable).catch(() => setPayable(null)); }, []);
 
   useEffect(() => {
     if (!id) return;
@@ -54,6 +81,8 @@ export default function NoticeDetailPage() {
   ].filter(Boolean).join(', ');
 
   const lineItems = notice.lineItems as { amount: number; dueDate: string }[];
+  // Blank lines until the account's payable-to details are saved.
+  const P = payable ?? EMPTY_PAYABLE;
 
   return (
     <div className="p-6">
@@ -64,10 +93,15 @@ export default function NoticeDetailPage() {
           <p className="text-sm text-gray-400">{property?.nickname || property?.address} — {tenantNames} · served {fmtDate(notice.noticeDate)}</p>
         </div>
         <div className="flex gap-3">
-          <button onClick={() => window.print()} className="btn-primary text-sm">Print</button>
+          {payable && <button onClick={() => setEditingPayable(true)} className="btn text-sm">Payable-to details</button>}
+          <button onClick={() => window.print()} disabled={!payable} title={payable ? undefined : 'Add who the rent is payable to first'} className="btn-primary text-sm disabled:opacity-40">Print</button>
           <button onClick={handleDelete} className="text-sm text-red-500 hover:text-red-400 border border-red-900/50 px-3 py-1.5 rounded-lg">Delete</button>
         </div>
       </div>
+
+      {(payable === null || editingPayable) && (
+        <PayableToForm value={payable ?? null} onSaved={p => { setPayable(p); setEditingPayable(false); }} onCancel={payable ? () => setEditingPayable(false) : undefined} />
+      )}
 
       {/* Notice body — renders in serif for print readability */}
       <div className="mx-auto max-w-3xl bg-white px-12 py-10 text-black text-sm leading-relaxed" style={{ fontFamily: 'Georgia, serif' }}>
@@ -126,25 +160,25 @@ export default function NoticeDetailPage() {
         </div>
 
         <h3 style={{ textAlign: 'center', fontWeight: 'bold', marginBottom: '0.5rem' }}>THE RENT IS PAYABLE TO:</h3>
-        <p>Make Payable To: <BU>{PAYABLE_TO.name}</BU>&nbsp;&nbsp;&nbsp;&nbsp;Phone Number: <U>&nbsp;&nbsp;{PAYABLE_TO.phone}&nbsp;&nbsp;</U></p>
-        <p style={{ marginBottom: '1rem' }}>Address: <U>&nbsp;&nbsp;{PAYABLE_TO.address}&nbsp;&nbsp;</U></p>
+        <p>Make Payable To: <BU>{P.name}</BU>&nbsp;&nbsp;&nbsp;&nbsp;Phone Number: <U>&nbsp;&nbsp;{P.phone}&nbsp;&nbsp;</U></p>
+        <p style={{ marginBottom: '1rem' }}>Address: <U>&nbsp;&nbsp;{P.address}&nbsp;&nbsp;</U></p>
 
         <h3 style={{ textAlign: 'center', fontWeight: 'bold', marginBottom: '0.25rem' }}>HOW TO DELIVER THE RENT:</h3>
         <p style={{ textAlign: 'center', fontWeight: 'bold', marginBottom: '0.25rem' }}>IN PERSON:</p>
-        <p>Deliver Payment To (Name(s) of Person(s)): <BU>{PAYABLE_TO.name}</BU></p>
-        <p>Phone Number: <BU>{PAYABLE_TO.phone}</BU></p>
-        <p>Personally Pay Here: <BU>{PAYABLE_TO.address}</BU></p>
+        <p>Deliver Payment To (Name(s) of Person(s)): <BU>{P.name}</BU></p>
+        <p>Phone Number: <BU>{P.phone}</BU></p>
+        <p>Personally Pay Here: <BU>{P.address}</BU></p>
         <p style={{ marginBottom: '1rem' }}>Personally Pay During Days and Hours: <BU>Monday through Sunday from 12:00 AM - 11:59 PM</BU></p>
 
         <p style={{ textAlign: 'center', fontWeight: 'bold', marginBottom: '0.25rem' }}>BY ELECTRONIC FUNDS TRANSFER:</p>
         <p>Pay by Electronic Funds Transfer Procedure:</p>
         <p style={{ marginBottom: '1rem' }}>
-          Zelle to {PAYABLE_TO.name} at{' '}
-          <a href={`mailto:${PAYABLE_TO.email}`} style={{ color: '#2563eb', textDecoration: 'underline' }}>{PAYABLE_TO.email}</a>
+          Zelle to {P.name} at{' '}
+          <a href={`mailto:${P.email}`} style={{ color: '#2563eb', textDecoration: 'underline' }}>{P.email}</a>
         </p>
 
         <p style={{ textAlign: 'center', fontWeight: 'bold', marginBottom: '0.25rem' }}>BY MAIL:</p>
-        <p style={{ marginBottom: '0.25rem' }}>Mail Check/Money Order To This Address: <BU>{PAYABLE_TO.address}</BU></p>
+        <p style={{ marginBottom: '0.25rem' }}>Mail Check/Money Order To This Address: <BU>{P.address}</BU></p>
         <p style={{ fontWeight: 'bold', marginBottom: '1.5rem' }}>
           It shall be conclusively presumed that upon the mailing of any rent or notice to the owner by the
           tenant to the name and address provided, the notice or rent is deemed received by the owner on the

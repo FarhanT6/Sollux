@@ -10,5 +10,5 @@ module.exports = {
   clerkMiddleware: pass,
   requireAuth: pass,
   getAuth: req => ({ userId: idOf(req), sessionId: 'sess_mock' }),
-  clerkClient: { users: { getUser: async id => id === 'user_tenant_mock' ? ({ id, firstName: 'Tina', lastName: 'Tenant', emailAddresses: [{ id: 't', emailAddress: 'tenant@example.com', verification: { status: 'verified' } }], primaryEmailAddressId: 't', phoneNumbers: [] }) : ({ id: 'user_mock', firstName: 'Farhan', lastName: 'Talukder', emailAddresses: [{ id: 'e', emailAddress: 'owner@example.com', verification: { status: 'verified' } }], primaryEmailAddressId: 'e', phoneNumbers: [] }) } },
+  clerkClient: { users: { getUser: async id => id === 'user_tenant_mock' ? ({ id, firstName: 'Tina', lastName: 'Tenant', emailAddresses: [{ id: 't', emailAddress: 'tenant@example.com', verification: { status: 'verified' } }], primaryEmailAddressId: 't', phoneNumbers: [] }) : ({ id: 'user_mock', firstName: 'Alex', lastName: 'Morgan', emailAddresses: [{ id: 'e', emailAddress: 'owner@example.com', verification: { status: 'verified' } }], primaryEmailAddressId: 'e', phoneNumbers: [] }) } },
 };

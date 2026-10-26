@@ -44,8 +44,8 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
-// Normalize a phone to digits so "(760) 672-7717", "7606727717" and
-// "+17606727717" all match the same invite.
+// Normalize a phone to digits so "(555) 010-0142", "5550100142" and
+// "+15550100142" all match the same invite.
 function normalizePhone(p?: string | null): string | null {
   if (!p) return null;
   const digits = p.replace(/\D/g, '');

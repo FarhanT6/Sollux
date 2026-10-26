@@ -35,7 +35,7 @@
 // existing backend/.env automatically, same as `npm run dev`):
 //
 //   npx tsx scripts/import-local-statements.ts \
-//     --dir /path/to/Bills --email you@example.com --property "4349 Vista Verde Way"
+//     --dir /path/to/Bills --email you@example.com --property "1200 Elm Grove Ln"
 //
 //   Add --dry-run to preview matches/creates without writing anything.
 //   Add --ai to use Claude extraction instead of regex (costs credits,

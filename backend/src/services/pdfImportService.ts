@@ -388,7 +388,7 @@ function findDollarNear(text: string, labels: RegExp[]): number | null {
 }
 
 function findDateNear(text: string, labels: RegExp[]): string | null {
-  // The spelled-out form must start with a month name: "Due\n073603497319"
+  // The spelled-out form must start with a month name: "Due\n012345678901"
   // once matched as a word, two digits and four more, and swallowed the
   // real "Sep 1, 2026" behind it.
   const suffix = '[\\s\\S]{0,60}?(\\d{1,2}[\\/\\-]\\d{1,2}[\\/\\-](?:\\d{4}|\\d{2})(?!\\d)|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\\.?\\s*\\d{1,2},?\\s*\\d{4})';
@@ -637,7 +637,7 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string, laye
   if (!serviceAddress) {
     // One line, whole words: "00\nRemaining Term" is not a street ending in
     // "Ter". Capitals as well as title case — statements print names and
-    // addresses in capitals ("4349 VISTA VERDE WAY").
+    // addresses in capitals ("1200 ELM GROVE LN").
     const suffixes = ['St', 'Street', 'Ave', 'Avenue', 'Blvd', 'Dr', 'Drive', 'Rd', 'Road', 'Way', 'Ln', 'Lane', 'Ct', 'Court', 'Pl', 'Place', 'Cir', 'Circle', 'Ter', 'Terrace', 'Trail', 'Pkwy', 'Hwy'];
     const suffix = [...suffixes, ...suffixes.map(x => x.toUpperCase())].join('|');
     const addrMatch = text.match(new RegExp(`\\b(\\d{2,6}[ \\t]+(?:[A-Z][a-z]+|[A-Z]{2,})(?:[ \\t]+(?:[A-Z][a-z]+|[A-Z]{2,})){0,2}[ \\t]+(?:${suffix})\\b[^\\n]{0,50})`));
@@ -1697,8 +1697,8 @@ async function matchByNumberAndAddress(
   const tail = billTail(extracted.accountNumber);
   // Only the last digits are printed: masked ("*******7055", "XXXXX1102"),
   // or a short number on its own ("Account Ending: 6664"). A bare 6664 was
-  // not treated as a tail, so SDG&E's Kauana Loa email fell through to a
-  // weaker rule and was filed to the 4349 Vista Verde Way account.
+  // not treated as a tail, so SDG&E's Ridgeview email fell through to a
+  // weaker rule and was filed to the 1200 Elm Grove Ln account.
   const onlyTail = /[*•●]|x{2,}|ending/i.test(extracted.accountNumber ?? '') || (extracted.accountNumber ?? '').replace(/\D/g, '').length <= 6;
   if (tail && onlyTail) {
     const hits = accounts.filter(a => tailMatches(a, tail) === true);
@@ -2246,8 +2246,8 @@ function cadenceOf(ins: NonNullable<ExtractedBillData['insurance']>, start: Date
 /**
  * Keep the account's insurance policy in step with what its billing
  * statements say. A carrier's billing account outlives any one policy: the
- * April statement bills the last installment of policy …3130444825
- * (09/09/25–09/09/26) and the August one the first of …3140444825
+ * April statement bills the last installment of policy …5550001001
+ * (09/09/25–09/09/26) and the August one the first of …5550001002
  * (09/09/26–09/09/27), posted as a "Renewal" of 2,198.00. When the newest
  * statement names a policy the account is not linked to, the old policy is
  * closed at its coverage end and kept as history, and the new one is
@@ -2695,7 +2695,7 @@ export function applyInsuranceFromText(ex: ExtractedBillData, text: string): voi
   // At least three digits: "24-Hour" (from "Policy Number: / 24-Hour Claims:"
   // on a Safeco letter) is not a policy number.
   const wellFormed = (v: string | null | undefined) => !!v && v.length >= 6 && (v.match(/\d/g) ?? []).length >= 3 && !/^policy/i.test(v) && !/hour|claim|service/i.test(v);
-  // Printed under its own label ("Policy Number: 863646930") it stands, even
+  // Printed under its own label ("Policy Number: 912345678") it stands, even
   // when the carrier bills under the same number; found anywhere else, a
   // number that is the billing account's is not the policy's.
   // The first labelled value that is a number; a package prints the label
@@ -2723,7 +2723,7 @@ export function applyInsuranceFromText(ex: ExtractedBillData, text: string): voi
   // left of the policy — owed over the term, not now. Read with no spaces
   // ("MinimumDue", "PayTheMinimumByTheDueDate") as pdf-parse renders it.
   // The same three figures under different words:
-  //   Hartford:   "TOTALS $2,145.50 $221.75" / "Pay The Minimum By The Due Date $221.75 05/20/26 15106186 $2,145.50"
+  //   Hartford:   "TOTALS $2,145.50 $221.75" / "Pay The Minimum By The Due Date $221.75 05/20/26 15550123 $2,145.50"
   //   Nationwide: "Please pay $283.34 by 02/21/26." / "Current full account balance $838.02" / "Minimum amount due $283.34"
   const first = (...res: RegExp[]) => { for (const re of res) { const m = text.match(re); if (m) return m; } return null; };
   const totals = text.match(/TOTALS\s*\$\s*([\d,]+\.\d{2})\s*\$\s*([\d,]+\.\d{2})/i);
@@ -2778,7 +2778,7 @@ export function applyInsuranceFromText(ex: ExtractedBillData, text: string): voi
       + Array.from(text.matchAll(/payment\(?s?\)?\s*of\s*\$\s*([\d,]+\.\d{2})\s*received/gi)).reduce((t, m) => t + money(m[1]!), 0)
       - Array.from(text.matchAll(/\$\s*([\d,]+\.\d{2})\s*(?:protested|returned|reversed|nsf)\s*payment/gi)).reduce((t, m) => t + money(m[1]!), 0);
     // The billing account, not the bill's serial number from the remittance
-    // line: "Bill Account Number … 15106186", "Billing account 288454435".
+    // line: "Bill Account Number … 15550123", "Billing account 200111222".
     // AmTrust prints "Account Number:" and, a block later, the value on a
     // line of its own.
     const acct = stub?.[3] ?? coupon?.[1] ?? first(/billing\s*account\s*(?:number)?\s*:?\s*(\d{6,12})\b/i, /account\s*number\s*:?\s*(\d{6,12})\b/i, /account\s*number\s*:?[\s\S]{0,600}?^\s*(\d{7,12})\s*$/im)?.[1] ?? null;

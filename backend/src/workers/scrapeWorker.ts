@@ -123,7 +123,7 @@ function groupSummary(r: { downloads: number; filed: number; review: number; fil
  */
 /**
  * City of Oceanside water bills are found on InvoiceCloud's customer lookup
- * with the two numbers the bill prints ("177299-182052": customer, account) —
+ * with the two numbers the bill prints ("123456-654321": customer, account) —
  * no login, no emailed code. The built-in connector that did this is retired;
  * the portal agent starts there instead (its bill-lookup mode), unless the
  * account's website is already a lookup page.
@@ -299,7 +299,7 @@ const worker = new Worker<ScrapeJobData>(
     // agent too once it has a portal login: most providers' emails only say
     // a bill is ready, and the statement itself is on the portal.
     // City of Oceanside water with the bill's customer and account numbers
-    // ("177299-182052"): InvoiceCloud's customer lookup gives the bills with
+    // ("123456-654321"): InvoiceCloud's customer lookup gives the bills with
     // those two numbers alone — no login, no emailed code, no Claude — where
     // WaterSmart wanted an email login and a verification code.
     const fullNumber = (() => { try { return account.accountNumberEnc ? decrypt(account.accountNumberEnc).trim() : ''; } catch { return ''; } })();
@@ -426,7 +426,7 @@ const worker = new Worker<ScrapeJobData>(
             const a = normalizeAcct(stmtAcctNum);
             const b = normalizeAcct(acctNum);
             // Strict match: exact OR one is a suffix of the other.
-            // (RS stores "3-04670-041160" but API returns "4670041160" — same account, suffix match.)
+            // (RS stores "3-01234-012345" but API returns "4670041160" — same account, suffix match.)
             // Substring `includes` was too permissive — when account A's number contains
             // digit subsequences of account B's number, it falsely matched.
             if (a === b) return true;
@@ -440,7 +440,7 @@ const worker = new Worker<ScrapeJobData>(
           }
           // If the account number filter matched nothing but this is the only account with
           // these credentials, the stored account number likely has a format mismatch
-          // (e.g. RS uses infoProId "4670038334" but user stored "3-04670-038334").
+          // (e.g. RS uses infoProId "1234567890" but user stored "3-04670-038334").
           // Fall back to assigning all statements rather than silently importing nothing.
           if (filtered.length === 0 && sameCredAccounts.length === 1) {
             console.log(`[ScrapeWorker] Account number filter matched 0 statements for single account ${acct.id} — bypassing filter (format mismatch)`);

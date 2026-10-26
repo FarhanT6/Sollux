@@ -35,7 +35,7 @@ export default function LetterheadCard() {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div className="sm:col-span-2">
           <label className="text-xs text-gray-400 block mb-1">Entity name</label>
-          <input className={input} value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. The M.S. Talukder Family 2023 Trust" />
+          <input className={input} value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. The Smith Family Trust" />
         </div>
         <div className="sm:col-span-2">
           <label className="text-xs text-gray-400 block mb-1">Mailing address</label>

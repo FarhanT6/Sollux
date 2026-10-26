@@ -92,7 +92,7 @@ export default function PortfolioPage() {
   }), [filtered, stats]);
 
   // Cluster properties that share a parcel group so adjacent/combined
-  // parcels (e.g. 1536/1538/1518 Hunsaker St) show together, not scattered.
+  // parcels (e.g. 1536/1538/1518 Linden St) show together, not scattered.
   const { groups, ungrouped } = useMemo(() => {
     const g: Record<string, Property[]> = {};
     const u: Property[] = [];

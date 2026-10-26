@@ -179,7 +179,7 @@ const STOP = new Set(['the', 'of', 'and', 'trust', 'trustee', 'family', 'living'
 const words = (s: string | null | undefined) =>
   new Set((s ?? '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter(w => w.length > 1 && !STOP.has(w) && !/^\d+$/.test(w)));
 
-/** "1536-1538 Hunsaker St." → { nums: [1536,1538], street: 'hunsaker' } */
+/** "1536-1538 Linden St." → { nums: [1536,1538], street: 'linden' } */
 function addressKey(a: string | null | undefined): { nums: number[]; street: string | null } {
   if (!a) return { nums: [], street: null };
   const m = a.match(/^\s*(\d+)(?:\s*[-–&]\s*(\d+))?\s+(?:[NSEW]\.?\s+)?([A-Za-z]+)/);
@@ -189,7 +189,7 @@ function addressKey(a: string | null | undefined): { nums: number[]; street: str
 function sameAddress(a: string | null | undefined, b: string | null | undefined): boolean {
   const x = addressKey(a), y = addressKey(b);
   if (!x.street || !y.street || x.street !== y.street) return false;
-  // Ranges overlap ("1536-1538" vs "1536 Hunsaker").
+  // Ranges overlap ("1536-1538" vs "1536 Linden").
   const [x0, x1] = [x.nums[0], x.nums[x.nums.length - 1]], [y0, y1] = [y.nums[0], y.nums[y.nums.length - 1]];
   return x0 <= y1 && y0 <= x1;
 }

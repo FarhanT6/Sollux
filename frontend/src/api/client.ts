@@ -1280,3 +1280,8 @@ export const apiOrigin = () => {
   const base = (import.meta.env.VITE_API_URL as string | undefined) || '/api';
   return new URL(base, window.location.origin).toString().replace(/\/api\/?$/, '').replace(/\/+$/, '');
 };
+
+/** Who rent is payable to on 3-day notices (the account's own details). */
+export interface RentPayableTo { name: string; phone: string; email: string; address: string }
+export const getRentPayableTo = () => api.get<{ payableTo: RentPayableTo | null }>('/account/payable-to').then(r => r.data.payableTo);
+export const saveRentPayableTo = (p: RentPayableTo) => api.put<{ payableTo: RentPayableTo }>('/account/payable-to', p).then(r => r.data.payableTo);
