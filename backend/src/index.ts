@@ -62,6 +62,7 @@ import plaidRouter from './routes/plaid';
 import { errorHandler } from './middleware/errorHandler';
 import { requireAuth, clerkMiddleware } from './middleware/requireAuth';
 import auditRouter from './routes/audit';
+import { publicAuditRouter, adminAuditRouter } from './routes/auditRequests';
 import telemetryRouter from './routes/telemetry';
 import complianceRouter from './routes/compliance';
 import projectsRouter from './routes/projects';
@@ -153,6 +154,8 @@ app.use('/api/portal/requests', express.json({ limit: '60mb' }));
 app.use('/api/maintenance', express.json({ limit: '60mb' }));
 // ClickUp signs webhook deliveries over the raw body; it must not be JSON-parsed first.
 app.use('/api/clickup/webhook', express.raw({ type: '*/*', limit: '1mb' }));
+// A portfolio audit request carries up to five bills (routes/auditRequests.ts).
+app.use('/api/public/audit-requests', express.json({ limit: '70mb' }));
 app.use(express.json({ limit: '10mb' }));
 
 // ─── Health check ─────────────────────────────────────────
@@ -178,6 +181,8 @@ app.use('/api/stripe', stripeRouter);
 // The auditor's quality report: a job, not a person, so it carries a shared
 // secret (x-audit-token) instead of a login. See routes/audit.ts.
 app.use('/api/audit', auditRouter);
+// The landing page's audit request form: public, rate-limited (routes/auditRequests.ts).
+app.use('/api/public/audit-requests', publicAuditRouter);
 
 // The worker collects the files the owner's Chrome downloaded in a connector
 // session; the signed session path is its credential (services/connector.ts).
@@ -198,6 +203,7 @@ app.use('/api', (req, res, next) => {
   return requireAuth(req, res, next);
 });
 app.use('/api/dashboard', dashboardRouter);
+app.use('/api/admin/audit-requests', adminAuditRouter);
 app.use('/api/properties', propertiesRouter);
 app.use('/api/utilities', utilitiesRouter);
 app.use('/api/statements', statementsRouter);

@@ -2606,3 +2606,24 @@ model ConnectorDevice {
   @@index([userId])
   @@map("connector_devices")
 }
+
+// ─── PORTFOLIO AUDIT REQUESTS ─────────────────────────────
+// Sent from the public landing page by an owner who wants a free portfolio
+// audit (routes/auditRequests.ts). Files are bills they chose to send,
+// stored in S3 (keys only here) and opened by the admin with signed URLs.
+model AuditRequest {
+  id           String   @id @default(cuid())
+  name         String
+  email        String
+  phone        String?
+  properties   Int?
+  currentTools String?
+  notes        String?
+  fileKeysJson Json?
+  // new → contacted → audited → converted / declined
+  status       String   @default("new")
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("audit_requests")
+}

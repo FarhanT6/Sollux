@@ -73,7 +73,8 @@ Always use `npx prisma migrate dev --name <description>` — never edit schema w
 ## Security rules (never violate)
 - Never log decrypted credentials
 - Never return `usernameEnc`, `passwordEnc`, `accountNumberEnc` fields from any API endpoint
-- All `/api/*` routes except `/api/auth` and `/api/stripe/webhook` require authentication
+- All `/api/*` routes except `/api/auth`, `/api/stripe/webhook` and the landing page's audit request form
+  (`POST /api/public/audit-requests`: rate-limited, 5 files of 10 MB, PDF or image only) require authentication
 - PDF files must always be accessed via signed S3 URLs, never public URLs
 - The vault (`/vault`, `routes/vault.ts`, `lib/vaultCrypto.ts`) is zero-knowledge: records are encrypted in the
   browser with a key only the owner's vault passphrase or recovery key unwraps. The server must never receive,
