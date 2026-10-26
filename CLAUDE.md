@@ -81,12 +81,13 @@ Always use `npx prisma migrate dev --name <description>` — never edit schema w
 Copy `.env.example` to `.env` in both `frontend/` and `backend/` and fill in your keys.
 Generate ENCRYPTION_KEY: `openssl rand -hex 32`
 
-## Key real-world data (from user's actual portfolio)
-The user has 22 properties, 135 bills, 76 utility accounts across CA, FL, WV, TX, NV.
-Key providers in their portfolio:
-- SDGE, SoCal Gas, IID, Cox, T-Mobile, AT&T, WM, Republic Services
+## Providers to support first
+Common providers for the owners Sollux serves — prioritize these when improving fetching or reading:
+- SDG&E, SoCalGas, IID, Cox, T-Mobile, AT&T, WM, Republic Services
 - City of Oceanside, City of Imperial, City of El Centro, City of Brawley
 - FPL, Brevard County Water, Vista Irrigation District
 - Service Finance (solar), Bamboo Insurance, Safeco, Keystone HOA
 
-When building scrapers, prioritize these providers first.
+Never write a real owner's or tenant's details (names, addresses, account numbers, phone numbers, email
+addresses, amounts tied to a person) into the repository — code, comments, tests, docs or issues. Use made-up
+examples ("1200 Elm Grove Ln", "account 123456-654321").

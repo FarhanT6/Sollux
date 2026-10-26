@@ -65,7 +65,7 @@ jobs:
             For each (a), first check it is not already filed: `gh issue list --state open --search "<key words>" --json number,title,labels`. If an open issue covers it, add ONE short comment with today's evidence (only if the numbers changed) and move on.
 
             Otherwise file an issue with `gh issue create --label proposed --title "Proposed: <one line>" --body-file <file>`. The body must have these sections:
-              **What the app is doing wrong** — the evidence from audit.json, with the actual figures (provider, dates, amounts, counts, error text).
+              **What the app is doing wrong** — the evidence from audit.json, with the actual figures (provider, dates, amounts, counts, error text). Never put a street address, account or policy number, person's name, phone number or email address in an issue or comment: refer to a statement by its statementId and a provider by name.
               **Why I think it happens** — point at the code: file paths and function names you read (Grep/Read the repo; do not guess).
               **Proposed fix** — concrete, in the same style CLAUDE.md describes, small enough for one PR.
               **How to verify** — what the report or the page should show afterwards.

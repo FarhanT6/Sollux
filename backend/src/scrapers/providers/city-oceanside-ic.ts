@@ -3,9 +3,9 @@
  * Portal: https://www.invoicecloud.com/
  *
  * Account ID format: {customerId}-{accountNumber}
- * Example: 177299-182052
- *   customerId = 177299 (first 6 digits)
- *   accountNumber = 182052 (last 6 digits after dash)
+ * Example: 123456-654321
+ *   customerId = 123456 (first 6 digits)
+ *   accountNumber = 654321 (last 6 digits after dash)
  *
  * Flow:
  *  1. Go to Invoice Cloud customer locator
@@ -73,7 +73,7 @@ export class CityOceansideInvoiceCloudScraper extends BaseScraperProvider {
       }
 
       if (!customerId || !accountNumber) {
-        console.error('[Oceanside-IC] Could not parse account ID. Expected format: 177299-182052 or 177299182052');
+        console.error('[Oceanside-IC] Could not parse account ID. Expected format: 123456-654321 or 123456654321');
         return false;
       }
 
@@ -267,7 +267,7 @@ export class CityOceansideInvoiceCloudScraper extends BaseScraperProvider {
           console.error('[Oceanside-IC] Error message:', errorMsg);
         } else {
           console.error('[Oceanside-IC] No error message found. Account may be invalid or form data incorrect.');
-          console.error('[Oceanside-IC] Tried: customerId=177299, accountNumber=182052');
+          console.error('[Oceanside-IC] Tried: customerId=123456, accountNumber=654321');
         }
 
         return false;

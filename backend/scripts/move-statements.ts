@@ -11,7 +11,7 @@
  *   # named rather than passed as an id, so nothing has to be copied between
  *   # commands:
  *   npx tsx scripts/move-statements.ts --from ACCOUNT_ID \
- *     --to-property "De Anza" --to-provider IID --address "488 H ST"
+ *     --to-property "Main Street" --to-provider IID --address "100 MAIN ST"
  *
  *   # Or by id, or a specific list of statements:
  *   npx tsx scripts/move-statements.ts --to ACCOUNT_ID --ids id1,id2,id3
@@ -97,7 +97,7 @@ async function findTargetAccount() {
   const haveDestination = TO_ARG || TO_PROPERTY;
   if (!haveDestination || (!IDS.length && !(FROM && ADDRESS))) {
     console.error('Usage:');
-    console.error('  --to-property "De Anza" --to-provider IID --from <accountId> --address "488 H ST"');
+    console.error('  --to-property "Main Street" --to-provider IID --from <accountId> --address "100 MAIN ST"');
     console.error('  --to <accountId> --ids id1,id2');
     console.error('Add --apply to write. Dry run by default.');
     process.exit(1);

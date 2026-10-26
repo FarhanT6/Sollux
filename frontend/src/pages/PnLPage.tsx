@@ -165,7 +165,7 @@ export default function PnLPage({ embedded }: { embedded?: boolean } = {}) {
     }).finally(() => setLoading(false));
   }, [year]);
 
-  // Cluster properties that share a parcel group (e.g. 1536/1538/1518 Hunsaker
+  // Cluster properties that share a parcel group (e.g. 1536/1538/1518 Linden
   // St), mirroring the grouping on the Portfolio page.
   const { groupedByProp, ungroupedByProp } = useMemo(() => {
     const groupNameById: Record<string, string | undefined> = {};

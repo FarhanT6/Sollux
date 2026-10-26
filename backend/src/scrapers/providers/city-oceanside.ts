@@ -579,7 +579,7 @@ export class CityOceansideScraper extends BaseScraperProvider {
         // Filter by account number when one is provided (Pay Bill page shows ALL accounts)
         if (targetNorm) {
           var rowNorm = text.replace(/[-\\s]/g, '');
-          // Look for the account number as a substring (handles "177299-182052" → "177299182052")
+          // Look for the account number as a substring (handles "123456-654321" → "123456654321")
           if (rowNorm.indexOf(targetNorm) === -1) continue;
         }
 

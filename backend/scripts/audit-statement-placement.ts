@@ -114,8 +114,8 @@ const digits = (s: string) => s.replace(/\D/g, '');
         const billAddresses = statements
           .map(s => (s.rawDataJson as Record<string, unknown> | null)?.serviceAddress)
           .filter((a): a is string => typeof a === 'string');
-        // Compare on the normalised key, not the raw string: "488 H ST BRAWLEY
-        // CA" and "488 H ST, BRAWLEY CA" are one address, and treating them as
+        // Compare on the normalised key, not the raw string: "100 MAIN ST BRAWLEY
+        // CA" and "100 MAIN ST, BRAWLEY CA" are one address, and treating them as
         // two suppressed this hint exactly where it was needed.
         const distinct = new Set(billAddresses.map(addressKey));
         if (problems.length === statements.length && distinct.size === 1 && billAddresses.length > 0) {

@@ -250,7 +250,7 @@ export default function UtilityReimbursementPanel({ leaseId }: { leaseId: string
                 </label>
                 <label className="text-xs text-gray-400 space-y-1">
                   <span>Payable to</span>
-                  <input className={sel} placeholder="e.g. The M.S. Talukder Family 2023 Trust" value={terms.payableTo} onChange={e => setTerms(t => ({ ...t, payableTo: e.target.value }))} />
+                  <input className={sel} placeholder="e.g. The Smith Family Trust" value={terms.payableTo} onChange={e => setTerms(t => ({ ...t, payableTo: e.target.value }))} />
                 </label>
                 <label className="text-xs text-gray-400 space-y-1" style={{ gridColumn: '1 / -1' }}>
                   <span>Payment instructions <span className="text-gray-600">(printed only when a due date is set)</span></span>

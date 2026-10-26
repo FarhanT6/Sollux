@@ -159,7 +159,7 @@ export default function CardEditor({ card, onDone }: { card?: CreditCardT | null
       </>)}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <div><span className={label}>Authorized users, one per line: name then last 4</span><textarea rows={3} className={input} value={str('authorizedUsers')} onChange={e => set('authorizedUsers', e.target.value)} placeholder={'Fahima Talukder 5678'} /></div>
+        <div><span className={label}>Authorized users, one per line: name then last 4</span><textarea rows={3} className={input} value={str('authorizedUsers')} onChange={e => set('authorizedUsers', e.target.value)} placeholder={'Jane Smith 1234'} /></div>
         <div><span className={label}>Notes</span><textarea rows={3} className={input} value={str('notes')} onChange={e => set('notes', e.target.value)} /></div>
       </div>
 

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { isPlatformAdmin } from '../lib/plans';
 import { workerStatus } from '../workers/heartbeat';
 import { timingSafeEqual } from 'crypto';
 import { db } from '../config/db';
@@ -34,11 +35,17 @@ router.get('/report', async (req, res, next) => {
 
     const now = new Date();
     const days = (n: number) => new Date(now.getTime() - n * 86400000);
+    // Only the admin's own accounts (lib/plans.ts isPlatformAdmin): the
+    // report becomes GitHub issues, and a customer's bills, accounts and
+    // errors never leave the app.
+    const owners = await db.user.findMany({ where: { ownerUserId: null }, select: { id: true, email: true, subscriptionTier: true } });
+    const adminIds = owners.filter(isPlatformAdmin).map(u => u.id);
+    const mineAcct = { property: { userId: { in: adminIds } } };
     const num = (v: unknown) => (v == null ? null : Number(v));
 
     // ── Bills imported in the last 30 days: how well were they read? ─────
     const recent = await db.statement.findMany({
-      where: { createdAt: { gte: days(30) }, isDownPayment: false },
+      where: { createdAt: { gte: days(30) }, isDownPayment: false, utilityAccount: mineAcct },
       select: {
         id: true, statementDate: true, dueDate: true, billingPeriodStart: true, billingPeriodEnd: true,
         amountDue: true, pastDueCarried: true, penaltiesFees: true, balance: true, isScheduled: true, rawDataJson: true, sourceType: true,
@@ -86,7 +93,7 @@ router.get('/report', async (req, res, next) => {
 
     // ── Syncs that keep failing, by provider ─────────────────────────────
     const failedSyncs = await db.utilityAccount.findMany({
-      where: { isActive: true, syncEnabled: true, lastSyncStatus: 'FAILED' },
+      where: { isActive: true, syncEnabled: true, lastSyncStatus: 'FAILED', ...mineAcct },
       select: { providerName: true, providerSlug: true, lastSyncError: true, lastSyncedAt: true },
     });
     const syncByProvider = new Map<string, { failing: number; errors: Set<string> }>();
@@ -99,7 +106,7 @@ router.get('/report', async (req, res, next) => {
 
     // ── Accounts that went silent ────────────────────────────────────────
     const active = await db.utilityAccount.findMany({
-      where: { isActive: true, escrowLoanId: null, billingCadence: { in: ['MONTHLY', 'BIMONTHLY'] } },
+      where: { isActive: true, escrowLoanId: null, billingCadence: { in: ['MONTHLY', 'BIMONTHLY'] }, ...mineAcct },
       select: {
         id: true, providerName: true, providerSlug: true, category: true, syncEnabled: true, createdAt: true,
         statements: { where: { isScheduled: false }, orderBy: { statementDate: 'desc' }, take: 1, select: { statementDate: true } },
@@ -113,21 +120,21 @@ router.get('/report', async (req, res, next) => {
       .sort((a, b) => b.daysSince - a.daysSince);
 
     // ── Payments nobody filed against a bill ─────────────────────────────
-    const unlinked = await db.payment.count({ where: { statementId: null, paymentDate: { lte: days(14) }, status: { in: ['PAID', 'PARTIAL'] } } });
+    const unlinked = await db.payment.count({ where: { statementId: null, paymentDate: { lte: days(14) }, status: { in: ['PAID', 'PARTIAL'] }, utilityAccount: mineAcct } });
 
     // ── Scheduled installments past their date and still open ────────────
-    const scheduledOverdue = await db.statement.count({ where: { isScheduled: true, dueDate: { lt: days(3) }, amountPaid: null, paidOverride: null } });
+    const scheduledOverdue = await db.statement.count({ where: { isScheduled: true, dueDate: { lt: days(3) }, amountPaid: null, paidOverride: null, utilityAccount: mineAcct } });
 
     // ── Policies and loans with placeholder figures ──────────────────────
-    const zeroPremium = await db.insurancePolicy.count({ where: { isActive: true, premiumAmount: 0 } });
-    const loans = await db.loan.findMany({ where: { isActive: true }, select: { originalAmount: true, currentBalance: true, originationDate: true } });
+    const zeroPremium = await db.insurancePolicy.count({ where: { isActive: true, premiumAmount: 0, property: { userId: { in: adminIds } } } });
+    const loans = await db.loan.findMany({ where: { isActive: true, userId: { in: adminIds } }, select: { originalAmount: true, currentBalance: true, originationDate: true } });
     const loanBalanceMissing = loans.filter(l => l.currentBalance == null).length;
     const loanBalanceUntouched = loans.filter(l => l.currentBalance != null && l.originalAmount != null
       && Math.abs(Number(l.currentBalance) - Number(l.originalAmount)) < 0.01
       && l.originationDate && (now.getTime() - new Date(l.originationDate).getTime()) / 86400000 > 45).length;
 
     // ── Browser crashes this week ────────────────────────────────────────
-    const errors = await db.clientError.findMany({ where: { createdAt: { gte: days(7) } }, orderBy: { createdAt: 'desc' }, take: 300 });
+    const errors = await db.clientError.findMany({ where: { createdAt: { gte: days(7) }, userId: { in: adminIds } }, orderBy: { createdAt: 'desc' }, take: 300 });
     const byMessage = new Map<string, { count: number; lastUrl: string | null; lastAt: Date; stack: string | null }>();
     for (const e of errors) {
       const row = byMessage.get(e.message) ?? { count: 0, lastUrl: e.url, lastAt: e.createdAt, stack: e.stack };
@@ -158,7 +165,7 @@ router.get('/report', async (req, res, next) => {
       // Whether anything processes queued jobs (statement fetching, insights,
       // the bookkeeper, autopay). Not 'ok' or 'busy' is a defect to file.
       workers: await workerStatus(),
-      queuedFetchesWaiting: await db.syncJob.count({ where: { status: 'PENDING', startedAt: null, createdAt: { lt: new Date(Date.now() - 10 * 60_000) } } }),
+      queuedFetchesWaiting: await db.syncJob.count({ where: { status: 'PENDING', startedAt: null, createdAt: { lt: new Date(Date.now() - 10 * 60_000) }, utilityAccountId: { in: (await db.utilityAccount.findMany({ where: mineAcct, select: { id: true } })).map(a => a.id) } } }),
     });
   } catch (err) { next(err); }
 });

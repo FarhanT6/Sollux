@@ -6,7 +6,7 @@
 import type { ReactNode } from 'react';
 
 const user = {
-  id: 'user_mock', firstName: 'Farhan', lastName: 'Talukder', fullName: 'Farhan Talukder',
+  id: 'user_mock', firstName: 'Alex', lastName: 'Morgan', fullName: 'Alex Morgan',
   primaryEmailAddress: { emailAddress: 'owner@example.com' },
   emailAddresses: [{ emailAddress: 'owner@example.com' }],
   createdAt: new Date('2026-04-01'), passwordEnabled: true,

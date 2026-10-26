@@ -26,19 +26,19 @@ async function wipe() {
 
 async function main() {
   await wipe();
-  const user = await db.user.create({ data: { clerkUserId: 'user_mock', email: 'owner@example.com', fullName: 'Farhan Talukder' } });
+  const user = await db.user.create({ data: { clerkUserId: 'user_mock', email: 'owner@example.com', fullName: 'Alex Morgan' } });
   const userId = user.id;
 
   // ── Properties ────────────────────────────────────────────
-  const hunsaker = await db.property.create({ data: { userId, nickname: '1536 Hunsaker St', address: '1536 Hunsaker St', city: 'Oceanside', state: 'CA', zip: '92054', type: 'RESIDENTIAL_MULTI', estimatedValue: 1850000, acquisitionPrice: 1200000, acquisitionDate: new Date('2019-06-01') } });
+  const linden = await db.property.create({ data: { userId, nickname: '1536 Linden St', address: '1536 Linden St', city: 'Oceanside', state: 'CA', zip: '92054', type: 'RESIDENTIAL_MULTI', estimatedValue: 1850000, acquisitionPrice: 1200000, acquisitionDate: new Date('2019-06-01') } });
   const coast = await db.property.create({ data: { userId, nickname: '1015 S Coast Hwy', address: '1015 S Coast Hwy', city: 'Oceanside', state: 'CA', zip: '92054', type: 'MIXED_USE', estimatedValue: 1553000 } });
-  const vista = await db.property.create({ data: { userId, nickname: 'Vista Verde', address: '4349 Vista Verde Way', city: 'Oceanside', state: 'CA', zip: '92057', type: 'PRIMARY', estimatedValue: 1100000 } });
+  const vista = await db.property.create({ data: { userId, nickname: 'Elm Grove', address: '1200 Elm Grove Ln', city: 'Oceanside', state: 'CA', zip: '92057', type: 'PRIMARY', estimatedValue: 1100000 } });
 
   // ── Utility accounts, statements, payments ────────────────
   const accounts = [
-    { p: hunsaker, providerName: 'SDG&E', providerSlug: 'sdge', category: 'ELECTRIC', amounts: [444.26, 464.27, 398.12], dueIn: 6 },
-    { p: hunsaker, providerName: 'City of Oceanside', providerSlug: 'oceanside', category: 'WATER', amounts: [195.05, 231.22, 210.4], dueIn: 12 },
-    { p: hunsaker, providerName: 'Waste Management', providerSlug: 'wm', category: 'TRASH', amounts: [124.73, 124.73, 124.73], dueIn: -9 },
+    { p: linden, providerName: 'SDG&E', providerSlug: 'sdge', category: 'ELECTRIC', amounts: [444.26, 464.27, 398.12], dueIn: 6 },
+    { p: linden, providerName: 'City of Oceanside', providerSlug: 'oceanside', category: 'WATER', amounts: [195.05, 231.22, 210.4], dueIn: 12 },
+    { p: linden, providerName: 'Waste Management', providerSlug: 'wm', category: 'TRASH', amounts: [124.73, 124.73, 124.73], dueIn: -9 },
     { p: coast, providerName: 'SDG&E', providerSlug: 'sdge', category: 'ELECTRIC', amounts: [612.4, 580.9, 701.3], dueIn: 3 },
     { p: coast, providerName: 'Cox Business', providerSlug: 'cox', category: 'INTERNET', amounts: [189.99, 189.99, 189.99], dueIn: 18 },
     { p: vista, providerName: 'SoCal Gas', providerSlug: 'socalgas', category: 'GAS', amounts: [58.21, 41.9, 37.15], dueIn: 21 },
@@ -71,10 +71,10 @@ async function main() {
       leaseTenants: { create: ts.map((t, i) => ({ tenantId: t.id, isPrimary: i === 0 })) }, ...extra,
     } });
   };
-  const main1 = await lease(hunsaker.id, 'Main', ['Jacob Adams', 'Nikola Radovanovic'], 4452);
-  const pond = await lease(hunsaker.id, 'Pond', ['Matthew Connolly'], 1950, { arrearsBalance: 3800 });
-  const shed = await lease(hunsaker.id, 'Shed', ['Cassandra California'], 1600);
-  await lease(hunsaker.id, 'Studio', ['Adam Taylor'], 1400);
+  const main1 = await lease(linden.id, 'Main', ['Jacob Adams', 'Nikola Radovanovic'], 4452);
+  const pond = await lease(linden.id, 'Pond', ['Matthew Connolly'], 1950, { arrearsBalance: 3800 });
+  const shed = await lease(linden.id, 'Shed', ['Cassandra California'], 1600);
+  await lease(linden.id, 'Studio', ['Adam Taylor'], 1400);
   const front = await lease(coast.id, 'Front Unit', ['Sergio Salazar'], 2900, { businessName: 'Mariposa Nails and Spa', leaseType: 'FIXED_TERM', startDate: new Date('2026-09-01'), endDate: new Date('2027-08-31') });
   await db.leaseUtilityCharge.createMany({ data: [{ leaseId: front.id, category: 'WATER', amount: 50 }, { leaseId: front.id, category: 'TRASH', amount: 50 }] });
   const pay = (leaseId: string, amount: number, offsetDays: number, method = 'ZELLE') =>
@@ -86,18 +86,18 @@ async function main() {
 
   // ── Insights, a shut-off notice ───────────────────────────
   await db.aIInsight.createMany({ data: [
-    { propertyId: hunsaker.id, insightType: 'ANOMALY', severity: 'WARNING', title: 'SDG&E bill up 23% at 1536 Hunsaker St', body: 'September usage was 23% above the same month last year.' },
-    { propertyId: hunsaker.id, insightType: 'REMINDER', severity: 'ALERT', title: 'Waste Management is past due', body: 'Service interruption notice received. $124.73 is past due.' },
+    { propertyId: linden.id, insightType: 'ANOMALY', severity: 'WARNING', title: 'SDG&E bill up 23% at 1536 Linden St', body: 'September usage was 23% above the same month last year.' },
+    { propertyId: linden.id, insightType: 'REMINDER', severity: 'ALERT', title: 'Waste Management is past due', body: 'Service interruption notice received. $124.73 is past due.' },
     { propertyId: vista.id, insightType: 'SAVINGS', severity: 'INFO', title: 'Switch SoCal Gas to autopay', body: 'Autopay avoids the late fee charged twice this year.' },
   ] });
-  await db.serviceNotice.create({ data: { userId, utilityAccountId: acctIds['1536 Hunsaker St:TRASH'], kind: 'DISCONNECTION', provider: 'Waste Management', accountLast4: '3001', noticeDate: daysFromNow(-7), amountDemanded: 124.73, summary: 'Account past due and under review for service interruption.', status: 'OPEN' } });
+  await db.serviceNotice.create({ data: { userId, utilityAccountId: acctIds['1536 Linden St:TRASH'], kind: 'DISCONNECTION', provider: 'Waste Management', accountLast4: '3001', noticeDate: daysFromNow(-7), amountDemanded: 124.73, summary: 'Account past due and under review for service interruption.', status: 'OPEN' } });
 
   // ── Money ─────────────────────────────────────────────────
   await db.bankAccount.createMany({ data: [
     { userId, name: 'Wells Fargo Checking', bank: 'Wells Fargo', last4: '0705', accountType: 'CHECKING', watchForRentPayments: true },
     { userId, name: 'Chase Business', bank: 'Chase', last4: '0935', accountType: 'CHECKING' },
   ] });
-  await db.loan.create({ data: { userId, propertyId: hunsaker.id, loanType: 'MORTGAGE', lender: 'Rocket Mortgage', originalAmount: 960000, currentBalance: 842310, interestRate: 3.25, monthlyPayment: 4890, isActive: true } }).catch(e => console.warn('loan skipped:', e.message.split('\n').slice(-1)[0]));
+  await db.loan.create({ data: { userId, propertyId: linden.id, loanType: 'MORTGAGE', lender: 'Rocket Mortgage', originalAmount: 960000, currentBalance: 842310, interestRate: 3.25, monthlyPayment: 4890, isActive: true } }).catch(e => console.warn('loan skipped:', e.message.split('\n').slice(-1)[0]));
 
   console.log(`Seeded owner@example.com: 3 properties, ${accounts.length} utility accounts, 5 leases.`);
 }

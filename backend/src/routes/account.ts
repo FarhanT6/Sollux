@@ -12,6 +12,27 @@ function normalizePhone(p?: string | null): string | null {
   return digits.length > 10 ? digits.slice(-10) : digits || null;
 }
 
+// Who rent is payable to on this account's 3-day notices.
+const PayableTo = z.object({
+  name: z.string().trim().min(1).max(120),
+  phone: z.string().trim().max(40).default(''),
+  email: z.string().trim().max(120).default(''),
+  address: z.string().trim().min(1).max(240),
+});
+router.get('/payable-to', async (req, res, next) => {
+  try {
+    const u = await db.user.findUnique({ where: { id: req.dbUserId! }, select: { rentPayableToJson: true } });
+    res.json({ payableTo: u?.rentPayableToJson ?? null });
+  } catch (err) { next(err); }
+});
+router.put('/payable-to', async (req, res, next) => {
+  try {
+    const payableTo = PayableTo.parse(req.body);
+    await db.user.update({ where: { id: req.dbUserId! }, data: { rentPayableToJson: payableTo } });
+    res.json({ payableTo });
+  } catch (err) { next(err); }
+});
+
 // GET /api/account — who am I, and who shares this account?
 router.get('/', async (req, res, next) => {
   try {

@@ -592,7 +592,7 @@ function PropertyEditModal({ property, onClose, onSave }: {
             <div className="grid grid-cols-2 gap-3">
               <div className="col-span-2">
                 <label className="block text-xs text-gray-500 mb-1">Nickname</label>
-                <input value={form.nickname} onChange={f('nickname')} className="input-dark w-full text-sm" placeholder="e.g. Vista Verde" />
+                <input value={form.nickname} onChange={f('nickname')} className="input-dark w-full text-sm" placeholder="e.g. Elm Grove" />
               </div>
               <div className="col-span-2">
                 <label className="block text-xs text-gray-500 mb-1">Address *</label>

@@ -7,7 +7,7 @@ import { Chevron } from './icons';
  * Inset grouped lists, the way iOS Settings and Mail lay out content.
  *
  *   <Section header="Due soon" action={{ label: 'See all', to: '/payments' }}>
- *     <Row title="SDG&E" subtitle="1536 Hunsaker St" value="$444.26" to="/…" />
+ *     <Row title="SDG&E" subtitle="1536 Linden St" value="$444.26" to="/…" />
  *   </Section>
  */
 export function Section({ header, footer, action, plain, children }: {

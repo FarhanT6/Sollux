@@ -469,7 +469,7 @@ export class RepublicServicesScraper extends BaseScraperProvider {
       // session cookies and tokens.
       //
       // Account ID mapping:
-      //   user-stored "3-04670-041160" → strip dashes → "304670041160" = RS accountId
+      //   user-stored "3-01234-012345" → strip dashes → "301234012345" = RS accountId
       //   RS bills API: /api/v2/mr/accounts/{accountId}/bills?limit=10000000
       //   RS payments:  /api/v2/mr/accounts/{accountId}/payments?includeDetails=false&limit=10000000&refresh=true
       {
@@ -926,7 +926,7 @@ export class RepublicServicesScraper extends BaseScraperProvider {
         const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 500);
         const allAmounts = [...text.matchAll(/\$\s*([\d,]+\.\d{2})/g)].map(m => m[0]);
 
-        // Account number — RS format: digits with dashes, e.g. 3-0887738-03334
+        // Account number — RS format: digits with dashes, e.g. 3-0123456-01234
         const acctMatch = text.match(/(\d-\d{6,}-\d{4,})/);
         const accountNumber = acctMatch ? acctMatch[1] : undefined;
 
@@ -1162,7 +1162,7 @@ export class RepublicServicesScraper extends BaseScraperProvider {
 
       const pdfUrl = String(inv.pdfUrl || inv.invoiceUrl || inv.documentUrl || inv.statementUrl || '');
 
-      // RS bills only carry the internal accountId ("304670038334"), not the human-readable infoProId.
+      // RS bills only carry the internal accountId ("301234567890"), not the human-readable infoProId.
       // Look up the infoProId from capturedAccounts (set by parseAccountResponse) so that
       // _buildStatements and the worker can match against what the user actually entered.
       const rawAccountId = String(inv.accountId || '');
@@ -1170,7 +1170,7 @@ export class RepublicServicesScraper extends BaseScraperProvider {
         ? this.capturedAccounts.find(a => a.accountId === rawAccountId)
         : undefined;
       const acctNum = String(
-        matchedAcct?.accountNumber  // infoProId, e.g. "4670038334"
+        matchedAcct?.accountNumber  // infoProId, e.g. "1234567890"
         || inv.infoProId || inv.accountNumber || inv.serviceAccountId || rawAccountId || ''
       );
 
