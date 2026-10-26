@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { clerkClient, clerkMiddleware, getAuth } from '@clerk/express';
 import { db } from '../config/db';
-import { TRIAL_DAYS, canWrite, isPlatformAdmin } from '../lib/plans';
+import { TRIAL_DAYS, canWrite, isPlatformAdmin, accessOf } from '../lib/plans';
 import { withAiContext } from '../ai/meter';
 
 const WRITE = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
@@ -175,7 +175,11 @@ export async function attachDbUser(req: Request, res: Response, next: NextFuncti
     if (WRITE.has(req.method) && !WRITE_ALWAYS.test(req.originalUrl)) {
       const account = user.ownerUserId ? await db.user.findUnique({ where: { id: user.ownerUserId } }) : user;
       if (account && !canWrite(account)) {
-        return res.status(402).json({ error: 'Your free trial has ended. Choose a plan to keep adding and changing things — everything you have is still here.', code: 'PLAN_REQUIRED' });
+        const a = accessOf(account);
+        const why = a.kind === 'lapsed' && a.reason === 'canceled' ? 'Your plan was canceled.'
+          : a.kind === 'lapsed' && a.reason === 'unpaid' ? 'Your plan is paused: the last payment did not go through.'
+          : 'Your free trial has ended.';
+        return res.status(402).json({ error: `${why} Choose a plan to keep adding and changing things — everything you have is still here.`, code: 'PLAN_REQUIRED' });
       }
     }
     // Any Claude call this request makes is filed under this account's spend.
