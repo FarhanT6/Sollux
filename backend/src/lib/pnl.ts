@@ -80,7 +80,7 @@ function monthsInRange(range: DateRange): number {
   return n;
 }
 
-function scheduledRent(leases: LeaseLike[], range: DateRange): number {
+export function scheduledRent(leases: LeaseLike[], range: DateRange): number {
   const now = new Date();
   const lastMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
   const stop = range.end < lastMonth ? range.end : lastMonth;
@@ -103,7 +103,7 @@ function scheduledRent(leases: LeaseLike[], range: DateRange): number {
   return total;
 }
 
-const leaseSelect = { unitId: true, startDate: true, endDate: true, rentAmount: true, status: true, firstMonthRent: true } as const;
+export const leaseSelect = { unitId: true, startDate: true, endDate: true, rentAmount: true, status: true, firstMonthRent: true } as const;
 
 /**
  * Insurance is recorded twice by design: as a UtilityAccount, which carries the

@@ -143,6 +143,10 @@ model Property {
   apn              String?
   /// The last property-tax lookup: { status: queued | running | done | failed, at, note }.
   taxLookupJson    Json?
+  /// The operating-expense statement's setup: what it includes (which utility
+  /// accounts, late fees, mortgage, expense categories), amounts typed in for
+  /// what Sollux does not track, and the latest insurance / tax estimates.
+  opexSetupJson    Json?
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
 
