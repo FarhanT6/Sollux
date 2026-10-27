@@ -433,6 +433,44 @@ export const updateInsurancePolicy = (id: string, data: Partial<InsurancePolicy>
 export const deleteInsurancePolicy = (id: string) =>
   api.delete(`/insurance/${id}`);
 
+// Operating expenses
+export type OpexPer = 'month' | 'year' | 'pctRent';
+export type OpexSource = 'records' | 'manual' | 'estimate' | 'none';
+export interface OpexManualLine { id: string; label: string; amount: number; per: OpexPer }
+export interface OpexConfig {
+  utilities?: Record<string, boolean>; lateFees?: 'separate' | 'exclude'; debtService?: boolean; categories?: Record<string, boolean>; capex?: boolean;
+  taxes?: { source: OpexSource; manualAnnual?: number | null }; insurance?: { source: OpexSource; manualAnnual?: number | null }; manual?: OpexManualLine[];
+}
+export interface OpexEstimate { low: number; high: number; typical: number; basis: string; sources?: { title: string; url: string }[]; contacts?: string[]; at: string }
+export interface OpexMoney { period: number; monthly: number; annual: number }
+export interface OpexLine extends OpexMoney { key: string; group: string; label: string; source: string; note?: string }
+export interface OpexStatement {
+  months: number; income: OpexMoney; lines: OpexLine[]; totals: OpexMoney; noi: OpexMoney; ratio: number | null;
+  perUnit: { annual: number } | null; perSqft: { annual: number } | null; belowNoi: OpexLine[]; cashFlow: OpexMoney | null;
+  missing: ('taxes' | 'insurance')[]; notes: string[];
+}
+export interface OpexFacts {
+  months: number; rentIncome: number; units: number; sqft: number | null;
+  utilities: { id: string; name: string; category: string; total: number; fees: number; bills: number }[];
+  categories: { category: string; total: number; count: number }[]; capex: number;
+  tax: { annual: number | null; source: string | null }; insurance: { annual: number | null; source: string | null };
+  debt: { paid: number; escrow: number; monthlyPI: number | null; lenders: string[]; fromBills: number };
+  estimates?: { insurance?: OpexEstimate | null; tax?: OpexEstimate | null };
+}
+export interface OpexSuggestion { id: string; label: string; per: OpexPer; typical: number; hint: string }
+export type OpexPeriod = 'last12' | 'ytd' | 'lastYear';
+export interface OpexResponse {
+  property: { id: string; name: string; state: string; county: string | null; apn: string | null };
+  period: { key: OpexPeriod; label: string; start: string; end: string };
+  configured: boolean; config: OpexConfig; facts: OpexFacts; suggestions: OpexSuggestion[]; statement: OpexStatement;
+}
+export const getOpex = (propertyId: string, period: OpexPeriod) => api.get<OpexResponse>(`/opex/${propertyId}`, { params: { period } }).then(r => r.data);
+export const previewOpex = (propertyId: string, period: OpexPeriod, config: OpexConfig) => api.post<OpexResponse>(`/opex/${propertyId}/preview`, { period, config }).then(r => r.data);
+export const saveOpexSetup = (propertyId: string, config: OpexConfig) => api.put(`/opex/${propertyId}/setup`, { config }).then(r => r.data);
+export const estimateOpex = (propertyId: string, kind: 'insurance' | 'tax') => api.post<OpexEstimate>(`/opex/${propertyId}/estimate`, { kind }, { timeout: 180000 }).then(r => r.data);
+export const getOpexPortfolio = (period: OpexPeriod) =>
+  api.get<{ period: string; properties: { property: OpexResponse['property']; configured: boolean; statement: OpexStatement }[] }>('/opex', { params: { period } }).then(r => r.data);
+
 // Insurance review and claims
 export interface InsReviewFlag { code: string; severity: 'ALERT' | 'WARNING' | 'INFO'; text: string; policyId?: string }
 export interface InsPolicyLine {

@@ -38,6 +38,10 @@ export const NAV = [
     icon: (z: number) => <Ico size={z}><rect x="3" y="13" width="4" height="8" rx="0.5"/><rect x="10" y="7" width="4" height="14" rx="0.5"/><rect x="17" y="3" width="4" height="18" rx="0.5"/></Ico>,
   },
   {
+    group: '', to: '/operating-expenses', label: 'Operating expenses',
+    icon: (z: number) => <Ico size={z}><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></Ico>,
+  },
+  {
     group: '', to: '/insights', label: 'Insights',
     icon: (z: number) => <Ico size={z} d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z" />,
   },
