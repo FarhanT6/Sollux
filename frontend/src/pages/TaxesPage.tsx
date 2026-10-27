@@ -4,9 +4,10 @@ import IncomeTaxTab from '../components/taxes/IncomeTaxTab';
 import ScheduleETab from '../components/taxes/ScheduleETab';
 import ContractorsTab from '../components/taxes/ContractorsTab';
 import {
-  getTaxAssessments, readTaxBill, saveTaxAssessment, updateTaxAssessment, deleteTaxAssessment, taxBillUrl, getProperties, getLoans, type FilePayload,
+  getTaxAssessments, readTaxBill, saveTaxAssessment, updateTaxAssessment, deleteTaxAssessment, taxBillUrl, getProperties, getLoans, getTaxDefaults, saveTaxDefault, type FilePayload,
 } from '../api/client';
-import type { Property, TaxAssessment, TaxStatus } from '../types';
+import type { Property, TaxAssessment, TaxDefault, TaxStatus, SpecialAssessment } from '../types';
+import ParcelPanel from '../components/taxes/ParcelPanel';
 import { PageHeader, EmptyState } from '../components/ui';
 import { fmtDate, todayISO } from '../lib/date';
 import { fmtMoney } from '../lib/money';
@@ -25,9 +26,16 @@ type Form = {
   id?: string; propertyId: string; taxYear: string; apn: string; taxingAuthority: string; assessedValue: string; annualTaxAmount: string;
   installment1Amount: string; installment1Due: string; installment1Paid: string; installment2Amount: string; installment2Due: string; installment2Paid: string;
   status: TaxStatus; escrowLoanId: string; notes: string;
+  installment1Delinquent: string; installment2Delinquent: string; billNumber: string; landValue: string; improvementValue: string; marketValue: string;
+  exemptionsValue: string; exemptionsNote: string; baseYear: string; taxRate: string; penaltiesOwed: string; balanceOwed: string; sourceUrl: string;
+  specials: SpecialAssessment[];
+  /** Earlier unpaid years the bill warned about, saved with it. */
+  priorYears?: { taxYear: string; defaultNumber: string | null; amount: number | null; certificateHolder: string | null }[];
 };
 const EMPTY: Form = { propertyId: '', taxYear: '', apn: '', taxingAuthority: '', assessedValue: '', annualTaxAmount: '', installment1Amount: '', installment1Due: '', installment1Paid: '',
-  installment2Amount: '', installment2Due: '', installment2Paid: '', status: 'UNPAID', escrowLoanId: '', notes: '' };
+  installment2Amount: '', installment2Due: '', installment2Paid: '', status: 'UNPAID', escrowLoanId: '', notes: '',
+  installment1Delinquent: '', installment2Delinquent: '', billNumber: '', landValue: '', improvementValue: '', marketValue: '', exemptionsValue: '',
+  exemptionsNote: '', baseYear: '', taxRate: '', penaltiesOwed: '', balanceOwed: '', sourceUrl: '', specials: [] };
 
 const STATUS: Record<TaxStatus, { label: string; pill: string }> = {
   PAID: { label: 'Paid', pill: 'pill-green' }, PARTIALLY_PAID: { label: 'Part paid', pill: 'pill-amber' },
@@ -82,6 +90,9 @@ export default function TaxesPage() {
 
 function PropertyTaxTab() {
   const [taxes, setTaxes] = useState<TaxAssessment[]>([]);
+  const [defaults, setDefaults] = useState<TaxDefault[]>([]);
+  const [parcel, setParcel] = useState<string | null>(null);
+  const [more, setMore] = useState(false);
   const [properties, setProperties] = useState<Property[]>([]);
   const [loans, setLoans] = useState<{ id: string; lender: string; propertyId?: string | null }[]>([]);
   const [loading, setLoading] = useState(true);
@@ -96,8 +107,8 @@ function PropertyTaxTab() {
   async function load() {
     setLoading(true);
     try {
-      const [t, p, l] = await Promise.all([getTaxAssessments(), getProperties(), getLoans({ isActive: true }).catch(() => [])]);
-      setTaxes(t); setProperties(p); setLoans(l as any);
+      const [t, p, l, d] = await Promise.all([getTaxAssessments(), getProperties(), getLoans({ isActive: true }).catch(() => []), getTaxDefaults().catch(() => [])]);
+      setTaxes(t); setProperties(p); setLoans(l as any); setDefaults(d);
     } finally { setLoading(false); }
   }
   useEffect(() => { void load(); }, []);
@@ -129,7 +140,8 @@ function PropertyTaxTab() {
   const annualTotal = latestYear ? taxes.filter(t => t.taxYear === latestYear).reduce((sum, t) => sum + Number(t.annualTaxAmount ?? 0), 0) : 0;
 
   function startNew(propertyId = '', taxYear = '') {
-    setForm({ ...EMPTY, propertyId, taxYear }); setPages([]); setNote(null); setError(null);
+    const apn = properties.find(p => p.id === propertyId)?.apn ?? '';
+    setForm({ ...EMPTY, propertyId, taxYear, apn }); setPages([]); setNote(null); setError(null); setMore(false);
   }
   function startEdit(t: TaxAssessment) {
     setForm({
@@ -137,8 +149,12 @@ function PropertyTaxTab() {
       annualTaxAmount: s(t.annualTaxAmount), installment1Amount: s(t.installment1Amount), installment1Due: d10(t.installment1Due), installment1Paid: d10(t.installment1Paid),
       installment2Amount: s(t.installment2Amount), installment2Due: d10(t.installment2Due), installment2Paid: d10(t.installment2Paid),
       status: t.status, escrowLoanId: s(t.escrowLoanId), notes: s(t.notes),
+      installment1Delinquent: d10(t.installment1Delinquent), installment2Delinquent: d10(t.installment2Delinquent), billNumber: s(t.billNumber),
+      landValue: s(t.landValue), improvementValue: s(t.improvementValue), marketValue: s(t.marketValue), exemptionsValue: s(t.exemptionsValue),
+      exemptionsNote: s(t.exemptionsNote), baseYear: s(t.baseYear), taxRate: s(t.taxRate), penaltiesOwed: s(t.penaltiesOwed), balanceOwed: s(t.balanceOwed),
+      sourceUrl: s(t.sourceUrl), specials: t.specialAssessments ?? [],
     });
-    setPages([]); setNote(null); setError(null);
+    setPages([]); setNote(null); setError(null); setMore(false);
   }
   const setF = (p: Partial<Form>) => setForm(f => (f ? { ...f, ...p } : f));
 
@@ -153,7 +169,13 @@ function PropertyTaxTab() {
         assessedValue: s(f.assessedValue), annualTaxAmount: s(f.annualTaxAmount), installment1Amount: s(f.installment1Amount), installment1Due: f.installment1Due ?? '',
         installment1Paid: f.installment1Paid ?? '', installment2Amount: s(f.installment2Amount), installment2Due: f.installment2Due ?? '', installment2Paid: f.installment2Paid ?? '',
         status: f.status ?? 'UNPAID', notes: f.notes ?? prev.notes,
+        installment1Delinquent: f.installment1Delinquent ?? '', installment2Delinquent: f.installment2Delinquent ?? '', billNumber: s(f.billNumber),
+        landValue: s(f.landValue), improvementValue: s(f.improvementValue), marketValue: s(f.marketValue), exemptionsValue: s(f.exemptionsValue),
+        exemptionsNote: s(f.exemptionsNote), baseYear: s(f.baseYear), taxRate: s(f.taxRate), penaltiesOwed: s(f.penaltiesOwed), balanceOwed: s(f.balanceOwed),
+        specials: Array.isArray(f.specialAssessments) ? f.specialAssessments : prev.specials,
+        priorYears: Array.isArray(f.priorYearsDelinquent) ? f.priorYearsDelinquent : undefined,
       }));
+      setMore(true);
       setNote(match?.propertyId
         ? `Matched ${match.propertyName}${f.propertyAddress ? ` from ${f.propertyAddress}` : ''}. Check the figures, then save.`
         : `${f.propertyAddress ? `No property matched "${f.propertyAddress}" — pick it below. ` : ''}Check the figures, then save.`);
@@ -171,10 +193,20 @@ function PropertyTaxTab() {
       installment1Amount: numOrNull(form.installment1Amount), installment1Due: form.installment1Due || null, installment1Paid: form.installment1Paid || null,
       installment2Amount: numOrNull(form.installment2Amount), installment2Due: form.installment2Due || null, installment2Paid: form.installment2Paid || null,
       status: form.status, escrowLoanId: form.escrowLoanId || null, notes: form.notes || null,
+      installment1Delinquent: form.installment1Delinquent || null, installment2Delinquent: form.installment2Delinquent || null, billNumber: form.billNumber || null,
+      landValue: numOrNull(form.landValue), improvementValue: numOrNull(form.improvementValue), marketValue: numOrNull(form.marketValue),
+      exemptionsValue: numOrNull(form.exemptionsValue), exemptionsNote: form.exemptionsNote || null, baseYear: form.baseYear || null, taxRate: numOrNull(form.taxRate),
+      penaltiesOwed: numOrNull(form.penaltiesOwed), balanceOwed: numOrNull(form.balanceOwed), sourceUrl: /^https?:\/\//.test(form.sourceUrl) ? form.sourceUrl : null,
+      specialAssessments: form.specials.filter(a => a.name.trim() && Number.isFinite(Number(a.amount))).map(a => ({ ...a, amount: Number(a.amount) })),
       ...(pages.length ? { file: pages[0] } : {}),
     };
     try {
       if (form.id) await updateTaxAssessment(form.id, body as any); else await saveTaxAssessment(body);
+      // Earlier unpaid years the bill named go on file, unless already there.
+      for (const y of form.priorYears ?? []) {
+        if (defaults.some(d => d.propertyId === form.propertyId && d.taxYear === y.taxYear)) continue;
+        await saveTaxDefault({ propertyId: form.propertyId, taxYear: y.taxYear, defaultNumber: y.defaultNumber, amountToRedeem: y.amount, certificateHolder: y.certificateHolder }).catch(() => null);
+      }
       setForm(null); setPages([]); await load();
     } catch (e) { setError(describeApiError(e, 'Could not save.')); }
     finally { setSaving(false); }
@@ -239,8 +271,48 @@ function PropertyTaxTab() {
         </div>
         <div className="col-span-2"><span className={label}>Notes</span><input className={input} value={form.notes} onChange={e => setF({ notes: e.target.value })} /></div>
       </div>
+      <button type="button" onClick={() => setMore(m => !m)} className="text-xs text-gray-400 hover:text-white">{more ? '− Fewer details' : '+ Values, delinquency dates, special assessments'}</button>
+      {more && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div><span className={label}>1st delinquent after</span><input type="date" className={input} value={form.installment1Delinquent} onChange={e => setF({ installment1Delinquent: e.target.value })} /></div>
+          <div><span className={label}>2nd delinquent after</span><input type="date" className={input} value={form.installment2Delinquent} onChange={e => setF({ installment2Delinquent: e.target.value })} /></div>
+          <div><span className={label}>Bill number</span><input className={input} value={form.billNumber} onChange={e => setF({ billNumber: e.target.value })} /></div>
+          <div><span className={label}>Tax rate %</span><input type="number" step="0.00001" className={input} value={form.taxRate} onChange={e => setF({ taxRate: e.target.value })} /></div>
+          <div><span className={label}>Land value</span><input type="number" step="0.01" className={input} value={form.landValue} onChange={e => setF({ landValue: e.target.value })} /></div>
+          <div><span className={label}>Improvements</span><input type="number" step="0.01" className={input} value={form.improvementValue} onChange={e => setF({ improvementValue: e.target.value })} /></div>
+          <div><span className={label}>Market (just) value</span><input type="number" step="0.01" className={input} value={form.marketValue} onChange={e => setF({ marketValue: e.target.value })} /></div>
+          <div><span className={label}>Exemptions</span><input type="number" step="0.01" className={input} value={form.exemptionsValue} onChange={e => setF({ exemptionsValue: e.target.value })} /></div>
+          <div><span className={label}>Which exemptions</span><input className={input} value={form.exemptionsNote} onChange={e => setF({ exemptionsNote: e.target.value })} placeholder="Homeowners" /></div>
+          <div><span className={label}>Base year</span><input className={input} value={form.baseYear} onChange={e => setF({ baseYear: e.target.value })} placeholder="2019" /></div>
+          <div><span className={label}>Penalties owed</span><input type="number" step="0.01" className={input} value={form.penaltiesOwed} onChange={e => setF({ penaltiesOwed: e.target.value })} /></div>
+          <div><span className={label}>Balance owed</span><input type="number" step="0.01" className={input} value={form.balanceOwed} onChange={e => setF({ balanceOwed: e.target.value })} /></div>
+          <div className="col-span-2 md:col-span-4"><span className={label}>County page</span><input className={input} value={form.sourceUrl} onChange={e => setF({ sourceUrl: e.target.value })} placeholder="https://" /></div>
+          <div className="col-span-2 md:col-span-4">
+            <span className={label}>Special assessments &amp; direct charges</span>
+            <div className="space-y-1.5">
+              {form.specials.map((a, i) => (
+                <div key={i} className="flex gap-2 items-center">
+                  <input className={input} value={a.name} onChange={e => setF({ specials: form.specials.map((x, j) => j === i ? { ...x, name: e.target.value } : x) })} placeholder="CFD 2004-1 (Mello-Roos)" />
+                  <input type="number" step="0.01" className="input-dark text-sm w-32" value={String(a.amount ?? '')} onChange={e => setF({ specials: form.specials.map((x, j) => j === i ? { ...x, amount: e.target.value as any } : x) })} />
+                  <label className="text-xs text-gray-400 flex items-center gap-1 whitespace-nowrap"><input type="checkbox" checked={!!a.cfd} onChange={e => setF({ specials: form.specials.map((x, j) => j === i ? { ...x, cfd: e.target.checked } : x) })} />Mello-Roos</label>
+                  <button type="button" onClick={() => setF({ specials: form.specials.filter((_, j) => j !== i) })} className="text-gray-600 hover:text-red-400 text-xs">✕</button>
+                </div>
+              ))}
+              <button type="button" onClick={() => setF({ specials: [...form.specials, { name: '', amount: 0 }] })} className="text-xs text-amber-400 hover:text-amber-300">+ Add a charge</button>
+            </div>
+          </div>
+          {form.priorYears?.length ? <p className="col-span-2 md:col-span-4 text-xs text-amber-300">The bill names earlier unpaid years ({form.priorYears.map(y => y.taxYear).join(', ')}); they are added under the property's unpaid years when you save.</p> : null}
+        </div>
+      )}
       {error && <p className="text-xs text-red-400">{error}</p>}
     </>
+  );
+
+  const openDefaults = defaults.filter(d => d.status === 'OPEN' || d.status === 'PLAN');
+  const parcelProp = parcel ? properties.find(p => p.id === parcel) : null;
+  const panel = parcelProp && (
+    <ParcelPanel key={parcelProp.id} property={parcelProp} taxes={taxes.filter(t => t.propertyId === parcelProp.id)} defaults={defaults.filter(d => d.propertyId === parcelProp.id)}
+      onChanged={load} onEditYear={t => { setParcel(null); startEdit(t); }} onAddYear={() => { setParcel(null); startNew(parcelProp.id); }} />
   );
 
   if (phone) return (
@@ -249,6 +321,7 @@ function PropertyTaxTab() {
         <div className="ios-chip"><div className="k">{latestYear ? `${latestYear} total` : 'Annual total'}</div><div className="v">{fmtMoney(annualTotal)}</div></div>
         <div className="ios-chip"><div className="k">Installments left</div><div className="v">{upcoming.length}</div></div>
         <div className="ios-chip"><div className="k">Past due</div><div className={`v ${overdue.length ? 'ios-red' : ''}`}>{overdue.length}</div></div>
+        <div className="ios-chip"><div className="k">Unpaid years</div><div className={`v ${openDefaults.length ? 'ios-red' : ''}`}>{openDefaults.length}</div></div>
         <div className="ios-chip"><div className="k">Missing {latestYear ?? 'bills'}</div><div className={`v ${missingLatest.length ? 'ios-tint' : ''}`}>{latestYear ? `${missingLatest.length} of ${properties.length}` : properties.length}</div></div>
       </div>
       <Section footer="A PDF from the county or photos of the paper bill; Sollux reads the parcel, year, installments and due dates.">
@@ -268,6 +341,7 @@ function PropertyTaxTab() {
       {!loading && properties.length === 0 && <div className="ios-empty"><h3>No properties</h3>Add properties first.</div>}
       {!loading && properties.map(p => (
         <Section key={p.id} header={p.nickname || p.address} action={{ label: 'Add year', onClick: () => startNew(p.id) }}>
+          <Row title="Parcel & unpaid years" subtitle={[p.apn ? `APN ${p.apn}` : 'No parcel number yet', openDefaults.some(d => d.propertyId === p.id) ? `${openDefaults.filter(d => d.propertyId === p.id).length} unpaid` : null].filter(Boolean).join(' · ')} onClick={() => setParcel(p.id)} />
           {years.length === 0 && <Row title="Nothing on file" chevron={false} />}
           {years.map(y => {
             const t = byProp.get(p.id)?.get(y);
@@ -280,6 +354,9 @@ function PropertyTaxTab() {
           })}
         </Section>
       ))}
+      <Sheet open={!!parcelProp} onClose={() => setParcel(null)} title={parcelProp ? (parcelProp.nickname || parcelProp.address) : ''}>
+        <div className="ios-form-legacy">{panel}</div>
+      </Sheet>
       <Sheet open={!!form} onClose={() => setForm(null)} title={form?.id ? 'Tax record' : 'New tax record'}
         right={{ label: 'Save', onClick: () => void save(), busy: saving }}>
         <div className="ios-form-legacy">{formBody}</div>
@@ -300,9 +377,19 @@ function PropertyTaxTab() {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
           <div className="stat-card"><p className="text-xs text-gray-500">{latestYear ? `${latestYear} total` : 'Annual total'}</p><p className="text-lg font-semibold text-white">{fmtMoney(annualTotal)}</p></div>
           <div className="stat-card"><p className="text-xs text-gray-500">Installments still to pay</p><p className="text-lg font-semibold text-white">{upcoming.length}</p></div>
-          <div className="stat-card"><p className="text-xs text-gray-500">Past due</p><p className={`text-lg font-semibold ${overdue.length ? 'text-red-400' : 'text-white'}`}>{overdue.length}</p></div>
+          <div className="stat-card"><p className="text-xs text-gray-500">Past due</p><p className={`text-lg font-semibold ${overdue.length ? 'text-red-400' : 'text-white'}`}>{overdue.length}{openDefaults.length ? <span className="text-xs text-red-400 font-normal ml-2">+ {openDefaults.length} unpaid year{openDefaults.length === 1 ? '' : 's'}</span> : null}</p></div>
           <div className="stat-card"><p className="text-xs text-gray-500">Missing {latestYear ?? 'bills'}</p><p className={`text-lg font-semibold ${missingLatest.length ? 'text-amber-400' : 'text-white'}`}>{latestYear ? `${missingLatest.length} of ${properties.length}` : properties.length}</p></div>
         </div>
+
+        {parcelProp && (
+          <div className="card p-4 mb-5">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-sm font-semibold text-white">{parcelProp.nickname || parcelProp.address}</p>
+              <button onClick={() => setParcel(null)} className="text-xs text-gray-500 hover:text-gray-300">Close</button>
+            </div>
+            {panel}
+          </div>
+        )}
 
         {form && (
           <div className="card p-4 mb-5 space-y-3">
@@ -353,7 +440,10 @@ function PropertyTaxTab() {
                     <tr key={p.id}>
                       <td className="pl-4">
                         <Link to={`/portfolio/${p.id}`} className="text-gray-200 hover:text-white">{p.nickname || p.address}</Link>
-                        <span className="block text-xs text-gray-600">{[p.city, p.state].filter(Boolean).join(', ')}</span>
+                        <span className="block text-xs text-gray-600">{[p.city, p.state].filter(Boolean).join(', ')}{p.apn ? ` · APN ${p.apn}` : ''}</span>
+                        <button onClick={() => setParcel(parcel === p.id ? null : p.id)} className="text-xs text-amber-400/80 hover:text-amber-300">
+                          Parcel{openDefaults.some(d => d.propertyId === p.id) ? <span className="text-red-400"> · {openDefaults.filter(d => d.propertyId === p.id).length} unpaid</span> : ''}
+                        </button>
                       </td>
                       {years.length === 0 && <td className="text-xs text-gray-600">Nothing on file</td>}
                       {years.map(y => {

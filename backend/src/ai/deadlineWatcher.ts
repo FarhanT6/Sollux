@@ -19,6 +19,7 @@
  */
 import { db } from '../config/db';
 import type { Finding } from './bookkeeper';
+import { calendarFor, defaultTimeline, isCommercial } from '../lib/propertyTaxRules';
 
 const DAY = 86400000;
 const money = (n: number) => `$${Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -38,7 +39,7 @@ export function maturityStage(days: number): { stage: string; severity: Finding[
 
 export async function watchDeadlines(userId: string, now = new Date()): Promise<Finding[]> {
   const out: Finding[] = [];
-  const props = await db.property.findMany({ where: { userId }, select: { id: true, address: true, nickname: true }, orderBy: { createdAt: 'asc' } });
+  const props = await db.property.findMany({ where: { userId }, select: { id: true, address: true, nickname: true, state: true, type: true }, orderBy: { createdAt: 'asc' } });
   if (!props.length) return out;
   const name = new Map(props.map(p => [p.id, p.nickname || p.address]));
   // Insights hang off a property; a personal loan with none goes on the first.
@@ -109,11 +110,18 @@ export async function watchDeadlines(userId: string, now = new Date()): Promise<
   // ── Property tax installments ───────────────────────────────────────────
   const taxes = await db.taxAssessment.findMany({
     where: { property: { userId }, status: { not: 'PAID' }, escrowLoanId: null },
-    select: { id: true, propertyId: true, taxYear: true, installment1Due: true, installment2Due: true, installment1Paid: true, installment2Paid: true, installment1Amount: true, installment2Amount: true, annualTaxAmount: true },
+    select: { id: true, propertyId: true, taxYear: true, installment1Due: true, installment2Due: true, installment1Paid: true, installment2Paid: true, installment1Amount: true, installment2Amount: true, annualTaxAmount: true, installment1Delinquent: true, installment2Delinquent: true },
   });
+  const stateOf = new Map(props.map(p => [p.id, p.state]));
+  const dayAt = (iso: string) => new Date(`${iso}T12:00:00Z`);
   for (const t of taxes) {
+    // The deadline that costs money is the day it turns delinquent: the
+    // bill's own date, else the state's (Dec 10 / Apr 10 in California).
+    const rules = calendarFor(stateOf.get(t.propertyId), t.taxYear);
     for (const n of [1, 2] as const) {
-      const due = n === 1 ? t.installment1Due : t.installment2Due;
+      const stated = n === 1 ? t.installment1Delinquent ?? t.installment1Due : t.installment2Delinquent ?? t.installment2Due;
+      const rule = rules?.installments.find(i => i.n === n);
+      const due = stated ?? (rule ? dayAt(rule.delinquentAfter) : null);
       const paid = n === 1 ? t.installment1Paid : t.installment2Paid;
       if (!due || paid) continue;
       const d = daysUntil(due, now);
@@ -123,7 +131,41 @@ export async function watchDeadlines(userId: string, now = new Date()): Promise<
       out.push({
         key: `tax-installment:${t.id}:${n}`, propertyId: t.propertyId, type: 'REMINDER', severity: d < 0 ? 'ALERT' : d <= 10 ? 'WARNING' : 'INFO',
         title: `${name.get(t.propertyId)}: ${t.taxYear} property tax, installment ${n} — ${money(amount)} ${d < 0 ? `was due ${fmt(due)}` : `due ${fmt(due)} (${inDays(d)})`}`,
-        body: d < 0 ? 'Not marked paid. A delinquent installment carries a 10% penalty in California; mark it paid on the Taxes page if it was.' : 'Mark it paid on the Taxes page once paid.',
+        body: d < 0
+          ? `Not marked paid.${rule && rule.penaltyRate ? ` A delinquent installment carries a ${Math.round(rule.penaltyRate * 100)}% penalty${rule.cost ? ` plus $${rule.cost}` : ''}.` : ''} Mark it paid on the Taxes page if it was.`
+          : 'Mark it paid on the Taxes page once paid.',
+      });
+    }
+  }
+
+  // ── Unpaid tax years: power to sell, tax deed, plan installments ─────────
+  const typeOf = new Map(props.map(p => [p.id, p.type]));
+  const defaults = await db.taxDefault.findMany({
+    where: { property: { userId }, status: { in: ['OPEN', 'PLAN'] } },
+    select: { id: true, propertyId: true, taxYear: true, defaultDate: true, certificateIssued: true, powerToSellDate: true, payPlanJson: true, amountToRedeem: true },
+  });
+  for (const d of defaults) {
+    const iso = (x: Date | null) => (x ? x.toISOString().slice(0, 10) : null);
+    const tl = defaultTimeline(stateOf.get(d.propertyId), d.taxYear, { defaultDate: iso(d.defaultDate), certificateIssued: iso(d.certificateIssued) });
+    const saleIso = iso(d.powerToSellDate) ?? (isCommercial(typeOf.get(d.propertyId)) ? tl?.powerToSellCommercial : tl?.powerToSell) ?? tl?.deedEligible ?? null;
+    if (saleIso) {
+      const days = daysUntil(dayAt(saleIso), now);
+      if (days <= 548) {
+        const deed = !!tl?.deedEligible && !tl.powerToSell;
+        out.push({
+          key: `tax-default-sale:${d.id}`, propertyId: d.propertyId, type: 'REMINDER', severity: days <= 180 ? 'ALERT' : 'WARNING',
+          title: `${name.get(d.propertyId)}: unpaid ${d.taxYear} property tax — ${deed ? 'a tax deed can be applied for' : 'the county may sell the property'} ${days < 0 ? `since ${fmt(dayAt(saleIso))}` : `from ${fmt(dayAt(saleIso))} (${inDays(days)})`}`,
+          body: `Redeem it${d.amountToRedeem != null ? ` (${money(Number(d.amountToRedeem))} at the last figure)` : ''} or start a plan of redemption before then. Details on the Taxes page → Parcel.`,
+        });
+      }
+    }
+    const plan = d.payPlanJson as { nextDue?: string | null; installment?: number | null } | null;
+    if (plan?.nextDue) {
+      const days = daysUntil(dayAt(plan.nextDue.slice(0, 10)), now);
+      if (days <= 30 && days >= -60) out.push({
+        key: `tax-default-plan:${d.id}:${plan.nextDue.slice(0, 10)}`, propertyId: d.propertyId, type: 'REMINDER', severity: days < 0 ? 'ALERT' : 'WARNING',
+        title: `${name.get(d.propertyId)}: ${d.taxYear} plan of redemption installment${plan.installment != null ? ` ${money(plan.installment)}` : ''} ${days < 0 ? `was due ${fmt(dayAt(plan.nextDue.slice(0, 10)))}` : `due ${inDays(days)}`}`,
+        body: 'Missing a plan installment ends the plan and the whole redemption amount is owed again.',
       });
     }
   }

@@ -34,6 +34,7 @@ const PropertySchema = z.object({
   valuationNotes: z.string().optional().nullable(),
   lotSqft: z.number().optional().nullable(),
   parcelGroupName: z.string().optional().nullable(),
+  apn: z.string().max(60).optional().nullable(),
 });
 
 // GET /api/properties — list all for user

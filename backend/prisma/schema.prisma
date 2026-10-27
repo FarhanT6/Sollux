@@ -138,6 +138,9 @@ model Property {
   valuationNotes   String?
   lotSqft          Int?
   parcelGroupName  String? // e.g. "514-518 E St" for adjacent grouped parcels
+  /// Assessor's parcel number (APN / parcel ID / folio): with the county,
+  /// what a property-tax lookup searches by.
+  apn              String?
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
 
@@ -150,6 +153,7 @@ model Property {
   loans                  Loan[]
   insurance              InsurancePolicy[]
   taxAssessments         TaxAssessment[]
+  taxDefaults            TaxDefault[]
   improvements           Improvement[]
   legalMatters           LegalMatter[]
   reconciliationProfiles ReconciliationProfile[]
@@ -1457,9 +1461,76 @@ model TaxAssessment {
   documentS3Key      String?
   /// Paid by the mortgage lender from escrow, not by the owner directly.
   escrowLoanId       String?
+  /// The days each installment turns delinquent, as the bill prints them
+  /// (the state's rule when it does not).
+  installment1Delinquent DateTime?
+  installment2Delinquent DateTime?
+  billNumber         String?
+  /// Values on the roll. assessedValue is the net taxable value.
+  landValue          Decimal?  @db.Decimal(14, 2)
+  improvementValue   Decimal?  @db.Decimal(14, 2)
+  /// Just / market value where the roll prints one beside the assessed value (FL).
+  marketValue        Decimal?  @db.Decimal(14, 2)
+  exemptionsValue    Decimal?  @db.Decimal(14, 2)
+  /// "Homeowners' exemption", "Homestead", "Save Our Homes cap" …
+  exemptionsNote     String?
+  /// California Prop 13 base year (or a state's equivalent cap year).
+  baseYear           String?
+  /// Total rate, percent (1.1034 = 1.1034%).
+  taxRate            Decimal?  @db.Decimal(8, 5)
+  /// Direct charges and special assessments on the bill, Mello-Roos / CDD
+  /// included: [{ name, amount, phone?, cfd? }].
+  specialAssessmentsJson Json?
+  /// What is owed now beyond the installments (penalties and costs), and the
+  /// whole balance, as of lookedUpAt.
+  penaltiesOwed      Decimal?  @db.Decimal(12, 2)
+  balanceOwed        Decimal?  @db.Decimal(12, 2)
+  /// Where the figures came from (the county's page) and when they were read.
+  sourceUrl          String?
+  lookedUpAt         DateTime?
 
   @@unique([propertyId, taxYear])
   @@map("tax_assessments")
+}
+
+/// A tax year left unpaid: California's tax-defaulted year (default number,
+/// redemption amount, installment plan of redemption, the power-to-sell date),
+/// Florida's tax certificate (number, holder, rate, deed-application date),
+/// a lien elsewhere. One row per property and year.
+model TaxDefault {
+  id                 String    @id @default(cuid())
+  propertyId         String
+  property           Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  taxYear            String
+  /// OPEN | PLAN | REDEEMED | SOLD
+  status             String    @default("OPEN")
+  defaultNumber      String?
+  defaultDate        DateTime?
+  /// The defaulted tax, and the penalties and costs it carried.
+  taxAmount          Decimal?  @db.Decimal(12, 2)
+  penalties          Decimal?  @db.Decimal(12, 2)
+  costs              Decimal?  @db.Decimal(12, 2)
+  /// What the county says redeems it, and the last day that figure holds.
+  amountToRedeem     Decimal?  @db.Decimal(12, 2)
+  redeemGoodThrough  DateTime?
+  /// When the county may sell, or a certificate holder apply for a deed, as stated.
+  powerToSellDate    DateTime?
+  /// Installment plan of redemption: { started, installment, nextDue, remaining, balance }.
+  payPlanJson        Json?
+  /// Florida tax certificate / lien.
+  certificateNumber  String?
+  certificateHolder  String?
+  certificateRate    Decimal?  @db.Decimal(6, 3)
+  certificateIssued  DateTime?
+  redeemedOn         DateTime?
+  notes              String?
+  sourceUrl          String?
+  lookedUpAt         DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@unique([propertyId, taxYear])
+  @@map("tax_defaults")
 }
 
 enum TaxStatus {

@@ -105,6 +105,7 @@ export interface Property {
   valuationNotes?: string;
   lotSqft?: number;
   parcelGroupName?: string;
+  apn?: string | null;
   createdAt: string;
   utilityAccounts?: UtilityAccount[];
   insights?: AIInsight[];
@@ -629,7 +630,58 @@ export interface TaxAssessment {
   installment2Amount?: number | string | null;
   escrowLoanId?: string | null;
   hasDocument?: boolean;
-  property?: Pick<Property, 'id' | 'address' | 'nickname'> & { city?: string; state?: string };
+  installment1Delinquent?: string | null;
+  installment2Delinquent?: string | null;
+  billNumber?: string | null;
+  landValue?: number | string | null;
+  improvementValue?: number | string | null;
+  marketValue?: number | string | null;
+  exemptionsValue?: number | string | null;
+  exemptionsNote?: string | null;
+  baseYear?: string | null;
+  taxRate?: number | string | null;
+  specialAssessments?: SpecialAssessment[] | null;
+  penaltiesOwed?: number | string | null;
+  balanceOwed?: number | string | null;
+  sourceUrl?: string | null;
+  lookedUpAt?: string | null;
+  /** The state's rules applied to this year (server-computed). */
+  computed?: {
+    calendar: { yearLabel: string; notes: string[] } | null;
+    installments: { n: 1 | 2; amount: number | null; due: string | null; delinquentAfter: string | null; paid: string | null; state: 'paid' | 'upcoming' | 'due' | 'delinquent'; penalty: number }[];
+    discount: { by: string; rate: number } | null;
+  };
+  property?: Pick<Property, 'id' | 'address' | 'nickname'> & { city?: string; state?: string; county?: string | null };
+}
+
+export interface SpecialAssessment { name: string; amount: number; phone?: string | null; cfd?: boolean }
+
+export interface TaxCalendarInfo {
+  state: string; yearLabel: string; notes: string[];
+  installments: { n: 1 | 2; due: string; delinquentAfter: string; penaltyRate: number; cost: number }[];
+  discounts?: { by: string; rate: number }[];
+}
+export interface TaxTimeline {
+  defaultDate: string | null; powerToSell: string | null; powerToSellCommercial: string | null;
+  certificateSale: string | null; deedEligible: string | null; certificateExpires: string | null; notes: string[];
+}
+export type TaxDefaultStatus = 'OPEN' | 'PLAN' | 'REDEEMED' | 'SOLD';
+export interface TaxDefault {
+  id: string; propertyId: string; taxYear: string; status: TaxDefaultStatus;
+  defaultNumber?: string | null; defaultDate?: string | null;
+  taxAmount?: number | string | null; penalties?: number | string | null; costs?: number | string | null;
+  amountToRedeem?: number | string | null; redeemGoodThrough?: string | null; powerToSellDate?: string | null;
+  payPlan?: { started?: string | null; installment?: number | null; nextDue?: string | null; remaining?: number | null; balance?: number | null } | null;
+  certificateNumber?: string | null; certificateHolder?: string | null; certificateRate?: number | string | null; certificateIssued?: string | null;
+  redeemedOn?: string | null; notes?: string | null; sourceUrl?: string | null; lookedUpAt?: string | null;
+  property?: { id: string; address: string; nickname?: string | null; state?: string | null; county?: string | null; type?: string };
+  computed?: {
+    timeline: TaxTimeline | null;
+    redemption: { total: number; parts: { label: string; amount: number }[]; asOf: string; months: number } | null;
+    stated: number | null;
+    powerToSell: string | null;
+    commercial: boolean;
+  };
 }
 
 // ─── Compliance: citations, orders to comply, permits, inspections ─────────

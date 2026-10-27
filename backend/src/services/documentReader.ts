@@ -60,7 +60,21 @@ Return ONLY valid JSON, no markdown:
   "paidStatus": "UNPAID | PAID | PARTIALLY_PAID | DELINQUENT — PAID only when the bill says it is paid",
   "installment1PaidDate": "YYYY-MM-DD or null",
   "installment2PaidDate": "YYYY-MM-DD or null",
-  "notes": "exemptions, penalties, special assessments or anything unusual, or null"
+  "installment1Delinquent": "YYYY-MM-DD or null — the date after which installment 1 is delinquent ('Delinquent after 12/10/2026'), when printed separately from the due date",
+  "installment2Delinquent": "YYYY-MM-DD or null",
+  "billNumber": "bill / assessment / account number of this bill, or null",
+  "landValue": number or null,
+  "improvementValue": number or null — structures / improvements,
+  "marketValue": number or null — just / market value when printed beside the assessed value,
+  "exemptionsValue": number or null — total exemptions as a positive number,
+  "exemptionsNote": "which exemptions ('Homeowners', 'Homestead', 'Save Our Homes'), or null",
+  "baseYear": "the Prop 13 base year or similar cap year when printed, or null",
+  "taxRate": number or null — the total rate in percent (1.1034 for 1.1034%),
+  "specialAssessments": [{ "name": "as printed, e.g. 'CFD 2004-1 Mello-Roos' or 'Vector Control'", "amount": number — the annual amount, "phone": "the agency phone if printed, or null", "cfd": true when it is a Mello-Roos / Community Facilities District / CDD charge }] or null — every fixed charge, direct assessment and special assessment listed,
+  "penaltiesOwed": number or null — delinquent penalties and costs shown as owing,
+  "balanceOwed": number or null — the total amount shown as still owing, if the bill or statement prints one,
+  "priorYearsDelinquent": [{ "taxYear": "as printed", "defaultNumber": "default / redemption / certificate number or null", "amount": number or null, "certificateHolder": "or null" }] or null — any earlier unpaid years the bill warns about,
+  "notes": "anything unusual, or null"
 }
 A bill with a single annual amount (Florida, Texas, West Virginia) reports it as installment1 and leaves installment2 null.`,
   tax_form: `This is a US income-tax document: a return (Form 1040, a state return such as California 540 or 540NR, West Virginia IT-140), an information form (1098 mortgage interest, 1098-E, 1099-NEC, 1099-MISC, 1099-INT, 1099-DIV, 1099-K, 1099-R, W-2, K-1), a W-9, an estimated-payment voucher, or a notice from the IRS or a state tax agency. Read every page.
@@ -289,6 +303,18 @@ export function shape(kind: ReadKind, d: any): Record<string, any> {
       annualTaxAmount: num(d.annualTaxAmount) ?? (i1 != null || i2 != null ? Number(((i1 ?? 0) + (i2 ?? 0)).toFixed(2)) : null),
       installment1Amount: i1, installment1Due: day(d.installment1Due), installment2Amount: i2, installment2Due: day(d.installment2Due),
       status, installment1Paid: day(d.installment1PaidDate), installment2Paid: day(d.installment2PaidDate), notes: str(d.notes),
+      installment1Delinquent: day(d.installment1Delinquent), installment2Delinquent: day(d.installment2Delinquent), billNumber: str(d.billNumber),
+      landValue: num(d.landValue), improvementValue: num(d.improvementValue), marketValue: num(d.marketValue),
+      exemptionsValue: num(d.exemptionsValue) != null ? Math.abs(num(d.exemptionsValue)!) : null, exemptionsNote: str(d.exemptionsNote),
+      baseYear: str(d.baseYear), taxRate: num(d.taxRate), penaltiesOwed: num(d.penaltiesOwed), balanceOwed: num(d.balanceOwed),
+      specialAssessments: Array.isArray(d.specialAssessments)
+        ? d.specialAssessments.filter((a: any) => a && str(a.name) && num(a.amount) != null).slice(0, 60)
+          .map((a: any) => ({ name: str(a.name)!, amount: num(a.amount)!, phone: str(a.phone), cfd: !!a.cfd || /mello|cfd|community facilities|\bcdd\b/i.test(String(a.name)) }))
+        : null,
+      priorYearsDelinquent: Array.isArray(d.priorYearsDelinquent)
+        ? d.priorYearsDelinquent.filter((y: any) => y && str(y.taxYear)).slice(0, 20)
+          .map((y: any) => ({ taxYear: str(y.taxYear)!, defaultNumber: str(y.defaultNumber), amount: num(y.amount), certificateHolder: str(y.certificateHolder) }))
+        : null,
     };
   }
   const amountUsd = num(d.amountUsd), rate = num(d.exchangeRate);
