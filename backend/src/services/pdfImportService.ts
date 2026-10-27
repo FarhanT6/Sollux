@@ -322,6 +322,7 @@ Important extraction tips:
 - Carried balance is worded differently by every provider, and missing it makes a two-month bill look like a one-month bill. All of these mean the same thing: "Previous Balance", "Balance Forward", "Amount of Last Bill", "Past Due on <date>", "Previous Amount Due", "Amount Past Due". Report it net of any payment the bill shows against it. On an installment or pre-need plan statement ("Payment Plan Amount Due $913.95 / Amount Past Due $5,483.70 / Total Payment Due $6,397.65"), amountDue is the installment (913.95), previousBalance the past-due figure (5,483.70), and the plan's total sale / current balance goes in totalAccountBalance, never in amountDue. Two worked examples:
   · "Amount of Last Bill 13.40 / Payment Received .00 / Current Charges 18.73 / Total Amount Due 32.13" → previousBalance 13.40, amountDue 18.73. Nothing was paid, so the whole prior bill is still carried.
   · "Past Due on 08/20/26 716.10 / Payments/Adjustments -449.58 / Current Invoice Charges 326.38 / Total Amount Due 592.90" → previousBalance 266.52 (716.10 less the 449.58 paid), amountDue 326.38, and 266.52 + 326.38 = 592.90 as the bill's own total confirms.
+  · A POSITIVE Payments/Adjustments figure that the table explains as a memo charge ("Past Due on 10/20/26 600.00 / Payments/Adjustments 35.00 / Current Invoice Charges 400.00 / Total 1,035.00", the table listing "Unreferenced Memo $35.00 Re: Service Interrupt") is a charge of THIS bill, not past due: previousBalance 600.00, amountDue and currentCharges 435.00, and chargeBreakdown gets a line "Service Interrupt charge": 35.
 - Sanity-check yourself before answering: previousBalance + amountDue should equal the grand total the bill asks for, because previousBalance is already net of payments. If it does not, you have most likely put a carried-forward balance into amountDue. Re-read and split them.
 - Some bills show several totals (this period, total with past due, budget-billing amount, minimum payment). amountDue is always this period's charges alone.`;
 
@@ -2039,6 +2040,70 @@ export function takeOutPendingPayment(ex: ExtractedBillData): void {
   ex.amountDue = r2(charge - amt);
   if (ex.currentCharges != null && ex.currentCharges - amt >= -0.005) ex.currentCharges = r2(ex.currentCharges - amt);
   ex.previousBalance = r2(carried + amt);
+}
+
+/**
+ * Republic Services prints, e.g.: Past Due on 03/20/26 600.00 · Payments/
+ * Adjustments 35.00 · Current Invoice Charges 400.00 · Total Amount Due
+ * 1,035.00, where the Payments/Adjustments table lists "03/20/26 Unreferenced
+ * Memo $35.00 / Re: Service Interrupt". The memo is a charge put on the
+ * account that month, outside the invoice's own charge list. Read as an
+ * adjustment it was added to the past due (635.00), and the bill showed no
+ * service-interrupt fee. It is a charge of this bill: a line on its charge
+ * list, in its amount, and out of the carried balance. Payments in the same
+ * table (negative) still come off the past due. Only when the summary adds
+ * up to the bill's total.
+ */
+export function applyAdjustmentChargesFromText(ex: ExtractedBillData, text: string): void {
+  if (!text || !/payments\s*\/\s*adjustments/i.test(text)) return;
+  const money = (s: string) => {
+    const n = parseFloat(s.replace(/[^\d.]/g, ''));
+    return Number.isFinite(n) ? (/-|\(|CR/i.test(s) ? -n : n) : null;
+  };
+  const AMT = '(-?\\(?\\$?\\s?-?[\\d,]+\\.\\d{2}\\)?(?:\\s*CR)?)';
+  const pick = (re: RegExp) => { const m = text.match(re); return m ? money(m[1]) : null; };
+  const pastDue = pick(new RegExp(`past\\s+due\\s+on\\s+\\d{1,2}\\/\\d{1,2}\\/\\d{2,4}[ \\t]+${AMT}`, 'i'));
+  const adjusted = pick(new RegExp(`payments\\s*\\/\\s*adjustments[ \\t]+${AMT}`, 'i'));
+  const current = pick(new RegExp(`current\\s+invoice\\s+charges[ \\t]+${AMT}`, 'i'));
+  const total = ex.statedTotalDue ?? pick(new RegExp(`total\\s+amount\\s+due[ \\t]+${AMT}`, 'i'));
+  if (pastDue == null || adjusted == null || current == null || total == null) return;
+  if (Math.abs(pastDue + adjusted + current - total) > 0.01) return;
+
+  // The table's rows: a date, what it was, the amount; a "Re:" line under a
+  // memo names it.
+  const lines = text.split('\n').map(l => l.replace(/\s+/g, ' ').trim());
+  const start = lines.findIndex(l => /^payments\s*\/\s*adjustments$/i.test(l));
+  if (start < 0) return;
+  const charges: { name: string; amount: number }[] = [];
+  for (let i = start + 1; i < lines.length && i < start + 30; i++) {
+    if (/^current\s+invoice\s+charges/i.test(lines[i])) break;
+    const m = lines[i].match(new RegExp(`^(\\d{1,2}\\/\\d{1,2}\\/\\d{2,4}) (.*?[A-Za-z].*?) ${AMT}$`));
+    if (!m) continue;
+    const amount = money(m[3]);
+    if (amount == null || amount <= 0 || /payment|\bpmt\b|autopay|credit|refund|revers|waive/i.test(m[2])) continue;
+    const re = lines[i + 1]?.match(/^re:\s*(.+)$/i);
+    charges.push({ name: (re ? re[1] : m[2]).trim(), amount });
+  }
+  const added = Number(charges.reduce((t, c) => t + c.amount, 0).toFixed(2));
+  if (!(added > 0)) return;
+
+  const r2 = (n: number) => Number(n.toFixed(2));
+  const breakdown = { ...((ex.chargeBreakdown ?? {}) as Record<string, number>) };
+  if (!Object.keys(breakdown).length) breakdown['Current invoice charges'] = current;
+  for (const c of charges) {
+    // Already itemised by the reader ("Unreferenced Memo Re: Service Interrupt").
+    const word = c.name.toLowerCase();
+    const listed = Object.keys(breakdown).find(k => (k.toLowerCase().includes(word) || /memo/i.test(k)) && Math.abs(Number(breakdown[k]) - c.amount) < 0.01);
+    if (listed) delete breakdown[listed];
+    const name = /fee|charge/i.test(c.name) ? c.name : `${c.name} charge`;
+    breakdown[name] = r2((breakdown[name] ?? 0) + c.amount);
+  }
+  ex.chargeBreakdown = breakdown;
+  ex.currentCharges = r2(current + added);
+  ex.amountDue = ex.currentCharges;
+  const carried = r2(pastDue + adjusted - added);
+  ex.previousBalance = Math.abs(carried) < 0.005 ? null : carried;
+  ex.statedTotalDue = total;
 }
 
 /**
@@ -3990,6 +4055,7 @@ export async function parseBill(
       try {
         const rowsText = scanned || flattened ? text : await layoutText(buffer);
         applyTransactionsFromText(extracted, rowsText);
+        applyAdjustmentChargesFromText(extracted, rowsText);
       } catch { /* the table stays as Claude read it */ }
     }
     paymentsFromTransactions(extracted);
