@@ -68,7 +68,7 @@ export default api;
 import type {
   Property, UtilityAccount, Statement, StatementSummaryRow, Payment, AIInsight, DashboardSummary,
   Unit, Tenant, LeaseTenant, Lease, LeaseDeposit, RentPayment, RentNotice, RentChange, ScheduledRentIncrease, LeaseUtilityCharge, Expense, Loan, LoanComponent, LoanPayment,
-  InsurancePolicy, TaxAssessment, Improvement, LegalMatter, PropertyPnL, MonthlyPnL,
+  InsurancePolicy, TaxAssessment, TaxDefault, TaxCalendarInfo, TaxTimeline, Improvement, LegalMatter, PropertyPnL, MonthlyPnL,
   ComplianceItem, DevelopmentProject, ProjectTransfer,
   BankAccount, PendingOutflow, PendingOutflowKind, PayPlan, OtherIncome, BudgetSummary, DelinquencyTenant, BudgetForecast, IndexRate,
   ReconciliationProfile, ReconciliationStatement, ReconciliationLineItem,
@@ -448,6 +448,15 @@ export const readTaxBill = (files: FilePayload[]) =>
   api.post<{ fields: Record<string, any>; match: DocMatch | null }>('/taxes/read', { files }).then(r => r.data);
 export const saveTaxAssessment = (data: Record<string, any>) =>
   api.post<TaxAssessment>('/taxes', data).then(r => r.data);
+export const getTaxDefaults = (params?: { propertyId?: string }) =>
+  api.get<TaxDefault[]>('/taxes/defaults', { params }).then(r => r.data);
+export const saveTaxDefault = (data: Record<string, any>) =>
+  api.post<TaxDefault>('/taxes/defaults', data).then(r => r.data);
+export const updateTaxDefault = (id: string, data: Record<string, any>) =>
+  api.patch<TaxDefault>(`/taxes/defaults/${id}`, data).then(r => r.data);
+export const deleteTaxDefault = (id: string) => api.delete(`/taxes/defaults/${id}`);
+export const getTaxRules = (state: string, taxYear: string) =>
+  api.get<{ calendar: TaxCalendarInfo | null; timeline: TaxTimeline | null }>('/taxes/rules', { params: { state, taxYear } }).then(r => r.data);
 export const taxBillUrl = (id: string) =>
   api.get<{ url: string }>(`/taxes/${id}/document`).then(r => r.data.url);
 
