@@ -441,6 +441,9 @@ model Payment {
   // what was paid beyond the bill's own charge and the plan's fee. Kept
   // on the payment so an edit or deletion puts it back on the plan.
   planApplied        Decimal?       @db.Decimal(10, 2)
+  /// Logged "toward the payment arrangement": the whole payment is an
+  /// installment on the plan, not a bill payment with something left over.
+  towardPlan         Boolean        @default(false)
   // How much of this payment came off the balance of the loan linked to
   // the account (an installment contract billed like a utility). Kept so
   // an edit or deletion puts it back.

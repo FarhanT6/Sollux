@@ -106,6 +106,8 @@ const PaymentSchema = z.object({
   status: z.enum(['PAID', 'PENDING', 'FAILED', 'PARTIAL']).default('PAID'),
   bankAccountId: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
+  // Toward the account's payment arrangement (applyPaymentToPlan).
+  towardPlan: z.boolean().optional(),
 });
 
 /**

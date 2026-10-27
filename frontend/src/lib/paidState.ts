@@ -1,4 +1,4 @@
-import { isAfter } from 'date-fns';
+import { todayISO } from './date';
 import { paymentFees } from './feeKinds';
 
 /**
@@ -31,6 +31,12 @@ export function towardBills(p: any): number {
 // Open balance a statement is asking for: this period's charge plus any
 // prior balance carried into it.
 /** The part of a bill's charge deferred to a net-metering true-up — not payable now. */
+/** Overdue only once the due day itself has passed (Pacific time): a bill due today is due, not overdue. */
+function pastDue(due: string | Date): boolean {
+  const day = typeof due === 'string' ? due.slice(0, 10) : due.toISOString().slice(0, 10);
+  return todayISO() > day;
+}
+
 export function deferredOf(s: any): number {
   return s?.trueUpDeferred != null ? Number(s.trueUpDeferred) : 0;
 }
@@ -316,7 +322,7 @@ export function statementStatus(s: any, payments: any[] = [], newerStmt?: any, i
   // read as "Paid" — so a Prescott HOA bill whose arrears were growing
   // ($130, then $260) showed Paid beside a Mark paid button. The next bill
   // can still say a part was paid: that is "Part paid", not "Paid".
-  const overdue = !!s.dueDate && isAfter(new Date(), new Date(s.dueDate));
+  const overdue = !!s.dueDate && pastDue(s.dueDate);
   if (!isLatest && newerStmt && newerStmt.pastDueCarried != null) {
     const carriedIn = Number(newerStmt.pastDueCarried);
     const thisDue = Number(s.amountDue ?? 0);
@@ -325,7 +331,7 @@ export function statementStatus(s: any, payments: any[] = [], newerStmt?: any, i
     }
   }
 
-  if (s.dueDate && isAfter(new Date(), new Date(s.dueDate))) return { color: 'red', label: 'Overdue' };
+  if (s.dueDate && pastDue(s.dueDate)) return { color: 'red', label: 'Overdue' };
   return { color: 'amber', label: 'Due' };
 }
 

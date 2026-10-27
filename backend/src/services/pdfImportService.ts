@@ -2107,6 +2107,20 @@ export function applyAdjustmentChargesFromText(ex: ExtractedBillData, text: stri
 }
 
 /**
+ * The figure a statement row stores as the bill (amountDue): this period's
+ * charges — with an arrangement's installment when the bill charged one
+ * inside it. SDG&E, Oct 2026: Current Charges 1,005.07 (all deferred to the
+ * true-up) plus the 252.00 agreement installment = 1,257.07, of which 252.00
+ * is due. Storing the current charges alone dropped the installment, and
+ * the row said a 753.07 credit had been applied instead.
+ */
+export function periodChargeOf(ex: ExtractedBillData): number | null {
+  const plan = ex.paymentPlanAmount ?? 0;
+  if (plan > 0 && ex.amountDue != null && ex.currentCharges != null && Math.abs(ex.amountDue - (ex.currentCharges + plan)) < 0.01) return ex.amountDue;
+  return ex.currentCharges ?? ex.amountDue ?? null;
+}
+
+/**
  * Make the figures agree with the bill's own arithmetic.
  *
  * An SDG&E bill under a pay agreement reads: Previous Balance 1,936.25 ·
@@ -4100,4 +4114,20 @@ export async function parseBill(
       error: err instanceof Error ? err.message : 'Unknown error',
     };
   }
+}
+
+/**
+ * A bill with a net-metering summary marks its account as a true-up account
+ * and keeps the next true-up date current. Only the newest bill may move
+ * the date; an older bill imported later must not roll it back.
+ */
+export async function syncTrueUpFromBill(utilityAccountId: string, ex: ExtractedBillData): Promise<void> {
+  const nem = ex.netMetering;
+  if (!nem) return;
+  const billDate = ex.statementDate ? new Date(ex.statementDate) : new Date();
+  const newer = await db.statement.findFirst({ where: { utilityAccountId, statementDate: { gt: billDate }, isDownPayment: false }, select: { id: true } });
+  await db.utilityAccount.update({
+    where: { id: utilityAccountId },
+    data: { hasTrueUp: true, ...(!newer && nem.trueUpDate ? { trueUpDate: new Date(nem.trueUpDate) } : {}) },
+  });
 }

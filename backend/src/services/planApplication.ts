@@ -16,7 +16,7 @@ import { allocateAccountPayments } from '../lib/paymentAllocation';
 export async function applyPaymentToPlan(paymentId: string): Promise<number> {
   const payment = await db.payment.findUnique({
     where: { id: paymentId },
-    select: { id: true, utilityAccountId: true, amount: true, status: true, statementId: true, planApplied: true },
+    select: { id: true, utilityAccountId: true, amount: true, status: true, statementId: true, planApplied: true, towardPlan: true },
   });
   if (!payment) return 0;
 
@@ -37,8 +37,20 @@ export async function applyPaymentToPlan(paymentId: string): Promise<number> {
   const bill = payment.statementId
     ? await db.statement.findUnique({ where: { id: payment.statementId }, select: { amountDue: true, paymentPlanAmount: true } })
     : await db.statement.findFirst({ where: { utilityAccountId: payment.utilityAccountId, isDownPayment: false }, orderBy: { statementDate: 'desc' }, select: { amountDue: true, paymentPlanAmount: true } });
+  if (!bill && !payment.towardPlan) return 0;
+  // The installment billed inside the bill (SDG&E): paying the bill pays it,
+  // and the bill already counts it off the plan.
+  if (bill && Number(bill.paymentPlanAmount ?? 0) > 0) return 0;
+  // Logged as an installment: all of it comes off the plan (less its fee).
+  if (payment.towardPlan) {
+    const applied = Number(Math.min(Math.max(0, Number(payment.amount) - Number(plan.installmentFee ?? 0)), remaining).toFixed(2));
+    if (applied <= 0) return 0;
+    const left = Number((remaining - applied).toFixed(2));
+    await db.paymentPlan.update({ where: { id: plan.id }, data: { remainingBalance: left, status: left <= 0.005 ? 'COMPLETED' : 'ACTIVE' } });
+    await db.payment.update({ where: { id: payment.id }, data: { planApplied: applied } });
+    return applied;
+  }
   if (!bill) return 0;
-  if (Number(bill.paymentPlanAmount ?? 0) > 0) return 0;   // installment already inside the bill
 
   const charge = Math.max(0, Number(bill.amountDue ?? 0));
   const fee = Number(plan.installmentFee ?? 0);

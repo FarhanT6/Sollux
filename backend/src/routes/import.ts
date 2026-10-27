@@ -8,7 +8,7 @@ import { learnProviderWebsite } from '../services/providerWebsite';
 import { findExistingBill } from '../services/billMatch';
 import { Prisma } from '@prisma/client';
 import { markEscrowedStatements } from '../services/escrow';
-import { applyPolicyDocument, settleInFull } from '../services/pdfImportService';
+import { applyPolicyDocument, settleInFull, periodChargeOf, syncTrueUpFromBill } from '../services/pdfImportService';
 import { parseBill, applyPastDueNotice, recordConfirmedPayment, syncPaymentPlanFromBill, syncInsurancePolicyFromBill, syncLoanComponentsFromBill, normalizeAcct, ExtractedBillData, MatchResult } from '../services/pdfImportService';
 import { encrypt, decrypt } from '../crypto/encrypt';
 import { uploadDocument, buildStatementKey } from '../services/s3Service';
@@ -544,7 +544,7 @@ router.post('/confirm', async (req: Request, res: Response) => {
             where: { utilityAccountId, isScheduled: true, payments: { none: {} }, amountDue: { gt: ex.statedTotalDue * 3 } },
           });
         }
-        const periodCharge = ex.currentCharges ?? ex.amountDue ?? null;
+        const periodCharge = periodChargeOf(ex);
         const totalDue = (ex.currentCharges != null || ex.previousBalance != null)
           ? (ex.currentCharges ?? 0) + (ex.previousBalance ?? 0)
           : ex.amountDue ?? null;
@@ -767,22 +767,6 @@ function buildRawData(ex: ExtractedBillData, extractedBy?: 'ai' | 'text'): Recor
     // reversals since the last statement.
     transactions:        ex.transactions ?? null,
   };
-}
-
-/**
- * A bill with a net-metering summary marks its account as a true-up account
- * and keeps the next true-up date current. Only the newest bill may move
- * the date; an older bill imported later must not roll it back.
- */
-async function syncTrueUpFromBill(utilityAccountId: string, ex: ExtractedBillData): Promise<void> {
-  const nem = ex.netMetering;
-  if (!nem) return;
-  const billDate = ex.statementDate ? new Date(ex.statementDate) : new Date();
-  const newer = await db.statement.findFirst({ where: { utilityAccountId, statementDate: { gt: billDate }, isDownPayment: false }, select: { id: true } });
-  await db.utilityAccount.update({
-    where: { id: utilityAccountId },
-    data: { hasTrueUp: true, ...(!newer && nem.trueUpDate ? { trueUpDate: new Date(nem.trueUpDate) } : {}) },
-  });
 }
 
 function sanitizeFilename(name: string): string {
