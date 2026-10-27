@@ -38,7 +38,7 @@ export async function rereadAccountStatements(userId: string, utilityAccountId: 
           const buf = await downloadDocument(r.pdfS3Key!);
           const name = r.pdfS3Key!.split('/').pop() || 'statement.pdf';
           const source = String((r.rawDataJson as any)?.source ?? 'pdf_import');
-          await intakeBill(buf, name, userId, 'ai', batchId, source, { forAccounts: [{ id: account.id, last4 }], pdfKey: r.pdfS3Key! });
+          await intakeBill(buf, name, userId, 'ai', batchId, source, { forAccounts: [{ id: account.id, last4 }], pdfKey: r.pdfS3Key!, statementId: r.id });
         } catch (err) {
           console.warn(`[Reread] statement ${r.id}: ${err instanceof Error ? err.message : err}`);
         }

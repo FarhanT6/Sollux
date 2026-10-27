@@ -88,6 +88,9 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
   forAccounts?: { id: string; last4: string }[];
   // Re-reading a statement already on file: its PDF is already stored here.
   pdfKey?: string;
+  // ...and the statement it belongs to: the reading updates that row and
+  // never files a new one.
+  statementId?: string;
 } = {}): Promise<IntakeResult> {
   // parseBill defaults to AI; this path must pass the choice through or
   // every bulk import silently bills per PDF regardless of what was picked.
@@ -100,6 +103,16 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
 
   // Correspondence, a legal filing, a transfer receipt: nothing to file or review.
   if (ex.documentKind === 'not_a_bill') return { outcome: 'not_a_bill' };
+  // A re-read updates its own row, and only with a bill's figures. A
+  // reading with no date and no amounts (a saved portal page, a notice)
+  // used to be filed as a new $0.00 bill dated the day of the re-read.
+  if (opts.statementId) {
+    const row = await db.statement.findFirst({ where: { id: opts.statementId }, select: { id: true, utilityAccountId: true } });
+    const hasFigures = ex.amountDue != null || ex.currentCharges != null || ex.statedTotalDue != null;
+    if (!row || (ex.documentKind ?? 'bill') !== 'bill' || !hasFigures) return { outcome: 'skipped', reason: 're-read found no bill figures; the statement is left as it was' };
+    match.utilityAccountId = row.utilityAccountId;
+    match.confidence = 'high';
+  }
   // Already paid, or nothing owed yet: nothing to file and nothing to review.
   if (ex.documentKind === 'receipt') return { outcome: 'skipped', reason: 'receipt or subscription charge (already paid)' };
   if (ex.documentKind === 'estimate') return { outcome: 'skipped', reason: 'estimate or quote (nothing owed yet)' };
@@ -189,11 +202,15 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
     // Already on file? One rule for every importer (services/billMatch.ts).
     // This path had only the period and month steps, so a bill filed by hand
     // with no period was filed again here (#241, #189).
-    let existing = await findExistingBill(acct.id, ex, statementDate, { insuranceBill: !!ex.insurance || acct.category === 'INSURANCE' });
+    let existing = opts.statementId
+      ? await db.statement.findFirst({ where: { id: opts.statementId, utilityAccountId: acct.id } })
+      : await findExistingBill(acct.id, ex, statementDate, { insuranceBill: !!ex.insurance || acct.category === 'INSURANCE' });
+    if (opts.statementId && !existing) return { outcome: 'skipped', reason: 'statement not found' };
 
     // A "your bill is ready" email and the PDF statement are one bill.
     if (!existing) existing = await sameBillByDue(acct.id, ex);
-    if (existing && thinnerThan(ex, existing)) {
+    // (A re-read is the statement's own PDF: it always replaces the reading.)
+    if (existing && !opts.statementId && thinnerThan(ex, existing)) {
       // It confirms a bill already on file in full; nothing to replace.
       await recordConfirmedPayment(acct.id, existing.id, ex);
       return { outcome: 'filed', utilityAccountId: acct.id };
