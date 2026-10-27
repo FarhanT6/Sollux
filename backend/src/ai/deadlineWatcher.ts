@@ -170,6 +170,21 @@ export async function watchDeadlines(userId: string, now = new Date()): Promise<
     }
   }
 
+  // ── Insurance claims: the next step the owner noted ─────────────────────
+  const claims = await db.insuranceClaim.findMany({
+    where: { property: { userId }, status: { in: ['OPEN', 'IN_REVIEW', 'APPROVED'] }, nextStepDate: { not: null } },
+    select: { id: true, propertyId: true, claimNumber: true, nextStep: true, nextStepDate: true },
+  });
+  for (const c of claims) {
+    const d = daysUntil(c.nextStepDate!, now);
+    if (d > 7 || d < -30) continue;
+    out.push({
+      key: `claim-step:${c.id}:${c.nextStepDate!.toISOString().slice(0, 10)}`, propertyId: c.propertyId, type: 'REMINDER', severity: d < 0 ? 'WARNING' : 'INFO',
+      title: `${name.get(c.propertyId)}: insurance claim${c.claimNumber ? ` ${c.claimNumber}` : ''} — ${c.nextStep ?? 'follow up'} ${d < 0 ? `(was due ${fmt(c.nextStepDate!)})` : `(${inDays(d)})`}`,
+      body: 'Update the claim on the Insurance page once done.',
+    });
+  }
+
   // ── Citations, notices and permits ──────────────────────────────────────
   const items = await db.complianceItem.findMany({
     where: { userId, status: { in: ['OPEN', 'IN_PROGRESS', 'APPEALED'] } },

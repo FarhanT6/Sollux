@@ -5,6 +5,7 @@ import { attachDbUser } from '../middleware/requireAuth';
 import { extractDeclarations } from '../services/declarationsExtractor';
 import { uploadDocument } from '../services/s3Service';
 import { findOrCreateUtilityAccount } from '../services/utilityAccountResolver';
+import { reviewInsurance } from '../services/insuranceReview';
 
 const router = Router();
 router.use(attachDbUser);
@@ -75,6 +76,74 @@ router.patch('/:id', async (req, res, next) => {
     if (!existing) return res.status(404).json({ error: 'Policy not found' });
     const policy = await db.insurancePolicy.update({ where: { id: req.params.id }, data });
     res.json(policy);
+  } catch (err) { next(err); }
+});
+
+// GET /review — coverage, gaps, underinsurance, renewals and premium changes across the portfolio.
+router.get('/review', async (req, res, next) => {
+  try { res.json(await reviewInsurance(req.dbUserId!)); } catch (err) { next(err); }
+});
+
+// ─── Claims ──────────────────────────────────────────────────────────────────
+const day = z.string().nullable().optional().transform(v => (v ? new Date(v.slice(0, 10) + 'T12:00:00Z') : v === null ? null : undefined));
+const ClaimSchema = z.object({
+  propertyId: z.string(),
+  policyId: z.string().optional().nullable(),
+  claimNumber: z.string().max(80).optional().nullable(),
+  dateOfLoss: day, reportedOn: day,
+  cause: z.enum(['FIRE', 'WATER', 'WIND', 'HAIL', 'FLOOD', 'THEFT', 'VANDALISM', 'LIABILITY', 'OTHER']).default('OTHER'),
+  description: z.string().max(4000).optional().nullable(),
+  status: z.enum(['OPEN', 'IN_REVIEW', 'APPROVED', 'PAID', 'DENIED', 'CLOSED']).default('OPEN'),
+  amountClaimed: z.number().nonnegative().optional().nullable(),
+  amountPaid: z.number().nonnegative().optional().nullable(),
+  deductibleApplied: z.number().nonnegative().optional().nullable(),
+  adjusterName: z.string().max(200).optional().nullable(),
+  adjusterPhone: z.string().max(40).optional().nullable(),
+  adjusterEmail: z.string().max(200).optional().nullable(),
+  nextStep: z.string().max(500).optional().nullable(),
+  nextStepDate: day,
+  notes: z.string().max(4000).optional().nullable(),
+});
+async function claimRefsOk(userId: string, d: { propertyId?: string; policyId?: string | null }) {
+  if (d.propertyId && !(await db.property.findFirst({ where: { id: d.propertyId, userId }, select: { id: true } }))) return 'Property not found';
+  if (d.policyId && !(await db.insurancePolicy.findFirst({ where: { id: d.policyId, property: { userId } }, select: { id: true } }))) return 'Policy not found';
+  return null;
+}
+
+router.get('/claims', async (req, res, next) => {
+  try {
+    const claims = await db.insuranceClaim.findMany({
+      where: { property: { userId: req.dbUserId! }, ...(req.query.propertyId ? { propertyId: String(req.query.propertyId) } : {}) },
+      include: { property: { select: { id: true, address: true, nickname: true } } },
+      orderBy: [{ dateOfLoss: 'desc' }, { createdAt: 'desc' }],
+    });
+    res.json(claims);
+  } catch (err) { next(err); }
+});
+router.post('/claims', async (req, res, next) => {
+  try {
+    const data = ClaimSchema.parse(req.body);
+    const bad = await claimRefsOk(req.dbUserId!, data);
+    if (bad) return res.status(404).json({ error: bad });
+    res.status(201).json(await db.insuranceClaim.create({ data }));
+  } catch (err) { next(err); }
+});
+router.patch('/claims/:id', async (req, res, next) => {
+  try {
+    const data = ClaimSchema.partial().parse(req.body);
+    const existing = await db.insuranceClaim.findFirst({ where: { id: req.params.id, property: { userId: req.dbUserId! } } });
+    if (!existing) return res.status(404).json({ error: 'Claim not found' });
+    const bad = await claimRefsOk(req.dbUserId!, data);
+    if (bad) return res.status(404).json({ error: bad });
+    res.json(await db.insuranceClaim.update({ where: { id: existing.id }, data }));
+  } catch (err) { next(err); }
+});
+router.delete('/claims/:id', async (req, res, next) => {
+  try {
+    const existing = await db.insuranceClaim.findFirst({ where: { id: req.params.id, property: { userId: req.dbUserId! } } });
+    if (!existing) return res.status(404).json({ error: 'Claim not found' });
+    await db.insuranceClaim.delete({ where: { id: existing.id } });
+    res.status(204).send();
   } catch (err) { next(err); }
 });
 

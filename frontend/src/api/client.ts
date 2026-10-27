@@ -433,6 +433,37 @@ export const updateInsurancePolicy = (id: string, data: Partial<InsurancePolicy>
 export const deleteInsurancePolicy = (id: string) =>
   api.delete(`/insurance/${id}`);
 
+// Insurance review and claims
+export interface InsReviewFlag { code: string; severity: 'ALERT' | 'WARNING' | 'INFO'; text: string; policyId?: string }
+export interface InsPolicyLine {
+  id: string; carrier: string; policyNumber: string | null; policyType: string; annualPremium: number | null; effectiveDate: string | null; expirationDate: string | null;
+  dwellingLimit: number | null; liabilityLimit: number | null; deductible: number | null; windHailDeductible: string | null; windHailDollars: number | null;
+  replacementCostBasis: string | null; mortgageePayee: string | null; agentName: string | null; agentPhone: string | null; agentEmail: string | null;
+  priorPremium: number | null; premiumChange: number | null;
+}
+export interface InsPropertyReview {
+  propertyId: string; name: string; state: string | null; type: string; policies: InsPolicyLine[];
+  coverage: { property: boolean; liability: boolean; flood: boolean; umbrella: boolean };
+  annualPremium: number; replacementProxy: number | null; replacementSource: string | null; dwellingLimit: number | null; coverageRatio: number | null;
+  premiumPerThousand: number | null; openClaims: number; flags: InsReviewFlag[];
+}
+export interface InsuranceReview {
+  properties: InsPropertyReview[];
+  totals: { annualPremium: number; policies: number; alerts: number; warnings: number; renewalsSoon: number };
+  renewals: { propertyId: string; name: string; policyId: string; carrier: string; policyType: string; expirationDate: string; days: number; annualPremium: number | null; premiumChange: number | null }[];
+}
+export interface InsuranceClaim {
+  id: string; propertyId: string; policyId?: string | null; claimNumber?: string | null; dateOfLoss?: string | null; reportedOn?: string | null;
+  cause: string; description?: string | null; status: string; amountClaimed?: number | string | null; amountPaid?: number | string | null; deductibleApplied?: number | string | null;
+  adjusterName?: string | null; adjusterPhone?: string | null; adjusterEmail?: string | null; nextStep?: string | null; nextStepDate?: string | null; notes?: string | null;
+  property?: { id: string; address: string; nickname?: string | null };
+}
+export const getInsuranceReview = () => api.get<InsuranceReview>('/insurance/review').then(r => r.data);
+export const getInsuranceClaims = (params?: { propertyId?: string }) => api.get<InsuranceClaim[]>('/insurance/claims', { params }).then(r => r.data);
+export const saveInsuranceClaim = (data: Record<string, any>) => api.post<InsuranceClaim>('/insurance/claims', data).then(r => r.data);
+export const updateInsuranceClaim = (id: string, data: Record<string, any>) => api.patch<InsuranceClaim>(`/insurance/claims/${id}`, data).then(r => r.data);
+export const deleteInsuranceClaim = (id: string) => api.delete(`/insurance/claims/${id}`);
+
 // Taxes
 export const getTaxAssessments = (params?: { propertyId?: string }) =>
   api.get<TaxAssessment[]>('/taxes', { params }).then(r => r.data);
