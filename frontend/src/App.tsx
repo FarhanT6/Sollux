@@ -38,6 +38,7 @@ import ReimbursementInvoicePage from './pages/ReimbursementInvoicePage';
 import CompliancePage from './pages/CompliancePage';
 import ProjectsPage from './pages/ProjectsPage';
 import TaxesPage from './pages/TaxesPage';
+import InsurancePage from './pages/InsurancePage';
 import VaultPage from './pages/VaultPage';
 import PersonalPage from './pages/PersonalPage';
 import CreditCardPage from './pages/CreditCardPage';
@@ -130,6 +131,7 @@ export default function App() {
           {/* Finances hub */}
           <Route path="finances" element={<Responsive phone={<FinancesScreen />} desktop={<FinancesPage />} />} />
           <Route path="taxes" element={<TaxesPage />} />
+          <Route path="insurance" element={<InsurancePage />} />
           <Route path="personal" element={<PersonalPage />} />
           <Route path="vault" element={<VaultPage />} />
           <Route path="personal/cards/:id" element={<CreditCardPage />} />

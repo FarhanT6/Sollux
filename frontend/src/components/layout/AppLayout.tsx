@@ -74,6 +74,10 @@ export const NAV = [
     icon: (z: number) => <Ico size={z}><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 3v18"/><path d="M4 12h4"/></Ico>,
   },
   {
+    group: 'Records', to: '/insurance', label: 'Insurance',
+    icon: (z: number) => <Ico size={z}><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z"/><path d="M12 8v8M8 12h8"/></Ico>,
+  },
+  {
     group: 'Records', to: '/taxes', label: 'Taxes', module: 'books' as ModuleKey,
     icon: (z: number) => <Ico size={z}><path d="M3 21h18"/><path d="M4 10h16"/><path d="M12 3l9 5H3l9-5z"/><path d="M6 10v8M10 10v8M14 10v8M18 10v8"/></Ico>,
   },

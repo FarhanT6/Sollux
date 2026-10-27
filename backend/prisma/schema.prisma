@@ -156,6 +156,7 @@ model Property {
   insurance              InsurancePolicy[]
   taxAssessments         TaxAssessment[]
   taxDefaults            TaxDefault[]
+  insuranceClaims        InsuranceClaim[]
   improvements           Improvement[]
   legalMatters           LegalMatter[]
   reconciliationProfiles ReconciliationProfile[]
@@ -1417,6 +1418,37 @@ model InsurancePolicy {
 
   @@index([propertyId])
   @@map("insurance_policies")
+}
+
+/// A claim against a policy: the loss, where it stands, what was paid, and
+/// the adjuster — kept so a renewal or a sale can show the loss history.
+model InsuranceClaim {
+  id               String    @id @default(cuid())
+  propertyId       String
+  property         Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  policyId         String?
+  claimNumber      String?
+  dateOfLoss       DateTime?
+  reportedOn       DateTime?
+  /// FIRE | WATER | WIND | HAIL | FLOOD | THEFT | VANDALISM | LIABILITY | OTHER
+  cause            String    @default("OTHER")
+  description      String?
+  /// OPEN | IN_REVIEW | APPROVED | PAID | DENIED | CLOSED
+  status           String    @default("OPEN")
+  amountClaimed    Decimal?  @db.Decimal(12, 2)
+  amountPaid       Decimal?  @db.Decimal(12, 2)
+  deductibleApplied Decimal? @db.Decimal(12, 2)
+  adjusterName     String?
+  adjusterPhone    String?
+  adjusterEmail    String?
+  nextStep         String?
+  nextStepDate     DateTime?
+  notes            String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([propertyId])
+  @@map("insurance_claims")
 }
 
 enum InsuranceType {
