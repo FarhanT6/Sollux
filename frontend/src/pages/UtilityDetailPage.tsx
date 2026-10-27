@@ -1716,7 +1716,13 @@ export default function UtilityDetailPage() {
                   if (!showSchedule && isUpcoming(s) && s.id !== nextUp?.id) return null;
                   // filteredStatements sorted DESC; [idx-1] is more recent; idx===0 is latest
                   const isLatest = latestStmt?.id === s.id && yearFilter === 'all' && !search;
-                  const { color: sc, label: sl } = statementStatus(s, payments, filteredStatements[idx - 1], isLatest, resolvedByFuture, paidMap);
+                  const base = statementStatus(s, payments, filteredStatements[idx - 1], isLatest, resolvedByFuture, paidMap);
+                  // The bill whose balance became the payment arrangement was
+                  // not paid: it was rolled into the plan (SDG&E's Sep total
+                  // is the agreement's original amount). Said so, not "Paid".
+                  const intoPlan = !!plan && plan.startDate && Math.abs(Number(openBalanceOf(s) ?? 0) - Number(plan.totalAmount)) < 0.01
+                    && Math.abs(new Date(plan.startDate).getTime() - new Date(s.statementDate).getTime()) < 45 * 864e5;
+                  const { color: sc, label: sl } = intoPlan ? { color: 'blue' as any, label: 'In arrangement' } : base;
                   // Everything from the dedicated, editable columns — no
                   // rawDataJson fallback, so edits always show up.
                   // Every row reads exactly as its statement printed it: the
