@@ -19,6 +19,11 @@ import { buildPayPlan } from '../lib/payPlan';
 import { recordRentPayment } from '../services/rentPaymentService';
 import { syncStatementPaid } from '../routes/payments';
 import { applyPaymentToPlan, applyPaymentToLoan } from '../services/planApplication';
+import { downloadDocument } from '../services/s3Service';
+import { fileBlockForClaude } from '../services/pdfImportService';
+import { reviewInsurance } from '../services/insuranceReview';
+import { opexFacts, rangeFor } from '../services/operatingExpenses';
+import { buildStatement } from '../lib/opexStatement';
 
 export type ChatTurn = { role: 'user' | 'assistant'; content: string };
 export interface PendingAction { tool: string; input: Record<string, any>; summary: string }
@@ -31,7 +36,16 @@ const iso = (s: unknown) => (typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test
 const TOOLS: Anthropic.Tool[] = [
   { name: 'find', description: 'Search the portfolio by name or address: properties, tenants (with their lease ids), loans, utility accounts. Use it to get ids before other tools.', input_schema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } },
   { name: 'bills_due', description: 'Utility, insurance, HOA and similar accounts with money owed now: amount, due date, past due, penalty date. Optionally for one property.', input_schema: { type: 'object', properties: { propertyId: { type: 'string' } } } },
-  { name: 'account_statements', description: 'Recent statements on one utility account: dates, amount, paid.', input_schema: { type: 'object', properties: { utilityAccountId: { type: 'string' } }, required: ['utilityAccountId'] } },
+  { name: 'account_statements', description: 'Statements on one utility / insurance / HOA / loan account, newest first (up to 36; year to filter): every figure Sollux stored — amount, past due carried, deferred to true-up, arrangement installment, fees, charge breakdown, paid state, whether a PDF is on file. Use the statementId with open_file to read the bill itself.', input_schema: { type: 'object', properties: { utilityAccountId: { type: 'string' }, year: { type: 'number' } }, required: ['utilityAccountId'] } },
+  { name: 'account_detail', description: 'One account in full: provider, kind, website, billing cadence, autopay, payment plan / arrangement, linked insurance policy or loan, true-up date, last sync and its error.', input_schema: { type: 'object', properties: { utilityAccountId: { type: 'string' } }, required: ['utilityAccountId'] } },
+  { name: 'payments', description: 'Payments logged on an account (or on every account of a property): date, amount, bill it went toward, method, confirmation, fees added, what came off a payment plan or loan.', input_schema: { type: 'object', properties: { utilityAccountId: { type: 'string' }, propertyId: { type: 'string' }, since: { type: 'string', description: 'YYYY-MM-DD' } } } },
+  { name: 'open_file', description: "Open and read a stored file itself — the PDF of a statement (statementId), a property's tax bill (taxAssessmentId), or a scanned / uploaded document (documentId). You see the whole document: usage, line items, true-up and net-metering detail, notices. Use it whenever the question is about what a bill or document says.", input_schema: { type: 'object', properties: { statementId: { type: 'string' }, taxAssessmentId: { type: 'string' }, documentId: { type: 'string' } } } },
+  { name: 'documents', description: 'Documents on file (scanned and uploaded: insurance, leases, receipts, tax, legal, HOA…), optionally for one property or category. Read one with open_file.', input_schema: { type: 'object', properties: { propertyId: { type: 'string' }, category: { type: 'string' } } } },
+  { name: 'property_detail', description: 'One property in full: units, leases and tenants, loans, insurance policies, utility accounts, tax years and unpaid tax years, value and purchase.', input_schema: { type: 'object', properties: { propertyId: { type: 'string' } }, required: ['propertyId'] } },
+  { name: 'taxes', description: 'Property tax: every tax year on file (installments, due and delinquency dates, paid, values, special assessments) and every unpaid / defaulted year, optionally for one property.', input_schema: { type: 'object', properties: { propertyId: { type: 'string' } } } },
+  { name: 'insurance', description: 'Insurance across the portfolio: policies, coverage, yearly premiums, gaps, renewals, and claims.', input_schema: { type: 'object', properties: {} } },
+  { name: 'operating_expenses', description: "A property's operating-expense statement on its saved setup: rent, each expense line, NOI, debt service and cash flow. period: last12 | ytd | lastYear.", input_schema: { type: 'object', properties: { propertyId: { type: 'string' }, period: { type: 'string', enum: ['last12', 'ytd', 'lastYear'] } }, required: ['propertyId'] } },
+  { name: 'expenses', description: 'Expenses logged (repairs, landscaping, management, supplies…), optionally for one property and a date range.', input_schema: { type: 'object', properties: { propertyId: { type: 'string' }, from: { type: 'string' }, to: { type: 'string' } } } },
   { name: 'loan_tracker', description: "Every active loan for a month (YYYY-MM): owed, paid, due date, status (paid/partial/upcoming/due/late), how it's paid.", input_schema: { type: 'object', properties: { month: { type: 'string' } } } },
   { name: 'rent_status', description: "This month's rent: who is late past grace, how much, how many days; plus each lease's back rent.", input_schema: { type: 'object', properties: {} } },
   { name: 'pay_plan', description: 'What to pay in the next N days (default 14), which account has room for each, and how to pay.', input_schema: { type: 'object', properties: { days: { type: 'number' } } } },
@@ -42,7 +56,7 @@ const TOOLS: Anthropic.Tool[] = [
 ];
 const ACTIONS = new Set(['log_rent_payment', 'log_loan_payment', 'log_bill_payment']);
 
-async function runReadTool(userId: string, name: string, input: any, today: string): Promise<unknown> {
+export async function runReadTool(userId: string, name: string, input: any, today: string): Promise<unknown> {
   switch (name) {
     case 'find': {
       const q = String(input.query ?? '').trim();
@@ -70,9 +84,137 @@ async function runReadTool(userId: string, name: string, input: any, today: stri
       return p.filter(x => x.balanceToCurrent > 0.01).slice(0, 40).map(x => ({ utilityAccountId: x.accountId, provider: x.providerName, service: x.serviceLabel, property: x.propertyName, owed: x.balanceToCurrent, payThisMonth: x.payThisMonth, pastDue: x.pastDue, dueDate: x.dueDate, penaltyDate: x.penaltyDate }));
     }
     case 'account_statements': {
-      const a = await db.utilityAccount.findFirst({ where: { id: String(input.utilityAccountId), property: { userId } }, select: { providerName: true, statements: { orderBy: { statementDate: 'desc' }, take: 8, select: { id: true, statementDate: true, dueDate: true, amountDue: true, balance: true, amountPaid: true, paidOverride: true } } } });
+      const y = Number(input.year) || null;
+      const a = await db.utilityAccount.findFirst({
+        where: { id: String(input.utilityAccountId), property: { userId } },
+        select: {
+          providerName: true,
+          statements: {
+            where: y ? { statementDate: { gte: new Date(Date.UTC(y, 0, 1)), lt: new Date(Date.UTC(y + 1, 0, 1)) } } : {},
+            orderBy: { statementDate: 'desc' }, take: 36,
+            select: {
+              id: true, statementDate: true, dueDate: true, billingPeriodStart: true, billingPeriodEnd: true, amountDue: true, balance: true, amountPaid: true, paidOverride: true,
+              pastDueCarried: true, trueUpDeferred: true, trueUpBalance: true, paymentPlanAmount: true, penaltiesFees: true, chargesExcludingFees: true, penaltyDate: true,
+              usageValue: true, usageUnit: true, isScheduled: true, pdfS3Key: true, rawDataJson: true,
+            },
+          },
+        },
+      });
       if (!a) return { error: 'No such account' };
-      return { provider: a.providerName, statements: a.statements.map(s => ({ statementId: s.id, date: day(s.statementDate), due: day(s.dueDate), amountDue: n(s.amountDue), balance: n(s.balance), paid: n(s.amountPaid), markedPaid: s.paidOverride === 'PAID' })) };
+      return {
+        provider: a.providerName,
+        note: 'Owed on a bill = amountDue − deferredToTrueUp + pastDueCarried (negative = credit carried in). amountDue includes an arrangement installment when one was billed.',
+        statements: a.statements.map(s => {
+          const raw = (s.rawDataJson ?? {}) as Record<string, any>;
+          return {
+            statementId: s.id, date: day(s.statementDate), due: day(s.dueDate), period: s.billingPeriodStart ? `${day(s.billingPeriodStart)} – ${day(s.billingPeriodEnd)}` : null,
+            amountDue: n(s.amountDue), pastDueCarried: n(s.pastDueCarried), deferredToTrueUp: n(s.trueUpDeferred), trueUpBalance: n(s.trueUpBalance),
+            arrangementInstallment: n(s.paymentPlanAmount), fees: n(s.penaltiesFees), penaltyDate: day(s.penaltyDate), statedTotalDue: raw.statedTotalDue ?? null,
+            usage: s.usageValue != null ? `${s.usageValue} ${s.usageUnit ?? ''}`.trim() : null, paid: n(s.amountPaid), markedPaid: s.paidOverride ?? null,
+            scheduled: s.isScheduled, charges: raw.chargeBreakdown ?? null, alerts: raw.alerts ?? null, hasPdf: !!s.pdfS3Key,
+          };
+        }),
+      };
+    }
+    case 'account_detail': {
+      const a = await db.utilityAccount.findFirst({
+        where: { id: String(input.utilityAccountId), property: { userId } },
+        select: {
+          id: true, providerName: true, category: true, serviceLabel: true, accountNumber: true, loginUrl: true, billingCadence: true, isActive: true, syncEnabled: true,
+          hasTrueUp: true, trueUpDate: true, lastSyncedAt: true, lastSyncStatus: true, lastSyncError: true, escrowLoanId: true, notes: true,
+          property: { select: { id: true, address: true, nickname: true } },
+          paymentPlan: { select: { status: true, totalAmount: true, remainingBalance: true, monthlyAmount: true, downPayment: true, startDate: true, installmentFee: true, description: true } },
+          insurancePolicy: { select: { id: true, carrier: true, policyNumber: true, policyType: true, premiumAmount: true, premiumFrequency: true, termPremium: true, effectiveDate: true, expirationDate: true } },
+        },
+      });
+      if (!a) return { error: 'No such account' };
+      // Only the last four of the account number, as everywhere else.
+      return { ...a, accountNumber: a.accountNumber ? `…${String(a.accountNumber).replace(/\D/g, '').slice(-4)}` : null };
+    }
+    case 'payments': {
+      const where: any = { utilityAccount: { property: { userId } } };
+      if (input.utilityAccountId) where.utilityAccountId = String(input.utilityAccountId);
+      if (input.propertyId) where.utilityAccount = { propertyId: String(input.propertyId), property: { userId } };
+      if (iso(input.since)) where.paymentDate = { gte: new Date(`${input.since}T00:00:00Z`) };
+      const ps = await db.payment.findMany({
+        where, orderBy: { paymentDate: 'desc' }, take: 60,
+        select: { id: true, paymentDate: true, amount: true, status: true, paymentMethod: true, confirmationNumber: true, notes: true, feeAmount: true, lateFeeAdded: true, feesAddedJson: true, planApplied: true, loanApplied: true, towardPlan: true,
+          utilityAccount: { select: { providerName: true } }, statement: { select: { id: true, statementDate: true } } },
+      });
+      return ps.map(p => ({ paymentId: p.id, date: day(p.paymentDate), amount: n(p.amount), status: p.status, account: p.utilityAccount.providerName, towardBill: p.statement ? { statementId: p.statement.id, billed: day(p.statement.statementDate) } : null,
+        towardArrangement: p.towardPlan, method: p.paymentMethod, confirmation: p.confirmationNumber, transactionFee: n(p.feeAmount), feesAdded: p.feesAddedJson ?? n(p.lateFeeAdded), offPlan: n(p.planApplied), offLoan: n(p.loanApplied), notes: p.notes }));
+    }
+    case 'open_file': {
+      let key: string | null = null, name = 'file';
+      if (input.statementId) {
+        const st = await db.statement.findFirst({ where: { id: String(input.statementId), utilityAccount: { property: { userId } } }, select: { pdfS3Key: true, statementDate: true, utilityAccount: { select: { providerName: true } } } });
+        if (!st) return { error: 'No such statement' };
+        if (!st.pdfS3Key) return { error: 'No PDF is on file for that statement — only its figures.' };
+        key = st.pdfS3Key; name = `${st.utilityAccount.providerName} statement ${day(st.statementDate)}`;
+      } else if (input.taxAssessmentId) {
+        const t = await db.taxAssessment.findFirst({ where: { id: String(input.taxAssessmentId), property: { userId } }, select: { documentS3Key: true, taxYear: true } });
+        if (!t?.documentS3Key) return { error: 'No tax bill file on that record' };
+        key = t.documentS3Key; name = `tax bill ${t.taxYear}`;
+      } else if (input.documentId) {
+        const d = await db.document.findFirst({ where: { id: String(input.documentId), userId }, select: { s3Key: true, title: true } });
+        if (!d) return { error: 'No such document' };
+        key = d.s3Key; name = d.title;
+      } else return { error: 'Give a statementId, taxAssessmentId or documentId' };
+      const buf = await downloadDocument(key);
+      return { __blocks: [{ type: 'text', text: `The file: ${name}` }, await fileBlockForClaude(buf, name)] };
+    }
+    case 'documents': {
+      const docs = await db.document.findMany({
+        where: { userId, ...(input.propertyId ? { propertyId: String(input.propertyId) } : {}), ...(input.category ? { category: String(input.category) as any } : {}) },
+        orderBy: { createdAt: 'desc' }, take: 60, select: { id: true, title: true, category: true, pageCount: true, createdAt: true, property: { select: { address: true, nickname: true } } },
+      });
+      return docs.map(d => ({ documentId: d.id, title: d.title, category: d.category, pages: d.pageCount, added: day(d.createdAt), property: d.property ? d.property.nickname || d.property.address : null }));
+    }
+    case 'property_detail': {
+      const p = await db.property.findFirst({
+        where: { id: String(input.propertyId), userId },
+        select: {
+          id: true, nickname: true, address: true, city: true, state: true, zip: true, county: true, apn: true, type: true, status: true, acquisitionDate: true, acquisitionPrice: true, estimatedValue: true, landValue: true, notes: true,
+          units: { select: { id: true, unitLabel: true, bedrooms: true, bathrooms: true, sqft: true, leases: { where: { status: 'ACTIVE' }, select: { id: true, rentAmount: true, startDate: true, endDate: true, arrearsBalance: true, leaseTenants: { select: { tenant: { select: { fullName: true, phone: true, email: true } } } } } } } },
+          loans: { select: { id: true, lender: true, loanType: true, isActive: true, currentBalance: true, interestRate: true, monthlyPayment: true, escrowAmount: true, maturityDate: true } },
+          insurance: { select: { id: true, carrier: true, policyNumber: true, policyType: true, premiumAmount: true, premiumFrequency: true, termPremium: true, dwellingLimit: true, liabilityLimit: true, deductible: true, effectiveDate: true, expirationDate: true, isActive: true } },
+          utilityAccounts: { select: { id: true, providerName: true, category: true, isActive: true } },
+          taxAssessments: { orderBy: { taxYear: 'desc' }, take: 5, select: { id: true, taxYear: true, annualTaxAmount: true, status: true } },
+          taxDefaults: { select: { id: true, taxYear: true, status: true, amountToRedeem: true } },
+        },
+      });
+      return p ?? { error: 'No such property' };
+    }
+    case 'taxes': {
+      const where = { property: { userId }, ...(input.propertyId ? { propertyId: String(input.propertyId) } : {}) };
+      const [years, unpaid] = await Promise.all([
+        db.taxAssessment.findMany({ where, orderBy: { taxYear: 'desc' }, take: 40, select: {
+          id: true, propertyId: true, taxYear: true, apn: true, taxingAuthority: true, annualTaxAmount: true, status: true, installment1Amount: true, installment1Due: true, installment1Delinquent: true, installment1Paid: true,
+          installment2Amount: true, installment2Due: true, installment2Delinquent: true, installment2Paid: true, assessedValue: true, landValue: true, improvementValue: true, exemptionsValue: true, baseYear: true,
+          specialAssessmentsJson: true, penaltiesOwed: true, balanceOwed: true, escrowLoanId: true, documentS3Key: true, sourceUrl: true, lookedUpAt: true } }),
+        db.taxDefault.findMany({ where, select: { propertyId: true, taxYear: true, status: true, defaultNumber: true, defaultDate: true, taxAmount: true, penalties: true, amountToRedeem: true, redeemGoodThrough: true, powerToSellDate: true, payPlanJson: true, certificateNumber: true, certificateHolder: true } }),
+      ]);
+      return { years: years.map(({ documentS3Key, ...t }) => ({ ...t, taxAssessmentId: t.id, hasBillFile: !!documentS3Key })), unpaidYears: unpaid };
+    }
+    case 'insurance': {
+      const [review, claims] = await Promise.all([
+        reviewInsurance(userId),
+        db.insuranceClaim.findMany({ where: { property: { userId } }, orderBy: { createdAt: 'desc' }, take: 20 }),
+      ]);
+      return { ...review, claims };
+    }
+    case 'operating_expenses': {
+      const period = (['last12', 'ytd', 'lastYear'] as const).includes(input.period) ? input.period : 'last12';
+      const { facts, saved, property } = await opexFacts(String(input.propertyId), userId, rangeFor(period));
+      return { property: property.name, period: rangeFor(period).label, setupSaved: !!saved.config, statement: buildStatement(facts, saved.config ?? {}) };
+    }
+    case 'expenses': {
+      const ex = await db.expense.findMany({
+        where: { property: { userId }, isPersonal: false, ...(input.propertyId ? { propertyId: String(input.propertyId) } : {}),
+          ...(iso(input.from) || iso(input.to) ? { date: { ...(iso(input.from) ? { gte: new Date(`${input.from}T00:00:00Z`) } : {}), ...(iso(input.to) ? { lte: new Date(`${input.to}T23:59:59Z`) } : {}) } } : {}) },
+        orderBy: { date: 'desc' }, take: 80, select: { id: true, date: true, amount: true, category: true, vendor: true, description: true, isCapEx: true, property: { select: { address: true, nickname: true } } },
+      });
+      return ex.map(e => ({ ...e, date: day(e.date), amount: n(e.amount), property: e.property ? e.property.nickname || e.property.address : null }));
     }
     case 'loan_tracker': {
       const t = await trackerMonth(userId, ym(input.month) ?? today.slice(0, 7), today);
@@ -153,11 +295,11 @@ async function create(client: Anthropic, base: { system: string; messages: Anthr
  */
 export async function assistantTurn(userId: string, history: ChatTurn[], today: string): Promise<{ answer: string; actions: PendingAction[] }> {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const system = `You are Sollux, the assistant inside a real-estate owner's property-management app (rentals, utilities, loans, taxes). Today is ${today}. Answer from the tools — never guess amounts, dates or ids. Look things up before answering; use find to get ids. Be brief: short sentences or bullets, dollar amounts and dates. To record a payment, call the matching log_* tool; it is only proposed — the owner confirms it on screen — so after proposing, say in one line what will be recorded. Do not claim anything was recorded.`;
+  const system = `You are Sollux, the assistant inside a real-estate owner's property-management app (rentals, utilities, loans, taxes). Today is ${today}. You can see everything the owner has in Sollux except the vault and saved passwords: every bill and its PDF (open_file reads the document itself — usage, line items, true-up, notices), payments, payment plans, loans, rent, taxes, insurance, documents and expenses. Answer from the tools — never guess amounts, dates or ids, and never say you cannot see a bill: open it. Look things up before answering; use find to get ids. Be brief: short sentences or bullets, dollar amounts and dates. To record a payment, call the matching log_* tool; it is only proposed — the owner confirms it on screen — so after proposing, say in one line what will be recorded. Do not claim anything was recorded.`;
   const messages: Anthropic.MessageParam[] = history.slice(-12).map(t => ({ role: t.role, content: t.content }));
   const actions: PendingAction[] = [];
 
-  for (let step = 0; step < 8; step++) {
+  for (let step = 0; step < 12; step++) {
     const res = await create(client, { system, messages });
     const uses = res.content.filter((c): c is Anthropic.ToolUseBlock => c.type === 'tool_use');
     const text = res.content.map(c => (c.type === 'text' ? c.text : '')).join('').trim();
@@ -173,7 +315,9 @@ export async function assistantTurn(userId: string, history: ChatTurn[], today: 
           else out = desc;
         } else out = await runReadTool(userId, u.name, u.input, today);
       } catch (err) { out = { error: err instanceof Error ? err.message : String(err) }; }
-      results.push({ type: 'tool_result', tool_use_id: u.id, content: JSON.stringify(out).slice(0, 20000) });
+      // A file comes back as the document itself, for the model to read.
+      if (out && typeof out === 'object' && '__blocks' in (out as any)) results.push({ type: 'tool_result', tool_use_id: u.id, content: (out as any).__blocks });
+      else results.push({ type: 'tool_result', tool_use_id: u.id, content: JSON.stringify(out).slice(0, 40000) });
     }
     messages.push({ role: 'user', content: results });
   }

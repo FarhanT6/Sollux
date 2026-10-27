@@ -48,7 +48,7 @@ export default function AskSollux() {
   return (
     <div className="card p-5">
       <div className="flex items-baseline justify-between mb-3">
-        <p className="text-sm font-semibold text-gray-100">Ask Sollux <span className="font-normal text-gray-500">· it can look things up and log payments for you</span></p>
+        <p className="text-sm font-semibold text-gray-100">Ask Sollux <span className="font-normal text-gray-500">· it reads your bills, payments, taxes, insurance and documents, and can log payments for you</span></p>
         {turns.length > 0 && <button onClick={() => { setTurns([]); setErr(null); }} className="text-xs text-gray-500 hover:text-gray-300">New conversation</button>}
       </div>
 
