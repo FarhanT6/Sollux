@@ -98,6 +98,13 @@ async function scheduleAllInsights() {
 // Run scrapes every 6 hours
 setInterval(scheduleAllScrapes, 6 * 60 * 60 * 1000);
 
+// Property-tax lookups older than 30 days run again (services/taxLookupJobs.ts).
+const refreshTaxes = () => import('../services/taxLookupJobs').then(m => m.refreshTaxLookups())
+  .then(n => { if (n) console.log(`[TaxLookup] Queued ${n} monthly refresh(es)`); })
+  .catch(err => console.warn('[TaxLookup] refresh failed:', err instanceof Error ? err.message : err));
+setTimeout(refreshTaxes, 10 * 60_000);
+setInterval(refreshTaxes, 24 * 60 * 60 * 1000);
+
 // Apply any due scheduled rent increases — on startup, then once a day.
 async function runLeaseMaintenance() {
   await applyDueRentIncreases().catch(err => console.warn('[RentIncrease] run failed:', err));

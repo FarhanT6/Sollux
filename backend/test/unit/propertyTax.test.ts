@@ -48,3 +48,23 @@ test('a state without rules gets none (the bill\'s own dates stand)', () => {
   assert.equal(calendarFor('OH', '2026'), null);
   assert.equal(defaultTimeline('OH', '2026'), null);
 });
+
+test('lookup starts on the county site Sollux knows, a Florida county-taxes page, or a search', async () => {
+  const { startUrlFor, cleanReport } = await import('../../src/lib/taxLookupReport');
+  assert.equal(startUrlFor('FL', 'Brevard County', '123'), 'https://brevard.county-taxes.com/public');
+  assert.equal(startUrlFor('FL', 'St. Lucie', '123'), 'https://stlucie.county-taxes.com/public');
+  assert.match(startUrlFor('OH', 'Franklin', '010-000123'), /^https:\/\/duckduckgo\.com\/html\/\?q=franklin%20county%20OH%20/);
+
+  // What the agent reports is typed and trimmed; malformed entries are dropped.
+  const r = cleanReport({
+    found: true, sourceUrl: 'javascript:alert(1)',
+    years: [{ taxYear: '2026-27', installment1Amount: '1,200.50', installment1Due: '2026-11-01', exemptionsValue: -7000, specialAssessments: [{ name: 'CFD 2006-1', amount: 300 }, { name: '', amount: 5 }] }, { annualTaxAmount: 9 }],
+    defaults: [{ taxYear: '2022-23', defaultNumber: 'DEF230000001', defaultDate: 'July 1', amountToRedeem: 4100 }],
+  });
+  assert.equal(r.sourceUrl, null);
+  assert.equal(r.years!.length, 1);
+  assert.equal(r.years![0].installment1Amount, 1200.5);
+  assert.equal(r.years![0].exemptionsValue, 7000);
+  assert.deepEqual(r.years![0].specialAssessments, [{ name: 'CFD 2006-1', amount: 300, phone: null, cfd: true }]);
+  assert.equal(r.defaults![0].defaultDate, null);
+});

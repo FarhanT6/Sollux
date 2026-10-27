@@ -5,10 +5,15 @@ import { guardWorker } from './redisGuard';
 import { withAiContext } from '../ai/meter';
 import { db } from '../config/db';
 import { createWorkerConnection, workerTuning } from './queues';
+import { runQueuedTaxLookup } from '../services/taxLookupJobs';
 
 const worker = new Worker(
   'insights',
   async (job: Job) => {
+    if (job.name === 'tax-lookup') {
+      await runQueuedTaxLookup(job.data.propertyId);
+      return;
+    }
     if (job.name === 'bookkeeper') {
       console.log('[InsightWorker] Running the bookkeeper');
       await runBookkeeperForEveryone();
