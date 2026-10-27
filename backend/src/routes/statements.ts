@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client';
 import { attachDbUser } from '../middleware/requireAuth';
 import { getSignedDocumentUrl } from '../services/s3Service';
 import { findDuplicates, mergeStatements } from '../services/statementDuplicates';
+import { rereadAccountStatements } from '../services/rereadStatements';
 
 const router = Router();
 router.use(attachDbUser);
@@ -176,6 +177,20 @@ router.post('/duplicates/merge', async (req, res, next) => {
     for (const p of pairs) if (await mergeStatements(req.dbUserId!, p.keepId, p.dropId)) merged++;
     res.json({ merged });
   } catch (err) { next(err); }
+});
+
+// POST /api/statements/reread — { utilityAccountId }: read the account's
+// stored PDFs again with the current reader (in the background).
+router.post('/reread', async (req, res, next) => {
+  try {
+    const { utilityAccountId } = z.object({ utilityAccountId: z.string() }).parse(req.body);
+    const count = await rereadAccountStatements(req.dbUserId!, utilityAccountId);
+    if (count == null) return res.status(409).json({ error: 'Already re-reading this account' });
+    res.json({ count });
+  } catch (err: any) {
+    if (err?.status === 404) return res.status(404).json({ error: err.message });
+    next(err);
+  }
 });
 
 // POST /api/statements — manual entry (no PDF required)

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { feesFor } from '../../src/services/rentCollection';
 import { allocateAccountPayments } from '../../src/lib/paymentAllocation';
 import { feesOf, mergeFees, feesTotal } from '../../src/services/lateFees';
-import { reconcileWithStatedTotal } from '../../src/services/pdfImportService';
+import { reconcileWithStatedTotal, applyAdjustmentChargesFromText } from '../../src/services/pdfImportService';
 
 test('card rent is grossed up so the owner receives the full rent', () => {
   const f = feesFor(1850, 'card');
@@ -76,4 +76,33 @@ test('a "Pending Payment" line is taken out of the charge and the carried balanc
   assert.equal(ex.previousBalance, 13.55);
   assert.equal(ex.chargeBreakdown['Pending Payment'], undefined);
   assert.ok(Math.abs(ex.amountDue + ex.previousBalance - ex.statedTotalDue) < 0.01);
+});
+
+test('a charge listed under Payments/Adjustments is a fee on this bill, not past due', () => {
+  const text = [
+    'Past Due on 03/20/26  $200.00',
+    'Payments/Adjustments  $40.00',
+    'Current Invoice Charges  $150.00',
+    'Total Amount Due  $390.00',
+    'PAYMENTS/ADJUSTMENTS',
+    'Description  Reference  Amount',
+    '03/20/26  Unreferenced Memo  $40.00',
+    'Re: Service Interrupt',
+    'CURRENT INVOICE CHARGES',
+  ].join('\n');
+  // Read as the bill's summary does: the memo added to the past due.
+  const ex: any = { amountDue: 150, currentCharges: 150, previousBalance: 240, statedTotalDue: 390, chargeBreakdown: { 'Pickup Service': 150 } };
+  applyAdjustmentChargesFromText(ex, text);
+  reconcileWithStatedTotal(ex);
+  assert.equal(ex.amountDue, 190);
+  assert.equal(ex.previousBalance, 200);
+  assert.deepEqual(ex.chargeBreakdown, { 'Pickup Service': 150, 'Service Interrupt charge': 40 });
+
+  // A payment in the same table still comes off the past due.
+  const paid = text.replace('Payments/Adjustments  $40.00', 'Payments/Adjustments  -$60.00').replace('Total Amount Due  $390.00', 'Total Amount Due  $290.00')
+    .replace('Re: Service Interrupt', 'Re: Service Interrupt\n03/22/26  Payment - Thank You  -$100.00');
+  const ex2: any = { amountDue: 150, currentCharges: 150, previousBalance: 140, statedTotalDue: 290, chargeBreakdown: null };
+  applyAdjustmentChargesFromText(ex2, paid);
+  assert.equal(ex2.amountDue, 190);
+  assert.equal(ex2.previousBalance, 100);
 });

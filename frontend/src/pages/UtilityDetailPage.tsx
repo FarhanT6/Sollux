@@ -14,6 +14,7 @@ import {
   getBankAccounts, getCostSettings, updateCostSettings, getLoans, getLoanPayments,
   getInsurancePolicies,
 } from '../api/client';
+import api from '../api/client';
 import { CADENCE_LABELS } from '../lib/cadence';
 import { CATEGORY_LABELS, CATEGORY_COLORS, LOAN_TYPE_LABELS,
   UTILITY_PAYMENT_METHODS, PAYMENT_STATUS_LABELS } from '../types';
@@ -1322,6 +1323,17 @@ export default function UtilityDetailPage() {
   const website: { url: string; source: string } | null = account?.website ?? null;
   const siteLabel = website ? new URL(website.url).hostname.replace(/^www\./, '') : null;
   const openWebsite = () => void openUrl(website?.url ?? `https://www.google.com/search?q=${encodeURIComponent(`${account?.providerName ?? ''} pay bill online login`)}`);
+  // Saved PDFs read again with the current reader: a reading fix reaches
+  // bills already on file. Runs in the background.
+  const rereadStatements = async () => {
+    try {
+      const { data } = await api.post('/statements/reread', { utilityAccountId: account!.id });
+      toast(data.count ? `Re-reading ${data.count} statement${data.count === 1 ? '' : 's'} — refresh in a few minutes.` : 'No saved statement PDFs to re-read.');
+    } catch (e: any) {
+      toast(e?.response?.data?.error ?? 'Could not start the re-read.', 'error');
+    }
+  };
+
   async function saveWebsite() {
     const typed = prompt(`Website for ${account?.providerName} (paste the page you sign in on):`, website?.url ?? 'https://');
     if (typed == null) return;
@@ -1529,6 +1541,7 @@ export default function UtilityDetailPage() {
               ? { label: lookupValue ? lookupLabel : `Add ${lookupLabel.toLowerCase()}`, onClick: editLookupName, title: `The bill lookup page finds the bills by account number and this ${byCustomer ? 'customer ID' : 'name'}` }
               : { label: account.hasCredentials ? 'Portal login' : 'Add portal login', onClick: () => setPortalLogin(true), title: "Let Sollux fetch statements from the provider's website" },
             { label: `${website ? 'Edit' : 'Save'} website link`, onClick: () => void saveWebsite(), title: 'Set the website for this account' },
+            { label: 'Re-read statements', onClick: () => void rereadStatements(), title: "Read this account's saved statement PDFs again with the latest reader" },
             ...(account.category === 'ELECTRIC' || account.category === 'SOLAR' ? [{ label: account.hasTrueUp ? 'Turn off true-up' : 'Set true-up (net metering)', onClick: () => void toggleTrueUp() }] : []),
             ...(!loan ? [{ label: 'Add loan details', onClick: () => setShowLoanModal(true) }] : []),
             ...(!plan ? [{ label: 'Add payment plan', onClick: () => setShowPlanModal(true) }] : []),

@@ -86,6 +86,8 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
   // Centro's Munis bill page) does not print enough to be matched alone, and
   // went to review though Sollux had fetched it for that very account.
   forAccounts?: { id: string; last4: string }[];
+  // Re-reading a statement already on file: its PDF is already stored here.
+  pdfKey?: string;
 } = {}): Promise<IntakeResult> {
   // parseBill defaults to AI; this path must pass the choice through or
   // every bulk import silently bills per PDF regardless of what was picked.
@@ -207,7 +209,7 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
     }
 
     const key = buildStatementKey(userId, acct.propertyId, acct.id, statementDate, sanitizeFilename(filename));
-    const pdfS3Key = docBuffer ? await uploadDocument(key, docBuffer) : null;
+    const pdfS3Key = opts.pdfKey ?? (docBuffer ? await uploadDocument(key, docBuffer) : null);
     const rawData = buildRawData(ex, source, parsed.extractedBy);
     // What this bill carried in: positive is arrears, negative a credit. This
     // path never saved it, so a $7,786 SDG&E bill read as its $836 charge
