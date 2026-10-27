@@ -275,6 +275,31 @@ router.delete('/defaults/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// POST /lookup { propertyId } — look the parcel up on the county's tax site (in the background).
+router.post('/lookup', async (req, res, next) => {
+  try {
+    const { propertyId } = z.object({ propertyId: z.string() }).parse(req.body);
+    const p = await db.property.findFirst({ where: { id: propertyId, userId: req.dbUserId! }, select: { id: true, apn: true, state: true, county: true, taxLookupJson: true } });
+    if (!p) return res.status(404).json({ error: 'Property not found' });
+    if (!p.apn) return res.status(400).json({ error: 'Add the parcel number (APN) first.' });
+    if (!p.state) return res.status(400).json({ error: 'Add the property\'s state (and county) first.' });
+    const s = p.taxLookupJson as { status?: string; at?: string } | null;
+    // One at a time; a run stuck for over 20 minutes may be started again.
+    if ((s?.status === 'queued' || s?.status === 'running') && s.at && Date.now() - new Date(s.at).getTime() < 20 * 60_000) return res.status(409).json({ error: 'A lookup is already running for this property.' });
+    const { queueTaxLookup } = await import('../services/taxLookupJobs');
+    await queueTaxLookup(p.id);
+    res.status(202).json({ queued: true });
+  } catch (err) { next(err); }
+});
+
+// GET /lookup-status — where each property's last lookup stands.
+router.get('/lookup-status', async (req, res, next) => {
+  try {
+    const rows = await db.property.findMany({ where: { userId: req.dbUserId! }, select: { id: true, taxLookupJson: true } });
+    res.json(Object.fromEntries(rows.map(r => [r.id, r.taxLookupJson ?? null])));
+  } catch (err) { next(err); }
+});
+
 // GET /rules?state=CA&taxYear=2026-27 — the state's calendar and what an unpaid year leads to.
 router.get('/rules', (req, res) => {
   const state = String(req.query.state ?? ''); const taxYear = String(req.query.taxYear ?? '');

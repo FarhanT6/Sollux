@@ -141,6 +141,8 @@ model Property {
   /// Assessor's parcel number (APN / parcel ID / folio): with the county,
   /// what a property-tax lookup searches by.
   apn              String?
+  /// The last property-tax lookup: { status: queued | running | done | failed, at, note }.
+  taxLookupJson    Json?
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
 

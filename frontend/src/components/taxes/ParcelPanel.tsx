@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { saveTaxDefault, updateTaxDefault, deleteTaxDefault, updateProperty } from '../../api/client';
+import { useEffect, useRef, useState } from 'react';
+import { saveTaxDefault, updateTaxDefault, deleteTaxDefault, updateProperty, startTaxLookup, getTaxLookupStatus, type TaxLookupStatus } from '../../api/client';
 import type { Property, TaxAssessment, TaxDefault, TaxDefaultStatus } from '../../types';
 import { fmtDate, todayISO } from '../../lib/date';
 import { fmtMoney } from '../../lib/money';
@@ -71,6 +71,43 @@ export default function ParcelPanel({ property, taxes, defaults, onChanged, onEd
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [showRules, setShowRules] = useState(false);
+  const [lookup, setLookup] = useState<TaxLookupStatus | null>(null);
+  const [lookupError, setLookupError] = useState<string | null>(null);
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef = useRef<() => Promise<void>>(async () => {});
+
+  // Where the county lookup stands; polled while it runs, and the records reloaded when it ends.
+  useEffect(() => {
+    let alive = true;
+    const poll = async () => {
+      const all = await getTaxLookupStatus().catch(() => null);
+      if (!alive || !all) return;
+      const st = all[property.id] ?? null;
+      setLookup(prev => {
+        if (prev && (prev.status === 'queued' || prev.status === 'running') && st && (st.status === 'done' || st.status === 'failed')) void onChanged();
+        return st;
+      });
+      const busy = st && (st.status === 'queued' || st.status === 'running');
+      if (busy && !timer.current) timer.current = setInterval(poll, 4000);
+      if (!busy && timer.current) { clearInterval(timer.current); timer.current = null; }
+    };
+    void poll();
+    pollRef.current = poll;
+    return () => { alive = false; if (timer.current) clearInterval(timer.current); timer.current = null; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [property.id]);
+
+  async function runLookup() {
+    setLookupError(null);
+    if (!apn.trim()) { setLookupError('Add the parcel number first.'); return; }
+    if (apn.trim() !== (property.apn ?? '')) await updateProperty(property.id, { apn: apn.trim() } as any);
+    try {
+      await startTaxLookup(property.id);
+      setLookup({ status: 'queued', at: new Date().toISOString() });
+      if (!timer.current) timer.current = setInterval(() => void pollRef.current(), 4000);
+    } catch (e) { setLookupError(describeApiError(e, 'Could not start the lookup.')); }
+  }
+  const busy = lookup?.status === 'queued' || lookup?.status === 'running';
 
   const years = [...taxes].sort((a, b) => yearKey(b.taxYear) - yearKey(a.taxYear));
   const current = years[0];
@@ -147,6 +184,16 @@ export default function ParcelPanel({ property, taxes, defaults, onChanged, onEd
             <button onClick={() => void saveApn()} className="btn text-xs">{apnSaved ? 'Saved' : 'Save'}</button>
           </div>
           <p className="text-xs text-gray-600 mt-1">{[property.county && `${property.county} County`, property.state].filter(Boolean).join(', ') || 'Add the county and state on the property.'}</p>
+          <div className="flex items-center gap-2 mt-2 flex-wrap">
+            <button onClick={() => void runLookup()} disabled={busy} className="btn btn-primary text-xs disabled:opacity-50">{busy ? 'Looking up…' : 'Look up on the county site'}</button>
+            <span className="text-xs text-gray-500">
+              {busy ? (lookup?.progress ?? (lookup?.status === 'queued' ? 'Waiting for a browser…' : 'Starting…'))
+                : lookup?.status === 'done' ? `Looked up ${fmtDate(lookup.at)} · ${lookup.years ?? 0} year${lookup.years === 1 ? '' : 's'}${lookup.defaults ? `, ${lookup.defaults} unpaid` : ''} · refreshed monthly`
+                : lookup?.status === 'failed' ? <span className="text-red-400">Lookup failed: {lookup.note}</span>
+                : 'Reads the bill, values, special assessments and any unpaid years from the county.'}
+            </span>
+          </div>
+          {lookupError && <p className="text-xs text-red-400 mt-1">{lookupError}</p>}
         </div>
         <div className="stat-card"><p className="text-xs text-gray-500">To be current today</p><p className={`text-lg font-semibold ${owedNow > 0 ? 'text-red-400' : 'text-white'}`}>{fmtMoney(owedNow)}</p></div>
         <div className="stat-card">
