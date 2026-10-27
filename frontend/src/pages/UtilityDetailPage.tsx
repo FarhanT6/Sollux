@@ -733,7 +733,7 @@ export default function UtilityDetailPage() {
       bankAccountId: p.bankAccountId ?? '',
       notes: p.notes ?? '',
     });
-    setBill({ statementId: p.statementId ?? '', split: false, alloc: {} });
+    setBill({ statementId: p.statementId ?? '', split: false, alloc: {}, towardPlan: !!p.towardPlan });
     setEditPaymentId(p.id);
     setShowPayForm(false);
   }
@@ -772,6 +772,7 @@ export default function UtilityDetailPage() {
         paymentMethod: payForm.paymentMethod || null,
         status: payForm.status,
         statementId: bill.statementId || null,
+        towardPlan: !!bill.towardPlan,
         confirmationNumber: payForm.confirmationNumber || null,
         bankAccountId,
         notes: payForm.notes || null,
@@ -1166,7 +1167,8 @@ export default function UtilityDetailPage() {
                   already settled say so, so a payment for the newest bill is
                   not filed against the one before it by mistake. */}
               <BillPicker className="sm:col-span-2" statements={statements} payments={payments}
-                amount={parseFloat(payForm.amount) || 0} value={bill} onChange={setBill} />
+                amount={parseFloat(payForm.amount) || 0} value={bill} onChange={setBill}
+                plan={plan && plan.status === 'ACTIVE' && Number(plan.remainingBalance) > 0 ? { installment: Number(plan.monthlyAmount), agreement: String(plan.notes ?? '').match(/Agreement (\d+)/)?.[1] ?? null } : null} />
               <PaymentSourcePicker accounts={bankAccounts} paymentMethod={payForm.paymentMethod}
                 value={payForm.bankAccountId} onChange={id => setPayForm(f => ({ ...f, bankAccountId: id }))}
                 card={newCard} onCardChange={setNewCard} />
@@ -1934,7 +1936,12 @@ export default function UtilityDetailPage() {
                               {s.trueUpDeferred != null && Number(s.trueUpDeferred) !== 0 && (
                                 <p className="text-xs text-sky-400">
                                   {fmtMoney(Number(s.trueUpDeferred))} deferred to true-up
-                                  {' · '}billed now {fmtMoney(amt - Number(s.trueUpDeferred))}
+                                  {' · '}{(() => {
+                                    const now = Number((amt - Number(s.trueUpDeferred)).toFixed(2));
+                                    if (now < -0.005) return `net credit ${fmtMoney(-now)} this month`;
+                                    if (plan > 0 && Math.abs(now - plan) < 0.01) return `${fmtMoney(now)} due now (the arrangement installment)`;
+                                    return `billed now ${fmtMoney(now)}`;
+                                  })()}
                                 </p>
                               )}
                               {/* The charge stands as the bill's figure; the

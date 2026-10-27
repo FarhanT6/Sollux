@@ -16,7 +16,7 @@ import { recordNotice } from './noticeTracker';
 import { fileServiceInvoice, invoiceAmount } from './expenseIntake';
 import { compareWithOwner, keepOwnerFigures, ownerEntered, sameBillByDue, thinnerThan } from './statementConflict';
 import { markEscrowedStatements } from './escrow';
-import { settleInFull, applyPolicyDocument, recordConfirmedPayment, syncPaymentPlanFromBill, syncInsurancePolicyFromBill, syncLoanComponentsFromBill, applyPastDueNotice, parseBill } from './pdfImportService';
+import { settleInFull, applyPolicyDocument, recordConfirmedPayment, syncPaymentPlanFromBill, syncInsurancePolicyFromBill, syncLoanComponentsFromBill, applyPastDueNotice, parseBill, periodChargeOf, syncTrueUpFromBill } from './pdfImportService';
 import { findExistingBill } from './billMatch';
 import { findOrCreateUtilityAccount } from './utilityAccountResolver';
 import { uploadDocument, buildStatementKey } from './s3Service';
@@ -224,9 +224,25 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
       await syncLoanComponentsFromBill(acct.id, ex);
       return { outcome: 'filed', utilityAccountId: acct.id };
     }
-    // amountDue = current period charges only; balance = full amount owed.
-    const amountDueCurrent = ex.currentCharges ?? ex.amountDue;
+    // amountDue = this period's charges (with an installment billed inside
+    // them); balance = full amount owed. Same rule as routes/import.ts.
+    const amountDueCurrent = periodChargeOf(ex);
     const totalBalance = rawData.totalDue ?? amountDueCurrent;
+    // What the manual import keeps and this path used to drop: the part
+    // deferred to a net-metering true-up, an arrangement's installment, the
+    // penalty date and aging. Without the deferral an SDG&E bill read as
+    // owing its whole charge (or as a credit when the total said less).
+    const nem = ex.netMetering ?? null;
+    const extra = {
+      ...(nem ? { trueUpDeferred: nem.deferred, trueUpBalance: nem.ytdBalance, trueUpDate: nem.trueUpDate ? new Date(nem.trueUpDate) : null } : {}),
+      ...(ex.paymentPlanAmount != null ? { paymentPlanAmount: ex.paymentPlanAmount } : {}),
+      ...(ex.penaltyDate ? { penaltyDate: new Date(ex.penaltyDate) } : {}),
+      ...(ex.amountAfterDueDate != null ? { amountAfterDueDate: ex.amountAfterDueDate } : {}),
+      ...(ex.agingBuckets ? { agingBuckets: ex.agingBuckets as Prisma.InputJsonValue } : {}),
+    };
+    // A bill that states its total says what was carried in, nothing
+    // included: a stale carried figure from an earlier reading must go.
+    const carriedOnUpdate = pastDueAmt ?? (ex.statedTotalDue != null ? null : undefined);
 
     if (existing) {
       await db.statement.update({
@@ -237,12 +253,13 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
           billingPeriodEnd: ex.billingPeriodEnd ? new Date(ex.billingPeriodEnd) : existing.billingPeriodEnd,
           amountDue: amountDueCurrent ?? existing.amountDue,
           balance: ex.totalAccountBalance ?? totalBalance ?? existing.balance,
-          pastDueCarried: pastDueAmt ?? existing.pastDueCarried,
+          pastDueCarried: carriedOnUpdate === undefined ? existing.pastDueCarried : carriedOnUpdate,
           chargesExcludingFees: ex.currentCharges ?? existing.chargesExcludingFees,
           penaltiesFees: ex.lateFee ?? existing.penaltiesFees,
           usageValue: ex.usageValue ?? existing.usageValue,
           usageUnit: ex.usageUnit ?? existing.usageUnit,
           ratePlan: ex.ratePlan ?? existing.ratePlan,
+          ...extra,
           rawDataJson: rawData as Prisma.InputJsonValue,
           // A full statement replaces the printed summary email it updates.
           ...(pdfS3Key && (!existing.pdfS3Key || !existing.billingPeriodStart) ? { pdfS3Key } : {}),
@@ -256,6 +273,7 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
       await learnProviderWebsite(acct.id, ex);
       await syncLoanComponentsFromBill(acct.id, ex);
       await markEscrowedStatements(acct.id);
+      await syncTrueUpFromBill(acct.id, ex);
     } else {
       const created = await db.statement.create({
         data: {
@@ -275,6 +293,7 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
           ratePlan: ex.ratePlan ?? null,
           pdfS3Key,
           sourceType: 'MANUAL',
+          ...extra,
           rawDataJson: rawData as Prisma.InputJsonValue,
         },
       });
@@ -284,6 +303,7 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
     await learnProviderWebsite(acct.id, ex);
     await syncLoanComponentsFromBill(acct.id, ex);
     await markEscrowedStatements(acct.id);
+    await syncTrueUpFromBill(acct.id, ex);
   }
 
     return { outcome: 'filed', utilityAccountId: acct.id };

@@ -15,6 +15,8 @@ export interface BillPickerValue {
   split: boolean;
   /** statementId → amount as typed; presence is the selection. */
   alloc: Record<string, string>;
+  /** Toward the account's payment arrangement (with the bill that bills its installment, if any). */
+  towardPlan?: boolean;
 }
 
 export const emptyBillPick: BillPickerValue = { statementId: '', split: false, alloc: {} };
@@ -74,13 +76,15 @@ export function splitAllocations(value: BillPickerValue, total: number): { alloc
   return { allocations };
 }
 
-export default function BillPicker({ statements, payments, amount, value, onChange, className = '' }: {
+export default function BillPicker({ statements, payments, amount, value, onChange, className = '', plan = null }: {
   statements: any[];
   payments: any[];
   amount: number;
   value: BillPickerValue;
   onChange: (v: BillPickerValue) => void;
   className?: string;
+  /** An active payment arrangement on the account: offered as its own choice. */
+  plan?: { installment: number; agreement?: string | null } | null;
 }) {
   const sorted = useMemo(() => [...statements].sort((a, b) => (b.statementDate ?? '').localeCompare(a.statementDate ?? '')).slice(0, 36), [statements]);
   const paidMap = useMemo(() => computePaidMap(sorted, payments, computeResolvedByFutureCheckpoint(sorted)), [sorted, payments]);
@@ -96,16 +100,30 @@ export default function BillPicker({ statements, payments, amount, value, onChan
     const figure = open
       ? `${money(own.share)}${own.fee > 0 ? ` (${money(own.charge)} + ${money(own.fee)} fee)` : ''}`
       : money(own.charge + own.fee);
-    return `${billMonthLabel(st)} — ${figure} · billed ${fmtDate(st.statementDate, 'MMM d')}${!open && st.dueDate ? ` · due ${fmtDate(st.dueDate, 'MMM d')}` : ''}${paidMap.get(st.id) ? ' · already paid' : ' · open'}`;
+    const inst = Number(st.paymentPlanAmount ?? 0);
+    return `${billMonthLabel(st)} — ${figure}${inst > 0 ? ` (incl. ${money(inst)} arrangement installment)` : ''} · billed ${fmtDate(st.statementDate, 'MMM d')}${!open && st.dueDate ? ` · due ${fmtDate(st.dueDate, 'MMM d')}` : ''}${paidMap.get(st.id) ? ' · already paid' : ' · open'}`;
   };
+  // "Toward the arrangement": the newest open bill that bills the installment
+  // (SDG&E prints it inside the bill — paying that bill pays it), else no
+  // bill, and the whole payment comes off the plan.
+  const planBill = sorted.find(st => Number(st.paymentPlanAmount ?? 0) > 0 && !paidMap.get(st.id));
+  const PLAN = '__plan__';
 
   if (!value.split) {
     return (
       <div className={className}>
-        <select value={value.statementId} onChange={e => onChange({ ...value, statementId: e.target.value })} className="input-dark text-xs w-full">
+        <select value={value.towardPlan ? PLAN : value.statementId}
+          onChange={e => onChange(e.target.value === PLAN ? { ...value, statementId: planBill?.id ?? '', towardPlan: true } : { ...value, statementId: e.target.value, towardPlan: false })}
+          className="input-dark text-xs w-full">
           <option value="">— Not against a specific bill —</option>
+          {plan && <option value={PLAN}>Payment arrangement{plan.agreement ? ` ${plan.agreement}` : ''} — {money(plan.installment)} installment{planBill ? ` (billed on ${billMonthLabel(planBill)})` : ''}</option>}
           {sorted.map(st => <option key={st.id} value={st.id}>{describe(st)}</option>)}
         </select>
+        {value.towardPlan && (
+          <p className="text-xs text-sky-400 mt-1">
+            {planBill ? `Pays the installment billed on ${billMonthLabel(planBill)}; the arrangement's balance follows the next bill.` : 'The whole payment comes off the arrangement\'s remaining balance.'}
+          </p>
+        )}
         {sorted.length > 1 && (
           <button type="button" className="text-xs text-amber-400 hover:text-amber-300 mt-1"
             onClick={() => onChange({ statementId: '', split: true, alloc: allocateAcrossBills(sorted, amount, value.statementId ? [value.statementId] : [], payments) })}>
