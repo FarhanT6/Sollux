@@ -1168,7 +1168,7 @@ export default function UtilityDetailPage() {
                   not filed against the one before it by mistake. */}
               <BillPicker className="sm:col-span-2" statements={statements} payments={payments}
                 amount={parseFloat(payForm.amount) || 0} value={bill} onChange={setBill}
-                plan={plan && plan.status === 'ACTIVE' && Number(plan.remainingBalance) > 0 ? { installment: Number(plan.monthlyAmount), agreement: String(plan.notes ?? '').match(/Agreement (\d+)/)?.[1] ?? null } : null} />
+                plan={plan && plan.status === 'ACTIVE' && Number(plan.remainingBalance) > 0 ? { installment: Number(plan.monthlyAmount), agreement: String(plan.description ?? '').match(/Agreement (\d+)/)?.[1] ?? null } : null} />
               <PaymentSourcePicker accounts={bankAccounts} paymentMethod={payForm.paymentMethod}
                 value={payForm.bankAccountId} onChange={id => setPayForm(f => ({ ...f, bankAccountId: id }))}
                 card={newCard} onCardChange={setNewCard} />
