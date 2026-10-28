@@ -45,7 +45,14 @@ interface ZodIssue { path?: (string | number)[]; message?: string }
 
 export function describeApiError(err: any, fallback: string): string {
   const data = err?.response?.data;
+  const status = err?.response?.status;
+  // A route the server does not have answers with Express's HTML page, not
+  // JSON: the page was updated before the server finished deploying.
+  if (status === 404 && typeof data === 'string' && /Cannot (GET|POST|PUT|PATCH|DELETE)/i.test(data)) {
+    return 'The Sollux server is still on an older version (a new one is deploying, or its last deploy failed). Try again in a few minutes.';
+  }
   if (!data) return err?.message || fallback;
+  if (typeof data === 'string') return status ? `${fallback} (server said ${status})` : fallback;
 
   const issues: ZodIssue[] | undefined =
     Array.isArray(data.details) ? data.details : undefined;
