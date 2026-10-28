@@ -12,7 +12,7 @@ import {
   upsertUtilityLoan, deleteUtilityLoan, patchStatement, createStatement, deleteStatement, markStatementUnpaid,
   revealUtilityAccountNumber, createPayment, createSplitPayment, updatePayment, deletePayment,
   getBankAccounts, getCostSettings, updateCostSettings, getLoans, getLoanPayments,
-  getInsurancePolicies,
+  getInsurancePolicies, updateInsurancePolicy,
 } from '../api/client';
 import api from '../api/client';
 import { CADENCE_LABELS } from '../lib/cadence';
@@ -30,6 +30,7 @@ import PaymentSourcePicker, { emptyNewCard, resolvePaymentSource, type NewCardFo
 import { operatingCost } from '../lib/operatingCost';
 import ChargeAnalyticsPanel from '../components/utility/ChargeAnalyticsPanel';
 import { usePhone, CategoryGlyph } from '../ios';
+import { describeApiError } from '../lib/apiError';
 import { openUrl } from '../lib/native';
 import PortalLogin from '../components/utility/PortalLogin';
 import { toast } from '../lib/toast';
@@ -2363,6 +2364,74 @@ function StatementModal({ accountId, statement, onClose, onSaved }: {
 
 
 /**
+ * Editing the policy a billing account pays for: what the statements could
+ * not say or said wrong — the policy number, the term, the premium and the
+ * installment, limits, deductible, the agent.
+ */
+function PolicyEditor({ policy, onClose, onSaved }: { policy: any; onClose: () => void; onSaved: () => void }) {
+  const str = (v: any) => (v == null ? '' : String(v));
+  const [f, setF] = useState({
+    policyNumber: str(policy.policyNumber), effectiveDate: str(policy.effectiveDate).slice(0, 10), expirationDate: str(policy.expirationDate).slice(0, 10),
+    termPremium: str(policy.termPremium), premiumAmount: str(policy.premiumAmount), premiumFrequency: policy.premiumFrequency ?? 'MONTHLY',
+    deductible: str(policy.deductible), dwellingLimit: str(policy.dwellingLimit), liabilityLimit: str(policy.liabilityLimit),
+    agentName: str(policy.agentName), agentPhone: str(policy.agentPhone), agentEmail: str(policy.agentEmail), notes: str(policy.notes),
+  });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+  const num = (v: string) => (v.trim() === '' ? null : Number(v.replace(/[^0-9.]/g, '')));
+  async function save() {
+    const premium = num(f.premiumAmount);
+    if (!(premium && premium > 0)) { setErr('Enter the installment (what one bill asks for).'); return; }
+    setSaving(true); setErr('');
+    try {
+      await updateInsurancePolicy(policy.id, {
+        policyNumber: f.policyNumber.trim() || null, effectiveDate: f.effectiveDate || null, expirationDate: f.expirationDate || null,
+        termPremium: num(f.termPremium), premiumAmount: premium, premiumFrequency: f.premiumFrequency,
+        deductible: num(f.deductible), dwellingLimit: num(f.dwellingLimit), liabilityLimit: num(f.liabilityLimit),
+        agentName: f.agentName.trim() || null, agentPhone: f.agentPhone.trim() || null, agentEmail: f.agentEmail.trim() || null, notes: f.notes.trim() || null,
+      } as any);
+      onSaved();
+    } catch (e) { setErr(describeApiError(e, 'Could not save the policy.')); }
+    finally { setSaving(false); }
+  }
+  const field = (label: string, key: keyof typeof f, type = 'text', placeholder = '') => (
+    <label className="block">
+      <span className="block text-xs text-gray-500 mb-1">{label}</span>
+      <input type={type} className="input-dark w-full text-sm" value={f[key]} placeholder={placeholder} onChange={e => setF({ ...f, [key]: e.target.value })} />
+    </label>
+  );
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {field('Policy number', 'policyNumber')}
+        {field('Starts', 'effectiveDate', 'date')}
+        {field('Ends', 'expirationDate', 'date')}
+        {field('Term premium', 'termPremium', 'text', 'whole term')}
+        {field('Installment', 'premiumAmount', 'text', 'one bill')}
+        <label className="block">
+          <span className="block text-xs text-gray-500 mb-1">Billed</span>
+          <select className="input-dark w-full text-sm" value={f.premiumFrequency} onChange={e => setF({ ...f, premiumFrequency: e.target.value })}>
+            <option value="MONTHLY">Monthly</option><option value="SEMI_ANNUAL">Every 6 months</option><option value="ANNUAL">Once a year</option>
+          </select>
+        </label>
+        {field('Deductible', 'deductible')}
+        {field('Dwelling limit', 'dwellingLimit')}
+        {field('Liability limit', 'liabilityLimit')}
+        {field('Agent', 'agentName')}
+        {field('Agent phone', 'agentPhone', 'tel')}
+        {field('Agent email', 'agentEmail', 'email')}
+      </div>
+      {field('Notes', 'notes')}
+      {err && <p className="text-xs text-red-400">{err}</p>}
+      <div className="flex justify-end gap-2">
+        <button onClick={onClose} className="btn text-xs">Cancel</button>
+        <button onClick={() => void save()} disabled={saving} className="btn btn-primary text-xs disabled:opacity-50">{saving ? 'Saving…' : 'Save policy'}</button>
+      </div>
+    </div>
+  );
+}
+
+/**
  * The policy this billing account is paying for, as the statements state
  * it: number, coverage term, term premium, installment. A carrier's billing
  * account outlives any one policy, so the previous policy stays listed as
@@ -2372,7 +2441,9 @@ function PolicyCard({ accountId, propertyId, carrier, account, onAccountChange }
   accountId: string; propertyId: string; carrier: string; account: any; onAccountChange: (patch: Record<string, unknown>) => void;
 }) {
   const [policies, setPolicies] = useState<any[] | null>(null);
-  useEffect(() => { getInsurancePolicies({ propertyId }).then(setPolicies).catch(() => setPolicies([])); }, [propertyId, accountId]);
+  const [editing, setEditing] = useState(false);
+  const reloadPolicies = () => getInsurancePolicies({ propertyId }).then(setPolicies).catch(() => setPolicies([]));
+  useEffect(() => { void reloadPolicies(); }, [propertyId, accountId]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!policies) return null;
   const current = policies.find(p => p.utilityAccountId === accountId);
   const previous = policies
@@ -2385,9 +2456,14 @@ function PolicyCard({ accountId, propertyId, carrier, account, onAccountChange }
     <div className="mx-6 mb-4 rounded-xl p-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
       <div className="flex items-center justify-between mb-2">
         <p className="text-sm font-semibold text-white">Policy</p>
-        {current && <span className={`pill ${daysLeft != null && daysLeft < 45 ? 'pill-amber' : 'pill-green'}`}>{daysLeft != null && daysLeft < 0 ? 'Expired' : 'Active'}</span>}
+        <div className="flex items-center gap-2">
+          {current && !editing && <button onClick={() => setEditing(true)} className="text-xs text-gray-400 hover:text-white">Edit</button>}
+          {current && <span className={`pill ${daysLeft != null && daysLeft < 45 ? 'pill-amber' : 'pill-green'}`}>{daysLeft != null && daysLeft < 0 ? 'Expired' : 'Active'}</span>}
+        </div>
       </div>
-      {current ? (
+      {current && editing ? (
+        <PolicyEditor policy={current} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); void reloadPolicies(); }} />
+      ) : current ? (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
           <div><p className="text-xs text-gray-500">Policy number</p><p className="text-gray-200">{current.policyNumber ?? '—'}</p></div>
           <div><p className="text-xs text-gray-500">Coverage</p><p className="text-gray-200">{current.effectiveDate ? fmtDate(current.effectiveDate, 'MMM d, yyyy') : '—'} – {current.expirationDate ? fmtDate(current.expirationDate, 'MMM d, yyyy') : '—'}{daysLeft != null && daysLeft >= 0 ? <span className="text-gray-500"> · {daysLeft}d left</span> : null}</p></div>
