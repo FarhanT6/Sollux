@@ -1,57 +1,62 @@
 import { Navigate, useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/ui';
-import PnLPage from './PnLPage';
-import CashflowPage from './CashflowPage';
-import BudgetPage from './BudgetPage';
+import FinanceOverviewPage from './FinanceOverviewPage';
+import RentPage from './RentPage';
 import LoansPage from './LoansPage';
 import CostsPage from './CostsPage';
 import IncomingPaymentsPage from './IncomingPaymentsPage';
 import LoanPaymentTracker from '../components/loans/LoanPaymentTracker';
 
-export type Tab = 'performance' | 'loans' | 'incoming' | 'costs';
+export type Tab = 'overview' | 'costs' | 'loans' | 'income';
 
 interface View { key: string; label: string; subtitle: string; render: () => JSX.Element }
 
 /**
  * The Finances sections: one list for the desktop tabs and the phone's index
- * (pages/phone/FinancesScreen.tsx), so both offer the same things. Four
- * sections, each with its views: P&L, cash flow and budget under
- * Performance; the loans and their month-by-month payments under Loans;
- * what each property cost, by type, under Costs (lib/costLedger on the
- * server). Utility payments, fees and the bill archive are on the Bills
- * page. Reconciliation and Expense Payments were taken out — the property
- * manager's monthly statement is to come in a better way.
+ * (pages/phone/FinancesScreen.tsx), so both offer the same things.
+ *   Overview  rent against costs by type, NOI, loans and cash flow per month,
+ *             actual beside expected (replaced P&L, cash flow and budget)
+ *   Costs     what each property cost, by type (lib/costLedger on the server)
+ *   Loans     every loan with this month's payment, and payments by month
+ *   Income    rent collection and delinquency, and incoming deposits
+ * Utility payments, fees and the bill archive are on the Bills page.
  */
 export const FINANCE_SECTIONS: { key: Tab; label: string; subtitle: string; views: View[] }[] = [
   {
-    key: 'performance', label: 'Performance', subtitle: 'Income, costs and cash by property',
-    views: [
-      { key: 'pnl', label: 'P&L', subtitle: 'Net operating income and cash flow by property', render: () => <PnLPage embedded /> },
-      { key: 'cashflow', label: 'Cash flow', subtitle: 'Rent received against the loans, and against the loans and utilities — per property, per month', render: () => <CashflowPage embedded /> },
-      { key: 'budget', label: 'Budget', subtitle: 'The month: rent collected, delinquency, and what is left after loans and bills', render: () => <BudgetPage embedded /> },
-    ],
-  },
-  {
-    key: 'loans', label: 'Loans', subtitle: 'Mortgages, HELOCs and installment plans, and every payment on them',
-    views: [
-      { key: 'loans', label: 'Loans', subtitle: 'Mortgages, HELOCs, and installment plans', render: () => <LoansPage embedded /> },
-      { key: 'loan-payments', label: 'Payments by month', subtitle: 'Every loan payment month by month — owed, paid, due, in grace or late', render: () => <LoanPaymentTracker /> },
-    ],
-  },
-  {
-    key: 'incoming', label: 'Incoming payments', subtitle: 'Transfers, checks and deposits into watched bank accounts, matched to tenants',
-    views: [{ key: 'incoming', label: 'Incoming payments', subtitle: 'Transfers, checks and deposits into watched bank accounts, matched to tenants', render: () => <IncomingPaymentsPage embedded /> }],
+    key: 'overview', label: 'Overview', subtitle: 'Rent, costs, NOI, loans and cash flow — month by month, against what was expected',
+    views: [{ key: 'overview', label: 'Overview', subtitle: 'Rent, costs, NOI, loans and cash flow — month by month, against what was expected', render: () => <FinanceOverviewPage /> }],
   },
   {
     key: 'costs', label: 'Costs', subtitle: 'What each property cost, by type: utilities, insurance, tax, HOA, maintenance, management, loans',
     views: [{ key: 'costs', label: 'Costs', subtitle: 'What each property cost, by type: utilities, insurance, tax, HOA, maintenance, management, loans', render: () => <CostsPage /> }],
   },
+  {
+    key: 'loans', label: 'Loans', subtitle: 'Every loan, this month\'s payment on each, and every payment by month',
+    views: [{
+      key: 'loans', label: 'Loans', subtitle: 'Every loan, this month\'s payment on each, and every payment by month',
+      render: () => (
+        <>
+          <LoansPage embedded />
+          <h2 className="text-sm font-semibold text-white mt-8 mb-3">Payments by month</h2>
+          <LoanPaymentTracker />
+        </>
+      ),
+    }],
+  },
+  {
+    key: 'income', label: 'Income', subtitle: 'Rent collected and owed, and money coming in',
+    views: [
+      { key: 'rent', label: 'Rent', subtitle: 'Rent collected this month, reminders, and who is behind', render: () => <RentPage embedded /> },
+      { key: 'incoming', label: 'Incoming payments', subtitle: 'Transfers, checks and deposits into watched bank accounts, matched to tenants', render: () => <IncomingPaymentsPage embedded /> },
+    ],
+  },
 ];
 
 /** Old ?tab= links (one tab per view) and where they live now. */
 const OLD_TABS: Record<string, [Tab, string]> = {
-  pnl: ['performance', 'pnl'], cashflow: ['performance', 'cashflow'], budget: ['performance', 'budget'],
-  'loan-payments': ['loans', 'loan-payments'], reconciliation: ['performance', 'pnl'], outgoing: ['costs', 'costs'], expenses: ['costs', 'costs'],
+  performance: ['overview', 'overview'], pnl: ['overview', 'overview'], cashflow: ['overview', 'overview'], budget: ['income', 'rent'],
+  'loan-payments': ['loans', 'loans'], incoming: ['income', 'incoming'],
+  reconciliation: ['income', 'rent'], outgoing: ['costs', 'costs'], expenses: ['costs', 'costs'],
 };
 
 /** Old Finances links to what is now on the Bills page. */

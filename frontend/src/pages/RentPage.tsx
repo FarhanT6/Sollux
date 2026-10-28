@@ -1,16 +1,15 @@
 import { Fragment, useEffect, useMemo, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  getBudgetMonthly, getBudgetDelinquency, getBudgetForecast,
+  getBudgetMonthly, getBudgetDelinquency,
   updateLease,
   getRentPayments,
 } from '../api/client';
 import type { RentPayment } from '../types';
 import type {
-  BudgetSummary, DelinquencyTenant, BudgetForecast,
+  BudgetSummary, DelinquencyTenant,
 } from '../types';
 import { RENT_PAYMENT_METHOD_LABELS } from '../types';
-import LoanPaymentTracker from '../components/loans/LoanPaymentTracker';
 import RentRemindersPanel from '../components/tenant/RentRemindersPanel';
 import LogRentPaymentModal from '../components/tenant/LogRentPaymentModal';
 
@@ -45,49 +44,38 @@ function LikelihoodBadge({ likelihood }: { likelihood: DelinquencyTenant['likeli
   return <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${cls}`}>{label}</span>;
 }
 
-export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
+export default function RentPage({ embedded }: { embedded?: boolean } = {}) {
   const now = new Date();
   const [year,  setYear]  = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
 
   const [budget,       setBudget]       = useState<BudgetSummary | null>(null);
   const [delinquency,  setDelinquency]  = useState<{ tenants: DelinquencyTenant[]; totalArrears: number; totalExpectedCollection: number } | null>(null);
-  const [forecast,     setForecast]     = useState<BudgetForecast | null>(null);
-  const [forecastLoading, setForecastLoading] = useState(false);
   const [loading,      setLoading]      = useState(true);
-  const [activeTab,       setActiveTab]       = useState<'overview' | 'delinquency' | 'forecast'>('overview');
-  const [includePersonal, setIncludePersonal] = useState(false);
+  const [activeTab,       setActiveTab]       = useState<'overview' | 'delinquency'>('overview');
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const [b, d] = await Promise.all([
-        getBudgetMonthly(year, month, includePersonal),
+        getBudgetMonthly(year, month, false),
         getBudgetDelinquency(),
       ]);
       setBudget(b);
       setDelinquency(d);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
-  }, [year, month, includePersonal]);
+  }, [year, month]);
 
   useEffect(() => { load(); }, [load]);
 
-  useEffect(() => {
-    if (activeTab !== 'forecast' || forecast) return;
-    setForecastLoading(true);
-    getBudgetForecast(6).then(setForecast).catch(console.error).finally(() => setForecastLoading(false));
-  }, [activeTab, forecast]);
-
-  const net        = budget?.summary.realisticNet ?? 0;
-  const idealNet   = budget?.summary.idealNet ?? 0;
 
   return (
     <div className={embedded ? 'max-w-7xl' : 'p-6 max-w-7xl mx-auto'}>
       {!embedded && (
         <div className="mb-2">
-          <h1 className="text-2xl font-bold text-white">Budget</h1>
-          <p className="text-sm text-gray-400 mt-0.5">Monthly cash position, rent collection &amp; delinquency analysis</p>
+          <h1 className="text-2xl font-bold text-white">Rent</h1>
+          <p className="text-sm text-gray-400 mt-0.5">Rent collection and delinquency</p>
         </div>
       )}
       <div className="flex items-center gap-3 mb-6 flex-wrap">
@@ -97,35 +85,11 @@ export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
         <select value={month} onChange={e => setMonth(+e.target.value)} className="input-dark text-sm">
           {MONTHS.map((m, i) => <option key={i} value={i+1}>{m}</option>)}
         </select>
-        <label className="flex items-center gap-2 cursor-pointer select-none ml-auto">
-          <div
-            onClick={() => setIncludePersonal(v => !v)}
-            className="relative w-8 h-4 rounded-full transition-colors flex-shrink-0"
-            style={{ background: includePersonal ? '#F5A623' : 'rgba(255,255,255,0.15)' }}
-          >
-            <div
-              className="absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform"
-              style={{ transform: includePersonal ? 'translateX(18px)' : 'translateX(2px)' }}
-            />
-          </div>
-          <span className="text-xs text-gray-400">Include personal expenses</span>
-        </label>
-        <Link to="/personal?tab=expenses" className="text-xs text-amber-500 hover:text-amber-400">Manage →</Link>
       </div>
       {/* KPI row */}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
-        <KpiCard
-          label="Net Position (realistic)"
-          value={fmt(net, { sign: true })}
-          sub="after mortgages & expenses"
-          color={net >= 0 ? 'green' : 'red'}
-        />
-        <KpiCard
-          label="Net Position (ideal)"
-          value={fmt(idealNet, { sign: true })}
-          sub="if all rent collected"
-          color={idealNet >= 0 ? 'green' : 'amber'}
-        />
+        <KpiCard label="Rent Collected" value={fmt(budget?.rent.collected ?? 0)} sub={`of ${fmt(budget?.rent.expected ?? 0)} expected`} color="green" />
+        <KpiCard label="Outstanding" value={fmt(budget?.rent.outstanding ?? 0)} sub="this month" color="amber" />
         <KpiCard
           label="Total Arrears"
           value={fmt(delinquency?.totalArrears ?? 0)}
@@ -136,14 +100,14 @@ export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
 
       {/* Tabs */}
       <div className="flex gap-1 mb-5 border-b border-white/10">
-        {(['overview','delinquency','forecast'] as const).map(t => (
+        {(['overview','delinquency'] as const).map(t => (
           <button key={t} onClick={() => setActiveTab(t)}
             className={`px-4 py-2 text-sm font-medium capitalize transition-colors ${
               activeTab === t
                 ? 'text-white border-b-2 border-gold-500 -mb-px'
                 : 'text-gray-400 hover:text-gray-200'
             }`}>
-            {t === 'delinquency' ? 'Delinquency' : t === 'forecast' ? 'Forecast' : 'Overview'}
+            {t === 'delinquency' ? 'Delinquency' : 'This month'}
           </button>
         ))}
       </div>
@@ -158,11 +122,6 @@ export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
           {activeTab === 'delinquency' && delinquency && (
             <DelinquencyTab data={delinquency} onChanged={load} />
           )}
-          {activeTab === 'forecast' && (
-            forecastLoading || !forecast
-              ? <div className="flex items-center justify-center h-64 text-gray-500">Loading…</div>
-              : <ForecastTab data={forecast} />
-          )}
         </>
       )}
 
@@ -173,7 +132,7 @@ export default function BudgetPage({ embedded }: { embedded?: boolean } = {}) {
 // ─── Overview Tab ─────────────────────────────────────────
 
 function OverviewTab({ budget, onChanged }: { budget: BudgetSummary; onChanged: () => void }) {
-  const { rent, mortgages, utilities } = budget;
+  const { rent } = budget;
 
   return (
     <div className="space-y-6">
@@ -184,73 +143,6 @@ function OverviewTab({ budget, onChanged }: { budget: BudgetSummary; onChanged: 
         <RentCollectionTable rows={rent.rows} outstanding={rent.outstanding} expected={rent.expected} collected={rent.collected} onChanged={onChanged} period={`${budget.year}-${String(budget.month).padStart(2, '0')}`} />
       </Section>
 
-      {/* Loan payments — the same month, tracked like rent */}
-      <Section title="Loan Payments" badge={`${fmt(mortgages.paid)} paid of ${fmt(mortgages.total)} in mortgages`}>
-        <LoanPaymentTracker month={`${budget.year}-${String(budget.month).padStart(2, '0')}`} />
-      </Section>
-
-      {/* Utility bills */}
-      <Section title="Utility Bills" badge={`${fmt(utilities.paid)} paid of ${fmt(utilities.total)}`}>
-        <ProgressBar value={utilities.paid} total={utilities.total} color="blue" />
-        <div className="mt-3 overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-gray-500 text-xs uppercase tracking-wider border-b border-white/5">
-                <th className="text-left pb-2">Provider</th>
-                <th className="text-left pb-2">Property</th>
-                <th className="text-right pb-2">Due</th>
-                <th className="text-right pb-2">Paid</th>
-                <th className="text-left pb-2 pl-3">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {utilities.rows.map(row => (
-                <tr key={row.statementId} className="border-b border-white/5 hover:bg-white/2">
-                  <td className="py-2 text-white">{row.provider}</td>
-                  <td className="py-2 text-gray-400">{row.property}</td>
-                  <td className="py-2 text-right text-gray-300">{fmt(row.amountDue)}</td>
-                  <td className="py-2 text-right text-emerald-500">{row.amountPaid > 0 ? fmt(row.amountPaid) : '—'}</td>
-                  <td className="py-2 pl-3">
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${
-                      row.status === 'paid'
-                        ? 'bg-emerald-900/40 text-emerald-500'
-                        : 'bg-red-900/50 text-red-500'
-                    }`}>{row.status}</span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr className="text-sm font-semibold text-white border-t border-white/10">
-                <td colSpan={2} className="pt-2">Total</td>
-                <td className="pt-2 text-right">{fmt(utilities.total)}</td>
-                <td className="pt-2 text-right text-emerald-500">{fmt(utilities.paid)}</td>
-                <td className="pt-2 pl-3 text-red-500">{utilities.unpaid > 0 ? `${fmt(utilities.unpaid)} left` : '✓'}</td>
-              </tr>
-            </tfoot>
-          </table>
-          {utilities.rows.length === 0 && (
-            <p className="text-center text-gray-500 py-8">No utility bills due or issued this month.</p>
-          )}
-        </div>
-      </Section>
-
-      {/* Summary */}
-      <Section title="Month Summary">
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
-          <SummaryLine label="Rent collected" value={fmt(budget.rent.collected)} color="emerald" />
-          {budget.otherIncome.total > 0 && <SummaryLine label="Other income" value={fmt(budget.otherIncome.total)} color="emerald" />}
-          <SummaryLine label="Total income"   value={fmt(budget.summary.totalIncome)} color="emerald" bold />
-          <SummaryLine label="Mortgages"      value={fmt(budget.mortgages.total)} color="red" />
-          <SummaryLine label="Utility bills"  value={fmt(budget.utilities.total)} color="red" />
-          <SummaryLine label="Other expenses" value={fmt(budget.expenses.total)} color="red" />
-          <SummaryLine label="Total expenses" value={fmt(budget.summary.totalExpenses)} color="red" bold />
-          <div className="col-span-2 md:col-span-3 border-t border-white/10 pt-3 grid grid-cols-2 gap-4">
-            <SummaryLine label="Realistic net (rent collected so far)" value={fmt(budget.summary.realisticNet, { sign: true })} color={budget.summary.realisticNet >= 0 ? 'emerald' : 'red'} bold />
-            <SummaryLine label="Ideal net (all rent received)" value={fmt(budget.summary.idealNet, { sign: true })} color={budget.summary.idealNet >= 0 ? 'emerald' : 'amber'} bold />
-          </div>
-        </div>
-      </Section>
     </div>
   );
 }
@@ -561,62 +453,6 @@ function DelinquencyTab({ data, onChanged }: {
 
 // ─── Forecast Tab ───────────────────────────────────────────
 
-function ForecastTab({ data }: { data: BudgetForecast }) {
-  const { months, baseline } = data;
-  const maxAbsNet = Math.max(1, ...months.map(m => Math.abs(m.netCashFlow)));
-
-  return (
-    <div className="space-y-6">
-      <div className="rounded-xl border border-white/10 bg-white/3 p-4">
-        <p className="text-xs text-gray-500">
-          Projected from recurring baselines — <span className="text-gray-300">{fmt(baseline.rentBaseline)}/mo</span> rent across{' '}
-          {baseline.activeLeaseCount} active lease{baseline.activeLeaseCount === 1 ? '' : 's'},{' '}
-          <span className="text-gray-300">{fmt(baseline.mortgageBaseline)}/mo</span> across {baseline.activeLoanCount} active loan{baseline.activeLoanCount === 1 ? '' : 's'}, and{' '}
-          <span className="text-gray-300">{fmt(baseline.utilityBaseline)}/mo</span> utilities (trailing average across {baseline.utilityAccountsWithData} account{baseline.utilityAccountsWithData === 1 ? '' : 's'} with bill history).
-          Not a guess at one-off income or expenses — assumes nothing changes.
-        </p>
-      </div>
-
-      <Section title="Next 6 Months">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-gray-500 text-xs uppercase tracking-wider border-b border-white/5">
-                <th className="text-left pb-2">Month</th>
-                <th className="text-right pb-2">Rent</th>
-                <th className="text-right pb-2">Mortgages</th>
-                <th className="text-right pb-2">Utilities</th>
-                <th className="text-right pb-2">Net cash flow</th>
-                <th className="text-left pb-2 pl-3">Trend</th>
-              </tr>
-            </thead>
-            <tbody>
-              {months.map(m => (
-                <tr key={m.month} className="border-b border-white/5 hover:bg-white/2">
-                  <td className="py-2 text-white font-medium">{m.label}</td>
-                  <td className="py-2 text-right text-emerald-500">{fmt(m.rentalIncome)}</td>
-                  <td className="py-2 text-right text-red-500">{fmt(m.mortgages)}</td>
-                  <td className="py-2 text-right text-red-500">{fmt(m.utilities)}</td>
-                  <td className={`py-2 text-right font-semibold ${m.netCashFlow >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
-                    {fmt(m.netCashFlow, { sign: true })}
-                  </td>
-                  <td className="py-2 pl-3">
-                    <div className="w-24 h-2 bg-white/10 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full rounded-full ${m.netCashFlow >= 0 ? 'bg-emerald-500' : 'bg-red-500'}`}
-                        style={{ width: `${(Math.abs(m.netCashFlow) / maxAbsNet) * 100}%` }}
-                      />
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Section>
-    </div>
-  );
-}
 
 // ─── Reusable bits ────────────────────────────────────────
 
@@ -655,15 +491,6 @@ function ProgressBar({ value, total, color }: { value: number; total: number; co
   );
 }
 
-function SummaryLine({ label, value, color, bold }: { label: string; value: string; color: string; bold?: boolean }) {
-  const colors: Record<string, string> = { emerald: 'text-emerald-500', red: 'text-red-600', amber: 'text-amber-500' };
-  return (
-    <div className="flex justify-between items-center py-1">
-      <span className={`text-gray-400 ${bold ? 'font-semibold text-gray-300' : ''}`}>{label}</span>
-      <span className={`font-${bold ? 'bold' : 'medium'} ${colors[color] ?? 'text-white'}`}>{value}</span>
-    </div>
-  );
-}
 
 function ScoreBar({ score }: { score: number }) {
   const color = score >= 65 ? 'bg-emerald-500' : score >= 40 ? 'bg-amber-500' : score >= 20 ? 'bg-orange-500' : 'bg-red-500';

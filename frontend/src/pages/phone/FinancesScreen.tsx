@@ -3,10 +3,10 @@ import { Screen, Section, Row } from '../../ios';
 import { FINANCE_SECTIONS, resolveFinance, ViewSwitch, billsRedirect } from '../FinancesPage';
 
 const ICON: Record<string, { bg: string; d: string }> = {
-  performance: { bg: '#34c759', d: 'M4 19V9M10 19V5M16 19v-7M22 19H2' },
-  loans: { bg: '#0a84ff', d: 'M3 10l9-6 9 6M5 10v10h14V10M9 20v-6h6v6' },
-  incoming: { bg: '#34c759', d: 'M12 4v12M6 10l6 6 6-6M4 20h16' },
+  overview: { bg: '#34c759', d: 'M4 19V9M10 19V5M16 19v-7M22 19H2' },
   costs: { bg: '#ff375f', d: 'M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6' },
+  loans: { bg: '#0a84ff', d: 'M3 10l9-6 9 6M5 10v10h14V10M9 20v-6h6v6' },
+  income: { bg: '#30b0c7', d: 'M12 4v12M6 10l6 6 6-6M4 20h16' },
 };
 const glyph = (d: string) => (
   <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>

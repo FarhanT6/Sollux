@@ -40,7 +40,6 @@ export async function buildLedger(userId: string, from: string, to: string, prop
   // A scheduled amount (a loan payment, a policy's monthly share) is a cost
   // once its month has come; a bill or tax installment is one once it is issued.
   const thisMonth = new Date().toISOString().slice(0, 7);
-  const scheduled = months.filter(m => m <= thisMonth);
 
   const properties = await db.property.findMany({
     where: { userId, ...(propertyId ? { id: propertyId } : {}) },
@@ -146,14 +145,16 @@ export async function buildLedger(userId: string, from: string, to: string, prop
     };
     const due = n(l.monthlyPayment) + n(l.escrowAmount);
     if (l.isActive && due > 0) {
-      for (const m of scheduled) {
+      line.schedule = {};
+      for (const m of months) {
         if (l.originationDate && ym(l.originationDate) > m) continue;
         if (l.maturityDate && ym(l.maturityDate) < m) continue;
-        add(line, m, 'charged', due);
+        line.schedule[m] = r2(due);
+        if (m <= thisMonth) add(line, m, 'charged', due);
       }
     }
     for (const p of l.loanPayments) add(line, ym(p.date), 'paid', n(p.amount));
-    if (Object.values(line.months).some(f => f.charged || f.paid)) lines.push(line);
+    if (Object.values(line.months).some(f => f.charged || f.paid) || Object.keys(line.schedule ?? {}).length) lines.push(line);
   }
 
   // Property tax: each installment in the month it is due, and in the month it was paid.
@@ -184,12 +185,14 @@ export async function buildLedger(userId: string, from: string, to: string, prop
       key: `policy:${pol.id}`, type: 'INSURANCE', source: 'policy', propertyId: pol.propertyId, label: pol.carrier,
       sub: 'Policy premium, monthly share', link: '/insurance', months: blank(),
     };
-    for (const m of scheduled) {
+    line.schedule = {};
+    for (const m of months) {
       if (pol.effectiveDate && ym(pol.effectiveDate) > m) continue;
       if (pol.expirationDate && ym(pol.expirationDate) < m) continue;
-      add(line, m, 'charged', monthly);
+      line.schedule[m] = r2(monthly);
+      if (m <= thisMonth) add(line, m, 'charged', monthly);
     }
-    if (Object.values(line.months).some(f => f.charged)) lines.push(line);
+    if (Object.keys(line.schedule).length) lines.push(line);
   }
 
   return {

@@ -801,6 +801,16 @@ export interface CostLedger { months: string[]; properties: { id: string; name: 
 export const getCosts = (from: string, to: string, propertyId?: string) =>
   api.get<CostLedger>('/costs', { params: { from, to, propertyId } }).then(r => r.data);
 
+// The Finances overview: rent against costs by type, NOI, loans and cash flow, per property and month, actual beside expected.
+export interface OverviewCell { expected: number; charged: number; paid: number }
+export interface OverviewMonth { rent: { expected: number; received: number }; types: Partial<Record<CostType, OverviewCell>> }
+export interface FinanceOverview {
+  year: number; months: string[]; thisMonth: string;
+  properties: { id: string; name: string; sold: boolean; months: Record<string, OverviewMonth> }[];
+}
+export const getFinanceOverview = (year: number, propertyId?: string) =>
+  api.get<FinanceOverview>('/finance/overview', { params: { year, propertyId } }).then(r => r.data);
+
 // Utility payments
 export const getPayments = (params: { utilityAccountId?: string; propertyId?: string }) =>
   api.get<Payment[]>('/payments', { params }).then(r => r.data);
