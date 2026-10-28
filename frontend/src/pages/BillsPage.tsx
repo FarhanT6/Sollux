@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   getBillsSheet, getLoanTrackerYear, getStatementDownloadUrl, patchStatement, markStatementUnpaid, createPayment, createLoanPayment,
   type BillsSheet, type BillsSheetAccount, type BillsSheetStatement, type LoanTrackerYear, type LoanTrackerStatus,
@@ -10,6 +10,10 @@ import { fmtDate, monthKey, todayISO } from '../lib/date';
 import { computePaidMap, computeResolvedByFutureCheckpoint, openBalanceOf, deferredOf, isUpcoming } from '../lib/paidState';
 import { openUrl } from '../lib/native';
 import { describeApiError } from '../lib/apiError';
+import PaymentsPage from './PaymentsPage';
+import FeesSummaryPage from './FeesSummaryPage';
+import DocumentsPage from './DocumentsPage';
+import { ViewSwitch } from './FinancesPage';
 
 /**
  * Bills: the owner's spreadsheet, kept by Sollux. One table per property, a
@@ -53,7 +57,7 @@ function billsOf(account: BillsSheetAccount, propertyId: string): Bill[] {
   });
 }
 
-export default function BillsPage() {
+function BillsSheet() {
   const [year, setYear] = useState(() => Number(todayISO().slice(0, 4)));
   const [sheet, setSheet] = useState<BillsSheet | null>(null);
   const [loans, setLoans] = useState<LoanTrackerYear | null>(null);
@@ -126,8 +130,7 @@ export default function BillsPage() {
 
   return (
     <div>
-      <PageHeader title="Bills" subtitle="Every account and loan, month by month — what is paid, what is due, what is late" />
-      <div className="px-4 md:px-8 pb-10">
+      <div>
         <div className="flex flex-wrap items-center gap-2 mb-4">
           <div className="inline-flex items-center rounded-lg" style={{ background: 'rgba(255,255,255,0.05)' }}>
             <button className="px-2.5 py-1.5 text-gray-400 hover:text-white" onClick={() => setYear(y => y - 1)} aria-label="Previous year">‹</button>
@@ -234,6 +237,28 @@ export default function BillsPage() {
 
       {cell && <BillPanel bills={cell.bills} month={cell.month} onClose={() => setCell(null)} onChanged={() => { setCell(null); void load(); }} />}
       {loanCell && <LoanPanel row={loanCell.row} month={loanCell.month} onClose={() => setLoanCell(null)} onChanged={() => { setLoanCell(null); void load(); }} />}
+    </div>
+  );
+}
+
+/** The Bills page: the sheet, and beside it the bills' payments, fees and archive (moved here from Finances). */
+const VIEWS = [
+  { key: 'sheet', label: 'By month', subtitle: 'Every account and loan, month by month — what is paid, what is due, what is late', render: () => <BillsSheet /> },
+  { key: 'payments', label: 'Payments', subtitle: 'Payments made against utility accounts, grouped by provider', render: () => <PaymentsPage embedded /> },
+  { key: 'fees', label: 'Fees', subtitle: 'Any line item, broken down by utility and rolled up by property — month, year, or overall', render: () => <FeesSummaryPage embedded /> },
+  { key: 'archive', label: 'Archive', subtitle: 'Every statement across all properties, searchable, with PDFs', render: () => <DocumentsPage embedded /> },
+];
+
+export default function BillsPage() {
+  const [params, setParams] = useSearchParams();
+  const view = VIEWS.find(v => v.key === params.get('view')) ?? VIEWS[0];
+  return (
+    <div>
+      <PageHeader title="Bills" subtitle={view.subtitle} />
+      <div className="px-4 md:px-8 pb-10">
+        <ViewSwitch views={VIEWS} value={view.key} onChange={v => setParams(v === 'sheet' ? {} : { view: v }, { replace: true })} />
+        {view.render()}
+      </div>
     </div>
   );
 }
