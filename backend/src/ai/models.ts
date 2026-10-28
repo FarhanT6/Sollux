@@ -32,6 +32,8 @@ export interface AskOptions {
   cache?: boolean;
   /** How hard an always-thinking model thinks. Reading a document needs little. */
   effort?: 'low' | 'medium' | 'high';
+  /** Let a model that can think do so (adaptive): analysis across documents, not reading one into JSON. */
+  think?: boolean;
 }
 
 // The SDK waits up to ten minutes per call and retries twice on its own; a
@@ -53,7 +55,8 @@ export function paramsFor(model: string, o: AskOptions): Anthropic.MessageCreate
   };
   // Opus 5.5 and Fable always think — thinking can't be turned off, only
   // turned down with effort, and it counts against max_tokens.
-  if (/opus-5-5|fable/.test(model)) return { ...base, max_tokens: o.maxTokens + 16000, output_config: { effort: o.effort ?? 'low' } };
+  if (/opus-5-5|fable/.test(model)) return { ...base, max_tokens: o.maxTokens + 16000, output_config: { effort: o.effort ?? (o.think ? 'medium' : 'low') } };
+  if (o.think && /sonnet-5|opus-5/.test(model)) return { ...base, max_tokens: o.maxTokens + 12000, thinking: { type: 'adaptive' } } as Anthropic.MessageCreateParamsNonStreaming;
   // Sonnet 5 and Opus 5 think by default; reading a bill into JSON does not
   // need it, and leaving it on would spend the answer's tokens on reasoning.
   if (/sonnet-5|opus-5/.test(model)) return { ...base, thinking: { type: 'disabled' } };

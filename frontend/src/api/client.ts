@@ -919,8 +919,11 @@ export const getBudgetForecast = (months = 6) =>
 // AI portfolio query
 // Ask Sollux with tools: answers from live data; proposed payments run only on Confirm.
 export interface AgentAction { tool: string; input: Record<string, unknown>; summary: string }
-export const askSollux = (messages: { role: 'user' | 'assistant'; content: string }[], today: string) =>
-  api.post<{ answer: string; actions: AgentAction[] }>('/ai/agent', { messages, today }, { timeout: 120000 }).then(r => r.data);
+export interface SolluxAttachment { key: string; name: string }
+export const askSollux = (messages: { role: 'user' | 'assistant'; content: string; attachments?: SolluxAttachment[] }[], today: string) =>
+  api.post<{ answer: string; actions: AgentAction[] }>('/ai/agent', { messages, today }, { timeout: 360000 }).then(r => r.data);
+export const attachToSollux = (files: { name: string; data: string }[]) =>
+  api.post<{ attachments: SolluxAttachment[] }>('/ai/agent/attachments', { files }, { timeout: 180000 }).then(r => r.data.attachments);
 export const confirmSolluxAction = (a: AgentAction) =>
   api.post<{ result: string }>('/ai/agent/confirm', { tool: a.tool, input: a.input }).then(r => r.data);
 

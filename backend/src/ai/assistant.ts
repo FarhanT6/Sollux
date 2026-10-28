@@ -25,7 +25,9 @@ import { reviewInsurance } from '../services/insuranceReview';
 import { opexFacts, rangeFor } from '../services/operatingExpenses';
 import { buildStatement } from '../lib/opexStatement';
 
-export type ChatTurn = { role: 'user' | 'assistant'; content: string };
+/** A file the owner attached in the chat: stored under their own chat folder (routes/ai.ts). */
+export interface ChatAttachment { key: string; name: string }
+export type ChatTurn = { role: 'user' | 'assistant'; content: string; attachments?: ChatAttachment[] };
 export interface PendingAction { tool: string; input: Record<string, any>; summary: string }
 
 const n = (v: unknown) => (v == null ? null : Number(v));
@@ -281,7 +283,10 @@ export async function runAction(userId: string, a: { tool: string; input: any })
 
 async function create(client: Anthropic, base: { system: string; messages: Anthropic.MessageParam[] }) {
   // Cached: each lookup turn resends the whole conversation so far.
-  const make = (model: string) => meteredCreate(client, 'assistant', { ...paramsFor(model, { maxTokens: 2000, system: base.system, messages: base.messages, cache: true }), tools: TOOLS });
+  // Thinks before answering (comparing months of bills is analysis), and may
+  // search the web — a rate rule, an installer, what a charge means.
+  const tools: Anthropic.ToolUnion[] = [...TOOLS, { type: 'web_search_20260209', name: 'web_search', max_uses: 5 } as Anthropic.WebSearchTool20260209];
+  const make = (model: string) => meteredCreate(client, 'assistant', { ...paramsFor(model, { maxTokens: 4000, system: base.system, messages: base.messages, cache: true, think: true }), tools } as Anthropic.MessageCreateParamsNonStreaming);
   try { return await make(PRIMARY_MODEL); }
   catch (err) {
     if (!FALLBACK_MODEL || !worthRetrying(err)) throw err;
@@ -295,14 +300,38 @@ async function create(client: Anthropic, base: { system: string; messages: Anthr
  */
 export async function assistantTurn(userId: string, history: ChatTurn[], today: string): Promise<{ answer: string; actions: PendingAction[] }> {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const system = `You are Sollux, the assistant inside a real-estate owner's property-management app (rentals, utilities, loans, taxes). Today is ${today}. You can see everything the owner has in Sollux except the vault and saved passwords: every bill and its PDF (open_file reads the document itself — usage, line items, true-up, notices), payments, payment plans, loans, rent, taxes, insurance, documents and expenses. Answer from the tools — never guess amounts, dates or ids, and never say you cannot see a bill: open it. Look things up before answering; use find to get ids. Be brief: short sentences or bullets, dollar amounts and dates. To record a payment, call the matching log_* tool; it is only proposed — the owner confirms it on screen — so after proposing, say in one line what will be recorded. Do not claim anything was recorded.`;
-  const messages: Anthropic.MessageParam[] = history.slice(-12).map(t => ({ role: t.role, content: t.content }));
+  const system = `You are Sollux, the assistant inside a real-estate owner's property-management app (rentals, utilities, loans, taxes). Today is ${today}. You can see everything the owner has in Sollux except the vault and saved passwords: every bill and its PDF (open_file reads the document itself — usage, line items, true-up, notices), payments, payment plans, loans, rent, taxes, insurance, documents and expenses. Answer from the tools — never guess amounts, dates or ids, and never say you cannot see a bill: open it. Look things up before answering; use find to get ids. Match the question: a quick lookup gets a short answer; "why is this bill so high" or "what changed" gets a real analysis — open every relevant statement PDF (several months), compare usage (kWh, therms, gallons) and its time-of-use split, rates, credits and their balances (an SDG&E bill's net-metering summary page lists each month's net usage and the NEM credit left), charges by provider (delivery vs a CCA's generation), and fees; say what changed and when, separate what the bills prove from what they cannot show (a net-metered bill shows net grid usage, not solar production), and end with the next checks to make. Read any file or screenshot the owner attached (usage graphs, a solar app, a letter) as evidence. Search the web when outside facts help (a tariff, an installer, a program), and say where a fact came from. Ask one focused question when an answer depends on something only the owner knows.
+Format with Markdown: **bold**, bullet and numbered lists, ### headings for a long answer, and tables (| a | b |). To show a chart, add a fenced block in this exact form — the app draws it:
+\`\`\`chart
+{"type":"bar","title":"Net grid usage by bill","unit":"kWh","labels":["May","Jun","Jul"],"series":[{"name":"Net kWh","values":[-1010,-990,-901]}]}
+\`\`\`
+(type "bar" or "line"; unit "$", "kWh" or any short unit; one or more series with a value per label.) Use dollar amounts and dates. To record a payment, call the matching log_* tool; it is only proposed — the owner confirms it on screen — so after proposing, say in one line what will be recorded. Do not claim anything was recorded.`;
+  // Attachments travel with the turn they were sent in; the newest dozen are
+  // read again on follow-ups, so "is this what you wanted?" can be answered.
+  const recent = history.slice(-12);
+  let budget = 12;
+  const withFiles = new Set<number>();
+  for (let i = recent.length - 1; i >= 0 && budget > 0; i--) if (recent[i].role === 'user' && recent[i].attachments?.length) { withFiles.add(i); budget -= recent[i].attachments!.length; }
+  const messages: Anthropic.MessageParam[] = [];
+  for (const [i, t] of recent.entries()) {
+    if (t.role === 'user' && withFiles.has(i)) {
+      const blocks: Anthropic.ContentBlockParam[] = [];
+      for (const a of t.attachments!.slice(0, 12)) {
+        try { blocks.push({ type: 'text', text: `Attached: ${a.name}` }, await fileBlockForClaude(await downloadDocument(a.key), a.name)); }
+        catch (err) { blocks.push({ type: 'text', text: `Attached ${a.name}, but it could not be opened (${err instanceof Error ? err.message : err}).` }); }
+      }
+      blocks.push({ type: 'text', text: t.content });
+      messages.push({ role: 'user', content: blocks });
+    } else messages.push({ role: t.role, content: t.content });
+  }
   const actions: PendingAction[] = [];
 
-  for (let step = 0; step < 12; step++) {
+  for (let step = 0; step < 20; step++) {
     const res = await create(client, { system, messages });
     const uses = res.content.filter((c): c is Anthropic.ToolUseBlock => c.type === 'tool_use');
     const text = res.content.map(c => (c.type === 'text' ? c.text : '')).join('').trim();
+    // A long web search pauses the turn; it is continued as it stands.
+    if (res.stop_reason === 'pause_turn') { messages.push({ role: 'assistant', content: res.content }); continue; }
     if (res.stop_reason !== 'tool_use' || !uses.length) return { answer: text || 'I could not find an answer to that.', actions };
     messages.push({ role: 'assistant', content: res.content });
     const results: Anthropic.ToolResultBlockParam[] = [];

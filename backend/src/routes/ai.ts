@@ -5,6 +5,9 @@ import { askClaude } from '../ai/models';
 import { assistantTurn, runAction, type ChatTurn } from '../ai/assistant';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
+import { uploadDocument } from '../services/s3Service';
+import { imageMediaType } from '../services/pdfImportService';
+import crypto from 'crypto';
 
 const router = Router();
 router.use(attachDbUser);
@@ -170,13 +173,44 @@ Keep responses under 300 words unless detail is genuinely needed.`,
 router.post('/agent', async (req: Request, res: Response) => {
   try {
     const body = req.body as { messages?: ChatTurn[]; today?: string };
-    const history = (body.messages ?? []).filter(m => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim()).map(m => ({ role: m.role, content: m.content.slice(0, 4000) }));
+    // An attachment is only ever one of this owner's own chat uploads.
+    const mine = `${req.dbUserId}/chat/`;
+    const history: ChatTurn[] = (body.messages ?? []).filter(m => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim()).map(m => ({
+      role: m.role, content: m.content.slice(0, 8000),
+      ...(m.role === 'user' && Array.isArray(m.attachments)
+        ? { attachments: m.attachments.filter(a => a && typeof a.key === 'string' && a.key.startsWith(mine) && !a.key.includes('..')).slice(0, 12).map(a => ({ key: a.key, name: String(a.name ?? 'file').slice(0, 120) })) }
+        : {}),
+    }));
     if (!history.length || history[history.length - 1].role !== 'user') return res.status(400).json({ error: 'Ask a question.' });
     const today = typeof body.today === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.today) ? body.today : new Date().toISOString().slice(0, 10);
     res.json(await assistantTurn(req.dbUserId!, history, today));
   } catch (err: any) {
     console.error('AI agent error:', err?.message ?? err);
     res.status(500).json({ error: 'Sollux could not answer that just now.' });
+  }
+});
+
+// POST /api/ai/agent/attachments { files: [{ name, data(base64) }] } — files for the
+// next question (statements, usage screenshots, letters): stored privately under
+// the owner's chat folder and read by the assistant; never shared or listed.
+router.post('/agent/attachments', async (req: Request, res: Response) => {
+  try {
+    const files = Array.isArray(req.body?.files) ? req.body.files.slice(0, 12) : [];
+    if (!files.length) return res.status(400).json({ error: 'No files.' });
+    const out: { key: string; name: string }[] = [];
+    for (const f of files) {
+      const buf = Buffer.from(String(f?.data ?? ''), 'base64');
+      const name = String(f?.name ?? 'file').replace(/[^\w.\- ]+/g, '_').slice(0, 100) || 'file';
+      if (!buf.length || buf.length > 15 * 1024 * 1024) return res.status(400).json({ error: `${name}: up to 15 MB per file.` });
+      if (!imageMediaType(buf) && buf.indexOf('%PDF-') < 0) return res.status(400).json({ error: `${name}: attach a PDF or a picture (PNG, JPEG, WebP).` });
+      const key = `${req.dbUserId}/chat/${crypto.randomUUID()}_${name}`;
+      await uploadDocument(key, buf);
+      out.push({ key, name });
+    }
+    res.json({ attachments: out });
+  } catch (err: any) {
+    console.error('AI attachment error:', err?.message ?? err);
+    res.status(500).json({ error: 'Could not attach that file.' });
   }
 });
 
