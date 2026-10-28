@@ -18,6 +18,8 @@ export interface LedgerLine {
   /** Where to go for the detail: the account, the loan, the Taxes or Insurance page. */
   link: string | null;
   months: Record<string, MonthFigure>;
+  /** Loans and policies: the scheduled amount for every month, months to come included (a budget's expectation). */
+  schedule?: Record<string, number>;
   /** Logged expenses, one by one, so they can be edited. */
   items?: LedgerItem[];
 }
@@ -70,3 +72,35 @@ export function operatingCharge(s: { amountDue: unknown; trueUpDeferred: unknown
   return r2(n(s.amountDue) - n(s.trueUpDeferred) - n(s.paymentPlanAmount));
 }
 
+
+/** The month before / a year before, as YYYY-MM. */
+export function shiftMonth(month: string, by: number): string {
+  const [y, m] = month.split('-').map(Number);
+  const t = y * 12 + (m - 1) + by;
+  return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, '0')}`;
+}
+
+/**
+ * What a bill line is expected to charge in a month, from its own history:
+ * the same month a year before (seasons, and accounts billed every other
+ * month, come out right), else the average month since its first bill in
+ * the year before. Nothing on record means nothing expected.
+ */
+export function expectedCharge(charged: Record<string, number>, month: string): number {
+  const lastYear = charged[shiftMonth(month, -12)];
+  if (lastYear) return r2(lastYear);
+  let first: number | null = null, total = 0;
+  for (let k = 12; k >= 1; k--) {
+    const v = charged[shiftMonth(month, -k)] ?? 0;
+    if (first == null && v) first = k;
+    total += v;
+  }
+  return first ? r2(total / first) : 0;
+}
+
+/** A logged cost (repairs, management) expected per month: the year before's monthly average. */
+export function expectedAverage(charged: Record<string, number>, month: string): number {
+  let total = 0;
+  for (let k = 1; k <= 12; k++) total += charged[shiftMonth(month, -k)] ?? 0;
+  return r2(total / 12);
+}

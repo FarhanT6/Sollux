@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getLoans, createLoan, updateLoan, deleteLoan, getProperties } from '../api/client';
+import { getLoans, createLoan, updateLoan, deleteLoan, getProperties, getLoanTrackerMonth, type LoanTrackerRow } from '../api/client';
+import { todayISO, thisMonthISO } from '../lib/date';
 import type { Loan, Property, LoanType } from '../types';
 import { format } from 'date-fns';
 import { projectLoanBalance } from '../lib/loanMath';
@@ -45,8 +46,17 @@ const LOAN_TYPES: LoanType[] = ['MORTGAGE','HELOC','AUTO','PERSONAL','STUDENT','
 const MORTGAGE_PERSONAL_TYPES: LoanType[] = ['MORTGAGE', 'HELOC', 'SELLER_FINANCING', 'DSCR', 'COMMERCIAL', 'HARD_MONEY', 'PERSONAL'];
 const CONSUMER_LOAN_TYPES: LoanType[] = ['AUTO', 'STUDENT', 'INSTALLMENT_PLAN', 'CREDIT_LINE', 'OTHER'];
 
-function LoanTable({ title, loans, setLoans }: {
-  title: string; loans: Loan[]; setLoans: (updater: (prev: Loan[]) => Loan[]) => void;
+/** This month's payment on a loan, from the payment tracker: paid, part paid, not due yet, in grace, late. */
+const MONTH_PILL: Record<string, { label: string; cls: string }> = {
+  paid: { label: 'Paid', cls: 'text-emerald-400 bg-emerald-900/30' },
+  partial: { label: 'Part paid', cls: 'text-amber-400 bg-amber-900/30' },
+  upcoming: { label: 'Not due yet', cls: 'text-gray-400 bg-white/5' },
+  due: { label: 'In grace', cls: 'text-amber-400 bg-amber-900/30' },
+  late: { label: 'Late', cls: 'text-red-400 bg-red-900/30' },
+};
+
+function LoanTable({ title, loans, setLoans, month }: {
+  title: string; loans: Loan[]; setLoans: (updater: (prev: Loan[]) => Loan[]) => void; month: Map<string, LoanTrackerRow>;
 }) {
   if (loans.length === 0) return null;
   // Every active loan in the group, personal ones included — the same set
@@ -71,6 +81,7 @@ function LoanTable({ title, loans, setLoans }: {
               <th className="px-4 py-3 text-right">Original</th>
               <th className="px-4 py-3 text-right">Balance</th>
               <th className="px-4 py-3 text-right">Monthly</th>
+              <th className="px-4 py-3">This month</th>
               <th className="px-4 py-3 text-right">Rate</th>
               <th className="px-4 py-3 text-right">Interest remaining</th>
               <th className="px-4 py-3 text-right">Interest paid</th>
@@ -103,6 +114,14 @@ function LoanTable({ title, loans, setLoans }: {
                 </td>
                 <td className="px-4 py-3 text-right text-gray-300 text-xs" title={loan.escrowAmount ? `${money(loan.monthlyPayment)} P&I + ${money(loan.escrowAmount)} escrow` : undefined}>
                   {moneyExact(loan.monthlyPayment != null || loan.escrowAmount != null ? Number(loan.monthlyPayment ?? 0) + Number(loan.escrowAmount ?? 0) : undefined)}
+                </td>
+                <td className="px-4 py-3 text-xs whitespace-nowrap">
+                  {(() => {
+                    const m = month.get(loan.id);
+                    const pill = m ? MONTH_PILL[m.status] : null;
+                    if (!m || !pill) return <span className="text-gray-600">—</span>;
+                    return <span className={`px-1.5 py-0.5 rounded ${pill.cls}`} title={`Due ${m.dueDate} · paid ${moneyExact(m.paid)} of ${moneyExact(m.expected)}`}>{pill.label}</span>;
+                  })()}
                 </td>
                 <td className="px-4 py-3 text-right text-gray-400 text-xs">{loan.interestRate != null ? `${loan.interestRate}%` : '—'}</td>
                 <td className="px-4 py-3 text-right text-gray-400 text-xs">{money(loan.totalInterestLifetime ?? undefined)}</td>
@@ -151,6 +170,9 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
   const [loans, setLoans] = useState<Loan[]>([]);
   const [properties, setProperties] = useState<Property[]>([]);
   const [loading, setLoading] = useState(true);
+  // This month's payment on each loan, from the tracker.
+  const [month, setMonth] = useState<Map<string, LoanTrackerRow>>(new Map());
+  useEffect(() => { getLoanTrackerMonth(thisMonthISO(), todayISO()).then(t => setMonth(new Map(t.rows.map(r => [r.loanId, r])))).catch(() => {}); }, []);
   const [search, setSearch] = useState('');
   const [propertyFilter, setPropertyFilter] = useState('');
   const [sortBy, setSortBy] = useState<'lender' | 'balance' | 'maturity' | 'rate'>('lender');
@@ -405,11 +427,13 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
             title="Mortgages & Personal"
             loans={displayedLoans.filter(l => MORTGAGE_PERSONAL_TYPES.includes(l.loanType))}
             setLoans={setLoans}
+            month={month}
           />
           <LoanTable
             title="Auto, Student & Solar Loans"
             loans={displayedLoans.filter(l => CONSUMER_LOAN_TYPES.includes(l.loanType))}
             setLoans={setLoans}
+            month={month}
           />
           {displayedLoans.length === 0 && (
             <div className="text-center py-12 text-gray-500 text-sm">No loans found</div>

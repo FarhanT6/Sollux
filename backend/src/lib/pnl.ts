@@ -80,10 +80,11 @@ function monthsInRange(range: DateRange): number {
   return n;
 }
 
-export function scheduledRent(leases: LeaseLike[], range: DateRange): number {
+/** `project` counts months still to come too (an expectation, not income), for a budget. */
+export function scheduledRent(leases: LeaseLike[], range: DateRange, project = false): number {
   const now = new Date();
   const lastMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
-  const stop = range.end < lastMonth ? range.end : lastMonth;
+  const stop = project || range.end < lastMonth ? range.end : lastMonth;
 
   let total = 0;
   for (let m = new Date(Date.UTC(range.start.getUTCFullYear(), range.start.getUTCMonth(), 1)); m < stop; m = new Date(Date.UTC(m.getUTCFullYear(), m.getUTCMonth() + 1, 1))) {

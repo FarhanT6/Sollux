@@ -386,7 +386,7 @@ function LeaseCard({ lease, maintenance, onChanged }: {
         <div className="flex items-center gap-2">
           <span className={`pill text-xs ${lease.status === 'ACTIVE' ? 'pill-green' : lease.status === 'PENDING' ? 'pill-amber' : 'pill-gray'}`}>{lease.status}</span>
           {lease.status === 'ACTIVE' && (
-            <Link to="/finances?tab=budget" className="text-xs text-gray-500 hover:text-gray-300">View in Budget</Link>
+            <Link to="/finances?tab=income&view=rent" className="text-xs text-gray-500 hover:text-gray-300">View in Rent</Link>
           )}
           <button onClick={() => setEditing(e => !e)} className="text-xs text-amber-400 hover:text-amber-300">{editing ? 'Cancel' : 'Edit'}</button>
         </div>
