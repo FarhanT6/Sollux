@@ -789,6 +789,18 @@ export interface BillsSheetAccount {
 export interface BillsSheet { properties: { id: string; name: string; address: string; city: string; state: string; accounts: BillsSheetAccount[] }[] }
 export const getBillsSheet = () => api.get<BillsSheet>('/bills').then(r => r.data);
 
+// The cost ledger: what each property cost, by type and month (charged when due, paid when paid).
+export type CostType = 'UTILITIES' | 'INSURANCE' | 'PROPERTY_TAX' | 'HOA' | 'MAINTENANCE' | 'MANAGEMENT' | 'OTHER' | 'DEBT_SERVICE' | 'CAPITAL';
+export interface CostLine {
+  key: string; type: CostType; source: 'account' | 'expense' | 'loan' | 'tax' | 'policy'; propertyId: string;
+  label: string; sub: string | null; link: string | null;
+  months: Record<string, { charged: number; paid: number }>;
+  items?: { date: string; label: string; charged: number; paid: number; expenseId?: string }[];
+}
+export interface CostLedger { months: string[]; properties: { id: string; name: string; sold: boolean }[]; lines: CostLine[] }
+export const getCosts = (from: string, to: string, propertyId?: string) =>
+  api.get<CostLedger>('/costs', { params: { from, to, propertyId } }).then(r => r.data);
+
 // Utility payments
 export const getPayments = (params: { utilityAccountId?: string; propertyId?: string }) =>
   api.get<Payment[]>('/payments', { params }).then(r => r.data);

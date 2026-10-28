@@ -4,14 +4,11 @@ import PnLPage from './PnLPage';
 import CashflowPage from './CashflowPage';
 import BudgetPage from './BudgetPage';
 import LoansPage from './LoansPage';
-import ExpensesPage from './ExpensesPage';
+import CostsPage from './CostsPage';
 import IncomingPaymentsPage from './IncomingPaymentsPage';
-import FeesSummaryPage from './FeesSummaryPage';
-import PaymentsPage from './PaymentsPage';
-import DocumentsPage from './DocumentsPage';
 import LoanPaymentTracker from '../components/loans/LoanPaymentTracker';
 
-export type Tab = 'performance' | 'loans' | 'incoming' | 'expenses';
+export type Tab = 'performance' | 'loans' | 'incoming' | 'costs';
 
 interface View { key: string; label: string; subtitle: string; render: () => JSX.Element }
 
@@ -20,8 +17,9 @@ interface View { key: string; label: string; subtitle: string; render: () => JSX
  * (pages/phone/FinancesScreen.tsx), so both offer the same things. Four
  * sections, each with its views: P&L, cash flow and budget under
  * Performance; the loans and their month-by-month payments under Loans;
- * utility payments, fees and the bill archive under Expenses.
- * Reconciliation and Expense Payments were taken out — the property
+ * what each property cost, by type, under Costs (lib/costLedger on the
+ * server). Utility payments, fees and the bill archive are on the Bills
+ * page. Reconciliation and Expense Payments were taken out — the property
  * manager's monthly statement is to come in a better way.
  */
 export const FINANCE_SECTIONS: { key: Tab; label: string; subtitle: string; views: View[] }[] = [
@@ -45,22 +43,23 @@ export const FINANCE_SECTIONS: { key: Tab; label: string; subtitle: string; view
     views: [{ key: 'incoming', label: 'Incoming payments', subtitle: 'Transfers, checks and deposits into watched bank accounts, matched to tenants', render: () => <IncomingPaymentsPage embedded /> }],
   },
   {
-    key: 'expenses', label: 'Expenses', subtitle: 'What the properties cost: expenses, utility payments, fees and bills',
-    views: [
-      { key: 'expenses', label: 'Expenses', subtitle: 'Operating and capital expenditures across all properties', render: () => <ExpensesPage embedded /> },
-      { key: 'utility-payments', label: 'Utility payments', subtitle: 'Payments made against utility accounts, grouped by provider', render: () => <PaymentsPage embedded /> },
-      { key: 'fees', label: 'Fees', subtitle: 'Any line item, broken down by utility and rolled up by property — month, year, or overall', render: () => <FeesSummaryPage embedded /> },
-      { key: 'bills', label: 'Bill archive', subtitle: 'Every statement across all properties, searchable, with PDFs', render: () => <DocumentsPage embedded /> },
-    ],
+    key: 'costs', label: 'Costs', subtitle: 'What each property cost, by type: utilities, insurance, tax, HOA, maintenance, management, loans',
+    views: [{ key: 'costs', label: 'Costs', subtitle: 'What each property cost, by type: utilities, insurance, tax, HOA, maintenance, management, loans', render: () => <CostsPage /> }],
   },
 ];
 
 /** Old ?tab= links (one tab per view) and where they live now. */
 const OLD_TABS: Record<string, [Tab, string]> = {
   pnl: ['performance', 'pnl'], cashflow: ['performance', 'cashflow'], budget: ['performance', 'budget'],
-  'loan-payments': ['loans', 'loan-payments'], fees: ['expenses', 'fees'], 'utility-payments': ['expenses', 'utility-payments'],
-  bills: ['expenses', 'bills'], reconciliation: ['performance', 'pnl'], outgoing: ['expenses', 'expenses'],
+  'loan-payments': ['loans', 'loan-payments'], reconciliation: ['performance', 'pnl'], outgoing: ['costs', 'costs'], expenses: ['costs', 'costs'],
 };
+
+/** Old Finances links to what is now on the Bills page. */
+export const BILLS_VIEWS: Record<string, string> = { fees: 'fees', 'utility-payments': 'payments', bills: 'archive' };
+export function billsRedirect(tab: string | null, view: string | null): string | null {
+  const v = (tab && BILLS_VIEWS[tab]) || (tab === 'expenses' && view && BILLS_VIEWS[view]);
+  return v ? `/bills?view=${v}` : null;
+}
 
 /** The section and view a ?tab=&view= pair names, old links included. */
 export function resolveFinance(tab: string | null, view: string | null) {
@@ -91,6 +90,8 @@ export default function FinancesPage() {
 
   // Personal expenses moved to the Personal section.
   if (raw === 'personal') return <Navigate to="/personal?tab=expenses" replace />;
+  const toBills = billsRedirect(raw, searchParams.get('view'));
+  if (toBills) return <Navigate to={toBills} replace />;
 
   const resolved = resolveFinance(raw, searchParams.get('view'));
   const section = resolved.section ?? FINANCE_SECTIONS[0];

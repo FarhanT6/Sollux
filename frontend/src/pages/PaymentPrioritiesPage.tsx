@@ -154,7 +154,7 @@ export default function PaymentPrioritiesPage() {
         {fees && fees.totalFeesPaid > 0 && (
           <p className="text-xs text-gray-500 mt-5">
             {money(fees.totalFeesPaid)} paid in fees across {fees.billsWithFees} bills in the last 12 months.
-            {' '}<Link to="/finances?tab=fees" className="text-[#F5A623] hover:underline">See the full breakdown</Link>.
+            {' '}<Link to="/bills?view=fees" className="text-[#F5A623] hover:underline">See the full breakdown</Link>.
           </p>
         )}
       </div>
