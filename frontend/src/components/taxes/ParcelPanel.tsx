@@ -99,6 +99,12 @@ export default function ParcelPanel({ property, taxes, defaults, onChanged, onEd
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [property.id]);
 
+  // A parcel picked from the candidates: saved, then its taxes looked up.
+  async function runLookupWith(chosen: string) {
+    setLookupError(null);
+    try { await startTaxLookup(property.id); setLookup({ status: 'queued', at: new Date().toISOString() }); if (!timer.current) timer.current = setInterval(() => void pollRef.current(), 4000); await onChanged(); }
+    catch (e) { setLookupError(describeApiError(e, `Saved parcel ${chosen}, but could not start the lookup.`)); }
+  }
   async function runLookup() {
     setLookupError(null);
     // No parcel number: the lookup finds it by the street address.
@@ -196,6 +202,18 @@ export default function ParcelPanel({ property, taxes, defaults, onChanged, onEd
             </span>
           </div>
           {lookupError && <p className="text-xs text-red-400 mt-1">{lookupError}</p>}
+          {lookup?.status === 'choose' && lookup.candidates?.length ? (
+            <div className="mt-2 rounded-lg p-2.5 space-y-1.5" style={{ background: 'rgba(245,166,35,0.06)', border: '1px solid rgba(245,166,35,0.25)' }}>
+              <p className="text-xs text-amber-300">{lookup.note ?? 'Which of these is this property?'}</p>
+              {lookup.candidates.map(c => (
+                <div key={c.apn} className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="text-white font-mono">{c.apn}</span>
+                  <span className="text-gray-400 flex-1 min-w-[10rem]">{[c.situsAddress, c.owner, c.note].filter(Boolean).join(' · ') || '—'}</span>
+                  <button onClick={() => { setApn(c.apn); void (async () => { await updateProperty(property.id, { apn: c.apn } as any); await runLookupWith(c.apn); })(); }} className="btn btn-primary text-xs">Use this parcel</button>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
         <div className="stat-card"><p className="text-xs text-gray-500">To be current today</p><p className={`text-lg font-semibold ${owedNow > 0 ? 'text-red-400' : 'text-white'}`}>{fmtMoney(owedNow)}</p></div>
         <div className="stat-card">

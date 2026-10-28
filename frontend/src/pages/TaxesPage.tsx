@@ -247,6 +247,7 @@ function PropertyTaxTab() {
     if (stalled(st)) return <span className="block text-xs text-amber-400">Lookup stalled — start it again</span>;
     if (st.status === 'queued') return <span className="block text-xs text-gray-500">Lookup queued — one property at a time</span>;
     if (st.status === 'running') return <span className="block text-xs text-amber-300">Looking up… {st.progress ?? ''}</span>;
+    if (st.status === 'choose') return <span className="block text-xs text-amber-300">Several possible parcels — open Parcel to pick one</span>;
     if (st.status === 'failed') return <span className="block text-xs text-red-400" title={st.note ?? ''}>Lookup failed: {(st.note ?? '').slice(0, 90)}</span>;
     return <span className="block text-xs text-emerald-500">Looked up {fmtDate(st.at)}</span>;
   };

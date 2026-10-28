@@ -6,10 +6,12 @@
 import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { insightQueue } from '../workers/queues';
-import { lookupPropertyTax } from './propertyTaxLookup';
+import { lookupPropertyTax, type LookupRun } from './propertyTaxLookup';
 import { withAiContext, checkBudget } from '../ai/meter';
 
-type Status = { status: 'queued' | 'running' | 'done' | 'failed'; at: string; note?: string | null; progress?: string | null; years?: number; defaults?: number };
+type Status = { status: 'queued' | 'running' | 'done' | 'failed' | 'choose'; at: string; note?: string | null; progress?: string | null; years?: number; defaults?: number;
+  /** Parcels that could be this property, for the owner to pick from. */
+  candidates?: { apn: string; situsAddress: string | null; owner: string | null; note: string | null }[] };
 
 const setStatus = (propertyId: string, s: Status) =>
   db.property.update({ where: { id: propertyId }, data: { taxLookupJson: s as unknown as Prisma.InputJsonValue } }).catch(() => {});
@@ -38,11 +40,13 @@ async function runOne(propertyId: string): Promise<void> {
     if (Date.now() - last < 4000) return;
     last = Date.now();
     void setStatus(propertyId, { status: 'running', at: startedAt, progress: t.slice(0, 160) });
-  }).catch(err => ({ ok: false, report: null, error: err instanceof Error ? err.message : String(err), steps: 0, costUsd: 0 }));
+  }).catch((err): LookupRun => ({ ok: false, report: null, error: err instanceof Error ? err.message : String(err), steps: 0, costUsd: 0 }));
   const years = r.report?.years?.length ?? 0, defaults = r.report?.defaults?.length ?? 0;
   await setStatus(propertyId, r.ok
     ? { status: 'done', at: new Date().toISOString(), note: r.report?.notes ?? null, years, defaults }
-    : { status: 'failed', at: new Date().toISOString(), note: r.error ?? 'The lookup did not finish.' });
+    : r.candidates?.length
+      ? { status: 'choose', at: new Date().toISOString(), note: r.error ?? null, candidates: r.candidates }
+      : { status: 'failed', at: new Date().toISOString(), note: r.error ?? 'The lookup did not finish.' });
   console.log(`[TaxLookup] ${propertyId}: ${r.ok ? `${years} year(s), ${defaults} unpaid` : r.error} · ${r.steps} steps · $${r.costUsd.toFixed(3)}`);
 }
 

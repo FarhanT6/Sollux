@@ -524,7 +524,7 @@ export const saveTaxDefault = (data: Record<string, any>) =>
 export const updateTaxDefault = (id: string, data: Record<string, any>) =>
   api.patch<TaxDefault>(`/taxes/defaults/${id}`, data).then(r => r.data);
 export const deleteTaxDefault = (id: string) => api.delete(`/taxes/defaults/${id}`);
-export interface TaxLookupStatus { status: 'queued' | 'running' | 'done' | 'failed'; at: string; note?: string | null; progress?: string | null; years?: number; defaults?: number }
+export interface TaxLookupStatus { status: 'queued' | 'running' | 'done' | 'failed' | 'choose'; at: string; note?: string | null; progress?: string | null; years?: number; defaults?: number; candidates?: { apn: string; situsAddress: string | null; owner: string | null; note: string | null }[] }
 export const startTaxLookup = (propertyId: string) => api.post('/taxes/lookup', { propertyId }).then(r => r.data);
 export const startTaxLookupAll = () => api.post<{ queued: number; skipped: number }>('/taxes/lookup-all').then(r => r.data);
 export const getTaxLookupStatus = () => api.get<Record<string, TaxLookupStatus | null>>('/taxes/lookup-status').then(r => r.data);
