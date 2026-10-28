@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { savingsReport } from '../services/savingsReport';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { runBookkeeperForUser } from '../ai/bookkeeper';
@@ -43,6 +44,11 @@ router.get('/', async (req, res, next) => {
 
 // POST /api/insights/bookkeeper/run — run the nightly bookkeeper now for
 // this owner and return what it found.
+// GET /api/insights/savings — where the owner can save, a dollar figure a year each (lib/savings.ts).
+router.get('/savings', async (req, res, next) => {
+  try { res.json(await savingsReport(req.dbUserId!)); } catch (err) { next(err); }
+});
+
 router.post('/bookkeeper/run', async (req, res, next) => {
   try {
     const result = await runBookkeeperForUser(req.dbUserId!);

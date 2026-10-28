@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { getInsights, markInsightRead, dismissInsight, markAllInsightsRead, dismissAllInfoInsights, runBookkeeper } from '../api/client';
 import type { AIInsight, InsightSeverity } from '../types';
 import { PageHeader, InsightCard, EmptyState, Skeleton } from '../components/ui';
+import SavingsList from '../components/insights/SavingsList';
 
 const SEVERITY_RANK: Record<InsightSeverity, number> = { ALERT: 3, WARNING: 2, INFO: 1 };
 
@@ -108,6 +109,7 @@ export default function InsightsPage() {
         }
       />
       <div className="px-6 py-5">
+        <SavingsList />
         {/* Controls row */}
         <div className="flex gap-3 mb-5 flex-wrap items-center">
           {/* Severity chips */}

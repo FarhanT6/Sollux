@@ -851,6 +851,13 @@ export const createPayment = (data: any) =>
 export const createSplitPayment = (data: any & { allocations: { statementId: string; amount: number }[] }) =>
   api.post<Payment[]>('/payments/split', data).then(r => r.data);
 
+// Where the owner can save: each finding a dollar figure a year, from the owner's own records.
+export interface Saving {
+  kind: 'LATE_FEES' | 'CARD_FEES' | 'RISING_BILL' | 'INSURANCE_UP' | 'IDLE_SERVICE' | 'DUPLICATE_SERVICE' | 'HIGH_RATE_LOAN';
+  title: string; detail: string; action: string; perYear: number; propertyId: string | null; propertyName: string | null; link: string | null;
+}
+export const getSavings = () => api.get<{ savings: Saving[]; total: number }>('/insights/savings').then(r => r.data);
+
 // Insights
 // Run the nightly bookkeeper now; findings land as insights.
 export const runBookkeeper = () =>
