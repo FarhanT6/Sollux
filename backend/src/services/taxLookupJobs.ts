@@ -18,7 +18,17 @@ export async function queueTaxLookup(propertyId: string): Promise<void> {
   await insightQueue.add('tax-lookup', { propertyId }, { attempts: 1, removeOnComplete: { count: 50 }, removeOnFail: { count: 50 } });
 }
 
-export async function runQueuedTaxLookup(propertyId: string): Promise<void> {
+// One lookup at a time in a worker: several at once fought over one browser
+// profile ("ProcessSingleton") and over the owner's Chrome tabs.
+let chain: Promise<unknown> = Promise.resolve();
+
+export function runQueuedTaxLookup(propertyId: string): Promise<void> {
+  const next = chain.then(() => runOne(propertyId), () => runOne(propertyId));
+  chain = next.catch(() => {});
+  return next;
+}
+
+async function runOne(propertyId: string): Promise<void> {
   const startedAt = new Date().toISOString();
   await setStatus(propertyId, { status: 'running', at: startedAt });
   let last = 0;

@@ -4,7 +4,7 @@ import IncomeTaxTab from '../components/taxes/IncomeTaxTab';
 import ScheduleETab from '../components/taxes/ScheduleETab';
 import ContractorsTab from '../components/taxes/ContractorsTab';
 import {
-  getTaxAssessments, readTaxBill, saveTaxAssessment, updateTaxAssessment, deleteTaxAssessment, taxBillUrl, getProperties, getLoans, getTaxDefaults, saveTaxDefault, startTaxLookupAll, type FilePayload,
+  getTaxAssessments, readTaxBill, saveTaxAssessment, updateTaxAssessment, deleteTaxAssessment, taxBillUrl, getProperties, getLoans, getTaxDefaults, saveTaxDefault, startTaxLookupAll, getTaxLookupStatus, type FilePayload, type TaxLookupStatus,
 } from '../api/client';
 import type { Property, TaxAssessment, TaxDefault, TaxStatus, SpecialAssessment } from '../types';
 import ParcelPanel from '../components/taxes/ParcelPanel';
@@ -224,10 +224,37 @@ function PropertyTaxTab() {
   }
 
   const [lookupNote, setLookupNote] = useState<string | null>(null);
+  // Where each property's county lookup stands, polled while any is under way.
+  const [lookups, setLookups] = useState<Record<string, TaxLookupStatus | null>>({});
+  const stalled = (st: TaxLookupStatus | null | undefined) => !!st && (st.status === 'queued' || st.status === 'running') && Date.now() - new Date(st.at).getTime() > 20 * 60_000;
+  const busyIds = Object.entries(lookups).filter(([, st]) => st && (st.status === 'queued' || st.status === 'running') && !stalled(st)).map(([id]) => id);
+  useEffect(() => { void getTaxLookupStatus().then(setLookups).catch(() => {}); }, []);
+  useEffect(() => {
+    if (!busyIds.length) return;
+    const t = setInterval(async () => {
+      const next = await getTaxLookupStatus().catch(() => null);
+      if (!next) return;
+      // A lookup that just finished: its years are on file now.
+      if (busyIds.some(id => next[id]?.status === 'done')) void load();
+      setLookups(next);
+    }, 5000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busyIds.join(',')]);
+  const lookupLine = (id: string) => {
+    const st = lookups[id];
+    if (!st) return null;
+    if (stalled(st)) return <span className="block text-xs text-amber-400">Lookup stalled — start it again</span>;
+    if (st.status === 'queued') return <span className="block text-xs text-gray-500">Lookup queued — one property at a time</span>;
+    if (st.status === 'running') return <span className="block text-xs text-amber-300">Looking up… {st.progress ?? ''}</span>;
+    if (st.status === 'failed') return <span className="block text-xs text-red-400" title={st.note ?? ''}>Lookup failed: {(st.note ?? '').slice(0, 90)}</span>;
+    return <span className="block text-xs text-emerald-500">Looked up {fmtDate(st.at)}</span>;
+  };
   async function lookupAll() {
     setLookupNote('Starting…');
     try {
       const r = await startTaxLookupAll();
+      void getTaxLookupStatus().then(setLookups).catch(() => {});
       setLookupNote(r.queued ? `Looking up ${r.queued} propert${r.queued === 1 ? 'y' : 'ies'} on the county sites — parcel numbers are found by address. A few minutes each; open Parcel to watch.${r.skipped ? ` ${r.skipped} skipped (looked up this week, running, or no address / state).` : ''}` : `Nothing to look up: every property was looked up this week, is running, or has no address / state.`);
     } catch (e) { setLookupNote(describeApiError(e, 'Could not start the lookups.')); }
   }
@@ -454,6 +481,7 @@ function PropertyTaxTab() {
                       <td className="pl-4">
                         <Link to={`/portfolio/${p.id}`} className="text-gray-200 hover:text-white">{p.nickname || p.address}</Link>
                         <span className="block text-xs text-gray-600">{[p.city, p.state].filter(Boolean).join(', ')}{p.apn ? ` · APN ${p.apn}` : ''}</span>
+                        {lookupLine(p.id)}
                         <button onClick={() => setParcel(parcel === p.id ? null : p.id)} className="text-xs text-amber-400/80 hover:text-amber-300">
                           Parcel{openDefaults.some(d => d.propertyId === p.id) ? <span className="text-red-400"> · {openDefaults.filter(d => d.propertyId === p.id).length} unpaid</span> : ''}
                         </button>

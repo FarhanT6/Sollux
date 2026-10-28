@@ -26,7 +26,7 @@ import { launchPortalContext } from '../scrapers/browser';
 import { BaseScraperProvider } from '../scrapers/base';
 import { connectorFor } from './connector';
 import { meteredCreate, paramsFor, PRIMARY_MODEL } from '../ai/models';
-import { withAiContext, costOf } from '../ai/meter';
+import { withAiContext, costOf, checkBudget } from '../ai/meter';
 import { startUrlFor, cleanReport, sameStreetAddress, type LookupReport } from '../lib/taxLookupReport';
 
 export { startUrlFor, cleanReport };
@@ -119,6 +119,9 @@ async function runLookup(p: { id: string; userId: string; address: string; city:
   const run: LookupRun = { ok: false, report: null, steps: 0, costUsd: 0 };
   if (!p.apn && !p.address) { run.error = 'Add the property address or its parcel number (APN) first.'; return run; }
   if (!process.env.ANTHROPIC_API_KEY) { run.error = 'AI is not configured.'; return run; }
+  // Before any browser opens: a run the budget would stop at its first step
+  // only flashed tabs open and shut in the owner's Chrome.
+  try { await checkBudget('tax-lookup'); } catch (err) { run.error = err instanceof Error ? err.message : String(err); return run; }
   const start = startUrlFor(p.state, p.county, p.apn ?? '', p.city);
 
   // The owner's own Chrome when its connector is online (county sites that
@@ -138,7 +141,11 @@ async function runLookup(p: { id: string; userId: string; address: string; city:
   }
   let page: Page = remote ? await ctx.newPage() : ctx.pages()[0] ?? await ctx.newPage();
   const opened: Page[] = [page];
-  ctx.on('page', np => { opened.push(np); });
+  // Only the tabs this lookup opened (its page's pop-ups, and theirs): in the
+  // owner's Chrome other tabs — another fetch's, the owner's own — are not
+  // this run's to follow or close.
+  const track = (pg: Page) => pg.on('popup', np => { opened.push(np); track(np); });
+  track(page);
   const close = async () => {
     if (remote) { for (const t of opened) await t.close().catch(() => {}); await remote.close().catch(() => {}); }
     else await ctx.close().catch(() => {});

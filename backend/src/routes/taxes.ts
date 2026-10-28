@@ -285,6 +285,9 @@ router.post('/lookup', async (req, res, next) => {
     const s = p.taxLookupJson as { status?: string; at?: string } | null;
     // One at a time; a run stuck for over 20 minutes may be started again.
     if ((s?.status === 'queued' || s?.status === 'running') && s.at && Date.now() - new Date(s.at).getTime() < 20 * 60_000) return res.status(409).json({ error: 'A lookup is already running for this property.' });
+    const { checkBudget, withAiContext } = await import('../ai/meter');
+    try { await withAiContext({ userId: req.dbUserId! }, () => checkBudget('tax-lookup')); }
+    catch (err) { return res.status(402).json({ error: err instanceof Error ? err.message : String(err) }); }
     const { queueTaxLookup } = await import('../services/taxLookupJobs');
     await queueTaxLookup(p.id);
     res.status(202).json({ queued: true });
@@ -296,6 +299,10 @@ router.post('/lookup', async (req, res, next) => {
 // none is on file.
 router.post('/lookup-all', async (req, res, next) => {
   try {
+    // Nothing is queued that the AI budget would stop at once.
+    const { checkBudget, withAiContext } = await import('../ai/meter');
+    try { await withAiContext({ userId: req.dbUserId! }, () => checkBudget('tax-lookup')); }
+    catch (err) { return res.status(402).json({ error: err instanceof Error ? err.message : String(err) }); }
     const props = await db.property.findMany({ where: { userId: req.dbUserId!, status: 'ACTIVE' }, select: { id: true, state: true, address: true, taxLookupJson: true } });
     const { queueTaxLookup } = await import('../services/taxLookupJobs');
     let queued = 0, skipped = 0;
