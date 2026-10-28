@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { saveTaxDefault, updateTaxDefault, deleteTaxDefault, updateProperty, startTaxLookup, getTaxLookupStatus, type TaxLookupStatus } from '../../api/client';
+import { saveTaxDefault, updateTaxDefault, deleteTaxDefault, updateProperty, startTaxLookup, getTaxLookupStatus, cancelTaxLookup, type TaxLookupStatus } from '../../api/client';
 import type { Property, TaxAssessment, TaxDefault, TaxDefaultStatus } from '../../types';
 import { fmtDate, todayISO } from '../../lib/date';
 import { fmtMoney } from '../../lib/money';
@@ -193,10 +193,12 @@ export default function ParcelPanel({ property, taxes, defaults, onChanged, onEd
           </div>
           <p className="text-xs text-gray-600 mt-1">{[property.county && `${property.county} County`, property.state].filter(Boolean).join(', ') || 'Add the county and state on the property.'}</p>
           <div className="flex items-center gap-2 mt-2 flex-wrap">
+            {busy && <button onClick={() => void cancelTaxLookup(property.id).then(() => pollRef.current())} className="btn text-xs">Cancel</button>}
             <button onClick={() => void runLookup()} disabled={busy} className="btn btn-primary text-xs disabled:opacity-50">{busy ? 'Looking up…' : apn.trim() ? 'Look up on the county site' : 'Find the parcel & look up taxes'}</button>
             <span className="text-xs text-gray-500">
               {busy ? (lookup?.progress ?? (lookup?.status === 'queued' ? 'Waiting for a browser…' : 'Starting…'))
                 : lookup?.status === 'done' ? `Looked up ${fmtDate(lookup.at)} · ${lookup.years ?? 0} year${lookup.years === 1 ? '' : 's'}${lookup.defaults ? `, ${lookup.defaults} unpaid` : ''} · refreshed monthly`
+                : lookup?.status === 'cancelled' ? 'Lookup cancelled.'
                 : lookup?.status === 'failed' ? <span className="text-red-400">Lookup failed: {lookup.note}</span>
                 : apn.trim() ? 'Reads the bill, values, special assessments and any unpaid years from the county.' : 'No parcel number needed: Sollux finds it on the county site by the address, then reads the bill.'}
             </span>

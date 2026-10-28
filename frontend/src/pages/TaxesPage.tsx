@@ -4,7 +4,7 @@ import IncomeTaxTab from '../components/taxes/IncomeTaxTab';
 import ScheduleETab from '../components/taxes/ScheduleETab';
 import ContractorsTab from '../components/taxes/ContractorsTab';
 import {
-  getTaxAssessments, readTaxBill, saveTaxAssessment, updateTaxAssessment, deleteTaxAssessment, taxBillUrl, getProperties, getLoans, getTaxDefaults, saveTaxDefault, startTaxLookupAll, getTaxLookupStatus, type FilePayload, type TaxLookupStatus,
+  getTaxAssessments, readTaxBill, saveTaxAssessment, updateTaxAssessment, deleteTaxAssessment, taxBillUrl, getProperties, getLoans, getTaxDefaults, saveTaxDefault, startTaxLookupAll, getTaxLookupStatus, cancelTaxLookup, type FilePayload, type TaxLookupStatus,
 } from '../api/client';
 import type { Property, TaxAssessment, TaxDefault, TaxStatus, SpecialAssessment } from '../types';
 import ParcelPanel from '../components/taxes/ParcelPanel';
@@ -247,6 +247,7 @@ function PropertyTaxTab() {
     if (stalled(st)) return <span className="block text-xs text-amber-400">Lookup stalled — start it again</span>;
     if (st.status === 'queued') return <span className="block text-xs text-gray-500">Lookup queued — one property at a time</span>;
     if (st.status === 'running') return <span className="block text-xs text-amber-300">Looking up… {st.progress ?? ''}</span>;
+    if (st.status === 'cancelled') return <span className="block text-xs text-gray-500">Lookup cancelled</span>;
     if (st.status === 'choose') return <span className="block text-xs text-amber-300">Several possible parcels — open Parcel to pick one</span>;
     if (st.status === 'failed') return <span className="block text-xs text-red-400" title={st.note ?? ''}>Lookup failed: {(st.note ?? '').slice(0, 90)}</span>;
     return <span className="block text-xs text-emerald-500">Looked up {fmtDate(st.at)}</span>;
@@ -363,6 +364,7 @@ function PropertyTaxTab() {
       <Section footer="A PDF from the county or photos of the paper bill; Sollux reads the parcel, year, installments and due dates.">
         <Row title="Add or upload a tax bill" tinted chevron={false} onClick={() => startNew()} />
         <Row title="Look up all properties" subtitle={lookupNote ?? 'From the county tax sites; parcel numbers found by address'} chevron={false} onClick={() => void lookupAll()} />
+        {busyIds.length > 0 && <Row title={`Stop all lookups (${busyIds.length})`} destructive chevron={false} onClick={() => void cancelTaxLookup().then(async () => setLookups(await getTaxLookupStatus()))} />}
       </Section>
       {upcoming.length > 0 && (
         <Section header="Due next" footer="Swipe left on an installment once it is paid.">
@@ -412,6 +414,9 @@ function PropertyTaxTab() {
       <div className="px-6 py-5">
         <div className="flex flex-wrap items-center justify-end gap-2 mb-3">
           {lookupNote && <span className="text-xs text-gray-400 mr-auto">{lookupNote}</span>}
+          {busyIds.length > 0 && (
+            <button onClick={async () => { const r = await cancelTaxLookup().catch(() => null); setLookupNote(r ? `Stopped ${r.cancelled} lookup${r.cancelled === 1 ? '' : 's'}.` : 'Could not stop the lookups.'); setLookups(await getTaxLookupStatus().catch(() => lookups)); }} className="btn text-xs">Stop all lookups ({busyIds.length})</button>
+          )}
           <button onClick={() => void lookupAll()} className="btn text-xs" title="Finds each property's parcel on its county's tax site (by address when there is no parcel number) and reads the bills">Look up all properties</button>
           <button onClick={() => startNew()} className="btn btn-primary text-xs">+ Add or upload a tax bill</button>
         </div>
