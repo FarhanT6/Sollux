@@ -856,7 +856,15 @@ export interface Saving {
   kind: 'LATE_FEES' | 'CARD_FEES' | 'RISING_BILL' | 'INSURANCE_UP' | 'IDLE_SERVICE' | 'DUPLICATE_SERVICE' | 'HIGH_RATE_LOAN';
   title: string; detail: string; action: string; perYear: number; propertyId: string | null; propertyName: string | null; link: string | null;
 }
-export const getSavings = () => api.get<{ savings: Saving[]; total: number }>('/insights/savings').then(r => r.data);
+export interface SavingsTactic { title: string; how: string; perYear: number | null; effort: 'call' | 'online' | 'form' | 'switch'; confidence: 'high' | 'medium' | 'low'; source: string | null }
+export interface CompanyResearch { provider: string; category: string; state: string; accounts: number; properties: string[]; monthly: number; lateFees12: number; tactics: SavingsTactic[]; error?: string }
+export interface InsuranceCheck {
+  propertyId: string; propertyName: string; paying: number; carriers: string[]; low: number; high: number; typical: number;
+  basis: string; contacts: string[]; sources: { title: string; url: string }[]; high_: boolean; error?: string;
+}
+export interface SavingsResearch { at: string; running: boolean; done: number; total: number; current: string | null; results: CompanyResearch[]; insurance?: InsuranceCheck[] }
+export const getSavings = () => api.get<{ savings: Saving[]; total: number; research: SavingsResearch | null }>('/insights/savings').then(r => r.data);
+export const startSavingsResearch = () => api.post<{ started: boolean; research: SavingsResearch | null }>('/insights/savings/research').then(r => r.data);
 
 // Insights
 // Run the nightly bookkeeper now; findings land as insights.
