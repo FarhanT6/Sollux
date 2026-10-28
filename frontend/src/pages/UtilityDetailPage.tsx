@@ -998,11 +998,11 @@ export default function UtilityDetailPage() {
   const years = tab === 'statements' ? stmtYears : pmtYears;
 
   const filteredStatements = useMemo(() => statements.filter(s => {
-    const date = new Date(s.statementDate);
-    if (yearFilter !== 'all' && date.getFullYear().toString() !== yearFilter) return false;
+    // Date-only values: read through the date helpers, or a Jan 1 bill filed under the year before.
+    if (yearFilter !== 'all' && String(yearOf(s.statementDate)) !== yearFilter) return false;
     if (search) {
       const q = search.toLowerCase();
-      if (!format(date, 'MMMM yyyy').toLowerCase().includes(q) && !String(s.amountDue || '').includes(q)) return false;
+      if (!fmtDate(s.statementDate, 'MMMM yyyy').toLowerCase().includes(q) && !String(s.amountDue || '').includes(q)) return false;
     }
     return true;
   // Ordered by the period billed, the same key the rows are labelled by. The
@@ -1015,11 +1015,10 @@ export default function UtilityDetailPage() {
   ), [statements, yearFilter, search]);
 
   const filteredPayments = useMemo(() => payments.filter(p => {
-    const date = new Date(p.paymentDate);
-    if (yearFilter !== 'all' && date.getFullYear().toString() !== yearFilter) return false;
+    if (yearFilter !== 'all' && String(yearOf(p.paymentDate)) !== yearFilter) return false;
     if (search) {
       const q = search.toLowerCase();
-      const dateStr = format(date, 'MMMM yyyy').toLowerCase();
+      const dateStr = fmtDate(p.paymentDate, 'MMMM yyyy').toLowerCase();
       if (!dateStr.includes(q) && !(p.confirmationNumber || '').toLowerCase().includes(q) && !String(p.amount || '').includes(q)) return false;
     }
     return true;
