@@ -157,6 +157,7 @@ app.use('/api/maintenance', express.json({ limit: '60mb' }));
 app.use('/api/clickup/webhook', express.raw({ type: '*/*', limit: '1mb' }));
 // A portfolio audit request carries up to five bills (routes/auditRequests.ts).
 app.use('/api/public/audit-requests', express.json({ limit: '70mb' }));
+app.use('/api/ai/agent', express.json({ limit: '120mb' }));
 app.use(express.json({ limit: '10mb' }));
 
 // ─── Health check ─────────────────────────────────────────
