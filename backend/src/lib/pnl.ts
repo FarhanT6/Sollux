@@ -122,33 +122,43 @@ function isCoveredByStatements(policy: { utilityAccountId?: string | null }): bo
   return policy.utilityAccountId != null;
 }
 
-export async function getPropertyPnL(propertyId: string, range: DateRange, userId: string): Promise<PropertyPnL> {
-  const property = await db.property.findFirstOrThrow({ where: { id: propertyId, userId } });
-
+/**
+ * Everything a property P&L reads, for many properties at once: seven
+ * queries in all, grouped by property afterwards. The portfolio P&L used
+ * to run these seven for every property in parallel — a few hundred
+ * queries for a large portfolio, queued on a small connection pool, which
+ * is what made Finances slow to open.
+ */
+async function loadFacts(propertyIds: string[], range: DateRange) {
   const [leases, rentPayments, expenses, policies, taxAssessments, loans, utilityStatements] = await Promise.all([
     db.lease.findMany({
-      where: { unit: { propertyId }, OR: [{ startDate: null }, { startDate: { lt: range.end } }], AND: { OR: [{ status: 'ACTIVE' }, { endDate: null }, { endDate: { gt: range.start } }] } },
-      select: leaseSelect,
+      where: { unit: { propertyId: { in: propertyIds } }, OR: [{ startDate: null }, { startDate: { lt: range.end } }], AND: { OR: [{ status: 'ACTIVE' }, { endDate: null }, { endDate: { gt: range.start } }] } },
+      select: { ...leaseSelect, unit: { select: { propertyId: true } } },
     }),
     db.rentPayment.findMany({
-      where: { paidDate: { gte: range.start, lt: range.end }, lease: { unit: { propertyId } } },
+      where: { paidDate: { gte: range.start, lt: range.end }, lease: { unit: { propertyId: { in: propertyIds } } } },
+      select: { amount: true, lease: { select: { unit: { select: { propertyId: true } } } } },
     }),
     db.expense.findMany({
-      where: { propertyId, date: { gte: range.start, lt: range.end }, isCapEx: false, isPersonal: false },
+      where: { propertyId: { in: propertyIds }, date: { gte: range.start, lt: range.end }, isCapEx: false, isPersonal: false },
+      select: { propertyId: true, category: true, amount: true },
     }),
     // A policy the lender pays from escrow is inside the mortgage payment already.
-    db.insurancePolicy.findMany({ where: { propertyId, isPersonal: false, isActive: true, OR: [{ utilityAccountId: null }, { utilityAccount: { escrowLoanId: null } }] } }),
-    db.taxAssessment.findMany({ where: { propertyId } }),
-    db.loan.findMany({ where: { propertyId, isPersonal: false, isActive: true }, include: { loanPayments: true } }),
+    db.insurancePolicy.findMany({ where: { propertyId: { in: propertyIds }, isPersonal: false, isActive: true, OR: [{ utilityAccountId: null }, { utilityAccount: { escrowLoanId: null } }] } }),
+    db.taxAssessment.findMany({ where: { propertyId: { in: propertyIds } }, select: { propertyId: true, annualTaxAmount: true } }),
+    // Only the payments in the range: a loan's whole history is not needed to sum one period.
+    db.loan.findMany({
+      where: { propertyId: { in: propertyIds }, isPersonal: false, isActive: true },
+      select: { propertyId: true, loanPayments: { where: { date: { gte: range.start, lt: range.end } }, select: { amount: true, date: true } } },
+    }),
     db.statement.findMany({
-      // The account's category decides which expense line a statement belongs
-      // to, and whether a linked policy's premium would double-count it.
-      include: { utilityAccount: { select: { category: true, insurancePolicy: { select: { id: true } } } } },
+      // The account's category decides which expense line a statement belongs to.
+      select: { amountDue: true, utilityAccount: { select: { category: true, propertyId: true } } },
       where: {
         amountDue: { not: null },
         // An account the lender pays from escrow is already inside the
         // mortgage payment; its bills would count the same money twice.
-        utilityAccount: { propertyId, escrowLoanId: null },
+        utilityAccount: { propertyId: { in: propertyIds }, escrowLoanId: null },
         OR: [
           { dueDate: { gte: range.start, lt: range.end } },
           { dueDate: null, statementDate: { gte: range.start, lt: range.end } },
@@ -156,7 +166,28 @@ export async function getPropertyPnL(propertyId: string, range: DateRange, userI
       },
     }),
   ]);
+  return (propertyId: string) => ({
+    leases: leases.filter(l => l.unit.propertyId === propertyId),
+    rentPayments: rentPayments.filter(p => p.lease.unit.propertyId === propertyId),
+    expenses: expenses.filter(e => e.propertyId === propertyId),
+    policies: policies.filter(p => p.propertyId === propertyId),
+    taxAssessments: taxAssessments.filter(t => t.propertyId === propertyId),
+    loans: loans.filter(l => l.propertyId === propertyId),
+    utilityStatements: utilityStatements.filter(st => st.utilityAccount.propertyId === propertyId),
+  });
+}
 
+type Facts = ReturnType<Awaited<ReturnType<typeof loadFacts>>>;
+
+export async function getPropertyPnL(propertyId: string, range: DateRange, userId: string): Promise<PropertyPnL> {
+  const property = await db.property.findFirstOrThrow({ where: { id: propertyId, userId } });
+  const facts = await loadFacts([propertyId], range);
+  return computePnL(property, facts(propertyId), range);
+}
+
+function computePnL(property: { id: string; nickname: string | null; address: string }, facts: Facts, range: DateRange): PropertyPnL {
+  const { leases, rentPayments, expenses, policies, taxAssessments, loans, utilityStatements } = facts;
+  const propertyId = property.id;
   const rentalIncome = scheduledRent(leases, range);
   const rentCollected = rentPayments.reduce((s, p) => s + toNum(p.amount), 0);
   const rentMonths = monthsInRange(range);
@@ -315,7 +346,8 @@ export async function getMonthlyPnL(year: number, userId: string, propertyId?: s
 
 export async function getPortfolioPnL(range: DateRange, userId: string) {
   const properties = await db.property.findMany({ where: { userId }, orderBy: [{ state: 'asc' }, { address: 'asc' }] });
-  const byProperty = await Promise.all(properties.map(p => getPropertyPnL(p.id, range, userId)));
+  const facts = await loadFacts(properties.map(p => p.id), range);
+  const byProperty = properties.map(p => computePnL(p, facts(p.id), range));
   const totals = byProperty.reduce((acc, p) => ({
     rentalIncome: acc.rentalIncome + p.rentalIncome,
     rentCollected: acc.rentCollected + p.rentCollected,
