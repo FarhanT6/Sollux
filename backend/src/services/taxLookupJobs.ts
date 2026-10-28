@@ -54,7 +54,8 @@ async function runOne(propertyId: string): Promise<void> {
     last = Date.now();
     void statusOf(propertyId).then(s => s?.status === 'cancelled' ? undefined : setStatus(propertyId, { status: 'running', at: startedAt, progress: t.slice(0, 160) }));
   }, async () => (await statusOf(propertyId))?.status === 'cancelled').catch((err): LookupRun => ({ ok: false, report: null, error: err instanceof Error ? err.message : String(err), steps: 0, costUsd: 0 }));
-  const years = r.report?.years?.length ?? 0, defaults = r.report?.defaults?.length ?? 0;
+  // What was saved, not what the page listed: a year with no amount is not kept.
+  const years = r.saved?.years ?? 0, defaults = r.saved?.defaults ?? 0;
   if ((await statusOf(propertyId))?.status === 'cancelled') { console.log(`[TaxLookup] ${propertyId}: cancelled · ${r.steps} steps · $${r.costUsd.toFixed(3)}`); return; }
   await setStatus(propertyId, r.ok
     ? { status: 'done', at: new Date().toISOString(), note: r.report?.notes ?? null, years, defaults }

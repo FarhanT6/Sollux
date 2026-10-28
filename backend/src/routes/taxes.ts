@@ -154,8 +154,13 @@ router.post('/read', async (req, res, next) => {
         select: { apn: true, property: { select: { id: true, address: true, nickname: true } } },
       }) : [];
       const prior = known.find(k => (k.apn ?? '').replace(/\D/g, '') === digits);
+      // Or the parcel number saved on the property itself (entered, or found by a lookup).
+      const own = prior ? null : digits.length >= 6 ? (await db.property.findMany({ where: { userId: req.dbUserId!, apn: { not: null } }, select: { id: true, address: true, nickname: true, apn: true } }))
+        .find(p => (p.apn ?? '').replace(/\D/g, '') === digits) : null;
       if (prior) {
         result.match = { confidence: 'high', propertyId: prior.property.id, propertyName: prior.property.nickname || prior.property.address };
+      } else if (own) {
+        result.match = { confidence: 'high', propertyId: own.id, propertyName: own.nickname || own.address };
       }
     }
     res.json(result);
