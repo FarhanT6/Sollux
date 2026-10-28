@@ -947,7 +947,8 @@ function UtilityAccountCard({
   // The next installment scheduled ahead (a financed premium's whole schedule
   // is filed in advance): shown once the current one is paid.
   const { next: nextUp, paid: nextPaid, left: nextLeft } = nextInstallment((account.statements ?? []) as any[], payments as any[]);
-  const dueDate = latest?.dueDate ? new Date(latest.dueDate) : null;
+  // The due day as a date-only string: read as a Date it shifted a day west of UTC (due the 28th showed the 27th).
+  const dueDay = latest?.dueDate ? String(latest.dueDate).slice(0, 10) : null;
   const color = CATEGORY_COLORS[account.category] || '#888';
 
   // Reconcile balance against recent payments so a payment that hasn't yet posted
@@ -995,9 +996,11 @@ function UtilityAccountCard({
   const view = accountView((account.statements ?? []) as any[], payments as any[]);
   const isPaid = view.isPaid;
 
-  const now = new Date();
-  const isPastDue = !isPaid && dueDate != null && dueDate < now;
-  const isDueSoon = !isPaid && !isPastDue && dueDate != null && dueDate <= new Date(Date.now() + 7 * 86400000);
+  // Past due once the due day itself has passed (home time zone), as everywhere else.
+  const today = todayISO();
+  const weekOut = new Date(`${today}T12:00:00Z`); weekOut.setUTCDate(weekOut.getUTCDate() + 7);
+  const isPastDue = !isPaid && dueDay != null && dueDay < today;
+  const isDueSoon = !isPaid && !isPastDue && dueDay != null && dueDay <= weekOut.toISOString().slice(0, 10);
 
   // Status pill: inactive overrides everything else — an account you've
   // deactivated isn't "past due" or "syncing", it's just parked.
@@ -1196,8 +1199,8 @@ function UtilityAccountCard({
                     <span className="text-xs text-gray-400">
                       Current: {fmt(currentCharge)}
                     </span>
-                    {dueDate && (
-                      <span className="text-xs text-gray-500">· due {format(dueDate, 'MMM d')}</span>
+                    {dueDay && (
+                      <span className="text-xs text-gray-500">· due {fmtDate(dueDay, 'MMM d')}</span>
                     )}
                   </div>
                 )}
