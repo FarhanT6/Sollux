@@ -8,6 +8,7 @@ import {
 } from '../api/client';
 import type { Property, TaxAssessment, TaxDefault, TaxStatus, SpecialAssessment } from '../types';
 import ParcelPanel from '../components/taxes/ParcelPanel';
+import BulkTaxUpload from '../components/taxes/BulkTaxUpload';
 import { PageHeader, EmptyState } from '../components/ui';
 import { fmtDate, todayISO } from '../lib/date';
 import { fmtMoney } from '../lib/money';
@@ -224,6 +225,7 @@ function PropertyTaxTab() {
   }
 
   const [lookupNote, setLookupNote] = useState<string | null>(null);
+  const [bulk, setBulk] = useState(false);
   // Where each property's county lookup stands, polled while any is under way.
   const [lookups, setLookups] = useState<Record<string, TaxLookupStatus | null>>({});
   const stalled = (st: TaxLookupStatus | null | undefined) => !!st && (st.status === 'queued' || st.status === 'running') && Date.now() - new Date(st.at).getTime() > 20 * 60_000;
@@ -249,7 +251,7 @@ function PropertyTaxTab() {
     if (st.status === 'running') return <span className="block text-xs text-amber-300">Looking up… {st.progress ?? ''}</span>;
     if (st.status === 'cancelled') return <span className="block text-xs text-gray-500">Lookup cancelled</span>;
     if (st.status === 'choose') return <span className="block text-xs text-amber-300">Several possible parcels — open Parcel to pick one</span>;
-    if (st.status === 'failed') return <span className="block text-xs text-red-400" title={st.note ?? ''}>Lookup failed: {(st.note ?? '').slice(0, 90)}</span>;
+    if (st.status === 'failed') return <span className="block text-xs text-red-400 whitespace-normal max-w-md">Lookup failed: {st.note}</span>;
     return <span className="block text-xs text-emerald-500">Looked up {fmtDate(st.at)}</span>;
   };
   async function lookupAll() {
@@ -418,8 +420,10 @@ function PropertyTaxTab() {
             <button onClick={async () => { const r = await cancelTaxLookup().catch(() => null); setLookupNote(r ? `Stopped ${r.cancelled} lookup${r.cancelled === 1 ? '' : 's'}.` : 'Could not stop the lookups.'); setLookups(await getTaxLookupStatus().catch(() => lookups)); }} className="btn text-xs">Stop all lookups ({busyIds.length})</button>
           )}
           <button onClick={() => void lookupAll()} className="btn text-xs" title="Finds each property's parcel on its county's tax site (by address when there is no parcel number) and reads the bills">Look up all properties</button>
+          <button onClick={() => setBulk(true)} className="btn text-xs" title="Bills downloaded from the county's tax site, several at once">Upload several bills</button>
           <button onClick={() => startNew()} className="btn btn-primary text-xs">+ Add or upload a tax bill</button>
         </div>
+        {bulk && <BulkTaxUpload properties={properties} onClose={() => setBulk(false)} onDone={() => { setBulk(false); void load(); }} />}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
           <div className="stat-card"><p className="text-xs text-gray-500">{latestYear ? `${latestYear} total` : 'Annual total'}</p><p className="text-lg font-semibold text-white">{fmtMoney(annualTotal)}</p></div>
           <div className="stat-card"><p className="text-xs text-gray-500">Installments still to pay</p><p className="text-lg font-semibold text-white">{upcoming.length}</p></div>

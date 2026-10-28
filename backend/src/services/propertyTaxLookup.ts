@@ -91,7 +91,7 @@ const TOOLS: Anthropic.Tool[] = [
   },
 ];
 
-export interface LookupRun { ok: boolean; report: LookupReport | null; error?: string; steps: number; costUsd: number; candidates?: ParcelCandidate[] }
+export interface LookupRun { ok: boolean; report: LookupReport | null; error?: string; steps: number; costUsd: number; candidates?: ParcelCandidate[]; saved?: { years: number; defaults: number } }
 export interface ParcelCandidate { apn: string; situsAddress: string | null; owner: string | null; note: string | null }
 
 type Prop = { id: string; userId: string; address: string; city: string; state: string; zip: string; county: string | null; apn: string | null; ownerEntity: string | null };
@@ -169,7 +169,11 @@ export async function lookupPropertyTax(propertyId: string, onProgress?: (t: str
     if (await cancelled()) return { ok: false, report: null, error: 'Cancelled.', steps, costUsd };
     const run = await readTaxes(p, t => onProgress?.(`Reading the tax bill · ${t}`), cancelled);
     run.steps += steps; run.costUsd += costUsd;
-    if (run.report?.found) await saveReport(p.id, { ...run.report, apn: run.report.apn ?? p.apn });
+    if (run.report?.found) run.saved = await saveReport(p.id, { ...run.report, apn: run.report.apn ?? p.apn });
+    // Read, but nothing to keep: say so rather than "looked up" with nothing on file.
+    if (run.ok && !run.saved?.years && !run.saved?.defaults) {
+      return { ...run, ok: false, error: `The county site was read for parcel ${p.apn}, but it showed no tax amounts to save.${run.report?.notes ? ` ${run.report.notes}` : ''} Upload the tax bill instead (+ Year → upload), or try again later.` };
+    }
     return run;
   });
 }
@@ -421,7 +425,7 @@ function present<T extends Record<string, unknown>>(o: T): Partial<T> {
 
 export async function saveReport(propertyId: string, r: LookupReport): Promise<{ years: number; defaults: number }> {
   const now = new Date();
-  const prop = await db.property.findUnique({ where: { id: propertyId }, select: { apn: true, county: true } });
+  const prop = await db.property.findUnique({ where: { id: propertyId }, select: { apn: true, county: true, state: true } });
   // The parcel number (and county) the county site showed fill what is missing.
   const fill = { ...(r.apn && !prop?.apn ? { apn: r.apn } : {}), ...(r.county && !prop?.county ? { county: r.county.replace(/\s+county$/i, '') } : {}) };
   if (Object.keys(fill).length) await db.property.update({ where: { id: propertyId }, data: fill });
@@ -430,6 +434,10 @@ export async function saveReport(propertyId: string, r: LookupReport): Promise<{
   for (const y of r.years ?? []) {
     // The year's total: as shown, or both installments' sum; one installment alone is not the year.
     const total = y.annualTaxAmount ?? (y.installment1Amount != null && y.installment2Amount != null ? Number((y.installment1Amount + y.installment2Amount).toFixed(2)) : null);
+    // California's two secured installments are equal halves: one shown is half
+    // the year. Used only for a year not yet on file — never over a real total.
+    const one = y.installment1Amount ?? y.installment2Amount;
+    const estimate = total == null && one != null && prop?.state === 'CA' ? Number((one * 2).toFixed(2)) : null;
     const data = present({
       annualTaxAmount: total, status: y.status ?? undefined,
       installment1Amount: y.installment1Amount, installment1Due: at(y.installment1Due), installment1Delinquent: at(y.installment1Delinquent), installment1Paid: at(y.installment1Paid),
@@ -442,8 +450,9 @@ export async function saveReport(propertyId: string, r: LookupReport): Promise<{
     });
     const match = existing.find(e => sameYear(e.taxYear, y.taxYear));
     if (match) { await db.taxAssessment.update({ where: { id: match.id }, data: data as any }); years++; }
-    else if (total != null) {
-      const created = await db.taxAssessment.create({ data: { propertyId, taxYear: y.taxYear, ...(data as any), annualTaxAmount: total } });
+    else if ((total ?? estimate) != null) {
+      const note = total == null ? 'Annual total taken as twice the installment shown (California installments are equal halves).' : undefined;
+      const created = await db.taxAssessment.create({ data: { propertyId, taxYear: y.taxYear, ...(data as any), annualTaxAmount: (total ?? estimate)!, ...(note ? { notes: note } : {}) } });
       existing.push({ id: created.id, taxYear: created.taxYear });
       years++;
     }
