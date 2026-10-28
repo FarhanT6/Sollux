@@ -27,7 +27,6 @@ html[data-theme="light"] [class~="bg-white/5"] { background-color: rgba(28, 34, 
 html[data-theme="light"] [class~="bg-white/6"] { background-color: rgba(28, 34, 48, 0.042) !important; }
 html[data-theme="light"] [class~="border-[#F5A623]"] { border-color: #b8674a !important; }
 html[data-theme="light"] [class~="border-amber-700"] { border-color: rgba(217, 119, 6, 0.35) !important; }
-html[data-theme="light"] [class~="border-blue-800"] { border-color: rgba(37, 99, 235, 0.35) !important; }
 html[data-theme="light"] [class~="border-emerald-700"] { border-color: rgba(5, 150, 105, 0.35) !important; }
 html[data-theme="light"] [class~="border-gold-500"] { border-color: #b8674a !important; }
 html[data-theme="light"] [class~="border-orange-700"] { border-color: rgba(234, 88, 12, 0.35) !important; }
@@ -102,7 +101,6 @@ html[data-theme="light"] [class~="hover:text-[#F5A623]"]:hover { color: #b8674a 
 html[data-theme="light"] [class~="hover:text-amber-200"]:hover { color: #92400e !important; }
 html[data-theme="light"] [class~="hover:text-amber-300"]:hover { color: #b45309 !important; }
 html[data-theme="light"] [class~="hover:text-amber-400"]:hover { color: #b45309 !important; }
-html[data-theme="light"] [class~="hover:text-blue-300"]:hover { color: #1d4ed8 !important; }
 html[data-theme="light"] [class~="hover:text-emerald-300"]:hover { color: #047857 !important; }
 html[data-theme="light"] [class~="hover:text-gray-200"]:hover { color: #1c2230 !important; }
 html[data-theme="light"] [class~="hover:text-gray-300"]:hover { color: #2b3140 !important; }

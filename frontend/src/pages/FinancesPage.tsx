@@ -30,7 +30,7 @@ export const FINANCE_SECTIONS: { key: Tab; label: string; subtitle: string; view
     views: [
       { key: 'pnl', label: 'P&L', subtitle: 'Net operating income and cash flow by property', render: () => <PnLPage embedded /> },
       { key: 'cashflow', label: 'Cash flow', subtitle: 'Rent received against the loans, and against the loans and utilities — per property, per month', render: () => <CashflowPage embedded /> },
-      { key: 'budget', label: 'Budget', subtitle: 'Monthly cash position, rent collection, and delinquency', render: () => <BudgetPage embedded /> },
+      { key: 'budget', label: 'Budget', subtitle: 'The month: rent collected, delinquency, and what is left after loans and bills', render: () => <BudgetPage embedded /> },
     ],
   },
   {
