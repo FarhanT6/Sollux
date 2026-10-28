@@ -1404,6 +1404,9 @@ model InsurancePolicy {
   // The whole term's premium, when the policy is written as a term total and
   // billed in installments. Null when premiumAmount already is the total.
   termPremium      Decimal?         @db.Decimal(10, 2)
+  // Paid at the start of the term; the rest is the installments. termPremium = downPayment + installments.
+  downPayment      Decimal?         @db.Decimal(10, 2)
+  downPaymentDate  DateTime?
   // Coverage, as printed on the declarations page. All optional: a liability
   // policy has no dwelling limit, a flood policy no loss-of-use.
   dwellingLimit         Decimal? @db.Decimal(12, 2)
