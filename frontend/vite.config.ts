@@ -9,6 +9,10 @@ import path from 'path';
 // the code they protect. Fail the build instead of shipping that.
 const REQUIRED_ENV = ['VITE_CLERK_PUBLISHABLE_KEY'];
 
+// Each build's id, also written to /version.json: an open tab compares the
+// two and reloads onto a newer build (src/lib/appVersion.ts).
+const BUILD_ID = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 12) || String(Date.now());
+
 export default defineConfig(({ command, mode }) => {
   // `vite --mode mock`: local screen testing with a stand-in for Clerk
   // (src/dev/clerkMock.tsx) and the API served by scripts/screens.mjs.
@@ -27,7 +31,15 @@ export default defineConfig(({ command, mode }) => {
   }
 
   return {
-    plugins: [react()],
+    plugins: [
+      react(),
+      {
+        name: 'version-json',
+        apply: 'build',
+        generateBundle() { this.emitFile({ type: 'asset', fileName: 'version.json', source: JSON.stringify({ build: BUILD_ID }) }); },
+      },
+    ],
+    define: { __BUILD_ID__: JSON.stringify(command === 'build' ? BUILD_ID : 'dev') },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),

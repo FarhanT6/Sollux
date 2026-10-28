@@ -289,6 +289,7 @@ model UtilityAccount {
   insurancePolicy      InsurancePolicy?
   outgoingTransactions OutgoingTransaction[]
 
+  @@index([propertyId])
   @@map("utility_accounts")
 }
 
@@ -410,6 +411,8 @@ model Statement {
 
   /// ClickUp task created for paying this bill, so it can be updated and closed.
   clickupTaskId        String?
+  @@index([utilityAccountId, statementDate])
+  @@index([utilityAccountId, dueDate])
   @@map("statements")
 }
 
@@ -461,6 +464,7 @@ model Payment {
   notes              String?
   createdAt          DateTime       @default(now())
 
+  @@index([statementId])
   @@index([utilityAccountId, paymentDate])
   @@index([bankAccountId])
   @@map("payments")
@@ -762,6 +766,7 @@ model LeaseTenant {
   tenant    Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   isPrimary Boolean @default(false)
 
+  @@index([tenantId])
   @@unique([leaseId, tenantId])
   @@map("lease_tenants")
 }
@@ -835,6 +840,7 @@ model Lease {
   rentCharges          RentCharge[]
   reimbursementPayments ReimbursementPayment[]
 
+  @@index([unitId])
   @@map("leases")
 }
 

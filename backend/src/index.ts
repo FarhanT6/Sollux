@@ -163,6 +163,16 @@ app.use('/api/clickup/webhook', express.raw({ type: '*/*', limit: '1mb' }));
 app.use('/api/public/audit-requests', express.json({ limit: '70mb' }));
 app.use('/api/ai/agent', express.json({ limit: '120mb' }));
 app.use(express.json({ limit: '10mb' }));
+// A request that takes long is named in the log (path only — no query, no
+// body), so a slow page can be traced to the call behind it.
+app.use((req, res, next) => {
+  const started = Date.now();
+  res.on('finish', () => {
+    const ms = Date.now() - started;
+    if (ms >= 1500 && req.path.startsWith('/api/')) console.warn(`[Slow] ${req.method} ${req.baseUrl}${req.path} ${res.statusCode} ${ms}ms`);
+  });
+  next();
+});
 
 // ─── Health check ─────────────────────────────────────────
 const STARTED_AT = new Date().toISOString();

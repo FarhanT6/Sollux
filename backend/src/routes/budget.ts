@@ -114,7 +114,9 @@ router.get('/monthly', async (req, res, next) => {
           { dueDate: null, statementDate: { gte: monthStart, lte: monthEnd } },
         ],
       },
-      include: {
+      // Only the figures used: a statement row also carries the whole reading (rawDataJson).
+      select: {
+        id: true, amountDue: true, amountPaid: true, dueDate: true,
         utilityAccount: {
           select: {
             providerName: true, category: true,

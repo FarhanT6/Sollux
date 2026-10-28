@@ -9,6 +9,7 @@ import type { DashboardSummary } from '../../types';
 import { tap } from '../../lib/native';
 import { useThemeChoice } from '../../lib/theme';
 import { useModules, type ModuleKey } from '../../lib/modules';
+import { watchForNewBuild, reloadIfStale } from '../../lib/appVersion';
 
 function Ico({ d, children, size = 16 }: { d?: string; children?: React.ReactNode; size?: number }) {
   return (
@@ -117,6 +118,9 @@ export default function AppLayout() {
     getDashboardSummary().then(setSummary).catch(() => {});
   }, []);
 
+  // A newer build deployed while this tab was open: reload onto it at the next page change.
+  useEffect(() => { watchForNewBuild(); }, []);
+  useEffect(() => { reloadIfStale(); }, [location.pathname, location.search]);
   // Remember which screen each history entry was, so Back can name it.
   useEffect(() => { rememberEntry(location.pathname + location.search); }, [location.key, location.pathname, location.search]);
 

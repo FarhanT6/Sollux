@@ -281,7 +281,7 @@ export async function getMonthlyPnL(year: number, userId: string, propertyId?: s
     db.loanPayment.findMany({ where: { date: { gte: yearStart, lt: yearEnd }, ...loanFilter } }),
     db.statement.findMany({
       // Same as above: the category decides which expense line this belongs on.
-      include: { utilityAccount: { select: { category: true } } },
+      select: { amountDue: true, dueDate: true, statementDate: true, utilityAccount: { select: { category: true } } },
       where: {
         amountDue: { not: null },
         utilityAccount: utilityAccountFilter,
