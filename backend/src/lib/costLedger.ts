@@ -175,6 +175,33 @@ export async function buildLedger(userId: string, from: string, to: string, prop
     if (Object.values(line.months).some(f => f.charged || f.paid)) lines.push(line);
   }
 
+  // A down payment entered on a policy: an insurance cost in the month it was paid,
+  // unless the account already holds it as a down-payment statement.
+  const downs = await db.insurancePolicy.findMany({
+    // An escrowed account's policy is paid inside the mortgage payment.
+    where: { propertyId: { in: ids }, isPersonal: false, downPayment: { gt: 0 }, downPaymentDate: { gte: start, lt: end }, OR: [{ utilityAccountId: null }, { utilityAccount: { escrowLoanId: null } }] },
+    select: { id: true, propertyId: true, carrier: true, downPayment: true, downPaymentDate: true, utilityAccountId: true, premiumFrequency: true },
+  });
+  const billedDowns = downs.some(d => d.utilityAccountId) ? new Set((await db.statement.findMany({
+    where: { utilityAccountId: { in: downs.map(d => d.utilityAccountId).filter((x): x is string => !!x) }, isDownPayment: true },
+    select: { utilityAccountId: true },
+  })).map(x => x.utilityAccountId)) : new Set<string>();
+  for (const d of downs) {
+    if (d.utilityAccountId && billedDowns.has(d.utilityAccountId)) continue;
+    // Without a billing account, a yearly premium is the whole term, down payment included.
+    if (!d.utilityAccountId && d.premiumFrequency === 'ANNUAL') continue;
+    const m = ym(d.downPaymentDate!);
+    const onAccount = d.utilityAccountId ? byAccount.get(d.utilityAccountId) : undefined;
+    if (onAccount) {
+      add(onAccount, m, 'charged', n(d.downPayment)); add(onAccount, m, 'paid', n(d.downPayment));
+      if (!lines.includes(onAccount)) lines.push(onAccount);
+    } else {
+      const line: LedgerLine = { key: `policy-down:${d.id}`, type: 'INSURANCE', source: 'policy', propertyId: d.propertyId, label: d.carrier, sub: 'Down payment', link: '/insurance', months: blank() };
+      add(line, m, 'charged', n(d.downPayment)); add(line, m, 'paid', n(d.downPayment));
+      lines.push(line);
+    }
+  }
+
   // A policy with no billing account: its premium, a month's share each month it is in force.
   for (const pol of policies) {
     const monthly = pol.premiumFrequency === 'MONTHLY' ? n(pol.premiumAmount)

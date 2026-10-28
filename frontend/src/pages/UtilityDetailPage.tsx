@@ -2372,7 +2372,8 @@ function PolicyEditor({ policy, onClose, onSaved }: { policy: any; onClose: () =
   const str = (v: any) => (v == null ? '' : String(v));
   const [f, setF] = useState({
     policyNumber: str(policy.policyNumber), effectiveDate: str(policy.effectiveDate).slice(0, 10), expirationDate: str(policy.expirationDate).slice(0, 10),
-    termPremium: str(policy.termPremium), premiumAmount: str(policy.premiumAmount), premiumFrequency: policy.premiumFrequency ?? 'MONTHLY',
+    termPremium: str(policy.termPremium), downPayment: str(policy.downPayment), downPaymentDate: str(policy.downPaymentDate).slice(0, 10),
+    premiumAmount: str(policy.premiumAmount), premiumFrequency: policy.premiumFrequency ?? 'MONTHLY',
     deductible: str(policy.deductible), dwellingLimit: str(policy.dwellingLimit), liabilityLimit: str(policy.liabilityLimit),
     agentName: str(policy.agentName), agentPhone: str(policy.agentPhone), agentEmail: str(policy.agentEmail), notes: str(policy.notes),
   });
@@ -2386,7 +2387,8 @@ function PolicyEditor({ policy, onClose, onSaved }: { policy: any; onClose: () =
     try {
       await updateInsurancePolicy(policy.id, {
         policyNumber: f.policyNumber.trim() || null, effectiveDate: f.effectiveDate || null, expirationDate: f.expirationDate || null,
-        termPremium: num(f.termPremium), premiumAmount: premium, premiumFrequency: f.premiumFrequency,
+        termPremium: num(f.termPremium), downPayment: num(f.downPayment), downPaymentDate: f.downPaymentDate || null,
+        premiumAmount: premium, premiumFrequency: f.premiumFrequency,
         deductible: num(f.deductible), dwellingLimit: num(f.dwellingLimit), liabilityLimit: num(f.liabilityLimit),
         agentName: f.agentName.trim() || null, agentPhone: f.agentPhone.trim() || null, agentEmail: f.agentEmail.trim() || null, notes: f.notes.trim() || null,
       } as any);
@@ -2407,6 +2409,8 @@ function PolicyEditor({ policy, onClose, onSaved }: { policy: any; onClose: () =
         {field('Starts', 'effectiveDate', 'date')}
         {field('Ends', 'expirationDate', 'date')}
         {field('Term premium', 'termPremium', 'text', 'whole term')}
+        {field('Down payment', 'downPayment', 'text', 'paid up front')}
+        {field('Down payment paid', 'downPaymentDate', 'date')}
         {field('Installment', 'premiumAmount', 'text', 'one bill')}
         <label className="block">
           <span className="block text-xs text-gray-500 mb-1">Billed</span>
@@ -2469,6 +2473,17 @@ function PolicyCard({ accountId, propertyId, carrier, account, onAccountChange }
           <div><p className="text-xs text-gray-500">Coverage</p><p className="text-gray-200">{current.effectiveDate ? fmtDate(current.effectiveDate, 'MMM d, yyyy') : '—'} – {current.expirationDate ? fmtDate(current.expirationDate, 'MMM d, yyyy') : '—'}{daysLeft != null && daysLeft >= 0 ? <span className="text-gray-500"> · {daysLeft}d left</span> : null}</p></div>
           <div><p className="text-xs text-gray-500">Term premium</p><p className="text-gray-200">{money(current.termPremium)}</p></div>
           <div><p className="text-xs text-gray-500">Installment</p><p className="text-gray-200">{money(current.premiumAmount)} / {String(current.premiumFrequency ?? '').toLowerCase().replace('_', '-') || 'term'}</p></div>
+          {current.downPayment != null && <div><p className="text-xs text-gray-500">Down payment</p><p className="text-gray-200">{money(current.downPayment)}{current.downPaymentDate ? <span className="text-gray-500"> · paid {fmtDate(current.downPaymentDate, 'MMM d, yyyy')}</span> : null}</p></div>}
+          {(() => {
+            // The term premium is the down payment plus the installments: say how many, or that they do not add up.
+            const term = Number(current.termPremium ?? 0), down = Number(current.downPayment ?? 0), inst = Number(current.premiumAmount ?? 0);
+            if (!term || !inst || current.downPayment == null) return null;
+            const count = (term - down) / inst;
+            const whole = Math.round(count);
+            return Math.abs(count - whole) < 0.02 && whole > 0
+              ? <p className="col-span-2 md:col-span-3 text-xs text-gray-500 self-end">{money(down)} down + {whole} installments of {money(inst)} = {money(term)}</p>
+              : <p className="col-span-2 md:col-span-3 text-xs text-amber-400 self-end">Down payment and installments do not divide the term premium evenly — check the figures ({money(term - down)} left over ÷ {money(inst)} = {count.toFixed(2)} installments).</p>;
+          })()}
           {current.notes && <p className="col-span-2 md:col-span-4 text-xs text-gray-500">{current.notes}</p>}
         </div>
       ) : <p className="text-xs text-gray-500">No current policy linked to this account.</p>}

@@ -22,6 +22,8 @@ const PolicySchema = z.object({
   // A term total that differs from the installment — a policy quoted for the
   // year but paid monthly carries both.
   termPremium: z.number().nonnegative().optional().nullable(),
+  downPayment: z.number().nonnegative().optional().nullable(),
+  downPaymentDate: z.string().transform(s => new Date(s)).optional().nullable(),
   dwellingLimit: z.number().nonnegative().optional().nullable(),
   otherStructuresLimit: z.number().nonnegative().optional().nullable(),
   personalPropertyLimit: z.number().nonnegative().optional().nullable(),
