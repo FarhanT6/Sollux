@@ -56,6 +56,8 @@ model User {
   // ["operations", "books"]. Null is every module — accounts from before
   // modules existed keep everything; a new account starts with none.
   modulesJson       Json?
+  // Pages the owner took out of the menu for now (paths like "/vault"); they still open by link.
+  hiddenNavJson     Json?
   members          User[]           @relation("AccountMembers")
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt

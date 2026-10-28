@@ -101,10 +101,10 @@ export const TAB_BAR = ['/dashboard', '/properties', '/scan', '/finances', '/pay
 export default function AppLayout() {
   const { user } = useUser();
   // Only the modules this account has turned on (lib/modules.ts).
-  const { has } = useModules();
+  const { shown } = useModules();
   const moduleOf = (to: string) => (NAV.find(x => x.to === to) as { module?: ModuleKey } | undefined)?.module;
-  const nav = NAV.filter(n => has((n as { module?: ModuleKey }).module));
-  const tabs = TAB_BAR.filter(to => has(moduleOf(to)));
+  const nav = NAV.filter(n => shown(n.to, (n as { module?: ModuleKey }).module));
+  const tabs = TAB_BAR.filter(to => shown(to, moduleOf(to)));
   const { signOut } = useClerk();
   const location = useLocation();
   const [summary, setSummary] = useState<DashboardSummary | null>(null);

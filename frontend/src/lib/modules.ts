@@ -14,24 +14,32 @@ export const MODULE_INFO: { key: ModuleKey; title: string; body: string }[] = [
   { key: 'personal', title: 'Personal & vault', body: 'Personal finances, credit cards and the encrypted vault.' },
 ];
 
-interface State { modules: Set<ModuleKey>; isAdmin: boolean; isOwner: boolean; loaded: boolean }
+interface State { modules: Set<ModuleKey>; hidden: Set<string>; isAdmin: boolean; isOwner: boolean; loaded: boolean }
 // Until it loads, everything shows: nothing a user relies on flickers away.
-let state: State = { modules: new Set(['operations', 'books', 'personal']), isAdmin: false, isOwner: false, loaded: false };
+let state: State = { modules: new Set(['operations', 'books', 'personal']), hidden: new Set(), isAdmin: false, isOwner: false, loaded: false };
 const listeners = new Set<(s: State) => void>();
 let loading: Promise<void> | null = null;
 const publish = (s: State) => { state = s; listeners.forEach(l => l(s)); };
 
 function load(): Promise<void> {
-  loading ??= api.get<{ modules: ModuleKey[]; isAdmin: boolean; isOwner: boolean }>('/account/modules')
-    .then(r => publish({ modules: new Set(r.data.modules), isAdmin: r.data.isAdmin, isOwner: r.data.isOwner, loaded: true }))
+  loading ??= api.get<{ modules: ModuleKey[]; hidden?: string[]; isAdmin: boolean; isOwner: boolean }>('/account/modules')
+    .then(r => publish({ modules: new Set(r.data.modules), hidden: new Set(r.data.hidden ?? []), isAdmin: r.data.isAdmin, isOwner: r.data.isOwner, loaded: true }))
     .catch(() => publish({ ...state, loaded: true }));
   return loading;
 }
 
-export function useModules(): State & { has: (m?: ModuleKey) => boolean } {
+export function useModules(): State & { has: (m?: ModuleKey) => boolean; shown: (to: string, m?: ModuleKey) => boolean } {
   const [s, setS] = useState(state);
   useEffect(() => { listeners.add(setS); void load(); return () => { listeners.delete(setS); }; }, []);
-  return { ...s, has: (m?: ModuleKey) => !m || s.modules.has(m) };
+  const has = (m?: ModuleKey) => !m || s.modules.has(m);
+  // In the menu: its module is on and the owner has not taken it out (Settings → Menu).
+  return { ...s, has, shown: (to: string, m?: ModuleKey) => has(m) && !s.hidden.has(to) };
+}
+
+/** Take pages out of the menu, or put them back. They still open by link. */
+export async function saveHidden(hidden: string[]): Promise<void> {
+  const r = await api.put<{ hidden: string[] }>('/account/menu', { hidden });
+  publish({ ...state, hidden: new Set(r.data.hidden) });
 }
 
 export async function saveModules(modules: ModuleKey[]): Promise<void> {

@@ -16,8 +16,20 @@ function normalizePhone(p?: string | null): string | null {
 // The optional modules this account uses (lib/modules.ts). Members see the owner's.
 router.get('/modules', async (req, res, next) => {
   try {
-    const u = await db.user.findUnique({ where: { id: req.dbUserId! }, select: { modulesJson: true } });
-    res.json({ modules: modulesOf(u ?? {}), isAdmin: !!req.isPlatformAdmin, isOwner: !!req.isAccountOwner });
+    const u = await db.user.findUnique({ where: { id: req.dbUserId! }, select: { modulesJson: true, hiddenNavJson: true } });
+    const hidden = Array.isArray(u?.hiddenNavJson) ? (u!.hiddenNavJson as unknown[]).filter((x): x is string => typeof x === 'string') : [];
+    res.json({ modules: modulesOf(u ?? {}), hidden, isAdmin: !!req.isPlatformAdmin, isOwner: !!req.isAccountOwner });
+  } catch (err) { next(err); }
+});
+
+// Pages taken out of the menu (and put back): paths like "/vault".
+router.put('/menu', async (req, res, next) => {
+  try {
+    if (!req.isAccountOwner) return res.status(403).json({ error: 'Only the account owner can change the menu.' });
+    const { hidden } = z.object({ hidden: z.array(z.string().regex(/^\/[a-z-]+$/)).max(40) }).parse(req.body);
+    const list = [...new Set(hidden)];
+    await db.user.update({ where: { id: req.dbUserId! }, data: { hiddenNavJson: list } });
+    res.json({ hidden: list });
   } catch (err) { next(err); }
 });
 router.put('/modules', async (req, res, next) => {
