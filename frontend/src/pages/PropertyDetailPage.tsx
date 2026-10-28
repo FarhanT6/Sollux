@@ -9,7 +9,7 @@ import type { Property, Statement, Payment, AIInsight, UtilityAccount } from '..
 import { CATEGORY_LABELS, CATEGORY_COLORS, INSURANCE_TYPE_LABELS, LOAN_TYPE_LABELS, UTILITY_PAYMENT_METHODS, PAYMENT_STATUS_LABELS } from '../types';
 import PaymentBreakdownLine from '../components/utility/PaymentBreakdownLine';
 import { todayISO } from '../lib/date';
-import { accountView, newestIssued, isUpcoming } from '../lib/paidState';
+import { accountView, newestIssued, nextInstallment } from '../lib/paidState';
 import { PageHeader, StatCard, InsightCard, Skeleton, EmptyState, Pill, Modal } from '../components/ui';
 import { format } from 'date-fns';
 import AddUtilityModal from '../components/utility/AddUtilityModal';
@@ -946,8 +946,7 @@ function UtilityAccountCard({
   const latest = newestIssued(account.statements ?? []) ?? undefined;
   // The next installment scheduled ahead (a financed premium's whole schedule
   // is filed in advance): shown once the current one is paid.
-  const nextUp = (account.statements ?? []).filter(isUpcoming)
-    .sort((a: any, b: any) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())[0] as any;
+  const { next: nextUp, paid: nextPaid, left: nextLeft } = nextInstallment((account.statements ?? []) as any[], payments as any[]);
   const dueDate = latest?.dueDate ? new Date(latest.dueDate) : null;
   const color = CATEGORY_COLORS[account.category] || '#888';
 
@@ -980,6 +979,10 @@ function UtilityAccountCard({
     (new Date(b.paymentDate).getTime() - new Date(a.paymentDate).getTime())
     || (new Date((b as any).createdAt ?? 0).getTime() - new Date((a as any).createdAt ?? 0).getTime()))[0];
   const paidForBillTotal = paidForBill.reduce((s, p) => s + Number(p.amount ?? 0), 0);
+  // Paid ahead: the newest payment went to the next installment, so it is the one to name.
+  const newestPmt = [...payments].filter(counted).sort((a, b) => new Date(b.paymentDate).getTime() - new Date(a.paymentDate).getTime())[0];
+  const nextPart = !nextPaid && nextUp && nextLeft < Number(nextUp.amountDue ?? 0) - 0.01;
+  const shownPmt = (nextPaid || nextPart) && newestPmt && recentPmt && new Date(newestPmt.paymentDate) > new Date(recentPmt.paymentDate) ? newestPmt : null;
   // A bill-reported paid figure that covers the bill's own open balance.
   const isPaidViaStatement = latest?.amountPaid != null && openBalance != null
     && Number(latest.amountPaid) >= openBalance - 0.01;
@@ -1155,7 +1158,9 @@ function UtilityAccountCard({
                 {isPaid && (
                   <div className="mt-1 flex items-center gap-1.5">
                     <span className="text-xs text-emerald-400">
-                      {recentPmt && paidForBillTotal > 0 ? (
+                      {shownPmt ? (
+                        <>Paid {fmt(Number(shownPmt.amount ?? 0))} on {fmtDate(shownPmt.paymentDate, 'MMM d')}</>
+                      ) : recentPmt && paidForBillTotal > 0 ? (
                         <>
                           Paid {fmt(paidForBillTotal)} on {fmtDate(recentPmt.paymentDate, 'MMM d')}
                           {paidForBill.length > 1 && <span className="text-gray-500"> · {paidForBill.length} payments</span>}
@@ -1172,8 +1177,8 @@ function UtilityAccountCard({
                 )}
 
                 {isPaid && nextUp && (
-                  <p className="mt-0.5 text-xs text-blue-400">
-                    Next: {fmt(Number(nextUp.amountDue ?? 0))} due {format(new Date(nextUp.dueDate), 'MMM d')}
+                  <p className={`mt-0.5 text-xs ${nextPaid ? 'text-emerald-400/80' : 'text-blue-400'}`}>
+                    Next: {fmt(Number(nextUp.amountDue ?? 0))} due {fmtDate(nextUp.dueDate, 'MMM d')}{nextPaid ? ' · already paid' : nextPart ? ` · ${fmt(Number(nextUp.amountDue ?? 0) - nextLeft)} paid, ${fmt(nextLeft)} left` : ''}
                   </p>
                 )}
 

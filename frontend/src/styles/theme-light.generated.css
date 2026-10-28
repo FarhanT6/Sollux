@@ -61,6 +61,7 @@ html[data-theme="light"] [class~="text-blue-400"] { color: #1d4ed8 !important; }
 html[data-theme="light"] [class~="text-blue-500"] { color: #1d4ed8 !important; }
 html[data-theme="light"] [class~="text-emerald-300"] { color: #047857 !important; }
 html[data-theme="light"] [class~="text-emerald-400"] { color: #047857 !important; }
+html[data-theme="light"] [class~="text-emerald-400/80"] { color: #047857 !important; }
 html[data-theme="light"] [class~="text-emerald-500"] { color: #047857 !important; }
 html[data-theme="light"] [class~="text-emerald-500/80"] { color: #047857 !important; }
 html[data-theme="light"] [class~="text-emerald-600"] { color: #047857 !important; }
