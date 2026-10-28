@@ -148,6 +148,7 @@ app.use('/api/', limiter);
 // ─── Body parsing ─────────────────────────────────────────
 app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }));
 app.use('/api/import', express.json({ limit: '100mb' }));
+app.use('/api/reconciliation/read', express.json({ limit: '40mb' }));
 // Document uploads (lease agreements, applications, insurance/tax/maintenance
 // scans) can be large multi-page PDFs — allow well above the default cap.
 app.use('/api/leases', express.json({ limit: '50mb' }));

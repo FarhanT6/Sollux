@@ -345,6 +345,26 @@ export const applyReconciliationStatement = (id: string) =>
   api.post<ReconciliationStatement>(`/reconciliation/statements/${id}/apply`).then(r => r.data);
 export const deleteReconciliationStatement = (id: string) =>
   api.delete(`/reconciliation/statements/${id}`);
+/** A manager's statement read into lines and matched to properties, leases and loans — a draft to review. */
+export type ManagerLineKind = 'RENT' | 'MANAGEMENT_FEE' | 'REPAIR' | 'UTILITY' | 'LOAN_PAYMENT' | 'OTHER_EXPENSE' | 'OWNER_DRAW' | 'OTHER';
+export interface ManagerDraftLine {
+  date: string | null; description: string; kind: ManagerLineKind; amount: number; direction: 'IN' | 'OUT';
+  propertyHint: string | null; payee: string | null; unit: string | null;
+  propertyId: string | null; leaseId: string | null; loanId: string | null; category: string | null;
+  alreadyRecorded: boolean; include: boolean;
+}
+export interface ManagerStatementDraft {
+  manager: string | null; periodStart: string | null; periodEnd: string | null; statementDate: string | null;
+  beginningBalance: number | null; endingBalance: number | null; profileId: string | null; documentKey: string;
+  lines: ManagerDraftLine[]; totals: { in: number; out: number; toOwner: number };
+}
+export const readManagerStatement = (fileData: string, filename: string) =>
+  api.post<ManagerStatementDraft>('/reconciliation/read', { fileData, filename }, { timeout: 300_000 }).then(r => r.data);
+export const importManagerStatement = (data: {
+  profileId: string | null; managerName: string; statementDate: string; documentKey: string | null; lines: ManagerDraftLine[];
+}) => api.post<{ id: string; profileId: string }>('/reconciliation/import', data).then(r => r.data);
+export const getReconciliationDocumentUrl = (id: string) =>
+  api.get<{ url: string }>(`/reconciliation/statements/${id}/document`).then(r => r.data);
 
 // Shared ("family") account access
 export interface AccountMember { id: string; email: string; fullName: string; phone?: string | null; createdAt?: string }

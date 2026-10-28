@@ -92,8 +92,6 @@ html[data-theme="light"] [class~="text-white"] { color: #1c2230 !important; }
 html[data-theme="light"] [class~="focus:text-amber-400"]:focus { color: #b45309 !important; }
 html[data-theme="light"] .group:hover [class~="group-hover:text-amber-400"] { color: #b45309 !important; }
 html[data-theme="light"] .group:hover [class~="group-hover:text-white"] { color: #1c2230 !important; }
-html[data-theme="light"] [class~="hover:bg-emerald-900/60"]:hover { background-color: rgba(5, 150, 105, 0.1) !important; }
-html[data-theme="light"] [class~="hover:bg-red-900/60"]:hover { background-color: rgba(220, 38, 38, 0.1) !important; }
 html[data-theme="light"] [class~="hover:bg-white/10"]:hover { background-color: rgba(28, 34, 48, 0.070) !important; }
 html[data-theme="light"] [class~="hover:bg-white/2"]:hover { background-color: rgba(28, 34, 48, 0.014) !important; }
 html[data-theme="light"] [class~="hover:bg-white/5"]:hover { background-color: rgba(28, 34, 48, 0.035) !important; }

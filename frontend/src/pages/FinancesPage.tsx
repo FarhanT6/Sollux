@@ -5,6 +5,7 @@ import RentPage from './RentPage';
 import LoansPage from './LoansPage';
 import CostsPage from './CostsPage';
 import IncomingPaymentsPage from './IncomingPaymentsPage';
+import ManagerStatementsPage from './ManagerStatementsPage';
 import LoanPaymentTracker from '../components/loans/LoanPaymentTracker';
 
 export type Tab = 'overview' | 'costs' | 'loans' | 'income';
@@ -18,7 +19,8 @@ interface View { key: string; label: string; subtitle: string; render: () => JSX
  *             actual beside expected (replaced P&L, cash flow and budget)
  *   Costs     what each property cost, by type (lib/costLedger on the server)
  *   Loans     every loan with this month's payment, and payments by month
- *   Income    rent collection and delinquency, and incoming deposits
+ *   Income    rent collection and delinquency, incoming deposits, and the
+ *             property manager's monthly statements, read and recorded
  * Utility payments, fees and the bill archive are on the Bills page.
  */
 export const FINANCE_SECTIONS: { key: Tab; label: string; subtitle: string; views: View[] }[] = [
@@ -48,6 +50,7 @@ export const FINANCE_SECTIONS: { key: Tab; label: string; subtitle: string; view
     views: [
       { key: 'rent', label: 'Rent', subtitle: 'Rent collected this month, reminders, and who is behind', render: () => <RentPage embedded /> },
       { key: 'incoming', label: 'Incoming payments', subtitle: 'Transfers, checks and deposits into watched bank accounts, matched to tenants', render: () => <IncomingPaymentsPage embedded /> },
+      { key: 'manager', label: 'Manager statements', subtitle: 'Upload your property manager\'s monthly statement: rent, fees, repairs and loan payments read and recorded', render: () => <ManagerStatementsPage /> },
     ],
   },
 ];
@@ -56,7 +59,7 @@ export const FINANCE_SECTIONS: { key: Tab; label: string; subtitle: string; view
 const OLD_TABS: Record<string, [Tab, string]> = {
   performance: ['overview', 'overview'], pnl: ['overview', 'overview'], cashflow: ['overview', 'overview'], budget: ['income', 'rent'],
   'loan-payments': ['loans', 'loans'], incoming: ['income', 'incoming'],
-  reconciliation: ['income', 'rent'], outgoing: ['costs', 'costs'], expenses: ['costs', 'costs'],
+  reconciliation: ['income', 'manager'], outgoing: ['costs', 'costs'], expenses: ['costs', 'costs'],
 };
 
 /** Old Finances links to what is now on the Bills page. */

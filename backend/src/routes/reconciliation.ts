@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
-import { uploadDocument } from '../services/s3Service';
+import { uploadDocument, getSignedDocumentUrl, detectContentType } from '../services/s3Service';
+import { readManagerStatement } from '../services/managerStatement';
 
 const router = Router();
 router.use(attachDbUser);
@@ -32,6 +33,11 @@ const LineItemSchema = z.object({
   // loan payments/mgmt fee deducted 8/3) — falls back to statementDate
   // when not set, so older statements without per-item dates still work.
   date: z.string().optional().nullable(),
+  // Read statements carry each cost's category and property (a manager may
+  // cover several), and lines the owner left out (already recorded, a draw).
+  category: z.string().optional().nullable(),
+  propertyId: z.string().optional().nullable(),
+  include: z.boolean().optional(),
 });
 
 const StatementSchema = z.object({
@@ -161,13 +167,15 @@ router.post('/statements/:id/apply', async (req, res, next) => {
 
     await db.$transaction(async tx => {
       for (const item of lineItems) {
+        if (item.include === false) continue;
         const itemDate = item.date ? new Date(item.date) : statement.statementDate;
 
         if (item.type === 'RENT' && item.targetId) {
           const p = await tx.rentPayment.create({
             data: {
               leaseId: item.targetId,
-              periodDate,
+              // The month the rent was for: the line's own date when it has one.
+              periodDate: item.date ? new Date(Date.UTC(itemDate.getUTCFullYear(), itemDate.getUTCMonth(), 1)) : periodDate,
               amount: item.amount,
               paidDate: itemDate,
               method: 'OTHER',
@@ -186,12 +194,12 @@ router.post('/statements/:id/apply', async (req, res, next) => {
             },
           });
           loanPaymentIds.push(p.id);
-        } else if (item.type === 'EXPENSE' && profile.propertyId) {
+        } else if (item.type === 'EXPENSE' && (item.propertyId ?? profile.propertyId)) {
           const e = await tx.expense.create({
             data: {
               userId: req.dbUserId!,
-              propertyId: profile.propertyId,
-              category: (profile.managementFeeCategory ?? 'PROPERTY_MANAGEMENT') as any,
+              propertyId: (item.propertyId ?? profile.propertyId)!,
+              category: (item.category ?? profile.managementFeeCategory ?? 'PROPERTY_MANAGEMENT') as any,
               amount: item.amount,
               date: itemDate,
               vendor: profile.name,
@@ -216,6 +224,100 @@ router.post('/statements/:id/apply', async (req, res, next) => {
 
     const updated = await db.reconciliationStatement.findUnique({ where: { id: statement.id } });
     res.json(updated);
+  } catch (err) { next(err); }
+});
+
+// ── Reading a statement ──────────────────────────────────────
+// POST /api/reconciliation/read { fileData (base64), filename } — the
+// statement read into lines and matched to properties, leases and loans
+// (services/managerStatement.ts). The file is kept under the owner's
+// folder so the statement saved from this draft carries it.
+router.post('/read', async (req, res, next) => {
+  try {
+    const { fileData, filename } = z.object({ fileData: z.string().min(1), filename: z.string().max(200).default('statement.pdf') }).parse(req.body);
+    const buffer = Buffer.from(fileData, 'base64');
+    if (buffer.length > 25 * 1024 * 1024) return res.status(400).json({ error: 'That file is over 25 MB.' });
+    const type = detectContentType(buffer, filename);
+    if (!/^(application\/pdf|image\/)/.test(type)) return res.status(400).json({ error: 'Upload the statement as a PDF or a photo.' });
+    const draft = await readManagerStatement(req.dbUserId!, buffer, filename);
+    const documentKey = `${req.dbUserId}/reconciliation/uploads/${Date.now()}-${sanitizeFilename(filename)}`;
+    await uploadDocument(documentKey, buffer);
+    res.json({ ...draft, documentKey });
+  } catch (err: any) {
+    if (err?.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
+const ImportSchema = z.object({
+  profileId: z.string().optional().nullable(),
+  managerName: z.string().min(1).max(120),
+  statementDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  documentKey: z.string().optional().nullable(),
+  notes: z.string().max(2000).optional().nullable(),
+  lines: z.array(z.object({
+    date: z.string().nullable().optional(), description: z.string().max(300), kind: z.string(), amount: z.number().positive(),
+    direction: z.enum(['IN', 'OUT']), propertyId: z.string().nullable().optional(), leaseId: z.string().nullable().optional(),
+    loanId: z.string().nullable().optional(), category: z.string().nullable().optional(), include: z.boolean(),
+  })).min(1).max(500),
+});
+
+// POST /api/reconciliation/import — save a reviewed draft as a statement
+// (under the manager's profile, made if new) and apply it: the rent,
+// loan payments and costs it records become the owner's records.
+router.post('/import', async (req, res, next) => {
+  try {
+    const d = ImportSchema.parse(req.body);
+    const userId = req.dbUserId!;
+    if (d.documentKey && !d.documentKey.startsWith(`${userId}/reconciliation/uploads/`)) return res.status(400).json({ error: 'That file is not yours.' });
+    // Every record a line points at must be the owner's.
+    const ids = (k: 'propertyId' | 'leaseId' | 'loanId') => [...new Set(d.lines.filter(l => l.include).map(l => l[k]).filter((x): x is string => !!x))];
+    const [props, leases, loans] = await Promise.all([
+      db.property.count({ where: { userId, id: { in: ids('propertyId') } } }),
+      db.lease.count({ where: { unit: { property: { userId } }, id: { in: ids('leaseId') } } }),
+      db.loan.count({ where: { userId, id: { in: ids('loanId') } } }),
+    ]);
+    if (props !== ids('propertyId').length || leases !== ids('leaseId').length || loans !== ids('loanId').length) return res.status(400).json({ error: 'A line points at a record that is not yours.' });
+    for (const l of d.lines.filter(l => l.include)) {
+      if (l.kind === 'RENT' && !l.leaseId) return res.status(400).json({ error: `Choose the lease for "${l.description}", or leave it out.` });
+      if (l.kind === 'LOAN_PAYMENT' && !l.loanId) return res.status(400).json({ error: `Choose the loan for "${l.description}", or leave it out.` });
+      if (['MANAGEMENT_FEE', 'REPAIR', 'UTILITY', 'OTHER_EXPENSE'].includes(l.kind) && !l.propertyId) return res.status(400).json({ error: `Choose the property for "${l.description}", or leave it out.` });
+    }
+
+    let profile = d.profileId ? await db.reconciliationProfile.findFirst({ where: { id: d.profileId, userId } }) : null;
+    if (!profile) {
+      const only = ids('propertyId');
+      profile = await db.reconciliationProfile.create({
+        data: { userId, name: d.managerName, propertyId: only.length === 1 ? only[0] : null, managementFeeCategory: 'PROPERTY_MANAGEMENT', loanIds: ids('loanId') as unknown as Prisma.InputJsonValue },
+      });
+    }
+    const lineItems = d.lines.map(l => ({
+      type: l.kind === 'RENT' ? 'RENT' : l.kind === 'LOAN_PAYMENT' ? 'LOAN_PAYMENT' : ['MANAGEMENT_FEE', 'REPAIR', 'UTILITY', 'OTHER_EXPENSE'].includes(l.kind) ? 'EXPENSE' : 'OTHER',
+      targetId: l.kind === 'RENT' ? l.leaseId ?? null : l.kind === 'LOAN_PAYMENT' ? l.loanId ?? null : null,
+      targetLabel: l.kind, description: l.description, amount: l.amount, direction: l.direction === 'IN' ? 'CREDIT' : 'DEBIT',
+      date: l.date ?? null, category: l.category ?? null, propertyId: l.propertyId ?? null, include: l.include,
+    }));
+    const net = lineItems.reduce((t, li) => t + (li.direction === 'CREDIT' ? li.amount : -li.amount), 0);
+    const statement = await db.reconciliationStatement.create({
+      data: {
+        userId, profileId: profile.id, statementDate: new Date(`${d.statementDate}T00:00:00.000Z`),
+        lineItems: lineItems as unknown as Prisma.InputJsonValue, netAmount: Math.round(net * 100) / 100, notes: d.notes ?? null,
+        documentS3Key: d.documentKey ?? null,
+      },
+    });
+    res.status(201).json({ id: statement.id, profileId: profile.id });
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ error: 'Some lines are incomplete.' });
+    next(err);
+  }
+});
+
+// GET /api/reconciliation/statements/:id/document — the statement file, through a signed link.
+router.get('/statements/:id/document', async (req, res, next) => {
+  try {
+    const s = await db.reconciliationStatement.findFirst({ where: { id: req.params.id, userId: req.dbUserId! }, select: { documentS3Key: true } });
+    if (!s?.documentS3Key) return res.status(404).json({ error: 'No file on this statement.' });
+    res.json({ url: await getSignedDocumentUrl(s.documentS3Key) });
   } catch (err) { next(err); }
 });
 
