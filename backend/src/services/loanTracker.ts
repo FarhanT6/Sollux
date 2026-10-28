@@ -42,7 +42,7 @@ export function statusFor(expected: number, paid: number, dueDate: string, grace
 const LOAN_SELECT = {
   id: true, lender: true, loanType: true, isPersonal: true, monthlyPayment: true, escrowAmount: true, dueDay: true, gracePeriodDays: true,
   originationDate: true, paymentMethods: true, paymentInstructions: true, mailingAddress: true, paymentUrl: true,
-  propertyId: true, property: { select: { nickname: true, address: true } },
+  propertyId: true, utilityAccountId: true, property: { select: { nickname: true, address: true } },
   payFromBankAccount: { select: { id: true, name: true, last4: true } },
 } as const;
 
@@ -72,6 +72,8 @@ function base(l: Loan) {
   return {
     loanId: l.id, lender: l.lender, loanType: l.loanType, isPersonal: l.isPersonal,
     property: l.property?.nickname || l.property?.address || (l.isPersonal ? 'Personal' : 'General'), propertyId: l.propertyId,
+    // Set when the loan is billed like a utility (an installment contract): its bills are that account's.
+    utilityAccountId: l.utilityAccountId,
     expected: Number((n(l.monthlyPayment) + n(l.escrowAmount)).toFixed(2)),
     dueDay: l.dueDay, gracePeriodDays: l.gracePeriodDays,
     paymentMethods: l.paymentMethods, paymentInstructions: l.paymentInstructions, mailingAddress: l.mailingAddress, paymentUrl: l.paymentUrl,

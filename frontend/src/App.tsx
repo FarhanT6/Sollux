@@ -40,6 +40,7 @@ import ProjectsPage from './pages/ProjectsPage';
 import TaxesPage from './pages/TaxesPage';
 import InsurancePage from './pages/InsurancePage';
 import OperatingExpensesPage from './pages/OperatingExpensesPage';
+import BillsPage from './pages/BillsPage';
 import VaultPage from './pages/VaultPage';
 import PersonalPage from './pages/PersonalPage';
 import CreditCardPage from './pages/CreditCardPage';
@@ -134,6 +135,7 @@ export default function App() {
           <Route path="taxes" element={<TaxesPage />} />
           <Route path="insurance" element={<InsurancePage />} />
           <Route path="operating-expenses" element={<OperatingExpensesPage />} />
+          <Route path="bills" element={<BillsPage />} />
           <Route path="personal" element={<PersonalPage />} />
           <Route path="vault" element={<VaultPage />} />
           <Route path="personal/cards/:id" element={<CreditCardPage />} />

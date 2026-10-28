@@ -292,6 +292,8 @@ export type LoanTrackerStatus = 'paid' | 'partial' | 'upcoming' | 'due' | 'late'
 interface LoanTrackerBase {
   loanId: string; lender: string; loanType: string; isPersonal: boolean; property: string; propertyId: string | null;
   expected: number; dueDay: number | null; gracePeriodDays: number | null;
+  /** Set when the loan is billed like a utility: its bills are that account's. */
+  utilityAccountId?: string | null;
   paymentMethods: string[]; paymentInstructions: string | null; mailingAddress: string | null; paymentUrl: string | null; payFrom: string | null;
 }
 export interface LoanTrackerPayment { id: string; loanId: string; date: string; month: string; amount: number; lateFee: number | null; method: string | null; confirmationNumber: string | null; notes: string | null }
@@ -773,6 +775,19 @@ export const createStatement = (data: {
 }) => api.post<Statement>('/statements', data).then(r => r.data);
 export const getStatementsSummary = (params?: { propertyId?: string; utilityAccountId?: string }) =>
   api.get<StatementSummaryRow[]>('/statements/summary', { params }).then(r => r.data);
+
+// The bills sheet: every active account by property, with its bills and payments.
+export interface BillsSheetStatement {
+  id: string; statementDate: string; dueDate: string | null; amountDue: number | null; amountPaid: number | null;
+  pastDueCarried: number | null; balance: number | null; trueUpDeferred: number | null; paymentPlanAmount: number | null;
+  paidOverride: 'PAID' | 'UNPAID' | null; isScheduled: boolean; isDownPayment: boolean; hasPdf: boolean;
+}
+export interface BillsSheetAccount {
+  id: string; providerName: string; category: string; billingCadence: string; last4: string | null; serves: string | null;
+  notes: string | null; website: string | null; statements: BillsSheetStatement[]; payments: any[];
+}
+export interface BillsSheet { properties: { id: string; name: string; address: string; city: string; state: string; accounts: BillsSheetAccount[] }[] }
+export const getBillsSheet = () => api.get<BillsSheet>('/bills').then(r => r.data);
 
 // Utility payments
 export const getPayments = (params: { utilityAccountId?: string; propertyId?: string }) =>

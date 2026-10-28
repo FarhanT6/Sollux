@@ -56,6 +56,13 @@ export default function SettingsPage() {
   const { signOut } = useClerk();
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = (searchParams.get('tab') as SettingsTab) || 'account';
+  // Audit requests from the landing page: the tab shows only while some are new.
+  const [newAudits, setNewAudits] = useState(0);
+  useEffect(() => {
+    if (!isAdmin) return;
+    api.get<{ status: string }[]>('/admin/audit-requests').then(r => setNewAudits(r.data.filter(x => x.status === 'new').length)).catch(() => {});
+  }, [isAdmin]);
+  const showAudits = isAdmin && (newAudits > 0 || tab === 'audits');
   const phone = usePhone();
   const [gmailStatus, setGmailStatus] = useState<{ connected: boolean; accounts: { id: string; email: string; label?: string }[] } | null>(null);
   const [gmailSuccessMsg, setGmailSuccessMsg] = useState('');
@@ -149,7 +156,7 @@ export default function SettingsPage() {
           <Row title="Plan & billing" to="/settings?tab=billing" icon={{ bg: 'var(--ios-tint)', glyph: <span style={{ fontWeight: 700, color: '#000' }}>★</span> }} />
           {modulesHas('operations') && <Row title="Rent collection" subtitle="Tenants pay online; payouts to your bank" to="/settings?tab=rent" icon={{ bg: '#30d158', glyph: <span style={{ fontWeight: 700 }}>↓</span> }} />}
           <Row title="AI usage" subtitle="Spend, budget and a test of every AI feature" to="/settings?tab=ai" icon={{ bg: '#bf5af2', glyph: <span style={{ fontWeight: 700 }}>✦</span> }} />
-          {isAdmin && <Row title="Audit requests" subtitle="From the landing page" to="/settings?tab=audits" icon={{ bg: '#ff9f0a', glyph: <span style={{ fontWeight: 700 }}>✉</span> }} />}
+          {showAudits && <Row title="Audit requests" subtitle={`${newAudits} new from the landing page`} to="/settings?tab=audits" icon={{ bg: '#ff9f0a', glyph: <span style={{ fontWeight: 700 }}>✉</span> }} />}
         </Section>
         <Section>
           <Row title="Sign out" destructive chevron={false} onClick={() => void signOut()} />
@@ -175,7 +182,7 @@ export default function SettingsPage() {
       />
 
       <div className="flex border-b px-6" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
-        {(['account', 'billing', 'rent', 'ai', 'notifications', 'banking', 'rates', 'audits'] as SettingsTab[]).filter(t => (t !== 'rent' || modulesHas('operations')) && (t !== 'audits' || isAdmin)).map(t => (
+        {(['account', 'billing', 'rent', 'ai', 'notifications', 'banking', 'rates', 'audits'] as SettingsTab[]).filter(t => (t !== 'rent' || modulesHas('operations')) && (t !== 'audits' || showAudits)).map(t => (
           <button
             key={t}
             onClick={() => setSearchParams({ tab: t }, { replace: true })}

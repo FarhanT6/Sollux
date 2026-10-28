@@ -19,8 +19,16 @@ function Ico({ d, children, size = 16 }: { d?: string; children?: React.ReactNod
   );
 }
 
-/** The sidebar, in three groups: the daily few, the properties themselves, and records. */
+/**
+ * The sidebar, in three groups: the daily few, the properties themselves, and
+ * records. Projects, Operations, Compliance and Legal are left out of it: they
+ * went unused, and their pages stay reachable from a property and by address.
+ */
 export const NAV = [
+  {
+    group: '', to: '/bills', label: 'Bills',
+    icon: (z: number) => <Ico size={z}><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M3 14h18M9 4v16M15 4v16"/></Ico>,
+  },
   {
     group: '', to: '/dashboard', label: 'Overview',
     icon: (z: number) => <Ico size={z}><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></Ico>,
@@ -52,22 +60,6 @@ export const NAV = [
   {
     group: 'Properties', to: '/repairs', label: 'Repairs', module: 'operations' as ModuleKey,
     icon: (z: number) => <Ico size={z} d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />,
-  },
-  {
-    group: 'Properties', folder: 'Property records', to: '/projects', label: 'Projects', module: 'operations' as ModuleKey,
-    icon: (z: number) => <Ico size={z}><path d="M4 21V5h7v16"/><path d="M11 9h9v12"/><path d="M7 9h1M7 13h1M7 17h1M14 13h2M14 17h2"/><path d="M2 21h20"/></Ico>,
-  },
-  {
-    group: 'Properties', folder: 'Property records', to: '/operations', label: 'Operations', module: 'operations' as ModuleKey,
-    icon: (z: number) => <Ico size={z}><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></Ico>,
-  },
-  {
-    group: 'Properties', folder: 'Property records', to: '/compliance', label: 'Compliance', module: 'operations' as ModuleKey,
-    icon: (z: number) => <Ico size={z}><path d="M12 2l8 4v6c0 5-3.5 9-8 10-4.5-1-8-5-8-10V6l8-4z"/><path d="M9 12l2 2 4-4"/></Ico>,
-  },
-  {
-    group: 'Properties', folder: 'Property records', to: '/legal', label: 'Legal', module: 'operations' as ModuleKey,
-    icon: (z: number) => <Ico size={z}><path d="M12 3v18"/><path d="M5 7h14"/><path d="M6 7l-3 6h6z"/><path d="M18 7l-3 6h6z"/></Ico>,
   },
   {
     group: 'Records', to: '/import', label: 'Import',
@@ -129,8 +121,6 @@ export default function AppLayout() {
   useEffect(() => { rememberEntry(location.pathname + location.search); }, [location.key, location.pathname, location.search]);
 
   const section = '/' + location.pathname.split('/')[1];
-  const [folderOpen, setFolderOpen] = useState(false);
-  const folderShown = folderOpen || nav.some(n => (n as { folder?: string }).folder && n.to === section);
   const moreActive = !tabs.includes(section);
   const summaryBadge = (to: string) => {
     const b = badge(to);
@@ -147,30 +137,14 @@ export default function AppLayout() {
       {nav.map((n, i) => {
         const b = badge(n.to);
         const heading = n.group && n.group !== nav[i - 1]?.group ? n.group : null;
-        const folder = (n as { folder?: string }).folder;
-        // The pages used now and then (projects, operations, compliance,
-        // legal) sit in one folder, closed until opened or one of them is open.
-        const firstInFolder = folder && (nav[i - 1] as { folder?: string } | undefined)?.folder !== folder;
-        const link = (
-          <NavLink to={n.to} className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`} style={folder ? { paddingLeft: 49 } : undefined}>
-            {!folder && <span className="flex-shrink-0" style={{ opacity: 0.6 }}>{n.icon(17)}</span>}
-            <span>{n.label}</span>
-            {b && <span className="ml-auto text-xs text-gray-500 tabular-nums">{b.n}</span>}
-          </NavLink>
-        );
         return (
           <div key={n.to}>
             {heading && <p className="px-2.5 pt-6 pb-1.5 text-xs font-medium text-gray-500">{heading}</p>}
-            {firstInFolder && (
-              <button onClick={() => setFolderOpen(o => !o)} className="sidebar-link w-full" aria-expanded={folderShown}>
-                <span className="flex-shrink-0" style={{ opacity: 0.6 }}>
-                  <Ico size={17}><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></Ico>
-                </span>
-                <span>{folder}</span>
-                <span className="ml-auto text-gray-500 text-xs transition-transform" style={{ transform: folderShown ? 'rotate(90deg)' : undefined }}>›</span>
-              </button>
-            )}
-            {(!folder || folderShown) && link}
+            <NavLink to={n.to} className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
+              <span className="flex-shrink-0" style={{ opacity: 0.6 }}>{n.icon(17)}</span>
+              <span>{n.label}</span>
+              {b && <span className="ml-auto text-xs text-gray-500 tabular-nums">{b.n}</span>}
+            </NavLink>
           </div>
         );
       })}
