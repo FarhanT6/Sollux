@@ -7,6 +7,7 @@ import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { insightQueue } from '../workers/queues';
 import { lookupPropertyTax } from './propertyTaxLookup';
+import { withAiContext, checkBudget } from '../ai/meter';
 
 type Status = { status: 'queued' | 'running' | 'done' | 'failed'; at: string; note?: string | null; progress?: string | null; years?: number; defaults?: number };
 
@@ -57,6 +58,15 @@ export async function refreshTaxLookups(): Promise<number> {
     const s = p.taxLookupJson as Status | null;
     return s?.status === 'done' && Date.now() - new Date(s.at).getTime() > 30 * 24 * 3600_000;
   });
+  // Lookups the AI budget stopped before they began are run once it allows:
+  // the owner asked for them, so nobody has to press the button again.
+  const stopped = await db.property.findMany({ where: { status: 'ACTIVE' }, select: { id: true, userId: true, taxLookupJson: true } });
+  for (const p of stopped) {
+    const s = p.taxLookupJson as Status | null;
+    if (s?.status !== 'failed' || !/AI budget|allowance/i.test(s.note ?? '') || due.some(d => d.id === p.id)) continue;
+    const ok = await withAiContext({ userId: p.userId }, () => checkBudget('tax-lookup')).then(() => true, () => false);
+    if (ok) due.push({ id: p.id, taxLookupJson: p.taxLookupJson });
+  }
   for (const p of due) await queueTaxLookup(p.id);
   return due.length;
 }

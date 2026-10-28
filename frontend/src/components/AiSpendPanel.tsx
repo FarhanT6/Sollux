@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import PortalLogin from './utility/PortalLogin';
-import { getAiSpend, getAiTest, startAiTest, getPortalTests, testPortal, cancelFetch, type AiSpend, type AiTestState, type PortalTestAccount, type WorkerStatus, type QueueSnapshot } from '../api/client';
+import { getAiSpend, setAiBudget, getAiTest, startAiTest, getPortalTests, testPortal, cancelFetch, type AiSpend, type AiTestState, type PortalTestAccount, type WorkerStatus, type QueueSnapshot } from '../api/client';
 import { fmtMoney } from '../lib/money';
 import { fmtMoment } from '../lib/date';
 import PortalCodeBanner from './utility/PortalCodeBanner';
@@ -95,8 +95,9 @@ export default function AiSpendPanel() {
           Models: {spend.primaryModel} first{spend.fallbackModel ? `, ${spend.fallbackModel} when an answer fails its check` : ', no fallback'}.
           {spend.scope === 'account'
             ? 'Bill reading, portal fetches and insights draw on this allowance. When it is used up they pause until the 1st; bills can still be added by hand or read as plain text.'
-            : 'App-wide, across every account. When the budget is reached Claude stops for the month and Sollux falls back to plain text reading and templates — change it with AI_MONTHLY_BUDGET on Render. Each customer also has their plan’s own allowance (AI_ALLOWANCE_STARTER / _PRO / _PORTFOLIO).'}
+            : 'App-wide, across every account. When the budget is reached Claude stops for the month and Sollux falls back to plain text reading and templates. Each customer also has their plan’s own allowance (AI_ALLOWANCE_STARTER / _PRO / _PORTFOLIO).'}
         </p>
+        {spend.scope === 'app' && <BudgetEditor current={spend.budget} onSaved={b => setSpend(s => (s ? { ...s, budget: b } : s))} />}
       </div>
 
       <div className="card p-5">
@@ -267,6 +268,26 @@ function RunLine({ a, workers, queue, onCodeSent }: { a: PortalTestAccount; work
       {live && a.mfaPrompt && <PortalCodeBanner accountId={a.id} prompt={a.mfaPrompt} requestedAt={a.mfaRequestedAt} providerName={a.providerName} onSent={onCodeSent} />}
       {r.state === 'done' && <p className="text-xs text-green-400">Finished {fmtMoment(r.completedAt)}: {r.progress ?? (r.statementsFound ? `${r.statementsFound} statements` : 'nothing new')}{r.costUsd != null ? ` · ${fmtCost(r.costUsd)}` : ''}</p>}
       {r.state === 'failed' && <p className="text-xs text-red-400">Stopped {r.completedAt ? fmtMoment(r.completedAt) : ''}: {r.error ?? 'the run failed.'}{r.costUsd ? ` · ${fmtCost(r.costUsd)}` : ''}</p>}
+    </div>
+  );
+}
+
+/** The app-wide monthly cap, set here rather than on Render (it wins over AI_MONTHLY_BUDGET). */
+function BudgetEditor({ current, onSaved }: { current: number | null; onSaved: (b: number | null) => void }) {
+  const [value, setValue] = useState(current != null ? String(current) : '');
+  const [saving, setSaving] = useState(false);
+  async function save(v: number | null) {
+    setSaving(true);
+    try { await setAiBudget(v); onSaved(v); toast(v == null ? 'No monthly cap.' : `Monthly budget set to ${fmtMoney(v)}.`); }
+    catch { toast('Could not change the budget.', 'error'); }
+    finally { setSaving(false); }
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-2 mt-3">
+      <span className="text-xs text-gray-400">Monthly budget $</span>
+      <input type="number" min={0} step={5} value={value} onChange={e => setValue(e.target.value)} className="input-dark text-sm w-24" />
+      <button disabled={saving || value === '' || Number(value) < 0} onClick={() => void save(Number(value))} className="btn btn-primary text-xs disabled:opacity-50">{saving ? '…' : 'Save'}</button>
+      <button disabled={saving} onClick={() => void save(null)} className="text-xs text-gray-500 hover:text-gray-300">No cap</button>
     </div>
   );
 }

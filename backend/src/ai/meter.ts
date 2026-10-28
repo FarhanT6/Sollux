@@ -55,7 +55,25 @@ const budget = (name: string, dflt: number | null): number | null => {
   const n = Number(v);
   return Number.isFinite(n) && n >= 0 ? n : dflt;
 };
-export const monthlyBudget = () => budget('AI_MONTHLY_BUDGET', 25);
+/** The budget from Render's environment alone (the default when nothing is set in the app). */
+export const envMonthlyBudget = () => budget('AI_MONTHLY_BUDGET', 25);
+// Set from Settings → AI usage (app_settings), read at most once a minute;
+// it wins over the environment, so the owner changes it without Render.
+let setting: { at: number; value: number | null | undefined } | null = null;
+export async function monthlyBudget(): Promise<number | null> {
+  if (!setting || Date.now() - setting.at > 60_000) {
+    const row = await db.appSetting.findUnique({ where: { key: 'AI_MONTHLY_BUDGET' } }).catch(() => null);
+    const v = row?.value?.trim().toLowerCase();
+    setting = { at: Date.now(), value: v == null ? undefined : v === 'none' ? null : Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : undefined };
+  }
+  return setting.value === undefined ? envMonthlyBudget() : setting.value;
+}
+/** Set the app-wide budget (null: no cap). */
+export async function setMonthlyBudget(value: number | null): Promise<void> {
+  const v = value == null ? 'none' : String(value);
+  await db.appSetting.upsert({ where: { key: 'AI_MONTHLY_BUDGET' }, create: { key: 'AI_MONTHLY_BUDGET', value: v }, update: { value: v } });
+  setting = { at: Date.now(), value };
+}
 const userBudget = () => budget('AI_USER_MONTHLY_BUDGET', null);
 
 const monthStart = () => { const d = new Date(); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)); };
@@ -102,7 +120,7 @@ export async function accountSpend(userId: string): Promise<number> { return (aw
 
 /** Throws AiBudgetError when this month's budget (the app's, or this account's) is used up. */
 export async function checkBudget(feature: string): Promise<void> {
-  const cap = monthlyBudget();
+  const cap = await monthlyBudget();
   const s = await spend();
   if (cap != null && s.total >= cap) {
     throw new AiBudgetError(`AI budget for the month reached ($${s.total.toFixed(2)} of $${cap}) — ${feature} skipped. Raise AI_MONTHLY_BUDGET on Render to continue.`);
