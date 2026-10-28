@@ -12,7 +12,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { askClaude, PRIMARY_MODEL, FALLBACK_MODEL } from '../ai/models';
-import { monthlyBudget, monthSpend, withAiContext, accountSpend, allowanceOf } from '../ai/meter';
+import { monthlyBudget, setMonthlyBudget, monthSpend, withAiContext, accountSpend, allowanceOf } from '../ai/meter';
 import { downloadDocument } from '../services/s3Service';
 import { parseBill } from '../services/pdfImportService';
 import { extractLeaseTerms } from '../services/leaseExtract';
@@ -74,7 +74,7 @@ router.get('/', async (req: Request, res: Response) => {
   res.json({
     month: since.toISOString().slice(0, 7),
     spent: total,
-    budget: admin ? monthlyBudget() : await allowanceOf(req.dbUserId!),
+    budget: admin ? await monthlyBudget() : await allowanceOf(req.dbUserId!),
     scope: admin ? 'app' : 'account',
     primaryModel: PRIMARY_MODEL,
     fallbackModel: FALLBACK_MODEL,
@@ -88,6 +88,15 @@ router.get('/', async (req: Request, res: Response) => {
     })).sort((a, b) => b.cost - a.cost),
     recent: recent.map(r => ({ ...r, costUsd: Number(r.costUsd), name: nameOf(r.feature) })),
   });
+});
+
+// PUT /api/ai-spend/budget { monthly: number | null } — the app-wide monthly cap (admin only).
+router.put('/budget', async (req: Request, res: Response) => {
+  if (!req.isPlatformAdmin) return res.status(403).json({ error: 'Only the admin sets the app budget.' });
+  const m = req.body?.monthly;
+  if (m !== null && !(typeof m === 'number' && Number.isFinite(m) && m >= 0 && m <= 10000)) return res.status(400).json({ error: 'A dollar amount from 0 to 10,000, or no cap.' });
+  await setMonthlyBudget(m);
+  res.json({ budget: m });
 });
 
 // ─── Test run ──────────────────────────────────────────────

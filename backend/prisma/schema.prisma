@@ -2739,3 +2739,14 @@ model AuditRequest {
   @@index([createdAt])
   @@map("audit_requests")
 }
+
+/// App-wide settings the admin changes from the app instead of Render's
+/// environment (an env var still applies when no row is set). Keys:
+/// AI_MONTHLY_BUDGET — dollars, or 'none' for no cap.
+model AppSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+
+  @@map("app_settings")
+}

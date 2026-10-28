@@ -1287,6 +1287,7 @@ export interface PortalTestAccount {
   syncEnabled: boolean; mfaPrompt: string | null; mfaRequestedAt: string | null; run: PortalRunStatus | null;
 }
 export const getAiSpend = () => api.get<AiSpend>('/ai-spend').then(r => r.data);
+export const setAiBudget = (monthly: number | null) => api.put<{ budget: number | null }>('/ai-spend/budget', { monthly }).then(r => r.data);
 export const getAiTest = () => api.get<AiTestState>('/ai-spend/test').then(r => r.data);
 export const startAiTest = (only?: string) => api.post('/ai-spend/test', only ? { only } : {}).then(r => r.data);
 export interface QueueSnapshot { waiting: number; active: { account: string; since: string | null; kind: string }[] }
