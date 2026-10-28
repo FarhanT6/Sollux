@@ -27,7 +27,7 @@ import { BaseScraperProvider } from '../scrapers/base';
 import { connectorFor } from './connector';
 import { meteredCreate, paramsFor, PRIMARY_MODEL } from '../ai/models';
 import { withAiContext, costOf } from '../ai/meter';
-import { startUrlFor, cleanReport, type LookupReport } from '../lib/taxLookupReport';
+import { startUrlFor, cleanReport, sameStreetAddress, type LookupReport } from '../lib/taxLookupReport';
 
 export { startUrlFor, cleanReport };
 
@@ -54,6 +54,8 @@ const TOOLS: Anthropic.Tool[] = [
         sourceUrl: { type: 'string', description: 'The page with the parcel\'s current bill.' },
         taxingAuthority: { type: 'string' },
         apn: { type: 'string', description: 'The parcel number as the county prints it.' },
+        situsAddress: { type: 'string', description: "The parcel's property (situs) address as the county shows it." },
+        county: { type: 'string', description: 'The county the parcel is in.' },
         years: {
           type: 'array', description: 'Every tax year shown — the current one and earlier ones, paid or not.',
           items: {
@@ -100,6 +102,13 @@ export async function lookupPropertyTax(propertyId: string, onProgress?: (t: str
   if (!p) return { ok: false, report: null, error: 'Property not found', steps: 0, costUsd: 0 };
   return withAiContext({ userId: p.userId }, async () => {
     const run = await runLookup(p, onProgress);
+    // A parcel found by address is saved only when its address is this
+    // property's: the wrong parcel's taxes must never land here.
+    if (run.report?.found && !p.apn && !sameStreetAddress(p.address, run.report.situsAddress)) {
+      run.ok = false;
+      run.error = `Found parcel ${run.report.apn ?? '?'} at "${run.report.situsAddress ?? 'no address shown'}", which does not match ${p.address}. Nothing was saved — check the address, or add the parcel number.`;
+      return run;
+    }
     if (run.report?.found) await saveReport(p.id, run.report);
     return run;
   });
@@ -108,9 +117,9 @@ export async function lookupPropertyTax(propertyId: string, onProgress?: (t: str
 async function runLookup(p: { id: string; userId: string; address: string; city: string; state: string; zip: string; county: string | null; apn: string | null }, onProgress?: (t: string) => void): Promise<LookupRun> {
   const say = (t: string) => { try { onProgress?.(t); } catch { /* status only */ } };
   const run: LookupRun = { ok: false, report: null, steps: 0, costUsd: 0 };
-  if (!p.apn && !p.address) { run.error = 'Add the parcel number (APN) on the property first.'; return run; }
+  if (!p.apn && !p.address) { run.error = 'Add the property address or its parcel number (APN) first.'; return run; }
   if (!process.env.ANTHROPIC_API_KEY) { run.error = 'AI is not configured.'; return run; }
-  const start = startUrlFor(p.state, p.county, p.apn ?? '');
+  const start = startUrlFor(p.state, p.county, p.apn ?? '', p.city);
 
   // The owner's own Chrome when its connector is online (county sites that
   // refuse cloud servers let it in), else Sollux's browser.
@@ -146,7 +155,7 @@ async function runLookup(p: { id: string; userId: string; address: string; city:
   };
 
   const system = `You operate a web browser to look up a property's taxes on its county's official tax website, for the property's owner.
-Property: ${p.address}, ${p.city}, ${p.state} ${p.zip}${p.county ? ` — ${p.county} County` : ''}. Parcel number (APN / parcel ID / folio / account): ${p.apn ?? 'not known — search by the street address'}.
+Property: ${p.address}, ${p.city}, ${p.state} ${p.zip}${p.county ? ` — ${p.county} County` : ''}. Parcel number (APN / parcel ID / folio / account): ${p.apn ?? 'NOT KNOWN — find it first by the street address: the county assessor\'s or tax collector\'s address / situs search, or the county parcel map. Pick the parcel whose situs address matches this one exactly (number and street); if several match (units, adjacent lots), take the exact match and name the others in notes; if none matches exactly, report found false'}.${p.county ? '' : ' The county is not on file: work it out from the city and ZIP, and report it.'}
 Goal: find the parcel on the county treasurer-tax collector's (or tax collector's) own site — or the vendor site it links to for its tax search (Grant Street / county-taxes.com, MPTS, publicaccessnow, Tyler and the like) — and read:
 1. the current tax year's bill: each installment's amount, due date, the date it becomes delinquent, whether and when it was paid, penalties and balance owed, the bill number;
 2. the values on the roll: land, improvements, market (just) value, exemptions and which, net taxable value, the base year if shown (California assessor pages show it), the tax rate;
@@ -155,7 +164,7 @@ Goal: find the parcel on the county treasurer-tax collector's (or tax collector'
 5. anything left unpaid: on California sites the "defaulted" / "prior year" / "redemption" tab (default number like DEF230000268, default date, amount to redeem and the date it is good through, any five-year installment plan of redemption and its payments, the power-to-sell date if shown); on Florida sites the tax certificates (number, holder, interest rate, issue date, redemption amount, any tax deed application).
 Open each tab or link the parcel's page offers for these (Current bill, Prior years, Delinquent / Defaulted taxes, Pay plan, Assessment / Values, Bill detail / Direct charges). The assessor's site may have the values and base year when the tax collector's does not; visit it if there is time.
 Rules: read only. Never pay, never start a payment or checkout, never enroll in anything, never create an account or sign in, never enter anything except the parcel number or the street address into a search. Prefer official county (.gov, .us, .org of the county) pages and the vendors they link to; ignore paid property-record aggregators and ads. A search engine results page is only for finding the county's site. If a page asks to verify you are human and you cannot get past it, or the site does not load, try the county's other official search (assessor, a second search page) once, then report found false and say what stopped you.
-When done, call report once with everything the pages showed — never estimate a figure the page did not show.`;
+When done, call report once — always with the parcel number (apn) and the parcel's situs address as the county shows them — and with everything the pages showed — never estimate a figure the page did not show.`;
 
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const deadline = Date.now() + RUN_MS;
@@ -238,8 +247,10 @@ function present<T extends Record<string, unknown>>(o: T): Partial<T> {
 
 export async function saveReport(propertyId: string, r: LookupReport): Promise<{ years: number; defaults: number }> {
   const now = new Date();
-  const prop = await db.property.findUnique({ where: { id: propertyId }, select: { apn: true } });
-  if (r.apn && !prop?.apn) await db.property.update({ where: { id: propertyId }, data: { apn: r.apn } });
+  const prop = await db.property.findUnique({ where: { id: propertyId }, select: { apn: true, county: true } });
+  // The parcel number (and county) the county site showed fill what is missing.
+  const fill = { ...(r.apn && !prop?.apn ? { apn: r.apn } : {}), ...(r.county && !prop?.county ? { county: r.county.replace(/\s+county$/i, '') } : {}) };
+  if (Object.keys(fill).length) await db.property.update({ where: { id: propertyId }, data: fill });
   const existing = await db.taxAssessment.findMany({ where: { propertyId }, select: { id: true, taxYear: true } });
   let years = 0;
   for (const y of r.years ?? []) {

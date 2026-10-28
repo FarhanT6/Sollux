@@ -281,7 +281,6 @@ router.post('/lookup', async (req, res, next) => {
     const { propertyId } = z.object({ propertyId: z.string() }).parse(req.body);
     const p = await db.property.findFirst({ where: { id: propertyId, userId: req.dbUserId! }, select: { id: true, apn: true, state: true, county: true, taxLookupJson: true } });
     if (!p) return res.status(404).json({ error: 'Property not found' });
-    if (!p.apn) return res.status(400).json({ error: 'Add the parcel number (APN) first.' });
     if (!p.state) return res.status(400).json({ error: 'Add the property\'s state (and county) first.' });
     const s = p.taxLookupJson as { status?: string; at?: string } | null;
     // One at a time; a run stuck for over 20 minutes may be started again.
@@ -289,6 +288,27 @@ router.post('/lookup', async (req, res, next) => {
     const { queueTaxLookup } = await import('../services/taxLookupJobs');
     await queueTaxLookup(p.id);
     res.status(202).json({ queued: true });
+  } catch (err) { next(err); }
+});
+
+// POST /lookup-all — every active property not looked up in the last week
+// (and not already in progress): parcel numbers are found by address where
+// none is on file.
+router.post('/lookup-all', async (req, res, next) => {
+  try {
+    const props = await db.property.findMany({ where: { userId: req.dbUserId!, status: 'ACTIVE' }, select: { id: true, state: true, address: true, taxLookupJson: true } });
+    const { queueTaxLookup } = await import('../services/taxLookupJobs');
+    let queued = 0, skipped = 0;
+    for (const p of props) {
+      const s = p.taxLookupJson as { status?: string; at?: string } | null;
+      const age = s?.at ? Date.now() - new Date(s.at).getTime() : Infinity;
+      const busy = (s?.status === 'queued' || s?.status === 'running') && age < 20 * 60_000;
+      const fresh = s?.status === 'done' && age < 7 * 24 * 3600_000;
+      if (!p.state || !p.address || busy || fresh) { skipped++; continue; }
+      await queueTaxLookup(p.id);
+      queued++;
+    }
+    res.json({ queued, skipped });
   } catch (err) { next(err); }
 });
 

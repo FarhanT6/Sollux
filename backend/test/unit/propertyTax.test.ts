@@ -68,3 +68,12 @@ test('lookup starts on the county site Sollux knows, a Florida county-taxes page
   assert.deepEqual(r.years![0].specialAssessments, [{ name: 'CFD 2006-1', amount: 300, phone: null, cfd: true }]);
   assert.equal(r.defaults![0].defaultDate, null);
 });
+
+test('a parcel found by address is ours only when the street number and name agree', async () => {
+  const { sameStreetAddress } = await import('../../src/lib/taxLookupReport');
+  assert.equal(sameStreetAddress('1200 Elm Grove Ln', '1200 ELM GROVE LANE ESCONDIDO CA 92029'), true);
+  assert.equal(sameStreetAddress('1200 N Elm Grove Ln', '1200 ELM GROVE LN'), true);
+  assert.equal(sameStreetAddress('1200 Elm Grove Ln', '1204 ELM GROVE LN'), false);
+  assert.equal(sameStreetAddress('1200 Elm Grove Ln', '1200 OAK ST'), false);
+  assert.equal(sameStreetAddress('1200 Elm Grove Ln', null), false);
+});

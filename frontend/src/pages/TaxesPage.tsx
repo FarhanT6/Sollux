@@ -4,7 +4,7 @@ import IncomeTaxTab from '../components/taxes/IncomeTaxTab';
 import ScheduleETab from '../components/taxes/ScheduleETab';
 import ContractorsTab from '../components/taxes/ContractorsTab';
 import {
-  getTaxAssessments, readTaxBill, saveTaxAssessment, updateTaxAssessment, deleteTaxAssessment, taxBillUrl, getProperties, getLoans, getTaxDefaults, saveTaxDefault, type FilePayload,
+  getTaxAssessments, readTaxBill, saveTaxAssessment, updateTaxAssessment, deleteTaxAssessment, taxBillUrl, getProperties, getLoans, getTaxDefaults, saveTaxDefault, startTaxLookupAll, type FilePayload,
 } from '../api/client';
 import type { Property, TaxAssessment, TaxDefault, TaxStatus, SpecialAssessment } from '../types';
 import ParcelPanel from '../components/taxes/ParcelPanel';
@@ -223,6 +223,14 @@ function PropertyTaxTab() {
     if (w) w.location.href = url; else window.location.href = url;
   }
 
+  const [lookupNote, setLookupNote] = useState<string | null>(null);
+  async function lookupAll() {
+    setLookupNote('Starting…');
+    try {
+      const r = await startTaxLookupAll();
+      setLookupNote(r.queued ? `Looking up ${r.queued} propert${r.queued === 1 ? 'y' : 'ies'} on the county sites — parcel numbers are found by address. A few minutes each; open Parcel to watch.${r.skipped ? ` ${r.skipped} skipped (looked up this week, running, or no address / state).` : ''}` : `Nothing to look up: every property was looked up this week, is running, or has no address / state.`);
+    } catch (e) { setLookupNote(describeApiError(e, 'Could not start the lookups.')); }
+  }
   const propName = (id: string) => { const p = properties.find(x => x.id === id); return p ? (p.nickname || p.address) : '—'; };
   const removeRecord = async () => { if (form?.id && confirm('Delete this tax record?')) { await deleteTaxAssessment(form.id); setForm(null); await load(); } };
 
@@ -326,6 +334,7 @@ function PropertyTaxTab() {
       </div>
       <Section footer="A PDF from the county or photos of the paper bill; Sollux reads the parcel, year, installments and due dates.">
         <Row title="Add or upload a tax bill" tinted chevron={false} onClick={() => startNew()} />
+        <Row title="Look up all properties" subtitle={lookupNote ?? 'From the county tax sites; parcel numbers found by address'} chevron={false} onClick={() => void lookupAll()} />
       </Section>
       {upcoming.length > 0 && (
         <Section header="Due next" footer="Swipe left on an installment once it is paid.">
@@ -373,7 +382,11 @@ function PropertyTaxTab() {
   return (
     <div>
       <div className="px-6 py-5">
-        <div className="flex justify-end mb-3"><button onClick={() => startNew()} className="btn btn-primary text-xs">+ Add or upload a tax bill</button></div>
+        <div className="flex flex-wrap items-center justify-end gap-2 mb-3">
+          {lookupNote && <span className="text-xs text-gray-400 mr-auto">{lookupNote}</span>}
+          <button onClick={() => void lookupAll()} className="btn text-xs" title="Finds each property's parcel on its county's tax site (by address when there is no parcel number) and reads the bills">Look up all properties</button>
+          <button onClick={() => startNew()} className="btn btn-primary text-xs">+ Add or upload a tax bill</button>
+        </div>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
           <div className="stat-card"><p className="text-xs text-gray-500">{latestYear ? `${latestYear} total` : 'Annual total'}</p><p className="text-lg font-semibold text-white">{fmtMoney(annualTotal)}</p></div>
           <div className="stat-card"><p className="text-xs text-gray-500">Installments still to pay</p><p className="text-lg font-semibold text-white">{upcoming.length}</p></div>

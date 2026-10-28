@@ -13,14 +13,15 @@ const COUNTY_SITES: Record<string, string> = {
   'fl:brevard': 'https://brevard.county-taxes.com/public',
 };
 
-export function startUrlFor(state: string | null | undefined, county: string | null | undefined, apn: string): string {
+export function startUrlFor(state: string | null | undefined, county: string | null | undefined, apn: string, city?: string | null): string {
   const st = String(state ?? '').trim().toLowerCase();
   const co = String(county ?? '').trim().toLowerCase().replace(/\s+county$/, '');
   const known = COUNTY_SITES[`${st}:${co}`];
   if (known) return known;
   // Most Florida tax collectors are on Grant Street's county-taxes.com.
   if (st === 'fl' && co) return `https://${co.replace(/[^a-z]/g, '')}.county-taxes.com/public`;
-  const q = `${co ? `${co} county` : ''} ${st.toUpperCase()} treasurer tax collector property tax search parcel ${apn}`.replace(/\s+/g, ' ').trim();
+  // No county on file: the city places it.
+  const q = `${co ? `${co} county` : city ? `${city} county` : ''} ${st.toUpperCase()} treasurer tax collector property tax search ${apn ? `parcel ${apn}` : 'by address'}`.replace(/\s+/g, ' ').trim();
   return `https://duckduckgo.com/html/?q=${encodeURIComponent(q)}`;
 }
 
@@ -41,6 +42,8 @@ export interface LookupDefault {
 }
 export interface LookupReport {
   found: boolean; sourceUrl?: string | null; taxingAuthority?: string | null; apn?: string | null;
+  /** The parcel's situs address as the county prints it, and its county: how a parcel found by address is checked. */
+  situsAddress?: string | null; county?: string | null;
   years?: LookupYear[]; defaults?: LookupDefault[]; notes?: string | null;
 }
 
@@ -74,6 +77,22 @@ export function cleanReport(r: any): LookupReport {
     redeemedOn: day(d.redeemedOn), notes: str(d.notes),
   }));
   const sourceUrl = str(r?.sourceUrl);
-  return { found: !!r?.found, sourceUrl: sourceUrl && /^https?:\/\//.test(sourceUrl) ? sourceUrl : null, taxingAuthority: str(r?.taxingAuthority), apn: str(r?.apn), years, defaults, notes: str(r?.notes) };
+  return { found: !!r?.found, sourceUrl: sourceUrl && /^https?:\/\//.test(sourceUrl) ? sourceUrl : null, taxingAuthority: str(r?.taxingAuthority), apn: str(r?.apn), situsAddress: str(r?.situsAddress), county: str(r?.county), years, defaults, notes: str(r?.notes) };
 }
 
+
+/**
+ * A parcel found by address is the property's only when its situs address
+ * carries the same street number and street name: "1200 Elm Grove Ln" and
+ * "1200 ELM GROVE LANE" agree; "1204 Elm Grove Ln" does not.
+ */
+export function sameStreetAddress(ours: string, theirs: string | null | undefined): boolean {
+  if (!theirs) return false;
+  const norm = (a: string) => a.toUpperCase().replace(/[.,#]/g, ' ').replace(/\s+/g, ' ').trim();
+  const a = norm(ours), b = norm(theirs);
+  const numA = a.match(/^\d+[A-Z]?/)?.[0], numB = b.match(/^\d+[A-Z]?/)?.[0];
+  if (!numA || numA !== numB) return false;
+  // The first word of the street name after the number.
+  const word = (x: string) => x.replace(/^\d+[A-Z]?\s+/, '').replace(/^(N|S|E|W|NORTH|SOUTH|EAST|WEST)\s+/, '').split(' ')[0];
+  return word(a) === word(b);
+}
