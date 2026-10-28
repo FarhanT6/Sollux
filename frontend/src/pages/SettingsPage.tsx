@@ -1,5 +1,6 @@
 import { useUser, useClerk } from '@clerk/clerk-react';
 import ModulesCard from '../components/settings/ModulesCard';
+import MenuCard from '../components/settings/MenuCard';
 import AuditRequestsPanel from '../components/settings/AuditRequestsPanel';
 import { useModules } from '../lib/modules';
 import { faceIdLockEnabled, biometryName, setFaceIdLock } from '../components/NativeLock';
@@ -146,6 +147,7 @@ export default function SettingsPage() {
             <AlertPhoneField />
           </div>
           <ModulesCard />
+          <MenuCard />
           <SignInSecurityCard />
           <PhoneLockCard />
           <SharedAccessCard />
@@ -215,6 +217,7 @@ export default function SettingsPage() {
       <div className="px-6 py-5 max-w-2xl">
 
         <ModulesCard />
+          <MenuCard />
 
         <div className="card p-5 mb-4">
           <h2 className="text-sm font-semibold text-white mb-4">Profile</h2>

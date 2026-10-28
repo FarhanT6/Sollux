@@ -808,6 +808,13 @@ export interface BillsSheetAccount {
 }
 export interface BillsSheet { properties: { id: string; name: string; address: string; city: string; state: string; accounts: BillsSheetAccount[] }[] }
 export const getBillsSheet = () => api.get<BillsSheet>('/bills').then(r => r.data);
+// Catching up: loan months and old bills marked paid on the owner's word, and undone in one stroke.
+export interface CatchUpLoan { loanId: string; lender: string; loanType: string; isPersonal: boolean; property: string | null; dueDay: number | null; expected: number; missing: { month: string; amount: number }[] }
+export const getCatchUpLoans = (through: string) =>
+  api.get<{ loans: CatchUpLoan[]; lastCatchUp: string | null }>('/catch-up/loans', { params: { through } }).then(r => r.data);
+export const runCatchUp = (data: { through: string; loanIds: string[]; statementIds: string[] }) =>
+  api.post<{ loanPayments: number; bills: number }>('/catch-up', data).then(r => r.data);
+export const undoCatchUp = () => api.post<{ loanPayments: number; bills: number }>('/catch-up/undo').then(r => r.data);
 
 // The cost ledger: what each property cost, by type and month (charged when due, paid when paid).
 export type CostType = 'UTILITIES' | 'INSURANCE' | 'PROPERTY_TAX' | 'HOA' | 'MAINTENANCE' | 'MANAGEMENT' | 'OTHER' | 'DEBT_SERVICE' | 'CAPITAL';

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
-  getBillsSheet, getLoanTrackerYear, getStatementDownloadUrl, patchStatement, markStatementUnpaid, createPayment, createLoanPayment,
+  getBillsSheet, getLoanTrackerYear, getCatchUpLoans, runCatchUp, undoCatchUp, type CatchUpLoan, getStatementDownloadUrl, patchStatement, markStatementUnpaid, createPayment, createLoanPayment,
   type BillsSheet, type BillsSheetAccount, type BillsSheetStatement, type LoanTrackerYear, type LoanTrackerStatus,
 } from '../api/client';
 import { PageHeader } from '../components/ui';
@@ -31,7 +31,7 @@ const CATEGORY: Record<string, string> = {
 };
 
 type State = 'paid' | 'overdue' | 'due' | 'upcoming';
-interface Bill { s: BillsSheetStatement; account: BillsSheetAccount; propertyId: string; amount: number; state: State }
+interface Bill { s: BillsSheetStatement; account: BillsSheetAccount; propertyId: string; propertyName: string; amount: number; state: State }
 
 const STATE_STYLE: Record<State, { color: string; bg: string; label: string }> = {
   paid: { color: '#34c759', bg: 'rgba(52,199,89,0.10)', label: 'Paid' },
@@ -46,14 +46,14 @@ const billMonth = (s: BillsSheetStatement) => monthKey(s.dueDate ?? s.statementD
 /** What the bill charged for its own period (no arrears carried in, no deferred true-up). */
 const chargeOf = (s: BillsSheetStatement) => Number(s.amountDue ?? 0) - deferredOf(s);
 
-function billsOf(account: BillsSheetAccount, propertyId: string): Bill[] {
+function billsOf(account: BillsSheetAccount, propertyId: string, propertyName: string): Bill[] {
   const resolved = computeResolvedByFutureCheckpoint(account.statements);
   const paid = computePaidMap(account.statements, account.payments, resolved);
   const today = todayISO();
   return account.statements.filter(s => !s.isDownPayment).map(s => {
     const isPaid = paid.get(s.id) ?? false;
     const state: State = isPaid ? 'paid' : isUpcoming(s) ? 'upcoming' : s.dueDate && s.dueDate < today ? 'overdue' : 'due';
-    return { s, account, propertyId, amount: chargeOf(s), state };
+    return { s, account, propertyId, propertyName, amount: chargeOf(s), state };
   });
 }
 
@@ -66,6 +66,7 @@ function BillsSheet() {
   const [query, setQuery] = useState('');
   const [openOnly, setOpenOnly] = useState(false);
   const [cell, setCell] = useState<{ bills: Bill[]; month: string } | null>(null);
+  const [catchingUp, setCatchingUp] = useState(false);
   const [loanCell, setLoanCell] = useState<{ row: LoanTrackerYear['rows'][number]; month: string } | null>(null);
 
   const load = useCallback(async () => {
@@ -90,7 +91,7 @@ function BillsSheet() {
   // Every bill, worked out once.
   const bills = useMemo(() => {
     const out = new Map<string, Bill[]>();
-    for (const p of sheet?.properties ?? []) for (const a of p.accounts) out.set(a.id, billsOf(a, p.id));
+    for (const p of sheet?.properties ?? []) for (const a of p.accounts) out.set(a.id, billsOf(a, p.id, p.name));
     return out;
   }, [sheet]);
 
@@ -149,6 +150,7 @@ function BillsSheet() {
             <span style={{ color: STATE_STYLE.overdue.color }}>Overdue {fmtMoney(totals.overdue)} · {totals.overdueN}</span>
             <span style={{ color: STATE_STYLE.due.color }}>To pay {fmtMoney(totals.toPay)} · {totals.toPayN}</span>
             <span className="text-gray-400">Paid in {year} {fmtMoney(totals.paidYear)}</span>
+            <button onClick={() => setCatchingUp(true)} className="text-amber-400 hover:text-amber-300 font-medium" title="Mark loan months and old bills you have paid but never logged">Catch up…</button>
           </div>
         </div>
 
@@ -235,6 +237,7 @@ function BillsSheet() {
         </div>
       </div>
 
+      {catchingUp && <CatchUp bills={[...bills.values()].flat().filter(b => b.state === 'overdue' || b.state === 'due')} onClose={() => setCatchingUp(false)} onDone={() => { setCatchingUp(false); void load(); }} />}
       {cell && <BillPanel bills={cell.bills} month={cell.month} onClose={() => setCell(null)} onChanged={() => { setCell(null); void load(); }} />}
       {loanCell && <LoanPanel row={loanCell.row} month={loanCell.month} onClose={() => setLoanCell(null)} onChanged={() => { setLoanCell(null); void load(); }} />}
     </div>
@@ -258,6 +261,131 @@ export default function BillsPage() {
       <div className="px-4 md:px-8 pb-10">
         <ViewSwitch views={VIEWS} value={view.key} onChange={v => setParams(v === 'sheet' ? {} : { view: v }, { replace: true })} />
         {view.render()}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Catch up: records start partway, so months already paid read as late.
+ * Loans: every month without a payment, through a chosen month, marked
+ * paid at the scheduled amount. Bills: those due before a chosen date that
+ * read as unpaid, account by account, marked paid. Undone in one click.
+ */
+function CatchUp({ bills, onClose, onDone }: { bills: Bill[]; onClose: () => void; onDone: () => void }) {
+  const thisMonth = todayISO().slice(0, 7);
+  const [through, setThrough] = useState(thisMonth);
+  const [loans, setLoans] = useState<CatchUpLoan[] | null>(null);
+  const [last, setLast] = useState<string | null>(null);
+  const [pickLoans, setPickLoans] = useState<Set<string>>(new Set());
+  const firstOfMonth = `${thisMonth}-01`;
+  const [before, setBefore] = useState(firstOfMonth);
+  const [skipAccounts, setSkipAccounts] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [done, setDone] = useState('');
+
+  useEffect(() => {
+    setLoans(null);
+    getCatchUpLoans(through).then(r => { setLoans(r.loans); setLast(r.lastCatchUp); setPickLoans(new Set(r.loans.map(l => l.loanId))); })
+      .catch(e => setErr(describeApiError(e, 'Could not load the loans.')));
+  }, [through]);
+
+  // Unpaid bills due before the date, by account.
+  const due = bills.filter(b => (b.s.dueDate ?? b.s.statementDate) < before);
+  const byAccount = new Map<string, { name: string; property: string; bills: Bill[] }>();
+  for (const b of due) {
+    const k = b.account.id;
+    const g = byAccount.get(k) ?? { name: `${b.account.providerName}${b.account.last4 ? ` ••${b.account.last4}` : ''}`, property: b.propertyName, bills: [] };
+    g.bills.push(b); byAccount.set(k, g);
+  }
+  const chosenBills = due.filter(b => !skipAccounts.has(b.account.id));
+  const chosenLoans = (loans ?? []).filter(l => pickLoans.has(l.loanId));
+  const loanMonths = chosenLoans.reduce((t, l) => t + l.missing.length, 0);
+
+  async function run() {
+    setBusy(true); setErr('');
+    try {
+      const r = await runCatchUp({ through, loanIds: chosenLoans.map(l => l.loanId), statementIds: chosenBills.map(b => b.s.id) });
+      setDone(`Caught up: ${r.loanPayments} loan payment${r.loanPayments === 1 ? '' : 's'} recorded, ${r.bills} bill${r.bills === 1 ? '' : 's'} marked paid.`);
+    } catch (e) { setErr(describeApiError(e, 'Could not catch up.')); }
+    finally { setBusy(false); }
+  }
+  async function undo() {
+    if (!confirm('Undo the last catch-up? Its loan payments are removed and its bills read as unpaid again.')) return;
+    setBusy(true); setErr('');
+    try { const r = await undoCatchUp(); setDone(`Undone: ${r.loanPayments} loan payments removed, ${r.bills} bills put back.`); setLast(null); }
+    catch (e) { setErr(describeApiError(e, 'Could not undo it.')); }
+    finally { setBusy(false); }
+  }
+  const toggle = (set: Set<string>, id: string) => { const n = new Set(set); n.has(id) ? n.delete(id) : n.add(id); return n; };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.55)' }} onClick={onClose}>
+      <div className="w-full max-w-2xl max-h-[88vh] overflow-y-auto rounded-xl p-5" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.08)' }} onClick={e => e.stopPropagation()}>
+        <div className="flex items-start justify-between mb-1">
+          <p className="font-semibold text-white">Catch up</p>
+          <button onClick={onClose} className="text-gray-500 hover:text-white" aria-label="Close">✕</button>
+        </div>
+        <p className="text-xs text-gray-500 mb-4">For what you have paid but never logged in Sollux. Untick anything that really is unpaid. You can undo the whole catch-up afterwards.</p>
+
+        {done ? (
+          <div>
+            <p className="text-sm text-emerald-400 mb-4">{done}</p>
+            <div className="flex justify-end"><button onClick={onDone} className="btn-primary text-sm px-4 py-2">Done</button></div>
+          </div>
+        ) : (
+          <>
+            <div className="mb-5">
+              <div className="flex items-center gap-2 mb-2">
+                <p className="text-sm font-medium text-white">Loans paid through</p>
+                <input type="month" className="input-dark text-sm" value={through} max={thisMonth} onChange={e => e.target.value && setThrough(e.target.value)} />
+              </div>
+              {!loans ? <p className="text-xs text-gray-500">Loading…</p> : !loans.length ? <p className="text-xs text-gray-500">Every loan month is already recorded.</p> : (
+                <div className="space-y-1">
+                  {loans.map(l => (
+                    <label key={l.loanId} className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+                      <input type="checkbox" checked={pickLoans.has(l.loanId)} onChange={() => setPickLoans(s => toggle(s, l.loanId))} />
+                      <span className="flex-1">{l.lender}{l.property ? <span className="text-gray-500"> · {l.property}</span> : null}</span>
+                      <span className="text-gray-500 tabular-nums">{l.missing.length} month{l.missing.length === 1 ? '' : 's'} · from {l.missing[0].month}</span>
+                      <span className="tabular-nums w-24 text-right">{fmtMoney(l.missing.reduce((t, m) => t + m.amount, 0))}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+              <p className="text-[11px] text-gray-600 mt-1.5">Each month is recorded at the scheduled payment, dated its due day. Balances are not changed.</p>
+            </div>
+
+            <div className="mb-5">
+              <div className="flex items-center gap-2 mb-2">
+                <p className="text-sm font-medium text-white">Bills due before</p>
+                <input type="date" className="input-dark text-sm" value={before} onChange={e => e.target.value && setBefore(e.target.value)} />
+              </div>
+              {!byAccount.size ? <p className="text-xs text-gray-500">No unpaid bills due before then.</p> : (
+                <div className="space-y-1">
+                  {[...byAccount.entries()].sort((a, b) => a[1].property.localeCompare(b[1].property)).map(([id, g]) => (
+                    <label key={id} className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+                      <input type="checkbox" checked={!skipAccounts.has(id)} onChange={() => setSkipAccounts(s => toggle(s, id))} />
+                      <span className="flex-1">{g.name}<span className="text-gray-500"> · {g.property}</span></span>
+                      <span className="text-gray-500 tabular-nums">{g.bills.length} bill{g.bills.length === 1 ? '' : 's'}</span>
+                      <span className="tabular-nums w-24 text-right">{fmtMoney(g.bills.reduce((t, b) => t + b.amount, 0))}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {err && <p className="text-xs text-red-400 mb-3">{err}</p>}
+            <div className="flex items-center gap-2">
+              {last && <button disabled={busy} onClick={() => void undo()} className="text-xs text-gray-400 hover:text-white">Undo last catch-up ({fmtDate(last)})</button>}
+              <span className="flex-1" />
+              <button onClick={onClose} className="btn-ghost text-sm">Cancel</button>
+              <button disabled={busy || (!loanMonths && !chosenBills.length)} onClick={() => void run()} className="btn-primary text-sm px-4 py-2">
+                {busy ? 'Working…' : `Mark ${loanMonths} loan month${loanMonths === 1 ? '' : 's'} and ${chosenBills.length} bill${chosenBills.length === 1 ? '' : 's'} paid`}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

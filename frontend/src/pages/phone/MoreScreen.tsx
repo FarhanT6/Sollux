@@ -24,8 +24,8 @@ export default function MoreScreen() {
 
   const initials = `${user?.firstName?.[0] ?? ''}${user?.lastName?.[0] ?? ''}` || '·';
   // Pages not on the tab bar, from the modules this account has turned on.
-  const { has } = useModules();
-  const items = NAV.filter(n => !TAB_BAR.includes(n.to) && has((n as { module?: ModuleKey }).module));
+  const { shown } = useModules();
+  const items = NAV.filter(n => !TAB_BAR.includes(n.to) && shown(n.to, (n as { module?: ModuleKey }).module));
 
   return (
     <Screen title="More">
