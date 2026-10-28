@@ -67,6 +67,8 @@ export default function ParcelPanel({ property, taxes, defaults, onChanged, onEd
 }) {
   const [apn, setApn] = useState(property.apn ?? taxes.find(t => t.apn)?.apn ?? '');
   const [apnSaved, setApnSaved] = useState(false);
+  // A parcel number the lookup found shows up here once it is saved.
+  useEffect(() => { if (property.apn && !apn) setApn(property.apn); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [property.apn]);
   const [form, setForm] = useState<DefaultForm | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -99,8 +101,8 @@ export default function ParcelPanel({ property, taxes, defaults, onChanged, onEd
 
   async function runLookup() {
     setLookupError(null);
-    if (!apn.trim()) { setLookupError('Add the parcel number first.'); return; }
-    if (apn.trim() !== (property.apn ?? '')) await updateProperty(property.id, { apn: apn.trim() } as any);
+    // No parcel number: the lookup finds it by the street address.
+    if (apn.trim() && apn.trim() !== (property.apn ?? '')) await updateProperty(property.id, { apn: apn.trim() } as any);
     try {
       await startTaxLookup(property.id);
       setLookup({ status: 'queued', at: new Date().toISOString() });
@@ -185,12 +187,12 @@ export default function ParcelPanel({ property, taxes, defaults, onChanged, onEd
           </div>
           <p className="text-xs text-gray-600 mt-1">{[property.county && `${property.county} County`, property.state].filter(Boolean).join(', ') || 'Add the county and state on the property.'}</p>
           <div className="flex items-center gap-2 mt-2 flex-wrap">
-            <button onClick={() => void runLookup()} disabled={busy} className="btn btn-primary text-xs disabled:opacity-50">{busy ? 'Looking up…' : 'Look up on the county site'}</button>
+            <button onClick={() => void runLookup()} disabled={busy} className="btn btn-primary text-xs disabled:opacity-50">{busy ? 'Looking up…' : apn.trim() ? 'Look up on the county site' : 'Find the parcel & look up taxes'}</button>
             <span className="text-xs text-gray-500">
               {busy ? (lookup?.progress ?? (lookup?.status === 'queued' ? 'Waiting for a browser…' : 'Starting…'))
                 : lookup?.status === 'done' ? `Looked up ${fmtDate(lookup.at)} · ${lookup.years ?? 0} year${lookup.years === 1 ? '' : 's'}${lookup.defaults ? `, ${lookup.defaults} unpaid` : ''} · refreshed monthly`
                 : lookup?.status === 'failed' ? <span className="text-red-400">Lookup failed: {lookup.note}</span>
-                : 'Reads the bill, values, special assessments and any unpaid years from the county.'}
+                : apn.trim() ? 'Reads the bill, values, special assessments and any unpaid years from the county.' : 'No parcel number needed: Sollux finds it on the county site by the address, then reads the bill.'}
             </span>
           </div>
           {lookupError && <p className="text-xs text-red-400 mt-1">{lookupError}</p>}
