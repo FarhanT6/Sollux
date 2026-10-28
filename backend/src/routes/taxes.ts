@@ -319,6 +319,18 @@ router.post('/lookup-all', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// POST /lookup/cancel { propertyId? } — stop one property's lookup, or every one under way.
+router.post('/lookup/cancel', async (req, res, next) => {
+  try {
+    const { propertyId } = z.object({ propertyId: z.string().optional() }).parse(req.body ?? {});
+    const props = await db.property.findMany({ where: { userId: req.dbUserId!, ...(propertyId ? { id: propertyId } : {}) }, select: { id: true } });
+    const { cancelTaxLookup } = await import('../services/taxLookupJobs');
+    let cancelled = 0;
+    for (const p of props) if (await cancelTaxLookup(p.id)) cancelled++;
+    res.json({ cancelled });
+  } catch (err) { next(err); }
+});
+
 // GET /lookup-status — where each property's last lookup stands.
 router.get('/lookup-status', async (req, res, next) => {
   try {

@@ -9,7 +9,7 @@ import { insightQueue } from '../workers/queues';
 import { lookupPropertyTax, type LookupRun } from './propertyTaxLookup';
 import { withAiContext, checkBudget } from '../ai/meter';
 
-type Status = { status: 'queued' | 'running' | 'done' | 'failed' | 'choose'; at: string; note?: string | null; progress?: string | null; years?: number; defaults?: number;
+type Status = { status: 'queued' | 'running' | 'done' | 'failed' | 'choose' | 'cancelled'; at: string; note?: string | null; progress?: string | null; years?: number; defaults?: number;
   /** Parcels that could be this property, for the owner to pick from. */
   candidates?: { apn: string; situsAddress: string | null; owner: string | null; note: string | null }[] };
 
@@ -31,7 +31,20 @@ export function runQueuedTaxLookup(propertyId: string): Promise<void> {
   return next;
 }
 
+const statusOf = async (propertyId: string) =>
+  ((await db.property.findUnique({ where: { id: propertyId }, select: { taxLookupJson: true } }))?.taxLookupJson ?? null) as Status | null;
+
+/** Stop a property's lookup: a queued one is skipped, a running one stops at its next step. */
+export async function cancelTaxLookup(propertyId: string): Promise<boolean> {
+  const s = await statusOf(propertyId);
+  if (s?.status !== 'queued' && s?.status !== 'running') return false;
+  await setStatus(propertyId, { status: 'cancelled', at: new Date().toISOString() });
+  return true;
+}
+
 async function runOne(propertyId: string): Promise<void> {
+  // Cancelled while it waited in line.
+  if ((await statusOf(propertyId))?.status === 'cancelled') return;
   const startedAt = new Date().toISOString();
   await setStatus(propertyId, { status: 'running', at: startedAt });
   let last = 0;
@@ -39,9 +52,10 @@ async function runOne(propertyId: string): Promise<void> {
     // A live line for the page, at most every few seconds.
     if (Date.now() - last < 4000) return;
     last = Date.now();
-    void setStatus(propertyId, { status: 'running', at: startedAt, progress: t.slice(0, 160) });
-  }).catch((err): LookupRun => ({ ok: false, report: null, error: err instanceof Error ? err.message : String(err), steps: 0, costUsd: 0 }));
+    void statusOf(propertyId).then(s => s?.status === 'cancelled' ? undefined : setStatus(propertyId, { status: 'running', at: startedAt, progress: t.slice(0, 160) }));
+  }, async () => (await statusOf(propertyId))?.status === 'cancelled').catch((err): LookupRun => ({ ok: false, report: null, error: err instanceof Error ? err.message : String(err), steps: 0, costUsd: 0 }));
   const years = r.report?.years?.length ?? 0, defaults = r.report?.defaults?.length ?? 0;
+  if ((await statusOf(propertyId))?.status === 'cancelled') { console.log(`[TaxLookup] ${propertyId}: cancelled · ${r.steps} steps · $${r.costUsd.toFixed(3)}`); return; }
   await setStatus(propertyId, r.ok
     ? { status: 'done', at: new Date().toISOString(), note: r.report?.notes ?? null, years, defaults }
     : r.candidates?.length

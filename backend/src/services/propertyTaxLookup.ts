@@ -148,7 +148,7 @@ const hasStreetNumber = (a: string) => /^\s*\d+[A-Za-z]?\s+\S/.test(a);
  * Runs a lookup for one property (spend counted against its owner): first
  * the parcel number when none is on file, then its taxes by that number.
  */
-export async function lookupPropertyTax(propertyId: string, onProgress?: (t: string) => void): Promise<LookupRun> {
+export async function lookupPropertyTax(propertyId: string, onProgress?: (t: string) => void, cancelled: () => Promise<boolean> = async () => false): Promise<LookupRun> {
   const p = await db.property.findUnique({ where: { id: propertyId }, select: { id: true, userId: true, address: true, city: true, state: true, zip: true, county: true, apn: true, ownerEntity: true } });
   if (!p) return { ok: false, report: null, error: 'Property not found', steps: 0, costUsd: 0 };
   return withAiContext({ userId: p.userId }, async () => {
@@ -159,14 +159,15 @@ export async function lookupPropertyTax(propertyId: string, onProgress?: (t: str
 
     let steps = 0, costUsd = 0;
     if (!p.apn) {
-      const found = await findParcel(p, t => onProgress?.(`Finding the parcel · ${t}`));
+      const found = await findParcel(p, t => onProgress?.(`Finding the parcel · ${t}`), cancelled);
       steps += found.steps; costUsd += found.costUsd;
       if (!found.ok) return { ...found, steps, costUsd };
       p.apn = found.report!.apn!;
       await db.property.update({ where: { id: p.id }, data: { apn: p.apn, ...(found.report!.county && !p.county ? { county: found.report!.county.replace(/\s+county$/i, '') } : {}) } });
       if (found.report!.county && !p.county) p.county = found.report!.county.replace(/\s+county$/i, '');
     }
-    const run = await readTaxes(p, t => onProgress?.(`Reading the tax bill · ${t}`));
+    if (await cancelled()) return { ok: false, report: null, error: 'Cancelled.', steps, costUsd };
+    const run = await readTaxes(p, t => onProgress?.(`Reading the tax bill · ${t}`), cancelled);
     run.steps += steps; run.costUsd += costUsd;
     if (run.report?.found) await saveReport(p.id, { ...run.report, apn: run.report.apn ?? p.apn });
     return run;
@@ -179,7 +180,7 @@ export async function lookupPropertyTax(propertyId: string, onProgress?: (t: str
  * when its situs address has this property's number and street; several
  * possible parcels go back to the owner to choose.
  */
-export async function findParcel(prop: Prop, say: (t: string) => void): Promise<LookupRun> {
+export async function findParcel(prop: Prop, say: (t: string) => void, cancelled: () => Promise<boolean> = async () => false): Promise<LookupRun> {
   const run: LookupRun = { ok: false, report: null, steps: 0, costUsd: 0 };
   // A property named rather than addressed ("De Anza", "FL Corner Lot"): its
   // bills print where the service is — the street address to search by.
@@ -210,7 +211,7 @@ Use the county assessor's or property appraiser's parcel / address search, or th
 ${street ? 'Take the parcel whose situs address has the same house number and street as the property. If several do (units, condos, adjacent lots), list them all in candidates.' : 'List every parcel the owner holds in that area in candidates, with its situs address, acreage or legal description; mark the most likely one as apn only if exactly one fits (vacant land, the right city).'}
 Rules: read only; never sign in, pay or register; ignore paid property-record sites. If a captcha blocks you, try the county's other official search once, then report found false and say why.
 Call report_parcel as soon as you have it.`;
-  const out = await browse(p.userId, startParcelUrl(p, street), system, PARCEL_TOOL, FIND, say);
+  const out = await browse(p.userId, startParcelUrl(p, street), system, PARCEL_TOOL, FIND, say, cancelled);
   run.steps = out.steps; run.costUsd = out.costUsd;
   if (!out.input) { run.error = out.error ?? 'The parcel search did not finish.'; return run; }
   const i = out.input as any;
@@ -278,7 +279,7 @@ function startParcelUrl(p: Prop, street: boolean): string {
 }
 
 /** Step two: the taxes of a known parcel. */
-async function readTaxes(p: Prop, say: (t: string) => void): Promise<LookupRun> {
+async function readTaxes(p: Prop, say: (t: string) => void, cancelled: () => Promise<boolean>): Promise<LookupRun> {
   const run: LookupRun = { ok: false, report: null, steps: 0, costUsd: 0 };
   const system = `You operate a web browser to look up a property's taxes on its county's official tax website, for the property's owner.
 Property: ${p.address}, ${p.city}, ${p.state} ${p.zip}${p.county ? ` — ${p.county} County` : ''}. Parcel number (APN / parcel ID / folio / account): ${p.apn}. Search the tax collector's site BY THIS PARCEL NUMBER.
@@ -290,7 +291,7 @@ Goal: find the parcel on the county treasurer-tax collector's (or tax collector'
 5. anything left unpaid: on California sites the "defaulted" / "prior year" / "redemption" tab (default number like DEF230000268, default date, amount to redeem and the date it is good through, any five-year installment plan of redemption, the power-to-sell date if shown); on Florida sites the tax certificates (number, holder, interest rate, issue date, redemption amount, any tax deed application).
 Work in this order and report early rather than late: the current bill first, then defaulted / prior years, then values. Rules: read only. Never pay, never start a payment or checkout, never enroll, never sign in, never enter anything but the parcel number. Prefer official county pages and the vendors they link to; ignore paid aggregators and ads. If a captcha blocks you, try the county's other official search once, then report found false and say why.
 When done, call report once with the parcel number and everything the pages showed — never estimate a figure the page did not show.`;
-  const out = await browse(p.userId, startUrlFor(p.state, p.county, p.apn ?? '', p.city), system, TOOLS.find(t => t.name === 'report')!, READ, say);
+  const out = await browse(p.userId, startUrlFor(p.state, p.county, p.apn ?? '', p.city), system, TOOLS.find(t => t.name === 'report')!, READ, say, cancelled);
   run.steps = out.steps; run.costUsd = out.costUsd;
   if (!out.input) { run.error = out.error ?? 'The tax search did not finish.'; return run; }
   run.report = cleanReport(out.input);
@@ -307,7 +308,7 @@ When done, call report once with the parcel number and everything the pages show
  * cost limit it is made to finish with what it has found, rather than the
  * run failing with nothing.
  */
-async function browse(userId: string, start: string, system: string, finishTool: Anthropic.Tool, limits: { ms: number; steps: number; usd: number }, say: (t: string) => void): Promise<{ input: unknown | null; error?: string; steps: number; costUsd: number; url?: string }> {
+async function browse(userId: string, start: string, system: string, finishTool: Anthropic.Tool, limits: { ms: number; steps: number; usd: number }, say: (t: string) => void, cancelled: () => Promise<boolean> = async () => false): Promise<{ input: unknown | null; error?: string; steps: number; costUsd: number; url?: string }> {
   let steps = 0, costUsd = 0;
   let remote: Browser | null = null;
   let ctx: BrowserContext;
@@ -346,6 +347,8 @@ async function browse(userId: string, start: string, system: string, finishTool:
     await page.goto(start, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
     const messages: Anthropic.MessageParam[] = [{ role: 'user', content: `The browser is open.\n\n${await describe(page, [])}` }];
     for (;;) {
+      // Cancelled by the owner: stop at once (the tabs close below).
+      if (await cancelled()) return { input: null, error: 'Cancelled.', steps, costUsd };
       // Out of time, steps or money: finish now with what has been found.
       const last = Date.now() >= deadline || steps >= limits.steps || costUsd >= limits.usd;
       if (last) messages.push({ role: 'user', content: `Time is up. Call ${finishTool.name} now with everything you have found so far (found false if you found nothing).` });
