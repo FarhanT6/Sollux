@@ -1087,6 +1087,8 @@ export interface AIInsight {
   createdAt: string;
   property?: Pick<Property, 'address' | 'nickname' | 'city'>;
   utilityAccount?: Pick<UtilityAccount, 'providerName' | 'category'>;
+  /** The bookkeeper's key ("late-fee:<id>", "loan-maturity:<id>"): what the insight is about. */
+  dedupeKey?: string | null;
 }
 
 export interface DashboardSummary {

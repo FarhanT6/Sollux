@@ -61,7 +61,7 @@ export function findSavings(accounts: AccountFacts[], loans: LoanFacts[], occupi
     if (a.feesLast12 >= 15) out.push({
       kind: 'LATE_FEES', title: `Late fees on ${name(a)}`, perYear: r0(a.feesLast12),
       detail: `${money(a.feesLast12)} in late fees and penalties in the last 12 months${a.latePaid ? `; ${a.latePaid} bill${a.latePaid === 1 ? ' was' : 's were'} paid after the due date` : ''}.`,
-      action: 'Turn on autopay, or pay a few days before the due date.', propertyId: a.propertyId, propertyName: a.propertyName, link: ACCOUNT_LINK(a),
+      action: 'Call and ask for a one-time courtesy waiver of the last late fee (most companies give one), then turn on autopay or pay a few days early.', propertyId: a.propertyId, propertyName: a.propertyName, link: ACCOUNT_LINK(a),
     });
     if (a.cardFeesLast12 >= 15) out.push({
       kind: 'CARD_FEES', title: `Card fees paying ${name(a)}`, perYear: r0(a.cardFeesLast12),

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { savingsReport } from '../services/savingsReport';
+import { researchState, startSavingsResearch } from '../services/savingsResearch';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { runBookkeeperForUser } from '../ai/bookkeeper';
@@ -29,7 +30,7 @@ router.get('/', async (req, res, next) => {
     const insights = await db.aIInsight.findMany({
       where,
       orderBy: [{ severity: 'desc' }, { createdAt: 'desc' }],
-      take: 50,
+      take: 300,
       include: {
         property: { select: { address: true, nickname: true, city: true } },
         utilityAccount: { select: { providerName: true, category: true } },
@@ -46,7 +47,21 @@ router.get('/', async (req, res, next) => {
 // this owner and return what it found.
 // GET /api/insights/savings — where the owner can save, a dollar figure a year each (lib/savings.ts).
 router.get('/savings', async (req, res, next) => {
-  try { res.json(await savingsReport(req.dbUserId!)); } catch (err) { next(err); }
+  try {
+    const [report, research] = await Promise.all([savingsReport(req.dbUserId!), researchState(req.dbUserId!)]);
+    res.json({ ...report, research });
+  } catch (err) { next(err); }
+});
+
+// POST /api/insights/savings/research — look into each company for promotions, waivers and cheaper service (services/savingsResearch.ts).
+router.post('/savings/research', async (req, res, next) => {
+  try {
+    const started = await startSavingsResearch(req.dbUserId!);
+    res.status(started ? 202 : 200).json({ started, research: await researchState(req.dbUserId!) });
+  } catch (err: any) {
+    if (err?.status || /budget|allowance/i.test(err?.message ?? '')) return res.status(err.status ?? 402).json({ error: err.message });
+    next(err);
+  }
 });
 
 router.post('/bookkeeper/run', async (req, res, next) => {
