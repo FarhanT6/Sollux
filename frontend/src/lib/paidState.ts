@@ -237,7 +237,7 @@ export function computeResolvedByFutureCheckpoint(statements: any[]): Set<string
  * whether the bill before it is settled. `statements` newest-first, as the
  * API returns them.
  */
-export function computePaidMap(statements: any[], payments: any[], resolvedByFuture: Set<string>): Map<string, boolean> {
+export function computePaidMap(statements: any[], payments: any[], resolvedByFuture: Set<string>, upcomingLeft?: Map<string, number>): Map<string, boolean> {
   const paid = new Map<string, boolean>();
   // A dollar pays one bill. Payments tied to a bill go to that bill only;
   // the rest are a pool, drawn down oldest bill first, so a payment that
@@ -254,10 +254,24 @@ export function computePaidMap(statements: any[], payments: any[], resolvedByFut
     // The owner's word beats every inference.
     if (s.paidOverride === 'UNPAID') { paid.set(s.id, false); continue; }
     if (s.paidOverride === 'PAID') { paid.set(s.id, true); continue; }
-    // An installment not yet due is paid only by money logged against it.
+    // An installment not yet due is paid by money logged against it, or by
+    // money left over once every bill before it is paid, when that money was
+    // paid in the run-up to its due date (45 days): paying November's
+    // installment on Oct 15 without filing it against November still pays
+    // November. Older money, and the installments after the next, are not
+    // paid by inference.
     if (isUpcoming(s)) {
+      const due = Number(s.amountDue ?? 0);
       const toIt = payments.filter(p => counted(p) && p.statementId === s.id).reduce((t, p) => t + Number(p.amount ?? 0), 0);
-      paid.set(s.id, toIt >= Number(s.amountDue ?? 0) - 0.01 && toIt > 0);
+      let need = due - toIt;
+      const from = new Date(s.dueDate).getTime() - 45 * 86400000;
+      for (const p of pool) {
+        if (need <= 0.01) break;
+        if (p.left <= 0 || p.date < from) continue;
+        const take = Math.min(p.left, need); p.left -= take; need -= take;
+      }
+      paid.set(s.id, due > 0 && need <= 0.01);
+      upcomingLeft?.set(s.id, Math.max(0, Number(need.toFixed(2))));
       continue;
     }
     if (resolvedByFuture.has(s.id)) { paid.set(s.id, true); continue; }
@@ -377,4 +391,20 @@ export function accountView(statements: any[], payments: any[] = []): AccountVie
   const credit = carried < 0 ? -carried : 0;
   const owed = isPaid ? 0 : Math.max(Number((current + (carried > 0 && !priorSettled ? carried : 0) - credit - unlinked).toFixed(2)), 0);
   return { latest, isPaid, priorSettled, pastDue, credit, current, owed };
+}
+
+/**
+ * The next scheduled installment and whether it is already paid (filed
+ * against it, or covered by money left over) — for "Next: … due Nov 14 ·
+ * paid ahead" on the account card.
+ */
+export function nextInstallment(statements: any[], payments: any[] = []): { next: any | null; paid: boolean; left: number } {
+  const upcoming = (statements ?? []).filter(isUpcoming).sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+  const next = upcoming[0] ?? null;
+  if (!next) return { next: null, paid: false, left: 0 };
+  const all = [...(statements ?? [])].sort((a, b) => new Date(b.statementDate).getTime() - new Date(a.statementDate).getTime());
+  const issued = all.filter(x => !isUpcoming(x));
+  const left = new Map<string, number>();
+  const paid = computePaidMap(all, payments, computeResolvedByFutureCheckpoint(issued), left);
+  return { next, paid: paid.get(next.id) ?? false, left: left.get(next.id) ?? Number(next.amountDue ?? 0) };
 }
