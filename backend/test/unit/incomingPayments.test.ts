@@ -21,10 +21,14 @@ test('a payment is logged without asking only when the sender is clearly the ten
   const lease = { rentAmount: 1400, arrearsBalance: 300 };
   const whole = { viaAlias: false, exact: true }, partial = { viaAlias: false, exact: false }, alias = { viaAlias: true, exact: true };
   assert.equal(sureOfTenant(whole, lease, 1400, null), true);
-  assert.equal(sureOfTenant(alias, lease, 2000, null), true);
-  // Most of the name: logged for up to what is owed (rent + arrears), not beyond.
+  assert.equal(sureOfTenant(alias, lease, 1400, 'Rent'), true);
   assert.equal(sureOfTenant(partial, lease, 1700, null), true);
+  // Never more than is owed (rent + arrears), whoever sends it: a deposit or two months waits.
   assert.equal(sureOfTenant(partial, lease, 1800, null), false);
+  assert.equal(sureOfTenant(alias, lease, 2000, null), false);
+  assert.equal(sureOfTenant(whole, lease, 1701, null), false);
+  // A saved payer sending money for something else waits too.
+  assert.equal(sureOfTenant(alias, lease, 300, 'security deposit'), false);
   // Matched by amount alone, an implausible amount, or a memo that is not rent: waits.
   assert.equal(sureOfTenant(null, lease, 1400, null), false);
   assert.equal(sureOfTenant(whole, lease, 5000, null), false);

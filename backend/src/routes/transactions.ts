@@ -90,6 +90,11 @@ router.patch('/:id', async (req, res, next) => {
       where: { id: tx.id },
       data: { matchedLeaseId: leaseId, status: leaseId ? 'SUGGESTED' : 'UNMATCHED' },
     });
+    // Choosing the tenant saves the sender as that lease's payer name, so
+    // their next payment is logged automatically (when it is certainly rent,
+    // sureOfTenant). Moving it to another tenant takes back what was learned.
+    if (tx.matchedLeaseId && tx.matchedLeaseId !== leaseId) await forgetSender(tx.matchedLeaseId, tx.name, tx.source);
+    if (leaseId) await learnSender(leaseId, tx.name, tx.source);
     res.json(updated);
   } catch (err) { next(err); }
 });
@@ -167,13 +172,29 @@ async function applySureSuggestions(userId: string): Promise<number> {
  * asking. A clean name only: an email's payer, or the name inside a bank
  * descriptor; the rest of a descriptor ("REF # 123") is not a name.
  */
-async function learnSender(leaseId: string, name: string | null, source: string | null) {
-  // From the bank feed, the name between FROM and ON: "ZELLE FROM JANE SAMPLE ON 10/01 REF # ...".
+const LEARNED = 'Learned from a payment matched to this tenant';
+
+/** The sender's name in a transaction: an email's payer, or the name between FROM and ON in a bank descriptor ("ZELLE FROM JANE SAMPLE ON 10/01 REF # ..."). */
+function senderName(name: string | null, source: string | null): string | null {
   const raw = source === 'email' ? name : /\bfrom\s+(.+?)\s+on\s+\d/i.exec(name ?? '')?.[1];
   const clean = (raw ?? '').trim();
-  if (!clean || /\d/.test(clean) || clean.split(/\s+/).length > 6) return;
+  return !clean || /\d/.test(clean) || clean.split(/\s+/).length > 6 ? null : clean;
+}
+
+async function learnSender(leaseId: string, name: string | null, source: string | null) {
+  const clean = senderName(name, source);
+  if (!clean) return;
+  // Already recognised as this tenant (their own name or a saved payer): nothing to learn.
+  const already = await matchLease(clean, (await db.lease.findUnique({ where: { id: leaseId }, select: { unit: { select: { property: { select: { userId: true } } } } } }))?.unit.property.userId ?? '');
+  if (already?.leaseId === leaseId && already.exact) return;
   const known = await db.leasePaymentAlias.findFirst({ where: { leaseId, name: { equals: clean, mode: 'insensitive' } }, select: { id: true } });
-  if (!known) await db.leasePaymentAlias.create({ data: { leaseId, name: clean, note: 'Learned when a payment from this sender was applied' } }).catch(() => {});
+  if (!known) await db.leasePaymentAlias.create({ data: { leaseId, name: clean, note: LEARNED } }).catch(() => {});
+}
+
+/** Undo learnSender when a payment is moved off a tenant it was wrongly matched to. Names the owner typed are kept. */
+async function forgetSender(leaseId: string, name: string | null, source: string | null) {
+  const clean = senderName(name, source);
+  if (clean) await db.leasePaymentAlias.deleteMany({ where: { leaseId, note: LEARNED, name: { equals: clean, mode: 'insensitive' } } });
 }
 
 // POST /:id/ignore — not rent, don't ask again

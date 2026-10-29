@@ -114,6 +114,7 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
       </div>
 
       {syncMsg && <p className="text-xs text-gray-500 mb-3">{syncMsg}</p>}
+      <p className="text-xs text-gray-600 mb-3">Choosing the tenant saves the sender's name on their lease; from then on their payments are logged as rent automatically when the amount is no more than they owe and the memo doesn't say it's for something else. Anything else waits here.</p>
 
       {loading ? (
         <p className="text-sm text-gray-500 py-8 text-center">Loading…</p>

@@ -41,21 +41,23 @@ const NOT_RENT = /util|water|electric|power|\bgas\b|sewer|trash|internet|wifi|re
 
 /**
  * Whether a payment is logged as rent without asking — the same rule for
- * an email and the bank feed. The sender is the tenant: their whole name or
- * a saved payer name, or most of their name for no more than they owe (rent
- * plus arrears). A match by amount alone, an overpayment on a partial name,
- * an implausible amount, or a memo saying it is not rent waits for review.
+ * an email and the bank feed. It has to be certain it is rent: the sender is
+ * the tenant (their whole name, a saved payer name, or most of their name),
+ * the amount is no more than they owe (this month's rent plus arrears), and
+ * no memo says it is for something else. A match by amount alone, anything
+ * over what is owed (a deposit, two months, a utility on top) or a memo like
+ * "water" or "deposit" waits for review, even from a saved payer.
  */
 export function sureOfTenant(
   nameMatch: { viaAlias: boolean; exact: boolean } | null,
   lease: { rentAmount: unknown; arrearsBalance: unknown } | null,
   amount: number, memo: string | null | undefined,
 ): boolean {
-  if (!nameMatch || !lease) return false;
-  const rent = Number(lease.rentAmount), arrears = Number(lease.arrearsBalance ?? 0);
-  if (amount > rent * 2 + arrears) return false;
+  if (!nameMatch || !lease || !(amount > 0)) return false;
+  const owed = Number(lease.rentAmount) + Number(lease.arrearsBalance ?? 0);
+  if (amount > owed + 0.005) return false;
   if (memo && NOT_RENT.test(memo)) return false;
-  return nameMatch.viaAlias || nameMatch.exact || amount <= rent + arrears + 0.005;
+  return true;
 }
 
 function channelOf(from: string, subject: string, body: string): P2PChannel | null {
