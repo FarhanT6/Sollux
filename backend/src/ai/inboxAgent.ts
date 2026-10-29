@@ -177,7 +177,7 @@ async function continueLater(userId: string, tokenId: string): Promise<void> {
 // bills: on its first run after this was added, each mailbox is searched for
 // Zelle / Venmo / Cash App payments over this many days. A mailbox read
 // only from the day it was connected missed the rent paid before then.
-const PAYMENT_HISTORY_DAYS = 90;
+const PAYMENT_HISTORY_DAYS = 30;
 const paymentHistoryKey = (tokenId: string) => `p2p-history:${tokenId}`;
 
 /** Reads a mailbox's payment emails back PAYMENT_HISTORY_DAYS, once. */
