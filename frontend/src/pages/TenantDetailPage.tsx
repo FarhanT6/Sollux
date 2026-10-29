@@ -12,6 +12,7 @@ import {
 import type { Tenant, Lease, LeaseTenant, RentPayment, Improvement, Document } from '../types';
 import { DOCUMENT_CATEGORY_LABELS } from '../types';
 import { fmtDate } from '../lib/date';
+import RentPaymentTable from '../components/tenant/RentPaymentTable';
 import UtilityReimbursementPanel from '../components/tenant/UtilityReimbursementPanel';
 import LeaseSummary from '../components/tenant/LeaseSummary';
 import { usePhone, Screen, Section, Row, Sheet, Field, BarButton, Icon } from '../ios';
@@ -232,6 +233,7 @@ function LeaseCard({ lease, maintenance, onChanged }: {
   maintenance: Improvement[];
   onChanged: () => void;
 }) {
+  // The phone's edit sheet; on a computer, Edit lease opens the property's full editor.
   const [editing, setEditing] = useState(false);
   // The rent field is the rent; utilities billed on top are added back when saving.
   const utilities = (lease.utilityCharges ?? []).reduce((s, c) => s + Number(c.amount), 0);
@@ -388,12 +390,12 @@ function LeaseCard({ lease, maintenance, onChanged }: {
           {lease.status === 'ACTIVE' && (
             <Link to="/finances?tab=income&view=rent" className="text-xs text-gray-500 hover:text-gray-300">View in Rent</Link>
           )}
-          <button onClick={() => setEditing(e => !e)} className="text-xs text-amber-400 hover:text-amber-300">{editing ? 'Cancel' : 'Edit'}</button>
+          {/* One lease editor: the property's, which has every term (rent, due day, utilities, increases, arrears, late fees, payer names). */}
+          {property && <Link to={`/portfolio/${property.id}?tab=Tenants&editLease=${lease.id}`} className="text-xs text-amber-400 hover:text-amber-300">Edit lease</Link>}
         </div>
       </div>
 
-      {!editing ? (
-        <>
+      <>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-3 text-sm">
             <div><p className="text-xs text-gray-500">Rent</p><p className="text-white font-medium">{money(lease.rentAmount)}/mo{lease.rentDueDay ? <span className="text-xs text-gray-500 font-normal"> · due the {lease.rentDueDay}{lease.rentDueDay === 1 ? 'st' : lease.rentDueDay === 2 ? 'nd' : lease.rentDueDay === 3 ? 'rd' : 'th'}</span> : null}</p></div>
             <div><p className="text-xs text-gray-500">Security deposit</p><p className="text-gray-300">{money(lease.securityDeposit)}</p></div>
@@ -425,44 +427,7 @@ function LeaseCard({ lease, maintenance, onChanged }: {
           </div>
           <LeaseSummary details={lease.termsJson} />
           <LeaseDocuments leaseId={lease.id} legacyUrl={lease.documentUrl} onLegacyRemoved={onChanged} />
-        </>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-3">
-          <input type="number" placeholder="Rent/mo" value={form.rentAmount} onChange={e => setForm(f => ({ ...f, rentAmount: e.target.value }))} className="input-dark text-sm" />
-          <input type="number" placeholder="Security deposit" value={form.securityDeposit} onChange={e => setForm(f => ({ ...f, securityDeposit: e.target.value }))} className="input-dark text-sm" />
-          <select value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value as any }))} className="input-dark text-sm">
-            {['ACTIVE', 'ENDED', 'PENDING', 'TERMINATED'].map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
-          <input type="date" value={form.startDate} onChange={e => setForm(f => ({ ...f, startDate: e.target.value }))} className="input-dark text-sm" />
-          <input type="date" value={form.endDate} onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))} className="input-dark text-sm" placeholder="End date" />
-          <select value={form.leaseType} onChange={e => setForm(f => ({ ...f, leaseType: e.target.value as any }))} className="input-dark text-sm">
-            <option value="MONTH_TO_MONTH">Month-to-month</option>
-            <option value="FIXED_TERM">Fixed term</option>
-          </select>
-          <input placeholder="Notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="input-dark text-sm col-span-3" />
-          <div className="col-span-3 flex justify-end">
-            <button onClick={save} disabled={saving} className="btn btn-primary text-xs">{saving ? '…' : 'Save changes'}</button>
-          </div>
-        </div>
-      )}
-
-      {editing && (
-        <div className="mt-3 flex items-center gap-2 text-xs">
-          {lease.documentUrl ? (
-            <>
-              <button onClick={viewDocument} className="text-amber-400 hover:text-amber-300">View lease agreement</button>
-              <button onClick={async () => { if (confirm('Remove the lease agreement from this lease?')) { await deleteLeaseAgreement(lease.id); onChanged(); } }}
-                className="text-gray-600 hover:text-red-400">Remove</button>
-            </>
-          ) : (
-            <label className="text-gray-500 hover:text-gray-300 cursor-pointer">
-              {uploading ? 'Uploading…' : '+ Upload lease agreement (PDF)'}
-              <input type="file" accept="application/pdf" className="hidden" disabled={uploading}
-                onChange={e => e.target.files?.[0] && handleUpload(e.target.files[0])} />
-            </label>
-          )}
-        </div>
-      )}
+      </>
 
       {/* Utility reimbursement — only for leases where the tenant repays a share */}
       <UtilityReimbursementPanel leaseId={lease.id} />
@@ -471,24 +436,8 @@ function LeaseCard({ lease, maintenance, onChanged }: {
       {lease.rentPayments && lease.rentPayments.length > 0 && (
         <details className="mt-3">
           <summary className="text-xs text-gray-500 hover:text-gray-300 cursor-pointer">Payment history ({lease.rentPayments.length})</summary>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs mt-2">
-              <thead>
-                <tr className="text-left text-gray-500">
-                  <th className="py-1 pr-4">Date</th><th className="py-1 pr-4">Amount</th><th className="py-1 pr-4">Method</th><th className="py-1">Notes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {lease.rentPayments.map(p => (
-                  <tr key={p.id} className="border-t border-white/5">
-                    <td className="py-1.5 pr-4 text-gray-300">{fmtDate(p.paidDate)}</td>
-                    <td className="py-1.5 pr-4 text-white font-medium">{money(p.amount)}</td>
-                    <td className="py-1.5 pr-4 text-gray-400">{p.method}</td>
-                    <td className="py-1.5 text-gray-500">{p.notes || '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="overflow-x-auto mt-2">
+            <RentPaymentTable payments={lease.rentPayments} onEdited={onChanged} />
           </div>
         </details>
       )}

@@ -1115,6 +1115,19 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
     getBankAccounts().then(bs => setBankAccounts(bs.filter(b => b.isActive)));
   }, [propertyId]);
 
+  // ?editLease=<id> (from a tenant's page): open that lease in this editor once the leases are in.
+  useEffect(() => {
+    const id = leaseParams.get('editLease');
+    if (!id) return;
+    const lease = leases.find(l => l.id === id);
+    if (!lease) return;
+    openEditLease(lease);
+    const next = new URLSearchParams(leaseParams); next.delete('editLease');
+    setLeaseParams(next, { replace: true });
+    setTimeout(() => document.getElementById(`lease-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leases, leaseParams]);
+
   function openEditLease(lease: Lease) {
     setEditForm({
       unitId: lease.unitId,
@@ -1773,7 +1786,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
             const arrears = Number(lease.arrearsBalance);
             const isExpanded = expandLease === lease.id;
             return (
-              <div key={lease.id} className="card overflow-hidden">
+              <div key={lease.id} id={`lease-${lease.id}`} className="card overflow-hidden">
                 <div className="px-4 py-3">
                   {/* Side by side on a desktop; on a phone the rent column drops below the names. */}
                   <div className="flex flex-col md:flex-row items-stretch md:items-start gap-1.5 md:gap-3">
