@@ -115,6 +115,9 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
     loginUrl: '',
     notes: '',
     useGmail: false,
+    // What a bill lookup page asks for beside the account number (no login needed).
+    lookupCustomerId: '',
+    lookupName: '',
   });
   const [selectedTile, setSelectedTile] = useState('');
   const [otherName, setOtherName] = useState('');
@@ -249,6 +252,8 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
         username: form.useGmail ? undefined : form.username,
         password: form.useGmail ? undefined : form.password,
         loginUrl: normalizeUrlInput(form.loginUrl),
+        lookupCustomerId: form.lookupCustomerId.trim() || undefined,
+        lookupName: form.lookupName.trim() || undefined,
         notes: form.notes || undefined,
         unitId: servesUnitId || undefined,
         serviceLabel: serviceLabel || undefined,
@@ -565,7 +570,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
             />
           </Field>
 
-          <Field label="Pay/login link (optional)" htmlFor="login-url">
+          <Field label="Pay/login link (optional)" htmlFor="login-url" hint="Where you sign in — or, for a biller with no login (City of Oceanside), the page where you find a bill by account number">
             <Input
               id="login-url"
               value={form.loginUrl}
@@ -573,6 +578,17 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
               placeholder="https://provider.com/login"
             />
           </Field>
+
+          {!form.useGmail && (
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Customer number (optional)" htmlFor="lookup-customer" hint="If the bill prints one beside the account number">
+                <Input id="lookup-customer" value={form.lookupCustomerId} onChange={e => set('lookupCustomerId', e.target.value)} placeholder="As the bill prints it" />
+              </Field>
+              <Field label="Name on the bill (optional)" htmlFor="lookup-name" hint="Some bill lookup pages ask for it">
+                <Input id="lookup-name" value={form.lookupName} onChange={e => set('lookupName', e.target.value)} placeholder="As the bill prints it" />
+              </Field>
+            </div>
+          )}
 
           <Field label="Notes (optional)" htmlFor="notes">
             <Input

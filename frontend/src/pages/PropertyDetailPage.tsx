@@ -549,6 +549,7 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
     serviceLabel:  account.serviceLabel || '',
     // A bill lookup page's second field (City of El Centro's "Customer ID").
     lookupCustomerId: account.lookupCustomerId || '',
+    lookupName: (account as any).lookupName || '',
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -609,6 +610,7 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
       if (form.notes.trim()         !== ((account as any).notes || '')) patch.notes = form.notes.trim();
       if (form.loginUrl.trim()      !== (account.loginUrl || ''))       patch.loginUrl = form.loginUrl.trim();
       if (form.lookupCustomerId.trim() !== (account.lookupCustomerId || '')) patch.lookupCustomerId = form.lookupCustomerId.trim();
+      if (form.lookupName.trim() !== ((account as any).lookupName || '')) patch.lookupName = form.lookupName.trim();
       // Sent even when cleared, so a nickname can be removed as well as set.
       if (form.serviceLabel.trim()  !== (account.serviceLabel || ''))    patch.serviceLabel = form.serviceLabel.trim();
       // Only send insuranceType/loanType if the user actually touched the
@@ -747,13 +749,22 @@ function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccou
               </div>
             </div>
           </div>
-          <div>
-            <label className="text-xs text-gray-400 block mb-1">
-              Customer ID <span className="text-gray-600">(if the provider's bill lookup asks for one)</span>
-            </label>
-            <input className={fieldCls} placeholder="e.g. the Customer ID printed on the bill" value={form.lookupCustomerId}
-              onChange={e => setForm(f => ({ ...f, lookupCustomerId: e.target.value }))} />
-            <p className="text-xs text-gray-500 mt-1">With the account number, Sollux looks up the bills on the provider's site — no username or password needed.</p>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">
+                Customer number <span className="text-gray-600">(if the bill prints one)</span>
+              </label>
+              <input className={fieldCls} placeholder="As the bill prints it" value={form.lookupCustomerId}
+                onChange={e => setForm(f => ({ ...f, lookupCustomerId: e.target.value }))} />
+            </div>
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">
+                Name on the bill <span className="text-gray-600">(if the lookup asks)</span>
+              </label>
+              <input className={fieldCls} placeholder="As the bill prints it" value={form.lookupName}
+                onChange={e => setForm(f => ({ ...f, lookupName: e.target.value }))} />
+            </div>
+            <p className="col-span-2 text-xs text-gray-500 -mt-1">For billers that find bills by account number (City of Oceanside, InvoiceCloud and Tyler pages): with these and the account number, Sollux looks the bills up — no username or password needed. Put that lookup page's address in Pay/login link.</p>
           </div>
           <div>
             <label className="text-xs text-gray-400 block mb-1">Pay/login link</label>
