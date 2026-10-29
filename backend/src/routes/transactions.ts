@@ -30,11 +30,45 @@ router.get('/', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /sync — pull new transactions for every watched account
+// POST /sync — pull new transactions for every watched account, and read the
+// connected mailboxes for Zelle / Venmo / Cash App emails. Payment emails
+// were only read by the nightly inbox run, so a payment that arrived today
+// was missing after "Sync now" until the next morning.
 router.post('/sync', async (req, res, next) => {
   try {
-    const result = await syncAllWatchedAccounts(req.dbUserId!);
-    res.json(result);
+    const userId = req.dbUserId!;
+    const [result, mailboxes] = await Promise.all([
+      syncAllWatchedAccounts(userId),
+      db.gmailToken.count({ where: { userId } }),
+    ]);
+    let emailJobId: string | null = null;
+    if (mailboxes) {
+      const { gmailQueue } = await import('../workers/queues');
+      const job = await gmailQueue.add('parse', { userId }, { attempts: 1 });
+      emailJobId = job.id ?? null;
+    }
+    res.json({ ...result, mailboxes, emailJobId, startedAt: new Date().toISOString() });
+  } catch (err) { next(err); }
+});
+
+// GET /sync/email/:jobId?since= — whether the mailbox read has finished, and
+// the payment emails it handled (each says where the payment went: suggested,
+// unmatched, already on record).
+router.get('/sync/email/:jobId', async (req, res, next) => {
+  try {
+    const userId = req.dbUserId!;
+    const { gmailQueue } = await import('../workers/queues');
+    const job = await gmailQueue.getJob(req.params.jobId);
+    if (!job || job.data.userId !== userId) return res.status(404).json({ error: 'Not found' });
+    const state = await job.getState();
+    const done = state === 'completed' || state === 'failed' || state === 'unknown';
+    const since = new Date(typeof req.query.since === 'string' ? req.query.since : Date.now() - 3600 * 1000);
+    const payments = done ? await db.inboxMessage.findMany({
+      where: { userId, outcome: 'payment', createdAt: { gte: since } },
+      orderBy: { receivedAt: 'desc' }, take: 20,
+      select: { subject: true, detail: true, receivedAt: true },
+    }) : [];
+    res.json({ done, failed: state === 'failed' ? (job.failedReason ?? 'failed') : null, payments });
   } catch (err) { next(err); }
 });
 
