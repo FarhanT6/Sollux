@@ -86,7 +86,8 @@ function payerFrom(subject: string, body: string): string | null {
   // capitalised words right before the verb. Subject first: it is the cleanest.
   // Same line only: "Wells Fargo\nJACOB ADAMS sent you" is not from "Wells Fargo JACOB ADAMS".
   // Digits count: "100 MAIN ST LLC sent you $314.00", "200-210 OAK ST LLC".
-  const before = /((?:[A-Z0-9][A-Za-z0-9.'&-]*[ \t]+){0,5}[A-Z][A-Za-z0-9.'&-]*)[ \t]+(?:has[ \t]+|just[ \t]+)?(?:sent|paid)[ \t]+you\b/;
+  // A comma inside a business name counts too: "SAMPLE GROUP, LLC sent you" was read as "LLC".
+  const before = /((?:[A-Z0-9][A-Za-z0-9.'&-]*,?[ \t]+){0,5}[A-Z][A-Za-z0-9.'&-]*)[ \t]+(?:has[ \t]+|just[ \t]+)?(?:sent|paid)[ \t]+you\b/;
   for (const t of [subject, body]) {
     const m = before.exec(t);
     const n = m && cleanName(m[1]);
@@ -139,7 +140,9 @@ export function parseP2PEmail(from: string, subject: string, body: string, recei
   const forM = /(?:sent|paid) you \$[\d,]+(?:\.\d{2})? for ([^\n.]{1,80})/i.exec(`${subject}\n${body}`);
   // Venmo puts the note right after the amount: "paid you $ 200. 00 2nd August Rent Payment See transaction".
   const venmoM = /(?:paid|sent) you \$\s?[\d,]+\s?\.\s?\d{2}[ \t]+([^\n]{1,80}?)[ \t]+See transaction/i.exec(body);
-  const memoRaw = memoM?.[1] ?? forM?.[1] ?? venmoM?.[1] ?? null;
+  // Chase on one line: "... Transaction number 31000000001 Memo Rent Oct".
+  const inlineM = /\bMemo:?\s+(?!\$)([^\n]{1,80})/.exec(body);
+  const memoRaw = memoM?.[1] ?? forM?.[1] ?? venmoM?.[1] ?? inlineM?.[1] ?? null;
   // On one line, the memo runs into the next sentence ("Memo: CC We deposited the money ...").
   const memo = memoRaw ? memoRaw.replace(/\s+(we deposited|the money|go to|have any|see transaction)\b.*$/i, '').trim() || null : null;
 
@@ -273,7 +276,13 @@ export async function recordP2PEmail(userId: string, p: P2PPayment, key: string)
 
   const lease = await db.lease.findUnique({ where: { id: matchedLeaseId }, select: { rentAmount: true, arrearsBalance: true } });
   const plausible = !!lease && p.amount <= Number(lease.rentAmount) * 2 + Number(lease.arrearsBalance ?? 0);
-  const sure = !!nameMatch && (nameMatch.viaAlias || nameMatch.exact) && plausible && !(p.memo && NOT_RENT.test(p.memo));
+  // Logged without asking when the sender is the tenant: their whole name or a
+  // saved alias, or most of their name for no more than they owe (this month's
+  // rent plus arrears). A sender matched by amount alone, an overpayment on a
+  // partial name, or a memo that says it is not rent waits for review.
+  const owed = lease ? Number(lease.rentAmount) + Number(lease.arrearsBalance ?? 0) : 0;
+  const sure = !!nameMatch && plausible && !(p.memo && NOT_RENT.test(p.memo))
+    && (nameMatch.viaAlias || nameMatch.exact || p.amount <= owed + 0.005);
   if (!sure) return { outcome: 'payment', detail: `${fmt}: tenant suggested, waiting in Finances → Incoming` };
 
   const payment = await recordRentPayment({

@@ -173,6 +173,65 @@ async function continueLater(userId: string, tokenId: string): Promise<void> {
   }
 }
 
+// Payment emails are read without Claude, so they can go back further than
+// bills: on its first run after this was added, each mailbox is searched for
+// Zelle / Venmo / Cash App payments over this many days. A mailbox read
+// only from the day it was connected missed the rent paid before then.
+const PAYMENT_HISTORY_DAYS = 90;
+const paymentHistoryKey = (tokenId: string) => `p2p-history:${tokenId}`;
+
+/** Reads a mailbox's payment emails back PAYMENT_HISTORY_DAYS, once. */
+async function readPaymentHistory(userId: string, token: { id: string }, gmail: gmail_v1.Gmail, sum: InboxRunSummary) {
+  if (await db.appSetting.findUnique({ where: { key: paymentHistoryKey(token.id) } })) return;
+  const since = Math.floor((Date.now() - PAYMENT_HISTORY_DAYS * 86400000) / 1000);
+  const q = `after:${since} -category:promotions -category:social (subject:(zelle OR venmo OR "cash app" OR "apple cash" OR "sent you" OR "paid you" OR "received money" OR "got money" OR "been paid") OR from:(venmo.com OR cash.app OR square.com))`;
+  const ids: string[] = [];
+  let pageToken: string | undefined;
+  do {
+    const list = await gmail.users.messages.list({ userId: 'me', q, maxResults: 100, pageToken });
+    for (const m of list.data.messages ?? []) if (m.id) ids.push(m.id);
+    pageToken = list.data.nextPageToken ?? undefined;
+  } while (pageToken && ids.length < 600);
+  const done = new Set((await db.inboxMessage.findMany({
+    where: { gmailTokenId: token.id, messageId: { in: ids }, outcome: 'payment' }, select: { messageId: true },
+  })).map(m => m.messageId));
+  for (const messageId of ids.filter(id => !done.has(id)).reverse()) {
+    try {
+      const msg = (await gmail.users.messages.get({ userId: 'me', id: messageId, format: 'full' })).data;
+      const subject = header(msg, 'Subject'), from = header(msg, 'From');
+      if (!P2P_HINT.test(subject) && !P2P_SENDER.test(from)) continue;
+      const rfcMessageId = header(msg, 'Message-ID').slice(0, 300) || null;
+      const receivedAt = msg.internalDate ? new Date(Number(msg.internalDate)) : null;
+      const parts = walk(msg.payload);
+      const textOf = async (mime: string) => {
+        const out: string[] = [];
+        for (const part of parts.filter(x => x.mimeType === mime)) {
+          if (part.body?.data) out.push(decode(part.body.data).toString('utf8'));
+          else if (part.body?.attachmentId) {
+            const att = await gmail.users.messages.attachments.get({ userId: 'me', messageId, id: part.body.attachmentId });
+            out.push(decode(att.data.data).toString('utf8'));
+          }
+        }
+        return out.join('\n');
+      };
+      const html = await textOf('text/html');
+      const p2p = parseP2PEmail(from, subject, html ? htmlToText(html) : await textOf('text/plain'), receivedAt);
+      if (!p2p) continue;
+      const r = await recordP2PEmail(userId, p2p, rfcMessageId ?? messageId);
+      sum.applied++;
+      await db.inboxMessage.upsert({
+        where: { gmailTokenId_messageId: { gmailTokenId: token.id, messageId } },
+        create: { userId, gmailTokenId: token.id, messageId, rfcMessageId, fromAddress: from.slice(0, 300), subject: subject.slice(0, 300), receivedAt, outcome: r.outcome, detail: r.detail.slice(0, 500) },
+        update: { outcome: r.outcome, rfcMessageId, detail: r.detail.slice(0, 500), createdAt: new Date() },
+      }).catch(() => {});
+    } catch (err) {
+      sum.errors.push(`payment email ${messageId}: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);
+    }
+  }
+  const value = new Date().toISOString();
+  await db.appSetting.upsert({ where: { key: paymentHistoryKey(token.id) }, create: { key: paymentHistoryKey(token.id), value }, update: { value } });
+}
+
 export async function runInboxAgent(userId: string, opts: { tokenId?: string } = {}): Promise<InboxRunSummary> {
   const tokens = await db.gmailToken.findMany({ where: { userId, ...(opts.tokenId ? { id: opts.tokenId } : {}) }, orderBy: { createdAt: 'asc' } });
   const sum: InboxRunSummary = { mailboxes: tokens.length, read: 0, filed: 0, review: 0, applied: 0, skipped: 0, errors: [], jobId: null };
@@ -192,6 +251,8 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
       const budgetEnd = documents + perMailbox;
       try {
         const gmail = google.gmail({ version: 'v1', auth: oauthFor(token) });
+        // A failed history read never stops the bill read; it is tried again next run.
+        await readPaymentHistory(userId, token, gmail, sum).catch(err => sum.errors.push(`${token.email}: payment history: ${err instanceof Error ? err.message : String(err)}`));
         const since = token.backfillFrom
           ?? (token.lastScanAt ? new Date(token.lastScanAt.getTime() - 24 * 3600 * 1000) : new Date(Date.now() - FIRST_RUN_DAYS * 24 * 3600 * 1000));
         const q = `after:${Math.floor(since.getTime() / 1000)} -category:promotions -category:social (has:attachment OR subject:(bill OR statement OR invoice OR due OR notice OR premium OR renewal OR tax OR cancellation OR disconnection) OR subject:(zelle OR venmo OR "cash app" OR "apple cash" OR "sent you" OR "paid you" OR "received money" OR "got money" OR "been paid") OR from:(venmo.com OR cash.app OR square.com))`;

@@ -128,9 +128,23 @@ router.post('/:id/apply', async (req, res, next) => {
       where: { id: tx.id },
       data: { status: 'APPLIED', rentPaymentId: payment.id },
     });
+    await learnSender(lease.id, tx.name, tx.source);
     res.json(updated);
   } catch (err) { next(err); }
 });
+
+/**
+ * Applying a payment teaches Sollux the sender: the name becomes one of the
+ * lease's payment aliases, so the next payment from them is logged without
+ * asking. Only a clean name from an email; a bank descriptor
+ * ("ZELLE FROM ... REF #123") is not a name.
+ */
+async function learnSender(leaseId: string, name: string | null, source: string | null) {
+  const clean = (name ?? '').trim();
+  if (source !== 'email' || !clean || /\d/.test(clean) || clean.split(/\s+/).length > 6) return;
+  const known = await db.leasePaymentAlias.findFirst({ where: { leaseId, name: { equals: clean, mode: 'insensitive' } }, select: { id: true } });
+  if (!known) await db.leasePaymentAlias.create({ data: { leaseId, name: clean, note: 'Learned when a payment from this sender was applied' } }).catch(() => {});
+}
 
 // POST /:id/ignore — not rent, don't ask again
 router.post('/:id/ignore', async (req, res, next) => {
