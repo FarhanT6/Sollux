@@ -107,7 +107,8 @@ function LoanTable({ title, loans, setLoans, month }: {
                     const { balance, estimated } = effectiveBalance(loan);
                     return (
                       <span title={estimated ? 'Projected from the schedule — no balance has been entered (or it still equals the original). Open the loan and set the balance from a statement to replace it.' : undefined}>
-                        {money(balance ?? undefined)}{estimated && <span className="text-gray-500 font-normal ml-1">est.</span>}
+                        {/* The "est." slot is kept on every row so the figures line up. */}
+                        {money(balance ?? undefined)}<span className={`inline-block w-7 text-left text-gray-500 font-normal ml-1 ${estimated ? '' : 'invisible'}`}>est.</span>
                       </span>
                     );
                   })()}
