@@ -543,7 +543,7 @@ function PaymentHistory({ row, payments, onLog, onEdited }: {
       ) : list.length === 0 ? (
         <p className="text-xs text-gray-600">No payments logged for this lease.</p>
       ) : (
-        <table className="text-xs w-full max-w-3xl">
+        <table className="text-xs w-full max-w-5xl">
           <thead>
             <tr className="text-gray-500">
               <th className="text-left pb-1 font-normal">For month</th>
@@ -621,15 +621,15 @@ function PaymentEditRow({ payment: p, onCancel, onSaved }: { payment: RentPaymen
     <tr className="border-t border-white/5 align-top" style={{ background: 'rgba(245,166,35,0.04)' }}>
       <td className="py-1.5 pr-2"><input type="month" value={f.month} onChange={set('month')} className={`${input} w-32`} /></td>
       <td className="py-1.5 pr-2"><input type="date" value={f.paidDate} onChange={set('paidDate')} className={`${input} w-32`} /></td>
-      <td className="py-1.5 pr-2 text-right"><input type="number" step="0.01" min="0" value={f.amount} onChange={set('amount')} className={`${input} w-24 text-right`} /></td>
+      <td className="py-1.5 pr-2 text-right"><input type="number" step="0.01" min="0" value={f.amount} onChange={set('amount')} className={`${input} w-20 text-right`} /></td>
       <td className="py-1.5 pr-2 text-right">
         <select value={f.applyTo} onChange={set('applyTo')} className={input} title="Where the payment goes first">
-          <option value="CURRENT">This month first</option>
+          <option value="CURRENT">Month first</option>
           <option value="ARREARS">Arrears first</option>
         </select>
       </td>
       <td className="py-1.5 pl-4">
-        <select value={f.method} onChange={set('method')} className={input}>
+        <select value={f.method} onChange={set('method')} className={`${input} w-28`}>
           {Object.entries(RENT_PAYMENT_METHOD_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
       </td>
