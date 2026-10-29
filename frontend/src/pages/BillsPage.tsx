@@ -13,7 +13,10 @@ import { describeApiError } from '../lib/apiError';
 import PaymentsPage from './PaymentsPage';
 import FeesSummaryPage from './FeesSummaryPage';
 import DocumentsPage from './DocumentsPage';
+import { onLoansTab } from '../lib/loanGroups';
 import { ViewSwitch } from './FinancesPage';
+
+const OTHER_LOANS = 'other-loans';
 
 /**
  * Bills: the owner's spreadsheet, kept by Sollux. One table per property, a
@@ -107,6 +110,12 @@ function BillsSheet() {
       && (!openOnly || r.cells.some(c => c.status === 'late' || c.status === 'due' || c.status === 'partial')));
     return { ...p, accounts, loanRows };
   }).filter(p => p.accounts.length || p.loanRows.length);
+  // Auto, solar and other consumer loans with no property: the Loans tab is
+  // mortgages only, so they are paid from here.
+  const otherLoans = pid !== 'all' ? [] : (loans?.rows ?? []).filter(r => !r.propertyId && !r.utilityAccountId && !onLoansTab(r)
+    && (!q || [r.lender, 'loan'].some(x => x.toLowerCase().includes(q)))
+    && (!openOnly || r.cells.some(c => c.status === 'late' || c.status === 'due' || c.status === 'partial')));
+  if (otherLoans.length) properties.push({ id: OTHER_LOANS, name: 'Other loans', address: 'Other loans', city: '', state: '', accounts: [], loanRows: otherLoans });
 
   // What is open across everything shown, for the line at the top.
   const totals = useMemo(() => {
@@ -162,7 +171,8 @@ function BillsSheet() {
           {properties.map(p => (
             <section key={p.id} className="rounded-xl overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.06)' }}>
               <div className="px-4 py-3 flex items-baseline gap-2 border-b border-white/5">
-                <Link to={`/properties/${p.id}`} className="font-semibold text-white hover:text-amber-400">{p.name}</Link>
+                {p.id === OTHER_LOANS ? <span className="font-semibold text-white">{p.name}</span>
+                  : <Link to={`/properties/${p.id}`} className="font-semibold text-white hover:text-amber-400">{p.name}</Link>}
                 {p.name !== p.address && <span className="text-xs text-gray-500">{p.address}, {p.city}</span>}
               </div>
               <div className="overflow-x-auto" data-bills-scroll>

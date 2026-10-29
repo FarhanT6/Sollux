@@ -9,6 +9,7 @@ import { fmtMoney } from '../../lib/money';
 import { fmtDate, todayISO, thisMonthISO } from '../../lib/date';
 import { PAYMENT_METHOD_LABELS, PAYMENT_METHODS, methodsShort } from '../../lib/loanPayment';
 import { describeApiError } from '../../lib/apiError';
+import { onLoansTab } from '../../lib/loanGroups';
 
 const MORTGAGE_TYPES = ['MORTGAGE', 'HELOC', 'SELLER_FINANCING', 'DSCR', 'COMMERCIAL', 'HARD_MONEY'];
 const STATUSES: (LoanTrackerStatus | 'all')[] = ['all', 'late', 'due', 'upcoming', 'partial', 'paid'];
@@ -55,8 +56,10 @@ export default function LoanPaymentTracker({ month: fixedMonth }: { month?: stri
   }, [view, month, year]);
   useEffect(() => { load(); }, [load]);
 
-  const inGroup = (r: { loanType: string; isPersonal: boolean }) =>
-    group === 'all' || (group === 'mortgages' ? MORTGAGE_TYPES.includes(r.loanType) && !r.isPersonal : !MORTGAGE_TYPES.includes(r.loanType) || r.isPersonal);
+  // Mortgages and private notes only, like the Loans list: consumer and
+  // utility-billed loans are tracked on the Bills page with their accounts.
+  const inGroup = (r: { loanType: string; isPersonal: boolean; utilityAccountId?: string | null }) => onLoansTab(r) &&
+    (group === 'all' || (group === 'mortgages' ? MORTGAGE_TYPES.includes(r.loanType) && !r.isPersonal : !MORTGAGE_TYPES.includes(r.loanType) || r.isPersonal));
 
   const properties = useMemo(() => {
     const seen = new Map<string, string>();
@@ -105,7 +108,7 @@ export default function LoanPaymentTracker({ month: fixedMonth }: { month?: stri
         <select value={group} onChange={e => setGroup(e.target.value as typeof group)} className="input-dark text-xs">
           <option value="all">All loans</option>
           <option value="mortgages">Mortgages</option>
-          <option value="other">Personal & other</option>
+          <option value="other">Personal</option>
         </select>
         <select value={propertyFilter} onChange={e => setPropertyFilter(e.target.value)} className="input-dark text-xs">
           <option value="all">All properties</option>

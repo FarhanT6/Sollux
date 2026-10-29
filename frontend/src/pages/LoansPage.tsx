@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { getLoans, createLoan, updateLoan, deleteLoan, getProperties, getLoanTrackerMonth, type LoanTrackerRow } from '../api/client';
 import { todayISO, thisMonthISO } from '../lib/date';
 import type { Loan, Property, LoanType } from '../types';
+import { MORTGAGE_PERSONAL_TYPES, onLoansTab } from '../lib/loanGroups';
 import { format } from 'date-fns';
 import { projectLoanBalance } from '../lib/loanMath';
 import PaymentDetailsImport from '../components/loans/PaymentDetailsImport';
@@ -37,14 +38,7 @@ function effectiveBalance(loan: Loan): { balance: number | null; estimated: bool
 
 const monthlyOf = (l: Loan) => Number(l.monthlyPayment ?? 0) + Number(l.escrowAmount ?? 0);
 
-const LOAN_TYPES: LoanType[] = ['MORTGAGE','HELOC','AUTO','PERSONAL','STUDENT','INSTALLMENT_PLAN','CREDIT_LINE','SELLER_FINANCING','DSCR','COMMERCIAL','HARD_MONEY','OTHER'];
 
-// Real-estate-secured debt (and personal loans, which usually ride along
-// with the same lenders) vs. consumer-style installment debt — kept
-// separate since they behave very differently in a portfolio's debt
-// picture. Every LoanType lands in exactly one of these two groups.
-const MORTGAGE_PERSONAL_TYPES: LoanType[] = ['MORTGAGE', 'HELOC', 'SELLER_FINANCING', 'DSCR', 'COMMERCIAL', 'HARD_MONEY', 'PERSONAL'];
-const CONSUMER_LOAN_TYPES: LoanType[] = ['AUTO', 'STUDENT', 'INSTALLMENT_PLAN', 'CREDIT_LINE', 'OTHER'];
 
 /** This month's payment on a loan, from the payment tracker: paid, part paid, not due yet, in grace, late. */
 const MONTH_PILL: Record<string, { label: string; cls: string }> = {
@@ -189,7 +183,7 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
   });
   const [saving, setSaving] = useState(false);
 
-  const loadLoans = () => getLoans().then(setLoans);
+  const loadLoans = () => getLoans().then(ls => setLoans(ls.filter(onLoansTab)));
 
   useEffect(() => {
     Promise.all([loadLoans(), getProperties().then(setProperties)]).finally(() => setLoading(false));
@@ -248,15 +242,11 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
 
   // The headline is real-estate debt: the mortgages group, active and not
   // personal, the same set its own footer adds up — so the two agree.
-  // Consumer debt (auto, student, solar, cards) is shown beside it.
   // Every active loan in the group counts, personal ones included: a loan
   // flagged personal is still a payment that goes out each month.
-  const activeLoans = loans.filter(l => l.isActive && MORTGAGE_PERSONAL_TYPES.includes(l.loanType));
-  const consumerLoans = loans.filter(l => l.isActive && CONSUMER_LOAN_TYPES.includes(l.loanType));
+  const activeLoans = loans.filter(l => l.isActive);
   const totalDebt = activeLoans.reduce((s, l) => s + (effectiveBalance(l).balance ?? 0), 0);
   const monthlyDebt = activeLoans.reduce((s, l) => s + monthlyOf(l), 0);
-  const consumerDebt = consumerLoans.reduce((s, l) => s + (effectiveBalance(l).balance ?? 0), 0);
-  const consumerMonthly = consumerLoans.reduce((s, l) => s + monthlyOf(l), 0);
   const estimatedCount = activeLoans.filter(l => effectiveBalance(l).estimated).length;
   // Weighted by balance: a 12% loan of 200,000 is not the same as a 6.5%
   // loan of 1.4 million, and a plain average of the rates said it was.
@@ -288,7 +278,6 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
               <p className="text-base font-semibold text-red-400">{money(totalDebt)}</p>
               <p className="text-xs text-gray-500">
                 {activeLoans.length} active mortgages{estimatedCount > 0 ? ` · ${estimatedCount} est.` : ''}
-                {consumerLoans.length > 0 && <span className="text-gray-600"> · + {money(consumerDebt)} consumer</span>}
               </p>
             </div>
             <div className="rounded-xl px-4 py-3" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
@@ -296,7 +285,6 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
               <p className="text-base font-semibold text-white">{moneyExact(monthlyDebt)}/mo</p>
               <p className="text-xs text-gray-500">
                 P&amp;I + escrow on every active mortgage
-                {consumerLoans.length > 0 && <span className="text-gray-600"> · + {moneyExact(consumerMonthly)}/mo consumer</span>}
               </p>
             </div>
             <div className="rounded-xl px-4 py-3" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
@@ -362,7 +350,7 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
             <div>
               <label className="text-xs text-gray-400 block mb-1">Loan type *</label>
               <select value={form.loanType} onChange={e => setForm(f => ({ ...f, loanType: e.target.value as LoanType }))} className="input-dark w-full">
-                {LOAN_TYPES.map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
+                {MORTGAGE_PERSONAL_TYPES.map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
               </select>
             </div>
             <div>
@@ -426,16 +414,11 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
         <>
           <LoanTable
             title="Mortgages & Personal"
-            loans={displayedLoans.filter(l => MORTGAGE_PERSONAL_TYPES.includes(l.loanType))}
+            loans={displayedLoans}
             setLoans={setLoans}
             month={month}
           />
-          <LoanTable
-            title="Auto, Student & Solar Loans"
-            loans={displayedLoans.filter(l => CONSUMER_LOAN_TYPES.includes(l.loanType))}
-            setLoans={setLoans}
-            month={month}
-          />
+          <p className="text-xs text-gray-600 mt-2">Auto, solar, premium financing and other loans billed like a utility are on the Bills page, under their accounts.</p>
           {displayedLoans.length === 0 && (
             <div className="text-center py-12 text-gray-500 text-sm">No loans found</div>
           )}
