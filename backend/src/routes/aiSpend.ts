@@ -8,6 +8,7 @@
  * read as everyday use.
  */
 import { Router, Request, Response } from 'express';
+import { fillLookupDetails, lookupFillState } from '../services/lookupDetails';
 import Anthropic from '@anthropic-ai/sdk';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
@@ -293,6 +294,17 @@ async function queueSnapshot(userId: string) {
  * Listing only accounts with a login left Cox and Service Finance out with no
  * word of why.
  */
+// POST /test/portal/fill-lookup — fill the customer number, name on the bill and pay-online
+// address from the bills already on file (services/lookupDetails.ts).
+router.post('/test/portal/fill-lookup', async (req: Request, res: Response) => {
+  try {
+    const count = await fillLookupDetails(req.dbUserId!);
+    res.status(202).json({ started: count != null, count, state: lookupFillState(req.dbUserId!) });
+  } catch (err: any) {
+    res.status(err?.status ?? (/budget|allowance/i.test(err?.message ?? '') ? 402 : 500)).json({ error: err?.message ?? 'Could not start.' });
+  }
+});
+
 router.get('/test/portal', async (req: Request, res: Response) => {
   const accounts = await db.utilityAccount.findMany({
     where: { property: { userId: req.dbUserId! } },
@@ -315,6 +327,7 @@ router.get('/test/portal', async (req: Request, res: Response) => {
   const myHosts = new Set(accounts.map(a => { try { return new URL(websiteFor(a)?.url ?? '').hostname.split('.').slice(-2).join('.'); } catch { return ''; } }).filter(Boolean));
   const usage = await db.aiUsage.groupBy({ by: ['userId'], where: { feature: 'portal-agent', userId: req.dbUserId!, createdAt: { gte: monthStart() } }, _sum: { costUsd: true }, _count: { _all: true } });
   res.json({
+    lookupFill: lookupFillState(req.dbUserId!),
     accounts: accounts.map(a => ({
       id: a.id, providerName: a.providerName, last4: a.accountNumber ? String(a.accountNumber).slice(-4) : null, propertyId: a.propertyId,
       hasCredentials: !!a.usernameEnc, lookupName: a.lookupName, lookupCustomerId: a.lookupCustomerId, website: (a.usernameEnc ? websiteFor(a)?.url : lookupStartFor(a)) ?? null,
