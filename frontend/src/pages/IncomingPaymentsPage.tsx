@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { format } from 'date-fns';
 import {
-  getIncomingTransactions, syncIncomingTransactions, matchIncomingTransaction,
+  getIncomingTransactions, syncIncomingTransactions, incomingEmailSyncState, matchIncomingTransaction,
   applyIncomingTransaction, ignoreIncomingTransaction, getLeases,
 } from '../api/client';
 import type { IncomingTransaction, IncomingTransactionStatus, Lease } from '../types';
@@ -46,12 +46,29 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
     setSyncMsg(null);
     try {
       const result = await syncIncomingTransactions();
-      setSyncMsg(
-        result.errors.length > 0
-          ? `Synced ${result.itemsSynced} account(s), ${result.added} new — ${result.errors.join('; ')}`
-          : `Synced ${result.itemsSynced} account(s), ${result.added} new transaction(s) found.`
-      );
+      const bank = result.errors.length > 0
+        ? `Bank feed: ${result.itemsSynced} account(s), ${result.added} new — ${result.errors.join('; ')}`
+        : `Bank feed: ${result.itemsSynced} account(s), ${result.added} new.`;
+      if (!result.emailJobId) {
+        setSyncMsg(`${bank} No mailbox is connected, so Zelle and Venmo emails were not read (Settings → Gmail).`);
+        await load();
+        return;
+      }
+      setSyncMsg(`${bank} Reading ${result.mailboxes} mailbox${result.mailboxes === 1 ? '' : 'es'} for Zelle, Venmo and Cash App emails…`);
       await load();
+      // The mailbox read runs on the workers; wait for it (up to 3 minutes).
+      for (let i = 0; i < 45; i++) {
+        await new Promise(r => setTimeout(r, 4000));
+        const st = await incomingEmailSyncState(result.emailJobId, result.startedAt).catch(() => null);
+        if (!st?.done) continue;
+        const found = st.payments.map(p => p.detail).filter(Boolean);
+        setSyncMsg(`${bank} ${st.failed ? `Email read failed: ${st.failed}` : found.length
+          ? `Email: ${found.join(' · ')}`
+          : 'Email: no new payment emails since the last read.'}`);
+        await load();
+        return;
+      }
+      setSyncMsg(`${bank} Email is still being read — the workers may be busy or off (Settings → AI usage shows their status). New payments will show here when it finishes.`);
     } finally {
       setSyncing(false);
     }
