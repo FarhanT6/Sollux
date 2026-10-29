@@ -29,7 +29,7 @@ export default function AiSpendPanel() {
   const [portal, setPortal] = useState<Awaited<ReturnType<typeof getPortalTests>> | null>(null);
   // An account without a login, being given one from here.
   const [loginFor, setLoginFor] = useState<PortalTestAccount | null>(null);
-  const [showUnfetched, setShowUnfetched] = useState(false);
+  const [showUnfetched, setShowUnfetched] = useState(true);
   const timer = useRef<number | null>(null);
   const portalTimer = useRef<number | null>(null);
 
@@ -209,14 +209,14 @@ export default function AiSpendPanel() {
             <div className="mt-4 pt-3 border-t border-white/5">
               <button className="text-left w-full" onClick={() => setShowUnfetched(v => !v)}>
                 <p className="text-xs text-gray-300">{showUnfetched ? '▾' : '▸'} Not fetched yet · {rest.length}</p>
-                <p className="text-xs text-gray-500">No portal login saved, so Sollux can't fetch these from the provider's website. Their bills still come in by email or upload.</p>
+                <p className="text-xs text-gray-500">Nothing saved to fetch with yet: a portal login, or — for billers that find bills by account number, like City of Oceanside — the bill lookup page and its customer number or name. Their bills still come in by email or upload.</p>
               </button>
               {showUnfetched && (
                 <div className="mt-2 divide-y divide-white/5">
                   {rest.map(a => (
                     <div key={a.id} className="flex items-center justify-between gap-3 py-2">
                       <p className="text-sm text-gray-200 min-w-0 truncate">{a.providerName}{a.last4 ? ` ··${a.last4}` : ''} <span className="text-gray-500">· {a.place}</span></p>
-                      <button className="btn text-xs whitespace-nowrap" onClick={() => setLoginFor(a)}>{a.needs === 'name' ? 'Add lookup details' : 'Add login'}</button>
+                      <button className="btn text-xs whitespace-nowrap" onClick={() => setLoginFor(a)}>{a.needs === 'name' ? 'Add lookup details' : 'Add login or lookup page'}</button>
                     </div>
                   ))}
                 </div>

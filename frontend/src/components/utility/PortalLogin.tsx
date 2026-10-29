@@ -31,8 +31,12 @@ export default function PortalLogin({ account, website, onClose, onSaved }: {
   const [busy, setBusy] = useState(false);
   // A lookup page needs a customer ID (Tyler Munis) or the name on the bill (InvoiceCloud), not a login.
   const lookup = isLookupPage(url);
-  const byCustomer = lookup && (/munisselfservice\.com/i.test(url) || !!account.lookupCustomerId);
-  const canSave = lookup ? !!(byCustomer ? customerId : name).trim() : !!username && !!password;
+  const munis = /munisselfservice\.com/i.test(url);
+  // InvoiceCloud pages ask for the account number and either a customer number
+  // (City of Oceanside) or the name on the bill, depending on the biller: both are offered.
+  const byCustomer = lookup && (munis || !!account.lookupCustomerId);
+  const askBoth = lookup && !munis;
+  const canSave = lookup ? !!(askBoth ? customerId.trim() || name.trim() : (byCustomer ? customerId : name).trim()) : !!username && !!password;
 
   async function save(fetchNow: boolean) {
     setBusy(true);
@@ -58,8 +62,9 @@ export default function PortalLogin({ account, website, onClose, onSaved }: {
   const note = (
     <p className="text-xs text-gray-500 leading-relaxed" style={phone ? { margin: '0 16px 16px' } : undefined}>
       {lookup
-        ? `This website is a bill lookup page: Sollux finds the bills with the account number and the ${byCustomer ? 'customer ID' : 'name on the bill'}, and never signs in. A username and password are not needed.`
-        : <>Stored encrypted. Sollux signs in only to read and download statements — it can't pay, change settings or send anything.
+        ? `This website is a bill lookup page: Sollux finds the bills with the account number and ${askBoth ? 'the customer number or the name on the bill — fill in whichever the page asks for' : byCustomer ? 'the customer ID' : 'the name on the bill'}, and never signs in. A username and password are not needed. If the page shows a "verify you are human" check, Sollux fetches through your own Chrome when the Sollux connector is open on your computer.`
+        : <>No login? Some billers (City of Oceanside, for one) find bills by account number instead: paste that bill lookup page's address as the website and the form asks for what it needs.{' '}
+          Stored encrypted. Sollux signs in only to read and download statements — it can't pay, change settings or send anything.
           If the portal texts a code, Sollux asks you for it.
           {account.hasCredentials ? ' A login is already saved; entering a new one replaces it.' : ''}</>}
     </p>
@@ -69,7 +74,10 @@ export default function PortalLogin({ account, website, onClose, onSaved }: {
     <Sheet open onClose={onClose} title="Portal login" right={{ label: 'Save', onClick: () => void save(true), disabled: !canSave, busy }}>
       <Section header={account.providerName}>
         <Field label="Website"><input inputMode="url" autoCapitalize="off" autoCorrect="off" placeholder="provider.com" value={url} onChange={e => setUrl(e.target.value)} /></Field>
-        {lookup ? (byCustomer
+        {lookup ? (askBoth ? <>
+          <Field label="Customer number"><input autoCorrect="off" inputMode="numeric" placeholder="If the page asks for it" value={customerId} onChange={e => setCustomerId(e.target.value)} /></Field>
+          <Field label="Name on the bill"><input autoCorrect="off" placeholder="If the page asks for it" value={name} onChange={e => setName(e.target.value)} /></Field>
+        </> : byCustomer
           ? <Field label="Customer ID"><input autoCorrect="off" inputMode="numeric" placeholder="As the bill prints it" value={customerId} onChange={e => setCustomerId(e.target.value)} /></Field>
           : <Field label="Name on the bill"><input autoCorrect="off" placeholder="As the bill prints it" value={name} onChange={e => setName(e.target.value)} /></Field>
         ) : <>
@@ -91,7 +99,12 @@ export default function PortalLogin({ account, website, onClose, onSaved }: {
       <div className="space-y-3">
         <label className="block"><span className="text-xs text-gray-400">Website (where you sign in, or the bill lookup page)</span>
           <input className="input-dark w-full text-sm mt-1" placeholder="https://provider.com" value={url} onChange={e => setUrl(e.target.value)} /></label>
-        {lookup ? (byCustomer
+        {lookup ? (askBoth ? <>
+          <label className="block"><span className="text-xs text-gray-400">Customer number — if the page asks for it</span>
+            <input className="input-dark w-full text-sm mt-1" placeholder="As the bill prints it" value={customerId} onChange={e => setCustomerId(e.target.value)} /></label>
+          <label className="block"><span className="text-xs text-gray-400">Name on the bill — if the page asks for it</span>
+            <input className="input-dark w-full text-sm mt-1" placeholder="As the bill prints it, e.g. JANE SMITH" value={name} onChange={e => setName(e.target.value)} /></label>
+        </> : byCustomer
           ? <label className="block"><span className="text-xs text-gray-400">Customer ID</span>
             <input className="input-dark w-full text-sm mt-1" placeholder="As the bill prints it" value={customerId} onChange={e => setCustomerId(e.target.value)} /></label>
           : <label className="block"><span className="text-xs text-gray-400">Name on the bill</span>
