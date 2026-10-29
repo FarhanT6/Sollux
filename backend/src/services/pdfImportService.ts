@@ -58,6 +58,10 @@ export interface ExtractedBillData {
   providerName:       string | null;
   /** The provider's website as the bill prints it ("Access your account online at nationwide.com"). */
   providerWebsite?:   string | null;
+  /** A customer number / customer ID printed apart from the account number (bill lookup pages ask for it). */
+  customerNumber?:    string | null;
+  /** The name the bill is addressed to, as printed (bill lookup pages ask for it). */
+  nameOnBill?:        string | null;
   serviceAddress:     string | null;
   accountNumber:      string | null;
   statementDate:      string | null;   // YYYY-MM-DD
@@ -273,6 +277,8 @@ Schema (use null for any field not present in the document):
 {
   "providerName": "string — company or organization name sending this bill",
   "serviceAddress": "string — the property/service address (NOT the mailing/remittance address). On an insurance document it is the insured property ('Property at:', 'Described location', 'Residence premises', 'Insured location'), never the policyholder's mailing address at the top of the letter",
+  "customerNumber": "string or null — a Customer Number / Customer ID / Customer # printed SEPARATELY from the account number (some cities bill under both: 'Customer Number 123456 / Account Number 654321'); null when the bill prints only one number",
+  "nameOnBill": "string or null — the customer name the bill is addressed to or printed under 'Customer Name' / 'Account Name', exactly as printed; null when none is printed",
   "accountNumber": "string or null — the ACCOUNT or customer number. A 'Bill number', 'Statement #' or 'Invoice #' is the bill's own serial and is NOT the account number; if the bill prints no account number, return null rather than the bill number",
   "statementDate": "YYYY-MM-DD — the date the bill itself carries: 'Bill Date', 'Statement Date', 'Invoice Date', 'Date Mailed'. NOT an 'As of' or 'Printed' date — that is the day the copy was generated, often months after the bill (a Tyler 'Bill Detail' reading 'As of 08/13/2026 / Bill Date 6/25/2026' has statementDate 2026-06-25)",
   "dueDate": "YYYY-MM-DD — the date payment for THIS bill is due. Bills often print several other dates: a next meter-read date, a service-period end, a solar/net-metering true-up date, an autopay draft date. None of those are the due date — use only a date explicitly labelled as when payment is due,

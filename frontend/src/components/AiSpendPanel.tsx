@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import PortalLogin from './utility/PortalLogin';
-import { getAiSpend, setAiBudget, getAiTest, startAiTest, getPortalTests, testPortal, cancelFetch, type AiSpend, type AiTestState, type PortalTestAccount, type WorkerStatus, type QueueSnapshot } from '../api/client';
+import { getAiSpend, setAiBudget, getAiTest, startAiTest, getPortalTests, testPortal, cancelFetch, type AiSpend, type AiTestState, type PortalTestAccount, type WorkerStatus, type QueueSnapshot, fillLookupFromBills } from '../api/client';
 import { fmtMoney } from '../lib/money';
 import { fmtMoment } from '../lib/date';
 import PortalCodeBanner from './utility/PortalCodeBanner';
@@ -49,7 +49,8 @@ export default function AiSpendPanel() {
   useEffect(() => { void load().then(t => { if (t?.run && !t.run.finishedAt) poll(); }); return () => { if (timer.current) window.clearTimeout(timer.current); }; }, []);
 
   // While a fetch is queued or running, refresh its status every few seconds.
-  const fetching = !!portal?.accounts.some(a => a.run && (a.run.state === 'queued' || a.run.state === 'running'));
+  const filling = !!portal?.lookupFill && portal.lookupFill.done < portal.lookupFill.total;
+  const fetching = filling || !!portal?.accounts.some(a => a.run && (a.run.state === 'queued' || a.run.state === 'running'));
   useEffect(() => {
     if (!fetching) return;
     portalTimer.current = window.setInterval(() => {
@@ -211,6 +212,18 @@ export default function AiSpendPanel() {
                 <p className="text-xs text-gray-300">{showUnfetched ? '▾' : '▸'} Not fetched yet · {rest.length}</p>
                 <p className="text-xs text-gray-500">Nothing saved to fetch with yet: a portal login, or — for billers that find bills by account number, like City of Oceanside — the bill lookup page and its customer number or name. Their bills still come in by email or upload.</p>
               </button>
+              <div className="flex items-center gap-3 mt-2">
+                <button className="btn text-xs" disabled={filling}
+                  onClick={async () => {
+                    try { const r = await fillLookupFromBills(); toast(r.count ? `Reading the newest bill of ${r.count} account${r.count === 1 ? '' : 's'}…` : 'No bills on file for these accounts yet.'); setPortal(await getPortalTests()); }
+                    catch (e: any) { toast(e?.response?.data?.error ?? 'Could not start.', 'error'); }
+                  }}>
+                  {filling ? `Reading bills… ${portal!.lookupFill!.done} of ${portal!.lookupFill!.total}` : 'Fill in from my bills'}
+                </button>
+                <span className="text-xs text-gray-500">
+                  {portal?.lookupFill && !filling ? `Filled in ${portal.lookupFill.filled} of ${portal.lookupFill.total} from their bills.` : 'Sollux reads the customer number, the name on the bill and the pay-online address from the bills it already has.'}
+                </span>
+              </div>
               {showUnfetched && (
                 <div className="mt-2 divide-y divide-white/5">
                   {rest.map(a => (
