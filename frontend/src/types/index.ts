@@ -508,6 +508,8 @@ export interface IndexRate {
 export type LoanPaymentMethod = 'AUTOPAY' | 'ONLINE' | 'CHECK' | 'ZELLE' | 'BANK_DEPOSIT' | 'CASH' | 'WIRE' | 'DEDUCTED' | 'OTHER';
 
 export interface Loan {
+  /** Billed through this utility account (premium financing, solar, an installment contract). */
+  utilityAccountId?: string | null;
   id: string;
   propertyId?: string;
   userId: string;
