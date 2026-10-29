@@ -1024,7 +1024,7 @@ export const syncPlaidBalances = () =>
 export const getIncomingTransactions = (status?: IncomingTransactionStatus) =>
   api.get<IncomingTransaction[]>('/transactions', { params: status ? { status } : undefined }).then(r => r.data);
 export const syncIncomingTransactions = () =>
-  api.post<{ itemsSynced: number; added: number; errors: string[]; mailboxes: number; emailJobId: string | null; startedAt: string }>('/transactions/sync').then(r => r.data);
+  api.post<{ itemsSynced: number; added: number; errors: string[]; autoApplied: number; mailboxes: number; emailJobId: string | null; startedAt: string }>('/transactions/sync').then(r => r.data);
 export const incomingEmailSyncState = (jobId: string, since: string) =>
   api.get<{ done: boolean; failed: string | null; payments: { subject: string | null; detail: string | null; receivedAt: string }[] }>(`/transactions/sync/email/${jobId}`, { params: { since } }).then(r => r.data);
 export const matchIncomingTransaction = (id: string, leaseId: string | null) =>

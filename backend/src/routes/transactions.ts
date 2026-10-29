@@ -1,9 +1,9 @@
 import { Router } from 'express';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
-import { syncAllWatchedAccounts, CHANNEL_TO_METHOD } from '../services/transactionMatchService';
+import { syncAllWatchedAccounts, CHANNEL_TO_METHOD, matchLease, extractCounterpartyName } from '../services/transactionMatchService';
 import { recordRentPayment } from '../services/rentPaymentService';
-import { findLoggedPayment, periodFor } from '../services/p2pPaymentEmails';
+import { findLoggedPayment, periodFor, sureOfTenant, descriptorMemo } from '../services/p2pPaymentEmails';
 
 const router = Router();
 router.use(attachDbUser);
@@ -41,13 +41,14 @@ router.post('/sync', async (req, res, next) => {
       syncAllWatchedAccounts(userId),
       db.gmailToken.count({ where: { userId } }),
     ]);
+    const autoApplied = await applySureSuggestions(userId);
     let emailJobId: string | null = null;
     if (mailboxes) {
       const { gmailQueue } = await import('../workers/queues');
       const job = await gmailQueue.add('parse', { userId }, { attempts: 1 });
       emailJobId = job.id ?? null;
     }
-    res.json({ ...result, mailboxes, emailJobId, startedAt: new Date().toISOString() });
+    res.json({ ...result, autoApplied, mailboxes, emailJobId, startedAt: new Date().toISOString() });
   } catch (err) { next(err); }
 });
 
@@ -104,44 +105,73 @@ router.post('/:id/apply', async (req, res, next) => {
     const lease = await db.lease.findFirst({ where: { id: tx.matchedLeaseId, unit: { property: { userId: req.dbUserId! } } } });
     if (!lease) return res.status(404).json({ error: 'Matched lease not found' });
 
-    // Goes through the shared recorder so an auto-applied payment splits
-    // against arrears exactly like a hand-entered one, and carries the account
-    // the money actually landed in.
-    // Logged by hand already: link it instead of logging the money twice.
-    const logged = await findLoggedPayment(lease.id, Number(tx.amount), tx.date);
-    if (logged) {
-      const linked = await db.incomingTransaction.update({ where: { id: tx.id }, data: { status: 'APPLIED', rentPaymentId: logged.id } });
-      return res.json({ ...linked, linkedExisting: true });
-    }
-
-    const payment = await recordRentPayment({
-      leaseId: lease.id,
-      periodDate: periodFor(tx.date, tx.memo),
-      amount: Number(tx.amount),
-      paidDate: tx.date,
-      method: (CHANNEL_TO_METHOD[(tx.channel ?? 'OTHER') as keyof typeof CHANNEL_TO_METHOD] ?? 'OTHER') as any,
-      bankAccountId: tx.bankAccountId ?? undefined,
-      notes: [`Matched from ${tx.channel ?? 'bank'} ${tx.source === 'email' ? 'email' : 'transaction'}: "${tx.name}"`, tx.confirmation && `confirmation ${tx.confirmation}`, tx.memo && `memo "${tx.memo}"`].filter(Boolean).join(' · '),
-    });
-
-    const updated = await db.incomingTransaction.update({
-      where: { id: tx.id },
-      data: { status: 'APPLIED', rentPaymentId: payment.id },
-    });
-    await learnSender(lease.id, tx.name, tx.source);
-    res.json(updated);
+    const { updated, linkedExisting } = await applyTo(tx, lease.id);
+    if (!linkedExisting) await learnSender(lease.id, tx.name, tx.source);
+    res.json({ ...updated, ...(linkedExisting ? { linkedExisting } : {}) });
   } catch (err) { next(err); }
 });
+
+type Tx = NonNullable<Awaited<ReturnType<typeof db.incomingTransaction.findFirst>>>;
+
+/** Record a transaction as rent on a lease (or link it to the payment already logged by hand). */
+async function applyTo(tx: Tx, leaseId: string) {
+  // Logged by hand already: link it instead of logging the money twice.
+  const logged = await findLoggedPayment(leaseId, Number(tx.amount), tx.date);
+  if (logged) {
+    const updated = await db.incomingTransaction.update({ where: { id: tx.id }, data: { status: 'APPLIED', rentPaymentId: logged.id } });
+    return { updated, linkedExisting: true };
+  }
+  // Goes through the shared recorder so the payment splits against arrears
+  // exactly like a hand-entered one, and carries the account it landed in.
+  const payment = await recordRentPayment({
+    leaseId,
+    // The memo names the month when there is one; a bank row's is in its descriptor.
+    periodDate: periodFor(tx.date, tx.memo ?? (tx.source === 'email' ? null : descriptorMemo(tx.name))),
+    amount: Number(tx.amount),
+    paidDate: tx.date,
+    method: (CHANNEL_TO_METHOD[(tx.channel ?? 'OTHER') as keyof typeof CHANNEL_TO_METHOD] ?? 'OTHER') as any,
+    bankAccountId: tx.bankAccountId ?? undefined,
+    notes: [`Matched from ${tx.channel ?? 'bank'} ${tx.source === 'email' ? 'email' : 'transaction'}: "${tx.name}"`, tx.confirmation && `confirmation ${tx.confirmation}`, tx.memo && `memo "${tx.memo}"`].filter(Boolean).join(' · '),
+  });
+  const updated = await db.incomingTransaction.update({ where: { id: tx.id }, data: { status: 'APPLIED', rentPaymentId: payment.id } });
+  return { updated, linkedExisting: false };
+}
+
+/**
+ * Payments waiting as Suggested that the auto-log rule (sureOfTenant) now
+ * covers — the rule was widened, or a payer name was saved since — are
+ * applied on Sync now rather than left for the owner. Only where the name
+ * still points at the lease already suggested.
+ */
+async function applySureSuggestions(userId: string): Promise<number> {
+  const waiting = await db.incomingTransaction.findMany({ where: { userId, status: 'SUGGESTED', matchedLeaseId: { not: null } }, orderBy: { date: 'asc' } });
+  let applied = 0;
+  for (const tx of waiting) {
+    try {
+      const nameMatch = await matchLease(tx.source === 'email' ? (tx.name ?? '') : extractCounterpartyName(tx.name ?? ''), userId);
+      if (!nameMatch || nameMatch.leaseId !== tx.matchedLeaseId) continue;
+      const lease = await db.lease.findUnique({ where: { id: nameMatch.leaseId }, select: { rentAmount: true, arrearsBalance: true } });
+      if (!sureOfTenant(nameMatch, lease, Number(tx.amount), tx.memo ?? (tx.source === 'email' ? null : descriptorMemo(tx.name)))) continue;
+      await applyTo(tx, nameMatch.leaseId);
+      applied++;
+    } catch (err) {
+      console.warn(`[Incoming] could not apply ${tx.id}:`, err instanceof Error ? err.message : err);
+    }
+  }
+  return applied;
+}
 
 /**
  * Applying a payment teaches Sollux the sender: the name becomes one of the
  * lease's payment aliases, so the next payment from them is logged without
- * asking. Only a clean name from an email; a bank descriptor
- * ("ZELLE FROM ... REF #123") is not a name.
+ * asking. A clean name only: an email's payer, or the name inside a bank
+ * descriptor; the rest of a descriptor ("REF # 123") is not a name.
  */
 async function learnSender(leaseId: string, name: string | null, source: string | null) {
-  const clean = (name ?? '').trim();
-  if (source !== 'email' || !clean || /\d/.test(clean) || clean.split(/\s+/).length > 6) return;
+  // From the bank feed, the name between FROM and ON: "ZELLE FROM JANE SAMPLE ON 10/01 REF # ...".
+  const raw = source === 'email' ? name : /\bfrom\s+(.+?)\s+on\s+\d/i.exec(name ?? '')?.[1];
+  const clean = (raw ?? '').trim();
+  if (!clean || /\d/.test(clean) || clean.split(/\s+/).length > 6) return;
   const known = await db.leasePaymentAlias.findFirst({ where: { leaseId, name: { equals: clean, mode: 'insensitive' } }, select: { id: true } });
   if (!known) await db.leasePaymentAlias.create({ data: { leaseId, name: clean, note: 'Learned when a payment from this sender was applied' } }).catch(() => {});
 }

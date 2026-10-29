@@ -49,12 +49,13 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
       const bank = result.errors.length > 0
         ? `Bank feed: ${result.itemsSynced} account(s), ${result.added} new — ${result.errors.join('; ')}`
         : `Bank feed: ${result.itemsSynced} account(s), ${result.added} new.`;
+      const auto = result.autoApplied ? ` ${result.autoApplied} waiting payment${result.autoApplied === 1 ? '' : 's'} logged as rent (sender names the tenant).` : '';
       if (!result.emailJobId) {
-        setSyncMsg(`${bank} No mailbox is connected, so Zelle and Venmo emails were not read (Settings → Gmail).`);
+        setSyncMsg(`${bank}${auto} No mailbox is connected, so Zelle and Venmo emails were not read (Settings → Gmail).`);
         await load();
         return;
       }
-      setSyncMsg(`${bank} Reading ${result.mailboxes} mailbox${result.mailboxes === 1 ? '' : 'es'} for Zelle, Venmo and Cash App emails…`);
+      setSyncMsg(`${bank}${auto} Reading ${result.mailboxes} mailbox${result.mailboxes === 1 ? '' : 'es'} for Zelle, Venmo and Cash App emails…`);
       await load();
       // The mailbox read runs on the workers; wait for it (up to 3 minutes).
       for (let i = 0; i < 45; i++) {
@@ -62,7 +63,7 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
         const st = await incomingEmailSyncState(result.emailJobId, result.startedAt).catch(() => null);
         if (!st?.done) continue;
         const found = st.payments.map(p => p.detail).filter(Boolean);
-        setSyncMsg(`${bank} ${st.failed ? `Email read failed: ${st.failed}` : found.length
+        setSyncMsg(`${bank}${auto} ${st.failed ? `Email read failed: ${st.failed}` : found.length
           ? `Email: ${found.join(' · ')}`
           : 'Email: no new payment emails since the last read.'}`);
         await load();

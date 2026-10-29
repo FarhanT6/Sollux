@@ -39,6 +39,25 @@ const NOT_NAME = new Set(['hi', 'hello', 'dear', 'good', 'news', 'great', 'you',
 // A memo that says the money is for something other than rent: left for the owner.
 const NOT_RENT = /util|water|electric|power|\bgas\b|sewer|trash|internet|wifi|reimburs|deposit|repair|fee\b|refund/i;
 
+/**
+ * Whether a payment is logged as rent without asking — the same rule for
+ * an email and the bank feed. The sender is the tenant: their whole name or
+ * a saved payer name, or most of their name for no more than they owe (rent
+ * plus arrears). A match by amount alone, an overpayment on a partial name,
+ * an implausible amount, or a memo saying it is not rent waits for review.
+ */
+export function sureOfTenant(
+  nameMatch: { viaAlias: boolean; exact: boolean } | null,
+  lease: { rentAmount: unknown; arrearsBalance: unknown } | null,
+  amount: number, memo: string | null | undefined,
+): boolean {
+  if (!nameMatch || !lease) return false;
+  const rent = Number(lease.rentAmount), arrears = Number(lease.arrearsBalance ?? 0);
+  if (amount > rent * 2 + arrears) return false;
+  if (memo && NOT_RENT.test(memo)) return false;
+  return nameMatch.viaAlias || nameMatch.exact || amount <= rent + arrears + 0.005;
+}
+
 function channelOf(from: string, subject: string, body: string): P2PChannel | null {
   const f = from.toLowerCase();
   if (/venmo\.com/.test(f)) return 'VENMO';
@@ -157,8 +176,15 @@ export function parseP2PEmail(from: string, subject: string, body: string, recei
  * ("2nd August Rent Payment" sent Oct 3 is for August); otherwise the month
  * it was sent in.
  */
+/** The memo in a bank descriptor: what follows "REF # <id>" ("ZELLE FROM JANE SAMPLE ON 09/30 REF # ABC123 OCTOBER RENT"). */
+export function descriptorMemo(name: string | null | undefined): string | null {
+  const m = /\bREF\s*#?\s*\S+\s+(.+)$/i.exec(name ?? '');
+  return m ? m[1].trim() || null : null;
+}
+
 export function periodFor(date: Date, memo: string | null | undefined): Date {
-  const m = memo && /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b/i.exec(memo);
+  // Whole month names or their short forms only: "JANE" is not January, nor "MARCUS" March.
+  const m = memo && /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)s?\b/i.exec(memo);
   if (m) {
     const month = MONTHS.indexOf(m[1].slice(0, 3).toLowerCase());
     // The latest such month no more than a month after the payment.
@@ -275,14 +301,7 @@ export async function recordP2PEmail(userId: string, p: P2PPayment, key: string)
   }
 
   const lease = await db.lease.findUnique({ where: { id: matchedLeaseId }, select: { rentAmount: true, arrearsBalance: true } });
-  const plausible = !!lease && p.amount <= Number(lease.rentAmount) * 2 + Number(lease.arrearsBalance ?? 0);
-  // Logged without asking when the sender is the tenant: their whole name or a
-  // saved alias, or most of their name for no more than they owe (this month's
-  // rent plus arrears). A sender matched by amount alone, an overpayment on a
-  // partial name, or a memo that says it is not rent waits for review.
-  const owed = lease ? Number(lease.rentAmount) + Number(lease.arrearsBalance ?? 0) : 0;
-  const sure = !!nameMatch && plausible && !(p.memo && NOT_RENT.test(p.memo))
-    && (nameMatch.viaAlias || nameMatch.exact || p.amount <= owed + 0.005);
+  const sure = sureOfTenant(nameMatch, lease, p.amount, p.memo);
   if (!sure) return { outcome: 'payment', detail: `${fmt}: tenant suggested, waiting in Finances → Incoming` };
 
   const payment = await recordRentPayment({

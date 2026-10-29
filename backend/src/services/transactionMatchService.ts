@@ -19,8 +19,8 @@
 import { plaidClient } from '../config/plaid';
 import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';
-import { recordRentPayment, periodStartOf } from './rentPaymentService';
-import { findTwin, findLoggedPayment } from './p2pPaymentEmails';
+import { recordRentPayment } from './rentPaymentService';
+import { findTwin, findLoggedPayment, sureOfTenant, periodFor, descriptorMemo } from './p2pPaymentEmails';
 import { findLoanCandidates, confidentLoan, logLoanPaymentFromTransaction } from './loanPaymentMatcher';
 
 // ─── Incoming (rent via P2P) ──────────────────────────────────────────────
@@ -72,7 +72,7 @@ export function detectChannel(name: string): Channel | null {
 
 // Strips the payment-app boilerplate off a transaction name to get at the
 // human name, e.g. "ZELLE FROM JOHN SMITH" -> "JOHN SMITH", "VENMO PAYMENT J SMITH" -> "J SMITH"
-function extractCounterpartyName(name: string): string {
+export function extractCounterpartyName(name: string): string {
   return name
     .replace(/zelle|venmo|paypal|cash ?app|square cash|sq \*cash|apple cash|apple pay cash/gi, '')
     .replace(/\bfrom\b|\bpayment\b|\btransfer\b|\bmoney\b|\breceived\b|\bdes:?\b|\bindn:?\b/gi, '')
@@ -328,22 +328,24 @@ export async function syncTransactionsForItem(plaidItemId: string) {
           });
           added += 1;
 
-          // Auto-log only on an alias hit. The owner wrote that name down for
-          // exactly this purpose, so the match is theirs, not a guess — every
-          // other match still waits for review, because a wrongly applied
-          // payment moves a balance and shows up in Budget and the P&L.
+          // Logged without asking on the same rule as a payment email
+          // (sureOfTenant): the tenant's name or a saved payer name, for an
+          // amount they plausibly owe. Anything less certain waits for review,
+          // because a wrongly applied payment moves a balance.
           const logged = nameMatch ? await findLoggedPayment(nameMatch.leaseId, amount, new Date(tx.date)) : null;
+          const lease = nameMatch ? await db.lease.findUnique({ where: { id: nameMatch.leaseId }, select: { rentAmount: true, arrearsBalance: true } }) : null;
           if (logged) {
             await db.incomingTransaction.update({ where: { id: created.id }, data: { status: 'APPLIED', rentPaymentId: logged.id } });
-          } else if (nameMatch?.viaAlias) {
+          } else if (nameMatch && sureOfTenant(nameMatch, lease, amount, descriptorMemo(name))) {
             const payment = await recordRentPayment({
               leaseId: nameMatch.leaseId,
-              periodDate: periodStartOf(new Date(tx.date)),
+              // "OCTOBER RENT 2026" sent Sep 30 is October's rent.
+              periodDate: periodFor(new Date(tx.date), descriptorMemo(name)),
               amount,
               paidDate: new Date(tx.date),
               method: (CHANNEL_TO_METHOD[channel] ?? 'OTHER') as any,
               bankAccountId: bankAccount.id,
-              notes: `Auto-logged — "${name}" matches an expected payer name`,
+              notes: `Auto-logged — "${name}" ${nameMatch.viaAlias ? 'matches an expected payer name' : 'names the tenant'}`,
             });
             await db.incomingTransaction.update({
               where: { id: created.id },
