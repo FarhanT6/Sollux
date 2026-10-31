@@ -251,7 +251,7 @@ router.get('/', async (req, res, next) => {
 
     // Verify property belongs to user
     const where: any = {};
-    // ?personal=1: only the owner's personal bills (Personal -> Bills).
+    // ?personal=1: only the owner's personal bills (the Bills page's Personal section).
     if (req.query.personal === '1') where.isPersonal = true;
     if (propertyId) {
       const property = await db.property.findFirst({

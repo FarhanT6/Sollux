@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { getCreditCards, createCardFromBankAccount, getLoans, getExpenses, getPersonalUtilities, setUtilitiesPersonal, type CreditCardT, type CardsSummary } from '../api/client';
-import { CATEGORY_LABELS } from '../types';
+import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
+import { getCreditCards, createCardFromBankAccount, getLoans, getExpenses, type CreditCardT, type CardsSummary } from '../api/client';
 import type { Loan } from '../types';
 import { PageHeader, EmptyState } from '../components/ui';
 import PersonalExpensesPage from './PersonalExpensesPage';
@@ -19,7 +18,6 @@ import { usePhone, Screen, Section, Row, Segmented } from '../ios';
 
 const TABS = [
   { key: 'overview', label: 'Overview' },
-  { key: 'bills', label: 'Bills' },
   { key: 'cards', label: 'Credit cards' },
   { key: 'expenses', label: 'Expenses' },
   { key: 'loans', label: 'Loans' },
@@ -293,47 +291,6 @@ function OverviewTab({ cards, summary, go }: { cards: CreditCardT[]; summary: Ca
   );
 }
 
-/**
- * The owner's own bills: utility accounts moved off a property (Move to
- * personal on the property's utilities). They fetch and take payments as
- * before; they just are not the property's costs. Each can be moved back.
- */
-function BillsTab() {
-  const [list, setList] = useState<any[] | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
-  const load = () => getPersonalUtilities().then(setList).catch(() => setList([]));
-  useEffect(() => { void load(); }, []);
-  async function moveBack(a: any) {
-    if (!confirm(`Move ${a.providerName} back to ${a.property?.nickname || a.property?.address}? Its bills count as that property's costs again.`)) return;
-    setBusy(a.id);
-    try { await setUtilitiesPersonal([a.id], false); await load(); } finally { setBusy(null); }
-  }
-  if (list == null) return <p className="text-sm text-gray-500">Loading…</p>;
-  if (!list.length) return <EmptyState title="No personal bills" body="On a property's utilities, use Move to personal… for your own bills (phone, car insurance, a card). They keep fetching here without counting as the property's costs." />;
-  const active = list.filter(a => a.isActive !== false).sort((a, b) => a.providerName.localeCompare(b.providerName));
-  const inactive = list.filter(a => a.isActive === false);
-  const row = (a: any) => {
-    const st = a.statements?.[0];
-    return (
-      <div key={a.id} className="flex items-center gap-3 py-2 border-b border-white/5 text-sm">
-        <Link to={`/properties/${a.propertyId}/utilities/${a.id}`} className="flex-1 min-w-0 hover:text-amber-400">
-          <span className="text-gray-100">{a.providerName}</span>
-          <span className="text-xs text-gray-500 ml-2">{CATEGORY_LABELS[a.category as keyof typeof CATEGORY_LABELS] ?? a.category}{a.accountNumber ? ` · ••${String(a.accountNumber).slice(-4)}` : ''} · filed on {a.property?.nickname || a.property?.address}</span>
-        </Link>
-        <span className="text-xs text-gray-400 w-40 text-right">{st ? `${fmtMoney(Number(st.amountDue ?? 0))}${st.dueDate ? ` due ${fmtDate(st.dueDate, 'MMM d')}` : ''}` : 'No bills yet'}</span>
-        <button onClick={() => void moveBack(a)} disabled={busy === a.id} className="text-xs text-gray-500 hover:text-amber-400 w-24 text-right">{busy === a.id ? '…' : 'Move back'}</button>
-      </div>
-    );
-  };
-  return (
-    <div className="max-w-4xl">
-      <p className="text-xs text-gray-500 mb-3">{active.length} personal bill{active.length === 1 ? '' : 's'}. They also show under Personal on the Bills page.</p>
-      {active.map(row)}
-      {inactive.length > 0 && <><p className="section-label mt-5 mb-1">Inactive</p>{inactive.map(row)}</>}
-    </div>
-  );
-}
-
 export default function PersonalPage() {
   const [params, setParams] = useSearchParams();
   const tab = (params.get('tab') as TabKey) || 'overview';
@@ -342,8 +299,9 @@ export default function PersonalPage() {
   const reload = async () => setData(await getCreditCards());
   useEffect(() => { void reload(); }, []);
   const go = (t: TabKey) => setParams({ tab: t });
-  const content = tab === 'expenses' ? <PersonalExpensesPage embedded />
-    : tab === 'bills' ? <BillsTab />
+  // Personal bills moved to the Bills page's Personal section.
+  const content = (tab as string) === 'bills' ? <Navigate to="/bills" replace />
+    : tab === 'expenses' ? <PersonalExpensesPage embedded />
     : tab === 'loans' ? <LoansTab />
     : data == null ? <p className="text-sm text-gray-500">Loading…</p>
     : tab === 'cards' ? <CardsTab cards={data.cards} summary={data.summary} sources={data.paymentSourceCards} reload={reload} />
@@ -357,7 +315,7 @@ export default function PersonalPage() {
   );
   return (
     <div>
-      <PageHeader title="Personal" subtitle="Your own money, apart from the rental portfolio: bills, credit cards, expenses and loans" />
+      <PageHeader title="Personal" subtitle="Your own money, apart from the rental portfolio: credit cards, expenses and loans (your own bills are under Personal on Bills)" />
       <div className="px-6 pt-4 flex gap-1 flex-wrap">
         {TABS.map(t => (
           <button key={t.key} onClick={() => go(t.key)} className={`text-xs px-3 py-1.5 rounded-lg font-medium ${tab === t.key ? 'bg-gold-500 text-white' : 'text-gray-400 hover:text-gray-200'}`}

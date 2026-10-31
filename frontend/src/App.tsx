@@ -18,7 +18,6 @@ import Section from './components/layout/Section';
 import DashboardPage from './pages/DashboardPage';
 import UtilityDetailPage from './pages/UtilityDetailPage';
 import InsightsPage from './pages/InsightsPage';
-import OperationsPage from './pages/OperationsPage';
 import PaymentPrioritiesPage from './pages/PaymentPrioritiesPage';
 import SettingsPage from './pages/SettingsPage';
 import FinancesPage from './pages/FinancesPage';
@@ -159,10 +158,11 @@ export default function App() {
           <Route path="legal" element={<Section group="properties"><LegalPage /></Section>} />
 
           {/* Standalone pages */}
-          {/* On a computer, paying lives on Bills (To pay, Pay first). */}
-          <Route path="payments" element={<Responsive phone={<PaymentsScreen />} desktop={<Navigate to="/bills?view=pay" replace />} />} />
-          <Route path="payments/priorities" element={<Responsive phone={<PaymentPrioritiesPage />} desktop={<Navigate to="/bills?view=first" replace />} />} />
-          <Route path="operations" element={<OperationsPage />} />
+          {/* On a computer, payments live on Bills (the pay planner and pay-first are off for now). */}
+          <Route path="payments" element={<Responsive phone={<PaymentsScreen />} desktop={<Navigate to="/bills?view=payments" replace />} />} />
+          <Route path="payments/priorities" element={<Responsive phone={<PaymentPrioritiesPage />} desktop={<Navigate to="/bills" replace />} />} />
+          {/* ClickUp operations went unused and had no way in; the address goes home. */}
+          <Route path="operations" element={<Navigate to="/dashboard" replace />} />
           <Route path="insights" element={<Section group="overview"><InsightsPage /></Section>} />
           <Route path="settings" element={<SettingsPage />} />
           {/* Phone: everything not in the tab bar. */}

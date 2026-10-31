@@ -14,11 +14,10 @@ import { PageHeader, StatCard, InsightCard, Skeleton, EmptyState, Pill, Modal } 
 import { format } from 'date-fns';
 import AddUtilityModal from '../components/utility/AddUtilityModal';
 import { BillsSheet } from './BillsPage';
-import PropertyOperations from '../components/property/PropertyOperations';
 import { fmtDate } from '../lib/date';
 import { computeMonthlySpend } from '../lib/monthlySpend';
 
-type Tab = 'sheet' | 'utilities' | 'operations' | 'payments' | 'insights' | 'documents';
+type Tab = 'sheet' | 'utilities' | 'payments' | 'insights' | 'documents';
 
 // Surface what the API actually said. A generic "not found" hides the useful
 // part — an unrun migration, for instance, reports a missing column.
@@ -96,7 +95,7 @@ export default function PropertyDetailPage({ embedded }: { embedded?: boolean } 
       .catch(() => {});
   }, []);
 
-  // Personal bills filed on this property (Personal -> Bills) are not its costs and are not listed here.
+  // Personal bills filed on this property (the Bills page's Personal section) are not its costs and are not listed here.
   const allAccounts = property?.utilityAccounts || [];
   const accounts = allAccounts.filter(a => !a.isPersonal);
   const personalCount = allAccounts.length - accounts.length;
@@ -167,7 +166,6 @@ export default function PropertyDetailPage({ embedded }: { embedded?: boolean } 
     ...(embedded ? [{ key: 'sheet' as Tab, label: 'By month' }] : []),
     { key: 'utilities', label: embedded ? 'Accounts' : 'Utilities' },
     // ClickUp tasks and documents have their own places on the property page.
-    ...(embedded ? [] : [{ key: 'operations' as Tab, label: 'Operations' }]),
     { key: 'payments', label: 'Payment history' },
     { key: 'insights', label: `AI insights${insights.filter(i => !i.isRead).length > 0 ? ` (${insights.filter(i => !i.isRead).length})` : ''}` },
     ...(embedded ? [] : [{ key: 'documents' as Tab, label: 'Documents' }]),
@@ -328,7 +326,7 @@ export default function PropertyDetailPage({ embedded }: { embedded?: boolean } 
               </div>
             </div>
             {personalCount > 0 && (
-              <p className="text-xs text-gray-500 mb-3">{personalCount} personal bill{personalCount === 1 ? '' : 's'} filed on this property {personalCount === 1 ? 'is' : 'are'} under <Link to="/personal?tab=bills" className="text-amber-400 hover:text-amber-300">Personal → Bills</Link>, not counted as this property's costs.</p>
+              <p className="text-xs text-gray-500 mb-3">{personalCount} personal bill{personalCount === 1 ? '' : 's'} filed on this property {personalCount === 1 ? 'is' : 'are'} under <Link to="/bills" className="text-amber-400 hover:text-amber-300">Personal on Bills</Link>, not counted as this property's costs.</p>
             )}
             {movingPersonal && (
               <MoveToPersonal accounts={activeAccounts} onClose={() => setMovingPersonal(false)}
@@ -380,14 +378,6 @@ export default function PropertyDetailPage({ embedded }: { embedded?: boolean } 
                 )}
               </div>
             )}
-          </>
-        )}
-
-        {/* ── Operations tab (ClickUp) ─────────────────── */}
-        {tab === 'operations' && id && (
-          <>
-            <p className="section-label mb-3">Operations</p>
-            <PropertyOperations propertyId={id} />
           </>
         )}
 
@@ -1385,7 +1375,7 @@ function LogPropertyPaymentModal({ accounts, statements, payments, onClose, onSa
 
 /**
  * Moving the owner's own bills (a phone, car insurance, a card) off a
- * property: ticked accounts go to Personal -> Bills and stop counting as the
+ * property: ticked accounts go to the Personal section on Bills and stop counting as the
  * property's costs. They keep fetching and taking payments as before.
  */
 function MoveToPersonal({ accounts, onClose, onMoved }: { accounts: UtilityAccount[]; onClose: () => void; onMoved: () => void }) {
@@ -1411,7 +1401,7 @@ function MoveToPersonal({ accounts, onClose, onMoved }: { accounts: UtilityAccou
           <button onClick={move} disabled={!picked.size || busy} className="btn btn-primary text-xs disabled:opacity-50">{busy ? 'Moving…' : `Move ${picked.size || ''} to personal`}</button>
         </div>
       </div>}>
-      <p className="text-xs text-gray-400 mb-3">Tick your own bills. They move to Personal → Bills and stop counting as this property's costs; fetching and payments carry on as before. You can move them back from there.</p>
+      <p className="text-xs text-gray-400 mb-3">Tick your own bills. They move to the Personal section on Bills and stop counting as this property's costs; fetching and payments carry on as before. Each can be moved back from there.</p>
       {err && <p className="text-xs text-red-400 mb-2">{err}</p>}
       <div className="space-y-1">
         {sorted.map(a => (
