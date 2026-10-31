@@ -21,6 +21,7 @@ import InsightsPage from './pages/InsightsPage';
 import PaymentPrioritiesPage from './pages/PaymentPrioritiesPage';
 import SettingsPage from './pages/SettingsPage';
 import FinancesPage from './pages/FinancesPage';
+import OperatingExpensesPage from './pages/OperatingExpensesPage';
 import TenantsHubPage from './pages/TenantsHubPage';
 import PortfolioPage from './pages/PortfolioPage';
 import PropertyHubPage from './pages/PropertyHubPage';
@@ -35,7 +36,6 @@ import ReimbursementInvoicePage from './pages/ReimbursementInvoicePage';
 import ProjectsPage from './pages/ProjectsPage';
 import TaxesPage from './pages/TaxesPage';
 import InsurancePage from './pages/InsurancePage';
-import OperatingExpensesPage from './pages/OperatingExpensesPage';
 import BillsPage from './pages/BillsPage';
 import VaultPage from './pages/VaultPage';
 import PersonalPage from './pages/PersonalPage';
@@ -128,10 +128,11 @@ export default function App() {
           <Route path="properties/:propertyId/utilities/:accountId" element={<UtilityDetailPage />} />
 
           {/* Finances hub */}
-          <Route path="finances" element={<Section group="finances"><Responsive phone={<FinancesScreen />} desktop={<FinancesPage />} /></Section>} />
+          <Route path="finances" element={<Responsive phone={<FinancesScreen />} desktop={<FinancesPage />} />} />
           <Route path="taxes" element={<Section group="properties"><TaxesPage /></Section>} />
           <Route path="insurance" element={<Section group="properties"><InsurancePage /></Section>} />
-          <Route path="operating-expenses" element={<Section group="finances"><OperatingExpensesPage /></Section>} />
+          {/* On a computer, part of Finances → Costs; a phone keeps the page (from More). */}
+          <Route path="operating-expenses" element={<Responsive phone={<OperatingExpensesPage />} desktop={<Navigate to="/finances?tab=costs&view=property" replace />} />} />
           <Route path="bills" element={<BillsPage />} />
           <Route path="personal" element={<Section group="personal"><PersonalPage /></Section>} />
           <Route path="vault" element={<Section group="personal"><VaultPage /></Section>} />
