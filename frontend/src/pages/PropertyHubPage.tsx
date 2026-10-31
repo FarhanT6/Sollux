@@ -1043,6 +1043,9 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   const [payAmount, setPayAmount] = useState('');
   const [payDate, setPayDate]     = useState(() => todayISO());
   const [payForMonth, setPayForMonth] = useState(() => thisMonthISO());
+  // The month follows the date paid until the owner picks one: a payment dated
+  // Sep 1 but logged in October was filed under October, which then read paid.
+  const [payMonthTouched, setPayMonthTouched] = useState(false);
   const [payMethod, setPayMethod] = useState('ZELLE');
   const [payNotes, setPayNotes]   = useState('');
   const [payBankAccountId, setPayBankAccountId] = useState('');
@@ -1084,7 +1087,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   const [deletingPayment, setDeletingPayment] = useState<string | null>(null);
   const [editPayment, setEditPayment] = useState<string | null>(null);
   const [savingPayment, setSavingPayment] = useState(false);
-  const [payEdit, setPayEdit] = useState({ paidDate: '', amount: '', method: 'ZELLE', status: 'RECEIVED', expectedDate: '', notes: '', applyTo: 'CURRENT' as PaymentApplyTo });
+  const [payEdit, setPayEdit] = useState({ month: '', paidDate: '', amount: '', method: 'ZELLE', status: 'RECEIVED', expectedDate: '', notes: '', applyTo: 'CURRENT' as PaymentApplyTo });
   const [savingEdit, setSavingEdit] = useState(false);
   const [uploadingDoc, setUploadingDoc] = useState(false);
   const [docCategory, setDocCategory] = useState<string>('LEASE');
@@ -1248,6 +1251,8 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
 
   function openPaymentEdit(p: any) {
     setPayEdit({
+      // The month it pays (YYYY-MM): a payment logged in a later month for an earlier one is moved here.
+      month: (p.periodDate ?? '').slice(0, 7),
       paidDate: (p.paidDate ?? '').slice(0, 10),
       amount: String(p.amount ?? ''),
       method: p.method ?? 'OTHER',
@@ -1280,7 +1285,9 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
     }
     setSavingPayment(true);
     try {
+      if (!/^\d{4}-\d{2}$/.test(payEdit.month)) { alert('Pick the month this payment is for.'); setSavingPayment(false); return; }
       await updateRentPayment(p.id, {
+        periodDate: `${payEdit.month}-01`,
         amount,
         paidDate: payEdit.paidDate || undefined,
         method: payEdit.method,
@@ -1949,7 +1956,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                   </div>
                   <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2.5 [&>button]:py-1.5 md:[&>button]:py-0 [&>button]:text-sm md:[&>button]:text-xs">
                     {lease.status === 'ACTIVE' && (
-                      <button onClick={() => { setPayApplyTo(lease.paymentsApplyTo ?? 'CURRENT'); setPayFor('RENT'); setReimbAlloc({}); setReimbTouched(false); setPayError(null); setShowPayForm(showPayForm === lease.id ? null : lease.id); }}
+                      <button onClick={() => { setPayApplyTo(lease.paymentsApplyTo ?? 'CURRENT'); setPayMonthTouched(false); setPayForMonth(payDate.slice(0, 7)); setPayFor('RENT'); setReimbAlloc({}); setReimbTouched(false); setPayError(null); setShowPayForm(showPayForm === lease.id ? null : lease.id); }}
                         className="text-xs text-amber-400 hover:text-amber-300">
                         Log payment
                       </button>
@@ -2377,9 +2384,11 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                       if (payFor === 'UTILITY' && !reimbTouched) setReimbAlloc(autoAllocate(reimbItems[lease.id], parseFloat(e.target.value) || 0));
                     }} className="input-dark text-xs w-28" />
                     {payFor === 'RENT' && (
-                      <input type="month"  title="Month this payment applies to" value={payForMonth} onChange={e => setPayForMonth(e.target.value)} className="input-dark text-xs w-36" />
+                      <label className="flex items-center gap-1 text-[11px] text-gray-500">For
+                        <input type="month"  title="Month this payment applies to" value={payForMonth} onChange={e => { setPayForMonth(e.target.value); setPayMonthTouched(true); }} className="input-dark text-xs w-36" />
+                      </label>
                     )}
-                    <input type="date"   title="Date the money arrived" value={payDate}   onChange={e => setPayDate(e.target.value)}   className="input-dark text-xs w-36" />
+                    <input type="date"   title="Date the money arrived" value={payDate}   onChange={e => { setPayDate(e.target.value); if (!payMonthTouched && /^\d{4}-\d{2}/.test(e.target.value)) setPayForMonth(e.target.value.slice(0, 7)); }}   className="input-dark text-xs w-36" />
                     <select value={payMethod} onChange={e => {
                       setPayMethod(e.target.value);
                       // Drop a stale account if the new method isn't one that
@@ -2551,6 +2560,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                           <table className="w-full text-xs">
                             <thead style={{ background: 'rgba(255,255,255,0.03)' }}>
                               <tr className="text-left text-gray-500">
+                                <th className="px-4 py-2">For month</th>
                                 <th className="px-4 py-2">Date</th>
                                 <th className="px-4 py-2">Amount</th>
                                 <th className="px-4 py-2">Method</th>
@@ -2561,6 +2571,11 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                             <tbody>
                               {payments[lease.id].map((p: any) => editPayment === p.id ? (
                                 <tr key={p.id} className="border-t border-white/5" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                                  <td className="px-4 py-2">
+                                    <input type="month" value={payEdit.month} title="The month this payment is for"
+                                      onChange={e => setPayEdit(f => ({ ...f, month: e.target.value }))}
+                                      className="input-dark text-xs w-36" />
+                                  </td>
                                   <td className="px-4 py-2">
                                     <input type="date" value={payEdit.paidDate}
                                       onChange={e => setPayEdit(f => ({ ...f, paidDate: e.target.value }))}
@@ -2606,6 +2621,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                                 </tr>
                               ) : (
                                 <tr key={p.id} className="border-t border-white/5 group">
+                                  <td className="px-4 py-2 text-gray-200 whitespace-nowrap">{p.periodDate ? fmtDateSafe(p.periodDate, 'MMM yyyy') : '—'}</td>
                                   <td className="px-4 py-2 text-gray-300 whitespace-nowrap">
                                     {p.status === 'PENDING'
                                       ? <span className="text-sky-400">Expected {p.expectedDate ? fmtDate(p.expectedDate) : '—'}</span>
