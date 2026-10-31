@@ -159,7 +159,7 @@ async function loadFacts(propertyIds: string[], range: DateRange) {
         amountDue: { not: null },
         // An account the lender pays from escrow is already inside the
         // mortgage payment; its bills would count the same money twice.
-        utilityAccount: { propertyId: { in: propertyIds }, escrowLoanId: null },
+        utilityAccount: { propertyId: { in: propertyIds }, escrowLoanId: null, isPersonal: false },
         OR: [
           { dueDate: { gte: range.start, lt: range.end } },
           { dueDate: null, statementDate: { gte: range.start, lt: range.end } },
@@ -266,7 +266,7 @@ export async function getMonthlyPnL(year: number, userId: string, propertyId?: s
     ? { loan: { propertyId, isPersonal: false, isActive: true } }
     : { loan: { userId, isPersonal: false, isActive: true } };
 
-  const utilityAccountFilter = propertyId ? { propertyId } : { property: { userId } };
+  const utilityAccountFilter = propertyId ? { propertyId, isPersonal: false } : { property: { userId }, isPersonal: false };
 
   const leaseWhere = propertyId ? { unit: { propertyId } } : { unit: { property: { userId } } };
   const [leases, rentPayments, expenses, policies, taxAssessments, loanPayments, utilityStatements] = await Promise.all([

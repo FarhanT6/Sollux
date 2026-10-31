@@ -172,6 +172,7 @@ function BillsSheet() {
             <section key={p.id} className="rounded-xl overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.06)' }}>
               <div className="px-4 py-3 flex items-baseline gap-2 border-b border-white/5">
                 {p.id === OTHER_LOANS ? <span className="font-semibold text-white">{p.name}</span>
+                  : p.personal ? <Link to="/personal?tab=bills" className="font-semibold text-white hover:text-amber-400">{p.name}</Link>
                   : <Link to={`/properties/${p.id}`} className="font-semibold text-white hover:text-amber-400">{p.name}</Link>}
                 {p.name !== p.address && <span className="text-xs text-gray-500">{p.address}, {p.city}</span>}
               </div>
@@ -195,7 +196,7 @@ function BillsSheet() {
                       return (
                         <tr key={a.id} className="border-t border-white/5 hover:bg-white/[0.02]">
                           <td className="px-3 py-2 sticky left-0 z-10" style={{ background: '#1e1e1e' }}>
-                            <Link to={`/properties/${p.id}/utilities/${a.id}`} className="text-gray-100 hover:text-amber-400 font-medium">{a.providerName}</Link>
+                            <Link to={`/properties/${a.propertyId ?? p.id}/utilities/${a.id}`} className="text-gray-100 hover:text-amber-400 font-medium">{a.providerName}</Link>
                             <div className="text-gray-500 flex gap-1.5 items-center">
                               <span>{CATEGORY[a.category] ?? a.category}</span>
                               {a.last4 && <span>••{a.last4}</span>}

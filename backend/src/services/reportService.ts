@@ -216,7 +216,7 @@ async function loadT12Data(propertyId: string, userId: string) {
       select: { amount: true, date: true, category: true },
     }),
     db.utilityAccount.findMany({
-      where: { propertyId },
+      where: { propertyId, isPersonal: false },
       select: {
         category: true,
         statements: {

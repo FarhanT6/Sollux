@@ -749,6 +749,11 @@ export const getCashflow = (params?: { year?: number; propertyId?: string }) =>
   api.get<CashflowReport>('/cashflow', { params }).then(r => r.data);
 
 // Utility accounts
+/** Move accounts to Personal (the owner's own bills, out of the property's costs) or back. */
+export const setUtilitiesPersonal = (ids: string[], personal: boolean) =>
+  api.post<{ moved: number }>('/utilities/personal', { ids, personal }).then(r => r.data);
+export const getPersonalUtilities = () =>
+  api.get<any[]>('/utilities', { params: { personal: '1' } }).then(r => r.data);
 export const getUtilities = (propertyId?: string) =>
   api.get<UtilityAccount[]>('/utilities', { params: { propertyId } }).then(r => r.data);
 export const getUtility = (id: string) =>
@@ -803,10 +808,12 @@ export interface BillsSheetStatement {
   paidOverride: 'PAID' | 'UNPAID' | null; isScheduled: boolean; isDownPayment: boolean; hasPdf: boolean;
 }
 export interface BillsSheetAccount {
+  /** The property it is filed on (for a personal bill, not the section it shows in). */
+  propertyId: string;
   id: string; providerName: string; category: string; billingCadence: string; last4: string | null; serves: string | null;
   notes: string | null; website: string | null; statements: BillsSheetStatement[]; payments: any[];
 }
-export interface BillsSheet { properties: { id: string; name: string; address: string; city: string; state: string; accounts: BillsSheetAccount[] }[] }
+export interface BillsSheet { properties: { id: string; name: string; address: string; city: string; state: string; accounts: BillsSheetAccount[]; /** The Personal section: the owner's own bills. */ personal?: boolean }[] }
 export const getBillsSheet = () => api.get<BillsSheet>('/bills').then(r => r.data);
 // Catching up: loan months and old bills marked paid on the owner's word, and undone in one stroke.
 export interface CatchUpLoan { loanId: string; lender: string; loanType: string; isPersonal: boolean; property: string | null; dueDay: number | null; expected: number; missing: { month: string; amount: number }[] }

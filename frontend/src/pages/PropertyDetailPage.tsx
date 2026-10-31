@@ -3,7 +3,7 @@ import { LogoMark } from '../components/brand/Logo';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import BillPicker, { emptyBillPick, splitAllocations, type BillPickerValue } from '../components/payments/BillPicker';
 import PaymentSourcePicker, { emptyNewCard, resolvePaymentSource, useBankAccounts, type NewCardForm } from '../components/payments/PaymentSourcePicker';
-import { getProperty, getStatements, getPayments, getInsights, createPayment, createSplitPayment, syncUtility, updateUtility, deleteUtility, updateProperty, markInsightRead, dismissInsight, getStatementDownloadUrl, revealUtilityAccountNumber, getUtilityUsername, getUtilityPassword, getCostSettings } from '../api/client';
+import { getProperty, getStatements, getPayments, getInsights, createPayment, createSplitPayment, syncUtility, updateUtility, deleteUtility, setUtilitiesPersonal, updateProperty, markInsightRead, dismissInsight, getStatementDownloadUrl, revealUtilityAccountNumber, getUtilityUsername, getUtilityPassword, getCostSettings } from '../api/client';
 import DeletePropertyModal from '../components/DeletePropertyModal';
 import type { Property, Statement, Payment, AIInsight, UtilityAccount } from '../types';
 import { CATEGORY_LABELS, CATEGORY_COLORS, INSURANCE_TYPE_LABELS, LOAN_TYPE_LABELS, UTILITY_PAYMENT_METHODS, PAYMENT_STATUS_LABELS } from '../types';
@@ -41,6 +41,7 @@ export default function PropertyDetailPage() {
   const navigate = useNavigate();
   const [syncing, setSyncing] = useState<string | null>(null);
   const [showAddUtility, setShowAddUtility] = useState(false);
+  const [movingPersonal, setMovingPersonal] = useState(false);
   const [showLogPayment, setShowLogPayment] = useState(false);
   const [showEditProperty, setShowEditProperty] = useState(false);
   const [showDeleteProperty, setShowDeleteProperty] = useState(false);
@@ -89,7 +90,10 @@ export default function PropertyDetailPage() {
       .catch(() => {});
   }, []);
 
-  const accounts = property?.utilityAccounts || [];
+  // Personal bills filed on this property (Personal -> Bills) are not its costs and are not listed here.
+  const allAccounts = property?.utilityAccounts || [];
+  const accounts = allAccounts.filter(a => !a.isPersonal);
+  const personalCount = allAccounts.length - accounts.length;
   const activeAccounts = accounts.filter(a => a.isActive !== false);
   const inactiveAccounts = accounts.filter(a => a.isActive === false);
   // Two figures rather than one, and both explainable — see lib/monthlySpend.ts
@@ -301,8 +305,18 @@ export default function PropertyDetailPage() {
           <>
             <div className="flex items-center justify-between mb-3">
               <p className="section-label">Active utility accounts</p>
-              <button onClick={() => setShowAddUtility(true)} className="btn btn-primary text-xs">+ Add utility</button>
+              <div className="flex items-center gap-2">
+                {activeAccounts.length > 0 && <button onClick={() => setMovingPersonal(true)} className="btn text-xs">Move to personal…</button>}
+                <button onClick={() => setShowAddUtility(true)} className="btn btn-primary text-xs">+ Add utility</button>
+              </div>
             </div>
+            {personalCount > 0 && (
+              <p className="text-xs text-gray-500 mb-3">{personalCount} personal bill{personalCount === 1 ? '' : 's'} filed on this property {personalCount === 1 ? 'is' : 'are'} under <Link to="/personal?tab=bills" className="text-amber-400 hover:text-amber-300">Personal → Bills</Link>, not counted as this property's costs.</p>
+            )}
+            {movingPersonal && (
+              <MoveToPersonal accounts={activeAccounts} onClose={() => setMovingPersonal(false)}
+                onMoved={() => { setMovingPersonal(false); getProperty(id!).then(setProperty); }} />
+            )}
             {accounts.length === 0 ? (
               <EmptyState title="No utility accounts" body="Add a utility account to start tracking bills for this property." />
             ) : activeAccounts.length === 0 ? (
@@ -1347,6 +1361,49 @@ function LogPropertyPaymentModal({ accounts, statements, payments, onClose, onSa
       <div className="flex justify-end gap-3 mt-4">
         <button onClick={onClose} className="text-xs text-gray-500 hover:text-gray-300">Cancel</button>
         <button onClick={save} disabled={saving} className="btn btn-primary text-xs disabled:opacity-50">{saving ? '…' : 'Log payment'}</button>
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * Moving the owner's own bills (a phone, car insurance, a card) off a
+ * property: ticked accounts go to Personal -> Bills and stop counting as the
+ * property's costs. They keep fetching and taking payments as before.
+ */
+function MoveToPersonal({ accounts, onClose, onMoved }: { accounts: UtilityAccount[]; onClose: () => void; onMoved: () => void }) {
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const toggle = (id: string) => setPicked(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const sorted = [...accounts].sort((a, b) => a.providerName.localeCompare(b.providerName));
+  async function move() {
+    setBusy(true); setErr(null);
+    try { await setUtilitiesPersonal([...picked], true); onMoved(); }
+    catch (e: any) { setErr(e?.response?.data?.error ?? 'Could not move them.'); setBusy(false); }
+  }
+  return (
+    <Modal title="Move to personal" onClose={onClose}
+      footer={<div className="flex items-center justify-between gap-2 w-full">
+        <div className="flex gap-3 text-xs">
+          <button onClick={() => setPicked(new Set(sorted.map(a => a.id)))} className="text-gray-400 hover:text-white">Select all</button>
+          <button onClick={() => setPicked(new Set())} className="text-gray-400 hover:text-white">Clear</button>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={onClose} className="btn text-xs">Cancel</button>
+          <button onClick={move} disabled={!picked.size || busy} className="btn btn-primary text-xs disabled:opacity-50">{busy ? 'Moving…' : `Move ${picked.size || ''} to personal`}</button>
+        </div>
+      </div>}>
+      <p className="text-xs text-gray-400 mb-3">Tick your own bills. They move to Personal → Bills and stop counting as this property's costs; fetching and payments carry on as before. You can move them back from there.</p>
+      {err && <p className="text-xs text-red-400 mb-2">{err}</p>}
+      <div className="space-y-1">
+        {sorted.map(a => (
+          <label key={a.id} className="flex items-center gap-3 px-2 py-1.5 rounded hover:bg-white/5 cursor-pointer text-sm">
+            <input type="checkbox" checked={picked.has(a.id)} onChange={() => toggle(a.id)} />
+            <span className="text-gray-100">{a.providerName}</span>
+            <span className="text-xs text-gray-500">{CATEGORY_LABELS[a.category] ?? a.category}{a.serviceLabel ? ` · ${a.serviceLabel}` : ''}{a.accountNumber ? ` · ••${String(a.accountNumber).slice(-4)}` : ''}</span>
+          </label>
+        ))}
       </div>
     </Modal>
   );

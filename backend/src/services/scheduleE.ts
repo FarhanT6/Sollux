@@ -69,7 +69,7 @@ export async function buildScheduleE(userId: string, year: number) {
       db.rentPayment.findMany({ where: { lease: { unit: { propertyId: p.id } }, paidDate: { gte: start, lt: end }, status: 'RECEIVED' }, select: { amount: true } }),
       db.expense.findMany({ where: { propertyId: p.id, isPersonal: false, date: { gte: start, lt: end } }, select: { category: true, amount: true, isCapEx: true } }),
       db.statement.findMany({
-        where: { isScheduled: false, utilityAccount: { propertyId: p.id, escrowLoanId: null }, OR: [{ dueDate: { gte: start, lt: end } }, { dueDate: null, statementDate: { gte: start, lt: end } }] },
+        where: { isScheduled: false, utilityAccount: { propertyId: p.id, escrowLoanId: null, isPersonal: false }, OR: [{ dueDate: { gte: start, lt: end } }, { dueDate: null, statementDate: { gte: start, lt: end } }] },
         select: { amountDue: true, amountPaid: true, paidOverride: true, utilityAccount: { select: { category: true } } },
       }),
       db.taxAssessment.findMany({ where: { propertyId: p.id }, select: { installment1Paid: true, installment2Paid: true, installment1Amount: true, installment2Amount: true, annualTaxAmount: true, escrowLoanId: true } }),

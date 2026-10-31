@@ -90,7 +90,7 @@ export async function getCashflow(year: number, userId: string, propertyId?: str
       where: {
         amountDue: { not: null },
         isDownPayment: false,
-        utilityAccount: { propertyId: { in: ids }, category: { notIn: ['INSURANCE', 'LOAN', 'CREDIT_CARD', 'TAXES'] } },
+        utilityAccount: { propertyId: { in: ids }, isPersonal: false, category: { notIn: ['INSURANCE', 'LOAN', 'CREDIT_CARD', 'TAXES'] } },
         OR: [
           { billingPeriodEnd: { gte: yearStart, lt: yearEnd } },
           { billingPeriodEnd: null, statementDate: { gte: yearStart, lt: yearEnd } },
