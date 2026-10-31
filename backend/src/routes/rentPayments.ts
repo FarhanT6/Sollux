@@ -112,7 +112,7 @@ router.patch('/:id', async (req, res, next) => {
     const amount = data.amount ?? Number(existing.amount);
     const status = data.status ?? (existing.status as 'PENDING' | 'RECEIVED');
 
-    const appliedToArrears = await repriceRentPayment(existing.id, {
+    const split = await repriceRentPayment(existing.id, {
       leaseId, periodDate, amount, status, appliedToArrears: data.appliedToArrears, applyTo: data.applyTo,
     });
 
@@ -124,7 +124,7 @@ router.patch('/:id', async (req, res, next) => {
     const payment = await db.rentPayment.update({
       where: { id: existing.id },
       data: {
-        leaseId, periodDate, amount, status, paidDate, appliedToArrears,
+        leaseId, periodDate, amount, status, paidDate, appliedToArrears: split.toArrears, settledRolledRent: split.settledRolled,
         ...(data.method !== undefined ? { method: data.method } : {}),
         ...(data.expectedDate !== undefined ? { expectedDate: data.expectedDate } : {}),
         ...(data.bankAccountId !== undefined ? { bankAccountId: data.bankAccountId } : {}),
@@ -146,7 +146,7 @@ router.delete('/:id', async (req, res, next) => {
     await db.rentPayment.delete({ where: { id: req.params.id } });
     // Put back whatever this payment knocked off the balance, or deleting a
     // mistaken payment would permanently understate what the tenant owes.
-    const restored = Number(existing.appliedToArrears);
+    const restored = Number(existing.appliedToArrears) + Number(existing.settledRolledRent);
     if (restored > 0) {
       await db.lease.update({
         where: { id: existing.leaseId },

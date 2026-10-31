@@ -243,9 +243,9 @@ export async function applyPaymentIntent(pi: Stripe.PaymentIntent): Promise<void
 }
 
 /** Take a payment out of the ledger, putting back what it knocked off the earlier balance. */
-async function removePayment(p: { id: string; leaseId: string; appliedToArrears: unknown }) {
+async function removePayment(p: { id: string; leaseId: string; appliedToArrears: unknown; settledRolledRent?: unknown }) {
   await db.rentPayment.delete({ where: { id: p.id } });
-  const restored = Number(p.appliedToArrears);
+  const restored = Number(p.appliedToArrears) + Number(p.settledRolledRent ?? 0);
   if (restored > 0) await db.lease.update({ where: { id: p.leaseId }, data: { arrearsBalance: { increment: restored } } });
 }
 
