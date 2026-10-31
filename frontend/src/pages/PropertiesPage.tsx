@@ -172,8 +172,8 @@ export default function PropertiesPage() {
 
             <p className="text-xs text-gray-500 leading-relaxed">
               Each property contributes its own most recent billed month, since properties
-              bill on different cycles. Past due carried from earlier months is excluded — it
-              is money owed, not this month's cost. A bill that does not arrive monthly is
+              bill on different cycles. A past-due balance carried onto a bill is left out: it
+              was counted in the month it was first billed, and still shows as owed. A bill that does not arrive monthly is
               spread across the months it covers. Click a property to see its own breakdown.
             </p>
           </div>
