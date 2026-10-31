@@ -1,6 +1,6 @@
 import { Navigate, useSearchParams } from 'react-router-dom';
 import { Screen, Section, Row } from '../../ios';
-import { FINANCE_SECTIONS, resolveFinance, ViewSwitch, billsRedirect } from '../FinancesPage';
+import { FINANCE_SECTIONS, resolveFinance, ViewSwitch, billsRedirect, rentRedirect } from '../FinancesPage';
 
 const ICON: Record<string, { bg: string; d: string }> = {
   overview: { bg: '#34c759', d: 'M4 19V9M10 19V5M16 19v-7M22 19H2' },
@@ -20,7 +20,7 @@ export default function FinancesScreen() {
   const [params, setParams] = useSearchParams();
   const tab = params.get('tab');
   if (tab === 'personal') return <Navigate to="/personal?tab=expenses" replace />;
-  const toBills = billsRedirect(tab, params.get('view'));
+  const toBills = billsRedirect(tab, params.get('view')) ?? rentRedirect(tab, params.get('view'));
   if (toBills) return <Navigate to={toBills} replace />;
   const { section, view } = resolveFinance(tab, params.get('view'));
 

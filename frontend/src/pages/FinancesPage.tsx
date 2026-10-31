@@ -1,7 +1,6 @@
 import { Navigate, useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/ui';
 import FinanceOverviewPage from './FinanceOverviewPage';
-import RentPage from './RentPage';
 import LoansPage from './LoansPage';
 import CostsPage from './CostsPage';
 import OperatingExpensesPage from './OperatingExpensesPage';
@@ -51,9 +50,9 @@ export const FINANCE_SECTIONS: { key: Tab; label: string; subtitle: string; view
     }],
   },
   {
-    key: 'income', label: 'Income', subtitle: 'Rent collected and owed, and money coming in',
+    // Rent itself (this month, who is behind) is under Properties -> Tenants & rent.
+    key: 'income', label: 'Income', subtitle: 'Money coming in: transfers matched to tenants, and manager statements',
     views: [
-      { key: 'rent', label: 'Rent', subtitle: 'Rent collected this month, reminders, and who is behind', render: () => <RentPage embedded /> },
       { key: 'incoming', label: 'Incoming payments', subtitle: 'Transfers, checks and deposits into watched bank accounts, matched to tenants', render: () => <IncomingPaymentsPage embedded /> },
       { key: 'manager', label: 'Manager statements', subtitle: 'Upload your property manager\'s monthly statement: rent, fees, repairs and loan payments read and recorded', render: () => <ManagerStatementsPage /> },
     ],
@@ -62,10 +61,15 @@ export const FINANCE_SECTIONS: { key: Tab; label: string; subtitle: string; view
 
 /** Old ?tab= links (one tab per view) and where they live now. */
 const OLD_TABS: Record<string, [Tab, string]> = {
-  performance: ['overview', 'overview'], pnl: ['overview', 'overview'], cashflow: ['overview', 'overview'], budget: ['income', 'rent'],
+  performance: ['overview', 'overview'], pnl: ['overview', 'overview'], cashflow: ['overview', 'overview'], budget: ['income', 'incoming'],
   'loan-payments': ['loans', 'loans'], incoming: ['income', 'incoming'],
   reconciliation: ['income', 'manager'], outgoing: ['costs', 'costs'], expenses: ['costs', 'costs'],
 };
+
+/** Rent moved to Properties -> Tenants & rent; old Finances links to it go there. */
+export function rentRedirect(tab: string | null, view: string | null): string | null {
+  return tab === 'budget' || (tab === 'income' && view === 'rent') ? '/tenants?tab=rent' : null;
+}
 
 /** Old Finances links to what is now on the Bills page. */
 export const BILLS_VIEWS: Record<string, string> = { fees: 'fees', 'utility-payments': 'payments', bills: 'archive' };
@@ -103,7 +107,7 @@ export default function FinancesPage() {
 
   // Personal expenses moved to the Personal section.
   if (raw === 'personal') return <Navigate to="/personal?tab=expenses" replace />;
-  const toBills = billsRedirect(raw, searchParams.get('view'));
+  const toBills = billsRedirect(raw, searchParams.get('view')) ?? rentRedirect(raw, searchParams.get('view'));
   if (toBills) return <Navigate to={toBills} replace />;
 
   const resolved = resolveFinance(raw, searchParams.get('view'));
