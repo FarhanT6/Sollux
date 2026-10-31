@@ -138,11 +138,13 @@ export default function AppLayout() {
     : to === '/properties' && summary?.billsDueSoon ? { n: summary.billsDueSoon, color: 'pill-amber' }
     : null;
 
+  const desktopNav = nav.filter(n => !(n as { phoneOnly?: boolean }).phoneOnly);
   const navList = (
     <nav className="flex-1 px-3 py-4 overflow-y-auto">
-      {nav.filter(n => !(n as { phoneOnly?: boolean }).phoneOnly).map((n, i) => {
+      {desktopNav.map((n, i) => {
         const b = badge(n.to);
-        const heading = n.group && n.group !== nav[i - 1]?.group ? n.group : null;
+        // Headings from what is shown, so a hidden item between two cannot repeat one.
+        const heading = n.group && n.group !== desktopNav[i - 1]?.group ? n.group : null;
         return (
           <div key={n.to}>
             {heading && <p className="px-2.5 pt-6 pb-1.5 text-xs font-medium text-gray-500">{heading}</p>}
