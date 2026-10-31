@@ -54,43 +54,57 @@ export async function creditedTo(leaseId: string, periodDate: Date, excludePayme
   return rows.reduce((s, p) => s + Number(p.amount) - Number(p.appliedToArrears), 0);
 }
 
+export interface Split {
+  /** Pays down the balance from earlier months; not this month's rent. */
+  toArrears: number;
+  /** This month's rent, for a month already rolled into the balance: counts toward the month and comes off the balance too. */
+  settledRolled: number;
+}
+
 /**
- * Work out how much of a payment pays down the balance (arrears); the rest
- * goes to the month's rent.
+ * Work out how a payment divides between the month's rent and the balance
+ * (arrears).
  *
  *  - CURRENT (the default): the month's rent and late fees first, the
  *    remainder against arrears.
  *  - ARREARS: arrears first, the remainder to the month.
  *
- * A month that has already rolled into arrears (an earlier month) is paid
- * through arrears whatever the order, or paying it would not move the balance.
+ * A month that has already ended rolled its unpaid rent into arrears. Paid
+ * "this month first", it is still that month's rent (the month reads as paid)
+ * and it also comes off the balance, where the month was being carried. It
+ * used to go to arrears whatever the order, so a late-logged September payment
+ * showed as "to arrears" and September as unpaid.
  * Never more than what is owed, so an overpayment is a credit, not a negative balance.
  */
 export async function splitPayment(
   leaseId: string, periodDate: Date, amount: number, excludePaymentId?: string, applyTo?: ApplyTo | null,
-): Promise<number> {
+): Promise<Split> {
   const lease = await db.lease.findUnique({
     where: { id: leaseId },
     select: { rentAmount: true, arrearsBalance: true, paymentsApplyTo: true, arrearsCaughtUpThrough: true, startDate: true, firstMonthRent: true },
   });
-  if (!lease) return 0;
+  if (!lease) return { toArrears: 0, settledRolled: 0 };
   const arrears = Math.max(0, Number(lease.arrearsBalance));
   const rolledIn = !!lease.arrearsCaughtUpThrough && periodDate.getTime() <= lease.arrearsCaughtUpThrough.getTime();
   const order = applyTo ?? (lease.paymentsApplyTo === 'ARREARS' ? 'ARREARS' : 'CURRENT');
-  if (rolledIn || order === 'ARREARS') return round2(Math.min(amount, arrears));
+  if (order === 'ARREARS') return { toArrears: round2(Math.min(amount, arrears)), settledRolled: 0 };
 
-  const due = monthRentDue(lease, periodDate) + await chargesFor(leaseId, periodDate) - await creditedTo(leaseId, periodDate, excludePaymentId);
-  const excess = Math.max(0, amount - Math.max(0, due));
-  return round2(Math.min(excess, arrears));
+  const due = Math.max(0, monthRentDue(lease, periodDate) + await chargesFor(leaseId, periodDate) - await creditedTo(leaseId, periodDate, excludePaymentId));
+  const toMonth = Math.min(amount, due);
+  const settledRolled = rolledIn ? Math.min(toMonth, arrears) : 0;
+  const toArrears = Math.min(amount - toMonth, arrears - settledRolled);
+  return { toArrears: round2(Math.max(0, toArrears)), settledRolled: round2(settledRolled) };
 }
 
 /** Create a rent payment and move the lease's arrears balance to match. */
 export async function recordRentPayment(input: RecordPaymentInput) {
   const status = input.status ?? 'RECEIVED';
   // A pending payment pays down nothing until it arrives.
-  const appliedToArrears = status === 'PENDING'
-    ? 0
-    : input.appliedToArrears ?? await splitPayment(input.leaseId, input.periodDate, input.amount, undefined, input.applyTo);
+  const split: Split = status === 'PENDING'
+    ? { toArrears: 0, settledRolled: 0 }
+    : input.appliedToArrears != null ? { toArrears: input.appliedToArrears, settledRolled: 0 }
+    : await splitPayment(input.leaseId, input.periodDate, input.amount, undefined, input.applyTo);
+  const appliedToArrears = split.toArrears;
 
   const payment = await db.rentPayment.create({
     data: {
@@ -105,13 +119,15 @@ export async function recordRentPayment(input: RecordPaymentInput) {
       notes: input.notes ?? null,
       applyTo: input.applyTo ?? null,
       appliedToArrears,
+      settledRolledRent: split.settledRolled,
     },
   });
 
-  if (appliedToArrears > 0) {
+  const offBalance = round2(appliedToArrears + split.settledRolled);
+  if (offBalance > 0) {
     await db.lease.update({
       where: { id: input.leaseId },
-      data: { arrearsBalance: { decrement: appliedToArrears } },
+      data: { arrearsBalance: { decrement: offBalance } },
     });
   }
 
@@ -136,15 +152,15 @@ export async function repriceRentPayment(paymentId: string, next: {
   appliedToArrears?: number;
   /** undefined keeps the payment's earlier choice; null goes back to the lease's setting. */
   applyTo?: ApplyTo | null;
-}) {
+}): Promise<Split> {
   const existing = await db.rentPayment.findUnique({
     where: { id: paymentId },
-    select: { leaseId: true, appliedToArrears: true, applyTo: true },
+    select: { leaseId: true, appliedToArrears: true, settledRolledRent: true, applyTo: true },
   });
-  if (!existing) return 0;
+  if (!existing) return { toArrears: 0, settledRolled: 0 };
 
   // Reverse the old effect first, on whichever lease it applied to.
-  const previous = Number(existing.appliedToArrears);
+  const previous = round2(Number(existing.appliedToArrears) + Number(existing.settledRolledRent));
   if (previous > 0) {
     await db.lease.update({
       where: { id: existing.leaseId },
@@ -152,16 +168,18 @@ export async function repriceRentPayment(paymentId: string, next: {
     });
   }
 
-  const applied = next.status === 'PENDING'
-    ? 0
-    : next.appliedToArrears ?? await splitPayment(next.leaseId, next.periodDate, next.amount, paymentId,
+  const split: Split = next.status === 'PENDING'
+    ? { toArrears: 0, settledRolled: 0 }
+    : next.appliedToArrears != null ? { toArrears: next.appliedToArrears, settledRolled: 0 }
+    : await splitPayment(next.leaseId, next.periodDate, next.amount, paymentId,
       next.applyTo !== undefined ? next.applyTo : (existing.applyTo as ApplyTo | null));
 
-  if (applied > 0) {
+  const off = round2(split.toArrears + split.settledRolled);
+  if (off > 0) {
     await db.lease.update({
       where: { id: next.leaseId },
-      data: { arrearsBalance: { decrement: applied } },
+      data: { arrearsBalance: { decrement: off } },
     });
   }
-  return applied;
+  return split;
 }

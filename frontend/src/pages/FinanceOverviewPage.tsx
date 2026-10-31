@@ -44,14 +44,26 @@ function rows(basis: Basis, present: Set<CostType>): Row[] {
   return out;
 }
 
-/** Green when it went the good way by more than 5%, red the bad way; otherwise plain. */
+/**
+ * A figure's colour says what it is: income green, costs red, and NOI and
+ * cash flow green when positive, red when negative. (It used to say how the
+ * figure compared with expected, so rent below plan read red and costs under
+ * plan read green — the owner read that as the signs flipped.)
+ */
 function tone(row: Row, f: Fig): string {
   if (!f.expected && !f.actual) return 'text-gray-600';
-  const better = row.kind === 'cost' ? f.actual < f.expected : f.actual > f.expected;
-  const off = Math.abs(f.actual - f.expected) > Math.max(25, Math.abs(f.expected) * 0.05);
-  if (!off) return 'text-gray-100';
-  return better ? 'text-emerald-400' : 'text-red-400';
+  if (row.kind === 'income') return 'text-emerald-400';
+  if (row.kind === 'cost') return 'text-red-400';
+  return f.actual < 0 ? 'text-red-400' : 'text-emerald-400';
 }
+
+/** The expected figure under it turns amber when the actual is worse than expected by more than 5%. */
+function behind(row: Row, f: Fig): boolean {
+  if (!f.expected) return false;
+  const worse = row.kind === 'cost' ? f.actual > f.expected : f.actual < f.expected;
+  return worse && Math.abs(f.actual - f.expected) > Math.max(25, Math.abs(f.expected) * 0.05);
+}
+const expCls = (row: Row, f: Fig) => behind(row, f) ? 'text-amber-500/80' : 'text-gray-600';
 
 export default function FinanceOverviewPage() {
   const thisYear = Number(todayISO().slice(0, 4));
@@ -124,7 +136,7 @@ export default function FinanceOverviewPage() {
             </button>
           ))}
         </div>
-        <span className="text-xs text-gray-500 ml-auto">Each figure: actual, with expected under it</span>
+        <span className="text-xs text-gray-500 ml-auto">Each figure: actual, with expected under it — <span className="text-emerald-400">income</span>, <span className="text-red-400">costs</span>; expected in <span className="text-amber-500/80">amber</span> when the actual is worse by over 5%</span>
       </div>
 
       {error && <p className="text-sm text-red-400 mb-3">{error}</p>}
@@ -138,7 +150,7 @@ export default function FinanceOverviewPage() {
               <div key={k} className="rounded-xl px-4 py-3" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.06)' }}>
                 <p className="text-xs text-gray-500">{r.label} · {ytdLabel}</p>
                 <p className={`text-xl font-semibold tabular-nums mt-0.5 ${tone(r, f)}`}>{fmtMoney(f.actual)}</p>
-                <p className="text-[11px] text-gray-500 tabular-nums">expected {fmtMoney(f.expected)}</p>
+                <p className={`text-[11px] tabular-nums ${behind(r, f) ? 'text-amber-500/80' : 'text-gray-500'}`}>expected {fmtMoney(f.expected)}</p>
               </div>
             );
           })}
@@ -169,14 +181,14 @@ export default function FinanceOverviewPage() {
                         return (
                           <td key={m} className="px-2 py-1.5 text-right tabular-nums align-top">
                             {past(m)
-                              ? <><div className={`${tone(r, f)} ${r.strong ? 'font-semibold' : ''}`}>{f.actual || f.expected ? k0(f.actual) : '·'}</div><div className="text-[10px] text-gray-600">{f.expected ? k0(f.expected) : ''}</div></>
+                              ? <><div className={`${tone(r, f)} ${r.strong ? 'font-semibold' : ''}`}>{f.actual || f.expected ? k0(f.actual) : '·'}</div><div className={`text-[10px] ${expCls(r, f)}`}>{f.expected ? k0(f.expected) : ''}</div></>
                               : <div className="text-gray-500 italic">{f.expected ? k0(f.expected) : '·'}</div>}
                           </td>
                         );
                       })}
                       <td className="px-2 py-1.5 text-right tabular-nums align-top">
                         <div className={`${tone(r, y)} font-semibold`}>{k0(y.actual)}</div>
-                        <div className="text-[10px] text-gray-600">{k0(y.expected)}</div>
+                        <div className={`text-[10px] ${expCls(r, y)}`}>{k0(y.expected)}</div>
                       </td>
                       <td className="px-3 py-1.5 text-right tabular-nums align-top text-gray-400">{k0(yearExpected(r, totals))}</td>
                     </tr>
@@ -213,7 +225,7 @@ export default function FinanceOverviewPage() {
                         return (
                           <td key={k} className="px-3 py-1.5 text-right tabular-nums">
                             <div className={tone(byKey[k], f)}>{k0(f.actual)}</div>
-                            <div className="text-[10px] text-gray-600">{k0(f.expected)}</div>
+                            <div className={`text-[10px] ${expCls(byKey[k], f)}`}>{k0(f.expected)}</div>
                           </td>
                         );
                       })}

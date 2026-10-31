@@ -942,6 +942,11 @@ model RentPayment {
   periodDate       DateTime
   amount           Decimal           @db.Decimal(10, 2)
   appliedToArrears Decimal           @default(0) @db.Decimal(10, 2)
+  // Paid toward a month that had already ended and rolled into arrears,
+  // "this month first": it counts as that month's rent and also comes off
+  // the arrears balance, where the month's unpaid rent was carried. Put back
+  // on the balance, with appliedToArrears, when the payment is edited or deleted.
+  settledRolledRent Decimal          @default(0) @db.Decimal(10, 2)
   paidDate         DateTime
   method           RentPaymentMethod @default(OTHER)
   // PENDING money is committed but not received: it must not count toward the
