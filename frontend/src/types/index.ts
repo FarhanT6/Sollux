@@ -1172,6 +1172,8 @@ export type OtherIncomeCategory =
 export interface BankAccount {
   id: string;
   name: string;
+  /** The owner's short name for what it is for ("Personal", "Elm Grove account"), shown after x1234. */
+  nickname?: string | null;
   last4?: string;
   bank?: string;
   ownerLabel?: string | null;

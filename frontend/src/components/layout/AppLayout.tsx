@@ -10,6 +10,7 @@ import { tap } from '../../lib/native';
 import { useThemeChoice } from '../../lib/theme';
 import { useModules, type ModuleKey } from '../../lib/modules';
 import { watchForNewBuild, reloadIfStale } from '../../lib/appVersion';
+import { sectionOf } from './Section';
 
 function Ico({ d, children, size = 16 }: { d?: string; children?: React.ReactNode; size?: number }) {
   return (
@@ -48,11 +49,11 @@ export const NAV = [
     icon: (z: number) => <Ico size={z}><rect x="3" y="13" width="4" height="8" rx="0.5"/><rect x="10" y="7" width="4" height="14" rx="0.5"/><rect x="17" y="3" width="4" height="18" rx="0.5"/></Ico>,
   },
   {
-    group: '', to: '/operating-expenses', label: 'Operating expenses',
+    group: '', to: '/operating-expenses', label: 'Operating expenses', phoneOnly: true,
     icon: (z: number) => <Ico size={z}><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></Ico>,
   },
   {
-    group: '', to: '/insights', label: 'Insights',
+    group: '', to: '/insights', label: 'Insights', phoneOnly: true,
     icon: (z: number) => <Ico size={z} d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z" />,
   },
   {
@@ -60,23 +61,23 @@ export const NAV = [
     icon: (z: number) => <Ico size={z}><path d="M3 21h18"/><path d="M9 21V7H5l7-5 7 5v14"/><rect x="9" y="13" width="2" height="4"/><rect x="13" y="13" width="2" height="4"/></Ico>,
   },
   {
-    group: 'Properties', to: '/repairs', label: 'Repairs', module: 'operations' as ModuleKey,
+    group: 'Properties', to: '/repairs', label: 'Repairs', phoneOnly: true, module: 'operations' as ModuleKey,
     icon: (z: number) => <Ico size={z} d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />,
   },
   {
-    group: 'Records', to: '/import', label: 'Import',
+    group: 'Records', to: '/import', label: 'Add',
     icon: (z: number) => <Ico size={z}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></Ico>,
   },
   {
-    group: 'Records', to: '/scan', label: 'Scan',
+    group: 'Records', to: '/scan', label: 'Scan', phoneOnly: true,
     icon: (z: number) => <Ico size={z}><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 3v18"/><path d="M4 12h4"/></Ico>,
   },
   {
-    group: 'Records', to: '/insurance', label: 'Insurance',
+    group: 'Records', to: '/insurance', label: 'Insurance', phoneOnly: true,
     icon: (z: number) => <Ico size={z}><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z"/><path d="M12 8v8M8 12h8"/></Ico>,
   },
   {
-    group: 'Records', to: '/taxes', label: 'Taxes', module: 'books' as ModuleKey,
+    group: 'Records', to: '/taxes', label: 'Taxes', phoneOnly: true, module: 'books' as ModuleKey,
     icon: (z: number) => <Ico size={z}><path d="M3 21h18"/><path d="M4 10h16"/><path d="M12 3l9 5H3l9-5z"/><path d="M6 10v8M10 10v8M14 10v8M18 10v8"/></Ico>,
   },
   {
@@ -84,7 +85,7 @@ export const NAV = [
     icon: (z: number) => <Ico size={z}><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/><path d="M6 15h4"/></Ico>,
   },
   {
-    group: 'Records', to: '/vault', label: 'Vault', module: 'personal' as ModuleKey,
+    group: 'Records', to: '/vault', label: 'Vault', phoneOnly: true, module: 'personal' as ModuleKey,
     icon: (z: number) => <Ico size={z}><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><circle cx="12" cy="15.5" r="1.5"/></Ico>,
   },
 ];
@@ -133,7 +134,7 @@ export default function AppLayout() {
   };
 
   const badge = (to: string) =>
-    to === '/insights' && summary?.unreadInsights ? { n: summary.unreadInsights, color: 'pill-red' }
+    (to === '/insights' || to === '/dashboard') && summary?.unreadInsights ? { n: summary.unreadInsights, color: 'pill-red' }
     : to === '/properties' && summary?.billsDueSoon ? { n: summary.billsDueSoon, color: 'pill-amber' }
     : null;
 
@@ -145,7 +146,7 @@ export default function AppLayout() {
         return (
           <div key={n.to}>
             {heading && <p className="px-2.5 pt-6 pb-1.5 text-xs font-medium text-gray-500">{heading}</p>}
-            <NavLink to={n.to} className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
+            <NavLink to={n.to} className={({ isActive }) => `sidebar-link ${isActive || (sectionOf(location.pathname) != null && sectionOf(location.pathname) === sectionOf(n.to)) ? 'active' : ''}`}>
               <span className="flex-shrink-0" style={{ opacity: 0.6 }}>{n.icon(17)}</span>
               <span>{n.label}</span>
               {b && <span className="ml-auto text-xs text-gray-500 tabular-nums">{b.n}</span>}
