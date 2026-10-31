@@ -34,8 +34,9 @@ function rows(basis: Basis, present: Set<CostType>): Row[] {
   const debt = (m: OverviewMonth) => cost(m, 'DEBT_SERVICE');
   const out: Row[] = [
     { key: 'rent', label: 'Rent', kind: 'income', strong: true, per: rent },
-    ...OPERATING.filter(t => present.has(t.key)).map(t => ({ key: t.key, label: t.label, kind: 'cost' as const, per: (m: OverviewMonth) => cost(m, t.key) })),
+    // The total first, then what it is made of, so the lines below add up to the row above.
     { key: 'operating', label: 'Operating costs', kind: 'cost', strong: true, per: operating },
+    ...OPERATING.filter(t => present.has(t.key)).map(t => ({ key: t.key, label: t.label, kind: 'cost' as const, per: (m: OverviewMonth) => cost(m, t.key) })),
     { key: 'noi', label: 'NOI', kind: 'total', strong: true, per: noi },
     { key: 'debt', label: 'Loans', kind: 'cost', per: debt },
     { key: 'cash', label: 'Cash flow', kind: 'total', strong: true, per: m => { const a = noi(m), d = debt(m); return { actual: a.actual - d.actual, expected: a.expected - d.expected }; } },

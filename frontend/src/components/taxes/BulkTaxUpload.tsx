@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { readTaxBill, saveTaxAssessment, type FilePayload } from '../../api/client';
 import type { Property } from '../../types';
 import { fileToPayload } from '../../lib/files';
@@ -17,12 +17,15 @@ type Row = { name: string; state: 'waiting' | 'reading' | 'saved' | 'skipped' | 
 
 const num = (v: unknown) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
 
-export default function BulkTaxUpload({ properties, onClose, onDone }: { properties: Property[]; onClose: () => void; onDone: () => void }) {
+export default function BulkTaxUpload({ properties, onClose, onDone, initialFiles }: { properties: Property[]; onClose: () => void; onDone: () => void; /** Handed over from Add's drop zone: read at once. */ initialFiles?: File[] }) {
   const [rows, setRows] = useState<Row[]>([]);
   const [running, setRunning] = useState(false);
   const set = (i: number, r: Partial<Row>) => setRows(rs => rs.map((x, j) => (j === i ? { ...x, ...r } : x)));
 
-  async function start(files: FileList | null) {
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (initialFiles?.length && properties.length) void start(initialFiles); }, [properties.length]);
+
+  async function start(files: FileList | File[] | null) {
     const list = Array.from(files ?? []);
     if (!list.length) return;
     setRows(list.map(f => ({ name: f.name, state: 'waiting' })));

@@ -19,6 +19,7 @@ import { fileCardStatement } from '../services/cardIntake';
 import { recordNotice } from '../services/noticeTracker';
 import { fileServiceInvoice } from '../services/expenseIntake';
 import { isEmailPrintout } from '../services/emailPrintouts';
+import { classifyUpload } from '../services/uploadKind';
 import { compareWithOwner, keepOwnerFigures, ownerEntered, sameBillByDue, thinnerThan } from '../services/statementConflict';
 
 const router = Router();
@@ -46,6 +47,23 @@ router.get('/accounts', async (req: Request, res: Response) => {
   } catch (err) {
     console.error('[Import] Accounts refresh error:', err);
     return res.status(500).json({ error: 'Failed to fetch accounts' });
+  }
+});
+
+// ── Classify: what each file dropped on Add is, so it reaches the right importer ──
+// Body { files: [{ name, data (base64), mimeType }] } -> { kinds: [{ name, kind }] }.
+router.post('/classify', async (req: Request, res: Response) => {
+  try {
+    const files = Array.isArray(req.body?.files) ? req.body.files.slice(0, 50) : [];
+    const kinds = [];
+    for (const f of files) {
+      if (typeof f?.data !== 'string' || typeof f?.name !== 'string') continue;
+      kinds.push({ name: f.name, kind: await classifyUpload(req.dbUserId!, Buffer.from(f.data, 'base64'), f.name, String(f.mimeType ?? '')) });
+    }
+    return res.json({ kinds });
+  } catch (err) {
+    console.error('[Import] Classify error:', err);
+    return res.status(500).json({ error: 'Could not sort the files' });
   }
 });
 
