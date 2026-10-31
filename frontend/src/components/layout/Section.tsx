@@ -11,10 +11,6 @@ export const SECTIONS = {
     { to: '/dashboard', label: 'Today' },
     { to: '/insights', label: 'Where you can save' },
   ],
-  finances: [
-    { to: '/finances', label: 'Finances' },
-    { to: '/operating-expenses', label: 'Operating statement' },
-  ],
   properties: [
     { to: '/portfolio', label: 'All properties' },
     { to: '/tenants', label: 'Tenants & rent roll' },

@@ -4,6 +4,7 @@ import FinanceOverviewPage from './FinanceOverviewPage';
 import RentPage from './RentPage';
 import LoansPage from './LoansPage';
 import CostsPage from './CostsPage';
+import OperatingExpensesPage from './OperatingExpensesPage';
 import IncomingPaymentsPage from './IncomingPaymentsPage';
 import ManagerStatementsPage from './ManagerStatementsPage';
 import LoanPaymentTracker from '../components/loans/LoanPaymentTracker';
@@ -25,12 +26,16 @@ interface View { key: string; label: string; subtitle: string; render: () => JSX
  */
 export const FINANCE_SECTIONS: { key: Tab; label: string; subtitle: string; views: View[] }[] = [
   {
-    key: 'overview', label: 'Overview', subtitle: 'Rent, costs, NOI, loans and cash flow — month by month, against what was expected',
+    key: 'overview', label: 'P&L', subtitle: 'Rent, costs, NOI, loans and cash flow — month by month, against what was expected',
     views: [{ key: 'overview', label: 'Overview', subtitle: 'Rent, costs, NOI, loans and cash flow — month by month, against what was expected', render: () => <FinanceOverviewPage /> }],
   },
   {
     key: 'costs', label: 'Costs', subtitle: 'What each property cost, by type: utilities, insurance, tax, HOA, maintenance, management, loans',
-    views: [{ key: 'costs', label: 'Costs', subtitle: 'What each property cost, by type: utilities, insurance, tax, HOA, maintenance, management, loans', render: () => <CostsPage /> }],
+    views: [
+      { key: 'costs', label: 'By type', subtitle: 'What each property cost, by type: utilities, insurance, tax, HOA, maintenance, management, loans', render: () => <CostsPage /> },
+      // Once its own page (Operating expenses): each property's running costs and what it nets, with estimates.
+      { key: 'property', label: 'By property', subtitle: 'What each property costs to run, and what it nets', render: () => <OperatingExpensesPage embedded /> },
+    ],
   },
   {
     key: 'loans', label: 'Loans', subtitle: 'Every loan, this month\'s payment on each, and every payment by month',

@@ -30,7 +30,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 const GROUP_ORDER = ['Utilities', 'HOA', 'Fees & penalties', 'Taxes & insurance', 'Operating', 'Your amounts'];
 const pct = (n: number | null) => (n == null ? '—' : `${Math.round(n * 100)}%`);
 
-export default function OperatingExpensesPage() {
+export default function OperatingExpensesPage({ embedded }: { embedded?: boolean } = {}) {
   const [properties, setProperties] = useState<Property[]>([]);
   const [pid, setPid] = useState<string>('all');
   const [period, setPeriod] = useState<OpexPeriod>('last12');
@@ -38,8 +38,8 @@ export default function OperatingExpensesPage() {
 
   return (
     <div>
-      <PageHeader title="Operating expenses" subtitle="What each property costs to run, and what it nets" />
-      <div className="px-4 md:px-8 pb-10 space-y-4">
+      {!embedded && <PageHeader title="Operating expenses" subtitle="What each property costs to run, and what it nets" />}
+      <div className={embedded ? 'space-y-4' : 'px-4 md:px-8 pb-10 space-y-4'}>
         <div className="flex flex-wrap items-center gap-2">
           <select className="input-dark text-sm" value={pid} onChange={e => setPid(e.target.value)}>
             <option value="all">All properties</option>
