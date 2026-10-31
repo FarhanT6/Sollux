@@ -5,6 +5,9 @@ import { format } from 'date-fns';
 import { fmtDate } from '../lib/date';
 import { fmtMoney } from '../lib/money';
 import { PageHeader } from '../components/ui';
+import BulkTaxUpload from '../components/taxes/BulkTaxUpload';
+import PaymentDetailsImport from '../components/loans/PaymentDetailsImport';
+import ManagerStatementsPage from './ManagerStatementsPage';
 import api, { getDriveStatus, getDriveConnectUrl, getDriveAccessToken, startDriveImport, getDriveImportJob, getProperties, getGmailStatus, getGmailConnectUrl, getInboxActivity, syncInbox, markInboxReviewed, getDuplicateStatements, mergeDuplicateStatements, getGmailCoverage, type GmailCoverage, type DuplicateStatementPair, type GmailMailbox, type InboxActivity } from '../api/client';
 import type { Property, UtilityCategory } from '../types';
 import { CATEGORY_LABELS } from '../types';
@@ -205,7 +208,9 @@ function Dropzone({ onFiles }: { onFiles: (files: File[]) => void }) {
   // whatever extraction method is chosen — it has no text layer to parse.
   const isImportable = (f: File) =>
     f.type === 'application/pdf' || /\.pdf$/i.test(f.name)
-    || /^image\/(png|jpe?g|webp)$/i.test(f.type) || /\.(png|jpe?g|webp)$/i.test(f.name);
+    || /^image\/(png|jpe?g|webp)$/i.test(f.type) || /\.(png|jpe?g|webp)$/i.test(f.name)
+    // A loan sheet: sorted to the loan importer.
+    || /\.csv$/i.test(f.name) || f.type === 'text/csv';
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -229,7 +234,7 @@ function Dropzone({ onFiles }: { onFiles: (files: File[]) => void }) {
       <input
         ref={inputRef}
         type="file"
-        accept=".pdf,application/pdf,.png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
+        accept=".pdf,application/pdf,.png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp,.csv,text/csv"
         multiple
         className="hidden"
         onChange={e => {
@@ -244,9 +249,9 @@ function Dropzone({ onFiles }: { onFiles: (files: File[]) => void }) {
           <path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" stroke="#F5A623" strokeWidth="1.8" strokeLinecap="round"/>
         </svg>
       </div>
-      <div className="text-center">
-        <p className="text-sm font-medium text-gray-200">Drop utility bill PDFs or photos here</p>
-        <p className="text-xs text-gray-500 mt-1">or click to browse · PDF, PNG or JPG · any utility · up to 50 at once</p>
+      <div className="text-center px-6">
+        <p className="text-sm font-medium text-gray-200">Drop any file here</p>
+        <p className="text-xs text-gray-500 mt-1">Bills, card statements, policies, property tax bills, manager statements, loan sheets — Sollux sorts each to the right place · PDF, photo or CSV · up to 50 at once</p>
       </div>
     </div>
   );
@@ -1903,7 +1908,27 @@ export default function ImportPage() {
     }
   };
 
+  // Files that are not bills, sorted to the importer that reads them.
+  const [others, setOthers] = useState<{ file: File; kind: 'tax' | 'manager' | 'loan-sheet' }[]>([]);
+  const [opened, setOpened] = useState<{ kind: 'tax' | 'manager' | 'loan-sheet'; files: File[] } | null>(null);
+  const [taxProps, setTaxProps] = useState<Property[]>([]);
   const handleFiles = async (files: File[]) => {
+    setStage('analyzing');
+    setProgress(`Sorting ${files.length} file${files.length !== 1 ? 's' : ''}...`);
+    let kinds: { name: string; kind: string }[] = [];
+    try {
+      const payload = await Promise.all(files.map(async f => ({ name: f.name, mimeType: f.type, data: await readFileAsBase64(f) })));
+      kinds = (await api.post<{ kinds: { name: string; kind: string }[] }>('/import/classify', { files: payload })).data.kinds;
+    } catch { /* not sorted: everything goes to the bill reader, as before */ }
+    const kindOf = (f: File) => kinds.find(k => k.name === f.name)?.kind ?? (/\.csv$/i.test(f.name) ? 'loan-sheet' : 'bill');
+    const rest = files.filter(f => kindOf(f) !== 'bill').map(f => ({ file: f, kind: kindOf(f) as 'tax' | 'manager' | 'loan-sheet' }));
+    if (rest.length) setOthers(prev => [...prev, ...rest]);
+    const bills = files.filter(f => kindOf(f) === 'bill');
+    if (!bills.length) { setStage('drop'); return; }
+    return analyzeBills(bills);
+  };
+
+  const analyzeBills = async (files: File[]) => {
     setStage('analyzing');
     setProgress(`Reading ${files.length} file${files.length !== 1 ? 's' : ''}...`);
     setBills([]);
@@ -2283,11 +2308,51 @@ export default function ImportPage() {
   return (
     <div>
       <PageHeader
-        title="Import bills"
-        subtitle="Upload utility bill PDFs  -  Claude extracts and auto-matches them to your properties"
+        title="Add"
+        subtitle="Drop any file: bills go to their accounts, and tax bills, manager statements and loan sheets to where they are read"
       />
 
       <div className="px-6 py-5 max-w-5xl">
+        {/* Files sorted away from the bill reader, each to its own importer. */}
+        {others.length > 0 && (
+          <div className="card p-4 mb-5">
+            <p className="text-sm font-semibold text-white mb-1">Not bills — sorted for you</p>
+            <p className="text-xs text-gray-500 mb-3">Each opens where that kind of document is read. Wrong guess? Send it to the bill reader instead.</p>
+            <div className="space-y-1.5">
+              {(['tax', 'manager', 'loan-sheet'] as const).map(kind => {
+                const list = others.filter(o => o.kind === kind);
+                if (!list.length) return null;
+                const label = kind === 'tax' ? 'Property tax bill' : kind === 'manager' ? 'Manager statement' : 'Loan payment sheet';
+                return list.map((o, i) => (
+                  <div key={`${kind}-${i}-${o.file.name}`} className="flex items-center gap-3 text-sm">
+                    <span className="text-xs px-2 py-0.5 rounded bg-white/10 text-gray-300 w-40 text-center whitespace-nowrap">{label}</span>
+                    <span className="flex-1 truncate text-gray-200">{o.file.name}</span>
+                    <button className="text-xs text-gray-500 hover:text-gray-300" onClick={() => { setOthers(prev => prev.filter(x => x !== o)); void analyzeBills([o.file]); }}>It's a bill</button>
+                    <button className="btn btn-primary text-xs" onClick={async () => {
+                      // A tax bill batch, a sheet batch, or one manager statement at a time.
+                      const files = kind === 'manager' ? [o.file] : list.map(x => x.file);
+                      if (kind === 'tax' && !taxProps.length) setTaxProps(await getProperties());
+                      setOpened({ kind, files });
+                      setOthers(prev => prev.filter(x => !files.includes(x.file)));
+                    }}>Continue</button>
+                  </div>
+                ));
+              })}
+            </div>
+          </div>
+        )}
+        {opened?.kind === 'tax' && (
+          <BulkTaxUpload properties={taxProps} initialFiles={opened.files} onClose={() => setOpened(null)} onDone={() => setOpened(null)} />
+        )}
+        {opened?.kind === 'loan-sheet' && (
+          <PaymentDetailsImport initialFiles={opened.files} onDone={() => setOpened(null)} />
+        )}
+        {opened?.kind === 'manager' && (
+          <div className="card p-4 mb-5">
+            <div className="flex justify-between mb-2"><p className="text-sm font-semibold text-white">Manager statement</p><button onClick={() => setOpened(null)} className="text-xs text-gray-500 hover:text-gray-300">Close</button></div>
+            <ManagerStatementsPage initialFile={opened.files[0]} />
+          </div>
+        )}
 
         {/* Drop stage */}
         {stage === 'drop' && (

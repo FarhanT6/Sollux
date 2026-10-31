@@ -27,7 +27,7 @@ const KIND_LABEL: Record<ManagerLineKind, string> = {
 const COST_KINDS: ManagerLineKind[] = ['MANAGEMENT_FEE', 'REPAIR', 'UTILITY', 'OTHER_EXPENSE'];
 const CATEGORY_OF: Partial<Record<ManagerLineKind, string>> = { MANAGEMENT_FEE: 'PROPERTY_MANAGEMENT', REPAIR: 'REPAIRS_MAINTENANCE', UTILITY: 'UTILITIES', OTHER_EXPENSE: 'OTHER' };
 
-export default function ManagerStatementsPage() {
+export default function ManagerStatementsPage({ initialFile }: { /** Handed over from Add's drop zone: read at once. */ initialFile?: File } = {}) {
   const [list, setList] = useState<ReconciliationStatement[] | null>(null);
   const [draft, setDraft] = useState<ManagerStatementDraft | null>(null);
   const [reading, setReading] = useState('');
@@ -35,6 +35,9 @@ export default function ManagerStatementsPage() {
 
   const load = useCallback(() => getReconciliationStatements().then(setList).catch(e => setError(describeApiError(e, 'Could not load statements.'))), []);
   useEffect(() => { void load(); }, [load]);
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (initialFile) void pick(initialFile); }, []);
 
   async function pick(file: File | undefined) {
     if (!file) return;

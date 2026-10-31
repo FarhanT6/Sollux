@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { readLoanPaymentDetails, applyLoanPaymentDetails, type LoanSheetRead, type FilePayload } from '../../api/client';
 import { filesToPayload } from '../../lib/files';
 import { fmtMoney } from '../../lib/money';
@@ -11,12 +11,14 @@ import { describeApiError } from '../../lib/apiError';
  * checks the pairs and applies. Nothing here adds or removes a loan, and
  * amounts, rates and terms are left alone.
  */
-export default function PaymentDetailsImport({ onDone }: { onDone: (updated: number | null) => void }) {
+export default function PaymentDetailsImport({ onDone, initialFiles }: { onDone: (updated: number | null) => void; /** Handed over from Add's drop zone. */ initialFiles?: File[] }) {
   const [files, setFiles] = useState<FilePayload[]>([]);
   const [read, setRead] = useState<LoanSheetRead | null>(null);
   const [picks, setPicks] = useState<(string | null)[]>([]);
   const [busy, setBusy] = useState<'read' | 'apply' | null>(null);
   const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => { if (initialFiles?.length) void filesToPayload(initialFiles).then(setFiles); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function doRead() {
     setBusy('read'); setErr(null);
