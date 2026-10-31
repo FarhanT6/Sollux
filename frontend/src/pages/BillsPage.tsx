@@ -15,6 +15,9 @@ import FeesSummaryPage from './FeesSummaryPage';
 import DocumentsPage from './DocumentsPage';
 import { onLoansTab } from '../lib/loanGroups';
 import { ViewSwitch } from './FinancesPage';
+import PayPlanPage from './PayPlanPage';
+import AddUtilityModal from '../components/utility/AddUtilityModal';
+import PaymentPrioritiesPage from './PaymentPrioritiesPage';
 
 const OTHER_LOANS = 'other-loans';
 
@@ -60,16 +63,20 @@ function billsOf(account: BillsSheetAccount, propertyId: string, propertyName: s
   });
 }
 
-function BillsSheet() {
+/** The sheet; with `propertyId`, just that property's accounts (its page's Bills tab). */
+export function BillsSheet({ propertyId }: { propertyId?: string } = {}) {
   const [year, setYear] = useState(() => Number(todayISO().slice(0, 4)));
   const [sheet, setSheet] = useState<BillsSheet | null>(null);
   const [loans, setLoans] = useState<LoanTrackerYear | null>(null);
   const [error, setError] = useState('');
-  const [pid, setPid] = useState('all');
+  const [pidChosen, setPid] = useState('all');
+  const pid = propertyId ?? pidChosen;
   const [query, setQuery] = useState('');
   const [openOnly, setOpenOnly] = useState(false);
   const [cell, setCell] = useState<{ bills: Bill[]; month: string } | null>(null);
   const [catchingUp, setCatchingUp] = useState(false);
+  // Adding an account: straight to the form when the property is known, else pick it first.
+  const [adding, setAdding] = useState<string | 'pick' | null>(null);
   const [loanCell, setLoanCell] = useState<{ row: LoanTrackerYear['rows'][number]; month: string } | null>(null);
 
   const load = useCallback(async () => {
@@ -140,6 +147,16 @@ function BillsSheet() {
 
   return (
     <div>
+      {adding === 'pick' && (
+        <Panel title="Add an account" subtitle="Which property is it for? (Your own bills can be moved to Personal after.)" onClose={() => setAdding(null)}>
+          <div className="space-y-1">
+            {(sheet?.properties ?? []).filter(p => !p.personal && p.id !== 'personal').map(p => (
+              <button key={p.id} onClick={() => setAdding(p.id)} className="block w-full text-left px-3 py-2 rounded hover:bg-white/5 text-sm text-gray-200">{p.name}</button>
+            ))}
+          </div>
+        </Panel>
+      )}
+      {adding && adding !== 'pick' && <AddUtilityModal propertyId={adding} onClose={() => setAdding(null)} onSuccess={() => { setAdding(null); void load(); }} />}
       <div>
         <div className="flex flex-wrap items-center gap-2 mb-4">
           <div className="inline-flex items-center rounded-lg" style={{ background: 'rgba(255,255,255,0.05)' }}>
@@ -147,10 +164,12 @@ function BillsSheet() {
             <span className="text-sm font-semibold tabular-nums px-1">{year}</span>
             <button className="px-2.5 py-1.5 text-gray-400 hover:text-white" onClick={() => setYear(y => y + 1)} aria-label="Next year">›</button>
           </div>
-          <select className="input-dark text-sm" value={pid} onChange={e => setPid(e.target.value)}>
-            <option value="all">All properties</option>
-            {(sheet?.properties ?? []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
+          {!propertyId && (
+            <select className="input-dark text-sm" value={pid} onChange={e => setPid(e.target.value)}>
+              <option value="all">All properties</option>
+              {(sheet?.properties ?? []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          )}
           <input className="input-dark text-sm w-48" placeholder="Search company, account, note" value={query} onChange={e => setQuery(e.target.value)} />
           <label className="text-sm text-gray-400 flex items-center gap-1.5 cursor-pointer">
             <input type="checkbox" checked={openOnly} onChange={e => setOpenOnly(e.target.checked)} /> Unpaid only
@@ -160,6 +179,7 @@ function BillsSheet() {
             <span style={{ color: STATE_STYLE.due.color }}>To pay {fmtMoney(totals.toPay)} · {totals.toPayN}</span>
             <span className="text-gray-400">Paid in {year} {fmtMoney(totals.paidYear)}</span>
             <button onClick={() => setCatchingUp(true)} className="text-amber-400 hover:text-amber-300 font-medium" title="Mark loan months and old bills you have paid but never logged">Catch up…</button>
+            <button onClick={() => setAdding(pid !== 'all' ? pid : 'pick')} className="text-amber-400 hover:text-amber-300 font-medium">+ Add account</button>
           </div>
         </div>
 
@@ -255,10 +275,16 @@ function BillsSheet() {
   );
 }
 
-/** The Bills page: the sheet, and beside it the bills' payments, fees and archive (moved here from Finances). */
+/**
+ * The Bills page, the one place for utility bills and paying them: the sheet
+ * first, then what to pay (the pay planner and pay-first, once the Payments
+ * page), what was paid, fees and the archive. Each row opens the account.
+ */
 const VIEWS = [
   { key: 'sheet', label: 'By month', subtitle: 'Every account and loan, month by month — what is paid, what is due, what is late', render: () => <BillsSheet /> },
-  { key: 'payments', label: 'Payments', subtitle: 'Payments made against utility accounts, grouped by provider', render: () => <PaymentsPage embedded /> },
+  { key: 'pay', label: 'To pay', subtitle: 'What is due, what is free in each account, and where to pay each one from', render: () => <PayPlanPage embedded /> },
+  { key: 'first', label: 'Pay first', subtitle: 'What to pay first, and what waiting costs', render: () => <PaymentPrioritiesPage embedded /> },
+  { key: 'payments', label: 'Paid', subtitle: 'Payments made against utility accounts, grouped by provider', render: () => <PaymentsPage embedded /> },
   { key: 'fees', label: 'Fees', subtitle: 'Any line item, broken down by utility and rolled up by property — month, year, or overall', render: () => <FeesSummaryPage embedded /> },
   { key: 'archive', label: 'Archive', subtitle: 'Every statement across all properties, searchable, with PDFs', render: () => <DocumentsPage embedded /> },
 ];

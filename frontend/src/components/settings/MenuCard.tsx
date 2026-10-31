@@ -12,7 +12,7 @@ export default function MenuCard() {
   const { hidden, has, isOwner, loaded } = useModules();
   const [busy, setBusy] = useState(false);
   if (!loaded) return null;
-  const pages = NAV.filter(n => has((n as { module?: ModuleKey }).module));
+  const pages = NAV.filter(n => has((n as { module?: ModuleKey }).module) && !(n as { phoneOnly?: boolean }).phoneOnly);
   const toggle = async (to: string) => {
     const next = new Set(hidden);
     if (next.has(to)) next.delete(to); else next.add(to);

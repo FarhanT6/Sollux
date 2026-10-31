@@ -15,12 +15,10 @@ import PaymentsScreen from './pages/phone/PaymentsScreen';
 import { Responsive } from './ios';
 import AppLayout from './components/layout/AppLayout';
 import DashboardPage from './pages/DashboardPage';
-import PropertiesPage from './pages/PropertiesPage';
 import UtilityDetailPage from './pages/UtilityDetailPage';
 import InsightsPage from './pages/InsightsPage';
 import OperationsPage from './pages/OperationsPage';
 import PaymentPrioritiesPage from './pages/PaymentPrioritiesPage';
-import PayPlanPage from './pages/PayPlanPage';
 import SettingsPage from './pages/SettingsPage';
 import FinancesPage from './pages/FinancesPage';
 import TenantsHubPage from './pages/TenantsHubPage';
@@ -125,7 +123,7 @@ export default function App() {
           <Route path="dashboard" element={<Responsive phone={<OverviewScreen />} desktop={<DashboardPage />} />} />
 
           {/* Properties */}
-          <Route path="properties" element={<Responsive phone={<UtilitiesScreen />} desktop={<PropertiesPage />} />} />
+          <Route path="properties" element={<Responsive phone={<UtilitiesScreen />} desktop={<Navigate to="/bills" replace />} />} />
           {/* One page per property: the old utilities page is its Bills tab. */}
           <Route path="properties/:id" element={<ToPropertyBills />} />
           <Route path="properties/:propertyId/utilities/:accountId" element={<UtilityDetailPage />} />
@@ -160,8 +158,9 @@ export default function App() {
           <Route path="legal" element={<LegalPage />} />
 
           {/* Standalone pages */}
-          <Route path="payments" element={<Responsive phone={<PaymentsScreen />} desktop={<PayPlanPage />} />} />
-          <Route path="payments/priorities" element={<PaymentPrioritiesPage />} />
+          {/* On a computer, paying lives on Bills (To pay, Pay first). */}
+          <Route path="payments" element={<Responsive phone={<PaymentsScreen />} desktop={<Navigate to="/bills?view=pay" replace />} />} />
+          <Route path="payments/priorities" element={<Responsive phone={<PaymentPrioritiesPage />} desktop={<Navigate to="/bills?view=first" replace />} />} />
           <Route path="operations" element={<OperationsPage />} />
           <Route path="insights" element={<InsightsPage />} />
           <Route path="settings" element={<SettingsPage />} />
