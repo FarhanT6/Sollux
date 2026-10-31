@@ -263,8 +263,9 @@ export default function PropertyDetailPage({ embedded }: { embedded?: boolean } 
             </div>
 
             <p className="text-xs text-gray-500 leading-relaxed">
-              Amounts are what each bill charged for its period. Past due carried from
-              earlier months is excluded — it is money owed, not this month's cost.
+              Amounts are what each bill charged for its period. A past-due balance carried
+              onto a bill is left out: it was counted in the month it was first billed.
+              It still shows as owed.
               {(!costOptions.includePenalties || !costOptions.includePaymentPlan) &&
                 ' Penalties and arrears installments are excluded too; change that on an account\u2019s Fees tab.'}
               {' '}A bill that does not arrive monthly is spread over the months it covers.
