@@ -251,6 +251,8 @@ router.get('/', async (req, res, next) => {
 
     // Verify property belongs to user
     const where: any = {};
+    // ?personal=1: only the owner's personal bills (Personal -> Bills).
+    if (req.query.personal === '1') where.isPersonal = true;
     if (propertyId) {
       const property = await db.property.findFirst({
         where: { id: String(propertyId), userId: req.dbUserId! },
@@ -272,6 +274,7 @@ router.get('/', async (req, res, next) => {
         statements: { orderBy: { statementDate: 'desc' }, take: 1 },
         payments: { orderBy: { paymentDate: 'desc' }, take: 1 },
         unit: { select: { id: true, unitLabel: true } },
+        property: { select: { id: true, address: true, nickname: true } },
       },
       orderBy: { createdAt: 'asc' },
     });
@@ -285,6 +288,17 @@ router.get('/', async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+});
+
+// POST /api/utilities/personal { ids, personal } — move accounts to Personal
+// (the owner's own bills, left out of the property's costs) or back. They keep
+// their property for the address, fetching and payments.
+router.post('/personal', async (req, res, next) => {
+  try {
+    const { ids, personal } = z.object({ ids: z.array(z.string()).min(1).max(200), personal: z.boolean() }).parse(req.body);
+    const r = await db.utilityAccount.updateMany({ where: { id: { in: ids }, property: { userId: req.dbUserId! } }, data: { isPersonal: personal } });
+    res.json({ moved: r.count });
+  } catch (err) { next(err); }
 });
 
 // POST /api/utilities — add new account (encrypts credentials)

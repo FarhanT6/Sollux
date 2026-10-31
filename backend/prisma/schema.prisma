@@ -204,12 +204,17 @@ model UtilityAccount {
   property         Property        @relation(fields: [propertyId], references: [id], onDelete: Cascade)
   providerName     String
   providerSlug     String
+  // The owner's own bill (their phone, car insurance, a card) kept here for
+  // fetching and paying, not a cost of the property: left out of the
+  // property's costs, P&L, operating expenses and Schedule E, and shown
+  // under Personal -> Bills and the Bills page's Personal section.
+  isPersonal       Boolean         @default(false)
   accountNumber    String? // last 4 only
   accountNumberEnc String? // AES-256 encrypted
   usernameEnc      String?
   passwordEnc      String?
   loginUrl         String?
-  // The name the bill is addressed to ("MOHAMMED TALUKDER"), for a biller's
+  // The name the bill is addressed to ("JANE SAMPLE"), for a biller's
   // lookup page that finds bills by account number and name without signing
   // in (InvoiceCloud's "Please Locate Your Account").
   lookupName       String?

@@ -46,7 +46,7 @@ export async function opexFacts(propertyId: string, userId: string, range: DateR
   const [leases, accounts, expenses, policies, taxes, loans] = await Promise.all([
     db.lease.findMany({ where: { unit: { propertyId }, OR: [{ startDate: null }, { startDate: { lt: range.end } }], AND: { OR: [{ status: 'ACTIVE' }, { endDate: null }, { endDate: { gt: range.start } }] } }, select: leaseSelect }),
     db.utilityAccount.findMany({
-      where: { propertyId },
+      where: { propertyId, isPersonal: false },
       select: {
         id: true, providerName: true, accountNumber: true, category: true, escrowLoanId: true, isActive: true,
         statements: {

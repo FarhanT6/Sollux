@@ -27,7 +27,7 @@ router.get('/', async (req, res, next) => {
         utilityAccounts: {
           where: { isActive: true },
           select: {
-            id: true, providerName: true, providerSlug: true, category: true, accountNumber: true, loginUrl: true,
+            id: true, providerName: true, providerSlug: true, category: true, accountNumber: true, loginUrl: true, isPersonal: true,
             notes: true, serviceLabel: true, billingCadence: true, unit: { select: { unitLabel: true } },
           },
           orderBy: [{ category: 'asc' }, { providerName: 'asc' }],
@@ -75,17 +75,24 @@ router.get('/', async (req, res, next) => {
       });
       paysBy.set(p.utilityAccountId, list);
     }
+    type Acct = typeof props[number]['utilityAccounts'][number];
+    const row = (a: Acct, propertyId: string) => ({
+      id: a.id, propertyId, providerName: a.providerName, category: a.category, billingCadence: a.billingCadence,
+      last4: a.accountNumber ? String(a.accountNumber).replace(/\D/g, '').slice(-4) || null : null,
+      serves: a.unit?.unitLabel ?? a.serviceLabel ?? null, notes: a.notes,
+      website: websiteFor(a)?.url ?? null,
+      statements: stmtsBy.get(a.id) ?? [], payments: paysBy.get(a.id) ?? [],
+    });
+    // The owner's personal bills sit together at the end, not under the property they were filed on.
+    const personal = props.flatMap(p => p.utilityAccounts.filter(a => a.isPersonal).map(a => row(a, p.id)));
     res.json({
-      properties: props.map(p => ({
-        id: p.id, name: p.nickname || p.address, address: p.address, city: p.city, state: p.state,
-        accounts: p.utilityAccounts.map(a => ({
-          id: a.id, providerName: a.providerName, category: a.category, billingCadence: a.billingCadence,
-          last4: a.accountNumber ? String(a.accountNumber).replace(/\D/g, '').slice(-4) || null : null,
-          serves: a.unit?.unitLabel ?? a.serviceLabel ?? null, notes: a.notes,
-          website: websiteFor(a)?.url ?? null,
-          statements: stmtsBy.get(a.id) ?? [], payments: paysBy.get(a.id) ?? [],
+      properties: [
+        ...props.map(p => ({
+          id: p.id, name: p.nickname || p.address, address: p.address, city: p.city, state: p.state,
+          accounts: p.utilityAccounts.filter(a => !a.isPersonal).map(a => row(a, p.id)),
         })),
-      })),
+        ...(personal.length ? [{ id: 'personal', name: 'Personal', address: 'Personal', city: '', state: '', accounts: personal, personal: true }] : []),
+      ],
     });
   } catch (err) { next(err); }
 });

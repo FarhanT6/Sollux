@@ -59,3 +59,10 @@ test("AI usage shows my account's spend, not another customer's", { skip }, asyn
   assert.equal(r.spent, 0);
   assert.equal(r.recent.length, 0);
 });
+
+test("another customer's utility account cannot be moved to personal", { skip }, async () => {
+  const r = await (await send('POST', '/utilities/personal', { ids: [other.account], personal: true })).json() as any;
+  assert.equal(r.moved, 0);
+  const a = await api.db.utilityAccount.findUnique({ where: { id: other.account } });
+  assert.equal(a?.isPersonal, false);
+});

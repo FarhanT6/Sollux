@@ -50,18 +50,18 @@ export async function buildLedger(userId: string, from: string, to: string, prop
 
   const [accounts, statements, payments, expenses, loans, taxes, policies] = await Promise.all([
     db.utilityAccount.findMany({
-      where: { propertyId: { in: ids }, escrowLoanId: null },
+      where: { propertyId: { in: ids }, escrowLoanId: null, isPersonal: false },
       select: { id: true, propertyId: true, providerName: true, category: true, accountNumber: true, isActive: true },
     }),
     db.statement.findMany({
       where: {
-        utilityAccount: { propertyId: { in: ids }, escrowLoanId: null }, isDownPayment: false,
+        utilityAccount: { propertyId: { in: ids }, escrowLoanId: null, isPersonal: false }, isDownPayment: false,
         OR: [{ dueDate: { gte: start, lt: end } }, { dueDate: null, statementDate: { gte: start, lt: end } }],
       },
       select: { id: true, utilityAccountId: true, statementDate: true, dueDate: true, amountDue: true, trueUpDeferred: true, paymentPlanAmount: true },
     }),
     db.payment.findMany({
-      where: { utilityAccount: { propertyId: { in: ids }, escrowLoanId: null }, paymentDate: { gte: start, lt: end }, status: { notIn: ['FAILED', 'PENDING'] } },
+      where: { utilityAccount: { propertyId: { in: ids }, escrowLoanId: null, isPersonal: false }, paymentDate: { gte: start, lt: end }, status: { notIn: ['FAILED', 'PENDING'] } },
       select: { utilityAccountId: true, amount: true, feeAmount: true, paymentDate: true },
     }),
     db.expense.findMany({
