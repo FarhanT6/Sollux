@@ -155,12 +155,13 @@ router.delete('/:id', async (req, res, next) => {
     }
 
     // If a bank transaction created this payment, send it back to the review
-    // queue. Otherwise deleting a wrongly auto-logged payment would strand the
-    // transaction as APPLIED, pointing at a payment that no longer exists, and
-    // it could never be re-matched to the right lease.
+    // queue, unmatched. Otherwise deleting a wrongly auto-logged payment would
+    // strand the transaction as APPLIED, pointing at a payment that no longer
+    // exists. Unmatched, not Suggested: Sync now applies Suggested rows it is
+    // sure of, and would log a deleted duplicate straight back.
     await db.incomingTransaction.updateMany({
       where: { rentPaymentId: existing.id },
-      data: { status: 'SUGGESTED', rentPaymentId: null },
+      data: { status: 'UNMATCHED', matchedLeaseId: null, rentPaymentId: null },
     });
 
     res.status(204).send();
