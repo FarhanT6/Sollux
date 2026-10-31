@@ -173,7 +173,7 @@ function BillsSheet() {
               <div className="px-4 py-3 flex items-baseline gap-2 border-b border-white/5">
                 {p.id === OTHER_LOANS ? <span className="font-semibold text-white">{p.name}</span>
                   : p.personal ? <Link to="/personal?tab=bills" className="font-semibold text-white hover:text-amber-400">{p.name}</Link>
-                  : <Link to={`/properties/${p.id}`} className="font-semibold text-white hover:text-amber-400">{p.name}</Link>}
+                  : <Link to={`/portfolio/${p.id}?tab=Bills`} className="font-semibold text-white hover:text-amber-400">{p.name}</Link>}
                 {p.name !== p.address && <span className="text-xs text-gray-500">{p.address}, {p.city}</span>}
               </div>
               <div className="overflow-x-auto" data-bills-scroll>

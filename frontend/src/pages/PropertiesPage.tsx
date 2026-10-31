@@ -139,7 +139,7 @@ export default function PropertiesPage() {
             {spend.lines.map(line => (
               <div key={line.propertyId} className="flex items-baseline justify-between text-xs border-t border-white/5 pt-2">
                 <span className="min-w-0">
-                  <Link to={`/properties/${line.propertyId}`} className="text-gray-200 hover:text-[#F5A623] truncate block">
+                  <Link to={`/portfolio/${line.propertyId}?tab=Bills`} className="text-gray-200 hover:text-[#F5A623] truncate block">
                     {line.label}
                   </Link>
                   <span className="text-gray-600">
@@ -371,7 +371,7 @@ function PropertyCard({ property, onEdit, onDelete }: { property: Property; onEd
   return (
     <div className="card overflow-hidden">
       {/* Header */}
-      <Link to={`/properties/${property.id}`} className="p-4 border-b border-white/8 flex items-start gap-3 hover:bg-white/2 transition-colors block">
+      <Link to={`/portfolio/${property.id}?tab=Bills`} className="p-4 border-b border-white/8 flex items-start gap-3 hover:bg-white/2 transition-colors block">
         <div className={`w-10 h-10 rounded-xl ${TYPE_COLORS[property.type] || 'bg-white/5'} flex items-center justify-center text-lg flex-shrink-0`}>
           <CategoryGlyph category="HOA" size={18} />
         </div>
@@ -419,7 +419,7 @@ function PropertyCard({ property, onEdit, onDelete }: { property: Property; onEd
       </Link>
 
       {/* Bill grid */}
-      <Link to={`/properties/${property.id}`} className="block p-4 hover:bg-white/2 transition-colors">
+      <Link to={`/portfolio/${property.id}?tab=Bills`} className="block p-4 hover:bg-white/2 transition-colors">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5 mb-3">
           {accounts.slice(0, 6).map(account => {
             // One status rule for this card and the phone list (lib/accountStatus.ts).

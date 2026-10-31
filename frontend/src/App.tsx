@@ -2,7 +2,7 @@ import NotFoundPage from './pages/NotFoundPage';
 import Toaster from './components/Toaster';
 import Logo from './components/brand/Logo';
 import { PrivacyPage, TermsPage } from './pages/PolicyPage';
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useParams } from 'react-router-dom';
 import LandingPage from './pages/LandingPage';
 import { useAuth } from '@clerk/clerk-react';
 import { SignIn, SignUp } from '@clerk/clerk-react';
@@ -16,7 +16,6 @@ import { Responsive } from './ios';
 import AppLayout from './components/layout/AppLayout';
 import DashboardPage from './pages/DashboardPage';
 import PropertiesPage from './pages/PropertiesPage';
-import PropertyDetailPage from './pages/PropertyDetailPage';
 import UtilityDetailPage from './pages/UtilityDetailPage';
 import InsightsPage from './pages/InsightsPage';
 import OperationsPage from './pages/OperationsPage';
@@ -33,7 +32,7 @@ import ScanPage from './pages/ScanPage';
 // Still used for deep-link detail pages
 import LoanDetailPage from './pages/LoanDetailPage';
 import NoticeDetailPage from './pages/NoticeDetailPage';
-import TenantDetailPage from './pages/TenantDetailPage';
+import { TenantRoute } from './pages/TenantDetailPage';
 import ReimbursementInvoicePage from './pages/ReimbursementInvoicePage';
 import CompliancePage from './pages/CompliancePage';
 import ProjectsPage from './pages/ProjectsPage';
@@ -127,7 +126,8 @@ export default function App() {
 
           {/* Properties */}
           <Route path="properties" element={<Responsive phone={<UtilitiesScreen />} desktop={<PropertiesPage />} />} />
-          <Route path="properties/:id" element={<PropertyDetailPage />} />
+          {/* One page per property: the old utilities page is its Bills tab. */}
+          <Route path="properties/:id" element={<ToPropertyBills />} />
           <Route path="properties/:propertyId/utilities/:accountId" element={<UtilityDetailPage />} />
 
           {/* Finances hub */}
@@ -150,7 +150,7 @@ export default function App() {
 
           {/* Tenants hub */}
           <Route path="tenants" element={<TenantsHubPage />} />
-          <Route path="tenants/:id" element={<TenantDetailPage />} />
+          <Route path="tenants/:id" element={<TenantRoute />} />
           <Route path="notices/:id" element={<NoticeDetailPage />} />
           <Route path="repairs" element={<RepairsPage />} />
           <Route path="repairs/:id" element={<RepairDetailPage />} />
@@ -182,4 +182,9 @@ export default function App() {
       <Toaster />
     </BrowserRouter>
   );
+}
+
+function ToPropertyBills() {
+  const { id } = useParams<{ id: string }>();
+  return <Navigate to={`/portfolio/${id}?tab=Bills`} replace />;
 }

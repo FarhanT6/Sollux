@@ -870,7 +870,7 @@ export default function LoanDetailPage() {
               <span> &middot; &middot;&middot;&middot;{loan.accountLast4}</span>
             ) : null}
             {loan.property && (
-              <> &middot; <Link to={`/properties/${loan.property.id}`} className="text-amber-400 hover:text-amber-300">{loan.property.nickname || loan.property.address}</Link></>
+              <> &middot; <Link to={`/portfolio/${loan.property.id}`} className="text-amber-400 hover:text-amber-300">{loan.property.nickname || loan.property.address}</Link></>
             )}
             {(loan as any).utilityAccount && (
               <> &middot; <Link to={`/properties/${(loan as any).utilityAccount.propertyId}/utilities/${(loan as any).utilityAccount.id}`} className="text-indigo-400 hover:text-indigo-300">

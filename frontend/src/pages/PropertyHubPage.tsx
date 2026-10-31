@@ -41,6 +41,8 @@ import { fmtDate as fmtDateSafe, monthKey, localMonthKey, todayISO, thisMonthISO
 import LegalPage from './LegalPage';
 import UnitsTab from '../components/UnitsTab';
 import { usePhone, Section, Row } from '../ios';
+import PropertyDetailPage from './PropertyDetailPage';
+import TenantDetailPage from './TenantDetailPage';
 import PropertyHubScreen from './phone/PropertyHubScreen';
 
 const LEASE_DOC_CATEGORIES = ['LEASE', 'APPLICATION', 'IDENTITY', 'SCREENING', 'OTHER'] as const;
@@ -117,13 +119,30 @@ const money = (n: number) =>
   n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const pct = (n: number) => `${n > 0 ? '+' : ''}${n.toFixed(1)}%`;
 const fmtDate = (d?: string | null) => fmtDateSafe(d);
-const TABS = ['Overview', 'Units', 'Tenants', 'Turnover', 'Loans', 'Expenses', 'Insurance', 'Maintenance', 'Tax', 'Compliance', 'Legal', 'Documents'] as const;
+// One page per property. Bills is the property's utility accounts (the old
+// /properties/:id page); Tenants holds units and turnover too; Legal holds
+// compliance. Old tab names in links land on the tab that holds them now.
+const TABS = ['Overview', 'Tenants', 'Bills', 'Loans', 'Insurance', 'Tax', 'Repairs', 'Expenses', 'Legal', 'Documents'] as const;
 type Tab = typeof TABS[number];
+const OLD_TABS: Record<string, Tab> = { Units: 'Tenants', Turnover: 'Tenants', Maintenance: 'Repairs', Compliance: 'Legal', Utilities: 'Bills' };
+
+/** A section of a tab that folds away, so a tab holding several things stays short. */
+function Fold({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <details className="border-t border-white/5 mt-2 group">
+      <summary className="px-6 py-3 text-sm font-medium text-gray-300 cursor-pointer hover:text-white list-none flex items-center gap-2">
+        <span className="text-gray-600 text-xs group-open:rotate-90 transition-transform">▶</span>{title}
+      </summary>
+      {children}
+    </details>
+  );
+}
 
 export default function PropertyHubPage() {
   const { id } = useParams<{ id: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
-  const activeTab = (searchParams.get('tab') as Tab) || 'Overview';
+  const rawTab = searchParams.get('tab') ?? 'Overview';
+  const activeTab: Tab = OLD_TABS[rawTab] ?? ((TABS as readonly string[]).includes(rawTab) ? rawTab as Tab : 'Overview');
   const phone = usePhone();
 
   const [property, setProperty] = useState<Property | null>(null);
@@ -179,9 +198,7 @@ export default function PropertyHubPage() {
         getPropertyPnL(id),
       ]).then(([l, lo, pl]) => { setLeases(l); setLoans(lo); setPnl(pl); });
     } else if (activeTab === 'Tenants') {
-      p = getLeases({ propertyId: id }).then(setLeases);
-    } else if (activeTab === 'Turnover') {
-      p = getTurnover({ propertyId: id }).then(setTurnover);
+      p = Promise.all([getLeases({ propertyId: id }).then(setLeases), getTurnover({ propertyId: id }).then(setTurnover)]);
     } else if (activeTab === 'Loans') {
       p = getLoans({ propertyId: id }).then(setLoans);
     } else if (activeTab === 'Expenses') {
@@ -190,7 +207,7 @@ export default function PropertyHubPage() {
       p = getInsurancePolicies({ propertyId: id }).then(setPolicies);
     } else if (activeTab === 'Tax') {
       p = getTaxAssessments({ propertyId: id }).then(setTaxes);
-    } else if (activeTab === 'Maintenance') {
+    } else if (activeTab === 'Repairs') {
       p = getImprovements({ propertyId: id }).then(setImprovements);
     } else if (activeTab === 'Documents') {
       p = getDocuments({ propertyId: id }).then(setDocuments);
@@ -233,16 +250,32 @@ export default function PropertyHubPage() {
     <>
       {tabFailed}
       {activeTab === 'Overview' && <OverviewTab property={property} pnl={pnl} leases={activeLeases} loans={loans.filter(l => l.isActive)} onPropertyChange={setProperty} />}
-      {activeTab === 'Units' && <UnitsTab propertyId={id!} />}
-      {activeTab === 'Tenants' && <TenantsTab propertyId={id!} leases={leases} setLeases={setLeases} propertyType={property.type} />}
-      {activeTab === 'Turnover' && <TurnoverTab report={turnover} />}
+      {activeTab === 'Tenants' && (
+        <>
+          {searchParams.get('tenant') && !phone && (
+            <TenantDetailPage tenantId={searchParams.get('tenant')!} onClose={() => {
+              const next = new URLSearchParams(searchParams); next.delete('tenant'); setSearchParams(next);
+              // The panel may have changed a lease or a payment.
+              getLeases({ propertyId: id! }).then(setLeases).catch(() => {});
+            }} />
+          )}
+          <TenantsTab propertyId={id!} leases={leases} setLeases={setLeases} propertyType={property.type} />
+          <Fold title="Units"><UnitsTab propertyId={id!} /></Fold>
+          <Fold title="Turnover"><TurnoverTab report={turnover} /></Fold>
+        </>
+      )}
+      {activeTab === 'Bills' && <PropertyDetailPage embedded />}
       {activeTab === 'Loans' && <LoansTab propertyId={id!} loans={loans} setLoans={setLoans} />}
       {activeTab === 'Expenses' && <ExpensesTab propertyId={id!} expenses={expenses} setExpenses={setExpenses} />}
       {activeTab === 'Insurance' && <InsuranceTab propertyId={id!} policies={policies} setPolicies={setPolicies} />}
-      {activeTab === 'Maintenance' && <MaintenanceTab propertyId={id!} items={improvements} setItems={setImprovements} />}
+      {activeTab === 'Repairs' && <MaintenanceTab propertyId={id!} items={improvements} setItems={setImprovements} />}
       {activeTab === 'Tax' && <TaxTab propertyId={id!} taxes={taxes} setTaxes={setTaxes} />}
-      {activeTab === 'Compliance' && <div className="px-6 py-5"><CompliancePage propertyId={id!} /></div>}
-      {activeTab === 'Legal' && <LegalPage embedded propertyId={id!} />}
+      {activeTab === 'Legal' && (
+        <>
+          <LegalPage embedded propertyId={id!} />
+          <Fold title="Compliance"><div className="px-6 py-5"><CompliancePage propertyId={id!} /></div></Fold>
+        </>
+      )}
       {activeTab === 'Documents' && <DocumentsTab propertyId={id!} documents={documents} setDocuments={setDocuments} />}
     </>
   );
@@ -1037,6 +1070,8 @@ function UnitTurnoverCard({ unit }: { unit: UnitTurnover }) {
 function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
   propertyId: string; leases: Lease[]; setLeases: (l: Lease[]) => void; propertyType?: PropertyType;
 }) {
+  // A tenant opens as a panel here on a computer; a phone goes to the tenant's own screen.
+  const onPhone = usePhone();
   const isCommercial = propertyType === 'COMMERCIAL';
   const [filterStatus, setFilterStatus] = useState('ACTIVE');
   const [showPayForm, setShowPayForm] = useState<string | null>(null);
@@ -1803,7 +1838,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                           {leaseTenants.length === 0 ? '—' : leaseTenants.map((lt, i) => (
                             <span key={lt.tenant.id}>
                               {i > 0 && ', '}
-                              <Link to={`/tenants/${lt.tenant.id}`} className="hover:text-amber-400 transition-colors" onClick={e => e.stopPropagation()}>
+                              <Link to={onPhone ? `/tenants/${lt.tenant.id}` : `?tab=Tenants&tenant=${lt.tenant.id}`} className="hover:text-amber-400 transition-colors" onClick={e => e.stopPropagation()}>
                                 {lt.tenant.fullName}
                               </Link>
                             </span>

@@ -121,7 +121,7 @@ export default function PaymentsPage({ embedded }: { embedded?: boolean } = {}) 
                     <span className="text-xs text-gray-500 uppercase tracking-wider">Property</span>
                     {propGroup.propertyId ? (
                       <Link
-                        to={`/properties/${propGroup.propertyId}`}
+                        to={`/portfolio/${propGroup.propertyId}?tab=Bills`}
                         className="text-sm font-semibold text-white hover:text-[#F5A623] transition-colors"
                       >
                         {propGroup.label} ›

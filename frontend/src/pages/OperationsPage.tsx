@@ -203,7 +203,7 @@ export default function OperationsPage() {
             return (
               <div key={g.propertyId} className="rounded-xl px-5 py-2.5 flex items-center justify-between"
                 style={{ background: '#161616', border: '1px solid rgba(255,255,255,0.05)' }}>
-                <Link to={`/properties/${g.propertyId}`} className="text-xs text-gray-500 hover:text-gray-300">{g.propertyName}</Link>
+                <Link to={`/portfolio/${g.propertyId}`} className="text-xs text-gray-500 hover:text-gray-300">{g.propertyName}</Link>
                 <button onClick={() => setAdding(g.propertyId)} className="text-xs text-gray-500 hover:text-white">+ task</button>
               </div>
             );
@@ -212,7 +212,7 @@ export default function OperationsPage() {
           return (
             <div key={g.propertyId} className="rounded-xl overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.07)' }}>
               <div className="px-5 py-3 flex items-center justify-between" style={{ borderBottom: '1px solid rgba(255,255,255,0.07)', background: 'rgba(255,255,255,0.02)' }}>
-                <Link to={`/properties/${g.propertyId}`} className="text-sm font-semibold text-white hover:text-[#F5A623]">{g.propertyName} ›</Link>
+                <Link to={`/portfolio/${g.propertyId}`} className="text-sm font-semibold text-white hover:text-[#F5A623]">{g.propertyName} ›</Link>
                 <div className="flex items-center gap-3">
                   <span className="text-xs text-gray-500">{tasks.length} task{tasks.length === 1 ? '' : 's'}</span>
                   <button onClick={() => setAdding(adding === g.propertyId ? null : g.propertyId)} className="btn text-xs">+ Add task</button>

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import TenantPortalCard from '../components/TenantPortalCard';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link, useNavigate, Navigate } from 'react-router-dom';
 import BackLink from '../components/ui/BackLink';
 import { format } from 'date-fns';
 import {
@@ -45,8 +45,14 @@ function readFileAsBase64(file: File): Promise<string> {
 
 type FullTenant = Tenant & { leaseTenants: (LeaseTenant & { lease: Lease & { rentPayments?: RentPayment[] } })[] };
 
-export default function TenantDetailPage() {
-  const { id } = useParams<{ id: string }>();
+/**
+ * A tenant: contact, portal invite, and each lease with its payments. On a
+ * computer it opens as a panel on the property's Tenants tab (`onClose`
+ * given); /tenants/:id sends there (TenantRoute). On a phone, a full screen.
+ */
+export default function TenantDetailPage({ tenantId, onClose }: { tenantId?: string; onClose?: () => void } = {}) {
+  const params = useParams<{ id: string }>();
+  const id = tenantId ?? params.id;
   const navigate = useNavigate();
   const [tenant, setTenant] = useState<FullTenant | null>(null);
   const [loading, setLoading] = useState(true);
@@ -111,7 +117,7 @@ export default function TenantDetailPage() {
     if (!id || !tenant) return;
     if (!confirm(`Delete tenant "${tenant.fullName}"? This removes them from all leases. This cannot be undone.`)) return;
     await deleteTenant(id);
-    navigate('/tenants');
+    if (onClose) onClose(); else navigate('/tenants');
   }
 
   if (loading) return <div className="p-6 text-gray-500 text-sm">Loading…</div>;
@@ -163,12 +169,14 @@ export default function TenantDetailPage() {
     </Screen>
   );
 
-  return (
-    <div className="p-6 max-w-5xl">
+  const body = (
+    <div className={onClose ? 'p-6' : 'p-6 max-w-5xl'}>
       {/* Header */}
       <div className="flex items-start justify-between mb-1">
         <div>
-          <BackLink fallback="/tenants" className="text-xs text-gray-500 hover:text-gray-300">&larr; Back</BackLink>
+          {onClose
+            ? <button onClick={onClose} className="text-xs text-gray-500 hover:text-gray-300">✕ Close</button>
+            : <BackLink fallback="/tenants" className="text-xs text-gray-500 hover:text-gray-300">&larr; Back</BackLink>}
           <h1 className="text-xl font-semibold text-white mt-1">{tenant.fullName}</h1>
         </div>
         <div className="flex items-center gap-2">
@@ -224,6 +232,38 @@ export default function TenantDetailPage() {
       )}
     </div>
   );
+  if (!onClose) return body;
+  // A panel over the property page: the property stays behind it, one click away.
+  return (
+    <div className="fixed inset-0 z-40 flex justify-end" style={{ background: 'rgba(0,0,0,0.45)' }} onClick={onClose}>
+      <div className="h-full w-full max-w-3xl overflow-y-auto shadow-2xl" style={{ background: '#181818', borderLeft: '1px solid rgba(255,255,255,0.08)' }}
+        onClick={e => e.stopPropagation()}>
+        {body}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * /tenants/:id: on a computer, the tenant opens on their property's Tenants
+ * tab (their active lease's property, else their latest); on a phone, or with
+ * no lease on file, the tenant's own screen.
+ */
+export function TenantRoute() {
+  const { id } = useParams<{ id: string }>();
+  const phone = usePhone();
+  const [to, setTo] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (phone || !id) { setTo(null); return; }
+    getTenant(id).then((t: any) => {
+      const leases = (t.leaseTenants ?? []).map((lt: any) => lt.lease).filter(Boolean);
+      const lease = leases.find((l: any) => l.status === 'ACTIVE') ?? leases[0];
+      const pid = lease?.unit?.property?.id;
+      setTo(pid ? `/portfolio/${pid}?tab=Tenants&tenant=${id}` : null);
+    }).catch(() => setTo(null));
+  }, [id, phone]);
+  if (to === undefined) return <div className="p-6 text-sm text-gray-500">Loading…</div>;
+  return to ? <Navigate to={to} replace /> : <TenantDetailPage />;
 }
 
 // ─── Lease card ──────────────────────────────────────────────────────────────

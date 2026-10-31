@@ -28,7 +28,12 @@ function errorMessage(err: any): string {
     ?? 'Unknown error.';
 }
 
-export default function PropertyDetailPage() {
+/**
+ * A property's utility accounts, payments and AI insights. Shown as the Bills
+ * tab of the property page (`embedded`); /properties/:id redirects there, so
+ * a property has one page instead of two.
+ */
+export default function PropertyDetailPage({ embedded }: { embedded?: boolean } = {}) {
   const { id } = useParams<{ id: string }>();
   const [property, setProperty] = useState<Property | null>(null);
   const [statements, setStatements] = useState<Statement[]>([]);
@@ -157,11 +162,12 @@ export default function PropertyDetailPage() {
   );
 
   const TABS: { key: Tab; label: string }[] = [
-    { key: 'utilities', label: 'Utilities' },
-    { key: 'operations', label: 'Operations' },
+    { key: 'utilities', label: embedded ? 'Accounts' : 'Utilities' },
+    // ClickUp tasks and documents have their own places on the property page.
+    ...(embedded ? [] : [{ key: 'operations' as Tab, label: 'Operations' }]),
     { key: 'payments', label: 'Payment history' },
     { key: 'insights', label: `AI insights${insights.filter(i => !i.isRead).length > 0 ? ` (${insights.filter(i => !i.isRead).length})` : ''}` },
-    { key: 'documents', label: 'Documents' },
+    ...(embedded ? [] : [{ key: 'documents' as Tab, label: 'Documents' }]),
   ];
 
   return (
@@ -172,7 +178,7 @@ export default function PropertyDetailPage() {
           {partialError}
         </div>
       )}
-      <PageHeader
+      {!embedded && <PageHeader
         title={property.nickname || property.address}
         subtitle={`${property.city}, ${property.state} · ${property.type.charAt(0) + property.type.slice(1).toLowerCase()}`}
         breadcrumb={[
@@ -196,7 +202,12 @@ export default function PropertyDetailPage() {
             </button>
           </div>
         }
-      />
+      />}
+      {embedded && (
+        <div className="px-6 pt-4 -mb-2 flex justify-end">
+          <button onClick={() => accounts.forEach(a => handleSync(a.id))} className="btn btn-primary text-xs">Sync all</button>
+        </div>
+      )}
 
       {showBreakdown && (
         <Modal title="How the monthly total is calculated" onClose={() => setShowBreakdown(false)}
