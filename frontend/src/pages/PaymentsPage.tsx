@@ -61,15 +61,13 @@ function groupPayments(payments: Payment[]): PropertyGroup[] {
 export default function PaymentsPage({ embedded }: { embedded?: boolean } = {}) {
   const [payments, setPayments] = useState<Payment[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<'all' | 'paid' | 'pending' | 'failed'>('all');
 
   useEffect(() => {
     getPayments({}).then(setPayments).finally(() => setLoading(false));
   }, []);
 
-  const filtered = filter === 'all'
-    ? payments
-    : payments.filter(p => p.status.toLowerCase() === filter);
+  // Every payment, newest first (the paid / pending / failed filter was taken off).
+  const filtered = payments;
 
   const total = filtered.reduce((s, p) => s + Number(p.amount), 0);
   const groups = groupPayments(filtered);
@@ -84,22 +82,6 @@ export default function PaymentsPage({ embedded }: { embedded?: boolean } = {}) 
       )}
 
       <div className={embedded ? '' : 'px-6 py-5'}>
-        {/* Filter tabs */}
-        <div className="flex gap-2 mb-5">
-          {(['all', 'paid', 'pending', 'failed'] as const).map(f => (
-            <button
-              key={f}
-              onClick={() => setFilter(f)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium capitalize transition-colors ${
-                filter === f ? 'bg-[#F5A623] text-black' : 'text-gray-400 hover:text-white'
-              }`}
-              style={filter !== f ? { background: 'rgba(255,255,255,0.06)' } : {}}
-            >
-              {f === 'all' ? 'All payments' : f.charAt(0).toUpperCase() + f.slice(1)}
-            </button>
-          ))}
-        </div>
-
         {loading ? (
           <div className="space-y-4">
             {[1, 2].map(i => <Skeleton key={i} className="h-48" />)}

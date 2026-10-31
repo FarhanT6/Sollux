@@ -14,6 +14,7 @@ import FinancesScreen from './pages/phone/FinancesScreen';
 import PaymentsScreen from './pages/phone/PaymentsScreen';
 import { Responsive } from './ios';
 import AppLayout from './components/layout/AppLayout';
+import Section from './components/layout/Section';
 import DashboardPage from './pages/DashboardPage';
 import UtilityDetailPage from './pages/UtilityDetailPage';
 import InsightsPage from './pages/InsightsPage';
@@ -120,7 +121,7 @@ export default function App() {
 
         <Route path="/" element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
           <Route index element={<Navigate to="/dashboard" replace />} />
-          <Route path="dashboard" element={<Responsive phone={<OverviewScreen />} desktop={<DashboardPage />} />} />
+          <Route path="dashboard" element={<Section group="overview"><Responsive phone={<OverviewScreen />} desktop={<DashboardPage />} /></Section>} />
 
           {/* Properties */}
           <Route path="properties" element={<Responsive phone={<UtilitiesScreen />} desktop={<Navigate to="/bills" replace />} />} />
@@ -129,47 +130,47 @@ export default function App() {
           <Route path="properties/:propertyId/utilities/:accountId" element={<UtilityDetailPage />} />
 
           {/* Finances hub */}
-          <Route path="finances" element={<Responsive phone={<FinancesScreen />} desktop={<FinancesPage />} />} />
-          <Route path="taxes" element={<TaxesPage />} />
-          <Route path="insurance" element={<InsurancePage />} />
-          <Route path="operating-expenses" element={<OperatingExpensesPage />} />
+          <Route path="finances" element={<Section group="finances"><Responsive phone={<FinancesScreen />} desktop={<FinancesPage />} /></Section>} />
+          <Route path="taxes" element={<Section group="properties"><TaxesPage /></Section>} />
+          <Route path="insurance" element={<Section group="properties"><InsurancePage /></Section>} />
+          <Route path="operating-expenses" element={<Section group="finances"><OperatingExpensesPage /></Section>} />
           <Route path="bills" element={<BillsPage />} />
-          <Route path="personal" element={<PersonalPage />} />
-          <Route path="vault" element={<VaultPage />} />
+          <Route path="personal" element={<Section group="personal"><PersonalPage /></Section>} />
+          <Route path="vault" element={<Section group="personal"><VaultPage /></Section>} />
           <Route path="personal/cards/:id" element={<CreditCardPage />} />
           <Route path="compliance" element={<CompliancePage />} />
-          <Route path="projects" element={<ProjectsPage />} />
+          <Route path="projects" element={<Section group="personal"><ProjectsPage /></Section>} />
           <Route path="projects/:id" element={<ProjectsPage />} />
           <Route path="loans/:id" element={<LoanDetailPage />} />
 
           {/* Portfolio hub */}
-          <Route path="portfolio" element={<PortfolioPage />} />
+          <Route path="portfolio" element={<Section group="properties"><PortfolioPage /></Section>} />
           <Route path="portfolio/:id" element={<PropertyHubPage />} />
 
           {/* Tenants hub */}
-          <Route path="tenants" element={<TenantsHubPage />} />
+          <Route path="tenants" element={<Section group="properties"><TenantsHubPage /></Section>} />
           <Route path="tenants/:id" element={<TenantRoute />} />
           <Route path="notices/:id" element={<NoticeDetailPage />} />
-          <Route path="repairs" element={<RepairsPage />} />
+          <Route path="repairs" element={<Section group="properties"><RepairsPage /></Section>} />
           <Route path="repairs/:id" element={<RepairDetailPage />} />
 
 
           {/* Legal */}
-          <Route path="legal" element={<LegalPage />} />
+          <Route path="legal" element={<Section group="properties"><LegalPage /></Section>} />
 
           {/* Standalone pages */}
           {/* On a computer, paying lives on Bills (To pay, Pay first). */}
           <Route path="payments" element={<Responsive phone={<PaymentsScreen />} desktop={<Navigate to="/bills?view=pay" replace />} />} />
           <Route path="payments/priorities" element={<Responsive phone={<PaymentPrioritiesPage />} desktop={<Navigate to="/bills?view=first" replace />} />} />
           <Route path="operations" element={<OperationsPage />} />
-          <Route path="insights" element={<InsightsPage />} />
+          <Route path="insights" element={<Section group="overview"><InsightsPage /></Section>} />
           <Route path="settings" element={<SettingsPage />} />
           {/* Phone: everything not in the tab bar. */}
           <Route path="more" element={<MoreScreen />} />
 
           {/* Import */}
-          <Route path="import" element={<ImportPage />} />
-          <Route path="scan" element={<ScanPage />} />
+          <Route path="import" element={<Section group="add"><ImportPage /></Section>} />
+          <Route path="scan" element={<Section group="add"><ScanPage /></Section>} />
 
           {/* An address with no page says so (and is reported) instead of
               quietly landing on the dashboard. */}

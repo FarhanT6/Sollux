@@ -1755,7 +1755,11 @@ model BankAccount {
   plaidItemId          String?
   plaidItem            PlaidItem?      @relation(fields: [plaidItemId], references: [id])
   plaidAccountId       String?         @unique
-  name                 String // e.g. "Fahim Chase Checking", "Dad WF Savings"
+  name                 String // e.g. "Jane Checking", "Joint Savings"
+  // The owner's own short name for what the account is for ("Personal",
+  // "Elm Grove account"), shown after x1234; kept apart from name, which a
+  // bank sync can rewrite.
+  nickname             String?
   last4                String? // e.g. "4821"
   bank                 String? // e.g. "Chase", "Wells Fargo"
   ownerLabel           String? // e.g. "Farhan", "Joint", "LLC"

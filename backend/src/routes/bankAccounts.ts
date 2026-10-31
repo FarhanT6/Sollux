@@ -18,6 +18,7 @@ function serialize(a: any) {
     last4: a.last4,
     bank: a.bank,
     ownerLabel: a.ownerLabel,
+    nickname: a.nickname,
     cardNetwork: a.cardNetwork,
     cardExpiry: a.cardExpiry,
     accountType: a.accountType,
@@ -173,10 +174,11 @@ router.patch('/:id', async (req, res, next) => {
   try {
     const acct = await db.bankAccount.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
     if (!acct) return res.status(404).json({ error: 'Not found' });
-    const { name, last4, bank, ownerLabel, cardNetwork, cardExpiry, accountType, isActive, sortOrder, notes, watchForRentPayments, watchForExpenses } = req.body;
+    const { name, last4, bank, ownerLabel, nickname, cardNetwork, cardExpiry, accountType, isActive, sortOrder, notes, watchForRentPayments, watchForExpenses } = req.body;
     const updated = await db.bankAccount.update({
       where: { id: acct.id },
-      data: { name, last4, bank, ownerLabel, cardNetwork, cardExpiry, accountType, isActive, sortOrder, notes, watchForRentPayments, watchForExpenses },
+      data: { name, last4, bank, ownerLabel, cardNetwork, cardExpiry, accountType, isActive, sortOrder, notes, watchForRentPayments, watchForExpenses,
+        ...(nickname !== undefined ? { nickname: typeof nickname === 'string' && nickname.trim() ? nickname.trim().slice(0, 40) : null } : {}) },
       include: { balances: { orderBy: { asOfDate: 'desc' }, take: 1 } },
     });
     res.json(serialize(updated));

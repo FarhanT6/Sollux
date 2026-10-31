@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { CategoryGlyph } from '../ios';
 import { Link } from 'react-router-dom';
 import { useUser } from '@clerk/clerk-react';
-import { getDashboardSummary, getRecentActivity, getInsights, getPlaidItems, getBankAccounts, getLeases, getRentPayments } from '../api/client';
+import { getDashboardSummary, getRecentActivity, getInsights, getPlaidItems, getBankAccounts, getLeases, getRentPayments, updateBankAccount } from '../api/client';
 import type { DashboardSummary, AIInsight, BankAccount, Lease, RentPayment } from '../types';
 import type { PlaidItem } from '../api/client';
 import { StatCard, InsightCard, Skeleton, EmptyState } from '../components/ui';
@@ -244,6 +244,16 @@ function isThirdParty(a: any) {
 
 function CashPositionCard({ items, manualAccounts }: { items: PlaidItem[]; manualAccounts: any[] }) {
   const [hidden, setHidden] = useState(() => sessionStorage.getItem('sollux_bal_vis') !== '1');
+  // Names set here show at once, before the next load.
+  const [named, setNamed] = useState<Record<string, string | null>>({});
+  async function rename(acct: any) {
+    const current = named[acct.id] !== undefined ? named[acct.id] : acct.nickname;
+    const next = window.prompt(`What is x${acct.last4 ?? ''} for? (e.g. Personal, Elm Grove account)\n${acct.name}`, current ?? '');
+    if (next === null) return;
+    const value = next.trim() || null;
+    setNamed(m => ({ ...m, [acct.id]: value }));
+    try { await updateBankAccount(acct.id, { nickname: value }); } catch { setNamed(m => ({ ...m, [acct.id]: current ?? null })); }
+  }
   const plaidAccounts = items.flatMap(i => i.accounts).filter(a => a.isActive);
   const bankAccounts  = plaidAccounts.filter(a => a.accountType !== 'CREDIT_CARD');
   const creditAccounts = plaidAccounts.filter(a => a.accountType === 'CREDIT_CARD');
@@ -321,8 +331,16 @@ function CashPositionCard({ items, manualAccounts }: { items: PlaidItem[]; manua
               : Number(bal?.available ?? bal?.balance ?? 0);
             return (
               <div key={acct.id} className="rounded-lg p-2.5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}>
-                {/* "x0935" rather than the bank's long product name; the full name on hover. */}
-                <p className="text-xs text-gray-400 truncate mb-0.5" title={acct.name}>{acct.last4 ? `x${acct.last4}` : String(acct.name ?? '').replace(/[^\x20-\x7E]/g, '').trim()}</p>
+                {/* "x0935 · Personal" rather than the bank's long product name; the full name on hover, a click names it. */}
+                {(() => {
+                  const nick = named[acct.id] !== undefined ? named[acct.id] : acct.nickname;
+                  return (
+                    <button onClick={() => void rename(acct)} className="block w-full text-left text-xs text-gray-400 hover:text-gray-200 truncate mb-0.5" title={`${acct.name} — click to name it`}>
+                      {acct.last4 ? `x${acct.last4}` : String(acct.name ?? '').replace(/[^\x20-\x7E]/g, '').trim()}
+                      {nick ? <span className="text-gray-500"> · {nick}</span> : <span className="text-gray-700"> · name</span>}
+                    </button>
+                  );
+                })()}
                 {acct.ownerLabel && <p className="text-xs text-amber-500/70 mb-0.5">{acct.ownerLabel}</p>}
                 <p className={`text-sm font-semibold ${acct.accountType === 'CREDIT_CARD' ? 'text-red-400' : 'text-white'}`}>
                   {hidden ? mask : acct.accountType === 'CREDIT_CARD' ? `(${money(displayBal)})` : money(displayBal)}

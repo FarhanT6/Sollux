@@ -12,7 +12,6 @@ import { openUrl } from '../lib/native';
 import { describeApiError } from '../lib/apiError';
 import PaymentsPage from './PaymentsPage';
 import FeesSummaryPage from './FeesSummaryPage';
-import DocumentsPage from './DocumentsPage';
 import { onLoansTab } from '../lib/loanGroups';
 import { ViewSwitch } from './FinancesPage';
 import PayPlanPage from './PayPlanPage';
@@ -284,9 +283,9 @@ const VIEWS = [
   { key: 'sheet', label: 'By month', subtitle: 'Every account and loan, month by month — what is paid, what is due, what is late', render: () => <BillsSheet /> },
   { key: 'pay', label: 'To pay', subtitle: 'What is due, what is free in each account, and where to pay each one from', render: () => <PayPlanPage embedded /> },
   { key: 'first', label: 'Pay first', subtitle: 'What to pay first, and what waiting costs', render: () => <PaymentPrioritiesPage embedded /> },
-  { key: 'payments', label: 'Paid', subtitle: 'Payments made against utility accounts, grouped by provider', render: () => <PaymentsPage embedded /> },
+  { key: 'payments', label: 'Payments', subtitle: 'Payments made against utility accounts, grouped by provider', render: () => <PaymentsPage embedded /> },
   { key: 'fees', label: 'Fees', subtitle: 'Any line item, broken down by utility and rolled up by property — month, year, or overall', render: () => <FeesSummaryPage embedded /> },
-  { key: 'archive', label: 'Archive', subtitle: 'Every statement across all properties, searchable, with PDFs', render: () => <DocumentsPage embedded /> },
+  // Archive taken off for now (DocumentsPage); statements and PDFs stay on each account.
 ];
 
 export default function BillsPage() {
