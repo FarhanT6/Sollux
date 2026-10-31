@@ -27,7 +27,7 @@ const BEHAVIOUR: Record<AccountPriority['feeBehaviour'], { text: string; color: 
   unknown:            { text: 'Not enough history', color: 'gray' },
 };
 
-export default function PaymentPrioritiesPage() {
+export default function PaymentPrioritiesPage({ embedded }: { embedded?: boolean } = {}) {
   const [priorities, setPriorities] = useState<AccountPriority[]>([]);
   const [fees, setFees] = useState<FeeSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -55,10 +55,10 @@ export default function PaymentPrioritiesPage() {
 
   return (
     <div>
-      <PageHeader title="Payments" subtitle="What to pay first, and what waiting costs" />
-      <PaymentsTabs active="priorities" />
+      {!embedded && <PageHeader title="Payments" subtitle="What to pay first, and what waiting costs" />}
+      {!embedded && <PaymentsTabs active="priorities" />}
 
-      <div className="px-6 py-5">
+      <div className={embedded ? '' : 'px-6 py-5'}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
           <StatCard label="Owed right now" value={money(totalOwed)} sub={`${owing.length} account${owing.length === 1 ? '' : 's'}`} />
           <StatCard

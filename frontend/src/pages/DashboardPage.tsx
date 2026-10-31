@@ -321,7 +321,8 @@ function CashPositionCard({ items, manualAccounts }: { items: PlaidItem[]; manua
               : Number(bal?.available ?? bal?.balance ?? 0);
             return (
               <div key={acct.id} className="rounded-lg p-2.5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}>
-                <p className="text-xs text-gray-400 truncate mb-0.5">{acct.name}</p>
+                {/* "x0935" rather than the bank's long product name; the full name on hover. */}
+                <p className="text-xs text-gray-400 truncate mb-0.5" title={acct.name}>{acct.last4 ? `x${acct.last4}` : String(acct.name ?? '').replace(/[^\x20-\x7E]/g, '').trim()}</p>
                 {acct.ownerLabel && <p className="text-xs text-amber-500/70 mb-0.5">{acct.ownerLabel}</p>}
                 <p className={`text-sm font-semibold ${acct.accountType === 'CREDIT_CARD' ? 'text-red-400' : 'text-white'}`}>
                   {hidden ? mask : acct.accountType === 'CREDIT_CARD' ? `(${money(displayBal)})` : money(displayBal)}
@@ -349,6 +350,8 @@ const ordinal = (n: number) => {
 };
 
 function RentSummaryCard({ leases, payments }: { leases: Lease[]; payments: RentPayment[] }) {
+  // Eight at first; "Show all" opens the rest here, the rent roll has the detail.
+  const [showAll, setShowAll] = useState(false);
   const now = new Date();
   const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   const money = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
@@ -412,7 +415,7 @@ function RentSummaryCard({ leases, payments }: { leases: Lease[]; payments: Rent
         </div>
         {unpaid.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-            {unpaid.slice(0, 8).map(({ lease, remaining, overdue }) => {
+            {(showAll ? unpaid : unpaid.slice(0, 8)).map(({ lease, remaining, overdue }) => {
               const prop = lease.unit?.property;
               const tenants = lease.leaseTenants?.map(lt => lt.tenant.fullName).join(', ') || '—';
               return (
@@ -433,7 +436,14 @@ function RentSummaryCard({ leases, payments }: { leases: Lease[]; payments: Rent
                 </Link>
               );
             })}
-            {unpaid.length > 8 && <Link to="/tenants?tab=rent-roll" className="text-[13px] text-gray-400 hover:text-white px-3 py-2">+{unpaid.length - 8} more →</Link>}
+            {unpaid.length > 8 && (
+              <div className="md:col-span-2 flex items-center gap-4 px-3 py-2 text-[13px]">
+                <button onClick={() => setShowAll(v => !v)} className="text-gray-300 hover:text-white">
+                  {showAll ? 'Show fewer' : `Show all ${unpaid.length} here ▾`}
+                </button>
+                <Link to="/tenants?tab=rent-roll" className="text-gray-500 hover:text-white">Open the rent roll →</Link>
+              </div>
+            )}
           </div>
         ) : (
           <p className="text-xs text-emerald-400">Every lease has paid for {format(now, 'MMMM')}.</p>

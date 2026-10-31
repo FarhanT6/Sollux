@@ -27,19 +27,20 @@ function Ico({ d, children, size = 16 }: { d?: string; children?: React.ReactNod
  */
 export const NAV = [
   {
-    group: '', to: '/bills', label: 'Bills',
-    icon: (z: number) => <Ico size={z}><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M3 14h18M9 4v16M15 4v16"/></Ico>,
-  },
-  {
     group: '', to: '/dashboard', label: 'Overview',
     icon: (z: number) => <Ico size={z}><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></Ico>,
   },
   {
-    group: '', to: '/properties', label: 'Utilities',
+    group: '', to: '/bills', label: 'Bills',
+    icon: (z: number) => <Ico size={z}><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M3 14h18M9 4v16M15 4v16"/></Ico>,
+  },
+  {
+    // Phone tabs only: on a computer, Bills is the utilities sheet and the pay planner.
+    group: '', to: '/properties', label: 'Utilities', phoneOnly: true,
     icon: (z: number) => <Ico size={z}><path d="M3 21h18"/><path d="M6 21V7l6-4 6 4v14"/><path d="M9 21v-9h6v9"/></Ico>,
   },
   {
-    group: '', to: '/payments', label: 'Payments',
+    group: '', to: '/payments', label: 'Payments', phoneOnly: true,
     icon: (z: number) => <Ico size={z}><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></Ico>,
   },
   {
@@ -138,7 +139,7 @@ export default function AppLayout() {
 
   const navList = (
     <nav className="flex-1 px-3 py-4 overflow-y-auto">
-      {nav.map((n, i) => {
+      {nav.filter(n => !(n as { phoneOnly?: boolean }).phoneOnly).map((n, i) => {
         const b = badge(n.to);
         const heading = n.group && n.group !== nav[i - 1]?.group ? n.group : null;
         return (

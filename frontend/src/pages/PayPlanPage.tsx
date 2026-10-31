@@ -95,17 +95,17 @@ export function usePayPlan() {
   return { plan, loading, days, setDays, cushion, setCushion, utilities, setUtilities, busy, load, acct, acctLabel, markSent, setUsual, clear, remove, due, sent, shortCount };
 }
 
-export default function PayPlanPage() {
+export default function PayPlanPage({ embedded }: { embedded?: boolean } = {}) {
   const { plan, loading, days, setDays, cushion, setCushion, utilities, setUtilities, busy, load, acct, acctLabel, markSent, setUsual, clear, remove, due, sent, shortCount } = usePayPlan();
   const [addingTo, setAddingTo] = useState<string | null>(null);
   const [balanceFor, setBalanceFor] = useState<string | null>(null);
 
   return (
     <div>
-      <PageHeader title="Payments" subtitle="What is due, what is free in each account, and where to pay each one from" />
-      <PaymentsTabs active="plan" />
+      {!embedded && <PageHeader title="Payments" subtitle="What is due, what is free in each account, and where to pay each one from" />}
+      {!embedded && <PaymentsTabs active="plan" />}
 
-      <div className="px-6 py-5">
+      <div className={embedded ? '' : 'px-6 py-5'}>
         {/* Controls */}
         <div className="flex flex-wrap items-center gap-2 mb-4">
           <label className="text-xs text-gray-500">Due within</label>

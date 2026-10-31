@@ -13,11 +13,12 @@ import { accountView, newestIssued, nextInstallment } from '../lib/paidState';
 import { PageHeader, StatCard, InsightCard, Skeleton, EmptyState, Pill, Modal } from '../components/ui';
 import { format } from 'date-fns';
 import AddUtilityModal from '../components/utility/AddUtilityModal';
+import { BillsSheet } from './BillsPage';
 import PropertyOperations from '../components/property/PropertyOperations';
 import { fmtDate } from '../lib/date';
 import { computeMonthlySpend } from '../lib/monthlySpend';
 
-type Tab = 'utilities' | 'operations' | 'payments' | 'insights' | 'documents';
+type Tab = 'sheet' | 'utilities' | 'operations' | 'payments' | 'insights' | 'documents';
 
 // Surface what the API actually said. A generic "not found" hides the useful
 // part — an unrun migration, for instance, reports a missing column.
@@ -39,7 +40,7 @@ export default function PropertyDetailPage({ embedded }: { embedded?: boolean } 
   const [statements, setStatements] = useState<Statement[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [insights, setInsights] = useState<AIInsight[]>([]);
-  const [tab, setTab] = useState<Tab>('utilities');
+  const [tab, setTab] = useState<Tab>(embedded ? 'sheet' : 'utilities');
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [partialError, setPartialError] = useState<string | null>(null);
@@ -162,6 +163,8 @@ export default function PropertyDetailPage({ embedded }: { embedded?: boolean } 
   );
 
   const TABS: { key: Tab; label: string }[] = [
+    // On the property page the sheet comes first, as on Bills; the cards hold syncing, adding and moving accounts.
+    ...(embedded ? [{ key: 'sheet' as Tab, label: 'By month' }] : []),
     { key: 'utilities', label: embedded ? 'Accounts' : 'Utilities' },
     // ClickUp tasks and documents have their own places on the property page.
     ...(embedded ? [] : [{ key: 'operations' as Tab, label: 'Operations' }]),
@@ -310,6 +313,8 @@ export default function PropertyDetailPage({ embedded }: { embedded?: boolean } 
 
       {/* Tab content */}
       <div className="px-6 py-5">
+
+        {tab === 'sheet' && id && <BillsSheet propertyId={id} />}
 
         {/* ── Utilities tab ─────────────────────────────── */}
         {tab === 'utilities' && (
