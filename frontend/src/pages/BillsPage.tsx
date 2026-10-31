@@ -284,7 +284,7 @@ const VIEWS = [
   { key: 'pay', label: 'To pay', subtitle: 'What is due, what is free in each account, and where to pay each one from', render: () => <PayPlanPage embedded /> },
   { key: 'first', label: 'Pay first', subtitle: 'What to pay first, and what waiting costs', render: () => <PaymentPrioritiesPage embedded /> },
   { key: 'payments', label: 'Payments', subtitle: 'Payments made against utility accounts, grouped by provider', render: () => <PaymentsPage embedded /> },
-  { key: 'fees', label: 'Fees', subtitle: 'Any line item, broken down by utility and rolled up by property — month, year, or overall', render: () => <FeesSummaryPage embedded /> },
+  { key: 'fees', label: 'Fees', subtitle: 'Late fees and any other bill line, across every property', render: () => <FeesSummaryPage embedded /> },
   // Archive taken off for now (DocumentsPage); statements and PDFs stay on each account.
 ];
 
