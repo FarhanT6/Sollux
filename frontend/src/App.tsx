@@ -33,7 +33,6 @@ import LoanDetailPage from './pages/LoanDetailPage';
 import NoticeDetailPage from './pages/NoticeDetailPage';
 import { TenantRoute } from './pages/TenantDetailPage';
 import ReimbursementInvoicePage from './pages/ReimbursementInvoicePage';
-import CompliancePage from './pages/CompliancePage';
 import ProjectsPage from './pages/ProjectsPage';
 import TaxesPage from './pages/TaxesPage';
 import InsurancePage from './pages/InsurancePage';
@@ -138,7 +137,8 @@ export default function App() {
           <Route path="personal" element={<Section group="personal"><PersonalPage /></Section>} />
           <Route path="vault" element={<Section group="personal"><VaultPage /></Section>} />
           <Route path="personal/cards/:id" element={<CreditCardPage />} />
-          <Route path="compliance" element={<CompliancePage />} />
+          {/* Compliance is part of Legal (folded under it there). */}
+          <Route path="compliance" element={<Navigate to="/legal" replace />} />
           <Route path="projects" element={<Section group="personal"><ProjectsPage /></Section>} />
           <Route path="projects/:id" element={<ProjectsPage />} />
           <Route path="loans/:id" element={<LoanDetailPage />} />
