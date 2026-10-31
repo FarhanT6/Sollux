@@ -15,9 +15,8 @@ import FeesSummaryPage from './FeesSummaryPage';
 import { onLoansTab, MORTGAGE_PERSONAL_TYPES } from '../lib/loanGroups';
 import type { LoanType } from '../types';
 import { ViewSwitch } from './FinancesPage';
-import PayPlanPage from './PayPlanPage';
 import AddUtilityModal from '../components/utility/AddUtilityModal';
-import PaymentPrioritiesPage from './PaymentPrioritiesPage';
+import { setUtilitiesPersonal } from '../api/client';
 
 const OTHER_LOANS = 'other-loans';
 
@@ -75,6 +74,12 @@ export function BillsSheet({ propertyId }: { propertyId?: string } = {}) {
   const [openOnly, setOpenOnly] = useState(false);
   const [cell, setCell] = useState<{ bills: Bill[]; month: string } | null>(null);
   const [catchingUp, setCatchingUp] = useState(false);
+  // A personal bill put back on its property: its bills count as the property's costs again.
+  async function moveBack(a: { id: string; providerName: string }) {
+    if (!confirm(`Move ${a.providerName} back to its property? Its bills count as that property's costs again.`)) return;
+    await setUtilitiesPersonal([a.id], false);
+    void load();
+  }
   // Adding an account: straight to the form when the property is known, else pick it first.
   const [adding, setAdding] = useState<string | 'pick' | null>(null);
   const [loanCell, setLoanCell] = useState<{ row: LoanTrackerYear['rows'][number]; month: string } | null>(null);
@@ -192,7 +197,7 @@ export function BillsSheet({ propertyId }: { propertyId?: string } = {}) {
             <section key={p.id} className="rounded-xl overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.06)' }}>
               <div className="px-4 py-3 flex items-baseline gap-2 border-b border-white/5">
                 {p.id === OTHER_LOANS ? <span className="font-semibold text-white">{p.name}</span>
-                  : p.personal ? <Link to="/personal?tab=bills" className="font-semibold text-white hover:text-amber-400">{p.name}</Link>
+                  : p.personal ? <span className="font-semibold text-white" title="Your own bills, not counted as any property's costs">{p.name}</span>
                   : <Link to={`/portfolio/${p.id}?tab=Bills`} className="font-semibold text-white hover:text-amber-400">{p.name}</Link>}
                 {p.name !== p.address && <span className="text-xs text-gray-500">{p.address}, {p.city}</span>}
               </div>
@@ -217,6 +222,7 @@ export function BillsSheet({ propertyId }: { propertyId?: string } = {}) {
                         <tr key={a.id} className="border-t border-white/5 hover:bg-white/[0.02]">
                           <td className="px-3 py-2 sticky left-0 z-10" style={{ background: '#1e1e1e' }}>
                             <Link to={`/properties/${a.propertyId ?? p.id}/utilities/${a.id}`} className="text-gray-100 hover:text-amber-400 font-medium">{a.providerName}</Link>
+                            {p.personal && <button onClick={() => void moveBack(a)} className="ml-2 text-[11px] text-gray-500 hover:text-amber-400" title="Back to the property's costs">Move back</button>}
                             <div className="text-gray-500 flex gap-1.5 items-center">
                               <span>{CATEGORY[a.category] ?? a.category}</span>
                               {a.last4 && <span>••{a.last4}</span>}
@@ -276,14 +282,12 @@ export function BillsSheet({ propertyId }: { propertyId?: string } = {}) {
 }
 
 /**
- * The Bills page, the one place for utility bills and paying them: the sheet
- * first, then what to pay (the pay planner and pay-first, once the Payments
- * page), what was paid, fees and the archive. Each row opens the account.
+ * The Bills page, the one place for utility bills: the sheet, the payments
+ * made and the fees. Each row opens the account. (The pay planner and
+ * pay-first views are off for now; their pages are kept.)
  */
 const VIEWS = [
   { key: 'sheet', label: 'By month', subtitle: 'Every account and loan, month by month — what is paid, what is due, what is late', render: () => <BillsSheet /> },
-  { key: 'pay', label: 'To pay', subtitle: 'What is due, what is free in each account, and where to pay each one from', render: () => <PayPlanPage embedded /> },
-  { key: 'first', label: 'Pay first', subtitle: 'What to pay first, and what waiting costs', render: () => <PaymentPrioritiesPage embedded /> },
   { key: 'payments', label: 'Payments', subtitle: 'Payments made against utility accounts, grouped by provider', render: () => <PaymentsPage embedded /> },
   { key: 'fees', label: 'Fees', subtitle: 'Late fees and any other bill line, across every property', render: () => <FeesSummaryPage embedded /> },
   // Archive taken off for now: DocumentsPage is kept to bring it back; statements and PDFs stay on each account.

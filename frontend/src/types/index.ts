@@ -921,7 +921,7 @@ export interface MonthlyPnL {
 }
 
 export interface UtilityAccount {
-  /** The owner's own bill, kept for fetching and paying but not a cost of the property (Personal -> Bills). */
+  /** The owner's own bill, kept for fetching and paying but not a cost of the property (the Bills page's Personal section). */
   isPersonal?: boolean;
   id: string;
   propertyId: string;

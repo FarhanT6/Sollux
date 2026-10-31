@@ -126,7 +126,7 @@ export default function DashboardPage() {
                         </div>
                       </Link>
                     ))}
-                    <Link to="/payments/priorities" className="block px-3 py-2 text-xs text-gray-400 hover:text-white" onClick={() => setShowDue(false)}>All payments →</Link>
+                    <Link to="/bills" className="block px-3 py-2 text-xs text-gray-400 hover:text-white" onClick={() => setShowDue(false)}>All bills →</Link>
                   </div>
                 )}
               </div>
