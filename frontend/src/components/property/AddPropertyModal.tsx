@@ -42,7 +42,7 @@ export default function AddPropertyModal({ onClose }: Props) {
     try {
       const property = await createProperty(form);
       onClose();
-      navigate(`/properties/${property.id}`);
+      navigate(`/portfolio/${property.id}`);
     } catch (err: any) {
       setError(err?.response?.data?.error || 'Failed to create property');
     } finally {

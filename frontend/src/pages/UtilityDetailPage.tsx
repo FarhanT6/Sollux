@@ -946,7 +946,7 @@ export default function UtilityDetailPage() {
     setDeleting(true);
     try {
       await deleteUtility(accountId);
-      navigate(propertyId ? `/properties/${propertyId}` : '/properties');
+      navigate(propertyId ? `/portfolio/${propertyId}?tab=Bills` : '/properties');
     } catch {
       setDeleting(false);
     }
@@ -1459,7 +1459,7 @@ export default function UtilityDetailPage() {
           <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-1">
             <Link to="/properties" className="hover:text-gray-300 transition-colors">Properties</Link>
             <span>›</span>
-            <Link to={`/properties/${propertyId}`} className="hover:text-gray-300 transition-colors">{propertyLabel}</Link>
+            <Link to={`/portfolio/${propertyId}?tab=Bills`} className="hover:text-gray-300 transition-colors">{propertyLabel}</Link>
             <span>›</span>
             <span className="text-gray-300">{account.providerName}</span>
           </div>

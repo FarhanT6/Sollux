@@ -55,7 +55,7 @@ export const NAV = [
     icon: (z: number) => <Ico size={z} d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z" />,
   },
   {
-    group: 'Properties', to: '/portfolio', label: 'Portfolio',
+    group: 'Properties', to: '/portfolio', label: 'Properties',
     icon: (z: number) => <Ico size={z}><path d="M3 21h18"/><path d="M9 21V7H5l7-5 7 5v14"/><rect x="9" y="13" width="2" height="4"/><rect x="13" y="13" width="2" height="4"/></Ico>,
   },
   {

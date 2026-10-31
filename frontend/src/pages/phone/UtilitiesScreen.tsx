@@ -60,9 +60,9 @@ export default function UtilitiesScreen() {
       )}
 
       {groups.map(({ p, label, shown, open, total }) => (
-        <Section key={p.id} header={label} action={{ label: 'Property', to: `/properties/${p.id}` }}
+        <Section key={p.id} header={label} action={{ label: 'Property', to: `/portfolio/${p.id}?tab=Bills` }}
           footer={total === 0 ? undefined : open > 0 ? `${fmtMoney(open)} open across ${total} account${total === 1 ? '' : 's'}.` : `All ${total} paid.`}>
-          {total === 0 && <Row title="No utility accounts" subtitle="Add one from the property" to={`/properties/${p.id}`} />}
+          {total === 0 && <Row title="No utility accounts" subtitle="Add one from the property" to={`/portfolio/${p.id}?tab=Bills`} />}
           {shown.map(({ a, st }) => (
             <Row key={a.id} to={`/properties/${p.id}/utilities/${a.id}`}
               icon={categoryIcon(a.category)} title={a.providerName}
