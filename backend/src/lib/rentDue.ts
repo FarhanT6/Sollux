@@ -11,7 +11,7 @@
  * rentAmount is the total the tenant pays each month (rent plus utilities
  * billed on top), so the utilities are prorated with it.
  */
-type LeaseRent = { rentAmount: unknown; startDate: Date | null; firstMonthRent?: unknown };
+export type LeaseRent = { rentAmount: unknown; startDate: Date | null; firstMonthRent?: unknown };
 
 const periodOf = (d: Date) => Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
 
