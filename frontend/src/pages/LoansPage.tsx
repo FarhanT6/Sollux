@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getLoans, createLoan, updateLoan, deleteLoan, getProperties, getLoanTrackerMonth, type LoanTrackerRow } from '../api/client';
+import { getLoans, createLoan, updateLoan, deleteLoan, getProperties, getLoanTrackerMonth, getCatchUpLoans, runCatchUp, type LoanTrackerRow } from '../api/client';
 import { todayISO, thisMonthISO } from '../lib/date';
 import type { Loan, Property, LoanType } from '../types';
 import { MORTGAGE_PERSONAL_TYPES, onLoansTab } from '../lib/loanGroups';
@@ -167,7 +167,27 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
   const [loading, setLoading] = useState(true);
   // This month's payment on each loan, from the tracker.
   const [month, setMonth] = useState<Map<string, LoanTrackerRow>>(new Map());
-  useEffect(() => { getLoanTrackerMonth(thisMonthISO(), todayISO()).then(t => setMonth(new Map(t.rows.map(r => [r.loanId, r])))).catch(() => {}); }, []);
+  const loadMonth = () => getLoanTrackerMonth(thisMonthISO(), todayISO()).then(t => setMonth(new Map(t.rows.map(r => [r.loanId, r])))).catch(() => {});
+  useEffect(() => { void loadMonth(); }, []);
+  // Every mortgage month without a payment on record, through this month, logged at its scheduled
+  // payment (Catch up, mortgages only, no bills). Undone from Bills -> Catch up -> Undo last catch-up.
+  const [catching, setCatching] = useState<string | null>(null);
+  async function mortgagesPaidToDate() {
+    setCatching('Checking…');
+    try {
+      const through = thisMonthISO();
+      const { loans: due } = await getCatchUpLoans(through);
+      const mortgages = due.filter(l => MORTGAGE_PERSONAL_TYPES.includes(l.loanType as LoanType));
+      const months = mortgages.reduce((t, l) => t + l.missing.length, 0);
+      if (!months) { setCatching('Every mortgage month is already recorded.'); return; }
+      if (!confirm(`Log ${months} mortgage payment${months === 1 ? '' : 's'} across ${mortgages.length} loan${mortgages.length === 1 ? '' : 's'} as paid, through ${format(new Date(`${through}-01T12:00:00`), 'MMMM yyyy')}? Each at its scheduled amount; balances are not changed. You can undo it from Bills → Catch up.`)) { setCatching(null); return; }
+      const r = await runCatchUp({ through, loanIds: mortgages.map(l => l.loanId), statementIds: [] });
+      setCatching(`Logged ${r.loanPayments} mortgage payment${r.loanPayments === 1 ? '' : 's'}. Every mortgage is paid through ${format(new Date(`${through}-01T12:00:00`), 'MMMM')}.`);
+      void loadMonth();
+    } catch {
+      setCatching('Could not log them. Try again, or use Bills → Catch up.');
+    }
+  }
   const [search, setSearch] = useState('');
   const [propertyFilter, setPropertyFilter] = useState('');
   const [sortBy, setSortBy] = useState<'lender' | 'balance' | 'maturity' | 'rate'>('lender');
@@ -321,6 +341,7 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
                 <option value="rate">Sort: Rate (high–low)</option>
               </select>
             </div>
+            <button onClick={() => void mortgagesPaidToDate()} className="btn text-xs" title="Log every mortgage month with no payment on record, through this month, as paid">Mark mortgages paid to date</button>
             <button onClick={() => setShowImport(v => !v)} className="btn text-xs">Import payment details</button>
             <button onClick={() => setShowForm(v => !v)} className="btn text-xs">
               {showForm ? 'Cancel' : '+ Add loan'}
@@ -329,6 +350,7 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
         </div>
       )}
 
+      {catching && <p className="text-xs text-emerald-400 mb-3">{catching} <button onClick={() => setCatching(null)} className="text-gray-500 hover:text-gray-300 ml-1">✕</button></p>}
       {importNote && <p className="text-xs text-emerald-400 mb-3">{importNote}</p>}
       {showImport && (
         <PaymentDetailsImport onDone={n => {
