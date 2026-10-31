@@ -12,7 +12,8 @@ import { openUrl } from '../lib/native';
 import { describeApiError } from '../lib/apiError';
 import PaymentsPage from './PaymentsPage';
 import FeesSummaryPage from './FeesSummaryPage';
-import { onLoansTab } from '../lib/loanGroups';
+import { onLoansTab, MORTGAGE_PERSONAL_TYPES } from '../lib/loanGroups';
+import type { LoanType } from '../types';
 import { ViewSwitch } from './FinancesPage';
 import PayPlanPage from './PayPlanPage';
 import AddUtilityModal from '../components/utility/AddUtilityModal';
@@ -376,6 +377,13 @@ function CatchUp({ bills, onClose, onDone }: { bills: Bill[]; onClose: () => voi
               <div className="flex items-center gap-2 mb-2">
                 <p className="text-sm font-medium text-white">Loans paid through</p>
                 <input type="month" className="input-dark text-sm" value={through} max={thisMonth} onChange={e => e.target.value && setThrough(e.target.value)} />
+                {loans && loans.length > 0 && (
+                  <span className="ml-auto flex gap-3 text-xs">
+                    <button onClick={() => setPickLoans(new Set(loans.map(l => l.loanId)))} className="text-gray-400 hover:text-white">All</button>
+                    <button onClick={() => setPickLoans(new Set(loans.filter(l => MORTGAGE_PERSONAL_TYPES.includes(l.loanType as LoanType)).map(l => l.loanId)))} className="text-amber-400 hover:text-amber-300">Mortgages only</button>
+                    <button onClick={() => setPickLoans(new Set())} className="text-gray-400 hover:text-white">None</button>
+                  </span>
+                )}
               </div>
               {!loans ? <p className="text-xs text-gray-500">Loading…</p> : !loans.length ? <p className="text-xs text-gray-500">Every loan month is already recorded.</p> : (
                 <div className="space-y-1">
@@ -396,6 +404,12 @@ function CatchUp({ bills, onClose, onDone }: { bills: Bill[]; onClose: () => voi
               <div className="flex items-center gap-2 mb-2">
                 <p className="text-sm font-medium text-white">Bills due before</p>
                 <input type="date" className="input-dark text-sm" value={before} onChange={e => e.target.value && setBefore(e.target.value)} />
+                {byAccount.size > 0 && (
+                  <span className="ml-auto flex gap-3 text-xs">
+                    <button onClick={() => setSkipAccounts(new Set())} className="text-gray-400 hover:text-white">All</button>
+                    <button onClick={() => setSkipAccounts(new Set(byAccount.keys()))} className="text-gray-400 hover:text-white">None</button>
+                  </span>
+                )}
               </div>
               {!byAccount.size ? <p className="text-xs text-gray-500">No unpaid bills due before then.</p> : (
                 <div className="space-y-1">

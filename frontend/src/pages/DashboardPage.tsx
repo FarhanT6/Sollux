@@ -337,7 +337,7 @@ function CashPositionCard({ items, manualAccounts }: { items: PlaidItem[]; manua
                   return (
                     <button onClick={() => void rename(acct)} className="block w-full text-left text-xs text-gray-400 hover:text-gray-200 truncate mb-0.5" title={`${acct.name} — click to name it`}>
                       {acct.last4 ? `x${acct.last4}` : String(acct.name ?? '').replace(/[^\x20-\x7E]/g, '').trim()}
-                      {nick ? <span className="text-gray-500"> · {nick}</span> : <span className="text-gray-700"> · name</span>}
+                      {nick ? <span className="text-gray-300"> · {nick}</span> : <span className="text-amber-500/80"> · + name</span>}
                     </button>
                   );
                 })()}
