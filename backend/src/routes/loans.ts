@@ -541,6 +541,17 @@ router.post('/:id/payments', async (req, res, next) => {
     const loan = await db.loan.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
     if (!loan) return res.status(404).json({ error: 'Loan not found' });
     const { periodMonth, ...data } = LoanPaymentSchema.parse(req.body);
+    // The same payment logged twice reads as a double payment. Unless the owner
+    // says it really is a second one, a payment of the same amount within three
+    // days of one on record is refused with the one it matches.
+    if (!req.body?.allowDuplicate && data.amount != null && data.date) {
+      const at = new Date(data.date as any).getTime();
+      const twin = await db.loanPayment.findFirst({
+        where: { loanId: loan.id, amount: { gte: Number(data.amount) - 0.5, lte: Number(data.amount) + 0.5 }, date: { gte: new Date(at - 3 * 86400000), lte: new Date(at + 3 * 86400000) } },
+        select: { date: true, amount: true },
+      });
+      if (twin) return res.status(409).json({ error: `A $${Number(twin.amount).toFixed(2)} payment on ${twin.date.toISOString().slice(0, 10)} is already logged for this loan.`, duplicate: true });
+    }
     const payment = await db.loanPayment.create({
       data: { ...data, loanId: req.params.id, ...(periodMonth ? { periodDate: new Date(`${periodMonth}-01T00:00:00.000Z`) } : {}) },
     });
@@ -552,7 +563,9 @@ router.delete('/:id/payments/:paymentId', async (req, res, next) => {
   try {
     const loan = await db.loan.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
     if (!loan) return res.status(404).json({ error: 'Loan not found' });
-    await db.loanPayment.delete({ where: { id: req.params.paymentId } });
+    // Only a payment on this loan (which is the owner's): an id from another loan or customer deletes nothing.
+    const r = await db.loanPayment.deleteMany({ where: { id: req.params.paymentId, loanId: loan.id } });
+    if (!r.count) return res.status(404).json({ error: 'Payment not found' });
     res.status(204).send();
   } catch (err) { next(err); }
 });

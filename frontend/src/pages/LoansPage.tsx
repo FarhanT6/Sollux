@@ -180,7 +180,7 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
       const mortgages = due.filter(l => MORTGAGE_PERSONAL_TYPES.includes(l.loanType as LoanType));
       const months = mortgages.reduce((t, l) => t + l.missing.length, 0);
       if (!months) { setCatching('Every mortgage month is already recorded.'); return; }
-      if (!confirm(`Log ${months} mortgage payment${months === 1 ? '' : 's'} across ${mortgages.length} loan${mortgages.length === 1 ? '' : 's'} as paid, through ${format(new Date(`${through}-01T12:00:00`), 'MMMM yyyy')}? Each at its scheduled amount; balances are not changed. You can undo it from Bills → Catch up.`)) { setCatching(null); return; }
+      if (!confirm(`Log ${months} mortgage payment${months === 1 ? '' : 's'} across ${mortgages.length} loan${mortgages.length === 1 ? '' : 's'} as paid, through ${format(new Date(`${through}-01T12:00:00`), 'MMMM yyyy')}? Only months with nothing logged; a month with any payment on record is left as it is. Each at its scheduled amount; balances are not changed. You can undo it from Bills → Catch up.`)) { setCatching(null); return; }
       const r = await runCatchUp({ through, loanIds: mortgages.map(l => l.loanId), statementIds: [] });
       setCatching(`Logged ${r.loanPayments} mortgage payment${r.loanPayments === 1 ? '' : 's'}. Every mortgage is paid through ${format(new Date(`${through}-01T12:00:00`), 'MMMM')}.`);
       void loadMonth();

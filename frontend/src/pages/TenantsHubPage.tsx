@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import RentCatchUp from '../components/tenant/RentCatchUp';
 import { PageHeader } from '../components/ui';
 import RentRollPage from './RentRollPage';
 import RentPage from './RentPage';
@@ -20,6 +22,9 @@ export default function TenantsHubPage() {
   const raw = searchParams.get('tab');
   const tab: Tab = TABS.some(t => t.key === raw) ? raw as Tab : 'rent';
 
+  const [catchingUp, setCatchingUp] = useState(false);
+  // Remount the open view after a catch-up so it shows the rent just logged.
+  const [reload, setReload] = useState(0);
   function setTab(t: Tab) {
     setSearchParams({ tab: t }, { replace: true });
   }
@@ -33,7 +38,9 @@ export default function TenantsHubPage() {
 
   return (
     <div>
-      <PageHeader title="Tenants & rent" subtitle={subtitles[tab]} />
+      <PageHeader title="Tenants & rent" subtitle={subtitles[tab]}
+        action={<button onClick={() => setCatchingUp(true)} className="btn text-sm" title="Log every month with no payment on record as paid, from move-in, for tenants who owe nothing from earlier months">Mark rent paid to date</button>} />
+      {catchingUp && <RentCatchUp onClose={() => setCatchingUp(false)} onDone={() => { setCatchingUp(false); setReload(n => n + 1); }} />}
 
       <div className="flex border-b px-6" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
         {TABS.map(t => (
@@ -51,7 +58,7 @@ export default function TenantsHubPage() {
         ))}
       </div>
 
-      <div className="px-6 py-5">
+      <div className="px-6 py-5" key={reload}>
         {tab === 'rent' && <RentPage embedded />}
         {tab === 'rent-roll' && <RentRollPage embedded />}
         {tab === 'tenants'   && <TenantsPage embedded />}

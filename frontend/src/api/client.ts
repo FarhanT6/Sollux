@@ -283,8 +283,15 @@ export const deleteLoan = (id: string) =>
   api.delete(`/loans/${id}`);
 export const getLoanPayments = (loanId: string) =>
   api.get<LoanPayment[]>(`/loans/${loanId}/payments`).then(r => r.data);
+/** A payment matching one already logged (same amount within three days) is confirmed before it is logged again. */
 export const createLoanPayment = (loanId: string, data: Partial<LoanPayment> & { periodMonth?: string | null }) =>
-  api.post<LoanPayment>(`/loans/${loanId}/payments`, data).then(r => r.data);
+  api.post<LoanPayment>(`/loans/${loanId}/payments`, data).then(r => r.data).catch(async (e: any) => {
+    if (e?.response?.status === 409 && e.response.data?.duplicate) {
+      if (!window.confirm(`${e.response.data.error} Log another one anyway?`)) throw Object.assign(new Error('Not logged: it is already on record.'), { response: { data: { error: 'Not logged: that payment is already on record.' } } });
+      return api.post<LoanPayment>(`/loans/${loanId}/payments`, { ...data, allowDuplicate: true }).then(r => r.data);
+    }
+    throw e;
+  });
 export const extendLoan = (id: string, data: { months: number; notes?: string }) =>
   api.post<Loan>(`/loans/${id}/extend`, data).then(r => r.data);
 // Monthly loan-payment tracker — the loans' side of rent collection.
@@ -819,6 +826,14 @@ export const getBillsSheet = () => api.get<BillsSheet>('/bills').then(r => r.dat
 export interface CatchUpLoan { loanId: string; lender: string; loanType: string; isPersonal: boolean; property: string | null; dueDay: number | null; expected: number; missing: { month: string; amount: number }[] }
 export const getCatchUpLoans = (through: string) =>
   api.get<{ loans: CatchUpLoan[]; lastCatchUp: string | null }>('/catch-up/loans', { params: { through } }).then(r => r.data);
+export interface RentCatchUp {
+  ready: { leaseId: string; tenant: string; property: string; months: { month: string; amount: number }[] }[];
+  review: { leaseId: string; tenant: string; property: string; reason: string; arrears: number }[];
+  lastCatchUp: string | null;
+}
+export const getRentCatchUp = (through: string) => api.get<RentCatchUp>('/catch-up/rent', { params: { through } }).then(r => r.data);
+export const runRentCatchUp = (through: string, leaseIds: string[]) => api.post<{ rentPayments: number; leases: number }>('/catch-up/rent', { through, leaseIds }).then(r => r.data);
+export const undoRentCatchUp = () => api.post<{ rentPayments: number }>('/catch-up/rent/undo').then(r => r.data);
 export const runCatchUp = (data: { through: string; loanIds: string[]; statementIds: string[] }) =>
   api.post<{ loanPayments: number; bills: number }>('/catch-up', data).then(r => r.data);
 export const undoCatchUp = () => api.post<{ loanPayments: number; bills: number }>('/catch-up/undo').then(r => r.data);
