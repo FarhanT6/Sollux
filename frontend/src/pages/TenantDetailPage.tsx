@@ -428,7 +428,7 @@ function LeaseCard({ lease, maintenance, onChanged }: {
         <div className="flex items-center gap-2">
           <span className={`pill text-xs ${lease.status === 'ACTIVE' ? 'pill-green' : lease.status === 'PENDING' ? 'pill-amber' : 'pill-gray'}`}>{lease.status}</span>
           {lease.status === 'ACTIVE' && (
-            <Link to="/finances?tab=income&view=rent" className="text-xs text-gray-500 hover:text-gray-300">View in Rent</Link>
+            <Link to="/tenants?tab=rent" className="text-xs text-gray-500 hover:text-gray-300">View in Rent</Link>
           )}
           {/* One lease editor: the property's, which has every term (rent, due day, utilities, increases, arrears, late fees, payer names). */}
           {property && <Link to={`/portfolio/${property.id}?tab=Tenants&editLease=${lease.id}`} className="text-xs text-amber-400 hover:text-amber-300">Edit lease</Link>}

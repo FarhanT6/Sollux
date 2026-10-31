@@ -13,7 +13,7 @@ export const SECTIONS = {
   ],
   properties: [
     { to: '/portfolio', label: 'All properties' },
-    { to: '/tenants', label: 'Tenants & rent roll' },
+    { to: '/tenants', label: 'Tenants & rent' },
     { to: '/insurance', label: 'Insurance' },
     { to: '/taxes', label: 'Taxes' },
     { to: '/repairs', label: 'Repairs' },
