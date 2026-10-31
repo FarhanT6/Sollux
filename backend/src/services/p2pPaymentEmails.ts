@@ -199,26 +199,45 @@ export function periodFor(date: Date, memo: string | null | undefined): Date {
   return periodStartOf(date);
 }
 
-/** A payment already logged by hand on this lease for this amount, around this date. */
-export async function findLoggedPayment(leaseId: string, amount: number, date: Date) {
-  return db.rentPayment.findFirst({
-    where: {
-      leaseId, amount,
-      paidDate: { gte: new Date(date.getTime() - 5 * DAY), lte: new Date(date.getTime() + 5 * DAY) },
-      // Not one another transaction already accounts for.
-    },
-    select: { id: true },
-    orderBy: { paidDate: 'asc' },
-  }).then(async p => {
-    if (!p) return null;
-    const used = await db.incomingTransaction.findFirst({ where: { rentPaymentId: p.id }, select: { id: true } });
-    return used ? null : p;
+/**
+ * The rent payment this transfer already is: logged by hand on this lease for
+ * this amount around this date, or logged from the other source's copy of the
+ * same transfer (the email when this is the bank row, or the other way round,
+ * when the two were not paired). A payment already accounted for by another
+ * transfer from the same source, or by one with a different reference, is a
+ * different payment: two real $1,000 Zelles on one day each get their own.
+ */
+export async function findLoggedPayment(leaseId: string, amount: number, date: Date, from?: { source: 'bank' | 'email'; reference?: string | null }) {
+  const candidates = await db.rentPayment.findMany({
+    where: { leaseId, amount, paidDate: { gte: new Date(date.getTime() - 5 * DAY), lte: new Date(date.getTime() + 5 * DAY) } },
+    select: { id: true, paidDate: true },
   });
+  // Nearest in date first.
+  candidates.sort((a, b) => Math.abs(a.paidDate.getTime() - date.getTime()) - Math.abs(b.paidDate.getTime() - date.getTime()));
+  const ref = from?.reference?.trim().toLowerCase();
+  for (const p of candidates) {
+    const users = await db.incomingTransaction.findMany({ where: { rentPaymentId: p.id }, select: { source: true, confirmation: true, name: true } });
+    if (!users.length) return { id: p.id };
+    if (!from) continue;
+    const sameTransfer = users.every(u => {
+      if ((u.source ?? 'bank') === from.source) return false;
+      const theirs = [u.confirmation, /\bREF\s*#?\s*(\S+)/i.exec(u.name ?? '')?.[1]].filter(Boolean).map(x => x!.toLowerCase());
+      return !ref || !theirs.length || theirs.includes(ref);
+    });
+    if (sameTransfer) return { id: p.id };
+  }
+  return null;
 }
 
-/** The same transfer already in the queue from the other source (bank feed vs. email). */
-export async function findTwin(userId: string, amount: number, date: Date, otherSource: 'bank' | 'email', bankAccountId?: string | null) {
-  return db.incomingTransaction.findFirst({
+/**
+ * The same transfer already in the queue from the other source (bank feed vs.
+ * email). Two same-amount transfers on one day are two payments, so each pairs
+ * with its own: the Zelle reference first (the bank descriptor carries it,
+ * "REF # JPM99ABC123", and so does the email), and never a row already paired
+ * with a different reference.
+ */
+export async function findTwin(userId: string, amount: number, date: Date, otherSource: 'bank' | 'email', bankAccountId?: string | null, reference?: string | null) {
+  const rows = await db.incomingTransaction.findMany({
     where: {
       userId, amount, source: otherSource,
       date: { gte: new Date(date.getTime() - 4 * DAY), lte: new Date(date.getTime() + 4 * DAY) },
@@ -226,6 +245,15 @@ export async function findTwin(userId: string, amount: number, date: Date, other
     },
     orderBy: { date: 'asc' },
   });
+  const ref = reference?.trim().toLowerCase();
+  const refsOf = (r: typeof rows[number]) => [r.confirmation, /\bREF\s*#?\s*(\S+)/i.exec(r.name ?? '')?.[1]].filter(Boolean).map(x => x!.toLowerCase());
+  if (ref) {
+    const same = rows.find(r => refsOf(r).includes(ref));
+    if (same) return same;
+    // A row carrying another reference is another transfer.
+    return rows.find(r => refsOf(r).length === 0) ?? null;
+  }
+  return rows[0] ?? null;
 }
 
 export type P2PResult = { outcome: 'payment'; detail: string };
@@ -273,7 +301,7 @@ export async function recordP2PEmail(userId: string, p: P2PPayment, key: string)
 
   // The bank feed may already have this transfer: add what the email knows
   // (who sent it) to that row instead of adding a second one.
-  const twin = await findTwin(userId, p.amount, p.date, 'bank', bankAccountId);
+  const twin = await findTwin(userId, p.amount, p.date, 'bank', bankAccountId, p.confirmation);
   if (twin) {
     await db.incomingTransaction.update({
       where: { id: twin.id },
@@ -296,7 +324,7 @@ export async function recordP2PEmail(userId: string, p: P2PPayment, key: string)
   if (!matchedLeaseId) return { outcome: 'payment', detail: `${fmt}: no tenant matched, waiting in Finances → Incoming` };
 
   // Logged already by hand: link to it rather than log it twice.
-  const logged = await findLoggedPayment(matchedLeaseId, p.amount, p.date);
+  const logged = await findLoggedPayment(matchedLeaseId, p.amount, p.date, { source: 'email', reference: p.confirmation });
   if (logged) {
     await db.incomingTransaction.update({ where: { id: created.id }, data: { status: 'APPLIED', rentPaymentId: logged.id } });
     return { outcome: 'payment', detail: `${fmt}: matches a payment already logged` };

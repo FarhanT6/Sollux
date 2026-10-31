@@ -121,7 +121,7 @@ type Tx = NonNullable<Awaited<ReturnType<typeof db.incomingTransaction.findFirst
 /** Record a transaction as rent on a lease (or link it to the payment already logged by hand). */
 async function applyTo(tx: Tx, leaseId: string) {
   // Logged by hand already: link it instead of logging the money twice.
-  const logged = await findLoggedPayment(leaseId, Number(tx.amount), tx.date);
+  const logged = await findLoggedPayment(leaseId, Number(tx.amount), tx.date, { source: tx.source === 'email' ? 'email' : 'bank', reference: tx.confirmation ?? /\bREF\s*#?\s*(\S+)/i.exec(tx.name ?? '')?.[1] ?? null });
   if (logged) {
     const updated = await db.incomingTransaction.update({ where: { id: tx.id }, data: { status: 'APPLIED', rentPaymentId: logged.id } });
     return { updated, linkedExisting: true };

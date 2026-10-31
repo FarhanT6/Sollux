@@ -279,9 +279,27 @@ export async function syncTransactionsForItem(plaidItemId: string) {
   while (hasMore) {
     const resp = await plaidClient.transactionsSync({ access_token: accessToken, cursor });
 
+    // A transfer is reported twice: pending, then posted under a new id
+    // (pending_transaction_id points back), and the pending one is then
+    // listed as removed. Both were kept and both logged as rent, so one $1,000
+    // Zelle read as two. Pending ones wait until they post; a posted one takes
+    // over a row stored from its pending self; removed ones not yet logged go.
+    const removedIds = resp.data.removed.map(r => r.transaction_id).filter((id): id is string => !!id);
+    if (removedIds.length) {
+      await db.incomingTransaction.deleteMany({ where: { plaidTransactionId: { in: removedIds }, status: { not: 'APPLIED' } } });
+      await db.outgoingTransaction.deleteMany({ where: { plaidTransactionId: { in: removedIds }, status: { not: 'APPLIED' } } });
+    }
+
     for (const tx of resp.data.added) {
       const bankAccount = bankAccountByPlaidId.get(tx.account_id);
       if (!bankAccount) continue;
+      if (tx.pending) continue;
+      if (tx.pending_transaction_id) {
+        const fromPending = await db.incomingTransaction.findUnique({ where: { plaidTransactionId: tx.pending_transaction_id }, select: { id: true } });
+        if (fromPending) { await db.incomingTransaction.update({ where: { id: fromPending.id }, data: { plaidTransactionId: tx.transaction_id } }); continue; }
+        const outPending = await db.outgoingTransaction.findUnique({ where: { plaidTransactionId: tx.pending_transaction_id }, select: { id: true } });
+        if (outPending) { await db.outgoingTransaction.update({ where: { id: outPending.id }, data: { plaidTransactionId: tx.transaction_id } }); continue; }
+      }
       const name = tx.merchant_name || tx.name;
 
       // Plaid: negative amount = money moving INTO the account (a credit).
@@ -298,7 +316,7 @@ export async function syncTransactionsForItem(plaidItemId: string) {
           const amount = Math.abs(tx.amount);
           // Already read from the Zelle / Venmo email: the bank feed adds the
           // account it landed in, not a second payment.
-          const fromEmail = await findTwin(plaidItem.userId, amount, new Date(tx.date), 'email', bankAccount.id);
+          const fromEmail = await findTwin(plaidItem.userId, amount, new Date(tx.date), 'email', bankAccount.id, /\bREF\s*#?\s*(\S+)/i.exec(name)?.[1] ?? null);
           if (fromEmail) {
             if (!fromEmail.bankAccountId) await db.incomingTransaction.update({ where: { id: fromEmail.id }, data: { bankAccountId: bankAccount.id } });
             continue;
@@ -332,7 +350,7 @@ export async function syncTransactionsForItem(plaidItemId: string) {
           // (sureOfTenant): the tenant's name or a saved payer name, for an
           // amount they plausibly owe. Anything less certain waits for review,
           // because a wrongly applied payment moves a balance.
-          const logged = nameMatch ? await findLoggedPayment(nameMatch.leaseId, amount, new Date(tx.date)) : null;
+          const logged = nameMatch ? await findLoggedPayment(nameMatch.leaseId, amount, new Date(tx.date), { source: 'bank', reference: /\bREF\s*#?\s*(\S+)/i.exec(name)?.[1] ?? null }) : null;
           const lease = nameMatch ? await db.lease.findUnique({ where: { id: nameMatch.leaseId }, select: { rentAmount: true, arrearsBalance: true } }) : null;
           if (logged) {
             await db.incomingTransaction.update({ where: { id: created.id }, data: { status: 'APPLIED', rentPaymentId: logged.id } });
