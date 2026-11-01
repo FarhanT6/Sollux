@@ -42,6 +42,7 @@ import LegalPage from './LegalPage';
 import UnitsTab from '../components/UnitsTab';
 import { usePhone, Section, Row } from '../ios';
 import PropertyDetailPage from './PropertyDetailPage';
+import DriveButton from '../components/DriveButton';
 import TenantDetailPage from './TenantDetailPage';
 import PropertyHubScreen from './phone/PropertyHubScreen';
 
@@ -2029,6 +2030,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                           <input type="file" accept="application/pdf,image/*" className="hidden" disabled={uploadingDoc || extracting}
                             onChange={e => { const f = e.target.files?.[0]; if (f) handleLeaseDocUpload(lease.id, f); e.target.value = ''; }} />
                         </label>
+                        <DriveButton disabled={uploadingDoc || extracting} onFiles={fs => handleLeaseDocUpload(lease.id, fs[0])} />
                         {docCategory === 'LEASE' && <span className="text-xs text-gray-600">read automatically when attached</span>}
                       </div>
 
@@ -4279,6 +4281,7 @@ function DocumentsTab({ propertyId, documents, setDocuments }: {
           <input type="file" accept="application/pdf,image/*" className="hidden" disabled={importing}
             onChange={e => { const f = e.target.files?.[0]; if (f) handleImport(f); e.target.value = ''; }} />
         </label>
+        <DriveButton disabled={importing} onFiles={fs => handleImport(fs[0])} className="btn text-xs disabled:opacity-50" />
         <span className="text-xs text-gray-600">or scan from the <Link to="/scan" className="text-amber-400 hover:text-amber-300">Scan</Link> page</span>
         <select value={filterCategory} onChange={e => setFilterCategory(e.target.value)} className="input-dark text-xs ml-auto">
           <option value="">All categories</option>
