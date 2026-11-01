@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { useCallback, useState, useRef, useEffect } from 'react';
 import { openOAuth } from '../lib/native';
+import { loadGooglePicker } from '../lib/drivePicker';
 import { format } from 'date-fns';
 import { fmtDate } from '../lib/date';
 import { fmtMoney } from '../lib/money';
@@ -275,23 +276,6 @@ interface DriveJobStatus {
   processedFiles: number;
   autoImported: number;
   needsReview: { filename: string; s3Key: string; extracted: ExtractedBill; match: MatchResult; pdfUrl: string }[];
-}
-
-// Lazily loads Google's API + Picker client libraries (not an npm package  - 
-// Google only ships these as browser globals from their own CDN).
-let gapiLoadPromise: Promise<void> | null = null;
-function loadGooglePicker(): Promise<void> {
-  if (gapiLoadPromise) return gapiLoadPromise;
-  gapiLoadPromise = new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = 'https://apis.google.com/js/api.js';
-    script.onload = () => {
-      (window as any).gapi.load('picker', () => resolve());
-    };
-    script.onerror = reject;
-    document.head.appendChild(script);
-  });
-  return gapiLoadPromise;
 }
 
 function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed, onProgress, extractionMethod }: {
