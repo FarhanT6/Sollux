@@ -1823,6 +1823,8 @@ model IncomingTransaction {
   matchedLease       Lease?      @relation(fields: [matchedLeaseId], references: [id], onDelete: SetNull)
   status             String      @default("UNMATCHED") // UNMATCHED | SUGGESTED | APPLIED | IGNORED
   rentPaymentId      String? // set once applied, for traceability
+  // Why it waits for the owner, or what was done with an overpayment (services/incomingRent.ts).
+  reviewNote         String?
   createdAt          DateTime    @default(now())
 
   @@index([userId, status])

@@ -20,7 +20,8 @@ import { plaidClient } from '../config/plaid';
 import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';
 import { recordRentPayment } from './rentPaymentService';
-import { findTwin, findLoggedPayment, sureOfTenant, rentMonthFor, descriptorMemo } from './p2pPaymentEmails';
+import { findTwin, findLoggedPayment, sureOfSender, descriptorMemo } from './p2pPaymentEmails';
+import { logIncomingRent } from './incomingRent';
 import { findLoanCandidates, confidentLoan, logLoanPaymentFromTransaction } from './loanPaymentMatcher';
 
 // ─── Incoming (rent via P2P) ──────────────────────────────────────────────
@@ -351,23 +352,16 @@ export async function syncTransactionsForItem(plaidItemId: string) {
           // amount they plausibly owe. Anything less certain waits for review,
           // because a wrongly applied payment moves a balance.
           const logged = nameMatch ? await findLoggedPayment(nameMatch.leaseId, amount, new Date(tx.date), { source: 'bank', reference: /\bREF\s*#?\s*(\S+)/i.exec(name)?.[1] ?? null }) : null;
-          const lease = nameMatch ? await db.lease.findUnique({ where: { id: nameMatch.leaseId }, select: { rentAmount: true, arrearsBalance: true } }) : null;
           if (logged) {
             await db.incomingTransaction.update({ where: { id: created.id }, data: { status: 'APPLIED', rentPaymentId: logged.id } });
-          } else if (nameMatch && sureOfTenant(nameMatch, lease, amount, descriptorMemo(name))) {
-            const payment = await recordRentPayment({
-              leaseId: nameMatch.leaseId,
-              // "OCTOBER RENT 2026" sent Sep 30 is October's rent.
-              periodDate: await rentMonthFor(nameMatch.leaseId, new Date(tx.date), descriptorMemo(name)),
-              amount,
-              paidDate: new Date(tx.date),
-              method: (CHANNEL_TO_METHOD[channel] ?? 'OTHER') as any,
-              bankAccountId: bankAccount.id,
+          } else if (nameMatch && sureOfSender(nameMatch, descriptorMemo(name))) {
+            // The month ("OCTOBER RENT 2026" sent Sep 30 is October's) and any
+            // amount over it (next month, or the owner's choice) are incomingRent's.
+            await logIncomingRent({
+              txId: created.id, userId: plaidItem.userId, leaseId: nameMatch.leaseId,
+              amount, date: new Date(tx.date), memo: descriptorMemo(name),
+              method: CHANNEL_TO_METHOD[channel] ?? 'OTHER', bankAccountId: bankAccount.id,
               notes: `Auto-logged — "${name}" ${nameMatch.viaAlias ? 'matches an expected payer name' : 'names the tenant'}`,
-            });
-            await db.incomingTransaction.update({
-              where: { id: created.id },
-              data: { status: 'APPLIED', rentPaymentId: payment.id },
             });
           }
           continue;

@@ -51,3 +51,10 @@ test('rent sent in the last days of a month with no month named is next month\'s
   assert.equal(periodFor(new Date('2026-12-28T00:00:00Z'), null).toISOString().slice(0, 7), '2027-01');
   assert.equal(periodFor(new Date('2026-09-20T00:00:00Z'), 'Rent').toISOString().slice(0, 7), '2026-09');
 });
+
+test('sureOfSender: the tenant by name and no memo saying otherwise, whatever the amount', async () => {
+  const { sureOfSender } = await import('../../src/services/p2pPaymentEmails');
+  assert.equal(sureOfSender({ viaAlias: false, exact: true }, 'salon rent'), true);
+  assert.equal(sureOfSender({ viaAlias: true, exact: false }, 'water bill'), false);
+  assert.equal(sureOfSender(null, 'rent'), false);
+});
