@@ -13,6 +13,7 @@ import StatementImport from '../components/cards/StatementImport';
 import { STATUS_PILL, utilTone } from './PersonalPage';
 import { fmtMoney } from '../lib/money';
 import { fmtDate, todayISO } from '../lib/date';
+import BackLink from '../components/ui/BackLink';
 
 /**
  * One credit card, in full: its position now, every term, statements,
@@ -169,7 +170,7 @@ export default function CreditCardPage() {
         </div>
 
         <div className="flex gap-1 mb-4">
-          {TABS.map(t => <button key={t} onClick={() => setParams({ tab: t })} className={`text-xs px-3 py-1.5 rounded-lg capitalize ${tab === t ? 'text-white' : 'text-gray-500'}`} style={{ background: tab === t ? 'rgba(255,255,255,0.08)' : 'transparent' }}>{t}{t === 'statements' ? ` (${card.statements?.length ?? 0})` : t === 'payments' ? ` (${card.payments?.length ?? 0})` : ''}</button>)}
+          {TABS.map(t => <button key={t} onClick={() => setParams({ tab: t }, { replace: true })} className={`text-xs px-3 py-1.5 rounded-lg capitalize ${tab === t ? 'text-white' : 'text-gray-500'}`} style={{ background: tab === t ? 'rgba(255,255,255,0.08)' : 'transparent' }}>{t}{t === 'statements' ? ` (${card.statements?.length ?? 0})` : t === 'payments' ? ` (${card.payments?.length ?? 0})` : ''}</button>)}
         </div>
 
         {tab === 'overview' && (
@@ -234,7 +235,7 @@ export default function CreditCardPage() {
                     <td className="text-right text-white">{fmtMoney(s.newBalance)}</td><td className="text-right">{m(s.minimumPayment)}</td><td className="text-right text-gray-400">{s.rewardsEarned != null ? `+${Number(s.rewardsEarned).toLocaleString()}` : '—'}</td>
                     <td className="pr-4 text-right whitespace-nowrap">
                       {s.hasDocument && <button onClick={() => openUrl(() => cardStatementUrl(s.id))} className="text-xs text-amber-400 hover:text-amber-300 mr-2">PDF</button>}
-                      <button onClick={() => { setParams({ tab: 'transactions' }); }} className="text-xs text-gray-500 hover:text-gray-300 mr-2">Lines</button>
+                      <button onClick={() => { setParams({ tab: 'transactions' }, { replace: true }); }} className="text-xs text-gray-500 hover:text-gray-300 mr-2">Lines</button>
                       <button onClick={async () => { if (confirm('Delete this statement and the transactions read from it?')) { await deleteCardStatement(s.id); await load(); } }} className="text-xs text-gray-600 hover:text-red-400">✕</button>
                     </td>
                   </tr>
@@ -263,7 +264,7 @@ export default function CreditCardPage() {
         )}
 
         <div className="mt-8 flex justify-between">
-          <Link to="/personal?tab=cards" className="text-xs text-gray-500 hover:text-gray-300">← All cards</Link>
+          <BackLink fallback="/personal?tab=cards" className="text-xs text-gray-500 hover:text-gray-300">← All cards</BackLink>
           <button onClick={async () => { if (confirm('Delete this card, its statements, transactions and payments? Expenses already filed to properties stay.')) { await deleteCreditCard(card.id); nav('/personal?tab=cards'); } }} className="text-xs text-red-400 hover:text-red-300">Delete card</button>
         </div>
       </div>

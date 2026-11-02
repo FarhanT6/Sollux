@@ -9,6 +9,7 @@ import { fmtDate, todayISO } from '../../lib/date';
 import { fmtMoney } from '../../lib/money';
 import { filesToPayload } from '../../lib/files';
 import { describeApiError } from '../../lib/apiError';
+import AddressInput from '../AddressInput';
 
 /**
  * Federal and state income tax for one year: what the year should have
@@ -121,7 +122,7 @@ export function TaxDocEditor({ initial, properties, loans, onDone }: {
           : <div className="col-span-2"><span className={label}>To (recipient / borrower)</span><input className={input} value={f.recipientName} onChange={e => set({ recipientName: e.target.value })} /></div>}
         {isW9 && <div className="col-span-2"><span className={label}>Tax classification</span><input className={input} value={f.entityType} onChange={e => set({ entityType: e.target.value })} placeholder="Individual/sole proprietor, LLC, S corporation…" /></div>}
         <div><span className={label}>TIN — last 4 only</span><input className={input} value={f.tinLast4} maxLength={4} onChange={e => set({ tinLast4: e.target.value.replace(/\D/g, '').slice(0, 4) })} /></div>
-        {isW9 && <div className="col-span-2 md:col-span-3"><span className={label}>Address</span><input className={input} value={f.address} onChange={e => set({ address: e.target.value })} /></div>}
+        {isW9 && <div className="col-span-2 md:col-span-3"><span className={label}>Address</span><AddressInput className={input} value={f.address} onChange={v => set({ address: v })} onPick={a => set({ address: a.label })} /></div>}
         {!isW9 && (
           <>
             <div><span className={label}>{isReturn ? 'Total tax' : 'Amount'}</span><input type="number" step="0.01" className={input} value={f.amount} onChange={e => set({ amount: e.target.value })} /></div>

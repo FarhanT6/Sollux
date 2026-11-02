@@ -76,7 +76,7 @@ export default function TaxesPage() {
       <PageHeader title="Taxes" subtitle="Property tax, federal and state income tax, and the W-9s and 1099s behind them" />
       <div className="px-6 pt-4 flex gap-1 flex-wrap">
         {TABS.map(t => (
-          <button key={t.key} onClick={() => setParams({ tab: t.key })}
+          <button key={t.key} onClick={() => setParams({ tab: t.key }, { replace: true })}
             className={`text-xs px-3 py-1.5 rounded-lg font-medium ${tab === t.key ? 'bg-gold-500 text-white' : 'text-gray-400 hover:text-gray-200'}`}
             style={tab === t.key ? undefined : { background: 'rgba(255,255,255,0.05)' }}>{t.label}</button>
         ))}

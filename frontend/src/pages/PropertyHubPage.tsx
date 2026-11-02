@@ -45,6 +45,7 @@ import PropertyDetailPage from './PropertyDetailPage';
 import DriveButton from '../components/DriveButton';
 import TenantDetailPage from './TenantDetailPage';
 import PropertyHubScreen from './phone/PropertyHubScreen';
+import AddressInput from '../components/AddressInput';
 
 const LEASE_DOC_CATEGORIES = ['LEASE', 'APPLICATION', 'IDENTITY', 'SCREENING', 'OTHER'] as const;
 
@@ -631,7 +632,8 @@ function PropertyEditModal({ property, onClose, onSave }: {
               </div>
               <div className="col-span-2">
                 <label className="block text-xs text-gray-500 mb-1">Address *</label>
-                <input value={form.address} onChange={f('address')} className="input-dark w-full text-sm" />
+                <AddressInput value={form.address} onChange={v => setForm(prev => ({ ...prev, address: v }))} className="input-dark w-full text-sm"
+                  onPick={a => setForm(prev => ({ ...prev, address: a.line1, city: a.city || prev.city, state: a.state || prev.state, zip: a.zip || prev.zip, county: a.county || prev.county }))} />
               </div>
               <div className="col-span-2">
                 <label className="block text-xs text-gray-500 mb-1">Address line 2</label>

@@ -16,6 +16,7 @@ import AddUtilityModal from '../components/utility/AddUtilityModal';
 import { BillsSheet } from './BillsPage';
 import { fmtDate } from '../lib/date';
 import { computeMonthlySpend } from '../lib/monthlySpend';
+import AddressInput from '../components/AddressInput';
 
 type Tab = 'sheet' | 'utilities' | 'payments' | 'insights' | 'documents';
 
@@ -546,7 +547,7 @@ export default function PropertyDetailPage({ embedded }: { embedded?: boolean } 
         <DeletePropertyModal
           property={property}
           onClose={() => setShowDeleteProperty(false)}
-          onDeleted={() => navigate('/properties')}
+          onDeleted={() => navigate('/portfolio', { replace: true })}
         />
       )}
     </div>
@@ -884,7 +885,8 @@ function EditPropertyModal({ property, onClose, onSaved }: { property: Property;
         <div className="space-y-3">
           <div>
             <label className="text-xs text-gray-400 block mb-1">Street address</label>
-            <input className={fieldCls} value={form.address} onChange={e => setForm(f => ({ ...f, address: e.target.value }))} />
+            <AddressInput className={fieldCls} value={form.address} onChange={v => setForm(f => ({ ...f, address: v }))}
+              onPick={a => setForm(f => ({ ...f, address: a.line1, city: a.city || f.city, state: a.state || f.state, zip: a.zip || f.zip }))} />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             <div>

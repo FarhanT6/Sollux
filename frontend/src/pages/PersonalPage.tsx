@@ -298,7 +298,7 @@ export default function PersonalPage() {
   const [data, setData] = useState<Awaited<ReturnType<typeof getCreditCards>> | null>(null);
   const reload = async () => setData(await getCreditCards());
   useEffect(() => { void reload(); }, []);
-  const go = (t: TabKey) => setParams({ tab: t });
+  const go = (t: TabKey) => setParams({ tab: t }, { replace: true });
   // Personal bills moved to the Bills page's Personal section.
   const content = (tab as string) === 'bills' ? <Navigate to="/bills" replace />
     : tab === 'expenses' ? <PersonalExpensesPage embedded />
