@@ -1160,6 +1160,8 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
     if (!id) return;
     const lease = leases.find(l => l.id === id);
     if (!lease) return;
+    // A terminated or ended lease is hidden by the default Active filter: show its status so the editor is seen.
+    if (filterStatus && lease.status !== filterStatus) setFilterStatus(lease.status);
     openEditLease(lease);
     const next = new URLSearchParams(leaseParams); next.delete('editLease');
     setLeaseParams(next, { replace: true });
