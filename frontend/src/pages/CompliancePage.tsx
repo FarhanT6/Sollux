@@ -66,8 +66,8 @@ export default function CompliancePage({ propertyId: fixedPropertyId }: { proper
   const [note, setNote] = useState<string | null>(null);
   const [paying, setPaying] = useState<{ id: string; amount: string; date: string; description: string } | null>(null);
 
+  // Reloads after an edit update in place; only the first load shows 'Loading…'.
   async function load() {
-    setLoading(true);
     try {
       const [list, props] = await Promise.all([getComplianceItems(fixedPropertyId ? { propertyId: fixedPropertyId } : undefined), getProperties()]);
       setItems(list); setProperties(props);

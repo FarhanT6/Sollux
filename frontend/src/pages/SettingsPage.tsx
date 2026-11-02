@@ -358,8 +358,8 @@ function RatesTab() {
   const [notes, setNotes]     = useState('');
   const [saving, setSaving]   = useState(false);
 
+  // Reloads after adding a rate update in place; only the first load shows 'Loading…'.
   const load = useCallback(() => {
-    setLoading(true);
     getIndexRates('PRIME').then(setRates).finally(() => setLoading(false));
   }, []);
 
