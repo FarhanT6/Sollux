@@ -38,12 +38,12 @@ function monthsFrom(from: string, through: string): string[] {
   return out;
 }
 
-/** Each active loan's months, through `through`, with no payment logged. Loans without a start date go back to January this year. */
+/** Each active loan's months, through `through`, with no payment logged — from the first month Bills counts it as owed (lib/loanStart.ts). */
 async function missingLoanMonths(userId: string, through: string, loanIds?: string[]) {
   const loans = await db.loan.findMany({
     where: { userId, isActive: true, utilityAccountId: null, ...(loanIds ? { id: { in: loanIds } } : {}) },
     select: {
-      id: true, lender: true, monthlyPayment: true, escrowAmount: true, dueDay: true, originationDate: true, firstPaymentDate: true, isPersonal: true, loanType: true,
+      id: true, lender: true, monthlyPayment: true, escrowAmount: true, dueDay: true, originationDate: true, firstPaymentDate: true, createdAt: true, isPersonal: true, loanType: true,
       property: { select: { nickname: true, address: true } },
       loanPayments: { select: { amount: true, date: true, periodDate: true } },
     },
@@ -52,7 +52,7 @@ async function missingLoanMonths(userId: string, through: string, loanIds?: stri
   const floor = `${new Date().getUTCFullYear() - 10}-01`;
   return loans.map(l => {
     const expected = Number((n(l.monthlyPayment) + n(l.escrowAmount)).toFixed(2));
-    // The first payment month (the month after it funds, or the date the owner gave); no start date goes back to January.
+    // The same first month Bills counts from (lib/loanStart.ts), so every month it shows as owed can be caught up.
     const first = firstDueMonth(l) ?? `${through.slice(0, 4)}-01`;
     const months = expected > 0 && first ? monthsFrom(first > floor ? first : floor, through) : [];
     const paidBy = new Map<string, number>();

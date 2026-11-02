@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { getLoans, createLoan, updateLoan, deleteLoan, getProperties, getLoanTrackerMonth, getCatchUpLoans, runCatchUp, type LoanTrackerRow } from '../api/client';
 import { todayISO, thisMonthISO } from '../lib/date';
 import type { Loan, Property, LoanType } from '../types';
-import { MORTGAGE_PERSONAL_TYPES, onLoansTab } from '../lib/loanGroups';
+import { MORTGAGE_PERSONAL_TYPES, onLoansTab, isPropertyLoan } from '../lib/loanGroups';
 import { format } from 'date-fns';
 import { projectLoanBalance } from '../lib/loanMath';
 import PaymentDetailsImport from '../components/loans/PaymentDetailsImport';
@@ -177,7 +177,7 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
     try {
       const through = thisMonthISO();
       const { loans: due } = await getCatchUpLoans(through);
-      const mortgages = due.filter(l => MORTGAGE_PERSONAL_TYPES.includes(l.loanType as LoanType));
+      const mortgages = due.filter(isPropertyLoan);
       const months = mortgages.reduce((t, l) => t + l.missing.length, 0);
       if (!months) { setCatching('Every mortgage month is already recorded.'); return; }
       if (!confirm(`Log ${months} mortgage payment${months === 1 ? '' : 's'} across ${mortgages.length} loan${mortgages.length === 1 ? '' : 's'} as paid, through ${format(new Date(`${through}-01T12:00:00`), 'MMMM yyyy')}? Only months with nothing logged; a month with any payment on record is left as it is. Each at its scheduled amount; balances are not changed. You can undo it from Bills → Catch up.`)) { setCatching(null); return; }

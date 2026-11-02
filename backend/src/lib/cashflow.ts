@@ -83,7 +83,7 @@ export async function getCashflow(year: number, userId: string, propertyId?: str
     db.loan.findMany({
       where: { propertyId: { in: ids }, isPersonal: false },
       select: {
-        id: true, propertyId: true, lender: true, monthlyPayment: true, escrowAmount: true, isActive: true, maturityDate: true, originationDate: true, firstPaymentDate: true,
+        id: true, propertyId: true, lender: true, monthlyPayment: true, escrowAmount: true, isActive: true, maturityDate: true, originationDate: true, firstPaymentDate: true, createdAt: true,
         loanPayments: { where: { date: { gte: yearStart, lt: yearEnd } }, select: { date: true, amount: true, status: true } },
       },
     }),

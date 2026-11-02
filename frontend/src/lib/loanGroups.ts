@@ -10,5 +10,10 @@ export const MORTGAGE_PERSONAL_TYPES: LoanType[] = ['MORTGAGE', 'HELOC', 'SELLER
  *  billed through a utility account (premium financing, solar) live on their
  *  accounts and the Bills page, where their bills and payments are; a second
  *  copy here disagreed with them. */
-export const onLoansTab = (l: { loanType: string; utilityAccountId?: string | null }) =>
-  MORTGAGE_PERSONAL_TYPES.includes(l.loanType as LoanType) && !l.utilityAccountId;
+export const onLoansTab = (l: { loanType: string; utilityAccountId?: string | null; propertyId?: string | null }) =>
+  isPropertyLoan(l) && !l.utilityAccountId;
+
+/** A mortgage or private note — or a loan typed Other that sits on a property, which is a property loan too
+ *  (a note to a seller or relative saved as Other was left out of Loans and of Mark mortgages paid to date). */
+export const isPropertyLoan = (l: { loanType: string; propertyId?: string | null; property?: string | null }) =>
+  MORTGAGE_PERSONAL_TYPES.includes(l.loanType as LoanType) || (l.loanType === 'OTHER' && !!(l.propertyId || l.property));
