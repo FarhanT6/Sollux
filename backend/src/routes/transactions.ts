@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
-import { syncAllWatchedAccounts, CHANNEL_TO_METHOD, matchLease, extractCounterpartyName } from '../services/transactionMatchService';
+import { syncAllWatchedAccounts, CHANNEL_TO_METHOD, matchLease, matchPayer, extractCounterpartyName } from '../services/transactionMatchService';
 import { recordRentPayment } from '../services/rentPaymentService';
 import { findLoggedPayment, periodFor, rentMonthFor, sureOfSender, descriptorMemo } from '../services/p2pPaymentEmails';
 import { logIncomingRent, logIncomingUtilities, autoLogIncoming, utilityInvoiceFor, leaseUtilityInvoices, memoSaysUtilities, type ExtraChoice } from '../services/incomingRent';
@@ -186,7 +186,7 @@ async function applySureSuggestions(userId: string): Promise<number> {
   let applied = 0;
   for (const tx of waiting) {
     try {
-      const nameMatch = await matchLease(tx.source === 'email' ? (tx.name ?? '') : extractCounterpartyName(tx.name ?? ''), userId);
+      const nameMatch = await matchPayer(tx.source === 'email' ? (tx.name ?? '') : extractCounterpartyName(tx.name ?? ''), memoOf(tx), userId);
       if (!nameMatch || nameMatch.leaseId !== tx.matchedLeaseId) continue;
       if (await findLoggedPayment(nameMatch.leaseId, Number(tx.amount), tx.date, { source: tx.source === 'email' ? 'email' : 'bank', reference: tx.confirmation ?? null })) continue;
       const did = await autoLogIncoming(txInput(tx, nameMatch.leaseId), sureOfSender(nameMatch, memoOf(tx)));
@@ -219,6 +219,10 @@ async function learnSender(leaseId: string, name: string | null, source: string 
   // Already recognised as this tenant (their own name or a saved payer): nothing to learn.
   const already = await matchLease(clean, (await db.lease.findUnique({ where: { id: leaseId }, select: { unit: { select: { property: { select: { userId: true } } } } } }))?.unit.property.userId ?? '');
   if (already?.leaseId === leaseId && already.exact) return;
+  // The sender is someone else's whole name — a manager or relative who is a
+  // tenant elsewhere, paying for this one. Saving it here would send all of
+  // their own rent to this lease; the memo's unit routes theirs (matchPayer).
+  if (already && already.leaseId !== leaseId && already.exact) return;
   const known = await db.leasePaymentAlias.findFirst({ where: { leaseId, name: { equals: clean, mode: 'insensitive' } }, select: { id: true } });
   if (!known) await db.leasePaymentAlias.create({ data: { leaseId, name: clean, note: LEARNED } }).catch(() => {});
 }

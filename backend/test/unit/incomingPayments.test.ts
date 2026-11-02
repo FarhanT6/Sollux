@@ -63,3 +63,13 @@ test('the payer in a bank descriptor ends at "ON <date>" or "REF"', async () => 
   const { extractCounterpartyName } = await import('../../src/services/transactionMatchService');
   assert.equal(extractCounterpartyName('ZELLE FROM JANE Q SAMPLE ON 10/07 REF # ABC123XYZ AUGUST RENT 545'), 'JANE Q SAMPLE');
 });
+
+test('the unit a memo names', async () => {
+  const { unitInMemo } = await import('../../src/services/transactionMatchService');
+  assert.equal(unitInMemo('RENT FOR NUMBER 7'), '7');
+  assert.equal(unitInMemo('NUMBER 8 RENT'), '8');
+  assert.equal(unitInMemo('RENT FOR APT 4 SENDING THE REST'), '4');
+  assert.equal(unitInMemo('1of2 Oct Rent Spc 4'), '4');
+  assert.equal(unitInMemo('AUGUST RENT 545'), null);
+  assert.equal(unitInMemo(null), null);
+});
