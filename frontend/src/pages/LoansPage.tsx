@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getLoans, createLoan, updateLoan, deleteLoan, getProperties, getLoanTrackerMonth, getCatchUpLoans, runCatchUp, type LoanTrackerRow } from '../api/client';
-import { todayISO, thisMonthISO } from '../lib/date';
+import { todayISO, thisMonthISO, lastMonthISO } from '../lib/date';
 import type { Loan, Property, LoanType } from '../types';
 import { MORTGAGE_PERSONAL_TYPES, onLoansTab, isPropertyLoan } from '../lib/loanGroups';
 import { format } from 'date-fns';
@@ -175,7 +175,8 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
   async function mortgagesPaidToDate() {
     setCatching('Checking…');
     try {
-      const through = thisMonthISO();
+      // Through last month: this month's payment is still coming, so it is logged when it is paid, not assumed.
+      const through = lastMonthISO();
       const { loans: due } = await getCatchUpLoans(through);
       const mortgages = due.filter(isPropertyLoan);
       const months = mortgages.reduce((t, l) => t + l.missing.length, 0);
@@ -341,7 +342,7 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
                 <option value="rate">Sort: Rate (high–low)</option>
               </select>
             </div>
-            <button onClick={() => void mortgagesPaidToDate()} className="btn text-xs" title="Log every mortgage month with no payment on record, through this month, as paid">Mark mortgages paid to date</button>
+            <button onClick={() => void mortgagesPaidToDate()} className="btn text-xs" title="Log every mortgage month with no payment on record, through last month, as paid. This month is left for the payment itself.">Mark mortgages paid to date</button>
             <button onClick={() => setShowImport(v => !v)} className="btn text-xs">Import payment details</button>
             <button onClick={() => setShowForm(v => !v)} className="btn text-xs">
               {showForm ? 'Cancel' : '+ Add loan'}
