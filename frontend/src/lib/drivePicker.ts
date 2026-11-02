@@ -54,6 +54,11 @@ export async function pickFromDrive(opts: { mimeTypes?: string; multiple?: boole
     builder.build().setVisible(true);
   });
 
+  return downloadDriveFiles(docs, accessToken);
+}
+
+/** Picked Drive files fetched into the browser (a Google Doc as a PDF). */
+export function downloadDriveFiles(docs: { id: string; name: string; mimeType: string }[], accessToken: string): Promise<File[]> {
   return Promise.all(docs.map(async d => {
     const isDoc = d.mimeType === GOOGLE_DOC;
     const url = isDoc

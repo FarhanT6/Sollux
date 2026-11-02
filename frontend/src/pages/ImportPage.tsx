@@ -1,7 +1,8 @@
 import { Link } from 'react-router-dom';
 import { useCallback, useState, useRef, useEffect } from 'react';
 import { openOAuth } from '../lib/native';
-import { loadGooglePicker } from '../lib/drivePicker';
+import { loadGooglePicker, downloadDriveFiles } from '../lib/drivePicker';
+import { DrivePreview } from '../components/DriveButton';
 import { format } from 'date-fns';
 import { fmtDate } from '../lib/date';
 import { fmtMoney } from '../lib/money';
@@ -292,6 +293,8 @@ function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed, onProgres
   const [folderName, setFolderName] = useState('');
   const [resolving, setResolving] = useState(false);
   const [driveError, setDriveError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{ files: File[]; ids: string[] } | null>(null);
+  const [previewing, setPreviewing] = useState(false);
 
   useEffect(() => {
     getDriveStatus().then(s => {
@@ -338,7 +341,8 @@ function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed, onProgres
       const pdfView = new google.picker.DocsView(google.picker.ViewId.DOCS)
         .setMimeTypes('application/pdf')
         .setIncludeFolders(true)
-        .setSelectFolderEnabled(true);
+        .setSelectFolderEnabled(true)
+        .setMode(google.picker.DocsViewMode.GRID);
 
       const picker = new google.picker.PickerBuilder()
         .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
@@ -357,6 +361,18 @@ function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed, onProgres
               files.length === 1 ? files[0].name :
               `${files.length} files`;
             setFolderName(displayName);
+            // Files on their own are shown first, the whole PDF or image, and imported
+            // only on Import; a folder can hold dozens, so it goes straight in.
+            if (!folders.length && files.length) {
+              setPreviewing(true);
+              try {
+                const got = await downloadDriveFiles(files.map((f: any) => ({ id: f.id, name: f.name, mimeType: f.mimeType })), accessToken);
+                setPreview({ files: got, ids: files.map((f: any) => f.id) });
+              } catch (e) {
+                setDriveError(e instanceof Error ? e.message : 'Could not open those files.');
+              } finally { setPreviewing(false); }
+              return;
+            }
             await startStream(tokenId, folders[0]?.id, files.map((f: any) => f.id));
           }
         })
@@ -513,15 +529,23 @@ function DriveImportPanel({ onResolved, onStreamStart, onBillStreamed, onProgres
   }
 
   return (
+    <>
+    {preview && (
+      <DrivePreview files={preview.files}
+        onImport={() => { const ids = preview.ids; setPreview(null); void startStream(tokenId, undefined, ids); }}
+        onAnother={() => { setPreview(null); void openPicker(); }}
+        onCancel={() => setPreview(null)} />
+    )}
     <div className="rounded-xl p-5 mb-5 flex items-center justify-between" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
       <div>
         <p className="text-sm font-medium text-gray-200">Import from Google Drive</p>
-        <p className="text-xs text-gray-500 mt-0.5">Pick a folder from My Drive or Shared with me  -  every PDF inside (including subfolders) gets pulled in.</p>
+        <p className="text-xs text-gray-500 mt-0.5">Pick files to see each one before it is imported, or a folder from My Drive or Shared with me to pull in every PDF inside (including subfolders).{previewing ? ' Opening the files…' : ''}</p>
       </div>
       <button onClick={openPicker} disabled={opening} className="btn btn-primary text-xs disabled:opacity-40">
         {opening ? 'Opening...' : 'Choose folder'}
       </button>
     </div>
+    </>
   );
 }
 

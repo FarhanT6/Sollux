@@ -51,7 +51,8 @@ export default function DriveButton({ onFiles, multiple, disabled, className, la
   );
 }
 
-function DrivePreview({ files, onImport, onAnother, onCancel }: { files: File[]; onImport: () => void; onAnother: () => void; onCancel: () => void }) {
+/** The picked files themselves, before anything is imported. Also used by Add's Drive import. */
+export function DrivePreview({ files, onImport, onAnother, onCancel }: { files: File[]; onImport: () => void; onAnother: () => void; onCancel: () => void }) {
   const [i, setI] = useState(0);
   const urls = useMemo(() => files.map(f => URL.createObjectURL(f)), [files]);
   useEffect(() => () => urls.forEach(u => URL.revokeObjectURL(u)), [urls]);
