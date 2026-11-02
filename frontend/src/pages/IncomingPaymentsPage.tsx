@@ -88,11 +88,14 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
   const [months, setMonths] = useState<Record<string, string>>({});
   // An overpayment with back rent or utilities owed: the plan the API answered with, until the owner chooses.
   const [asking, setAsking] = useState<Record<string, { note: string; extra: number; arrears: number; utilitiesOwed: number; nextMonth: string }>>({});
+  // Rent or utilities: starts at utilities when the memo says so or the amount is an open utility invoice's.
+  const [kinds, setKinds] = useState<Record<string, 'rent' | 'utilities'>>({});
+  const kindOf = (tx: IncomingTransaction) => kinds[tx.id] ?? (tx.utilities?.suggested ? 'utilities' : 'rent');
   async function handleApply(tx: IncomingTransaction, extraTo?: 'next' | 'arrears' | 'utilities') {
     const chosen = months[tx.id];
     try {
       // Only a month the owner changed is sent; the one Sollux read is what it records anyway.
-      await applyIncomingTransaction(tx.id, chosen && chosen !== tx.forMonth ? chosen : undefined, extraTo);
+      await applyIncomingTransaction(tx.id, chosen && chosen !== tx.forMonth ? chosen : undefined, extraTo, kindOf(tx));
       setAsking(a => { const n = { ...a }; delete n[tx.id]; return n; });
     } catch (e: any) {
       const plan = e?.response?.status === 409 ? e.response.data?.plan : null;
@@ -192,7 +195,16 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
                       placeholder="Type a tenant or address…"
                       options={leaseOptions}
                     />
-                    {tx.forMonth && (
+                    <select className="field-input text-xs w-auto flex-shrink-0" value={kindOf(tx)} title="Rent, or paying back utilities (recorded on the lease's open utility invoice)"
+                      onChange={e => setKinds(k => ({ ...k, [tx.id]: e.target.value as 'rent' | 'utilities' }))}>
+                      <option value="rent">Rent</option>
+                      <option value="utilities">Utilities</option>
+                    </select>
+                    {kindOf(tx) === 'utilities' ? (
+                      <span className="text-xs text-gray-400 flex-shrink-0" title={tx.utilities ? `Open balance ${money(tx.utilities.outstanding)}` : undefined}>
+                        {tx.utilities ? <>on the {tx.utilities.label} invoice{tx.utilities.exact ? <span className="text-emerald-400"> · matches</span> : ` · ${money(tx.utilities.outstanding)} open`}</> : 'no open utility invoice'}
+                      </span>
+                    ) : tx.forMonth && (
                       <label className="flex items-center gap-1 text-xs text-gray-500 flex-shrink-0" title="The month's rent this payment is for. It pays that month first, before older balances.">
                         for
                         <input type="month" className="field-input text-xs w-[9.5rem]" value={months[tx.id] ?? tx.forMonth}

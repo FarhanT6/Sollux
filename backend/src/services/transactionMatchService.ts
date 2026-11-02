@@ -21,7 +21,7 @@ import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';
 import { recordRentPayment } from './rentPaymentService';
 import { findTwin, findLoggedPayment, sureOfSender, descriptorMemo } from './p2pPaymentEmails';
-import { logIncomingRent } from './incomingRent';
+import { autoLogIncoming } from './incomingRent';
 import { findLoanCandidates, confidentLoan, logLoanPaymentFromTransaction } from './loanPaymentMatcher';
 
 // ─── Incoming (rent via P2P) ──────────────────────────────────────────────
@@ -354,15 +354,16 @@ export async function syncTransactionsForItem(plaidItemId: string) {
           const logged = nameMatch ? await findLoggedPayment(nameMatch.leaseId, amount, new Date(tx.date), { source: 'bank', reference: /\bREF\s*#?\s*(\S+)/i.exec(name)?.[1] ?? null }) : null;
           if (logged) {
             await db.incomingTransaction.update({ where: { id: created.id }, data: { status: 'APPLIED', rentPaymentId: logged.id } });
-          } else if (nameMatch && sureOfSender(nameMatch, descriptorMemo(name))) {
-            // The month ("OCTOBER RENT 2026" sent Sep 30 is October's) and any
-            // amount over it (next month, or the owner's choice) are incomingRent's.
-            await logIncomingRent({
+          } else if (nameMatch) {
+            // An open utility invoice it pays exactly, or rent: the month
+            // ("OCTOBER RENT 2026" sent Sep 30 is October's) and any amount over
+            // it (next month, or the owner's choice) are incomingRent's.
+            await autoLogIncoming({
               txId: created.id, userId: plaidItem.userId, leaseId: nameMatch.leaseId,
               amount, date: new Date(tx.date), memo: descriptorMemo(name),
               method: CHANNEL_TO_METHOD[channel] ?? 'OTHER', bankAccountId: bankAccount.id,
               notes: `Auto-logged — "${name}" ${nameMatch.viaAlias ? 'matches an expected payer name' : 'names the tenant'}`,
-            });
+            }, sureOfSender(nameMatch, descriptorMemo(name)));
           }
           continue;
         }

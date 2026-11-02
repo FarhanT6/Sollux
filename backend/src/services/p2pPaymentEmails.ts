@@ -16,7 +16,7 @@
 import { db } from '../config/db';
 import { recordRentPayment, periodStartOf, chargesFor, creditedTo } from './rentPaymentService';
 import { monthRentDue } from '../lib/rentDue';
-import { logIncomingRent } from './incomingRent';
+import { autoLogIncoming } from './incomingRent';
 import { matchLease, matchLeaseByAmount, CHANNEL_TO_METHOD } from './transactionMatchService';
 
 export type P2PChannel = 'ZELLE' | 'VENMO' | 'PAYPAL' | 'CASH_APP' | 'APPLE_CASH';
@@ -370,9 +370,10 @@ export async function recordP2PEmail(userId: string, p: P2PPayment, key: string)
     return { outcome: 'payment', detail: `${fmt}: matches a payment already logged` };
   }
 
-  if (!sureOfSender(nameMatch, p.memo)) return { outcome: 'payment', detail: `${fmt}: tenant suggested, waiting in Finances → Incoming` };
+  // Only from a sender known to be the tenant: an open utility invoice it pays exactly, or rent.
+  if (!nameMatch) return { outcome: 'payment', detail: `${fmt}: tenant suggested, waiting in Finances → Incoming` };
 
-  const r = await logIncomingRent({
+  const did = await autoLogIncoming({
     txId: created.id, userId,
     leaseId: matchedLeaseId,
     amount: p.amount,
@@ -381,7 +382,7 @@ export async function recordP2PEmail(userId: string, p: P2PPayment, key: string)
     method: CHANNEL_TO_METHOD[p.channel] ?? 'OTHER',
     bankAccountId,
     notes: [`Logged from ${p.channel === 'CASH_APP' ? 'Cash App' : p.channel === 'APPLE_CASH' ? 'Apple Cash' : p.channel[0] + p.channel.slice(1).toLowerCase()} email`, p.confirmation && `confirmation ${p.confirmation}`, p.memo && `memo "${p.memo}"`].filter(Boolean).join(' · '),
-  });
-  if (!r.applied) return { outcome: 'payment', detail: `${fmt}: ${r.plan.note ?? 'waiting in Finances → Incoming'}` };
-  return { outcome: 'payment', detail: `${fmt}: logged as rent${r.plan.extraGoes ? ` — ${r.plan.note}` : ''}` };
+  }, sureOfSender(nameMatch, p.memo));
+  if (did === 'waiting') return { outcome: 'payment', detail: `${fmt}: tenant suggested, waiting in Finances → Incoming` };
+  return { outcome: 'payment', detail: `${fmt}: logged as ${did === 'utilities' ? 'a utility payment' : 'rent'}` };
 }
