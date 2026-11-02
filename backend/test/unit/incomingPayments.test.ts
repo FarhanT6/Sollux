@@ -58,3 +58,8 @@ test('sureOfSender: the tenant by name and no memo saying otherwise, whatever th
   assert.equal(sureOfSender({ viaAlias: true, exact: false }, 'water bill'), false);
   assert.equal(sureOfSender(null, 'rent'), false);
 });
+
+test('the payer in a bank descriptor ends at "ON <date>" or "REF"', async () => {
+  const { extractCounterpartyName } = await import('../../src/services/transactionMatchService');
+  assert.equal(extractCounterpartyName('ZELLE FROM JANE Q SAMPLE ON 10/07 REF # ABC123XYZ AUGUST RENT 545'), 'JANE Q SAMPLE');
+});
