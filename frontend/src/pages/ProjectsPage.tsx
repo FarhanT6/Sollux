@@ -11,6 +11,7 @@ import { fmtDate, todayISO } from '../lib/date';
 import { fmtMoney, fmtCurrency } from '../lib/money';
 import { fileToPayload } from '../lib/files';
 import { describeApiError } from '../lib/apiError';
+import BackLink from '../components/ui/BackLink';
 
 /**
  * Builds funded from here that are not rental properties — a 10-story
@@ -294,7 +295,7 @@ function ProjectDetail({ id }: { id: string }) {
           )}
 
         <div className="mt-8 flex justify-between items-center">
-          <Link to="/projects" className="text-xs text-gray-500 hover:text-gray-300">← All projects</Link>
+          <BackLink fallback="/projects" className="text-xs text-gray-500 hover:text-gray-300">← All projects</BackLink>
           <button onClick={async () => { if (confirm('Delete this project and every transfer logged for it?')) { await deleteProject(p.id); nav('/projects'); } }} className="text-xs text-red-400 hover:text-red-300">Delete project</button>
         </div>
       </div>

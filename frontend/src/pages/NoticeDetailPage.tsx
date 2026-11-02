@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { getNotice, deleteNotice, getRentPayableTo, saveRentPayableTo, type RentPayableTo } from '../api/client';
 import type { RentNotice } from '../types';
 import { fmtDate as fmtDateSafe } from '../lib/date';
+import AddressInput from '../components/AddressInput';
 
 const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 });
 const fmtDate = (d: string | Date) => fmtDateSafe(d, 'MMMM d, yyyy');
@@ -32,7 +33,9 @@ function PayableToForm({ value, onSaved, onCancel }: { value: RentPayableTo | nu
         {field('name', 'Name', 'Who the rent is paid to')}
         {field('phone', 'Phone', '(555) 123-4567')}
         {field('email', 'Email (for Zelle)', 'name@example.com')}
-        {field('address', 'Address (in person and by mail)', 'Street, city, state ZIP')}
+        <label className="block"><span className="text-xs text-gray-400">Address (in person and by mail)</span>
+          <div className="mt-1"><AddressInput className="input-dark w-full text-sm" placeholder="Street, city, state ZIP" value={f.address}
+            onChange={v => setF(x => ({ ...x, address: v }))} onPick={a => setF(x => ({ ...x, address: a.label }))} /></div></label>
       </div>
       <div className="flex gap-2 mt-4">
         <button className="btn-primary text-sm disabled:opacity-40" disabled={busy || !f.name.trim() || !f.address.trim()}
@@ -63,7 +66,7 @@ export default function NoticeDetailPage() {
   async function handleDelete() {
     if (!confirm('Delete this notice record? This cannot be undone.')) return;
     await deleteNotice(id!);
-    navigate('/tenants?tab=notices');
+    navigate('/tenants?tab=notices', { replace: true });
   }
 
   if (loading) return <div className="p-6 text-gray-500">Loading…</div>;

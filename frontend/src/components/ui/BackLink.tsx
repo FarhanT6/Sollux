@@ -9,10 +9,11 @@ import { usePhone } from '../../ios/usePhone';
  * go there; if the page was opened cold (a pasted link, a new tab), fall
  * back to the parent so the link never dead-ends.
  *
- * On a phone the navigation bar's Back does this, so the link is not drawn.
+ * On a phone the navigation bar's Back does this, so the link is not drawn —
+ * unless `always` (pages with no navigation bar, like the tenant portal).
  */
-export default function BackLink({ fallback, className, style, children }: {
-  fallback: string; className?: string; style?: React.CSSProperties; children: ReactNode;
+export default function BackLink({ fallback, className, style, children, always }: {
+  fallback: string; className?: string; style?: React.CSSProperties; children: ReactNode; always?: boolean;
 }) {
   const navigate = useNavigate();
   const phone = usePhone();
@@ -23,6 +24,6 @@ export default function BackLink({ fallback, className, style, children }: {
     e.preventDefault();
     navigate(-1);
   };
-  if (phone) return null;
+  if (phone && !always) return null;
   return <Link to={fallback} onClick={onClick} className={className} style={style}>{children}</Link>;
 }

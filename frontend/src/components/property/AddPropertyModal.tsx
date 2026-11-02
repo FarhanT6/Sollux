@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { createProperty } from '../../api/client';
 import { Modal, Field, Input, Select } from '../ui';
 import type { PropertyType } from '../../types';
+import AddressInput from '../AddressInput';
 
 const US_STATES = [
   'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA',
@@ -82,11 +83,14 @@ export default function AddPropertyModal({ onClose }: Props) {
       </Field>
 
       <Field label="Street address" htmlFor="address" required>
-        <Input
+        <AddressInput
           id="address"
           value={form.address}
-          onChange={e => set('address', e.target.value)}
-          placeholder="1200 Elm Grove Ln"
+          onChange={v => set('address', v)}
+          onPick={a => setForm(prev => ({ ...prev, address: a.line1, city: a.city || prev.city, state: US_STATES.includes(a.state) ? a.state : prev.state, zip: a.zip || prev.zip }))}
+          placeholder="Start typing — 1200 Elm Grove Ln"
+          className="w-full rounded-lg px-3 py-2 text-sm text-gray-100 placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-gold-500 focus:border-transparent"
+          style={{ background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)' }}
         />
       </Field>
 

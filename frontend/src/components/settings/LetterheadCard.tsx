@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getLetterhead, saveLetterhead, type Letterhead } from '../../api/client';
+import AddressInput from '../AddressInput';
 
 /**
  * Who invoices come from and who tenants pay: the owner's entity — a trust,
@@ -39,7 +40,7 @@ export default function LetterheadCard() {
         </div>
         <div className="sm:col-span-2">
           <label className="text-xs text-gray-400 block mb-1">Mailing address</label>
-          <input className={input} value={form.address ?? ''} onChange={e => setForm(f => ({ ...f, address: e.target.value }))} placeholder="Street, City, ST ZIP" />
+          <AddressInput className={input} value={form.address ?? ''} onChange={v => setForm(f => ({ ...f, address: v }))} onPick={a => setForm(f => ({ ...f, address: a.label }))} placeholder="Street, City, ST ZIP" />
         </div>
         <div>
           <label className="text-xs text-gray-400 block mb-1">Phone</label>

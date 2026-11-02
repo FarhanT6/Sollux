@@ -117,7 +117,7 @@ export default function TenantDetailPage({ tenantId, onClose }: { tenantId?: str
     if (!id || !tenant) return;
     if (!confirm(`Delete tenant "${tenant.fullName}"? This removes them from all leases. This cannot be undone.`)) return;
     await deleteTenant(id);
-    if (onClose) onClose(); else navigate('/tenants');
+    if (onClose) onClose(); else navigate('/tenants', { replace: true });
   }
 
   if (loading) return <div className="p-6 text-gray-500 text-sm">Loading…</div>;

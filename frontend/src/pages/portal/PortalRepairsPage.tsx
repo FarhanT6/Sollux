@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { usePortal } from './PortalLayout';
 import { getPortalRepairs, getPortalRepair, createPortalRepair, addPortalRepairNote, type RepairRow, type RepairDetail, type PhotoUpload } from '../../api/client';
 import { REPAIR_CATEGORIES, URGENCY, REPAIR_STATUS } from '../../lib/repairs';
 import { shrinkPhoto } from '../../lib/photos';
 import { fmtMoment } from '../../lib/date';
 import { toast } from '../../lib/toast';
+import BackLink from '../../components/ui/BackLink';
 
 const Pill = ({ label, color }: { label: string; color: string }) => (
   <span className="text-[11px] px-2 py-0.5 rounded-full whitespace-nowrap" style={{ color, background: `${color}1f` }}>{label}</span>
@@ -14,17 +15,22 @@ const Pill = ({ label, color }: { label: string; color: string }) => (
 /** The tenant's repair requests, and the form for a new one. */
 export default function PortalRepairsPage() {
   const [params, setParams] = useSearchParams();
+  const navigate = useNavigate();
+  const location = useLocation();
   const [rows, setRows] = useState<RepairRow[] | null>(null);
   const load = () => getPortalRepairs().then(setRows).catch(() => setRows([]));
   useEffect(() => { void load(); }, []);
   const creating = params.get('new') === '1';
 
-  if (creating) return <NewRepair onDone={() => { setParams({}); void load(); }} />;
+  // The form is a step forward in history, so the phone's Back closes it; closing it steps back
+  // rather than adding another entry, so Back afterwards does not reopen it.
+  const closeNew = () => { if ((location.state as { opened?: boolean } | null)?.opened) navigate(-1); else setParams({}, { replace: true }); };
+  if (creating) return <NewRepair onDone={() => { closeNew(); void load(); }} />;
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold text-white">Repairs</h1>
-        <button className="btn btn-primary text-sm" onClick={() => setParams({ new: '1' })}>New request</button>
+        <button className="btn btn-primary text-sm" onClick={() => navigate('?new=1', { state: { opened: true } })}>New request</button>
       </div>
       <p className="text-xs text-gray-500">For anything dangerous — fire, a gas smell, flooding — call 911 or the utility first, then let your landlord know here.</p>
       {!rows ? <p className="text-sm text-gray-500">Loading…</p> : rows.length === 0 ? <div className="card p-5 text-sm text-gray-400">No repair requests yet.</div> : rows.map(r => {
@@ -143,7 +149,7 @@ export function PortalRepairPage() {
   const st = REPAIR_STATUS[r.status] ?? REPAIR_STATUS.OPEN;
   return (
     <div className="space-y-4">
-      <Link to="/portal/repairs" className="text-sm text-amber-400">‹ Repairs</Link>
+      <BackLink always fallback="/portal/repairs" className="text-sm text-amber-400">‹ Repairs</BackLink>
       <div className="card p-5">
         <div className="flex items-start justify-between gap-3">
           <h1 className="text-lg font-semibold text-white">{r.title}</h1>
