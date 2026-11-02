@@ -4,7 +4,7 @@ import { attachDbUser } from '../middleware/requireAuth';
 import { syncAllWatchedAccounts, CHANNEL_TO_METHOD, matchLease, extractCounterpartyName } from '../services/transactionMatchService';
 import { recordRentPayment } from '../services/rentPaymentService';
 import { findLoggedPayment, periodFor, rentMonthFor, sureOfSender, descriptorMemo } from '../services/p2pPaymentEmails';
-import { logIncomingRent, type ExtraChoice } from '../services/incomingRent';
+import { logIncomingRent, logIncomingUtilities, autoLogIncoming, utilityInvoiceFor, memoSaysUtilities, type ExtraChoice } from '../services/incomingRent';
 
 const router = Router();
 router.use(attachDbUser);
@@ -31,6 +31,11 @@ router.get('/', async (req, res, next) => {
     // Waiting ones with a tenant also skip a month that tenant has already paid in full (rentMonthFor).
     res.json(await Promise.all(transactions.map(async tx => ({
       ...tx,
+      // Waiting ones from a tenant with an open utility invoice: offered as utilities when the memo
+      // says so or the amount is that invoice's.
+      utilities: tx.status !== 'APPLIED' && tx.status !== 'IGNORED' && tx.matchedLeaseId
+        ? await (async () => { const inv = await utilityInvoiceFor(tx.matchedLeaseId!, tx.userId, Number(tx.amount)); return inv ? { ...inv, suggested: inv.exact || memoSaysUtilities(memoOf(tx)) } : null; })()
+        : null,
       forMonth: (tx.status !== 'APPLIED' && tx.status !== 'IGNORED' && tx.matchedLeaseId
         ? await rentMonthFor(tx.matchedLeaseId, tx.date, memoOf(tx))
         : periodFor(tx.date, memoOf(tx))).toISOString().slice(0, 7),
@@ -120,6 +125,14 @@ router.post('/:id/apply', async (req, res, next) => {
 
     // The owner can name the month ("October"); a named month takes the payment first, before arrears.
     const forMonth = typeof req.body?.forMonth === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(req.body.forMonth) ? req.body.forMonth as string : null;
+    // Paid back utilities, not rent: recorded on the lease's open utility invoice.
+    if (req.body?.as === 'utilities') {
+      const logged = await findLoggedPayment(lease.id, Number(tx.amount), tx.date, { source: tx.source === 'email' ? 'email' : 'bank', reference: tx.confirmation ?? null });
+      if (logged) return res.status(409).json({ error: 'This transfer is already logged as rent. Delete that rent payment first.' });
+      const { note } = await logIncomingUtilities(txInput(tx, lease.id));
+      await learnSender(lease.id, tx.name, tx.source);
+      return res.json({ ...(await db.incomingTransaction.findUniqueOrThrow({ where: { id: tx.id } })), reviewNote: note });
+    }
     const choice = (['next', 'arrears', 'utilities'] as const).find(c => c === req.body?.extraTo) ?? null;
     const { updated, linkedExisting, plan } = await applyTo(tx, lease.id, forMonth, choice);
     // More than the month owes, with back rent or utilities open: the owner says where the extra goes.
@@ -134,6 +147,14 @@ type Tx = NonNullable<Awaited<ReturnType<typeof db.incomingTransaction.findFirst
 /** Record a transaction as rent on a lease (or link it to the payment already logged by hand). */
 const memoOf = (tx: { memo: string | null; source: string | null; name: string | null }) => tx.memo ?? (tx.source === 'email' ? null : descriptorMemo(tx.name));
 
+const txInput = (tx: Tx, leaseId: string) => ({
+  txId: tx.id, userId: tx.userId, leaseId,
+  amount: Number(tx.amount), date: tx.date, memo: memoOf(tx),
+  method: CHANNEL_TO_METHOD[(tx.channel ?? 'OTHER') as keyof typeof CHANNEL_TO_METHOD] ?? 'OTHER',
+  bankAccountId: tx.bankAccountId,
+  notes: [`Matched from ${tx.channel ?? 'bank'} ${tx.source === 'email' ? 'email' : 'transaction'}: "${tx.name}"`, tx.confirmation && `confirmation ${tx.confirmation}`, tx.memo && `memo "${tx.memo}"`].filter(Boolean).join(' · '),
+});
+
 async function applyTo(tx: Tx, leaseId: string, forMonth?: string | null, choice?: ExtraChoice | null) {
   // Logged by hand already: link it instead of logging the money twice.
   const logged = await findLoggedPayment(leaseId, Number(tx.amount), tx.date, { source: tx.source === 'email' ? 'email' : 'bank', reference: tx.confirmation ?? /\bREF\s*#?\s*(\S+)/i.exec(tx.name ?? '')?.[1] ?? null });
@@ -143,14 +164,7 @@ async function applyTo(tx: Tx, leaseId: string, forMonth?: string | null, choice
   }
   // The month the owner chose, else the memo's or the date's (rentMonthFor); more
   // than the month owes goes where incomingRent decides, or where the owner chose.
-  const r = await logIncomingRent({
-    txId: tx.id, userId: tx.userId, leaseId,
-    amount: Number(tx.amount), date: tx.date, memo: memoOf(tx),
-    method: CHANNEL_TO_METHOD[(tx.channel ?? 'OTHER') as keyof typeof CHANNEL_TO_METHOD] ?? 'OTHER',
-    bankAccountId: tx.bankAccountId,
-    notes: [`Matched from ${tx.channel ?? 'bank'} ${tx.source === 'email' ? 'email' : 'transaction'}: "${tx.name}"`, tx.confirmation && `confirmation ${tx.confirmation}`, tx.memo && `memo "${tx.memo}"`].filter(Boolean).join(' · '),
-    forMonth, choice,
-  });
+  const r = await logIncomingRent({ ...txInput(tx, leaseId), forMonth, choice });
   const updated = await db.incomingTransaction.findUniqueOrThrow({ where: { id: tx.id } });
   return { updated, linkedExisting: false, plan: r.applied ? null : r.plan };
 }
@@ -169,10 +183,9 @@ async function applySureSuggestions(userId: string): Promise<number> {
     try {
       const nameMatch = await matchLease(tx.source === 'email' ? (tx.name ?? '') : extractCounterpartyName(tx.name ?? ''), userId);
       if (!nameMatch || nameMatch.leaseId !== tx.matchedLeaseId) continue;
-      if (!sureOfSender(nameMatch, memoOf(tx))) continue;
-      const r = await applyTo(tx, nameMatch.leaseId);
-      if (r.plan) continue;
-      applied++;
+      if (await findLoggedPayment(nameMatch.leaseId, Number(tx.amount), tx.date, { source: tx.source === 'email' ? 'email' : 'bank', reference: tx.confirmation ?? null })) continue;
+      const did = await autoLogIncoming(txInput(tx, nameMatch.leaseId), sureOfSender(nameMatch, memoOf(tx)));
+      if (did !== 'waiting') applied++;
     } catch (err) {
       console.warn(`[Incoming] could not apply ${tx.id}:`, err instanceof Error ? err.message : err);
     }

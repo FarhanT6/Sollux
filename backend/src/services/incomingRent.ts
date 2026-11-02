@@ -129,3 +129,57 @@ export async function logIncomingRent(t: IncomingToLog): Promise<{ applied: bool
   }
   return { applied: true, plan, rentPaymentId: first?.id ?? null };
 }
+
+// ─── Utilities ───────────────────────────────────────────────────────────
+// A tenant paying back utilities (an invoice from the lease's utility
+// reimbursement) is not rent: it is recorded on that invoice.
+
+const UTILITY_MEMO = /util|water|electric|power|\bgas\b|sewer|trash|internet|wifi|reimburs/i;
+export const memoSaysUtilities = (memo: string | null | undefined) => !!memo && UTILITY_MEMO.test(memo);
+
+/** The open utility invoice this amount pays: the one whose balance it equals, else the oldest open one. */
+export async function utilityInvoiceFor(leaseId: string, userId: string, amount: number): Promise<{ invoiceId: string; outstanding: number; label: string; exact: boolean } | null> {
+  try {
+    const { invoices } = await reimbursableItems(leaseId, userId);
+    const open = invoices.filter(i => i.outstanding > 0.005).sort((a, b) => a.periodStart.localeCompare(b.periodStart));
+    const label = (i: typeof open[number]) => `${monthName(i.periodStart.slice(0, 7))}${i.periodEnd.slice(0, 7) !== i.periodStart.slice(0, 7) ? ` – ${monthName(i.periodEnd.slice(0, 7))}` : ''}`;
+    const exact = open.find(i => Math.abs(i.outstanding - amount) < 0.5 || Math.abs(i.total - amount) < 0.5);
+    const pick = exact ?? open[0];
+    return pick ? { invoiceId: pick.id, outstanding: pick.outstanding, label: label(pick), exact: !!exact } : null;
+  } catch { return null; }
+}
+
+/** Records the transfer as a utility reimbursement payment (on the invoice it pays, when there is one) and marks it applied. */
+export async function logIncomingUtilities(t: Omit<IncomingToLog, 'forMonth' | 'choice'>): Promise<{ note: string }> {
+  const inv = await utilityInvoiceFor(t.leaseId, t.userId, t.amount);
+  await recordReimbursementPayment(t.leaseId, t.userId, {
+    amount: t.amount, paidDate: t.date.toISOString().slice(0, 10), method: t.method, bankAccountId: t.bankAccountId ?? null,
+    notes: t.notes, allocations: [], invoiceId: inv?.invoiceId ?? null,
+  });
+  const note = inv
+    ? `Applied to utilities — the ${inv.label} invoice${inv.exact ? ' (paid in full)' : ''}.`
+    : 'Applied to utilities (no open invoice: recorded on the lease\'s utility payments).';
+  await db.incomingTransaction.update({ where: { id: t.txId }, data: { status: 'APPLIED', matchedLeaseId: t.leaseId, rentPaymentId: null, reviewNote: note } });
+  return { note };
+}
+
+/**
+ * The auto-log for a transfer from a known tenant (bank feed, payment email,
+ * Sync's second look): an amount that is exactly an open utility invoice's —
+ * with a memo about utilities, or one that is not the rent — goes to that
+ * invoice; otherwise, from the tenant and not marked as something else, it is
+ * rent (logIncomingRent). Anything else is left waiting. Returns what it did.
+ */
+export async function autoLogIncoming(t: Omit<IncomingToLog, 'forMonth' | 'choice'>, sureSender: boolean): Promise<'utilities' | 'rent' | 'waiting'> {
+  const inv = await utilityInvoiceFor(t.leaseId, t.userId, t.amount);
+  if (inv?.exact) {
+    const lease = await db.lease.findUnique({ where: { id: t.leaseId }, select: { rentAmount: true } });
+    if (memoSaysUtilities(t.memo) || Math.abs(Number(lease?.rentAmount ?? 0) - t.amount) > 0.5) {
+      await logIncomingUtilities(t);
+      return 'utilities';
+    }
+  }
+  if (!sureSender) return 'waiting';
+  const r = await logIncomingRent(t);
+  return r.applied ? 'rent' : 'waiting';
+}
