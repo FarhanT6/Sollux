@@ -84,6 +84,12 @@ export function thisMonthISO(): string {
   return todayISO().slice(0, 7);
 }
 
+/** Last month in Pacific time, as YYYY-MM. */
+export function lastMonthISO(): string {
+  const [y, m] = thisMonthISO().split('-').map(Number);
+  return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+}
+
 /** A moment (a full timestamp, not a date-only string) in local time: "Oct 17, 3:04 PM". */
 export function fmtMoment(iso?: string | null): string {
   if (!iso) return '—';

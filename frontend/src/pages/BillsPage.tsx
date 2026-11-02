@@ -6,7 +6,7 @@ import {
 } from '../api/client';
 import { PageHeader } from '../components/ui';
 import { fmtMoney } from '../lib/money';
-import { fmtDate, monthKey, todayISO } from '../lib/date';
+import { fmtDate, monthKey, todayISO, lastMonthISO } from '../lib/date';
 import { computePaidMap, computeResolvedByFutureCheckpoint, openBalanceOf, deferredOf, isUpcoming } from '../lib/paidState';
 import { openUrl } from '../lib/native';
 import { describeApiError } from '../lib/apiError';
@@ -321,7 +321,8 @@ export default function BillsPage() {
  */
 function CatchUp({ bills, onClose, onDone }: { bills: Bill[]; onClose: () => void; onDone: () => void }) {
   const thisMonth = todayISO().slice(0, 7);
-  const [through, setThrough] = useState(thisMonth);
+  // Last month by default: this month's payments are still coming. This month can still be chosen.
+  const [through, setThrough] = useState(lastMonthISO());
   const [loans, setLoans] = useState<CatchUpLoan[] | null>(null);
   const [last, setLast] = useState<string | null>(null);
   const [pickLoans, setPickLoans] = useState<Set<string>>(new Set());
