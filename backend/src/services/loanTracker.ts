@@ -11,7 +11,8 @@
 import { db } from '../config/db';
 import { dueBy } from '../lib/loanStart';
 
-export type TrackerStatus = 'paid' | 'partial' | 'upcoming' | 'due' | 'late' | 'none';
+/** `closing`: the month the loan funded — its first month is paid at closing (prepaid interest, escrow), nothing owed. */
+export type TrackerStatus = 'paid' | 'partial' | 'upcoming' | 'due' | 'late' | 'none' | 'closing';
 
 const ym = (d: Date) => d.toISOString().slice(0, 7);
 const monthOf = (p: { periodDate: Date | null; date: Date }) => ym(p.periodDate ?? p.date);
@@ -124,8 +125,12 @@ export async function trackerYear(userId: string, year: number, today: string) {
   const rows = loans.map(l => {
     const b = base(l);
     const cells = months.map(month => {
-      if (!startedBy(l, month)) return { month, expected: 0, paid: 0, status: 'none' as TrackerStatus };
       const paid = Number(payments.filter(p => p.loanId === l.id && p.month === month).reduce((s, p) => s + p.amount, 0).toFixed(2));
+      if (!startedBy(l, month)) {
+        // Before the first payment nothing is owed. The funding month reads as paid at closing; anything logged still shows.
+        const funding = !!l.originationDate && ym(l.originationDate) === month;
+        return { month, expected: 0, paid, status: (funding ? 'closing' : paid > 0 ? 'paid' : 'none') as TrackerStatus };
+      }
       const dueDate = dueDateFor(month, l.dueDay);
       return { month, expected: b.expected, paid, status: statusFor(b.expected, paid, dueDate, addDays(dueDate, l.gracePeriodDays ?? 0), today) };
     });

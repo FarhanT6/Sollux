@@ -44,7 +44,7 @@ const STATE_STYLE: Record<State, { color: string; bg: string; label: string }> =
   due: { color: '#F5A623', bg: 'rgba(245,166,35,0.12)', label: 'To pay' },
   upcoming: { color: '#9ca3af', bg: 'rgba(255,255,255,0.04)', label: 'Scheduled' },
 };
-const LOAN_STATE: Record<LoanTrackerStatus, State | null> = { paid: 'paid', partial: 'due', upcoming: 'upcoming', due: 'due', late: 'overdue', none: null };
+const LOAN_STATE: Record<LoanTrackerStatus, State | null> = { paid: 'paid', partial: 'due', upcoming: 'upcoming', due: 'due', late: 'overdue', none: null, closing: null };
 
 /** The month a bill belongs to: the month it is due, or the month it was issued when it has no due date. */
 const billMonth = (s: BillsSheetStatement) => monthKey(s.dueDate ?? s.statementDate);
@@ -255,7 +255,13 @@ export function BillsSheet({ propertyId }: { propertyId?: string } = {}) {
                           const state = c ? LOAN_STATE[c.status] : null;
                           return (
                             <td key={m} className="px-1 py-1 text-right">
-                              {c && state ? (
+                              {c?.status === 'closing' ? (
+                                <button onClick={() => setLoanCell({ row: r, month: m })} className="w-full rounded px-1.5 py-1 text-right text-gray-400"
+                                  style={{ background: 'rgba(255,255,255,0.04)' }}
+                                  title="The month the loan funded: its first month is paid at closing (prepaid interest and escrow), so nothing is owed. The first monthly payment is the next month.">
+                                  {c.paid > 0 ? fmtShort(c.paid) : 'At closing'}
+                                </button>
+                              ) : c && state ? (
                                 <button onClick={() => setLoanCell({ row: r, month: m })} className="w-full rounded px-1.5 py-1 tabular-nums text-right"
                                   style={{ color: STATE_STYLE[state].color, background: STATE_STYLE[state].bg }}>
                                   {fmtShort(c.paid > 0 ? c.paid : c.expected)}

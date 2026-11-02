@@ -13,7 +13,7 @@ import { onLoansTab } from '../../lib/loanGroups';
 
 const MORTGAGE_TYPES = ['MORTGAGE', 'HELOC', 'SELLER_FINANCING', 'DSCR', 'COMMERCIAL', 'HARD_MONEY'];
 const STATUSES: (LoanTrackerStatus | 'all')[] = ['all', 'late', 'due', 'upcoming', 'partial', 'paid'];
-const STATUS_LABEL: Record<LoanTrackerStatus, string> = { paid: 'paid', partial: 'partial', upcoming: 'not due yet', due: 'in grace', late: 'late', none: '—' };
+const STATUS_LABEL: Record<LoanTrackerStatus, string> = { paid: 'paid', partial: 'partial', upcoming: 'not due yet', due: 'in grace', late: 'late', none: '—', closing: 'paid at closing' };
 const STATUS_CLS: Record<LoanTrackerStatus, string> = {
   paid: 'bg-emerald-900/40 text-emerald-500',
   partial: 'bg-amber-900/50 text-amber-500',
@@ -21,9 +21,10 @@ const STATUS_CLS: Record<LoanTrackerStatus, string> = {
   due: 'bg-amber-900/50 text-amber-400',
   late: 'bg-red-900/50 text-red-500',
   none: 'text-gray-600',
+  closing: 'bg-white/5 text-gray-400',
 };
 const CELL_BG: Record<LoanTrackerStatus, string> = {
-  paid: 'rgba(16,185,129,0.18)', partial: 'rgba(245,166,35,0.18)', upcoming: 'transparent', due: 'rgba(245,166,35,0.10)', late: 'rgba(239,68,68,0.18)', none: 'transparent',
+  paid: 'rgba(16,185,129,0.18)', partial: 'rgba(245,166,35,0.18)', upcoming: 'transparent', due: 'rgba(245,166,35,0.10)', late: 'rgba(239,68,68,0.18)', none: 'transparent', closing: 'rgba(255,255,255,0.04)',
 };
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const money0 = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
@@ -250,6 +251,7 @@ export default function LoanPaymentTracker({ month: fixedMonth }: { month?: stri
                           : c.status === 'partial' ? <span className="text-amber-400">{money0(c.paid)}</span>
                           : c.status === 'late' ? <span className="text-red-400">✕</span>
                           : c.status === 'due' ? <span className="text-amber-400">•</span>
+                          : c.status === 'closing' ? <span className="text-gray-500 text-[10px]">closing</span>
                           : <span className="text-gray-700">·</span>}
                       </button>
                     </td>
