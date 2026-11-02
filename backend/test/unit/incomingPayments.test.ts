@@ -45,3 +45,9 @@ test('a memo naming the month decides which rent it pays', () => {
   assert.equal(periodFor(new Date('2026-10-03T00:00:00Z'), '2nd August Rent Payment').toISOString().slice(0, 7), '2026-08');
   assert.equal(periodFor(new Date('2026-10-02T00:00:00Z'), null).toISOString().slice(0, 7), '2026-10');
 });
+
+test('rent sent in the last days of a month with no month named is next month\'s', () => {
+  assert.equal(periodFor(new Date('2026-09-30T00:00:00Z'), 'Rent').toISOString().slice(0, 7), '2026-10');
+  assert.equal(periodFor(new Date('2026-12-28T00:00:00Z'), null).toISOString().slice(0, 7), '2027-01');
+  assert.equal(periodFor(new Date('2026-09-20T00:00:00Z'), 'Rent').toISOString().slice(0, 7), '2026-09');
+});

@@ -26,7 +26,8 @@ router.get('/', async (req, res, next) => {
       },
       orderBy: { date: 'desc' },
     });
-    res.json(transactions);
+    // The month Apply records each one for, so the owner sees it (and can change it) before applying.
+    res.json(transactions.map(tx => ({ ...tx, forMonth: periodFor(tx.date, memoOf(tx)).toISOString().slice(0, 7) })));
   } catch (err) { next(err); }
 });
 
@@ -110,7 +111,9 @@ router.post('/:id/apply', async (req, res, next) => {
     const lease = await db.lease.findFirst({ where: { id: tx.matchedLeaseId, unit: { property: { userId: req.dbUserId! } } } });
     if (!lease) return res.status(404).json({ error: 'Matched lease not found' });
 
-    const { updated, linkedExisting } = await applyTo(tx, lease.id);
+    // The owner can name the month ("October"); a named month takes the payment first, before arrears.
+    const forMonth = typeof req.body?.forMonth === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(req.body.forMonth) ? req.body.forMonth as string : null;
+    const { updated, linkedExisting } = await applyTo(tx, lease.id, forMonth);
     if (!linkedExisting) await learnSender(lease.id, tx.name, tx.source);
     res.json({ ...updated, ...(linkedExisting ? { linkedExisting } : {}) });
   } catch (err) { next(err); }
@@ -119,7 +122,9 @@ router.post('/:id/apply', async (req, res, next) => {
 type Tx = NonNullable<Awaited<ReturnType<typeof db.incomingTransaction.findFirst>>>;
 
 /** Record a transaction as rent on a lease (or link it to the payment already logged by hand). */
-async function applyTo(tx: Tx, leaseId: string) {
+const memoOf = (tx: { memo: string | null; source: string | null; name: string | null }) => tx.memo ?? (tx.source === 'email' ? null : descriptorMemo(tx.name));
+
+async function applyTo(tx: Tx, leaseId: string, forMonth?: string | null) {
   // Logged by hand already: link it instead of logging the money twice.
   const logged = await findLoggedPayment(leaseId, Number(tx.amount), tx.date, { source: tx.source === 'email' ? 'email' : 'bank', reference: tx.confirmation ?? /\bREF\s*#?\s*(\S+)/i.exec(tx.name ?? '')?.[1] ?? null });
   if (logged) {
@@ -130,8 +135,9 @@ async function applyTo(tx: Tx, leaseId: string) {
   // exactly like a hand-entered one, and carries the account it landed in.
   const payment = await recordRentPayment({
     leaseId,
-    // The memo names the month when there is one; a bank row's is in its descriptor.
-    periodDate: periodFor(tx.date, tx.memo ?? (tx.source === 'email' ? null : descriptorMemo(tx.name))),
+    // The month the owner chose; else the memo's month (a bank row's is in its descriptor), or the date's.
+    periodDate: forMonth ? new Date(`${forMonth}-01T00:00:00.000Z`) : periodFor(tx.date, memoOf(tx)),
+    ...(forMonth ? { applyTo: 'CURRENT' as const } : {}),
     amount: Number(tx.amount),
     paidDate: tx.date,
     method: (CHANNEL_TO_METHOD[(tx.channel ?? 'OTHER') as keyof typeof CHANNEL_TO_METHOD] ?? 'OTHER') as any,

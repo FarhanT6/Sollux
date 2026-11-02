@@ -423,6 +423,8 @@ export type PaymentChannel = 'ZELLE' | 'VENMO' | 'PAYPAL' | 'CASH_APP' | 'APPLE_
 
 export interface IncomingTransaction {
   id: string;
+  /** YYYY-MM: the rent month Apply records it for (the memo's month, or next month when sent on the 25th or later). */
+  forMonth?: string;
   bankAccountId: string | null;
   bankAccount?: { id: string; name: string; bank?: string | null } | null;
   amount: number;

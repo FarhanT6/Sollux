@@ -196,6 +196,9 @@ export function periodFor(date: Date, memo: string | null | undefined): Date {
     else if (diff < -10) y += 1; // January's rent paid in December
     return new Date(Date.UTC(y, month, 1));
   }
+  // No month named: rent sent in the last days of a month is next month's,
+  // paid ahead of the 1st ("Rent" on September 30 is October's).
+  if (date.getUTCDate() >= 25) return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1));
   return periodStartOf(date);
 }
 
