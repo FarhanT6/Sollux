@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import SearchSelect from '../components/ui/SearchSelect';
 import { format } from 'date-fns';
 import {
   getIncomingTransactions, syncIncomingTransactions, incomingEmailSyncState, matchIncomingTransaction,
@@ -79,6 +80,10 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
     await matchIncomingTransaction(id, leaseId || null);
     load();
   }
+  const leaseOptions = useMemo(() => leases.map(l => ({
+    value: l.id,
+    label: `${l.leaseTenants?.map(lt => lt.tenant.fullName).join(', ') || l.unit?.unitLabel || 'Lease'} — ${l.unit?.property?.nickname || l.unit?.property?.address || ''}`,
+  })), [leases]);
   // The rent month each payment is applied to; starts at what Sollux reads from it.
   const [months, setMonths] = useState<Record<string, string>>({});
   async function handleApply(tx: IncomingTransaction) {
@@ -156,18 +161,14 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
                   <p className="text-xs text-gray-600">Ignored</p>
                 ) : (
                   <>
-                    <select
+                    <SearchSelect
+                      className="flex-1 min-w-0"
                       value={tx.matchedLeaseId ?? ''}
-                      onChange={e => handleMatch(tx.id, e.target.value)}
-                      className="field-input text-xs flex-1"
-                    >
-                      <option value="">— No tenant matched —</option>
-                      {leases.map(l => (
-                        <option key={l.id} value={l.id}>
-                          {l.leaseTenants?.map(lt => lt.tenant.fullName).join(', ') || l.unit?.unitLabel} — {l.unit?.property?.nickname || l.unit?.property?.address}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={v => handleMatch(tx.id, v)}
+                      emptyLabel="— No tenant matched —"
+                      placeholder="Type a tenant or address…"
+                      options={leaseOptions}
+                    />
                     {tx.forMonth && (
                       <label className="flex items-center gap-1 text-xs text-gray-500 flex-shrink-0" title="The month's rent this payment is for. It pays that month first, before older balances.">
                         for
