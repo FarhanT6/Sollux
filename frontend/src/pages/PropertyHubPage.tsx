@@ -255,7 +255,8 @@ export default function PropertyHubPage() {
         <>
           {searchParams.get('tenant') && !phone && (
             <TenantDetailPage tenantId={searchParams.get('tenant')!} onClose={() => {
-              const next = new URLSearchParams(searchParams); next.delete('tenant'); setSearchParams(next);
+              // Opening and closing the panel replace the history entry, so Back leaves the property page instead of reopening the panel.
+              const next = new URLSearchParams(searchParams); next.delete('tenant'); setSearchParams(next, { replace: true });
               // The panel may have changed a lease or a payment.
               getLeases({ propertyId: id! }).then(setLeases).catch(() => {});
             }} />
@@ -1846,7 +1847,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                           {leaseTenants.length === 0 ? '—' : leaseTenants.map((lt, i) => (
                             <span key={lt.tenant.id}>
                               {i > 0 && ', '}
-                              <Link to={onPhone ? `/tenants/${lt.tenant.id}` : `?tab=Tenants&tenant=${lt.tenant.id}`} className="hover:text-amber-400 transition-colors" onClick={e => e.stopPropagation()}>
+                              <Link to={onPhone ? `/tenants/${lt.tenant.id}` : `?tab=Tenants&tenant=${lt.tenant.id}`} replace={!onPhone} className="hover:text-amber-400 transition-colors" onClick={e => e.stopPropagation()}>
                                 {lt.tenant.fullName}
                               </Link>
                             </span>
