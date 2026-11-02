@@ -543,12 +543,24 @@ router.post('/:id/payments', async (req, res, next) => {
     if (!loan) return res.status(404).json({ error: 'Loan not found' });
     const { periodMonth, ...data } = LoanPaymentSchema.parse(req.body);
     // The same payment logged twice reads as a double payment. Unless the owner
-    // says it really is a second one, a payment of the same amount within three
-    // days of one on record is refused with the one it matches.
+    // says it really is a second one, a payment of the same amount for the same
+    // month — or, with no month named, within three days of one on record — is
+    // refused with the one it matches. A payment named for another month is
+    // not a twin however close its date (logging January 2025 today is not
+    // November's payment again).
     if (!req.body?.allowDuplicate && data.amount != null && data.date) {
       const at = new Date(data.date as any).getTime();
+      const amount = { gte: Number(data.amount) - 0.5, lte: Number(data.amount) + 0.5 };
+      let when: Prisma.LoanPaymentWhereInput;
+      if (periodMonth) {
+        const start = new Date(`${periodMonth}-01T00:00:00.000Z`);
+        const end = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1));
+        when = { OR: [{ periodDate: { gte: start, lt: end } }, { periodDate: null, date: { gte: start, lt: end } }] };
+      } else {
+        when = { date: { gte: new Date(at - 3 * 86400000), lte: new Date(at + 3 * 86400000) } };
+      }
       const twin = await db.loanPayment.findFirst({
-        where: { loanId: loan.id, amount: { gte: Number(data.amount) - 0.5, lte: Number(data.amount) + 0.5 }, date: { gte: new Date(at - 3 * 86400000), lte: new Date(at + 3 * 86400000) } },
+        where: { loanId: loan.id, amount, ...when },
         select: { date: true, amount: true },
       });
       if (twin) return res.status(409).json({ error: `A $${Number(twin.amount).toFixed(2)} payment on ${twin.date.toISOString().slice(0, 10)} is already logged for this loan.`, duplicate: true });

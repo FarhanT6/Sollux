@@ -565,7 +565,11 @@ function LoanPanel({ row, month, onClose, onChanged }: { row: LoanTrackerYear['r
   async function record() {
     setBusy(true); setErr('');
     try {
-      await createLoanPayment(row.loanId, { date: todayISO(), amount: left, billAmount: c.expected || undefined, status: 'PAID', periodMonth: month, notes: 'Recorded from Bills.' });
+      // A past month is dated its own due day, not today, so it reads as that month's payment.
+      const today = todayISO();
+      const [yy, mm] = month.split('-').map(Number);
+      const due = `${month}-${String(Math.min(row.dueDay ?? 1, new Date(Date.UTC(yy, mm, 0)).getUTCDate())).padStart(2, '0')}`;
+      await createLoanPayment(row.loanId, { date: month < today.slice(0, 7) ? due : today, amount: left, billAmount: c.expected || undefined, status: 'PAID', periodMonth: month, notes: 'Recorded from Bills.' });
       onChanged();
     } catch (e) { setErr(describeApiError(e, 'Could not record the payment.')); }
     finally { setBusy(false); }
