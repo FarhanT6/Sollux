@@ -79,8 +79,12 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
     await matchIncomingTransaction(id, leaseId || null);
     load();
   }
-  async function handleApply(id: string) {
-    await applyIncomingTransaction(id);
+  // The rent month each payment is applied to; starts at what Sollux reads from it.
+  const [months, setMonths] = useState<Record<string, string>>({});
+  async function handleApply(tx: IncomingTransaction) {
+    const chosen = months[tx.id];
+    // Only a month the owner changed is sent; the one Sollux read is what it records anyway.
+    await applyIncomingTransaction(tx.id, chosen && chosen !== tx.forMonth ? chosen : undefined);
     load();
   }
   async function handleIgnore(id: string) {
@@ -164,9 +168,16 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
                         </option>
                       ))}
                     </select>
+                    {tx.forMonth && (
+                      <label className="flex items-center gap-1 text-xs text-gray-500 flex-shrink-0" title="The month's rent this payment is for. It pays that month first, before older balances.">
+                        for
+                        <input type="month" className="field-input text-xs w-[9.5rem]" value={months[tx.id] ?? tx.forMonth}
+                          onChange={e => e.target.value && setMonths(m => ({ ...m, [tx.id]: e.target.value }))} />
+                      </label>
+                    )}
                     <button
                       disabled={!tx.matchedLeaseId}
-                      onClick={() => handleApply(tx.id)}
+                      onClick={() => handleApply(tx)}
                       className="text-xs text-amber-400 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed flex-shrink-0"
                     >Apply</button>
                     <button onClick={() => handleIgnore(tx.id)} className="text-xs text-red-500 hover:text-red-400 flex-shrink-0"

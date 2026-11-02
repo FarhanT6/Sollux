@@ -1056,8 +1056,8 @@ export const incomingEmailSyncState = (jobId: string, since: string) =>
   api.get<{ done: boolean; failed: string | null; payments: { subject: string | null; detail: string | null; receivedAt: string }[] }>(`/transactions/sync/email/${jobId}`, { params: { since } }).then(r => r.data);
 export const matchIncomingTransaction = (id: string, leaseId: string | null) =>
   api.patch<IncomingTransaction>(`/transactions/${id}`, { leaseId }).then(r => r.data);
-export const applyIncomingTransaction = (id: string) =>
-  api.post<IncomingTransaction>(`/transactions/${id}/apply`).then(r => r.data);
+export const applyIncomingTransaction = (id: string, forMonth?: string) =>
+  api.post<IncomingTransaction>(`/transactions/${id}/apply`, forMonth ? { forMonth } : {}).then(r => r.data);
 export const ignoreIncomingTransaction = (id: string) =>
   api.post<IncomingTransaction>(`/transactions/${id}/ignore`).then(r => r.data);
 
