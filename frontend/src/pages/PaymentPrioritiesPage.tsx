@@ -33,8 +33,8 @@ export default function PaymentPrioritiesPage({ embedded }: { embedded?: boolean
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<AccountPriority | null>(null);
 
+  // Reloads after an edit update in place; only the first load shows the skeleton.
   async function load() {
-    setLoading(true);
     // Independent requests: one failing should not blank the other.
     const [p, f] = await Promise.allSettled([getPaymentPriorities(), getFeeSummary(12)]);
     if (p.status === 'fulfilled') setPriorities(p.value);

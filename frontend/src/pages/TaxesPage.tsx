@@ -105,8 +105,8 @@ function PropertyTaxTab() {
   const [saving, setSaving] = useState(false);
   const phone = usePhone();
 
+  // Reloads after an edit update in place; only the first load shows 'Loading…'.
   async function load() {
-    setLoading(true);
     try {
       const [t, p, l, d] = await Promise.all([getTaxAssessments(), getProperties(), getLoans({ isActive: true }).catch(() => []), getTaxDefaults().catch(() => [])]);
       setTaxes(t); setProperties(p); setLoans(l as any); setDefaults(d);

@@ -53,8 +53,8 @@ export default function UtilityReimbursementPanel({ leaseId }: { leaseId: string
   const [payingId, setPayingId] = useState<string | null>(null);
   const [payForm, setPayForm] = useState({ amount: '', paidAt: todayISO(), method: 'ZELLE' });
 
+  // Only the first load shows 'Loading…' (loading starts true); a reload after an edit updates in place.
   async function load() {
-    setLoading(true);
     try {
       const r = await getReimbursement(leaseId);
       setConfig(r.config);
