@@ -1,6 +1,7 @@
 import { db } from '../config/db';
 import { monthRentDue } from './rentDue';
 import { Prisma } from '@prisma/client';
+import { dueBy } from './loanStart';
 
 /**
  * The two sheets that used to be kept by hand: rent received against the
@@ -82,7 +83,7 @@ export async function getCashflow(year: number, userId: string, propertyId?: str
     db.loan.findMany({
       where: { propertyId: { in: ids }, isPersonal: false },
       select: {
-        id: true, propertyId: true, lender: true, monthlyPayment: true, escrowAmount: true, isActive: true, maturityDate: true, originationDate: true,
+        id: true, propertyId: true, lender: true, monthlyPayment: true, escrowAmount: true, isActive: true, maturityDate: true, originationDate: true, firstPaymentDate: true,
         loanPayments: { where: { date: { gte: yearStart, lt: yearEnd } }, select: { date: true, amount: true, status: true } },
       },
     }),
@@ -141,7 +142,7 @@ export async function getCashflow(year: number, userId: string, propertyId?: str
         // Nothing logged: the scheduled payment stands in, for an active loan
         // that had started and not yet matured in this month.
         if (!loan.isActive) continue;
-        if (loan.originationDate && loan.originationDate >= mEnd) continue;
+        if (!dueBy(loan, month)) continue;
         if (loan.maturityDate && loan.maturityDate < mStart) continue;
         const scheduled = toNum(loan.monthlyPayment) + toNum(loan.escrowAmount);
         if (scheduled <= 0) continue;

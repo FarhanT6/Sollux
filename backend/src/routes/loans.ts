@@ -58,6 +58,7 @@ const LoanSchema = z.object({
   downPayment: z.number().min(0).optional().nullable(),
   interestRate: z.number().optional().nullable(),
   originationDate: z.string().transform(s => new Date(s)).optional().nullable(),
+  firstPaymentDate: z.string().transform(s => new Date(s)).optional().nullable(),
   maturityDate: z.string().transform(s => new Date(s)).optional().nullable(),
   monthlyPayment: z.number().optional().nullable(),
   balloonPaymentAmount: z.number().optional().nullable(),

@@ -9,6 +9,7 @@
  * YYYY-MM strings on the UTC date, the way date-only values are stored.
  */
 import { db } from '../config/db';
+import { dueBy } from '../lib/loanStart';
 
 export type TrackerStatus = 'paid' | 'partial' | 'upcoming' | 'due' | 'late' | 'none';
 
@@ -41,7 +42,7 @@ export function statusFor(expected: number, paid: number, dueDate: string, grace
 
 const LOAN_SELECT = {
   id: true, lender: true, loanType: true, isPersonal: true, monthlyPayment: true, escrowAmount: true, dueDay: true, gracePeriodDays: true,
-  originationDate: true, paymentMethods: true, paymentInstructions: true, mailingAddress: true, paymentUrl: true,
+  originationDate: true, firstPaymentDate: true, paymentMethods: true, paymentInstructions: true, mailingAddress: true, paymentUrl: true,
   propertyId: true, utilityAccountId: true, property: { select: { nickname: true, address: true } },
   payFromBankAccount: { select: { id: true, name: true, last4: true } },
 } as const;
@@ -81,8 +82,8 @@ function base(l: Loan) {
   };
 }
 
-/** A loan that had not started by the end of the month owes nothing that month. */
-const startedBy = (l: Loan, month: string) => !l.originationDate || ym(l.originationDate) <= month;
+/** A loan owes nothing before its first payment month (the month after it funds, lib/loanStart.ts). */
+const startedBy = (l: Loan, month: string) => dueBy(l, month);
 
 export async function trackerMonth(userId: string, month: string, today: string) {
   const loans = (await activeLoans(userId)).filter(l => startedBy(l, month));

@@ -9,6 +9,18 @@ import type { Loan, Property, LoanType, PrepaymentPenalty, PrepaymentPenaltyTier
 import { bankAccountLabel } from '../lib/bankAccountLabel';
 import { format, addMonths } from 'date-fns';
 import { fmtDate } from '../lib/date';
+
+/** The first payment: the date the owner gave, else the due day of the month after origination (backend lib/loanStart.ts). */
+function firstPaymentLabel(loan: { firstPaymentDate?: string | null; originationDate?: string | null; dueDay?: number | null }): string | null {
+  if (loan.firstPaymentDate) return fmtDate(loan.firstPaymentDate, 'MMM d, yyyy');
+  const m = loan.originationDate?.match(/^(\d{4})-(\d{2})/);
+  if (!m) return null;
+  let y = Number(m[1]), mo = Number(m[2]) + 1;
+  if (mo > 12) { mo = 1; y++; }
+  const last = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+  const day = Math.min(loan.dueDay ?? 1, last);
+  return fmtDate(`${y}-${String(mo).padStart(2, '0')}-${String(day).padStart(2, '0')}`, 'MMM d, yyyy');
+}
 import { projectLoanBalance } from '../lib/loanMath';
 import LoanComponentsPanel from '../components/LoanComponentsPanel';
 import HowPaidPanel from '../components/loans/HowPaidPanel';
@@ -215,6 +227,7 @@ function EditModal({ loan, properties, onClose, onSave }: {
     dueDay: loan.dueDay != null ? String(loan.dueDay) : '',
     gracePeriodDays: loan.gracePeriodDays != null ? String(loan.gracePeriodDays) : '',
     originationDate: loan.originationDate ? loan.originationDate.slice(0, 10) : '',
+    firstPaymentDate: loan.firstPaymentDate ? loan.firstPaymentDate.slice(0, 10) : '',
     maturityDate: loan.maturityDate ? loan.maturityDate.slice(0, 10) : '',
     propertyId: loan.propertyId ?? '',
     notes: loan.notes ?? '',
@@ -294,6 +307,7 @@ function EditModal({ loan, properties, onClose, onSave }: {
         dueDay: form.dueDay ? parseInt(form.dueDay, 10) : null,
         gracePeriodDays: form.gracePeriodDays ? parseInt(form.gracePeriodDays, 10) : null,
         originationDate: form.originationDate || null,
+        firstPaymentDate: form.firstPaymentDate || null,
         maturityDate: form.maturityDate || null,
         propertyId: form.propertyId || null,
         notes: form.notes || null,
@@ -457,6 +471,11 @@ function EditModal({ loan, properties, onClose, onSave }: {
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Origination date</label>
                 <input type="date" value={form.originationDate} onChange={f('originationDate')} className="input-dark w-full text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">First payment</label>
+                <input type="date" value={form.firstPaymentDate} onChange={f('firstPaymentDate')} className="input-dark w-full text-sm" />
+                <p className="text-[11px] text-gray-600 mt-1">{form.firstPaymentDate ? 'Nothing is due before this month.' : 'Blank: the month after origination — the closing covers the first month.'}</p>
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Maturity date</label>
@@ -889,9 +908,11 @@ export default function LoanDetailPage() {
         </div>
       </div>
 
-      {loan.maturityDate && (
+      {(loan.maturityDate || loan.originationDate) && (
         <p className="text-xs text-gray-500 mt-1">
-          Maturity: <span className="text-gray-300">{fmtDate(loan.maturityDate, 'MMM d, yyyy')}</span>
+          {loan.originationDate && <>Funded: <span className="text-gray-300">{fmtDate(loan.originationDate, 'MMM d, yyyy')}</span> &middot; </>}
+          {firstPaymentLabel(loan) && <>First payment: <span className="text-gray-300">{firstPaymentLabel(loan)}</span>{loan.maturityDate ? <> &middot; </> : null}</>}
+          {loan.maturityDate && <>Maturity: <span className="text-gray-300">{fmtDate(loan.maturityDate, 'MMM d, yyyy')}</span></>}
           {loan.loanExtensions && loan.loanExtensions.length > 0 && (
             <span> &middot; extended {loan.loanExtensions.length} time{loan.loanExtensions.length > 1 ? 's' : ''}</span>
           )}

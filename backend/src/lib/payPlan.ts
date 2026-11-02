@@ -1,6 +1,7 @@
 import { db } from '../config/db';
 import { websiteFor } from './providerDirectory';
 import { getPaymentPriorities } from '../services/paymentPriority';
+import { dueBy } from './loanStart';
 
 /**
  * The pay planner.
@@ -175,6 +176,7 @@ export async function buildPayPlan(userId: string, opts: { horizonDays?: number;
     const due = candidates.find(d => {
       if (d > horizonEnd) return false;
       if (d < lookback) return false;
+      if (!dueBy(loan, d.toISOString().slice(0, 7))) return false;
       const mStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
       const mEnd = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
       // A payment covers the month it says it covers; without one, the month it was paid in.
