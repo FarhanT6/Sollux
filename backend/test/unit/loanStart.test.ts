@@ -22,3 +22,10 @@ test('a first payment date the owner gave wins', () => {
 test('a loan with no dates is taken as running', () => {
   assert.equal(dueBy({}, '2020-01'), true);
 });
+
+test('a loan with no start date counts from the month it was added', () => {
+  const l = { createdAt: new Date('2026-03-20T00:00:00Z') };
+  assert.equal(firstDueMonth(l), '2026-03');
+  assert.equal(dueBy(l, '2025-12'), false);
+  assert.equal(dueBy(l, '2026-03'), true);
+});

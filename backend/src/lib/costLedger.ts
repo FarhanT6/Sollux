@@ -74,7 +74,7 @@ export async function buildLedger(userId: string, from: string, to: string, prop
       where: { userId, propertyId: { in: ids }, isPersonal: false, utilityAccountId: null },
       select: {
         id: true, propertyId: true, lender: true, loanType: true, accountLast4: true, isActive: true, monthlyPayment: true, escrowAmount: true,
-        originationDate: true, firstPaymentDate: true, maturityDate: true,
+        originationDate: true, firstPaymentDate: true, createdAt: true, maturityDate: true,
         loanPayments: { where: { date: { gte: start, lt: end } }, select: { amount: true, date: true } },
       },
     }),

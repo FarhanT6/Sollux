@@ -43,7 +43,7 @@ export function statusFor(expected: number, paid: number, dueDate: string, grace
 
 const LOAN_SELECT = {
   id: true, lender: true, loanType: true, isPersonal: true, monthlyPayment: true, escrowAmount: true, dueDay: true, gracePeriodDays: true,
-  originationDate: true, firstPaymentDate: true, paymentMethods: true, paymentInstructions: true, mailingAddress: true, paymentUrl: true,
+  originationDate: true, firstPaymentDate: true, createdAt: true, paymentMethods: true, paymentInstructions: true, mailingAddress: true, paymentUrl: true,
   propertyId: true, utilityAccountId: true, property: { select: { nickname: true, address: true } },
   payFromBankAccount: { select: { id: true, name: true, last4: true } },
 } as const;

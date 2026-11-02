@@ -12,7 +12,7 @@ import { openUrl } from '../lib/native';
 import { describeApiError } from '../lib/apiError';
 import PaymentsPage from './PaymentsPage';
 import FeesSummaryPage from './FeesSummaryPage';
-import { onLoansTab, MORTGAGE_PERSONAL_TYPES } from '../lib/loanGroups';
+import { onLoansTab, isPropertyLoan } from '../lib/loanGroups';
 import type { LoanType } from '../types';
 import { ViewSwitch } from './FinancesPage';
 import AddUtilityModal from '../components/utility/AddUtilityModal';
@@ -390,7 +390,7 @@ function CatchUp({ bills, onClose, onDone }: { bills: Bill[]; onClose: () => voi
                 {loans && loans.length > 0 && (
                   <span className="ml-auto flex gap-3 text-xs">
                     <button onClick={() => setPickLoans(new Set(loans.map(l => l.loanId)))} className="text-gray-400 hover:text-white">All</button>
-                    <button onClick={() => setPickLoans(new Set(loans.filter(l => MORTGAGE_PERSONAL_TYPES.includes(l.loanType as LoanType)).map(l => l.loanId)))} className="text-amber-400 hover:text-amber-300">Mortgages only</button>
+                    <button onClick={() => setPickLoans(new Set(loans.filter(isPropertyLoan).map(l => l.loanId)))} className="text-amber-400 hover:text-amber-300">Mortgages only</button>
                     <button onClick={() => setPickLoans(new Set())} className="text-gray-400 hover:text-white">None</button>
                   </span>
                 )}
