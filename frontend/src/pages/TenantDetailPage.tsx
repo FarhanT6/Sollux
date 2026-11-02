@@ -226,7 +226,7 @@ export default function TenantDetailPage({ tenantId, onClose }: { tenantId?: str
       ) : (
         <div className="space-y-4">
           {leases.map(lt => (
-            <LeaseCard key={lt.lease!.id} lease={lt.lease!} maintenance={maintenanceByLease[lt.lease!.id] ?? []} onChanged={load} />
+            <LeaseCard key={lt.lease!.id} lease={lt.lease!} maintenance={maintenanceByLease[lt.lease!.id] ?? []} onChanged={load} inPanel={!!onClose} />
           ))}
         </div>
       )}
@@ -268,10 +268,12 @@ export function TenantRoute() {
 
 // ─── Lease card ──────────────────────────────────────────────────────────────
 
-function LeaseCard({ lease, maintenance, onChanged }: {
+function LeaseCard({ lease, maintenance, onChanged, inPanel }: {
   lease: Lease & { rentPayments?: RentPayment[] };
   maintenance: Improvement[];
   onChanged: () => void;
+  /** Shown in the property page's panel: Edit lease replaces the history entry rather than adding one. */
+  inPanel?: boolean;
 }) {
   // The phone's edit sheet; on a computer, Edit lease opens the property's full editor.
   const [editing, setEditing] = useState(false);
@@ -431,7 +433,7 @@ function LeaseCard({ lease, maintenance, onChanged }: {
             <Link to="/tenants?tab=rent" className="text-xs text-gray-500 hover:text-gray-300">View in Rent</Link>
           )}
           {/* One lease editor: the property's, which has every term (rent, due day, utilities, increases, arrears, late fees, payer names). */}
-          {property && <Link to={`/portfolio/${property.id}?tab=Tenants&editLease=${lease.id}`} className="text-xs text-amber-400 hover:text-amber-300">Edit lease</Link>}
+          {property && <Link replace={inPanel} to={`/portfolio/${property.id}?tab=Tenants&editLease=${lease.id}`} className="text-xs text-amber-400 hover:text-amber-300">Edit lease</Link>}
         </div>
       </div>
 
