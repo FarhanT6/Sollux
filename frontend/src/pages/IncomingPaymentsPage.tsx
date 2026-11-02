@@ -177,10 +177,11 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
                 {tx.confirmation && <span className="text-gray-600"> · conf. {tx.confirmation}</span>}
               </p>
 
-              {tx.reviewNote && !asking[tx.id] && (
+              {tx.reviewNote && !asking[tx.id] && (tx.status === 'APPLIED' || kindOf(tx) === 'rent') && (
                 <p className={`text-xs mb-2 ${tx.status === 'APPLIED' ? 'text-sky-400' : 'text-amber-400'}`}>{tx.reviewNote}</p>
               )}
-              {asking[tx.id] && tx.status !== 'APPLIED' && (
+              {/* The overpayment question is about rent: choosing rent + deposit or utilities answers it. */}
+              {asking[tx.id] && tx.status !== 'APPLIED' && kindOf(tx) === 'rent' && (
                 <div className="rounded-lg px-3 py-2 mb-2 text-xs" style={{ background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.25)' }}>
                   <p className="text-amber-300 mb-1.5">{asking[tx.id].note}</p>
                   <div className="flex flex-wrap gap-2">
@@ -191,7 +192,7 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
                   </div>
                 </div>
               )}
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 {tx.status === 'APPLIED' ? (
                   <p className="text-xs text-emerald-500">
                     Applied to {tx.matchedLease?.leaseTenants.map(lt => lt.tenant.fullName).join(', ')} ({tx.matchedLease?.unit.property.nickname || tx.matchedLease?.unit.property.address})
@@ -201,7 +202,7 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
                 ) : (
                   <>
                     <SearchSelect
-                      className="flex-1 min-w-0"
+                      className="flex-1 min-w-[14rem]"
                       value={tx.matchedLeaseId ?? ''}
                       onChange={v => handleMatch(tx.id, v)}
                       emptyLabel="— No tenant matched —"
