@@ -89,8 +89,12 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
   // An overpayment with back rent or utilities owed: the plan the API answered with, until the owner chooses.
   const [asking, setAsking] = useState<Record<string, { note: string; extra: number; arrears: number; utilitiesOwed: number; nextMonth: string }>>({});
   // Rent or utilities: starts at utilities when the memo says so or the amount is an open utility invoice's.
-  const [kinds, setKinds] = useState<Record<string, 'rent' | 'utilities'>>({});
-  const kindOf = (tx: IncomingTransaction) => kinds[tx.id] ?? (tx.utilities?.suggested ? 'utilities' : 'rent');
+  type Kind = 'rent' | 'utilities' | 'deposit';
+  const [kinds, setKinds] = useState<Record<string, Kind>>({});
+  const kindOf = (tx: IncomingTransaction): Kind => kinds[tx.id] ?? (tx.utilities?.suggested ? 'utilities' : tx.deposit?.suggested ? 'deposit' : 'rent');
+  // The deposit part of a transfer applied as rent + deposit: starts at what is over the month's rent.
+  const [deposits, setDeposits] = useState<Record<string, string>>({});
+  const depositOf = (tx: IncomingTransaction) => deposits[tx.id] ?? String(tx.deposit?.amount ?? tx.amount);
   // The invoice a utility payment goes on: the open one it pays, unless the owner picks another (a paid one is replaced).
   const [invoicePick, setInvoicePick] = useState<Record<string, string>>({});
   const invoiceOf = (tx: IncomingTransaction) => invoicePick[tx.id] ?? tx.utilities?.invoiceId ?? '';
@@ -100,7 +104,9 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
       // Only a month the owner changed is sent; the one Sollux read is what it records anyway.
       const inv = kindOf(tx) === 'utilities' ? tx.utilities?.invoices.find(i => i.id === invoiceOf(tx)) : undefined;
       if (inv?.status === 'PAID' && !confirm(`The ${inv.label} invoice is already paid. Use this payment in place of what is logged on it (${money(inv.paid)})? The earlier payment is removed.`)) return;
-      await applyIncomingTransaction(tx.id, chosen && chosen !== tx.forMonth ? chosen : undefined, extraTo, kindOf(tx), invoiceOf(tx) || null);
+      const dep = kindOf(tx) === 'deposit' ? parseFloat(depositOf(tx)) : undefined;
+      if (dep != null && !(dep > 0 && dep <= Number(tx.amount))) { alert(`Enter a deposit between $0 and ${money(Number(tx.amount))}.`); return; }
+      await applyIncomingTransaction(tx.id, chosen && chosen !== tx.forMonth ? chosen : undefined, extraTo, kindOf(tx), invoiceOf(tx) || null, dep);
       setAsking(a => { const n = { ...a }; delete n[tx.id]; return n; });
     } catch (e: any) {
       const plan = e?.response?.status === 409 ? e.response.data?.plan : null;
@@ -203,10 +209,19 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
                       options={leaseOptions}
                     />
                     <select className="field-input text-xs w-auto flex-shrink-0" value={kindOf(tx)} title="Rent, or paying back utilities (recorded on the lease's open utility invoice)"
-                      onChange={e => setKinds(k => ({ ...k, [tx.id]: e.target.value as 'rent' | 'utilities' }))}>
+                      onChange={e => setKinds(k => ({ ...k, [tx.id]: e.target.value as Kind }))}>
                       <option value="rent">Rent</option>
+                      <option value="deposit">Rent + deposit</option>
                       <option value="utilities">Utilities</option>
                     </select>
+                    {kindOf(tx) === 'deposit' && (
+                      <label className="flex items-center gap-1 text-xs text-gray-500 flex-shrink-0" title="The security deposit part; the rest is rent for the month shown">
+                        deposit $
+                        <input type="number" min={0} step="0.01" className="field-input text-xs w-24" value={depositOf(tx)}
+                          onChange={e => setDeposits(d => ({ ...d, [tx.id]: e.target.value }))} />
+                        <span className="text-gray-600">· rent {money(Math.max(0, Number(tx.amount) - (parseFloat(depositOf(tx)) || 0)))}</span>
+                      </label>
+                    )}
                     {kindOf(tx) === 'utilities' ? (
                       tx.utilities?.invoices.length ? (
                         <select className="field-input text-xs w-auto max-w-[16rem] flex-shrink-0" value={invoiceOf(tx)}

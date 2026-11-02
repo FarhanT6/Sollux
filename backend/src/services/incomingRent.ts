@@ -230,3 +230,34 @@ export async function autoLogIncoming(t: Omit<IncomingToLog, 'forMonth' | 'choic
   const r = await logIncomingRent(t);
   return r.applied ? 'rent' : 'waiting';
 }
+
+// ─── Security deposits ───────────────────────────────────────────────────
+// A new tenant often sends the deposit with the first rent in one transfer.
+// The owner says how much of it is deposit; the rest is rent for the month.
+
+/** What part of a transfer looks like a deposit: a lease started in the last 90 days with no deposit on record, paying more than the month still owes. */
+export async function depositHint(leaseId: string, userId: string, amount: number, period: Date): Promise<{ suggested: boolean; amount: number; rentDue: number }> {
+  const lease = await db.lease.findUnique({ where: { id: leaseId }, select: { startDate: true, _count: { select: { deposits: true } } } });
+  const plan = await planPayment(leaseId, userId, amount, period);
+  const recent = !!lease?.startDate && Date.now() - lease.startDate.getTime() < 90 * 86_400_000;
+  return { suggested: recent && (lease?._count.deposits ?? 0) === 0 && plan.extra > 0.5, amount: plan.extra > 0.5 ? plan.extra : amount, rentDue: plan.due };
+}
+
+/** Records `depositAmount` of the transfer as the lease's security deposit and the rest as rent for the month, and marks it applied. */
+export async function logIncomingDeposit(t: Omit<IncomingToLog, 'choice'>, depositAmount: number | null): Promise<{ note: string }> {
+  const deposit = r2(Math.min(t.amount, depositAmount != null && depositAmount > 0 ? depositAmount : t.amount));
+  const rent = r2(t.amount - deposit);
+  await db.leaseDeposit.create({
+    data: { leaseId: t.leaseId, amount: deposit, paidDate: t.date, method: t.method as any, bankAccountId: t.bankAccountId ?? null, notes: `${t.notes} · security deposit` },
+  });
+  let rentPaymentId: string | null = null, month = '';
+  if (rent > 0.005) {
+    const period = t.forMonth ? new Date(`${t.forMonth}-01T00:00:00.000Z`) : await rentMonthFor(t.leaseId, t.date, t.memo);
+    month = ym(period);
+    const p = await recordRentPayment({ leaseId: t.leaseId, periodDate: period, amount: rent, paidDate: t.date, method: t.method as any, bankAccountId: t.bankAccountId ?? undefined, notes: `${t.notes} · with a ${usd(deposit)} deposit`, applyTo: 'CURRENT' });
+    rentPaymentId = p.id;
+  }
+  const note = rent > 0.005 ? `${usd(deposit)} security deposit · ${usd(rent)} rent for ${monthName(month)}.` : `${usd(deposit)} security deposit.`;
+  await db.incomingTransaction.update({ where: { id: t.txId }, data: { status: 'APPLIED', matchedLeaseId: t.leaseId, rentPaymentId, reviewNote: note } });
+  return { note };
+}
