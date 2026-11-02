@@ -125,18 +125,53 @@ export async function matchLease(counterpartyName: string, userId: string): Prom
   // A whole name beats a partial one: "Elizabeth Estrada" is hers, though
   // "Estrada" alone also fits Valeshka Estrada's and Javier Estrada's leases.
   // Two leases fitting the same way is a tie, and a tie is not guessed.
-  const aliasWhole = activeLeases.filter(l => l.paymentAliases.some(a => whole(a.name)));
+  // A name Sollux learned from an applied payment does not outrank a tenant's
+  // own name on another lease: that sender is a tenant (or manager) paying for
+  // someone else, and their own rent is theirs.
+  const tenantWholeAny = activeLeases.filter(l => l.leaseTenants.some(lt => normalizeWords(lt.tenant.fullName).length >= 2 && whole(lt.tenant.fullName)));
+  const counts = (l: typeof activeLeases[number], a: { name: string; note: string | null }) =>
+    !(a.note?.startsWith('Learned') && tenantWholeAny.some(t => t.id !== l.id));
+  const aliasWhole = activeLeases.filter(l => l.paymentAliases.some(a => whole(a.name) && counts(l, a)));
   if (aliasWhole.length === 1) return { leaseId: aliasWhole[0].id, viaAlias: true, exact: true };
-  const aliasMatches = activeLeases.filter(l => l.paymentAliases.some(a => fits(a.name)));
+  const aliasMatches = activeLeases.filter(l => l.paymentAliases.some(a => fits(a.name) && counts(l, a)));
   if (aliasWhole.length === 0 && aliasMatches.length === 1) return { leaseId: aliasMatches[0].id, viaAlias: true, exact: false };
 
-  const tenantWhole = activeLeases.filter(l => l.leaseTenants.some(lt => normalizeWords(lt.tenant.fullName).length >= 2 && whole(lt.tenant.fullName)));
+  const tenantWhole = tenantWholeAny;
   if (tenantWhole.length === 1) return { leaseId: tenantWhole[0].id, viaAlias: false, exact: true };
   if (tenantWhole.length > 1 || aliasWhole.length > 1 || aliasMatches.length > 1) return null;
   const tenantMatches = activeLeases.filter(l => l.leaseTenants.some(lt => fits(lt.tenant.fullName)));
   return tenantMatches.length === 1
     ? { leaseId: tenantMatches[0].id, viaAlias: false, exact: false }
     : null;
+}
+
+/** The unit a memo names: "RENT FOR NUMBER 7", "apt 4", "Unit 12B", "Spc 4" → "7", "4", "12b", "4". */
+export function unitInMemo(memo: string | null | undefined): string | null {
+  const m = memo && /\b(?:unit|apt|apartment|number|num|no|space|spc|sp|suite|ste|room|rm)\.?\s*#?\s*(\d+[a-z]?)\b/i.exec(memo);
+  return m ? m[1].toLowerCase() : null;
+}
+
+const unitNumbers = (label: string | null | undefined): string[] => (label ?? '').toLowerCase().match(/\d+[a-z]?/g) ?? [];
+
+/**
+ * The tenant a payment is for: the payer's name (matchLease) — unless the
+ * memo names another unit at the same property. A property manager who is
+ * also a tenant there sends rent for other tenants ("RENT FOR NUMBER 7"):
+ * that is unit 7's rent, not hers. Only a unit at the payer's property whose
+ * label carries that number, and only one, is taken.
+ */
+export async function matchPayer(counterpartyName: string, memo: string | null | undefined, userId: string): Promise<(LeaseMatch & { viaUnit?: boolean }) | null> {
+  const m = await matchLease(counterpartyName, userId);
+  const unit = unitInMemo(memo);
+  if (!m || !unit) return m;
+  const own = await db.lease.findUnique({ where: { id: m.leaseId }, select: { unit: { select: { propertyId: true, unitLabel: true } } } });
+  if (!own || unitNumbers(own.unit.unitLabel).includes(unit)) return m;
+  const there = await db.lease.findMany({
+    where: { status: 'ACTIVE', unit: { propertyId: own.unit.propertyId } },
+    select: { id: true, unit: { select: { unitLabel: true } } },
+  });
+  const named = there.filter(l => unitNumbers(l.unit.unitLabel).includes(unit));
+  return named.length === 1 ? { ...m, leaseId: named[0].id, viaUnit: true } : m;
 }
 
 /**
@@ -334,7 +369,7 @@ export async function syncTransactionsForItem(plaidItemId: string) {
           const counterparty = extractCounterpartyName(name);
           // Name first — it identifies the payer. Fall back to the rent amount,
           // which is all a bare "MOBILE DEPOSIT" gives us to go on.
-          const nameMatch = await matchLease(counterparty, plaidItem.userId);
+          const nameMatch = await matchPayer(counterparty, descriptorMemo(name), plaidItem.userId);
           const matchedLeaseId = nameMatch?.leaseId ?? await matchLeaseByAmount(amount, plaidItem.userId);
 
           // A bank-channel credit we can't tie to a tenant is far more likely

@@ -17,7 +17,7 @@ import { db } from '../config/db';
 import { recordRentPayment, periodStartOf, chargesFor, creditedTo } from './rentPaymentService';
 import { monthRentDue } from '../lib/rentDue';
 import { autoLogIncoming } from './incomingRent';
-import { matchLease, matchLeaseByAmount, CHANNEL_TO_METHOD } from './transactionMatchService';
+import { matchPayer, matchLeaseByAmount, CHANNEL_TO_METHOD } from './transactionMatchService';
 
 export type P2PChannel = 'ZELLE' | 'VENMO' | 'PAYPAL' | 'CASH_APP' | 'APPLE_CASH';
 
@@ -330,7 +330,7 @@ export async function recordP2PEmail(userId: string, p: P2PPayment, key: string)
     if (accts.length === 1) bankAccountId = accts[0].id;
   }
 
-  const nameMatch = await matchLease(p.payer, userId);
+  const nameMatch = await matchPayer(p.payer, p.memo, userId);
   const matchedLeaseId = nameMatch?.leaseId ?? await matchLeaseByAmount(p.amount, userId);
   // Someone the owner already said is not a tenant (family, their own LLCs):
   // kept for the record, not put in front of them again.
