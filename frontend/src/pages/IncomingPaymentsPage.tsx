@@ -88,6 +88,7 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
   const [months, setMonths] = useState<Record<string, string>>({});
   // An overpayment with back rent or utilities owed: the plan the API answered with, until the owner chooses.
   const [asking, setAsking] = useState<Record<string, { note: string; extra: number; arrears: number; utilitiesOwed: number; nextMonth: string }>>({});
+  const [unfolded, setUnfolded] = useState<Record<string, boolean>>({});
   // Rent or utilities: starts at utilities when the memo says so or the amount is an open utility invoice's.
   const [kinds, setKinds] = useState<Record<string, 'rent' | 'utilities'>>({});
   const kindOf = (tx: IncomingTransaction) => kinds[tx.id] ?? (tx.utilities?.suggested ? 'utilities' : 'rent');
@@ -158,7 +159,10 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
                 </div>
                 <p className="text-sm font-semibold text-emerald-500">{money(tx.amount)}</p>
               </div>
-              <p className="text-xs text-gray-500 mb-2 truncate">
+              {/* The whole descriptor and memo on hover; a click unfolds it (phones have no hover). */}
+              <p className={`text-xs text-gray-500 mb-2 cursor-pointer ${unfolded[tx.id] ? 'whitespace-normal break-words' : 'truncate'}`}
+                title={[tx.name, tx.memo && `“${tx.memo}”`, tx.confirmation && `conf. ${tx.confirmation}`].filter(Boolean).join(' · ')}
+                onClick={() => setUnfolded(u => ({ ...u, [tx.id]: !u[tx.id] }))}>
                 {tx.name}
                 {tx.memo && <span className="text-gray-400"> · “{tx.memo}”</span>}
                 {tx.confirmation && <span className="text-gray-600"> · conf. {tx.confirmation}</span>}
