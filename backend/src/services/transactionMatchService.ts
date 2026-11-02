@@ -20,7 +20,7 @@ import { plaidClient } from '../config/plaid';
 import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';
 import { recordRentPayment } from './rentPaymentService';
-import { findTwin, findLoggedPayment, sureOfTenant, periodFor, descriptorMemo } from './p2pPaymentEmails';
+import { findTwin, findLoggedPayment, sureOfTenant, rentMonthFor, descriptorMemo } from './p2pPaymentEmails';
 import { findLoanCandidates, confidentLoan, logLoanPaymentFromTransaction } from './loanPaymentMatcher';
 
 // ─── Incoming (rent via P2P) ──────────────────────────────────────────────
@@ -358,7 +358,7 @@ export async function syncTransactionsForItem(plaidItemId: string) {
             const payment = await recordRentPayment({
               leaseId: nameMatch.leaseId,
               // "OCTOBER RENT 2026" sent Sep 30 is October's rent.
-              periodDate: periodFor(new Date(tx.date), descriptorMemo(name)),
+              periodDate: await rentMonthFor(nameMatch.leaseId, new Date(tx.date), descriptorMemo(name)),
               amount,
               paidDate: new Date(tx.date),
               method: (CHANNEL_TO_METHOD[channel] ?? 'OTHER') as any,

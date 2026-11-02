@@ -3,7 +3,7 @@ import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { syncAllWatchedAccounts, CHANNEL_TO_METHOD, matchLease, extractCounterpartyName } from '../services/transactionMatchService';
 import { recordRentPayment } from '../services/rentPaymentService';
-import { findLoggedPayment, periodFor, sureOfTenant, descriptorMemo } from '../services/p2pPaymentEmails';
+import { findLoggedPayment, periodFor, rentMonthFor, sureOfTenant, descriptorMemo } from '../services/p2pPaymentEmails';
 
 const router = Router();
 router.use(attachDbUser);
@@ -27,7 +27,13 @@ router.get('/', async (req, res, next) => {
       orderBy: { date: 'desc' },
     });
     // The month Apply records each one for, so the owner sees it (and can change it) before applying.
-    res.json(transactions.map(tx => ({ ...tx, forMonth: periodFor(tx.date, memoOf(tx)).toISOString().slice(0, 7) })));
+    // Waiting ones with a tenant also skip a month that tenant has already paid in full (rentMonthFor).
+    res.json(await Promise.all(transactions.map(async tx => ({
+      ...tx,
+      forMonth: (tx.status !== 'APPLIED' && tx.status !== 'IGNORED' && tx.matchedLeaseId
+        ? await rentMonthFor(tx.matchedLeaseId, tx.date, memoOf(tx))
+        : periodFor(tx.date, memoOf(tx))).toISOString().slice(0, 7),
+    }))));
   } catch (err) { next(err); }
 });
 
@@ -136,7 +142,7 @@ async function applyTo(tx: Tx, leaseId: string, forMonth?: string | null) {
   const payment = await recordRentPayment({
     leaseId,
     // The month the owner chose; else the memo's month (a bank row's is in its descriptor), or the date's.
-    periodDate: forMonth ? new Date(`${forMonth}-01T00:00:00.000Z`) : periodFor(tx.date, memoOf(tx)),
+    periodDate: forMonth ? new Date(`${forMonth}-01T00:00:00.000Z`) : await rentMonthFor(leaseId, tx.date, memoOf(tx)),
     ...(forMonth ? { applyTo: 'CURRENT' as const } : {}),
     amount: Number(tx.amount),
     paidDate: tx.date,

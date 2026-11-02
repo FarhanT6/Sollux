@@ -14,7 +14,8 @@
  * Finances -> Incoming for the owner to pick the tenant, apply or ignore.
  */
 import { db } from '../config/db';
-import { recordRentPayment, periodStartOf } from './rentPaymentService';
+import { recordRentPayment, periodStartOf, chargesFor, creditedTo } from './rentPaymentService';
+import { monthRentDue } from '../lib/rentDue';
 import { matchLease, matchLeaseByAmount, CHANNEL_TO_METHOD } from './transactionMatchService';
 
 export type P2PChannel = 'ZELLE' | 'VENMO' | 'PAYPAL' | 'CASH_APP' | 'APPLE_CASH';
@@ -184,22 +185,48 @@ export function descriptorMemo(name: string | null | undefined): string | null {
   return m ? m[1].trim() || null : null;
 }
 
-export function periodFor(date: Date, memo: string | null | undefined): Date {
+/** The month a memo names ("OCTOBER RENT"), placed near the payment date; null when it names none. */
+export function memoMonth(date: Date, memo: string | null | undefined): Date | null {
   // Whole month names or their short forms only: "JANE" is not January, nor "MARCUS" March.
   const m = memo && /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)s?\b/i.exec(memo);
-  if (m) {
-    const month = MONTHS.indexOf(m[1].slice(0, 3).toLowerCase());
-    // The latest such month no more than a month after the payment.
-    let y = date.getUTCFullYear();
-    const diff = month - date.getUTCMonth();
-    if (diff > 1) y -= 1; // August's rent paid in October
-    else if (diff < -10) y += 1; // January's rent paid in December
-    return new Date(Date.UTC(y, month, 1));
-  }
+  if (!m) return null;
+  const month = MONTHS.indexOf(m[1].slice(0, 3).toLowerCase());
+  // The latest such month no more than a month after the payment.
+  let y = date.getUTCFullYear();
+  const diff = month - date.getUTCMonth();
+  if (diff > 1) y -= 1; // August's rent paid in October
+  else if (diff < -10) y += 1; // January's rent paid in December
+  return new Date(Date.UTC(y, month, 1));
+}
+
+export function periodFor(date: Date, memo: string | null | undefined): Date {
+  const named = memoMonth(date, memo);
+  if (named) return named;
   // No month named: rent sent in the last days of a month is next month's,
   // paid ahead of the 1st ("Rent" on September 30 is October's).
   if (date.getUTCDate() >= 25) return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1));
   return periodStartOf(date);
+}
+
+/**
+ * The rent month a payment on a lease is for. The memo's month when it names
+ * one; otherwise the date's (next month from the 25th) — and when that month
+ * is already paid in full, the next one that is not: a tenant who paid all of
+ * August on the 2nd and 3rd and sends rent again on the 31st is paying
+ * September, not August a second time.
+ */
+export async function rentMonthFor(leaseId: string, date: Date, memo: string | null | undefined): Promise<Date> {
+  const named = memoMonth(date, memo);
+  if (named) return named;
+  let period = periodFor(date, null);
+  const lease = await db.lease.findUnique({ where: { id: leaseId }, select: { rentAmount: true, startDate: true, firstMonthRent: true } });
+  if (!lease) return period;
+  for (let i = 0; i < 2; i++) {
+    const due = monthRentDue(lease as any, period) + await chargesFor(leaseId, period);
+    if (due <= 0 || await creditedTo(leaseId, period) < due - 0.5) break;
+    period = new Date(Date.UTC(period.getUTCFullYear(), period.getUTCMonth() + 1, 1));
+  }
+  return period;
 }
 
 /**
@@ -339,7 +366,7 @@ export async function recordP2PEmail(userId: string, p: P2PPayment, key: string)
 
   const payment = await recordRentPayment({
     leaseId: matchedLeaseId,
-    periodDate: periodFor(p.date, p.memo),
+    periodDate: await rentMonthFor(matchedLeaseId, p.date, p.memo),
     amount: p.amount,
     paidDate: p.date,
     method: (CHANNEL_TO_METHOD[p.channel] ?? 'OTHER') as any,
