@@ -3,7 +3,8 @@ import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { syncAllWatchedAccounts, CHANNEL_TO_METHOD, matchLease, extractCounterpartyName } from '../services/transactionMatchService';
 import { recordRentPayment } from '../services/rentPaymentService';
-import { findLoggedPayment, periodFor, rentMonthFor, sureOfTenant, descriptorMemo } from '../services/p2pPaymentEmails';
+import { findLoggedPayment, periodFor, rentMonthFor, sureOfSender, descriptorMemo } from '../services/p2pPaymentEmails';
+import { logIncomingRent, type ExtraChoice } from '../services/incomingRent';
 
 const router = Router();
 router.use(attachDbUser);
@@ -119,7 +120,10 @@ router.post('/:id/apply', async (req, res, next) => {
 
     // The owner can name the month ("October"); a named month takes the payment first, before arrears.
     const forMonth = typeof req.body?.forMonth === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(req.body.forMonth) ? req.body.forMonth as string : null;
-    const { updated, linkedExisting } = await applyTo(tx, lease.id, forMonth);
+    const choice = (['next', 'arrears', 'utilities'] as const).find(c => c === req.body?.extraTo) ?? null;
+    const { updated, linkedExisting, plan } = await applyTo(tx, lease.id, forMonth, choice);
+    // More than the month owes, with back rent or utilities open: the owner says where the extra goes.
+    if (plan) return res.status(409).json({ needsChoice: true, plan, error: plan.note });
     if (!linkedExisting) await learnSender(lease.id, tx.name, tx.source);
     res.json({ ...updated, ...(linkedExisting ? { linkedExisting } : {}) });
   } catch (err) { next(err); }
@@ -130,28 +134,25 @@ type Tx = NonNullable<Awaited<ReturnType<typeof db.incomingTransaction.findFirst
 /** Record a transaction as rent on a lease (or link it to the payment already logged by hand). */
 const memoOf = (tx: { memo: string | null; source: string | null; name: string | null }) => tx.memo ?? (tx.source === 'email' ? null : descriptorMemo(tx.name));
 
-async function applyTo(tx: Tx, leaseId: string, forMonth?: string | null) {
+async function applyTo(tx: Tx, leaseId: string, forMonth?: string | null, choice?: ExtraChoice | null) {
   // Logged by hand already: link it instead of logging the money twice.
   const logged = await findLoggedPayment(leaseId, Number(tx.amount), tx.date, { source: tx.source === 'email' ? 'email' : 'bank', reference: tx.confirmation ?? /\bREF\s*#?\s*(\S+)/i.exec(tx.name ?? '')?.[1] ?? null });
   if (logged) {
     const updated = await db.incomingTransaction.update({ where: { id: tx.id }, data: { status: 'APPLIED', rentPaymentId: logged.id } });
-    return { updated, linkedExisting: true };
+    return { updated, linkedExisting: true, plan: null };
   }
-  // Goes through the shared recorder so the payment splits against arrears
-  // exactly like a hand-entered one, and carries the account it landed in.
-  const payment = await recordRentPayment({
-    leaseId,
-    // The month the owner chose; else the memo's month (a bank row's is in its descriptor), or the date's.
-    periodDate: forMonth ? new Date(`${forMonth}-01T00:00:00.000Z`) : await rentMonthFor(leaseId, tx.date, memoOf(tx)),
-    ...(forMonth ? { applyTo: 'CURRENT' as const } : {}),
-    amount: Number(tx.amount),
-    paidDate: tx.date,
-    method: (CHANNEL_TO_METHOD[(tx.channel ?? 'OTHER') as keyof typeof CHANNEL_TO_METHOD] ?? 'OTHER') as any,
-    bankAccountId: tx.bankAccountId ?? undefined,
+  // The month the owner chose, else the memo's or the date's (rentMonthFor); more
+  // than the month owes goes where incomingRent decides, or where the owner chose.
+  const r = await logIncomingRent({
+    txId: tx.id, userId: tx.userId, leaseId,
+    amount: Number(tx.amount), date: tx.date, memo: memoOf(tx),
+    method: CHANNEL_TO_METHOD[(tx.channel ?? 'OTHER') as keyof typeof CHANNEL_TO_METHOD] ?? 'OTHER',
+    bankAccountId: tx.bankAccountId,
     notes: [`Matched from ${tx.channel ?? 'bank'} ${tx.source === 'email' ? 'email' : 'transaction'}: "${tx.name}"`, tx.confirmation && `confirmation ${tx.confirmation}`, tx.memo && `memo "${tx.memo}"`].filter(Boolean).join(' · '),
+    forMonth, choice,
   });
-  const updated = await db.incomingTransaction.update({ where: { id: tx.id }, data: { status: 'APPLIED', rentPaymentId: payment.id } });
-  return { updated, linkedExisting: false };
+  const updated = await db.incomingTransaction.findUniqueOrThrow({ where: { id: tx.id } });
+  return { updated, linkedExisting: false, plan: r.applied ? null : r.plan };
 }
 
 /**
@@ -161,15 +162,16 @@ async function applyTo(tx: Tx, leaseId: string, forMonth?: string | null) {
  * still points at the lease already suggested.
  */
 async function applySureSuggestions(userId: string): Promise<number> {
-  const waiting = await db.incomingTransaction.findMany({ where: { userId, status: 'SUGGESTED', matchedLeaseId: { not: null } }, orderBy: { date: 'asc' } });
+  // One waiting for the owner's choice about an overpayment (reviewNote) stays waiting.
+  const waiting = await db.incomingTransaction.findMany({ where: { userId, status: 'SUGGESTED', matchedLeaseId: { not: null }, reviewNote: null }, orderBy: { date: 'asc' } });
   let applied = 0;
   for (const tx of waiting) {
     try {
       const nameMatch = await matchLease(tx.source === 'email' ? (tx.name ?? '') : extractCounterpartyName(tx.name ?? ''), userId);
       if (!nameMatch || nameMatch.leaseId !== tx.matchedLeaseId) continue;
-      const lease = await db.lease.findUnique({ where: { id: nameMatch.leaseId }, select: { rentAmount: true, arrearsBalance: true } });
-      if (!sureOfTenant(nameMatch, lease, Number(tx.amount), tx.memo ?? (tx.source === 'email' ? null : descriptorMemo(tx.name)))) continue;
-      await applyTo(tx, nameMatch.leaseId);
+      if (!sureOfSender(nameMatch, memoOf(tx))) continue;
+      const r = await applyTo(tx, nameMatch.leaseId);
+      if (r.plan) continue;
       applied++;
     } catch (err) {
       console.warn(`[Incoming] could not apply ${tx.id}:`, err instanceof Error ? err.message : err);

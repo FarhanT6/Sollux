@@ -16,6 +16,7 @@
 import { db } from '../config/db';
 import { recordRentPayment, periodStartOf, chargesFor, creditedTo } from './rentPaymentService';
 import { monthRentDue } from '../lib/rentDue';
+import { logIncomingRent } from './incomingRent';
 import { matchLease, matchLeaseByAmount, CHANNEL_TO_METHOD } from './transactionMatchService';
 
 export type P2PChannel = 'ZELLE' | 'VENMO' | 'PAYPAL' | 'CASH_APP' | 'APPLE_CASH';
@@ -49,6 +50,15 @@ const NOT_RENT = /util|water|electric|power|\bgas\b|sewer|trash|internet|wifi|re
  * over what is owed (a deposit, two months, a utility on top) or a memo like
  * "water" or "deposit" waits for review, even from a saved payer.
  */
+/**
+ * Whether the sender is surely the tenant and the money surely rent — the
+ * name (or a saved payer name) and no memo saying otherwise — whatever the
+ * amount. What an amount over the month's rent does is incomingRent.ts's.
+ */
+export function sureOfSender(nameMatch: { viaAlias: boolean; exact: boolean } | null, memo: string | null | undefined): boolean {
+  return !!nameMatch && !(memo && NOT_RENT.test(memo));
+}
+
 export function sureOfTenant(
   nameMatch: { viaAlias: boolean; exact: boolean } | null,
   lease: { rentAmount: unknown; arrearsBalance: unknown } | null,
@@ -360,19 +370,18 @@ export async function recordP2PEmail(userId: string, p: P2PPayment, key: string)
     return { outcome: 'payment', detail: `${fmt}: matches a payment already logged` };
   }
 
-  const lease = await db.lease.findUnique({ where: { id: matchedLeaseId }, select: { rentAmount: true, arrearsBalance: true } });
-  const sure = sureOfTenant(nameMatch, lease, p.amount, p.memo);
-  if (!sure) return { outcome: 'payment', detail: `${fmt}: tenant suggested, waiting in Finances → Incoming` };
+  if (!sureOfSender(nameMatch, p.memo)) return { outcome: 'payment', detail: `${fmt}: tenant suggested, waiting in Finances → Incoming` };
 
-  const payment = await recordRentPayment({
+  const r = await logIncomingRent({
+    txId: created.id, userId,
     leaseId: matchedLeaseId,
-    periodDate: await rentMonthFor(matchedLeaseId, p.date, p.memo),
     amount: p.amount,
-    paidDate: p.date,
-    method: (CHANNEL_TO_METHOD[p.channel] ?? 'OTHER') as any,
-    bankAccountId: bankAccountId ?? undefined,
+    date: p.date,
+    memo: p.memo,
+    method: CHANNEL_TO_METHOD[p.channel] ?? 'OTHER',
+    bankAccountId,
     notes: [`Logged from ${p.channel === 'CASH_APP' ? 'Cash App' : p.channel === 'APPLE_CASH' ? 'Apple Cash' : p.channel[0] + p.channel.slice(1).toLowerCase()} email`, p.confirmation && `confirmation ${p.confirmation}`, p.memo && `memo "${p.memo}"`].filter(Boolean).join(' · '),
   });
-  await db.incomingTransaction.update({ where: { id: created.id }, data: { status: 'APPLIED', rentPaymentId: payment.id } });
-  return { outcome: 'payment', detail: `${fmt}: logged as rent` };
+  if (!r.applied) return { outcome: 'payment', detail: `${fmt}: ${r.plan.note ?? 'waiting in Finances → Incoming'}` };
+  return { outcome: 'payment', detail: `${fmt}: logged as rent${r.plan.extraGoes ? ` — ${r.plan.note}` : ''}` };
 }

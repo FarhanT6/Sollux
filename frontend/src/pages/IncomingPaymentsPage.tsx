@@ -86,10 +86,19 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
   })), [leases]);
   // The rent month each payment is applied to; starts at what Sollux reads from it.
   const [months, setMonths] = useState<Record<string, string>>({});
-  async function handleApply(tx: IncomingTransaction) {
+  // An overpayment with back rent or utilities owed: the plan the API answered with, until the owner chooses.
+  const [asking, setAsking] = useState<Record<string, { note: string; extra: number; arrears: number; utilitiesOwed: number; nextMonth: string }>>({});
+  async function handleApply(tx: IncomingTransaction, extraTo?: 'next' | 'arrears' | 'utilities') {
     const chosen = months[tx.id];
-    // Only a month the owner changed is sent; the one Sollux read is what it records anyway.
-    await applyIncomingTransaction(tx.id, chosen && chosen !== tx.forMonth ? chosen : undefined);
+    try {
+      // Only a month the owner changed is sent; the one Sollux read is what it records anyway.
+      await applyIncomingTransaction(tx.id, chosen && chosen !== tx.forMonth ? chosen : undefined, extraTo);
+      setAsking(a => { const n = { ...a }; delete n[tx.id]; return n; });
+    } catch (e: any) {
+      const plan = e?.response?.status === 409 ? e.response.data?.plan : null;
+      if (plan) setAsking(a => ({ ...a, [tx.id]: plan }));
+      else alert(e?.response?.data?.error ?? 'Could not apply it.');
+    }
     load();
   }
   async function handleIgnore(id: string) {
@@ -152,6 +161,20 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
                 {tx.confirmation && <span className="text-gray-600"> · conf. {tx.confirmation}</span>}
               </p>
 
+              {tx.reviewNote && !asking[tx.id] && (
+                <p className={`text-xs mb-2 ${tx.status === 'APPLIED' ? 'text-sky-400' : 'text-amber-400'}`}>{tx.reviewNote}</p>
+              )}
+              {asking[tx.id] && tx.status !== 'APPLIED' && (
+                <div className="rounded-lg px-3 py-2 mb-2 text-xs" style={{ background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.25)' }}>
+                  <p className="text-amber-300 mb-1.5">{asking[tx.id].note}</p>
+                  <div className="flex flex-wrap gap-2">
+                    <span className="text-gray-400">Put the extra {money(asking[tx.id].extra)} toward:</span>
+                    <button onClick={() => handleApply(tx, 'next')} className="text-amber-400 hover:text-amber-300 font-medium">Next month's rent</button>
+                    {asking[tx.id].arrears > 0.5 && <button onClick={() => handleApply(tx, 'arrears')} className="text-amber-400 hover:text-amber-300 font-medium">Back rent ({money(asking[tx.id].arrears)})</button>}
+                    {asking[tx.id].utilitiesOwed > 0.5 && <button onClick={() => handleApply(tx, 'utilities')} className="text-amber-400 hover:text-amber-300 font-medium">Utilities ({money(asking[tx.id].utilitiesOwed)})</button>}
+                  </div>
+                </div>
+              )}
               <div className="flex items-center gap-2">
                 {tx.status === 'APPLIED' ? (
                   <p className="text-xs text-emerald-500">
