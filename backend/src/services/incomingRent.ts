@@ -149,16 +149,63 @@ export async function utilityInvoiceFor(leaseId: string, userId: string, amount:
   } catch { return null; }
 }
 
-/** Records the transfer as a utility reimbursement payment (on the invoice it pays, when there is one) and marks it applied. */
-export async function logIncomingUtilities(t: Omit<IncomingToLog, 'forMonth' | 'choice'>): Promise<{ note: string }> {
-  const inv = await utilityInvoiceFor(t.leaseId, t.userId, t.amount);
-  await recordReimbursementPayment(t.leaseId, t.userId, {
-    amount: t.amount, paidDate: t.date.toISOString().slice(0, 10), method: t.method, bankAccountId: t.bankAccountId ?? null,
-    notes: t.notes, allocations: [], invoiceId: inv?.invoiceId ?? null,
+/** The lease's utility invoices, newest first, for the owner to pick from — paid ones too. */
+export async function leaseUtilityInvoices(leaseId: string) {
+  const rows = await db.reimbursementInvoice.findMany({
+    where: { reimbursement: { leaseId }, status: { not: 'DRAFT' } },
+    orderBy: { periodStart: 'desc' }, take: 18,
+    select: { id: true, periodStart: true, periodEnd: true, total: true, paidAmount: true, status: true },
   });
-  const note = inv
-    ? `Applied to utilities — the ${inv.label} invoice${inv.exact ? ' (paid in full)' : ''}.`
-    : 'Applied to utilities (no open invoice: recorded on the lease\'s utility payments).';
+  return rows.map(i => {
+    const start = ym(i.periodStart), end = ym(i.periodEnd);
+    return {
+      id: i.id, label: `${monthName(start)}${end !== start ? ` – ${monthName(end)}` : ''}`,
+      total: Number(i.total), paid: Number(i.paidAmount), outstanding: Math.max(0, r2(Number(i.total) - Number(i.paidAmount))), status: i.status,
+    };
+  });
+}
+
+/**
+ * Records the transfer as a utility reimbursement payment and marks it applied:
+ * on the invoice the owner picked, or the open one it pays (exactly, else the
+ * oldest). An invoice already paid can be picked too: this transfer then
+ * replaces what closed it (the payments recorded on it are removed, and the
+ * invoice is paid by this one) — the same money logged earlier by hand.
+ */
+export async function logIncomingUtilities(t: Omit<IncomingToLog, 'forMonth' | 'choice'> & { invoiceId?: string | null }): Promise<{ note: string }> {
+  let invoiceId: string | null = null, label = '', exact = false, replaced = 0;
+  if (t.invoiceId) {
+    const chosen = (await leaseUtilityInvoices(t.leaseId)).find(i => i.id === t.invoiceId);
+    if (!chosen) throw new Error('That invoice is not on this lease.');
+    invoiceId = chosen.id; label = chosen.label;
+    if (chosen.status === 'PAID') {
+      const { invoicePayments, deleteReimbursementPayment } = await import('./reimbursement');
+      const before = await invoicePayments(chosen.id, t.userId);
+      for (const p of before.payments) { await deleteReimbursementPayment(p.id, t.userId); replaced += p.amount; }
+      // Marked paid without a payment logged: that mark goes too.
+      const left = await db.reimbursementInvoice.findUnique({ where: { id: chosen.id }, select: { paidAmount: true } });
+      if (Number(left?.paidAmount ?? 0) > 0.005) {
+        replaced += Number(left!.paidAmount);
+        await db.reimbursementInvoice.update({ where: { id: chosen.id }, data: { paidAmount: 0, paidAt: null, status: 'SENT' } });
+      }
+    }
+    exact = Math.abs(chosen.total - t.amount) < 0.5;
+  } else {
+    const inv = await utilityInvoiceFor(t.leaseId, t.userId, t.amount);
+    if (inv) { invoiceId = inv.invoiceId; label = inv.label; exact = inv.exact; }
+  }
+  if (invoiceId) {
+    const { payInvoice } = await import('./reimbursement');
+    await payInvoice(invoiceId, t.userId, { amount: t.amount, paidAt: t.date.toISOString().slice(0, 10), method: t.method, bankAccountId: t.bankAccountId ?? null, notes: t.notes });
+  } else {
+    await recordReimbursementPayment(t.leaseId, t.userId, {
+      amount: t.amount, paidDate: t.date.toISOString().slice(0, 10), method: t.method, bankAccountId: t.bankAccountId ?? null,
+      notes: t.notes, allocations: [], invoiceId: null,
+    });
+  }
+  const note = invoiceId
+    ? `Applied to utilities — the ${label} invoice${replaced > 0.005 ? `, in place of the ${usd(replaced)} logged on it before` : exact ? ' (paid in full)' : ''}.`
+    : 'Applied to utilities (no invoice: recorded on the lease\'s utility payments).';
   await db.incomingTransaction.update({ where: { id: t.txId }, data: { status: 'APPLIED', matchedLeaseId: t.leaseId, rentPaymentId: null, reviewNote: note } });
   return { note };
 }
