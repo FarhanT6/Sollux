@@ -9,12 +9,15 @@ import { initNative, hideSplash } from './lib/native';
 import NativeLock from './components/NativeLock';
 import { installErrorReporting } from './lib/telemetry';
 import { initTheme } from './lib/theme';
+import { installFullText } from './lib/fullText';
 
 const CLERK_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
 
 // Crashes report themselves, so the nightly auditor sees what broke.
 installErrorReporting();
 initTheme();
+// Cut-off text shows in full on hover (a tap unfolds it on a phone).
+installFullText();
 
 // Shown when the app is built without a Clerk key. Deliberately plain — it
 // must not depend on anything that could itself be missing at this point.
