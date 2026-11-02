@@ -427,6 +427,8 @@ export interface IncomingTransaction {
   forMonth?: string;
   /** Why it waits (an overpayment with back rent or utilities owed), or what was done with the extra. */
   reviewNote?: string | null;
+  /** How much of it could be a security deposit: `suggested` for a lease started in the last 90 days with no deposit on record, paying more than the month still owes. */
+  deposit?: { suggested: boolean; amount: number; rentDue: number } | null;
   /** The lease's open utility invoice this could pay; `suggested` when the memo says utilities or the amount is the invoice's. */
   utilities?: {
     invoiceId: string | null; outstanding: number; label: string; exact: boolean; suggested: boolean;

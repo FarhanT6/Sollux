@@ -4,7 +4,7 @@ import { attachDbUser } from '../middleware/requireAuth';
 import { syncAllWatchedAccounts, CHANNEL_TO_METHOD, matchLease, matchPayer, extractCounterpartyName } from '../services/transactionMatchService';
 import { recordRentPayment } from '../services/rentPaymentService';
 import { findLoggedPayment, periodFor, rentMonthFor, sureOfSender, descriptorMemo } from '../services/p2pPaymentEmails';
-import { logIncomingRent, logIncomingUtilities, autoLogIncoming, utilityInvoiceFor, leaseUtilityInvoices, memoSaysUtilities, type ExtraChoice } from '../services/incomingRent';
+import { logIncomingRent, logIncomingUtilities, logIncomingDeposit, depositHint, autoLogIncoming, utilityInvoiceFor, leaseUtilityInvoices, memoSaysUtilities, type ExtraChoice } from '../services/incomingRent';
 
 const router = Router();
 router.use(attachDbUser);
@@ -31,6 +31,10 @@ router.get('/', async (req, res, next) => {
     // Waiting ones with a tenant also skip a month that tenant has already paid in full (rentMonthFor).
     res.json(await Promise.all(transactions.map(async tx => ({
       ...tx,
+      // Waiting ones with a tenant: how much of it could be a security deposit (a new lease with none on record).
+      deposit: tx.status !== 'APPLIED' && tx.status !== 'IGNORED' && tx.matchedLeaseId
+        ? await depositHint(tx.matchedLeaseId, tx.userId, Number(tx.amount), await rentMonthFor(tx.matchedLeaseId, tx.date, memoOf(tx)))
+        : null,
       // Waiting ones from a tenant with an open utility invoice: offered as utilities when the memo
       // says so or the amount is that invoice's.
       utilities: tx.status !== 'APPLIED' && tx.status !== 'IGNORED' && tx.matchedLeaseId
@@ -130,6 +134,13 @@ router.post('/:id/apply', async (req, res, next) => {
 
     // The owner can name the month ("October"); a named month takes the payment first, before arrears.
     const forMonth = typeof req.body?.forMonth === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(req.body.forMonth) ? req.body.forMonth as string : null;
+    // A new tenant's deposit with the first rent: the deposit part to the lease's deposits, the rest as rent.
+    if (req.body?.as === 'deposit') {
+      const dep = typeof req.body?.depositAmount === 'number' ? req.body.depositAmount : null;
+      const { note } = await logIncomingDeposit({ ...txInput(tx, lease.id), forMonth }, dep);
+      await learnSender(lease.id, tx.name, tx.source);
+      return res.json({ ...(await db.incomingTransaction.findUniqueOrThrow({ where: { id: tx.id } })), reviewNote: note });
+    }
     // Paid back utilities, not rent: recorded on the lease's open utility invoice.
     if (req.body?.as === 'utilities') {
       const logged = await findLoggedPayment(lease.id, Number(tx.amount), tx.date, { source: tx.source === 'email' ? 'email' : 'bank', reference: tx.confirmation ?? null });
