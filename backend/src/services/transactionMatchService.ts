@@ -75,6 +75,8 @@ export function detectChannel(name: string): Channel | null {
 // human name, e.g. "ZELLE FROM JOHN SMITH" -> "JOHN SMITH", "VENMO PAYMENT J SMITH" -> "J SMITH"
 export function extractCounterpartyName(name: string): string {
   return name
+    // "ZELLE FROM JANE SAMPLE ON 10/07 REF # ABC123 AUGUST RENT": the payer ends at "ON <date>" or "REF".
+    .replace(/\s+(ON\s+\d{1,2}\/\d{1,2}\b|REF\b|CONF\b|CONFIRMATION\b|MEMO\b).*$/i, '')
     .replace(/zelle|venmo|paypal|cash ?app|square cash|sq \*cash|apple cash|apple pay cash/gi, '')
     .replace(/\bfrom\b|\bpayment\b|\btransfer\b|\bmoney\b|\breceived\b|\bdes:?\b|\bindn:?\b/gi, '')
     .replace(/[*#0-9]{4,}/g, '')
@@ -120,13 +122,20 @@ export async function matchLease(counterpartyName: string, userId: string): Prom
   // An alias is something the owner typed specifically to be recognised, so it
   // is the stronger signal and is tested first.
   const whole = (candidate: string) => normalizeWords(candidate).every(w => words.includes(w));
+  // A whole name beats a partial one: "Elizabeth Estrada" is hers, though
+  // "Estrada" alone also fits Valeshka Estrada's and Javier Estrada's leases.
+  // Two leases fitting the same way is a tie, and a tie is not guessed.
+  const aliasWhole = activeLeases.filter(l => l.paymentAliases.some(a => whole(a.name)));
+  if (aliasWhole.length === 1) return { leaseId: aliasWhole[0].id, viaAlias: true, exact: true };
   const aliasMatches = activeLeases.filter(l => l.paymentAliases.some(a => fits(a.name)));
-  if (aliasMatches.length === 1) return { leaseId: aliasMatches[0].id, viaAlias: true, exact: aliasMatches[0].paymentAliases.some(a => whole(a.name)) };
-  if (aliasMatches.length > 1) return null;
+  if (aliasWhole.length === 0 && aliasMatches.length === 1) return { leaseId: aliasMatches[0].id, viaAlias: true, exact: false };
 
+  const tenantWhole = activeLeases.filter(l => l.leaseTenants.some(lt => normalizeWords(lt.tenant.fullName).length >= 2 && whole(lt.tenant.fullName)));
+  if (tenantWhole.length === 1) return { leaseId: tenantWhole[0].id, viaAlias: false, exact: true };
+  if (tenantWhole.length > 1 || aliasWhole.length > 1 || aliasMatches.length > 1) return null;
   const tenantMatches = activeLeases.filter(l => l.leaseTenants.some(lt => fits(lt.tenant.fullName)));
   return tenantMatches.length === 1
-    ? { leaseId: tenantMatches[0].id, viaAlias: false, exact: tenantMatches[0].leaseTenants.some(lt => whole(lt.tenant.fullName)) }
+    ? { leaseId: tenantMatches[0].id, viaAlias: false, exact: false }
     : null;
 }
 
