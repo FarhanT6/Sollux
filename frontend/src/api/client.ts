@@ -1490,3 +1490,8 @@ export const suggestAddresses = (q: string, session: string, signal?: AbortSigna
   api.get<{ suggestions: AddressSuggestion[] }>('/address/suggest', { params: { q, session }, signal }).then(r => r.data.suggestions);
 export const getAddressDetails = (placeId: string, session: string) =>
   api.get<AddressParts>('/address/details', { params: { placeId, session } }).then(r => r.data);
+
+// ─── Back rent from a known figure (routes/leases.ts, lib/arrearsAsOf.ts) ──
+export interface ArrearsAsOf { balance: number; current: number; lastRolled: string | null; saved: boolean; lines: { kind: 'payment' | 'month'; label: string; date: string; amount: number }[] }
+export const arrearsAsOf = (leaseId: string, body: { amount: number; through: string; asOf: string; save?: boolean }) =>
+  api.post<ArrearsAsOf>(`/leases/${leaseId}/arrears-as-of`, body).then(r => r.data);
