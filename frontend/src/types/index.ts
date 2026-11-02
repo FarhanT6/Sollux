@@ -428,7 +428,11 @@ export interface IncomingTransaction {
   /** Why it waits (an overpayment with back rent or utilities owed), or what was done with the extra. */
   reviewNote?: string | null;
   /** The lease's open utility invoice this could pay; `suggested` when the memo says utilities or the amount is the invoice's. */
-  utilities?: { invoiceId: string; outstanding: number; label: string; exact: boolean; suggested: boolean } | null;
+  utilities?: {
+    invoiceId: string | null; outstanding: number; label: string; exact: boolean; suggested: boolean;
+    /** Every invoice on the lease, paid ones too (picking a paid one replaces the payment that closed it). */
+    invoices: { id: string; label: string; total: number; paid: number; outstanding: number; status: string }[];
+  } | null;
   bankAccountId: string | null;
   bankAccount?: { id: string; name: string; bank?: string | null } | null;
   amount: number;

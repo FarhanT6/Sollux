@@ -92,11 +92,16 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
   // Rent or utilities: starts at utilities when the memo says so or the amount is an open utility invoice's.
   const [kinds, setKinds] = useState<Record<string, 'rent' | 'utilities'>>({});
   const kindOf = (tx: IncomingTransaction) => kinds[tx.id] ?? (tx.utilities?.suggested ? 'utilities' : 'rent');
+  // The invoice a utility payment goes on: the open one it pays, unless the owner picks another (a paid one is replaced).
+  const [invoicePick, setInvoicePick] = useState<Record<string, string>>({});
+  const invoiceOf = (tx: IncomingTransaction) => invoicePick[tx.id] ?? tx.utilities?.invoiceId ?? '';
   async function handleApply(tx: IncomingTransaction, extraTo?: 'next' | 'arrears' | 'utilities') {
     const chosen = months[tx.id];
     try {
       // Only a month the owner changed is sent; the one Sollux read is what it records anyway.
-      await applyIncomingTransaction(tx.id, chosen && chosen !== tx.forMonth ? chosen : undefined, extraTo, kindOf(tx));
+      const inv = kindOf(tx) === 'utilities' ? tx.utilities?.invoices.find(i => i.id === invoiceOf(tx)) : undefined;
+      if (inv?.status === 'PAID' && !confirm(`The ${inv.label} invoice is already paid. Use this payment in place of what is logged on it (${money(inv.paid)})? The earlier payment is removed.`)) return;
+      await applyIncomingTransaction(tx.id, chosen && chosen !== tx.forMonth ? chosen : undefined, extraTo, kindOf(tx), invoiceOf(tx) || null);
       setAsking(a => { const n = { ...a }; delete n[tx.id]; return n; });
     } catch (e: any) {
       const plan = e?.response?.status === 409 ? e.response.data?.plan : null;
@@ -205,9 +210,18 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
                       <option value="utilities">Utilities</option>
                     </select>
                     {kindOf(tx) === 'utilities' ? (
-                      <span className="text-xs text-gray-400 flex-shrink-0" title={tx.utilities ? `Open balance ${money(tx.utilities.outstanding)}` : undefined}>
-                        {tx.utilities ? <>on the {tx.utilities.label} invoice{tx.utilities.exact ? <span className="text-emerald-400"> · matches</span> : ` · ${money(tx.utilities.outstanding)} open`}</> : 'no open utility invoice'}
-                      </span>
+                      tx.utilities?.invoices.length ? (
+                        <select className="field-input text-xs w-auto max-w-[16rem] flex-shrink-0" value={invoiceOf(tx)}
+                          title="The utility invoice this pays. Picking a paid one replaces the payment that closed it."
+                          onChange={e => setInvoicePick(p => ({ ...p, [tx.id]: e.target.value }))}>
+                          {!invoiceOf(tx) && <option value="">Pick an invoice…</option>}
+                          {tx.utilities.invoices.map(i => (
+                            <option key={i.id} value={i.id}>
+                              {i.label} · {i.status === 'PAID' ? `paid ${money(i.paid)} — replace` : `${money(i.outstanding)} open`}{Math.abs(i.total - tx.amount) < 0.5 ? ' ✓ matches' : ''}
+                            </option>
+                          ))}
+                        </select>
+                      ) : <span className="text-xs text-gray-500 flex-shrink-0">no utility invoices on this lease</span>
                     ) : tx.forMonth && (
                       <label className="flex items-center gap-1 text-xs text-gray-500 flex-shrink-0" title="The month's rent this payment is for. It pays that month first, before older balances.">
                         for

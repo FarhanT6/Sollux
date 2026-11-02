@@ -4,7 +4,7 @@ import { attachDbUser } from '../middleware/requireAuth';
 import { syncAllWatchedAccounts, CHANNEL_TO_METHOD, matchLease, extractCounterpartyName } from '../services/transactionMatchService';
 import { recordRentPayment } from '../services/rentPaymentService';
 import { findLoggedPayment, periodFor, rentMonthFor, sureOfSender, descriptorMemo } from '../services/p2pPaymentEmails';
-import { logIncomingRent, logIncomingUtilities, autoLogIncoming, utilityInvoiceFor, memoSaysUtilities, type ExtraChoice } from '../services/incomingRent';
+import { logIncomingRent, logIncomingUtilities, autoLogIncoming, utilityInvoiceFor, leaseUtilityInvoices, memoSaysUtilities, type ExtraChoice } from '../services/incomingRent';
 
 const router = Router();
 router.use(attachDbUser);
@@ -34,7 +34,12 @@ router.get('/', async (req, res, next) => {
       // Waiting ones from a tenant with an open utility invoice: offered as utilities when the memo
       // says so or the amount is that invoice's.
       utilities: tx.status !== 'APPLIED' && tx.status !== 'IGNORED' && tx.matchedLeaseId
-        ? await (async () => { const inv = await utilityInvoiceFor(tx.matchedLeaseId!, tx.userId, Number(tx.amount)); return inv ? { ...inv, suggested: inv.exact || memoSaysUtilities(memoOf(tx)) } : null; })()
+        ? await (async () => {
+            const inv = await utilityInvoiceFor(tx.matchedLeaseId!, tx.userId, Number(tx.amount));
+            const invoices = await leaseUtilityInvoices(tx.matchedLeaseId!);
+            if (!inv && !invoices.length) return null;
+            return { ...(inv ?? { invoiceId: null, outstanding: 0, label: '', exact: false }), suggested: !!inv?.exact || memoSaysUtilities(memoOf(tx)), invoices };
+          })()
         : null,
       forMonth: (tx.status !== 'APPLIED' && tx.status !== 'IGNORED' && tx.matchedLeaseId
         ? await rentMonthFor(tx.matchedLeaseId, tx.date, memoOf(tx))
@@ -129,7 +134,7 @@ router.post('/:id/apply', async (req, res, next) => {
     if (req.body?.as === 'utilities') {
       const logged = await findLoggedPayment(lease.id, Number(tx.amount), tx.date, { source: tx.source === 'email' ? 'email' : 'bank', reference: tx.confirmation ?? null });
       if (logged) return res.status(409).json({ error: 'This transfer is already logged as rent. Delete that rent payment first.' });
-      const { note } = await logIncomingUtilities(txInput(tx, lease.id));
+      const { note } = await logIncomingUtilities({ ...txInput(tx, lease.id), invoiceId: typeof req.body?.invoiceId === 'string' ? req.body.invoiceId : null });
       await learnSender(lease.id, tx.name, tx.source);
       return res.json({ ...(await db.incomingTransaction.findUniqueOrThrow({ where: { id: tx.id } })), reviewNote: note });
     }
