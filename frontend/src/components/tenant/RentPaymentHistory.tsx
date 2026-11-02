@@ -11,7 +11,9 @@ const day = (iso: string) => new Date(iso).toLocaleDateString('en-US', { month: 
 export default function RentPaymentHistory({ leaseId, refreshKey = 0 }: { leaseId: string; refreshKey?: number }) {
   const [payments, setPayments] = useState<RentPayment[] | null>(null);
   const [all, setAll] = useState(false);
-  useEffect(() => { setPayments(null); getRentPayments({ leaseId }).then(setPayments).catch(() => setPayments([])); }, [leaseId, refreshKey]);
+  // A refresh keeps the list on screen until the new one arrives, so the page does not jump.
+  useEffect(() => { getRentPayments({ leaseId }).then(setPayments).catch(() => setPayments(p => p ?? [])); }, [leaseId, refreshKey]);
+  useEffect(() => { setPayments(null); }, [leaseId]);
 
   if (!payments) return <p className="text-xs text-gray-600">Loading payments…</p>;
   if (!payments.length) return <p className="text-xs text-gray-600">No payments logged for this lease yet.</p>;

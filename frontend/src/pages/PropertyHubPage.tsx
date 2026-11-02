@@ -174,7 +174,9 @@ export default function PropertyHubPage() {
   const [loadError, setLoadError] = useState<'missing' | 'failed' | null>(null);
   const loadProperty = () => {
     if (!id) return;
-    setLoading(true); setLoadError(null);
+    // A reload of the same property (after an edit) updates in place; only a first load or another property blanks the page.
+    if (property?.id !== id) setLoading(true);
+    setLoadError(null);
     getProperty(id)
       .then(p => setProperty(p))
       .catch(e => setLoadError(e?.response?.status === 404 ? 'missing' : 'failed'))

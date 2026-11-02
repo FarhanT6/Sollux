@@ -113,7 +113,9 @@ export default function RentPage({ embedded }: { embedded?: boolean } = {}) {
         ))}
       </div>
 
-      {loading ? (
+      {/* Only the first load blanks the page: a refresh after an edit updates in place, so the
+          page stays where you were instead of jumping to the top. */}
+      {loading && !budget ? (
         <div className="flex items-center justify-center h-64 text-gray-500">Loading…</div>
       ) : (
         <>
