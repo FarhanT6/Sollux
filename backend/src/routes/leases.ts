@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
+import { arrearsAsOf } from '../lib/arrearsAsOf';
 import { uploadDocument, getSignedDocumentUrl } from '../services/s3Service';
 import { extractLeaseTerms } from '../services/leaseExtract';
 import { assessLateFees, waiveCharge } from '../services/rentCharges';
@@ -200,6 +201,40 @@ router.get('/:id/rent-changes', async (req, res, next) => {
 });
 
 // POST /api/leases/:id/rent-changes — manually add a past rent change
+// POST /:id/arrears-as-of — back rent from a figure the owner knows (a 3-day
+// notice: "$22,550 owed through September, as of October 5"), carried forward
+// with the payments and months since (lib/arrearsAsOf.ts). `save: false`
+// previews; `save: true` sets the balance.
+router.post('/:id/arrears-as-of', async (req, res, next) => {
+  try {
+    const body = z.object({
+      amount: z.number().min(0),
+      through: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
+      asOf: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      save: z.boolean().default(false),
+    }).parse(req.body);
+    const lease = await db.lease.findFirst({
+      where: { id: req.params.id, unit: { property: { userId: req.dbUserId! } } },
+      include: { rentPayments: true, rentCharges: true },
+    });
+    if (!lease) return res.status(404).json({ error: 'Lease not found' });
+    const today = new Date().toISOString().slice(0, 10);
+    if (body.through >= today.slice(0, 7)) return res.status(400).json({ error: 'Choose a month that has ended: this month\'s rent is counted on its own, not in back rent.' });
+    const result = arrearsAsOf({
+      lease, amount: body.amount, through: body.through, asOf: body.asOf, today,
+      payments: lease.rentPayments.map(p => ({ id: p.id, amount: Number(p.amount), appliedToArrears: Number(p.appliedToArrears), periodDate: p.periodDate, paidDate: p.paidDate, status: p.status })),
+      charges: lease.rentCharges.map(c => ({ amount: Number(c.amount), periodDate: c.periodDate })),
+    });
+    if (body.save) {
+      await db.lease.update({
+        where: { id: lease.id },
+        data: { arrearsBalance: result.balance, arrearsCaughtUpThrough: new Date(`${result.lastRolled ?? body.through}-01T00:00:00.000Z`) },
+      });
+    }
+    res.json({ ...result, current: Number(lease.arrearsBalance), saved: body.save });
+  } catch (err) { next(err); }
+});
+
 router.post('/:id/rent-changes', async (req, res, next) => {
   try {
     const data = RentChangeSchema.parse(req.body);

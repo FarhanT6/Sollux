@@ -12,6 +12,7 @@ import type {
 } from '../types';
 import RentRemindersPanel from '../components/tenant/RentRemindersPanel';
 import LogRentPaymentModal from '../components/tenant/LogRentPaymentModal';
+import ArrearsAsOfDialog from '../components/tenant/ArrearsAsOfDialog';
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
@@ -517,6 +518,7 @@ function PaymentHistory({ row, payments, onLog, onEdited }: {
   /** A payment was changed or deleted: reload the history and the table. */
   onEdited: () => void;
 }) {
+  const [settingArrears, setSettingArrears] = useState(false);
   const money = (n: number) => `$${Number(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
   const list = Array.isArray(payments) ? payments.slice(0, 24) : [];
   const total12 = Array.isArray(payments)
@@ -531,6 +533,8 @@ function PaymentHistory({ row, payments, onLog, onEdited }: {
         </p>
         <div className="flex items-center gap-3">
           <button onClick={onLog} className="text-xs text-amber-400 hover:text-amber-300">Log payment</button>
+          <button onClick={() => setSettingArrears(true)} className="text-xs text-gray-400 hover:text-amber-400" title="Set back rent from a figure you know, like a 3-day notice's total">Set back rent…</button>
+          {settingArrears && <ArrearsAsOfDialog leaseId={row.leaseId} tenant={row.tenant} onClose={() => setSettingArrears(false)} onSaved={onEdited} />}
           {row.tenantId && <Link to={`/tenants/${row.tenantId}`} className="text-xs text-gray-400 hover:text-amber-400">Tenant page →</Link>}
         </div>
       </div>
