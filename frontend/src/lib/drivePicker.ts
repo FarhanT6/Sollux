@@ -39,7 +39,9 @@ export async function pickFromDrive(opts: { mimeTypes?: string; multiple?: boole
   const docs: { id: string; name: string; mimeType: string }[] = await new Promise(resolve => {
     const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
       .setMimeTypes(opts.mimeTypes ?? `application/pdf,image/png,image/jpeg,image/webp,${GOOGLE_DOC}`)
-      .setIncludeFolders(true);
+      .setIncludeFolders(true)
+      // Thumbnails, not just names, so the right file can be told apart before it is chosen.
+      .setMode(google.picker.DocsViewMode.GRID);
     let builder = new google.picker.PickerBuilder()
       .addView(view)
       .setOAuthToken(accessToken)
