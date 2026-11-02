@@ -129,13 +129,16 @@ export function BillsSheet({ propertyId }: { propertyId?: string } = {}) {
     && (!openOnly || r.cells.some(c => c.status === 'late' || c.status === 'due' || c.status === 'partial')));
   if (otherLoans.length) properties.push({ id: OTHER_LOANS, name: 'Other loans', address: 'Other loans', city: '', state: '', accounts: [], loanRows: otherLoans });
 
-  // What is open across everything shown, for the line at the top.
+  // What is open in the year shown, for the line at the top — the sum of the cells on screen.
+  // Each bill counts its own charge: a bill's balance also carries the unpaid bills
+  // before it, so adding balances counted the same unpaid month two or three times.
   const totals = useMemo(() => {
     let overdue = 0, overdueN = 0, toPay = 0, toPayN = 0, paidYear = 0;
     for (const list of bills.values()) for (const b of list) {
-      if (b.state === 'overdue') { overdue += Number(openBalanceOf(b.s) ?? b.amount); overdueN++; }
+      if (!billMonth(b.s)?.startsWith(String(year))) continue;
+      if (b.state === 'overdue') { overdue += b.amount; overdueN++; }
       if (b.state === 'due') { toPay += b.amount; toPayN++; }
-      if (b.state === 'paid' && billMonth(b.s)?.startsWith(String(year))) paidYear += b.amount;
+      if (b.state === 'paid') paidYear += b.amount;
     }
     // Loans billed on their own (not through a utility account), for the year shown.
     for (const r of loans?.rows ?? []) {
@@ -180,7 +183,7 @@ export function BillsSheet({ propertyId }: { propertyId?: string } = {}) {
             <input type="checkbox" checked={openOnly} onChange={e => setOpenOnly(e.target.checked)} /> Unpaid only
           </label>
           <div className="ml-auto flex flex-wrap gap-3 text-xs">
-            <span style={{ color: STATE_STYLE.overdue.color }}>Overdue {fmtMoney(totals.overdue)} · {totals.overdueN}</span>
+            <span style={{ color: STATE_STYLE.overdue.color }} title={`Late bills and loan payments due in ${year}, each at its own charge`}>Overdue in {year} {fmtMoney(totals.overdue)} · {totals.overdueN}</span>
             <span style={{ color: STATE_STYLE.due.color }}>To pay {fmtMoney(totals.toPay)} · {totals.toPayN}</span>
             <span className="text-gray-400">Paid in {year} {fmtMoney(totals.paidYear)}</span>
             <button onClick={() => setCatchingUp(true)} className="text-amber-400 hover:text-amber-300 font-medium" title="Mark loan months and old bills you have paid but never logged">Catch up…</button>
