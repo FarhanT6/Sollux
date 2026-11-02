@@ -33,15 +33,20 @@ api.interceptors.response.use(
     const cfg = err.config as (typeof err.config & { _retried?: boolean }) | undefined;
     if (err.response?.status === 401 && cfg && !cfg._retried) {
       cfg._retried = true;
+      // Only a session that is really gone sends the owner to sign in. A token
+      // refresh that failed (the network dropped, the phone woke from sleep)
+      // used to land here too and read as being logged out.
+      let signedOut = false;
       try {
         const clerk = await clerkReady();
+        if (clerk && !clerk.session) signedOut = true;
         const token = await clerk?.session?.getToken({ skipCache: true });
         if (token) {
           cfg.headers = { ...(cfg.headers ?? {}), Authorization: `Bearer ${token}` } as any;
           return api.request(cfg);
         }
-      } catch { /* fall through */ }
-      if (!window.location.pathname.startsWith('/sign-in')) window.location.href = '/sign-in';
+      } catch { /* a failed refresh is not a sign-out */ }
+      if (signedOut && !window.location.pathname.startsWith('/sign-in')) window.location.href = '/sign-in';
     }
     // A plan limit or a lapsed plan: say so where it happened.
     if (err.response?.status === 402) toast(err.response.data?.error ?? 'Choose a plan to continue.', 'error');
