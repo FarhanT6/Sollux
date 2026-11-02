@@ -174,3 +174,12 @@
   .table-base tr:last-child td { border-bottom: none; }
   .table-base tr:hover td { background: rgba(255,255,255,0.03); }
 }
+
+/* Cut-off text a tap unfolded (lib/fullText.ts). */
+.sollux-unfold {
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  overflow-wrap: anywhere;
+  -webkit-line-clamp: unset !important;
+}
