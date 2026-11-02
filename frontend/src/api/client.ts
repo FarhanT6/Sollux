@@ -295,7 +295,7 @@ export const createLoanPayment = (loanId: string, data: Partial<LoanPayment> & {
 export const extendLoan = (id: string, data: { months: number; notes?: string }) =>
   api.post<Loan>(`/loans/${id}/extend`, data).then(r => r.data);
 // Monthly loan-payment tracker — the loans' side of rent collection.
-export type LoanTrackerStatus = 'paid' | 'partial' | 'upcoming' | 'due' | 'late' | 'none';
+export type LoanTrackerStatus = 'paid' | 'partial' | 'upcoming' | 'due' | 'late' | 'none' | 'closing';
 interface LoanTrackerBase {
   loanId: string; lender: string; loanType: string; isPersonal: boolean; property: string; propertyId: string | null;
   expected: number; dueDay: number | null; gracePeriodDays: number | null;
@@ -1477,3 +1477,11 @@ export const apiOrigin = () => {
 export interface RentPayableTo { name: string; phone: string; email: string; address: string }
 export const getRentPayableTo = () => api.get<{ payableTo: RentPayableTo | null }>('/account/payable-to').then(r => r.data.payableTo);
 export const saveRentPayableTo = (p: RentPayableTo) => api.put<{ payableTo: RentPayableTo }>('/account/payable-to', p).then(r => r.data.payableTo);
+
+// ─── Address suggestions (routes/address.ts) ─────────────
+export interface AddressParts { line1: string; city: string; state: string; zip: string; county: string; label: string }
+export interface AddressSuggestion { label: string; placeId?: string; parts?: AddressParts }
+export const suggestAddresses = (q: string, session: string, signal?: AbortSignal) =>
+  api.get<{ suggestions: AddressSuggestion[] }>('/address/suggest', { params: { q, session }, signal }).then(r => r.data.suggestions);
+export const getAddressDetails = (placeId: string, session: string) =>
+  api.get<AddressParts>('/address/details', { params: { placeId, session } }).then(r => r.data);
