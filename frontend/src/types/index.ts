@@ -522,6 +522,8 @@ export interface Loan {
   downPayment?: number | null;
   interestRate?: number;
   originationDate?: string;
+  /** When the first payment is not the month after origination (backend lib/loanStart.ts). */
+  firstPaymentDate?: string | null;
   maturityDate?: string;
   monthlyPayment?: number;
   balloonPaymentAmount?: number;

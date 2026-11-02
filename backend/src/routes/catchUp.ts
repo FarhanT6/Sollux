@@ -19,6 +19,7 @@ import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { dueDateFor } from '../services/loanTracker';
 import { rentMonthsToCatchUp } from '../lib/rentCatchUp';
+import { firstDueMonth } from '../lib/loanStart';
 
 const router = Router();
 router.use(attachDbUser);
@@ -42,7 +43,7 @@ async function missingLoanMonths(userId: string, through: string, loanIds?: stri
   const loans = await db.loan.findMany({
     where: { userId, isActive: true, utilityAccountId: null, ...(loanIds ? { id: { in: loanIds } } : {}) },
     select: {
-      id: true, lender: true, monthlyPayment: true, escrowAmount: true, dueDay: true, originationDate: true, isPersonal: true, loanType: true,
+      id: true, lender: true, monthlyPayment: true, escrowAmount: true, dueDay: true, originationDate: true, firstPaymentDate: true, isPersonal: true, loanType: true,
       property: { select: { nickname: true, address: true } },
       loanPayments: { select: { amount: true, date: true, periodDate: true } },
     },
@@ -51,9 +52,8 @@ async function missingLoanMonths(userId: string, through: string, loanIds?: stri
   const floor = `${new Date().getUTCFullYear() - 10}-01`;
   return loans.map(l => {
     const expected = Number((n(l.monthlyPayment) + n(l.escrowAmount)).toFixed(2));
-    const start = l.originationDate ? ym(l.originationDate) : `${through.slice(0, 4)}-01`;
-    // A loan's first payment is due the month after it starts.
-    const first = monthsFrom(start, through)[1] ?? null;
+    // The first payment month (the month after it funds, or the date the owner gave); no start date goes back to January.
+    const first = firstDueMonth(l) ?? `${through.slice(0, 4)}-01`;
     const months = expected > 0 && first ? monthsFrom(first > floor ? first : floor, through) : [];
     const paidBy = new Map<string, number>();
     for (const p of l.loanPayments) { const m = ym(p.periodDate ?? p.date); paidBy.set(m, (paidBy.get(m) ?? 0) + n(p.amount)); }

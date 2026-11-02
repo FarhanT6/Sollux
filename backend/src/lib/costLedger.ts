@@ -23,6 +23,7 @@
  * (their bills are that account's). Personal expenses are not a property's.
  */
 import { db } from '../config/db';
+import { dueBy } from './loanStart';
 
 import {
   typeOfAccount, typeOfExpense, monthsBetween, operatingCharge, ym, n, r2,
@@ -73,7 +74,7 @@ export async function buildLedger(userId: string, from: string, to: string, prop
       where: { userId, propertyId: { in: ids }, isPersonal: false, utilityAccountId: null },
       select: {
         id: true, propertyId: true, lender: true, loanType: true, accountLast4: true, isActive: true, monthlyPayment: true, escrowAmount: true,
-        originationDate: true, maturityDate: true,
+        originationDate: true, firstPaymentDate: true, maturityDate: true,
         loanPayments: { where: { date: { gte: start, lt: end } }, select: { amount: true, date: true } },
       },
     }),
@@ -147,7 +148,7 @@ export async function buildLedger(userId: string, from: string, to: string, prop
     if (l.isActive && due > 0) {
       line.schedule = {};
       for (const m of months) {
-        if (l.originationDate && ym(l.originationDate) > m) continue;
+        if (!dueBy(l, m)) continue;
         if (l.maturityDate && ym(l.maturityDate) < m) continue;
         line.schedule[m] = r2(due);
         if (m <= thisMonth) add(line, m, 'charged', due);
