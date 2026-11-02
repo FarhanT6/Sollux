@@ -1411,9 +1411,14 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
       });
       const updated = await getLeases({ propertyId });
       setLeases(updated);
+      // A lease made active again (or ended) leaves the list it was in: follow it, so the change shows.
+      if (filterStatus && editForm.status !== filterStatus) setFilterStatus(editForm.status);
       // Refresh rent-change history if this lease's history is open
       if (rentChanges[leaseId]) getRentChanges(leaseId).then(rc => setRentChanges(prev => ({ ...prev, [leaseId]: rc })));
       setEditLease(null);
+    } catch (err: any) {
+      // A failed save said nothing before, and read as the change not taking.
+      alert(err?.response?.data?.error ?? 'Could not save the lease. Check the fields and try again.');
     } finally { setSavingEdit(false); }
   }
 
