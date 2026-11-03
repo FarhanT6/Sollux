@@ -3,7 +3,7 @@ import { FEE_LINE, FEE_KIND_IDS, FEE_KIND_LABELS, billOwnFees, paymentFees, feeK
 import { useEffect, useState, useMemo, useRef } from 'react';
 import PortalCodeBanner from '../components/utility/PortalCodeBanner';
 import PaymentBreakdownLine from '../components/utility/PaymentBreakdownLine';
-import { openBalanceOf, isStatementPaid, computeResolvedByFutureCheckpoint, computePaidMap, isEffectivelyPaid, isPriorStatementPaid, statementStatus, coveredByCredit, liveCarriedOf, newestIssued, isUpcoming, arrearsPaidSince, unlinkedPaidSince, paidSinceSplit, deferredOf } from '../lib/paidState';
+import { runningBalanceOwed, openBalanceOf, isStatementPaid, computeResolvedByFutureCheckpoint, computePaidMap, isEffectivelyPaid, isPriorStatementPaid, statementStatus, coveredByCredit, liveCarriedOf, newestIssued, isUpcoming, arrearsPaidSince, unlinkedPaidSince, paidSinceSplit, deferredOf } from '../lib/paidState';
 import { bankAccountLabel } from '../lib/bankAccountLabel';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
@@ -17,7 +17,7 @@ import {
 import api from '../api/client';
 import { CADENCE_LABELS } from '../lib/cadence';
 import { CATEGORY_LABELS, CATEGORY_COLORS, LOAN_TYPE_LABELS,
-  UTILITY_PAYMENT_METHODS, PAYMENT_STATUS_LABELS } from '../types';
+  UTILITY_PAYMENT_METHODS, PAYMENT_STATUS_LABELS, isCreditPayment } from '../types';
 import type { BankAccount } from '../types';
 import { Pill, Skeleton, EmptyState } from '../components/ui';
 import MoreMenu from '../components/ui/MoreMenu';
@@ -972,6 +972,8 @@ export default function UtilityDetailPage() {
   // view) so status stays correct regardless of year filter or search.
   const resolvedByFuture = useMemo(() => computeResolvedByFutureCheckpoint(statements), [statements]);
   const paidMap = useMemo(() => computePaidMap(statements, payments, resolvedByFuture), [statements, payments, resolvedByFuture]);
+  // A running-balance account: what each bill still owes, from the provider's balance (newest bills first).
+  const runningOwed = useMemo(() => runningBalanceOwed(statements, payments), [statements, payments]);
 
   // A fresh Log payment starts on the newest bill that is still open, with
   // its amount filled in — that is what is being paid nine times in ten.
@@ -1072,7 +1074,8 @@ export default function UtilityDetailPage() {
   const prevAmt = statements[1]?.amountDue != null ? Number(statements[1].amountDue) : null;
   const momPct = latestAmt != null && prevAmt != null && prevAmt !== 0
     ? ((latestAmt - prevAmt) / prevAmt) * 100 : null;
-  const totalPaid = payments.reduce((s, p) => s + Number(p.amount), 0);
+  // Credits from the provider settle bills but are not money paid out.
+  const totalPaid = payments.filter(p => !isCreditPayment(p)).reduce((s, p) => s + Number(p.amount), 0);
 
   // Past due from latest statement — all from the dedicated, editable columns
   // so edits show up here immediately.
@@ -1742,7 +1745,10 @@ export default function UtilityDetailPage() {
                   const paidSince = split.total;
                   const arrearsPaid = pastDue != null && pastDue > 0 ? split.towardArrears : 0;
                   const liveCarried = pastDue != null && pastDue > 0 ? Number((pastDue - arrearsPaid).toFixed(2)) : liveCarriedOf(s, payments, statements);
-                  const owedNow = totalDue != null && paidSince > 0.005 ? Math.max(0, Number((totalDue - Math.min(totalDue, paidSince)).toFixed(2))) : null;
+                  // Running balance: the bill's share of what the account owes now; otherwise its total less what has been paid since.
+                  const owedNow = runningOwed?.has(s.id)
+                    ? runningOwed.get(s.id)!
+                    : totalDue != null && paidSince > 0.005 ? Math.max(0, Number((totalDue - Math.min(totalDue, paidSince)).toFixed(2))) : null;
                   return (
                     <div key={s.id} className="group px-5 py-4 flex items-center gap-4 border-b border-white/[0.06] last:border-0"
                       style={{
@@ -1788,7 +1794,8 @@ export default function UtilityDetailPage() {
                             : 'Billing period —'}
                         </p>
                         {pastDue != null && pastDue > 0 && (
-                          arrearsPaid > 0.005 && !isPaid ? (
+                          // On a running balance the past due is the provider's figure as printed; what is owed now is the row's Owed now.
+                          arrearsPaid > 0.005 && !isPaid && !runningOwed ? (
                             <p className="text-xs mt-0.5 text-emerald-500">
                               ✓ Past due on statement {fmtMoney(pastDue)} · {liveCarried <= 0.01 ? 'paid since' : `${fmtMoney(arrearsPaid)} paid since, ${fmtMoney(liveCarried)} still owed`}
                             </p>
@@ -2088,7 +2095,8 @@ export default function UtilityDetailPage() {
                       <p className="text-base font-semibold text-white">{fmtMoney(p.amount)}</p>
                       {Number(p.feeAmount ?? 0) > 0 && <p className="text-xs text-gray-500">+ {fmtMoney(p.feeAmount)} fee · {fmtMoney(Number(p.amount) + Number(p.feeAmount))} out</p>}
                       {/* The fees this payment covered, by kind: logged with it, or on the bill it paid (imported fees). */}
-                      {(() => {
+                      {isCreditPayment(p) && <p className="text-xs text-emerald-400">credit — not paid out</p>}
+                      {!isCreditPayment(p) && (() => {
                         // One total here; the Applied-to line itemises it by kind.
                         const logged = paymentFees(p);
                         const toFees = Number(p.breakdown?.toFees ?? 0);

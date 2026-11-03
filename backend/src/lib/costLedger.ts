@@ -62,7 +62,8 @@ export async function buildLedger(userId: string, from: string, to: string, prop
       select: { id: true, utilityAccountId: true, statementDate: true, dueDate: true, amountDue: true, trueUpDeferred: true, paymentPlanAmount: true },
     }),
     db.payment.findMany({
-      where: { utilityAccount: { propertyId: { in: ids }, escrowLoanId: null, isPersonal: false }, paymentDate: { gte: start, lt: end }, status: { notIn: ['FAILED', 'PENDING'] } },
+      // A credit from the provider (a waived charge) settles a bill but is not money paid out.
+      where: { utilityAccount: { propertyId: { in: ids }, escrowLoanId: null, isPersonal: false }, paymentDate: { gte: start, lt: end }, status: { notIn: ['FAILED', 'PENDING'] }, OR: [{ paymentMethod: null }, { paymentMethod: { not: 'Credit / adjustment' } }] },
       select: { utilityAccountId: true, amount: true, feeAmount: true, paymentDate: true },
     }),
     db.expense.findMany({

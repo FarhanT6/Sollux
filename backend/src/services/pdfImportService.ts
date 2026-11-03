@@ -3639,7 +3639,8 @@ export async function recordConfirmedPayment(
         utilityAccountId,
         amount: { gte: amount - 0.01, lte: amount + 0.01 },
         paymentDate: { ...(priorDate ? { gte: priorDate } : {}), lte: confirmedOn },
-        NOT: { notes: { contains: '[from-statement:' } },
+        // A hand-logged payment often has no notes: NOT on its own would leave those out.
+        OR: [{ notes: null }, { NOT: { notes: { contains: '[from-statement:' } } }],
       },
     });
     if (handLogged) return;

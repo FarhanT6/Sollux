@@ -238,6 +238,42 @@ export function computeResolvedByFutureCheckpoint(statements: any[]): Set<string
 }
 
 /**
+ * What each bill still owes on an account billed on a running balance (WM,
+ * most utilities): every bill prints the balance carried in, and a payment
+ * pays the account, oldest charges first — so whatever is still owed is the
+ * newest bills'. The balance now is the newest bill's total less what has
+ * been paid since it printed; it is laid on the bills newest first, each up
+ * to its own charge, and the bills it does not reach are paid. Per-bill
+ * guesses ("$845.02 paid since, $180.11 still owed" on a bill the account
+ * had long paid) disagreed with the provider's own balance; this cannot.
+ *
+ * Null when the account is not billed that way, or has what this does not
+ * model: the newest bill prints no carried balance, a payment plan,
+ * net-metering deferrals, or scheduled installments.
+ */
+export function runningBalanceOwed(statements: any[], payments: any[]): Map<string, number> | null {
+  const issued = statements.filter(s => s?.statementDate && !isUpcoming(s))
+    .sort((a, b) => new Date(b.statementDate).getTime() - new Date(a.statementDate).getTime());
+  const latest = issued[0];
+  if (!latest || latest.pastDueCarried == null || latest.amountDue == null) return null;
+  if (statements.some(s => s.isScheduled || Number(s.paymentPlanAmount ?? 0) > 0 || Number(s.trueUpDeferred ?? 0) !== 0)) return null;
+  const printed = Number(latest.amountDue) + Number(latest.pastDueCarried);
+  const since = new Date(String(latest.statementDate).slice(0, 10) + 'T00:00:00Z').getTime();
+  const paidSince = payments
+    .filter(p => p.status !== 'FAILED' && p.status !== 'PENDING' && new Date(p.paymentDate).getTime() >= since)
+    .reduce((t, p) => t + towardBills(p), 0);
+  let left = Number((printed - paidSince).toFixed(2));
+  const owed = new Map<string, number>();
+  for (const s of issued) {
+    const own = Math.max(0, Number(s.amountDue ?? 0));
+    const take = Math.max(0, Math.min(left, own));
+    owed.set(s.id, Number(take.toFixed(2)));
+    left -= take;
+  }
+  return owed;
+}
+
+/**
  * The "payments received" a bill printed, when that money is not already in
  * Sollux as a payment. A bill prints the payment that came in during its
  * cycle — usually the one that paid the PREVIOUS bill. When that payment is
@@ -269,6 +305,8 @@ export function computePaidMap(statements: any[], payments: any[], resolvedByFut
   // the rest are a pool, drawn down oldest bill first, so a payment that
   // cleared July is not counted again as clearing August.
   const counted = (p: any) => p.status !== 'FAILED' && p.status !== 'PENDING';
+  // On a running-balance account the provider's balance decides (runningBalanceOwed).
+  const running = runningBalanceOwed(statements, payments);
   const pool = payments
     .filter(p => counted(p) && !p.statementId)
     .map(p => ({ date: new Date(p.paymentDate).getTime(), left: towardBills(p) }))
@@ -300,6 +338,7 @@ export function computePaidMap(statements: any[], payments: any[], resolvedByFut
       upcomingLeft?.set(s.id, Math.max(0, Number(need.toFixed(2))));
       continue;
     }
+    if (running?.has(s.id)) { paid.set(s.id, running.get(s.id)! <= 0.01); continue; }
     if (resolvedByFuture.has(s.id)) { paid.set(s.id, true); continue; }
     const carried = liveCarriedOf(s, payments, statements);
     if (s.amountDue == null && s.pastDueCarried == null) {

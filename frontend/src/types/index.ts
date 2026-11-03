@@ -1479,8 +1479,11 @@ export interface TurnoverReport {
 // How a utility bill was paid. Free-text in the database; these are the options
 // the UI offers so entries stay consistent enough to group.
 export const UTILITY_PAYMENT_METHODS = [
-  'ACH', 'Auto-pay', 'Card', 'Check', 'Cash', 'Online portal', 'Money order', 'Other',
+  'ACH', 'Auto-pay', 'Card', 'Check', 'Cash', 'Online portal', 'Money order', 'Credit / adjustment', 'Other',
 ];
+/** A credit from the provider (a waived or refunded charge): it settles a bill like a payment but is not money paid out. */
+export const CREDIT_METHOD = 'Credit / adjustment';
+export const isCreditPayment = (p: { paymentMethod?: string | null }) => p?.paymentMethod === CREDIT_METHOD;
 
 export const PAYMENT_STATUS_LABELS: Record<string, string> = {
   PAID: 'Paid', PENDING: 'Pending', PARTIAL: 'Partial', FAILED: 'Failed',
