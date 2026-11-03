@@ -247,18 +247,26 @@ export function computeResolvedByFutureCheckpoint(statements: any[]): Set<string
  * guesses ("$845.02 paid since, $180.11 still owed" on a bill the account
  * had long paid) disagreed with the provider's own balance; this cannot.
  *
+ * The newest bill read from a portal often has only its own charge, with no
+ * balance carried in. Then the balance starts from the newest bill that did
+ * print one: its total, plus every bill after it, less every payment since.
+ *
  * Null when the account is not billed that way, or has what this does not
- * model: the newest bill prints no carried balance, a payment plan,
- * net-metering deferrals, or scheduled installments.
+ * model: no bill prints a carried balance, a payment plan, net-metering
+ * deferrals, or scheduled installments.
  */
 export function runningBalanceOwed(statements: any[], payments: any[]): Map<string, number> | null {
   const issued = statements.filter(s => s?.statementDate && !isUpcoming(s))
     .sort((a, b) => new Date(b.statementDate).getTime() - new Date(a.statementDate).getTime());
-  const latest = issued[0];
-  if (!latest || latest.pastDueCarried == null || latest.amountDue == null) return null;
+  if (!issued.length || issued[0].amountDue == null) return null;
   if (statements.some(s => s.isScheduled || Number(s.paymentPlanAmount ?? 0) > 0 || Number(s.trueUpDeferred ?? 0) !== 0)) return null;
-  const printed = Number(latest.amountDue) + Number(latest.pastDueCarried);
-  const since = new Date(String(latest.statementDate).slice(0, 10) + 'T00:00:00Z').getTime();
+  const anchorAt = issued.findIndex(s => s.pastDueCarried != null && s.amountDue != null);
+  // Only a recent anchor: a carried balance printed a year ago says little about now.
+  if (anchorAt < 0 || anchorAt > 3) return null;
+  const anchor = issued[anchorAt];
+  const printed = Number(anchor.amountDue) + Number(anchor.pastDueCarried)
+    + issued.slice(0, anchorAt).reduce((t, s) => t + Number(s.amountDue ?? 0), 0);
+  const since = new Date(String(anchor.statementDate).slice(0, 10) + 'T00:00:00Z').getTime();
   const paidSince = payments
     .filter(p => p.status !== 'FAILED' && p.status !== 'PENDING' && new Date(p.paymentDate).getTime() >= since)
     .reduce((t, p) => t + towardBills(p), 0);

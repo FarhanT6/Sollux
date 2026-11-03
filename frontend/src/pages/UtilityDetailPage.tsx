@@ -974,6 +974,24 @@ export default function UtilityDetailPage() {
   const paidMap = useMemo(() => computePaidMap(statements, payments, resolvedByFuture), [statements, payments, resolvedByFuture]);
   // A running-balance account: what each bill still owes, from the provider's balance (newest bills first).
   const runningOwed = useMemo(() => runningBalanceOwed(statements, payments), [statements, payments]);
+  // The account's balance from it, and the part on bills older than the newest (past due).
+  // The owner's mark beats the arithmetic: a bill marked unpaid owes its charge (less what was
+  // logged against it), one marked paid owes nothing.
+  const owedByBill = useMemo(() => {
+    if (!runningOwed) return null;
+    const out = new Map<string, number>();
+    for (const s of statements) {
+      if (!runningOwed.has(s.id)) continue;
+      const linked = payments.filter((p: any) => p.statementId === s.id && p.status !== 'FAILED' && p.status !== 'PENDING').reduce((t: number, p: any) => t + Number(p.amount ?? 0), 0);
+      const owed = s.paidOverride === 'PAID' ? 0
+        : s.paidOverride === 'UNPAID' ? Math.max(runningOwed.get(s.id)!, Number(s.amountDue ?? 0) - linked)
+        : runningOwed.get(s.id)!;
+      out.set(s.id, Number(Math.max(0, owed).toFixed(2)));
+    }
+    return out;
+  }, [runningOwed, statements, payments]);
+  const runningTotal = owedByBill ? Number([...owedByBill.values()].reduce((t, v) => t + v, 0).toFixed(2)) : null;
+  const runningPastDue = owedByBill ? Number([...owedByBill.entries()].filter(([id]) => id !== newestIssued(statements)?.id).reduce((t, [, v]) => t + v, 0).toFixed(2)) : null;
 
   // A fresh Log payment starts on the newest bill that is still open, with
   // its amount filled in — that is what is being paid nine times in ten.
@@ -1260,12 +1278,12 @@ export default function UtilityDetailPage() {
                   {latestOwed != null && latestOwed < -0.01 && <span className="block">{fmtMoney(-latestOwed)} credit remains on the account</span>}
                 </span>
               )
-              : isLatestPaid
+              : isLatestPaid && !(runningTotal != null && runningTotal > 0.01)
               ? <span className="text-emerald-400">Paid</span>
               : (
                 <span>
                   {(() => {
-                    const carried = latestPastDue ?? 0;
+                    const carried = runningPastDue ?? latestPastDue ?? 0;
                     const active = plan && plan.status === 'ACTIVE' ? plan : null;
                     const installmentBilled = Number(latestStmt?.paymentPlanAmount ?? 0) > 0;
                     // Under an arrangement the deferred balance is owed, not
@@ -1571,7 +1589,8 @@ export default function UtilityDetailPage() {
         {[
           {
             label: 'Current balance',
-            value: fmtMoney(isLatestPaid ? 0 : (latestTotalDue ?? latestAmt)),
+            // A running-balance account: what the bills still owe, as the provider counts it.
+            value: fmtMoney(runningTotal ?? (isLatestPaid ? 0 : (latestTotalDue ?? latestAmt))),
             // In credit: nothing to pay, and the provider holds the rest. The
             // bill's own charge still shows so the month's cost is visible.
             sub: balanceSub,
@@ -1746,8 +1765,8 @@ export default function UtilityDetailPage() {
                   const arrearsPaid = pastDue != null && pastDue > 0 ? split.towardArrears : 0;
                   const liveCarried = pastDue != null && pastDue > 0 ? Number((pastDue - arrearsPaid).toFixed(2)) : liveCarriedOf(s, payments, statements);
                   // Running balance: the bill's share of what the account owes now; otherwise its total less what has been paid since.
-                  const owedNow = runningOwed?.has(s.id)
-                    ? runningOwed.get(s.id)!
+                  const owedNow = owedByBill?.has(s.id)
+                    ? owedByBill.get(s.id)!
                     : totalDue != null && paidSince > 0.005 ? Math.max(0, Number((totalDue - Math.min(totalDue, paidSince)).toFixed(2))) : null;
                   return (
                     <div key={s.id} className="group px-5 py-4 flex items-center gap-4 border-b border-white/[0.06] last:border-0"
