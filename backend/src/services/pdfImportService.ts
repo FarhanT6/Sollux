@@ -2127,6 +2127,51 @@ export function periodChargeOf(ex: ExtractedBillData): number | null {
 }
 
 /**
+ * A bill that prints its own arithmetic as labels — City of Oceanside:
+ * "BALANCE FORWARD $741.13 · TOTAL CURRENT CHARGES $379.37 · Total Due
+ * $1,120.50" — is read by those figures. The late payment penalty is printed
+ * just above BALANCE FORWARD, beside the period's charges, and was read into
+ * this bill's charge ($403.63) instead of the carried balance; the total
+ * still added up, so nothing caught it, and every payment then looked as if
+ * it matched nothing. Only when the three printed figures agree with each
+ * other (forward + current = total) are they taken.
+ */
+export function applyBalanceForwardFromText(text: string, ex: ExtractedBillData): void {
+  // Every printed occurrence of each label, and the amounts around it: the text layer puts an
+  // amount before its label as often as after it ("$741.13BALANCE FORWARD", "TOTAL CURRENT
+  // CHARGES$379.37"). Ranked: the amount right after the label first, then the one right
+  // before it, then later ones; the best-ranked pair that adds up to a printed total is taken.
+  const near = (label: RegExp) => {
+    const out: { v: number; rank: number }[] = [];
+    for (const m of text.matchAll(label)) {
+      const at = m.index ?? 0;
+      const after = text.slice(at + m[0].length, at + m[0].length + 90);
+      [...after.matchAll(/\$\s*(-?[\d,]+\.\d{2})/g)].slice(0, 3)
+        .forEach((n, k) => out.push({ v: Number(n[1].replace(/,/g, '')), rank: k === 0 ? 0 : k + 1 }));
+      const before = /\$\s*(-?[\d,]+\.\d{2})\s*$/.exec(text.slice(Math.max(0, at - 20), at));
+      if (before) out.push({ v: Number(before[1].replace(/,/g, '')), rank: 1 });
+    }
+    return out;
+  };
+  const currents = near(/TOTAL\s+CURRENT\s+CHARGES/gi);
+  const forwards = near(/BALANCE\s+FORWARD/gi);
+  // The total is printed in several places (the summary box, the stub), often away from its
+  // label in the text layer: any amount the bill prints that is forward + current will do.
+  const printed = new Set([...text.matchAll(/\$\s*(-?[\d,]+\.\d{2})/g)].map(n => Number(n[1].replace(/,/g, '')).toFixed(2)));
+  let hit: [number, number, number] | null = null, best = Infinity;
+  for (const c of currents) for (const f of forwards) {
+    const t = Number((f.v + c.v).toFixed(2));
+    if (c.rank + f.rank < best && printed.has(t.toFixed(2))) { best = c.rank + f.rank; hit = [f.v, c.v, t]; }
+  }
+  if (!hit) return;
+  const [forward, current, total] = hit;
+  ex.currentCharges = current;
+  ex.amountDue = current;
+  ex.previousBalance = forward;
+  ex.statedTotalDue = total;
+}
+
+/**
  * Make the figures agree with the bill's own arithmetic.
  *
  * An SDG&E bill under a pay agreement reads: Previous Balance 1,936.25 ·
@@ -4070,6 +4115,7 @@ export async function parseBill(
         applyPayInFullFromText(extracted, text);
         applyCancellationNoticeFromText(extracted, text);
         applyPremiumFinanceFromText(extracted, text);
+        applyBalanceForwardFromText(text, extracted);
       } catch { /* an unreadable text layer changes nothing */ }
       // A statement's transaction table, read in page order so each row's
       // date, description and amount sit on one line.
