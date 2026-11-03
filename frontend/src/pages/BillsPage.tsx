@@ -51,11 +51,34 @@ const billMonth = (s: BillsSheetStatement) => monthKey(s.dueDate ?? s.statementD
 /** What the bill charged for its own period (no arrears carried in, no deferred true-up). */
 const chargeOf = (s: BillsSheetStatement) => Number(s.amountDue ?? 0) - deferredOf(s);
 
+/**
+ * A bill with no due date read is placed by when it is usually due on this
+ * account: its issue date plus the account's typical gap from issue to due.
+ * EDCO bills on the 1st and is due the 20th of the next month; two bills
+ * with no due date sat in the month they were issued, so a bill every two
+ * months read Jan, Feb, May, Jul, Sep, Oct instead of every other month.
+ */
+function withDueDates(statements: BillsSheetStatement[]): BillsSheetStatement[] {
+  const DAY = 86400000;
+  const gaps = statements
+    .filter(s => s.dueDate && s.statementDate)
+    .map(s => Math.round((new Date(s.dueDate!.slice(0, 10)).getTime() - new Date(s.statementDate!.slice(0, 10)).getTime()) / DAY))
+    .filter(d => d >= 0 && d <= 75)
+    .sort((a, b) => a - b);
+  if (gaps.length < 2) return statements;
+  const gap = gaps[Math.floor(gaps.length / 2)];
+  return statements.map(s => s.dueDate || !s.statementDate ? s : {
+    ...s,
+    dueDate: new Date(new Date(s.statementDate.slice(0, 10)).getTime() + gap * DAY).toISOString().slice(0, 10),
+    dueInferred: true,
+  } as BillsSheetStatement);
+}
+
 function billsOf(account: BillsSheetAccount, propertyId: string, propertyName: string): Bill[] {
   const resolved = computeResolvedByFutureCheckpoint(account.statements);
   const paid = computePaidMap(account.statements, account.payments, resolved);
   const today = todayISO();
-  return account.statements.filter(s => !s.isDownPayment).map(s => {
+  return withDueDates(account.statements).filter(s => !s.isDownPayment).map(s => {
     const isPaid = paid.get(s.id) ?? false;
     const state: State = isPaid ? 'paid' : isUpcoming(s) ? 'upcoming' : s.dueDate && s.dueDate < today ? 'overdue' : 'due';
     return { s, account, propertyId, propertyName, amount: chargeOf(s), state };
@@ -537,7 +560,7 @@ function BillPanel({ bills, month, onClose, onChanged }: { bills: Bill[]; month:
                 <span className="text-xs font-medium" style={{ color: STATE_STYLE[b.state].color }}>{STATE_STYLE[b.state].label}</span>
               </div>
               <p className="text-xs text-gray-500 mt-0.5">
-                Issued {fmtDate(b.s.statementDate)}{b.s.dueDate ? ` · due ${fmtDate(b.s.dueDate)}` : ''}
+                Issued {fmtDate(b.s.statementDate)}{b.s.dueDate ? ` · due ${fmtDate(b.s.dueDate)}${(b.s as any).dueInferred ? ' (expected — not on the bill)' : ''}` : ''}
                 {carried > 0.01 ? ` · ${fmtMoney(carried)} carried in (${fmtMoney(open)} total)` : ''}
                 {Number(b.s.trueUpDeferred ?? 0) > 0 ? ` · ${fmtMoney(b.s.trueUpDeferred)} deferred to true-up` : ''}
               </p>
