@@ -1046,21 +1046,7 @@ Always end with the finish tool, never with a message. If the page seems gone or
               break;
             }
             case 'tick_captcha': {
-              const boxes = page.frames().filter(f => CAPTCHA_FRAME.test(f.url()));
-              if (!boxes.length) { content = await after('There is no checkbox check on this page.'); break; }
-              for (const f of boxes) {
-                const owner = await f.frameElement().catch(() => null);
-                const box = owner ? await owner.boundingBox().catch(() => null) : null;
-                if (!box || box.width < 20) continue;
-                // The checkbox sits at the left of the widget; get there the way a hand would.
-                const x = box.x + Math.min(30, box.width / 4), y = box.y + box.height / 2;
-                await page.mouse.move(x - 60 - Math.random() * 30, y + 20 + Math.random() * 10, { steps: 6 });
-                await page.mouse.move(x + Math.random() * 3, y + Math.random() * 3, { steps: 14 });
-                await page.waitForTimeout(150 + Math.random() * 250);
-                await page.mouse.click(x, y);
-              }
-              await page.waitForTimeout(5000);
-              content = await after('Ticked the check. If it passed (no error, or a green tick), carry on; if a picture puzzle or "complete the security check" remains, finish with captcha.');
+              content = 'Human verification must be completed by the account holder. Finish with captcha to hand control to the owner in their connected Chrome window.';
               break;
             }
             case 'type_code': {
