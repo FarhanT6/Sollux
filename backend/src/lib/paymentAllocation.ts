@@ -70,10 +70,18 @@ export function allocateAccountPayments(
 
   // Open balances per statement, consumed as payments are walked in date order.
   const open = new Map<string, { fees: number; pastDue: number; installment: number; current: number; credit: number }>();
+  // The bill before one, and whether payments logged against it paid it in
+  // full. A bill's printed past due is that bill's balance; once it is paid
+  // (as the paid state on the pages reads it), a payment toward this bill
+  // pays this bill's own charge, not the "past due" again.
+  const priorOf = (s: StatementForAllocation) => byDateDesc.find(x => x.statementDate.getTime() < s.statementDate.getTime()) ?? null;
+  const settled = (s: StatementForAllocation | null) => !!s && num(s.amountDue) > 0 &&
+    payments.filter(p => p.statementId === s.id && p.status !== 'FAILED').reduce((t, p) => t + num(p.amount), 0) >= num(s.amountDue) - 0.01;
   const openFor = (s: StatementForAllocation) => {
     let o = open.get(s.id);
     if (!o) {
-      const carried = num(s.pastDueCarried);
+      const printedCarried = num(s.pastDueCarried);
+      const carried = printedCarried > 0 && settled(priorOf(s)) ? 0 : printedCarried;
       const fees = Math.max(num(s.penaltiesFees), 0);
       const installment = Math.max(num(s.paymentPlanAmount), 0);
       const current = Math.max(num(s.amountDue) - fees - installment, 0);
