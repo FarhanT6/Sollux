@@ -23,7 +23,7 @@ export class CityOceansideInvoiceCloudScraper extends BaseScraperProvider {
   readonly providerName = 'City of Oceanside (Invoice Cloud)';
 
   private readonly INVOICE_CLOUD_LOCATOR =
-    'https://www.invoicecloud.com/portal/(S(inquvxj0wvsthlscr2olsg3z))/2/customerlocator.aspx' +
+    'https://www.invoicecloud.com/portal/2/customerlocator.aspx' +
     '?iti=42&bg=6e845e36-128a-4605-a057-4b50dc1f72b6&vsii=367';
 
   // ── Login (invoice lookup) ────────────────────────────────────────────────
@@ -147,6 +147,15 @@ export class CityOceansideInvoiceCloudScraper extends BaseScraperProvider {
       await this.page!.waitForTimeout(800);
       await this.screenshot('oceanside-ic-form-filled');
 
+      // Cloudflare verification must be completed by the account holder.
+      // Do not submit the form or mistake a failed human check for bad account data.
+      const challenge = await this.page!.locator('iframe[src*="challenges.cloudflare.com"], .cf-turnstile').count().catch(() => 0);
+      const failed = await this.page!.getByText(/verification failed/i).count().catch(() => 0);
+      if (challenge || failed) {
+        console.warn('[Oceanside-IC] VERIFICATION_REQUIRED: InvoiceCloud requested human verification');
+        return false;
+      }
+
       // Debug: log all clickable elements with "search" text
       const searchElements = await this.page!.evaluate(`
         (function() {
@@ -245,6 +254,11 @@ export class CityOceansideInvoiceCloudScraper extends BaseScraperProvider {
 
       // Check if we're still on the locator page (login failed)
       if (postLookupUrl.includes('customerlocator')) {
+        const verificationFailed = await this.page!.getByText(/verification failed|verify you are human/i).count().catch(() => 0);
+        if (verificationFailed) {
+          console.warn('[Oceanside-IC] VERIFICATION_REQUIRED: InvoiceCloud did not accept the verification');
+          return false;
+        }
         console.error('[Oceanside-IC] Still on locator page after lookup');
         const pageText = await this.page!.evaluate(
           `(document.body.innerText || '').slice(0, 1000)`

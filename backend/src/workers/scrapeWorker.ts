@@ -305,7 +305,11 @@ const worker = new Worker<ScrapeJobData>(
     const fullNumber = (() => { try { return account.accountNumberEnc ? decrypt(account.accountNumberEnc).trim() : ''; } catch { return ''; } })();
     const invoiceCloud = /oceanside/i.test(account.providerName) && /^\d{5,8}\s*-\s*\d{5,8}$/.test(fullNumber);
     const slug = invoiceCloud ? 'city-oceanside-ic' : account.providerSlug;
-    if (job.data.forceAgent || !getScraperProvider(slug) || (slug === 'gmail-fallback' && account.usernameEnc)) {
+    // Manual InvoiceCloud fetches use the portal agent, which can pause for the
+    // account holder to complete Cloudflare's check in their connected Chrome.
+    // Scheduled runs retain the inexpensive built-in scraper, with normal
+    // agent fallback if that scraper fails.
+    if (job.data.forceAgent || (invoiceCloud && job.data.manual) || !getScraperProvider(slug) || (slug === 'gmail-fallback' && account.usernameEnc)) {
       // forceAgent: a built-in scraper's run for the whole login failed just now, so it is due.
       if (!job.data.manual && !job.data.forceAgent) {
         const skip = await scheduledSkip(utilityAccountId, account.billingCadence, account.lastAgentRunAt, job.data.trigger === 'bill_posted');

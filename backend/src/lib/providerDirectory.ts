@@ -47,7 +47,7 @@ const DIRECTORY: ProviderSite[] = [
   { match: /\bedco\b/i, site: 'https://www.edcodisposal.com', domains: ['edcodisposal.com'] },
   // Water and cities
   { match: /vista irrigation/i, site: 'https://www.vidwater.org', domains: ['vidwater.org'] },
-  { match: /city of oceanside|oceanside utilit/i, site: 'https://www.ci.oceanside.ca.us', domains: ['ci.oceanside.ca.us', 'oceansideca.org'] },
+  { match: /city of oceanside|oceanside utilit/i, site: 'https://www.ci.oceanside.ca.us', login: 'https://www.invoicecloud.com/portal/2/customerlocator.aspx?iti=42&bg=6e845e36-128a-4605-a057-4b50dc1f72b6&vsii=367', domains: ['ci.oceanside.ca.us', 'oceansideca.org', 'invoicecloud.com'] },
   { match: /brevard county/i, site: 'https://www.brevardfl.gov', domains: ['brevardfl.gov'] },
   // Insurance
   { match: /nationwide/i, site: 'https://www.nationwide.com', login: 'https://www.nationwide.com/bill-pay', domains: ['nationwide.com'] },
