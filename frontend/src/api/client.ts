@@ -1499,3 +1499,6 @@ export const getAddressDetails = (placeId: string, session: string) =>
 export interface ArrearsAsOf { balance: number; current: number; lastRolled: string | null; saved: boolean; lines: { kind: 'payment' | 'month'; label: string; date: string; amount: number }[] }
 export const arrearsAsOf = (leaseId: string, body: { amount: number; through: string; asOf: string; save?: boolean }) =>
   api.post<ArrearsAsOf>(`/leases/${leaseId}/arrears-as-of`, body).then(r => r.data);
+/** A tenant's utility payment on one invoice, with where it was deposited and a note (matched to the invoice's lines). */
+export const payUtilityInvoice = (id: string, body: { amount: number; paidAt: string; method: string; bankAccountId?: string | null; notes?: string | null }) =>
+  api.post(`/reimbursements/invoices/${id}/payment`, body).then(r => r.data);
