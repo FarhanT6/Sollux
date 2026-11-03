@@ -145,7 +145,12 @@ export function isStatementPaid(s: any, payments: any[] = [], priorSettled = fal
   // $1,042 outstanding as fully paid, row by row, because every imported
   // statement records some payment. A payment only proves this bill paid
   // when it covers this bill's own open balance.
-  if (Number(s.amountPaid ?? 0) >= openBalance - 0.01) return true;
+  // …and only when that money is not already a payment in Sollux (counted against the bill before).
+  const prior = s.statementDate ? statements
+    .filter(x => x.id !== s.id && x.statementDate && new Date(x.statementDate) < new Date(s.statementDate))
+    .sort((x, y) => new Date(y.statementDate).getTime() - new Date(x.statementDate).getTime())[0] : undefined;
+  const printed = printedPaidNotLogged(s, prior, payments);
+  if (printed > 0.005 && printed >= openBalance - 0.01) return true;
   const stmtDate = s.statementDate ? new Date(s.statementDate) : null;
   if (!stmtDate) return false;
   // A payment logged against a specific bill is that bill's alone; one
@@ -233,6 +238,27 @@ export function computeResolvedByFutureCheckpoint(statements: any[]): Set<string
 }
 
 /**
+ * The "payments received" a bill printed, when that money is not already in
+ * Sollux as a payment. A bill prints the payment that came in during its
+ * cycle — usually the one that paid the PREVIOUS bill. When that payment is
+ * logged (dated in the cycle, from the bill before up to this one), it was
+ * counted there already; taking the printed figure off this bill as well
+ * paid a $180.67 bill with a $164.02 payment, the September payment being
+ * counted twice.
+ */
+function printedPaidNotLogged(s: any, prior: any, payments: any[]): number {
+  const printed = Number(s.amountPaid ?? 0);
+  if (printed <= 0.005 || !s.statementDate) return printed;
+  const end = new Date(s.statementDate).getTime() + 86400000;
+  const start = prior?.statementDate ? new Date(prior.statementDate).getTime() - 86400000 : end - 45 * 86400000;
+  const logged = payments
+    .filter(p => p.status !== 'FAILED' && p.status !== 'PENDING' && p.statementId !== s.id)
+    .filter(p => { const t = new Date(p.paymentDate).getTime(); return t >= start && t <= end; })
+    .reduce((t, p) => t + Number(p.amount ?? 0), 0);
+  return logged >= printed - 0.01 ? 0 : printed;
+}
+
+/**
  * Paid state for every statement, decided oldest-first so each bill knows
  * whether the bill before it is settled. `statements` newest-first, as the
  * API returns them.
@@ -286,7 +312,7 @@ export function computePaidMap(statements: any[], payments: any[], resolvedByFut
     // surplus flow forward marked September paid off a payment the owner
     // had deliberately filed against August.
     const linked = payments.filter(p => counted(p) && p.statementId === s.id);
-    let need = open - Number(s.amountPaid ?? 0) - linked.reduce((t, p) => t + Number(p.amount ?? 0), 0);
+    let need = open - printedPaidNotLogged(s, prior, payments) - linked.reduce((t, p) => t + Number(p.amount ?? 0), 0);
     const since = new Date(s.statementDate).getTime() - 86400000;
     for (const p of pool) {
       if (need <= 0.01) break;
