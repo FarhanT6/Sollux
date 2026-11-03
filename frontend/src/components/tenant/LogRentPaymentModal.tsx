@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { createRentPayment, getBankAccounts, getReimbursableItems, payUtilityInvoice, createReimbursementPayment, type OpenInvoice } from '../../api/client';
+import { createRentPayment, addLeaseDeposit, getBankAccounts, getReimbursableItems, payUtilityInvoice, createReimbursementPayment, type OpenInvoice } from '../../api/client';
 import type { BankAccount, RentPaymentMethod } from '../../types';
 import { RENT_PAYMENT_METHODS, RENT_PAYMENT_METHOD_LABELS, BANK_LINKED_METHODS } from '../../types';
 import { todayISO, thisMonthISO } from '../../lib/date';
@@ -55,7 +55,9 @@ export default function LogRentPaymentModal({ target, period, onClose, onSaved }
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // Rent, or a utility payment (on the lease's utility invoices).
-  const [kind, setKind] = useState<'rent' | 'utilities'>('rent');
+  const [kind, setKind] = useState<'rent' | 'deposit' | 'utilities'>('rent');
+  // Rent + deposit: the security deposit part; the rest is rent for the month chosen.
+  const [deposit, setDeposit] = useState('');
   const [invoices, setInvoices] = useState<OpenInvoice[] | null>(null);
   const [invoiceId, setInvoiceId] = useState('');
   useEffect(() => {
@@ -84,6 +86,25 @@ export default function LogRentPaymentModal({ target, period, onClose, onSaved }
     setSaving(true); setErr(null);
     const note = [reference ? `Ref ${reference}` : null, notes || null].filter(Boolean).join(' · ') || null;
     const bank = bankAccountId && BANK_LINKED_METHODS.includes(method) ? bankAccountId : null;
+    if (kind === 'deposit') {
+      const dep = parseFloat(deposit);
+      if (!(dep > 0) || dep > amt + 0.005) { setErr(`Enter a deposit between $0 and ${fmtMoney(amt)}.`); setSaving(false); return; }
+      const rent = Number((amt - dep).toFixed(2));
+      try {
+        await addLeaseDeposit(target.leaseId, { amount: dep, paidDate, method, bankAccountId: bank, notes: [note, 'security deposit'].filter(Boolean).join(' · ') });
+        if (rent > 0.005) {
+          await createRentPayment({
+            leaseId: target.leaseId, periodDate: `${forMonth}-01T00:00:00.000Z`, amount: rent, paidDate, method, status: 'RECEIVED',
+            ...(bank ? { bankAccountId: bank } : {}),
+            notes: [note, `with a ${fmtMoney(dep)} deposit`].filter(Boolean).join(' · '),
+          });
+        }
+        onSaved();
+      } catch (e) {
+        setErr(describeApiError(e, 'The payment was not saved.'));
+      } finally { setSaving(false); }
+      return;
+    }
     if (kind === 'utilities') {
       try {
         if (invoiceId) await payUtilityInvoice(invoiceId, { amount: amt, paidAt: paidDate, method, bankAccountId: bank, notes: note });
@@ -123,16 +144,21 @@ export default function LogRentPaymentModal({ target, period, onClose, onSaved }
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.6)' }} onClick={onClose}>
       <div className="card p-5 w-full max-w-lg space-y-3 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div>
-          <p className="text-sm font-semibold text-white">Log {kind === 'utilities' ? 'utility' : 'rent'} payment — {target.tenant}</p>
+          <p className="text-sm font-semibold text-white">Log {kind === 'utilities' ? 'utility' : kind === 'deposit' ? 'rent + deposit' : 'rent'} payment — {target.tenant}</p>
           <p className="text-xs text-gray-500">{target.unit} · {target.property} · rent {fmtMoney(target.rent)}{target.arrears > 0 ? <span className="text-red-400"> · {fmtMoney(target.arrears)} back rent owed</span> : null}</p>
         </div>
 
         {/* What it pays: rent, or utilities the tenant pays back. */}
         <div className="flex gap-1 p-0.5 rounded-lg w-fit" style={{ background: 'rgba(255,255,255,0.05)' }}>
-          {(['rent', 'utilities'] as const).map(k => (
-            <button key={k} type="button" onClick={() => { setKind(k); if (k === 'rent') setAmount(String(owedNow > 0 ? owedNow : target.rent)); else if (invoices?.[0]) { setInvoiceId(invoices[0].id); setAmount(invoices[0].outstanding.toFixed(2)); } }}
+          {(['rent', 'deposit', 'utilities'] as const).map(k => (
+            <button key={k} type="button" onClick={() => {
+              setKind(k); setAllToArrears(false);
+              if (k === 'rent') setAmount(String(owedNow > 0 ? owedNow : target.rent));
+              else if (k === 'deposit') { const r = owedNow > 0 ? owedNow : target.rent; setDeposit(String(target.rent)); setAmount(String(r + target.rent)); }
+              else if (invoices?.[0]) { setInvoiceId(invoices[0].id); setAmount(invoices[0].outstanding.toFixed(2)); }
+            }}
               className={`text-xs px-3 py-1 rounded-md ${kind === k ? 'bg-white/10 text-white' : 'text-gray-500 hover:text-gray-300'}`}>
-              {k === 'rent' ? 'Rent' : 'Utilities'}
+              {k === 'rent' ? 'Rent' : k === 'deposit' ? 'Rent + deposit' : 'Utilities'}
             </button>
           ))}
         </div>
@@ -147,6 +173,16 @@ export default function LogRentPaymentModal({ target, period, onClose, onSaved }
             {quick('Back rent only', target.arrears)}
           </div>}
         </div>
+
+        {kind === 'deposit' && (
+          <div>
+            <span className={label}>Security deposit part</span>
+            <input type="number" step="0.01" inputMode="decimal" className={input} value={deposit} onChange={e => setDeposit(e.target.value)} />
+            <p className="text-[11px] text-gray-500 mt-1">
+              {fmtMoney(parseFloat(deposit) || 0)} saved on the lease's deposits · {fmtMoney(Math.max(0, (amt || 0) - (parseFloat(deposit) || 0)))} rent for {monthLabel(forMonth)}
+            </p>
+          </div>
+        )}
 
         {kind === 'utilities' && (
           <div className="grid grid-cols-2 gap-3">
@@ -167,7 +203,7 @@ export default function LogRentPaymentModal({ target, period, onClose, onSaved }
           </div>
         )}
 
-        {kind === 'rent' && <>
+        {kind !== 'utilities' && <>
         <div className="grid grid-cols-2 gap-3">
           <div>
             <span className={label}>Rent for (which month it pays)</span>
@@ -181,11 +217,11 @@ export default function LogRentPaymentModal({ target, period, onClose, onSaved }
           </div>
         </div>
 
-        <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
+        {kind === 'rent' && <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
           <input type="checkbox" checked={allToArrears} onChange={e => setAllToArrears(e.target.checked)} />
           All of it pays back rent (none toward {monthLabel(forMonth)})
-        </label>
-        {extra > 0.005 && <p className="text-xs text-gray-500">{fmtMoney(target.rent)} goes to {monthLabel(forMonth)}'s rent; the other {fmtMoney(extra)} pays down back rent.</p>}
+        </label>}
+        {kind === 'rent' && extra > 0.005 && <p className="text-xs text-gray-500">{fmtMoney(target.rent)} goes to {monthLabel(forMonth)}'s rent; the other {fmtMoney(extra)} pays down back rent.</p>}
         </>}
 
         <div className="grid grid-cols-2 gap-3">
