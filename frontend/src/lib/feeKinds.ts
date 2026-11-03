@@ -3,7 +3,7 @@
  * bill as its own charge line (backend lateFees.ts FEE_KINDS, same ids); a
  * bill's own fee lines are sorted into the same kinds by their wording.
  */
-export type FeeKind = 'late' | 'contamination' | 'delinquent' | 'disconnection' | 'additional' | 'returned' | 'other';
+export type FeeKind = 'late' | 'contamination' | 'delinquent' | 'disconnection' | 'additional' | 'incidental' | 'returned' | 'other';
 export interface FeeLine { kind: FeeKind; amount: number }
 
 export const FEE_KIND_LABELS: Record<FeeKind, string> = {
@@ -12,6 +12,7 @@ export const FEE_KIND_LABELS: Record<FeeKind, string> = {
   delinquent: 'Delinquent charge',
   disconnection: 'Disconnection / reconnection',
   additional: 'Additional service',
+  incidental: 'Incidental charge',
   returned: 'Returned payment',
   other: 'Other fee',
 };
@@ -20,7 +21,7 @@ export const FEE_KIND_IDS = Object.keys(FEE_KIND_LABELS) as FeeKind[];
 /** The charge-list lines fees logged with payments are written to. */
 const LOGGED_LINES = new Set([
   'Late fee (paid late)', 'Contaminated materials (logged)', 'Delinquent charge (logged)',
-  'Disconnection / reconnection fee (logged)', 'Additional service (logged)',
+  'Disconnection / reconnection fee (logged)', 'Additional service (logged)', 'Incidental charge (logged)',
   'Returned payment fee (logged)', 'Other fee (logged)',
 ]);
 export const isLoggedFeeLine = (line: string) => LOGGED_LINES.has(line);
@@ -38,8 +39,9 @@ export function feeKindOf(line: string): FeeKind {
   if (/contaminat/i.test(line)) return 'contamination';
   if (/delinquen/i.test(line)) return 'delinquent';
   if (/disconnect|reconnect|interrupt/i.test(line)) return 'disconnection';
-  // WM's incidental charges are extra pickups and overages.
-  if (/additional|extra|incidental/i.test(line)) return 'additional';
+  // WM prints extra pickups and overages as "Incidental charges": named as printed.
+  if (/incidental/i.test(line)) return 'incidental';
+  if (/additional|extra/i.test(line)) return 'additional';
   if (/nsf|sufficient|returned|dishono/i.test(line)) return 'returned';
   if (/late|penalt/i.test(line)) return 'late';
   return 'other';

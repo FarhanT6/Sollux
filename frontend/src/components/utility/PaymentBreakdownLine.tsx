@@ -31,7 +31,7 @@ export default function PaymentBreakdownLine({ b, statement, payment }: { b?: Pa
   if (parts.length === 0) return null;
   return (
     <p className="text-[11px] mt-0.5">
-      <span className="text-gray-600">Applied{b.statementLabel ? ` to ${monthName(b.statementLabel)}` : ''}: </span>
+      <span className="text-gray-600">{payment?.paymentMethod === 'Credit / adjustment' ? 'Credited' : 'Applied'}{b.statementLabel ? ` to ${monthName(b.statementLabel)}` : ''}: </span>
       {parts.map((x, i) => (
         <span key={x.label}>
           {i > 0 && <span className="text-gray-700"> · </span>}

@@ -9,6 +9,7 @@ import { encryptOptional, decryptOptional } from '../crypto/encrypt';
 import { scrapeQueue } from '../workers/queues';
 import { syncLoanFromComponents } from '../services/loanComponents';
 import { markEscrowedStatements, unmarkEscrowedStatements } from '../services/escrow';
+import { dropStatementTwins } from '../services/statementPaymentTwins';
 
 const router = Router();
 router.use(attachDbUser);
@@ -377,6 +378,9 @@ router.post('/', async (req, res, next) => {
 // GET /api/utilities/:id — single utility account detail
 router.get('/:id', async (req, res, next) => {
   try {
+    // A bill's "Payments Received" copy of a payment the owner logged by hand goes (statementPaymentTwins.ts).
+    const own = await db.utilityAccount.findFirst({ where: { id: req.params.id, property: { userId: req.dbUserId! } }, select: { id: true } });
+    if (own) await dropStatementTwins(own.id).catch(() => {});
     const account = await db.utilityAccount.findFirst({
       where: { id: req.params.id, property: { userId: req.dbUserId! } },
       include: {

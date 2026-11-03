@@ -24,6 +24,7 @@ export const FEE_KINDS = {
   delinquent: 'Delinquent charge (logged)',
   disconnection: 'Disconnection / reconnection fee (logged)',
   additional: 'Additional service (logged)',
+  incidental: 'Incidental charge (logged)',
   returned: 'Returned payment fee (logged)',
   other: 'Other fee (logged)',
 } as const;

@@ -7,6 +7,7 @@ import { resolveAccountNotices } from '../services/noticeTracker';
 import { attachDbUser } from '../middleware/requireAuth';
 import { allocateAccountPayments } from '../lib/paymentAllocation';
 import { applyPaymentToPlan, unapplyPaymentFromPlan, applyPaymentToLoan, unapplyPaymentFromLoan } from '../services/planApplication';
+import { dropStatementTwins } from '../services/statementPaymentTwins';
 
 const router = Router();
 router.use(attachDbUser);
@@ -237,6 +238,7 @@ router.post('/', async (req, res, next) => {
 
     // A payment can settle a shut-off notice on the account.
     await resolveAccountNotices(fields.utilityAccountId).catch(() => {});
+    await dropStatementTwins(payment.utilityAccountId).catch(() => {});
     res.status(201).json({ ...payment, planApplied: planApplied > 0 ? planApplied : null, loanApplied: loanApplied > 0 ? loanApplied : null });
   } catch (err) {
     next(err);
