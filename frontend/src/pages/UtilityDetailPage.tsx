@@ -1191,6 +1191,7 @@ export default function UtilityDetailPage() {
                   not filed against the one before it by mistake. */}
               <BillPicker className="sm:col-span-2" statements={statements} payments={payments}
                 amount={parseFloat(payForm.amount) || 0} value={bill} onChange={setBill}
+                onLateFee={amt => setFeeRows(rows => [...rows.filter(r => !(r.kind === 'late' && !(parseFloat(r.amount) > 0))), { kind: 'late', amount: amt.toFixed(2) }])}
                 plan={plan && plan.status === 'ACTIVE' && Number(plan.remainingBalance) > 0 ? { installment: Number(plan.monthlyAmount), agreement: String(plan.description ?? '').match(/Agreement (\d+)/)?.[1] ?? null } : null} />
               <PaymentSourcePicker accounts={bankAccounts} paymentMethod={payForm.paymentMethod}
                 value={payForm.bankAccountId} onChange={id => setPayForm(f => ({ ...f, bankAccountId: id }))}
@@ -1854,12 +1855,24 @@ export default function UtilityDetailPage() {
                         {(() => {
                           const breakdown = (s.rawDataJson as any)?.chargeBreakdown as Record<string, number> | undefined;
                           if (!breakdown || Object.keys(breakdown).length === 0) return null;
+                          // A penalty the bill charged that is not among its itemised lines (printed
+                          // with the past-due balance, or read from the total) is listed too, so the
+                          // charge list and the Fees tab agree.
+                          const penalty = Number(s.penaltiesFees ?? 0);
+                          const unlisted = penalty > 0.005 && billOwnFees(s, true).length === 0 ? penalty : 0;
+                          const count = Object.keys(breakdown).length + (unlisted ? 1 : 0);
                           return (
                             <details className="mt-1">
                               <summary className="text-xs text-gray-600 cursor-pointer hover:text-gray-400 select-none">
-                                {Object.keys(breakdown).length} charge{Object.keys(breakdown).length === 1 ? '' : 's'}
+                                {count} charge{count === 1 ? '' : 's'}
                               </summary>
                               <div className="mt-1 space-y-0.5">
+                                {unlisted > 0 && (
+                                  <div className="flex justify-between gap-4 text-xs max-w-xs" title="On the bill as a penalty, but not in its itemised charges">
+                                    <span className="text-red-400 truncate">Late payment penalty</span>
+                                    <span className="text-red-400">{fmtMoney(unlisted)}</span>
+                                  </div>
+                                )}
                                 {Object.entries(breakdown).map(([label, amount]) => (
                                   <div key={label} className="flex justify-between gap-4 text-xs max-w-xs">
                                     <span className="text-gray-500 truncate">{label}</span>
