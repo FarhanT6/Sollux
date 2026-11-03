@@ -556,7 +556,8 @@ export default function PropertyDetailPage({ embedded }: { embedded?: boolean } 
 
 const UTILITY_CATEGORIES = ['ELECTRIC','GAS','WATER','SEWER','TRASH','SOLAR','INTERNET','PHONE','INSURANCE','HOA','TAXES','LOAN','CREDIT_CARD','OTHER'];
 
-function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccount; onClose: () => void; onSaved: () => void }) {
+/** The account's details: name, type, account number, portal login, website, lookup fields, nickname, notes. Also opened from the account page's More menu. */
+export function EditUtilityModal({ account, onClose, onSaved }: { account: UtilityAccount; onClose: () => void; onSaved: () => void }) {
   const [form, setForm] = useState({
     providerName:  account.providerName || '',
     category:      account.category     || 'OTHER',

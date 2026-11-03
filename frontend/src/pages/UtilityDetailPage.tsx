@@ -35,6 +35,7 @@ import { openUrl } from '../lib/native';
 import PortalLogin from '../components/utility/PortalLogin';
 import { toast } from '../lib/toast';
 import UtilityAccountScreen from './phone/UtilityAccountScreen';
+import { EditUtilityModal } from './PropertyDetailPage';
 
 // The name a bill goes by everywhere on this page: the period it covers, not
 // the month it was issued in. Insurance and haulers bill in advance, so two
@@ -660,6 +661,7 @@ export default function UtilityDetailPage() {
   const navigate = useNavigate();
   const phone = usePhone();
   const [account, setAccount] = useState<any>(null);
+  const [editingAccount, setEditingAccount] = useState(false);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -1560,6 +1562,7 @@ export default function UtilityDetailPage() {
           )}
           {/* Now-and-then actions, out of the way. */}
           <MoreMenu items={[
+            { label: 'Edit account details', onClick: () => setEditingAccount(true), title: 'Name, type, account number, portal login, website, nickname and notes' },
             lookupPage
               ? { label: lookupValue ? lookupLabel : `Add ${lookupLabel.toLowerCase()}`, onClick: editLookupName, title: `The bill lookup page finds the bills by account number and this ${byCustomer ? 'customer ID' : 'name'}` }
               : { label: account.hasCredentials ? 'Portal login' : 'Add portal login', onClick: () => setPortalLogin(true), title: "Let Sollux fetch statements from the provider's website" },
@@ -1574,6 +1577,10 @@ export default function UtilityDetailPage() {
         </div>
       </div>
 
+      {editingAccount && (
+        <EditUtilityModal account={account} onClose={() => setEditingAccount(false)}
+          onSaved={() => { void getUtility(account.id).then(setAccount); }} />
+      )}
       {account.mfaPrompt && (
         <PortalCodeBanner accountId={account.id} prompt={account.mfaPrompt} requestedAt={account.mfaRequestedAt} providerName={account.providerName} />
       )}
