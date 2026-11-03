@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { billMonthLabel, fmtDate } from '../../lib/date';
-import { computePaidMap, computeResolvedByFutureCheckpoint, openBalanceOf, deferredOf } from '../../lib/paidState';
+import { computePaidMap, computeResolvedByFutureCheckpoint, openBalanceOf, deferredOf, runningBalanceOwed } from '../../lib/paidState';
 
 const money = (v: number | string | null | undefined) => `$${Number(v ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -17,6 +17,10 @@ export interface BillPickerValue {
   alloc: Record<string, string>;
   /** Toward the account's payment arrangement (with the bill that bills its installment, if any). */
   towardPlan?: boolean;
+  /** Paid more than the bills owe: what the extra is — a late fee not billed yet, or credit toward the next bill. */
+  extraTo?: 'late' | 'credit' | null;
+  /** The bill a late fee goes on: sent first, since a split's fees sit on its first bill. */
+  feeOn?: string | null;
 }
 
 export const emptyBillPick: BillPickerValue = { statementId: '', split: false, alloc: {} };
@@ -52,31 +56,50 @@ export function ownShareOf(st: any, statements: any[], payments: any[] = []): { 
   return { charge: Number(charge.toFixed(2)), fee, share };
 }
 
-/** Spread `total` across `ids` oldest-first by what each bill adds; the last takes what is left. */
+/**
+ * What a bill still owes: on a running-balance account its share of the
+ * account balance (runningBalanceOwed — the figure the statement list shows
+ * as Owed now), else what it adds less what was paid toward it.
+ */
+export function owedOf(st: any, statements: any[], payments: any[] = []): number {
+  const running = runningBalanceOwed(statements, payments);
+  return running?.has(st.id) ? running.get(st.id)! : ownShareOf(st, statements, payments).share;
+}
+
+/**
+ * Spread `total` across `ids` oldest-first, each bill up to what it owes.
+ * Money beyond what the bills owe is not quietly put on the last one: it is
+ * left over (`extra`) for the owner to say what it is.
+ */
 export function allocateAcrossBills(statements: any[], total: number, ids: string[], payments: any[] = []): Record<string, string> {
   const chosen = statements.filter(s => ids.includes(s.id)).slice()
     .sort((a, b) => (a.statementDate ?? '').localeCompare(b.statementDate ?? ''));
   let left = Number((total || 0).toFixed(2));
   const next: Record<string, string> = {};
-  chosen.forEach((s, i) => {
-    const open = ownShareOf(s, statements, payments).share;
-    const take = i === chosen.length - 1 ? left : Math.min(open, left);
+  chosen.forEach(s => {
+    const take = Math.min(owedOf(s, statements, payments), left);
     next[s.id] = take.toFixed(2);
     left = Number((left - take).toFixed(2));
   });
   return next;
 }
 
+/** The newest of the chosen bills: where an extra (late fee or credit) goes. */
+const newestOf = (statements: any[], ids: string[]) =>
+  statements.filter(s => ids.includes(s.id)).sort((a, b) => (b.statementDate ?? '').localeCompare(a.statementDate ?? ''))[0];
+
 /** The allocations to send, or a message saying why they cannot be. */
 export function splitAllocations(value: BillPickerValue, total: number): { allocations: { statementId: string; amount: number }[] } | { error: string } {
   const allocations = Object.entries(value.alloc).map(([statementId, v]) => ({ statementId, amount: parseFloat(v) })).filter(a => a.amount > 0);
+  // A late fee goes on the bill it was charged with: the split's fees sit on its first part.
+  if (value.feeOn) allocations.sort((a, b) => (a.statementId === value.feeOn ? -1 : b.statementId === value.feeOn ? 1 : 0));
   if (allocations.length < 2) return { error: 'Pick at least two bills to split this payment across, or turn the split off.' };
   const assigned = Number(allocations.reduce((a, x) => a + x.amount, 0).toFixed(2));
   if (Math.abs(assigned - total) > 0.01) return { error: `The amounts per bill add up to ${money(assigned)}, not the ${money(total)} paid. Adjust them or use Auto-fill.` };
   return { allocations };
 }
 
-export default function BillPicker({ statements, payments, amount, value, onChange, className = '', plan = null }: {
+export default function BillPicker({ statements, payments, amount, value, onChange, className = '', plan = null, onLateFee }: {
   statements: any[];
   payments: any[];
   amount: number;
@@ -85,6 +108,8 @@ export default function BillPicker({ statements, payments, amount, value, onChan
   className?: string;
   /** An active payment arrangement on the account: offered as its own choice. */
   plan?: { installment: number; agreement?: string | null } | null;
+  /** The owner said the extra is a late fee not billed yet: the form adds it as a late fee. */
+  onLateFee?: (amount: number) => void;
 }) {
   const sorted = useMemo(() => [...statements].sort((a, b) => (b.statementDate ?? '').localeCompare(a.statementDate ?? '')).slice(0, 36), [statements]);
   const paidMap = useMemo(() => computePaidMap(sorted, payments, computeResolvedByFutureCheckpoint(sorted)), [sorted, payments]);
@@ -95,10 +120,12 @@ export default function BillPicker({ statements, payments, amount, value, onChan
 
   // Each bill by what it adds — its own charges and any fee it charged — not
   // its total, which also carries the older bills listed below it.
+  const running = runningBalanceOwed(sorted, payments);
   const describe = (st: any, open = false) => {
     const own = ownShareOf(st, sorted, payments);
+    // On a running balance the same Owed now the statement list shows.
     const figure = open
-      ? `${money(own.share)}${own.fee > 0 ? ` (${money(own.charge)} + ${money(own.fee)} fee)` : ''}`
+      ? running?.has(st.id) ? money(running.get(st.id)!) : `${money(own.share)}${own.fee > 0 ? ` (${money(own.charge)} + ${money(own.fee)} fee)` : ''}`
       : money(own.charge + own.fee);
     const inst = Number(st.paymentPlanAmount ?? 0);
     return `${billMonthLabel(st)} — ${figure}${inst > 0 ? ` (incl. ${money(inst)} arrangement installment)` : ''} · billed ${fmtDate(st.statementDate, 'MMM d')}${!open && st.dueDate ? ` · due ${fmtDate(st.dueDate, 'MMM d')}` : ''}${paidMap.get(st.id) ? ' · already paid' : ' · open'}`;
@@ -124,6 +151,25 @@ export default function BillPicker({ statements, payments, amount, value, onChan
             {planBill ? `Pays the installment billed on ${billMonthLabel(planBill)}; the arrangement's balance follows the next bill.` : 'The whole payment comes off the arrangement\'s remaining balance.'}
           </p>
         )}
+        {(() => {
+          // More than the chosen bill owes: say so, and ask what the rest is.
+          const st = sorted.find(s => s.id === value.statementId);
+          if (!st || value.towardPlan) return null;
+          const over = Number((amount - owedOf(st, sorted, payments)).toFixed(2));
+          if (over <= 0.01) return null;
+          return (
+            <div className="text-xs mt-1 rounded-md px-2 py-1.5" style={{ background: 'rgba(245,166,35,0.08)' }}>
+              <span className="text-amber-300">{money(over)} more than {billMonthLabel(st)} still owes. </span>
+              {value.extraTo === 'late' ? <span className="text-gray-400">Added as a late fee on it.</span>
+                : value.extraTo === 'credit' ? <span className="text-gray-400">Kept as credit toward the next bill.</span>
+                : <>
+                    {onLateFee && <button type="button" className="text-amber-400 hover:text-amber-300 underline mr-2" onClick={() => { onLateFee(over); onChange({ ...value, extraTo: 'late' }); }}>It's a late fee not billed yet</button>}
+                    <button type="button" className="text-amber-400 hover:text-amber-300 underline mr-2" onClick={() => onChange({ ...value, extraTo: 'credit' })}>Credit toward the next bill</button>
+                    {sorted.length > 1 && <span className="text-gray-500">or split it across other bills.</span>}
+                  </>}
+            </div>
+          );
+        })()}
         {sorted.length > 1 && (
           <button type="button" className="text-xs text-amber-400 hover:text-amber-300 mt-1"
             onClick={() => onChange({ statementId: '', split: true, alloc: allocateAcrossBills(sorted, amount, value.statementId ? [value.statementId] : [], payments) })}>
@@ -168,6 +214,28 @@ export default function BillPicker({ statements, payments, amount, value, onChan
       <p className={`text-xs mt-1.5 ${Math.abs(diff) > 0.01 ? 'text-amber-400' : 'text-gray-500'}`}>
         {money(assigned)} of {money(amount)} assigned{Math.abs(diff) > 0.01 ? ` · ${money(Math.abs(diff))} ${diff > 0 ? 'still to assign' : 'over'}` : ''}
       </p>
+      {(() => {
+        // Paid more than the chosen bills owe: the owner says what the extra is.
+        const owedAll = Number(sorted.filter(s => ids.includes(s.id)).reduce((t, s) => t + owedOf(s, sorted, payments), 0).toFixed(2));
+        const extra = Number((amount - owedAll).toFixed(2));
+        const newest = newestOf(sorted, ids);
+        if (extra <= 0.01 || !newest || !(diff > 0.01)) return null;
+        const put = (to: 'late' | 'credit') => {
+          const alloc = { ...value.alloc, [newest.id]: ((parseFloat(value.alloc[newest.id]) || 0) + diff).toFixed(2) };
+          if (to === 'late') onLateFee?.(diff);
+          onChange({ ...value, alloc, extraTo: to, feeOn: to === 'late' ? newest.id : null });
+        };
+        return (
+          <div className="text-xs mt-1.5 rounded-md px-2 py-1.5" style={{ background: 'rgba(245,166,35,0.08)' }}>
+            <p className="text-amber-300 mb-1">{money(diff)} more than these bills owe ({money(owedAll)}). What is it?</p>
+            {onLateFee && <button type="button" className="text-amber-400 hover:text-amber-300 underline mr-3" onClick={() => put('late')}>A late fee not billed yet (on {billMonthLabel(newest)})</button>}
+            <button type="button" className="text-amber-400 hover:text-amber-300 underline" onClick={() => put('credit')}>Credit toward the next bill</button>
+          </div>
+        );
+      })()}
+      {value.extraTo && diff <= 0.01 && (
+        <p className="text-xs text-gray-500 mt-1">The extra is {value.extraTo === 'late' ? 'a late fee on the newest bill' : 'credit toward the next bill'}.</p>
+      )}
     </div>
   );
 }
