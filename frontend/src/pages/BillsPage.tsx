@@ -16,6 +16,7 @@ import { onLoansTab, isPropertyLoan } from '../lib/loanGroups';
 import type { LoanType } from '../types';
 import { ViewSwitch } from './FinancesPage';
 import AddUtilityModal from '../components/utility/AddUtilityModal';
+import StatementAuditDialog from '../components/utility/StatementAuditDialog';
 import { setUtilitiesPersonal } from '../api/client';
 
 const OTHER_LOANS = 'other-loans';
@@ -97,6 +98,7 @@ export function BillsSheet({ propertyId }: { propertyId?: string } = {}) {
   const [openOnly, setOpenOnly] = useState(false);
   const [cell, setCell] = useState<{ bills: Bill[]; month: string } | null>(null);
   const [catchingUp, setCatchingUp] = useState(false);
+  const [auditing, setAuditing] = useState(false);
   // A personal bill put back on its property: its bills count as the property's costs again.
   async function moveBack(a: { id: string; providerName: string }) {
     if (!confirm(`Move ${a.providerName} back to its property? Its bills count as that property's costs again.`)) return;
@@ -210,6 +212,7 @@ export function BillsSheet({ propertyId }: { propertyId?: string } = {}) {
             <span style={{ color: STATE_STYLE.due.color }}>To pay {fmtMoney(totals.toPay)} · {totals.toPayN}</span>
             <span className="text-gray-400">Paid in {year} {fmtMoney(totals.paidYear)}</span>
             <button onClick={() => setCatchingUp(true)} className="text-amber-400 hover:text-amber-300 font-medium" title="Mark loan months and old bills you have paid but never logged">Catch up…</button>
+            <button onClick={() => setAuditing(true)} className="text-amber-400 hover:text-amber-300 font-medium" title="Read each account's statement PDFs again and list where Sollux disagrees with them">Check against PDFs…</button>
             <button onClick={() => setAdding(pid !== 'all' ? pid : 'pick')} className="text-amber-400 hover:text-amber-300 font-medium">+ Add account</button>
           </div>
         </div>
@@ -306,6 +309,7 @@ export function BillsSheet({ propertyId }: { propertyId?: string } = {}) {
         </div>
       </div>
 
+      {auditing && <StatementAuditDialog onClose={() => setAuditing(false)} onFixed={() => void load()} />}
       {catchingUp && <CatchUp bills={[...bills.values()].flat().filter(b => b.state === 'overdue' || b.state === 'due')} onClose={() => setCatchingUp(false)} onDone={() => { setCatchingUp(false); void load(); }} />}
       {cell && <BillPanel bills={cell.bills} month={cell.month} onClose={() => setCell(null)} onChanged={() => { setCell(null); void load(); }} />}
       {loanCell && <LoanPanel row={loanCell.row} month={loanCell.month} onClose={() => setLoanCell(null)} onChanged={() => { setLoanCell(null); void load(); }} />}

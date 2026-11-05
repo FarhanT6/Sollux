@@ -836,6 +836,23 @@ export interface RentCatchUp {
   review: { leaseId: string; tenant: string; property: string; reason: string; arrears: number }[];
   lastCatchUp: string | null;
 }
+// Check statements against their PDFs (backend services/statementAudit.ts).
+export interface StatementAuditFinding {
+  accountId: string; propertyId: string; provider: string; property: string; last4: string | null;
+  statementId: string; statementDate: string;
+  field: 'charge' | 'pastDue' | 'total' | 'dueDate' | 'payments' | 'unreadable';
+  stored: number | string | null; read: number | string | null;
+  ownerEdited: boolean; fixable: boolean; note?: string;
+}
+export interface StatementAudit {
+  startedAt: string; finishedAt: string | null; accounts: number; total: number; checked: number; failed: number;
+  perAccount: number; findings: StatementAuditFinding[]; fixed: string[]; running: boolean;
+}
+export const getStatementAudit = () => api.get<StatementAudit | null>('/statements/audit').then(r => r.data);
+export const startStatementAudit = (data: { perAccount?: number; accountIds?: string[] } = {}) =>
+  api.post<{ count: number }>('/statements/audit', data).then(r => r.data);
+export const fixAuditedStatement = (statementId: string) =>
+  api.post<{ outcome: string }>('/statements/audit/fix', { statementId }).then(r => r.data);
 export const getRentCatchUp = (through: string) => api.get<RentCatchUp>('/catch-up/rent', { params: { through } }).then(r => r.data);
 export const runRentCatchUp = (through: string, leaseIds: string[]) => api.post<{ rentPayments: number; leases: number }>('/catch-up/rent', { through, leaseIds }).then(r => r.data);
 export const undoRentCatchUp = () => api.post<{ rentPayments: number }>('/catch-up/rent/undo').then(r => r.data);
