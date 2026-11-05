@@ -369,7 +369,7 @@ export async function reconcileAging(accountId: string, userId: string): Promise
   const statements = await db.statement.findMany({
     where: { utilityAccountId: accountId, isDownPayment: false },
     select: {
-      statementDate: true, dueDate: true, amountDue: true, amountPaid: true,
+      statementDate: true, dueDate: true, amountDue: true, amountPaid: true, paidOverride: true,
       agingBuckets: true,
     },
     orderBy: { statementDate: 'desc' },
@@ -393,7 +393,8 @@ export async function reconcileAging(accountId: string, userId: string): Promise
   const derived = { current: 0, days30: 0, days60: 0, days90plus: 0 };
 
   for (const s of statements) {
-    const outstanding = num(s.amountDue) - num(s.amountPaid);
+    // The owner's mark beats the printed paid figure.
+    const outstanding = s.paidOverride === 'PAID' ? 0 : s.paidOverride === 'UNPAID' ? num(s.amountDue) : num(s.amountDue) - num(s.amountPaid);
     if (outstanding <= 0.01) continue;
     if (!s.dueDate) continue;
 

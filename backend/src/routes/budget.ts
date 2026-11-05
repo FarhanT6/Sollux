@@ -116,7 +116,7 @@ router.get('/monthly', async (req, res, next) => {
       },
       // Only the figures used: a statement row also carries the whole reading (rawDataJson).
       select: {
-        id: true, amountDue: true, amountPaid: true, dueDate: true,
+        id: true, amountDue: true, amountPaid: true, dueDate: true, paidOverride: true,
         utilityAccount: {
           select: {
             providerName: true, category: true,
@@ -141,7 +141,9 @@ router.get('/monthly', async (req, res, next) => {
         dueDate: s.dueDate,
         // Paid means the payment covered the bill, not that some payment
         // exists — the recorded figure is often the prior cycle's settlement.
-        status: paid >= due - 0.01 && due > 0 ? 'paid' : paid > 0 && due === 0 ? 'paid' : 'unpaid',
+        // The owner's mark beats the printed figure.
+        status: s.paidOverride === 'PAID' ? 'paid' : s.paidOverride === 'UNPAID' ? 'unpaid'
+          : paid >= due - 0.01 && due > 0 ? 'paid' : paid > 0 && due === 0 ? 'paid' : 'unpaid',
       };
     });
 
