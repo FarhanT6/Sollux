@@ -255,6 +255,29 @@ export function computeResolvedByFutureCheckpoint(statements: any[]): Set<string
  * model: no bill prints a carried balance, a payment plan, net-metering
  * deferrals, or scheduled installments.
  */
+/**
+ * What each bill still owes on a running-balance account, with the owner's
+ * mark beating the arithmetic: a bill marked unpaid owes its charge (less
+ * what was logged against it), one marked paid owes nothing. One rule for the
+ * statement list's Owed now and the bills offered when logging a payment —
+ * the payment form used the arithmetic alone, so bills marked unpaid were
+ * offered at $0.00.
+ */
+export function owedByBillWithMarks(statements: any[], payments: any[]): Map<string, number> | null {
+  const running = runningBalanceOwed(statements, payments);
+  if (!running) return null;
+  const out = new Map<string, number>();
+  for (const s of statements) {
+    if (!running.has(s.id)) continue;
+    const linked = payments.filter((p: any) => p.statementId === s.id && p.status !== 'FAILED' && p.status !== 'PENDING').reduce((t: number, p: any) => t + Number(p.amount ?? 0), 0);
+    const owed = s.paidOverride === 'PAID' ? 0
+      : s.paidOverride === 'UNPAID' ? Math.max(running.get(s.id)!, Number(s.amountDue ?? 0) - linked)
+      : running.get(s.id)!;
+    out.set(s.id, Number(Math.max(0, owed).toFixed(2)));
+  }
+  return out;
+}
+
 export function runningBalanceOwed(statements: any[], payments: any[]): Map<string, number> | null {
   const issued = statements.filter(s => s?.statementDate && !isUpcoming(s))
     .sort((a, b) => new Date(b.statementDate).getTime() - new Date(a.statementDate).getTime());
