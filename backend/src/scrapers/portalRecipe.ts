@@ -183,19 +183,19 @@ export async function findLoginBoxes(page: Page, wantPassword: boolean): Promise
   return { user: null, pass: null };
 }
 
-/** Put a value in a box and check it is there: filled directly, then key by key if the page wiped it. */
+/**
+ * Put a value in a box the way a person does — a click, then key by key with
+ * pauses (typeLikeAPerson) — and check it is there; once more if the page
+ * wiped it. Filling a box in one go is what a bot does, and sites behind bot
+ * protection (Nationwide's) answered it with Access Denied.
+ */
 export async function putInBox(page: Page, box: Locator, value: string, secret: boolean): Promise<boolean> {
   const ok = async () => { const v = await box.inputValue().catch(() => ''); return secret ? v.length === value.length : v === value; };
-  await box.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
-  await box.click({ timeout: 10000 }).catch(() => {});
-  await box.fill(value).catch(() => {});
-  await page.waitForTimeout(300);
-  if (await ok()) return true;
-  await box.fill('').catch(() => {});
-  await box.focus().catch(() => {});
-  await box.pressSequentially(value, { delay: 60 }).catch(() => {});
-  await page.waitForTimeout(300);
-  return ok();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await typeLikeAPerson(page, box, value).catch(() => {});
+    if (await ok()) return true;
+  }
+  return false;
 }
 
 export async function replay(page: Page, steps: RecipeStep[], login: { username: string; password: string }, allowedHost: (host: string) => boolean): Promise<number> {
