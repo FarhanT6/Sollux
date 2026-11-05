@@ -118,7 +118,13 @@ export async function typeLikeAPerson(page: Page, field: Locator, text: string):
   await field.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
   await field.click({ timeout: 10000 });
   await field.fill('').catch(() => {});
+  await field.focus().catch(() => {});
   await pause(150, 400);
+  // Keys go to whatever has focus: only type them when it is this field (a click
+  // that landed on a label or overlay left the focus in the box before, and the
+  // keys went there). Otherwise the field is filled directly.
+  const focused = await field.evaluate(el => el === document.activeElement).catch(() => false);
+  if (!focused) { await field.fill(text); await pause(250, 600); return; }
   for (const ch of text) {
     await page.keyboard.type(ch);
     await pause(45, 140);
