@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { liftMarksSettledBy } from '../services/paidMarks';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
@@ -132,8 +133,9 @@ export async function syncStatementPaid(statementId: string | null | undefined) 
     where: { id: statementId },
     // A payment logged against a bill the owner had pinned open lifts the
     // pin: the newer, more specific claim wins.
-    data: { amountPaid: total ?? null, ...(total != null && Number(total) > 0 ? { paidOverride: null } : {}) },
+    data: { amountPaid: total ?? null },
   });
+  await liftMarksSettledBy(statementId);
 }
 
 // Ownership check shared by every write path.
