@@ -141,6 +141,63 @@ export async function clickLikeAPerson(page: Page, target: Locator): Promise<voi
   await target.click({ timeout: 10000 });
 }
 
+/**
+ * The sign-in boxes found by code, not chosen by Claude: the visible password
+ * box (a password input, or one named or labelled as the password), and the
+ * visible text / email box before it in the same form (one named or labelled
+ * user, login, email or ID first). Marked with data-sollux-login so they can
+ * be filled by locator. Claude's refs pointed the password at the username
+ * box again and again on one portal; this does not ask it.
+ */
+export async function findLoginBoxes(page: Page, wantPassword: boolean): Promise<{ user: Locator | null; pass: Locator | null }> {
+  for (const frame of page.frames()) {
+    const found = await frame.evaluate(`(function (wantPassword) {
+      function visible(el) { var r = el.getBoundingClientRect(); var cs = getComputedStyle(el); return r.width > 2 && r.height > 2 && cs.visibility !== 'hidden' && cs.display !== 'none' && !el.disabled && !el.readOnly; }
+      function words(el) {
+        var lab = (el.labels && el.labels[0] && el.labels[0].innerText) || '';
+        return [el.name, el.id, el.getAttribute('autocomplete'), el.getAttribute('aria-label'), el.placeholder, lab].join(' ').toLowerCase();
+      }
+      Array.prototype.forEach.call(document.querySelectorAll('[data-sollux-login]'), function (e) { e.removeAttribute('data-sollux-login'); });
+      var inputs = Array.prototype.filter.call(document.querySelectorAll('input'), visible);
+      var pass = inputs.filter(function (e) { return (e.type || '').toLowerCase() === 'password'; })[0]
+        || inputs.filter(function (e) { return /pass|pwd|pin\b/.test(words(e)) && !/user|email|login/.test(words(e)); })[0] || null;
+      if (wantPassword && !pass) return null;
+      var textual = inputs.filter(function (e) { var t = (e.type || 'text').toLowerCase(); return (t === 'text' || t === 'email' || t === 'tel' || t === '') && e !== pass; });
+      if (pass) {
+        var form = pass.form;
+        textual = textual.filter(function (e) { return (form ? e.form === form : true) && (e.compareDocumentPosition(pass) & Node.DOCUMENT_POSITION_FOLLOWING); });
+      }
+      var named = textual.filter(function (e) { return /user|login|email|e-mail|account|member|\bid\b/.test(words(e)) && !/search|zip|code|captcha/.test(words(e)); });
+      var user = named[named.length - 1] || textual[textual.length - 1] || null;
+      if (user) user.setAttribute('data-sollux-login', 'user');
+      if (pass) pass.setAttribute('data-sollux-login', 'pass');
+      return { user: !!user, pass: !!pass };
+    })(${JSON.stringify(wantPassword)})`).catch(() => null) as { user: boolean; pass: boolean } | null;
+    if (found && (found.pass || (!wantPassword && found.user))) {
+      return {
+        user: found.user ? frame.locator('[data-sollux-login="user"]').first() : null,
+        pass: found.pass ? frame.locator('[data-sollux-login="pass"]').first() : null,
+      };
+    }
+  }
+  return { user: null, pass: null };
+}
+
+/** Put a value in a box and check it is there: filled directly, then key by key if the page wiped it. */
+export async function putInBox(page: Page, box: Locator, value: string, secret: boolean): Promise<boolean> {
+  const ok = async () => { const v = await box.inputValue().catch(() => ''); return secret ? v.length === value.length : v === value; };
+  await box.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
+  await box.click({ timeout: 10000 }).catch(() => {});
+  await box.fill(value).catch(() => {});
+  await page.waitForTimeout(300);
+  if (await ok()) return true;
+  await box.fill('').catch(() => {});
+  await box.focus().catch(() => {});
+  await box.pressSequentially(value, { delay: 60 }).catch(() => {});
+  await page.waitForTimeout(300);
+  return ok();
+}
+
 export async function replay(page: Page, steps: RecipeStep[], login: { username: string; password: string }, allowedHost: (host: string) => boolean): Promise<number> {
   let done = 0;
   for (const s of steps) {
@@ -152,19 +209,22 @@ export async function replay(page: Page, steps: RecipeStep[], login: { username:
       } else if (s.tool === 'press') {
         await page.keyboard.press(s.key); await settle(page);
       } else if (s.tool === 'fill_login') {
+        // The boxes are found on the page now (findLoginBoxes), not from the recording: a
+        // recording made when the password was aimed at the username box replayed that
+        // mistake on every run, typing the password into the username field.
         // A username-only page (the password comes on the next one).
         if (!s.pass) {
-          const user = s.user ? await find(page, s.user) : null;
+          const user = (await findLoginBoxes(page, false)).user;
           if (!user) { if (await page.locator('input[type=password]').count() === 0 && !(await page.locator('input[type=email]').count())) { done++; continue; } break; }
-          await typeLikeAPerson(page, user, login.username);
+          if (!(await putInBox(page, user, login.username, false))) break;
           done++;
           continue;
         }
-        const pass = await find(page, s.pass);
+        const boxes = await findLoginBoxes(page, true);
         // Already signed in (the browser kept the session): skip the login.
-        if (!pass) { if (await page.locator('input[type=password]').count() === 0) { done++; continue; } break; }
-        if (s.user) { const user = await find(page, s.user, 2000); if (user) await typeLikeAPerson(page, user, login.username); }
-        await typeLikeAPerson(page, pass, login.password);
+        if (!boxes.pass) { if (await page.locator('input[type=password]').count() === 0) { done++; continue; } break; }
+        if (s.user && boxes.user && !(await putInBox(page, boxes.user, login.username, false))) break;
+        if (!(await putInBox(page, boxes.pass, login.password, true))) break;
       } else {
         const el = await find(page, s.target);
         if (!el) {
