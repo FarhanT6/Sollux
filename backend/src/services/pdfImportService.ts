@@ -12,6 +12,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { askClaude, jsonIn } from '../ai/models';
 import { providersLookAlike } from './providerMatch';
 import { db } from '../config/db';
+import { liftMarksSettledBy } from './paidMarks';
 import { decrypt } from '../crypto/encrypt';
 import { syncLoanFromComponents } from './loanComponents';
 import { Prisma } from '@prisma/client';
@@ -3750,6 +3751,7 @@ export async function recordConfirmedPayment(
   } else {
     await db.payment.create({ data: { utilityAccountId, ...data } });
   }
+  await liftMarksSettledBy(data.statementId);
 }
 
 /**
@@ -3801,6 +3803,7 @@ async function recordLedgerPayments(utilityAccountId: string, statementId: strin
     };
     if (existing) await db.payment.update({ where: { id: existing.id }, data });
     else await db.payment.create({ data: { utilityAccountId, ...data } });
+    await liftMarksSettledBy(data.statementId);
   }
 }
 
