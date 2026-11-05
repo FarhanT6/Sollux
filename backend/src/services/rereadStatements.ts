@@ -26,7 +26,7 @@ export async function rereadAccountStatements(userId: string, utilityAccountId: 
     where: { utilityAccountId, pdfS3Key: { not: null } },
     select: { id: true, pdfS3Key: true, rawDataJson: true },
     orderBy: { statementDate: 'asc' },
-  }).then(all => all.filter(r => (r.rawDataJson as any)?.source !== 'email'));   // an email printout is not a statement
+  }).then(all => all.filter(r => !(r.rawDataJson as any)?.emailNotice));   // an email's own text is not a statement; a PDF it attached is
   if (!rows.length) return 0;
   running.add(utilityAccountId);
   const last4 = String(account.accountNumber ?? '').replace(/\D/g, '').slice(-4);

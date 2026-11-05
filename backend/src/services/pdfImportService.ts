@@ -2168,6 +2168,18 @@ export function applyStudentLoanFromText(text: string, ex: ExtractedBillData): v
   if (balance != null) ex.totalAccountBalance = balance;
   const due = /Current\s+Statement\s+Due\s+Date\s*(\d{1,2})\/(\d{1,2})\/(\d{4})/i.exec(text);
   if (due) ex.dueDate = `${due[3]}-${due[1].padStart(2, '0')}-${due[2].padStart(2, '0')}`;
+  // "Last Payment (Effective 9/16/2026) $200.00" is reprinted on every
+  // statement until the next payment: read as "payments received" it was
+  // logged again under each new bill. As a dated payment it is matched to
+  // the one already on file. No line printed: nothing was received.
+  const last = /Last\s+Payment\s*\(\s*Effective\s+(\d{1,2})\/(\d{1,2})\/(\d{4})\s*\)\s*\$\s*([\d,]+\.\d{2})/i.exec(text);
+  if (last) {
+    const date = `${last[3]}-${last[1].padStart(2, '0')}-${last[2].padStart(2, '0')}`;
+    ex.ledgerPayments = [{ date, amount: Number(last[4].replace(/,/g, '')), description: `Last payment (effective ${last[1]}/${last[2]}/${last[3]})` }];
+    ex.paymentsReceived = null;
+  } else {
+    ex.paymentsReceived = 0;
+  }
 }
 
 export function applyBalanceForwardFromText(text: string, ex: ExtractedBillData): void {
