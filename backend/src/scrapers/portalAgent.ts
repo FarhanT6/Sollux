@@ -123,6 +123,35 @@ const LOOKUP_TOOLS = TOOLS.filter(t => !['fill_login', 'ask_owner_for_code', 'op
 const SIGN_IN_URL = /log-?in|log-?on|sign-?in|sign-?on|register|auth/i;
 /** A sign-in page, whatever its address: a password box is showing. */
 const onSignIn = (page: Page) => page.locator('input[type="password"]').first().isVisible().catch(() => false);
+
+/**
+ * The username and password boxes for fill_login, checked: the password only
+ * ever goes into a password box (the page's visible one when the ref given is
+ * not), the username never does, and the two are never the same box. Typing
+ * the password into the username box sent it to the site as the username,
+ * and the sign-in was rejected as a wrong password.
+ */
+export async function loginFields(page: Page, user: Locator | null, pass: Locator | null): Promise<{ user: Locator | null; pass: Locator | null } | { error: string }> {
+  const typeOf = (l: Locator) => l.evaluate(e => (e as HTMLInputElement).type || e.tagName.toLowerCase()).catch(() => '');
+  const isPassword = async (l: Locator) => (await typeOf(l)) === 'password';
+  const visiblePassword = async () => {
+    for (const f of page.frames()) {
+      const l = f.locator('input[type="password"]:visible').first();
+      if (await l.count().catch(() => 0)) return l;
+    }
+    return null;
+  };
+  const askedForPassword = !!pass;
+  if (pass && !(await isPassword(pass))) pass = await visiblePassword();
+  if (askedForPassword && !pass) return { error: 'There is no password box on the page to put the password in, so nothing was typed. Look at the page again.' };
+  if (user && await isPassword(user)) return { error: 'That username ref is a password box. Look at the page again: the username goes in the text or email box.' };
+  if (user && pass) {
+    const same = await user.evaluate((a, b) => a === b, await pass.elementHandle()).catch(() => false);
+    if (same) return { error: 'The username and password refs are the same box. Look at the page again and give each its own.' };
+  }
+  if (!user && !pass) return { error: 'No password box on the page. Look at the page again.' };
+  return { user, pass };
+}
 /** Signed in: the page offers Log out / Sign out, has no password box, and is not an error page. */
 const looksSignedIn = async (page: Page, text: string) =>
   /\b(log ?out|sign ?out|logout|signout)\b/i.test(text) && !TURNED_AWAY.test(text) && !(await onSignIn(page));
@@ -918,8 +947,22 @@ Always end with the finish tool, never with a message. If the page seems gone or
             }
             case 'fill_login': {
               if (i.usernameRef == null && i.passwordRef == null) { content = 'Give usernameRef and/or passwordRef.'; break; }
-              if (i.usernameRef != null) await typeLikeAPerson(page, el(i.usernameRef), username);
-              if (i.passwordRef != null) await typeLikeAPerson(page, el(i.passwordRef), password);
+              // The fields are checked before anything is typed: the password went into the
+              // username box when the password ref pointed at it (the username typed, then
+              // cleared, then the password typed over it), and the site rejected the sign-in.
+              const fields = await loginFields(page, i.usernameRef != null ? el(i.usernameRef) : null, i.passwordRef != null ? el(i.passwordRef) : null);
+              if ('error' in fields) { content = fields.error; break; }
+              if (fields.user) await typeLikeAPerson(page, fields.user, username);
+              if (fields.pass) await typeLikeAPerson(page, fields.pass, password);
+              // Still the username in its box, and something in the password box — else not submitted.
+              if (fields.user && (await fields.user.inputValue().catch(() => '')) !== username) {
+                await fields.user.fill(username).catch(() => {});
+                if ((await fields.user.inputValue().catch(() => '')) !== username) { content = 'The username did not stay in its box, so nothing was submitted. Look at the page again and give the right refs.'; break; }
+              }
+              if (fields.pass && (await fields.pass.inputValue().catch(() => '')).length !== password.length) {
+                await fields.pass.fill(password).catch(() => {});
+                if ((await fields.pass.inputValue().catch(() => '')).length !== password.length) { content = 'The password did not go into the password box, so nothing was submitted. Look at the page again and give the right refs.'; break; }
+              }
               if (i.rememberRef != null) await el(i.rememberRef).check({ timeout: 3000 }).catch(() => el(i.rememberRef).click({ timeout: 3000 }).catch(() => {}));
               if (i.submitRef != null) await clickLikeAPerson(page, el(i.submitRef));
               content = await after(i.submitRef != null ? 'Signed in details entered and submitted.' : 'Entered.');
