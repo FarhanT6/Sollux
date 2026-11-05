@@ -6,6 +6,7 @@ import { attachDbUser } from '../middleware/requireAuth';
 import { getSignedDocumentUrl } from '../services/s3Service';
 import { findDuplicates, mergeStatements } from '../services/statementDuplicates';
 import { rereadAccountStatements } from '../services/rereadStatements';
+import { fixStatement, lastAudit, startStatementAudit } from '../services/statementAudit';
 
 const router = Router();
 router.use(attachDbUser);
@@ -189,6 +190,35 @@ router.post('/reread', async (req, res, next) => {
     res.json({ count });
   } catch (err: any) {
     if (err?.status === 404) return res.status(404).json({ error: err.message });
+    next(err);
+  }
+});
+
+// Check statements against their PDFs (services/statementAudit.ts).
+// GET: the last run and its findings. POST { perAccount?, accountIds? }:
+// start one in the background. POST /audit/fix { statementId }: re-read
+// that statement for real.
+router.get('/audit', async (req, res, next) => {
+  try { res.json(await lastAudit(req.dbUserId!)); } catch (err) { next(err); }
+});
+router.post('/audit', async (req, res, next) => {
+  try {
+    const body = z.object({ perAccount: z.number().int().min(1).max(24).optional(), accountIds: z.array(z.string()).optional() }).parse(req.body ?? {});
+    const count = await startStatementAudit(req.dbUserId!, body);
+    if (count == null) return res.status(409).json({ error: 'A check is already running' });
+    res.json({ count });
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ error: 'Choose what to check.' });
+    next(err);
+  }
+});
+router.post('/audit/fix', async (req, res, next) => {
+  try {
+    const { statementId } = z.object({ statementId: z.string() }).parse(req.body);
+    res.json(await fixStatement(req.dbUserId!, statementId));
+  } catch (err: any) {
+    if (err?.status === 404) return res.status(404).json({ error: err.message });
+    if (err instanceof z.ZodError) return res.status(400).json({ error: 'Choose a statement.' });
     next(err);
   }
 });
