@@ -545,6 +545,13 @@ function BillPanel({ bills, month, onClose, onChanged }: { bills: Bill[]; month:
     catch (e) { setErr(describeApiError(e, 'Could not mark it unpaid.')); }
     finally { setBusy(''); }
   }
+  // Take the owner's Paid/Unpaid mark off: the payments logged decide again.
+  async function clearMark(b: Bill) {
+    setBusy(b.s.id); setErr('');
+    try { await patchStatement(b.s.id, { paidOverride: null }); onChanged(); }
+    catch (e) { setErr(describeApiError(e, 'Could not take the mark off.')); }
+    finally { setBusy(''); }
+  }
   async function openPdf(b: Bill) {
     try { const r = await getStatementDownloadUrl(b.s.id); window.open(r.url, '_blank', 'noopener,noreferrer'); }
     catch { setErr('Could not open the PDF.'); }
@@ -572,6 +579,8 @@ function BillPanel({ bills, month, onClose, onChanged }: { bills: Bill[]; month:
                 {b.state === 'paid'
                   ? <button disabled={!!busy} onClick={() => void markUnpaid(b)} className="btn-ghost text-xs">Mark unpaid</button>
                   : <button disabled={!!busy} onClick={() => void markPaid(b)} className="btn-primary text-xs">{busy === b.s.id ? 'Saving…' : `Mark paid${open && open > 0 ? ` · ${fmtMoney(open)}` : ''}`}</button>}
+                {b.s.paidOverride && <button disabled={!!busy} onClick={() => void clearMark(b)} className="btn-ghost text-xs"
+                  title={`You marked this bill ${b.s.paidOverride === 'UNPAID' ? 'unpaid' : 'paid'}. Take the mark off and let the payments logged decide.`}>Auto</button>}
                 {b.s.hasPdf && <button onClick={() => void openPdf(b)} className="btn-ghost text-xs">Open PDF</button>}
               </div>
             </div>
