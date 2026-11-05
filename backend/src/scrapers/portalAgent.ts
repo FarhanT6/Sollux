@@ -152,6 +152,63 @@ export async function loginFields(page: Page, user: Locator | null, pass: Locato
   if (!user && !pass) return { error: 'No password box on the page. Look at the page again.' };
   return { user, pass };
 }
+/**
+ * The sign-in boxes found by code, not chosen by Claude: the visible password
+ * box (a password input, or one named or labelled as the password), and the
+ * visible text / email box before it in the same form (one named or labelled
+ * user, login, email or ID first). Marked with data-sollux-login so they can
+ * be filled by locator. Claude's refs pointed the password at the username
+ * box again and again on one portal; this does not ask it.
+ */
+export async function findLoginBoxes(page: Page, wantPassword: boolean): Promise<{ user: Locator | null; pass: Locator | null }> {
+  for (const frame of page.frames()) {
+    const found = await frame.evaluate(`(function (wantPassword) {
+      function visible(el) { var r = el.getBoundingClientRect(); var cs = getComputedStyle(el); return r.width > 2 && r.height > 2 && cs.visibility !== 'hidden' && cs.display !== 'none' && !el.disabled && !el.readOnly; }
+      function words(el) {
+        var lab = (el.labels && el.labels[0] && el.labels[0].innerText) || '';
+        return [el.name, el.id, el.getAttribute('autocomplete'), el.getAttribute('aria-label'), el.placeholder, lab].join(' ').toLowerCase();
+      }
+      Array.prototype.forEach.call(document.querySelectorAll('[data-sollux-login]'), function (e) { e.removeAttribute('data-sollux-login'); });
+      var inputs = Array.prototype.filter.call(document.querySelectorAll('input'), visible);
+      var pass = inputs.filter(function (e) { return (e.type || '').toLowerCase() === 'password'; })[0]
+        || inputs.filter(function (e) { return /pass|pwd|pin\b/.test(words(e)) && !/user|email|login/.test(words(e)); })[0] || null;
+      if (wantPassword && !pass) return null;
+      var textual = inputs.filter(function (e) { var t = (e.type || 'text').toLowerCase(); return (t === 'text' || t === 'email' || t === 'tel' || t === '') && e !== pass; });
+      if (pass) {
+        var form = pass.form;
+        textual = textual.filter(function (e) { return (form ? e.form === form : true) && (e.compareDocumentPosition(pass) & Node.DOCUMENT_POSITION_FOLLOWING); });
+      }
+      var named = textual.filter(function (e) { return /user|login|email|e-mail|account|member|\bid\b/.test(words(e)) && !/search|zip|code|captcha/.test(words(e)); });
+      var user = named[named.length - 1] || textual[textual.length - 1] || null;
+      if (user) user.setAttribute('data-sollux-login', 'user');
+      if (pass) pass.setAttribute('data-sollux-login', 'pass');
+      return { user: !!user, pass: !!pass };
+    })(${JSON.stringify(wantPassword)})`).catch(() => null) as { user: boolean; pass: boolean } | null;
+    if (found && (found.pass || (!wantPassword && found.user))) {
+      return {
+        user: found.user ? frame.locator('[data-sollux-login="user"]').first() : null,
+        pass: found.pass ? frame.locator('[data-sollux-login="pass"]').first() : null,
+      };
+    }
+  }
+  return { user: null, pass: null };
+}
+
+/** Put a value in a box and check it is there: filled directly, then key by key if the page wiped it. */
+async function putInBox(page: Page, box: Locator, value: string, secret: boolean): Promise<boolean> {
+  const ok = async () => { const v = await box.inputValue().catch(() => ''); return secret ? v.length === value.length : v === value; };
+  await box.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
+  await box.click({ timeout: 10000 }).catch(() => {});
+  await box.fill(value).catch(() => {});
+  await page.waitForTimeout(300);
+  if (await ok()) return true;
+  await box.fill('').catch(() => {});
+  await box.focus().catch(() => {});
+  await box.pressSequentially(value, { delay: 60 }).catch(() => {});
+  await page.waitForTimeout(300);
+  return ok();
+}
+
 /** Signed in: the page offers Log out / Sign out, has no password box, and is not an error page. */
 const looksSignedIn = async (page: Page, text: string) =>
   /\b(log ?out|sign ?out|logout|signout)\b/i.test(text) && !TURNED_AWAY.test(text) && !(await onSignIn(page));
@@ -954,10 +1011,19 @@ Always end with the finish tool, never with a message. If the page seems gone or
               // The fields are checked before anything is typed: the password went into the
               // username box when the password ref pointed at it (the username typed, then
               // cleared, then the password typed over it), and the site rejected the sign-in.
-              const fields = await loginFields(page, i.usernameRef != null ? el(i.usernameRef) : null, i.passwordRef != null ? el(i.passwordRef) : null);
-              if ('error' in fields) { content = fields.error; break; }
-              if (fields.user) await typeLikeAPerson(page, fields.user, username);
-              if (fields.pass) await typeLikeAPerson(page, fields.pass, password);
+              // The boxes are found on the page by code (findLoginBoxes); Claude's refs are only
+              // a fallback when the page has none it recognises.
+              const found = await findLoginBoxes(page, i.passwordRef != null);
+              let fields: { user: Locator | null; pass: Locator | null };
+              if (found.pass || (i.passwordRef == null && found.user)) {
+                fields = { user: i.usernameRef != null ? found.user : null, pass: i.passwordRef != null ? found.pass : null };
+              } else {
+                const r = await loginFields(page, i.usernameRef != null ? el(i.usernameRef) : null, i.passwordRef != null ? el(i.passwordRef) : null);
+                if ('error' in r) { content = r.error; break; }
+                fields = r;
+              }
+              if (fields.user && !(await putInBox(page, fields.user, username, false))) { content = 'The username would not stay in its box, so nothing was submitted.'; break; }
+              if (fields.pass && !(await putInBox(page, fields.pass, password, true))) { content = 'The password would not go into the password box, so nothing was submitted.'; break; }
               // Still the username in its box, and something in the password box — else not submitted.
               if (fields.user && (await fields.user.inputValue().catch(() => '')) !== username) {
                 await fields.user.fill(username).catch(() => {});
