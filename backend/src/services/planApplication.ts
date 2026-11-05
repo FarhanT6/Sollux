@@ -1,5 +1,6 @@
 import { db } from '../config/db';
 import { allocateAccountPayments } from '../lib/paymentAllocation';
+import { syncLoanFromComponents } from './loanComponents';
 
 /**
  * Apply a payment to the account's payment plan.
@@ -93,7 +94,14 @@ export async function applyPaymentToLoan(paymentId: string): Promise<number> {
   }
 
   const loan = await db.loan.findUnique({ where: { utilityAccountId: payment.utilityAccountId } });
-  if (!loan || !loan.isActive || loan.currentBalance == null) return 0;
+  if (!loan) return 0;
+  // A loan whose statement lists its loans one by one (a federal student
+  // loan's groups) takes its balance from the statement: principal and
+  // interest as the servicer applied them. Taking each payment off as well
+  // counted it twice — and deleting a payment put it back on top of a
+  // balance that already reflected it.
+  if (await hasComponents(loan.id)) { await syncLoanFromComponents(loan.id); return 0; }
+  if (!loan.isActive || loan.currentBalance == null) return 0;
   if (payment.status !== 'PAID' && payment.status !== 'PARTIAL') return 0;
   const balance = Number(loan.currentBalance);
   if (balance <= 0.005) return 0;
@@ -106,6 +114,8 @@ export async function applyPaymentToLoan(paymentId: string): Promise<number> {
   await db.payment.update({ where: { id: payment.id }, data: { loanApplied: applied } });
   return applied;
 }
+
+const hasComponents = async (loanId: string) => (await db.loanComponent.count({ where: { loanId } })) > 0;
 
 /** What a payment spent on bills' fees, as the account's payment allocation applies it. */
 async function feesPaidBy(paymentId: string, utilityAccountId: string): Promise<number> {
@@ -138,6 +148,8 @@ export async function unapplyPaymentFromLoan(paymentId: string): Promise<void> {
   if (!payment || previously <= 0) return;
   const loan = await db.loan.findUnique({ where: { utilityAccountId: payment.utilityAccountId } });
   if (!loan) return;
+  // The statement's own balance stands (see applyPaymentToLoan).
+  if (await hasComponents(loan.id)) { await syncLoanFromComponents(loan.id); return; }
   await db.loan.update({
     where: { id: loan.id },
     data: { currentBalance: Number((Number(loan.currentBalance ?? 0) + previously).toFixed(2)), isActive: true },
