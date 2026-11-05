@@ -3,7 +3,7 @@ import { FEE_LINE, FEE_KIND_IDS, FEE_KIND_LABELS, billOwnFees, paymentFees, feeK
 import { useEffect, useState, useMemo, useRef } from 'react';
 import PortalCodeBanner from '../components/utility/PortalCodeBanner';
 import PaymentBreakdownLine from '../components/utility/PaymentBreakdownLine';
-import { runningBalanceOwed, openBalanceOf, isStatementPaid, computeResolvedByFutureCheckpoint, computePaidMap, isEffectivelyPaid, isPriorStatementPaid, statementStatus, coveredByCredit, liveCarriedOf, newestIssued, isUpcoming, arrearsPaidSince, unlinkedPaidSince, paidSinceSplit, deferredOf } from '../lib/paidState';
+import { runningBalanceOwed, owedByBillWithMarks, openBalanceOf, isStatementPaid, computeResolvedByFutureCheckpoint, computePaidMap, isEffectivelyPaid, isPriorStatementPaid, statementStatus, coveredByCredit, liveCarriedOf, newestIssued, isUpcoming, arrearsPaidSince, unlinkedPaidSince, paidSinceSplit, deferredOf } from '../lib/paidState';
 import { bankAccountLabel } from '../lib/bankAccountLabel';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
@@ -979,19 +979,7 @@ export default function UtilityDetailPage() {
   // The account's balance from it, and the part on bills older than the newest (past due).
   // The owner's mark beats the arithmetic: a bill marked unpaid owes its charge (less what was
   // logged against it), one marked paid owes nothing.
-  const owedByBill = useMemo(() => {
-    if (!runningOwed) return null;
-    const out = new Map<string, number>();
-    for (const s of statements) {
-      if (!runningOwed.has(s.id)) continue;
-      const linked = payments.filter((p: any) => p.statementId === s.id && p.status !== 'FAILED' && p.status !== 'PENDING').reduce((t: number, p: any) => t + Number(p.amount ?? 0), 0);
-      const owed = s.paidOverride === 'PAID' ? 0
-        : s.paidOverride === 'UNPAID' ? Math.max(runningOwed.get(s.id)!, Number(s.amountDue ?? 0) - linked)
-        : runningOwed.get(s.id)!;
-      out.set(s.id, Number(Math.max(0, owed).toFixed(2)));
-    }
-    return out;
-  }, [runningOwed, statements, payments]);
+  const owedByBill = useMemo(() => owedByBillWithMarks(statements, payments), [statements, payments]);
   const runningTotal = owedByBill ? Number([...owedByBill.values()].reduce((t, v) => t + v, 0).toFixed(2)) : null;
   const runningPastDue = owedByBill ? Number([...owedByBill.entries()].filter(([id]) => id !== newestIssued(statements)?.id).reduce((t, [, v]) => t + v, 0).toFixed(2)) : null;
 

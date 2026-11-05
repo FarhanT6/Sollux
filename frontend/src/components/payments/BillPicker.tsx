@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { billMonthLabel, fmtDate } from '../../lib/date';
-import { computePaidMap, computeResolvedByFutureCheckpoint, openBalanceOf, deferredOf, runningBalanceOwed } from '../../lib/paidState';
+import { computePaidMap, computeResolvedByFutureCheckpoint, openBalanceOf, deferredOf, owedByBillWithMarks } from '../../lib/paidState';
 
 const money = (v: number | string | null | undefined) => `$${Number(v ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -58,12 +58,14 @@ export function ownShareOf(st: any, statements: any[], payments: any[] = []): { 
 
 /**
  * What a bill still owes: on a running-balance account its share of the
- * account balance (runningBalanceOwed — the figure the statement list shows
+ * account balance (owedByBillWithMarks — the figure the statement list shows
  * as Owed now), else what it adds less what was paid toward it.
  */
 export function owedOf(st: any, statements: any[], payments: any[] = []): number {
-  const running = runningBalanceOwed(statements, payments);
-  return running?.has(st.id) ? running.get(st.id)! : ownShareOf(st, statements, payments).share;
+  const running = owedByBillWithMarks(statements, payments);
+  if (running?.has(st.id)) return running.get(st.id)!;
+  if (st.paidOverride === 'PAID') return 0;
+  return ownShareOf(st, statements, payments).share;
 }
 
 /**
@@ -120,7 +122,7 @@ export default function BillPicker({ statements, payments, amount, value, onChan
 
   // Each bill by what it adds — its own charges and any fee it charged — not
   // its total, which also carries the older bills listed below it.
-  const running = runningBalanceOwed(sorted, payments);
+  const running = owedByBillWithMarks(sorted, payments);
   const describe = (st: any, open = false) => {
     const own = ownShareOf(st, sorted, payments);
     // On a running balance the same Owed now the statement list shows.
