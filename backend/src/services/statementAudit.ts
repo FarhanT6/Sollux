@@ -144,8 +144,8 @@ export async function startStatementAudit(userId: string, opts: { perAccount?: n
       orderBy: { statementDate: 'desc' },
       take: perAccount * 2,
     });
-    // An email printout is not a statement.
-    for (const r of rows.filter(r => (r.rawDataJson as any)?.source !== 'email').slice(0, perAccount)) jobs.push({ acct, s: r as any });
+    // An email's own text is not a statement; a PDF it attached is.
+    for (const r of rows.filter(r => !(r.rawDataJson as any)?.emailNotice).slice(0, perAccount)) jobs.push({ acct, s: r as any });
   }
   const run: AuditRun = {
     startedAt: new Date().toISOString(), finishedAt: null, accounts: new Set(jobs.map(j => j.acct.id)).size,

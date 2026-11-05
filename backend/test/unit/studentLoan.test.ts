@@ -26,3 +26,16 @@ test('figures that do not add up are left alone', () => {
   applyStudentLoanFromText(text.replace('$50.00', '$55.00'), ex);
   assert.equal(ex.amountDue, 60);
 });
+
+test('the last payment, reprinted on every statement, is a dated payment, not "payments received"', () => {
+  const ex: any = { amountDue: 60, paymentsReceived: 75 };
+  applyStudentLoanFromText(`Last Payment (Effective 10/2/2026)$75.00\n${text}`, ex);
+  assert.equal(ex.paymentsReceived, null);
+  assert.deepEqual(ex.ledgerPayments, [{ date: '2026-10-02', amount: 75, description: 'Last payment (effective 10/2/2026)' }]);
+});
+
+test('no last payment printed: nothing received', () => {
+  const ex: any = { amountDue: 60, paymentsReceived: 40 };
+  applyStudentLoanFromText(text, ex);
+  assert.equal(ex.paymentsReceived, 0);
+});
