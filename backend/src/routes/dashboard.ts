@@ -117,7 +117,8 @@ router.get('/recent-activity', async (req, res, next) => {
       include: {
         property: { select: { id: true, address: true, nickname: true } },
         statements: {
-          where: { dueDate: { gte: new Date() }, amountPaid: null },
+          // Not paid: by the owner's mark, else nothing printed as paid on it.
+          where: { dueDate: { gte: new Date() }, OR: [{ paidOverride: 'UNPAID' }, { paidOverride: null, amountPaid: null }] },
           orderBy: { statementDate: 'desc' },
           take: 1,
         },

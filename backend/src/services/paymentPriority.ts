@@ -152,14 +152,14 @@ export async function getPaymentPriorities(userId: string, propertyId?: string):
         take: 36,
         select: {
           id: true, statementDate: true, dueDate: true, amountDue: true,
-          pastDueCarried: true, penaltiesFees: true, amountPaid: true, paymentPlanAmount: true,
+          pastDueCarried: true, penaltiesFees: true, amountPaid: true, paymentPlanAmount: true, paidOverride: true,
           penaltyDate: true, amountAfterDueDate: true, isDownPayment: true,
           trueUpDeferred: true, trueUpBalance: true, trueUpDate: true,
         },
       },
       payments: {
         orderBy: { paymentDate: 'desc' }, take: 24,
-        select: { amount: true, paymentDate: true },
+        select: { amount: true, paymentDate: true, statementId: true },
       },
       paymentPlan: { select: { monthlyAmount: true, installmentFee: true, remainingBalance: true, endDate: true, description: true, status: true } },
     },
@@ -186,7 +186,15 @@ export async function getPaymentPriorities(userId: string, propertyId?: string):
       .reduce((t, p) => t + num(p.amount), 0);
     const statementPaid = num(latest.amountPaid);
 
-    const balanceToCurrent = Math.max(0, currentCharges + pastDue - paidSince - statementPaid);
+    let balanceToCurrent = Math.max(0, currentCharges + pastDue - paidSince - statementPaid);
+    // The owner's mark beats the arithmetic, as on the account page: the
+    // newest bill marked paid leaves nothing to pay; marked unpaid it owes
+    // at least its charge, less what was logged against it.
+    if (latest.paidOverride === 'PAID') balanceToCurrent = 0;
+    else if (latest.paidOverride === 'UNPAID') {
+      const linked = account.payments.filter(p => p.statementId === latest.id).reduce((t, p) => t + num(p.amount), 0);
+      balanceToCurrent = Math.max(balanceToCurrent, currentCharges - linked);
+    }
 
     // An arrears arrangement changes the question. The carried balance is
     // still owed, but it is not overdue: the provider has agreed to take it
@@ -208,7 +216,7 @@ export async function getPaymentPriorities(userId: string, propertyId?: string):
     // The plan's per-installment fee is paid each month with the
     // installment; it never comes off the balance.
     const planFee = plan && !installmentBilled && onPlan > 0 ? num(plan.installmentFee) : 0;
-    const payThisMonth = plan && !installmentBilled
+    const payThisMonth = latest.paidOverride === 'PAID' ? 0 : plan && !installmentBilled
       ? Math.max(0, currentCharges + pastDueOffPlan + Math.min(num(plan.monthlyAmount), onPlan) + planFee - paidSince - statementPaid)
       : balanceToCurrent;
     // Urgency is judged on what is actually late: the charge and any arrears

@@ -229,7 +229,8 @@ export async function findUtilityCandidates(merchantName: string, amount: number
       id: true, propertyId: true, providerName: true,
       property: { select: { address: true, nickname: true } },
       statements: {
-        where: { amountPaid: null, amountDue: { not: null } },
+        // Open: by the owner's mark, else nothing printed as paid on it.
+        where: { amountDue: { not: null }, OR: [{ paidOverride: 'UNPAID' }, { paidOverride: null, amountPaid: null }] },
         select: { id: true, statementDate: true, amountDue: true },
       },
     },

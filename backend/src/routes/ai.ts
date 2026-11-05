@@ -94,7 +94,8 @@ router.post('/query', async (req: Request, res: Response) => {
         if (!stmt) continue;
         const amountDue = Number(stmt.amountDue ?? 0);
         const dueDate = stmt.dueDate ? new Date(stmt.dueDate) : null;
-        const paid = acct.payments.length > 0 || Number(stmt.amountPaid ?? 0) > 0;
+        const paid = stmt.paidOverride === 'PAID' ? true : stmt.paidOverride === 'UNPAID' ? false
+          : acct.payments.length > 0 || Number(stmt.amountPaid ?? 0) > 0;
         const pastDue = !paid && dueDate && dueDate < now;
         const dueSoon = !paid && !pastDue && dueDate && dueDate <= new Date(Date.now() + 7 * 86400000);
         lines.push(
