@@ -2136,6 +2136,40 @@ export function periodChargeOf(ex: ExtractedBillData): number | null {
  * it matched nothing. Only when the three printed figures agree with each
  * other (forward + current = total) are they taken.
  */
+/**
+ * A federal student-loan statement (CRI, and servicers on the same template)
+ * prints its own payment arithmetic: Regular Monthly Payment Amount $50.00 ·
+ * Amount Already Paid for This Month −$12.56 · Past Due Amount + $24.88 ·
+ * Current Amount Due $62.32. Read naively the month read $50 + $24.88 =
+ * $74.88, ignoring the part of an earlier payment that had already covered
+ * it, and the past due was then counted again on the next bill. This bill's
+ * own charge is the monthly payment less what was already paid toward it;
+ * what it carries is the past due; the total is Current Amount Due — taken
+ * only when the three add up. The due date and the loan's current balance
+ * are taken as printed.
+ */
+export function applyStudentLoanFromText(text: string, ex: ExtractedBillData): void {
+  // The text layer may run a label straight into its amount ("Current Balance$3,719.43").
+  const amt = (re: RegExp) => { const m = re.exec(text); return m ? Number(m[1].replace(/,/g, '')) : null; };
+  const monthly = amt(/Regular\s+Monthly\s+Payment\s+Amount\s*\$\s*([\d,]+\.\d{2})/i);
+  const already = amt(/Amount\s+Already\s+Paid\s+for\s+This\s+Month\s*-?\s*\$\s*([\d,]+\.\d{2})/i) ?? 0;
+  const pastDue = amt(/Past\s+Due\s+Amount\s*\(if\s+applicable\)\s*\+?\s*\$\s*([\d,]+\.\d{2})/i) ?? 0;
+  if (monthly == null) return;
+  const charge = Number(Math.max(0, monthly - already).toFixed(2));
+  // Current Amount Due is printed more than once (the summary, the coupon): any that adds up.
+  const currents = [...text.matchAll(/Current\s+Amount\s+Due\s*\$\s*([\d,]+\.\d{2})/gi)].map(m => Number(m[1].replace(/,/g, '')));
+  const current = currents.find(c => Math.abs(charge + pastDue - c) <= 0.01);
+  if (current == null) return;
+  ex.amountDue = charge;
+  ex.currentCharges = charge;
+  ex.previousBalance = pastDue > 0 ? pastDue : null;
+  ex.statedTotalDue = current;
+  const balance = amt(/Current\s+Balance\s*\$\s*([\d,]+\.\d{2})/i);
+  if (balance != null) ex.totalAccountBalance = balance;
+  const due = /Current\s+Statement\s+Due\s+Date\s*(\d{1,2})\/(\d{1,2})\/(\d{4})/i.exec(text);
+  if (due) ex.dueDate = `${due[3]}-${due[1].padStart(2, '0')}-${due[2].padStart(2, '0')}`;
+}
+
 export function applyBalanceForwardFromText(text: string, ex: ExtractedBillData): void {
   // Every printed occurrence of each label, and the amounts around it: the text layer puts an
   // amount before its label as often as after it ("$741.13BALANCE FORWARD", "TOTAL CURRENT
@@ -4116,6 +4150,7 @@ export async function parseBill(
         applyCancellationNoticeFromText(extracted, text);
         applyPremiumFinanceFromText(extracted, text);
         applyBalanceForwardFromText(text, extracted);
+        applyStudentLoanFromText(text, extracted);
       } catch { /* an unreadable text layer changes nothing */ }
       // A statement's transaction table, read in page order so each row's
       // date, description and amount sit on one line.
