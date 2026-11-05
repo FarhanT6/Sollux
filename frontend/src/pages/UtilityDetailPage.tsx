@@ -852,6 +852,14 @@ export default function UtilityDetailPage() {
   // bill-reported figure or an earlier "Mark paid" said. Payments logged
   // by hand against it stay; removing those is a separate decision, and
   // the row says so.
+  // Take the owner's Paid/Unpaid mark off: the payments logged decide again.
+  async function clearMark(s: any) {
+    setMarkingPaid(s.id);
+    try { await patchStatement(s.id, { paidOverride: null }); await reloadAccount(); }
+    catch (e) { toast(describeApiError(e, 'Could not take the mark off.')); }
+    finally { setMarkingPaid(null); }
+  }
+
   async function handleMarkUnpaid(s: any) {
     const marker = `[marked-paid:${s.id}]`;
     const linked = payments.filter((p: any) => p.statementId === s.id && !(typeof p.notes === 'string' && p.notes.includes(marker)));
@@ -2009,7 +2017,7 @@ export default function UtilityDetailPage() {
                           (Mark paid · Edit vs Unpaid · PDF · Edit), and a group that
                           sized itself pushed the due date, amount and badge of
                           some rows out of line with the rest. */}
-                      <div className="flex-shrink-0 w-44 flex items-center justify-end gap-1 row-actions">
+                      <div className="flex-shrink-0 w-52 flex items-center justify-end gap-1 row-actions">
                         {!isPaid && (
                           <button
                             onClick={() => handleMarkPaid(s)}
@@ -2018,6 +2026,16 @@ export default function UtilityDetailPage() {
                             className="row-action"
                           >
                             {markingPaid === s.id ? '…' : 'Mark paid'}
+                          </button>
+                        )}
+                        {s.paidOverride && (
+                          <button
+                            onClick={() => void clearMark(s)}
+                            disabled={markingPaid === s.id}
+                            title={`You marked this bill ${s.paidOverride === 'UNPAID' ? 'unpaid' : 'paid'}. Take the mark off and let the payments logged decide.`}
+                            className="row-action"
+                          >
+                            {markingPaid === s.id ? '…' : 'Auto'}
                           </button>
                         )}
                         {isPaid && (
