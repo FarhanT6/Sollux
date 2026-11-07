@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { nextBillExpected } from '../services/nextFetch';
 import { websiteFor, isLookupPage, isLookupAccount, lookupStartFor } from '../lib/providerDirectory';
 import { allocateAccountPayments } from '../lib/paymentAllocation';
 import { submitPortalCode } from '../scrapers/portalAgent';
@@ -415,7 +416,10 @@ router.get('/:id', async (req, res, next) => {
     const payments = rest.payments.map(p => ({ ...p, breakdown: breakdowns.get(p.id) ?? null }));
     // The provider's website: the address the owner saved or a bill printed,
     // else the provider directory's.
-    res.json({ ...rest, payments, hasCredentials: !!usernameEnc, website: websiteFor(account), ...lookupInfo({ ...account, usernameEnc }) });
+    // When the schedule fetches next: the day its bills usually come out (services/nextFetch.ts).
+    const next = await nextBillExpected(account.id, account.billingCadence).catch(() => null);
+    const nextFetch = next?.on ? { on: next.on.toISOString().slice(0, 10), cycleDays: next.cycleDays, learned: next.learned } : null;
+    res.json({ ...rest, payments, hasCredentials: !!usernameEnc, website: websiteFor(account), ...lookupInfo({ ...account, usernameEnc }), nextFetch });
   } catch (err) { next(err); }
 });
 
