@@ -64,6 +64,66 @@ export async function lateLeases(userId: string, now = new Date()): Promise<Late
   return out;
 }
 
+/**
+ * Keep the owner's reminder list to one open reminder per tenant, and only
+ * while rent is owed.
+ *
+ *  - One per lease: a lease with more than one open draft (a friendly
+ *    reminder and a firm one, or last month's and this month's) keeps the
+ *    newest; the others are closed as MERGED. New drafts update the open one
+ *    in place (draftRentReminders), so this only tidies older lists.
+ *  - Paid since: a draft is written the night rent is late and stayed until
+ *    the owner marked it sent or dismissed it, so a payment logged the next
+ *    morning left "$2,200.00 owed" on screen. Each open draft's month is
+ *    checked again with the same arithmetic that wrote it, plus any back rent
+ *    on the lease; nothing owed, it is closed as PAID (kept, not deleted).
+ *    Something still owed, its amount is brought up to date.
+ */
+export async function tidyReminders(userId: string): Promise<number> {
+  const open = await db.messageDraft.findMany({
+    where: { userId, status: 'DRAFT', leaseId: { not: null }, dedupeKey: { startsWith: 'rent:' } },
+    select: { id: true, leaseId: true, dedupeKey: true, amountDue: true },
+    orderBy: { createdAt: 'desc' },
+  });
+  const seen = new Set<string>();
+  let closed = 0;
+  for (const d of open) {
+    if (seen.has(d.leaseId!)) {
+      await db.messageDraft.update({ where: { id: d.id }, data: { status: 'MERGED' } });
+      closed++;
+      continue;
+    }
+    seen.add(d.leaseId!);
+    const month = /^rent:[^:]+:(\d{4})-(\d{2}):/.exec(d.dedupeKey);
+    if (!month) continue;
+    const monthStart = new Date(Date.UTC(Number(month[1]), Number(month[2]) - 1, 1));
+    const monthEnd = new Date(Date.UTC(Number(month[1]), Number(month[2]), 1));
+    const l = await db.lease.findFirst({
+      where: { id: d.leaseId!, unit: { property: { userId } } },
+      include: {
+        rentPayments: { where: { periodDate: { gte: monthStart, lt: monthEnd }, status: 'RECEIVED' }, select: { amount: true, appliedToArrears: true } },
+        rentCharges: { where: { periodDate: { gte: monthStart, lt: monthEnd } }, select: { amount: true } },
+      },
+    });
+    // A lease that ended or was removed has nothing to remind about either.
+    let owed = 0;
+    if (l && l.status === 'ACTIVE') {
+      const rent = monthRentDue(l, monthStart) - Number(l.section8Amount ?? 0);
+      const paid = l.rentPayments.reduce((t, p) => t + Number(p.amount) - Number(p.appliedToArrears), 0);
+      const charged = l.rentCharges.reduce((t, c) => t + Number(c.amount), 0);
+      owed = Math.max(0, rent + charged - paid) + Math.max(0, Number(l.arrearsBalance ?? 0));
+    }
+    owed = Math.round(owed * 100) / 100;
+    if (owed <= 1) {
+      await db.messageDraft.update({ where: { id: d.id }, data: { status: 'PAID' } });
+      closed++;
+    } else if (d.amountDue == null || Math.abs(Number(d.amountDue) - owed) > 0.005) {
+      await db.messageDraft.update({ where: { id: d.id }, data: { amountDue: owed } });
+    }
+  }
+  return closed;
+}
+
 function template(l: LateLease, firm: boolean, pay: string, from: string) {
   const due = l.dueDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', timeZone: 'UTC' });
   const sms = firm
@@ -112,11 +172,13 @@ export async function draftRentReminders(userId: string, now = new Date()): Prom
         console.warn('[RentCollections] template used:', err instanceof Error ? err.message : err);
       }
     }
-    await db.messageDraft.create({
-      data: { userId, leaseId: l.leaseId, kind, toName: l.tenant, toEmail: l.email, toPhone: l.phone, subject: msg.subject, body: msg.body, sms: msg.sms, amountDue: l.owed, dedupeKey },
-    });
-    // A firm reminder supersedes this month's friendly one if it was never sent.
-    if (firm) await db.messageDraft.updateMany({ where: { dedupeKey: `rent:${l.leaseId}:${month}:REMINDER`, status: 'DRAFT' }, data: { status: 'DISMISSED' } });
+    // One open reminder per tenant: a newer stage or month updates the one
+    // already on the owner's list (its wording, stage and amount) rather than
+    // adding a second line for the same person.
+    const data = { kind, toName: l.tenant, toEmail: l.email, toPhone: l.phone, subject: msg.subject, body: msg.body, sms: msg.sms, amountDue: Math.round((l.owed + Math.max(0, l.arrears)) * 100) / 100, dedupeKey };
+    const already = await db.messageDraft.findFirst({ where: { userId, leaseId: l.leaseId, status: 'DRAFT' }, orderBy: { createdAt: 'desc' }, select: { id: true } });
+    if (already) await db.messageDraft.update({ where: { id: already.id }, data: { ...data, createdAt: new Date() } });
+    else await db.messageDraft.create({ data: { userId, leaseId: l.leaseId, ...data } });
     drafted++;
   }
   return { drafted, late: late.length };

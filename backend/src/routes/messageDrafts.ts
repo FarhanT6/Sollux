@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
-import { draftRentReminders } from '../ai/rentCollections';
+import { draftRentReminders, tidyReminders } from '../ai/rentCollections';
 
 // Messages Sollux drafted for the owner to send (rent reminders). The owner
 // sends them from their own email or phone and marks them sent here.
@@ -10,6 +10,8 @@ router.use(attachDbUser);
 
 router.get('/', async (req, res, next) => {
   try {
+    // One reminder per tenant, and none once the rent is paid: tidied before the list is read.
+    await tidyReminders(req.dbUserId!).catch(err => console.warn('[Reminders] could not recheck:', err instanceof Error ? err.message : err));
     const drafts = await db.messageDraft.findMany({
       where: { userId: req.dbUserId!, status: (req.query.status as string) || 'DRAFT' },
       orderBy: { createdAt: 'desc' }, take: 100,
