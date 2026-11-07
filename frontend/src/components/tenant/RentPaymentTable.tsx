@@ -19,6 +19,12 @@ export default function RentPaymentTable({ payments, onEdited }: {
   const monthOf = (iso: string) => fmtDate(iso, 'MMM yyyy');
   const day = (iso: string) => fmtDate(iso, 'MMM d, yyyy');
   const [editing, setEditing] = useState<string | null>(null);
+  // Newest first by the day paid; two payments the same day show the later
+  // month on top (August above July), then the one logged last.
+  const rows = [...payments].sort((a, b) =>
+    String(b.paidDate).slice(0, 10).localeCompare(String(a.paidDate).slice(0, 10))
+    || String(b.periodDate).slice(0, 10).localeCompare(String(a.periodDate).slice(0, 10))
+    || String((b as any).createdAt ?? '').localeCompare(String((a as any).createdAt ?? '')));
   return (
     <table className="text-xs w-full max-w-5xl">
       <thead>
@@ -34,7 +40,7 @@ export default function RentPaymentTable({ payments, onEdited }: {
         </tr>
       </thead>
       <tbody>
-        {payments.map(p => editing === p.id ? (
+        {rows.map(p => editing === p.id ? (
           <PaymentEditRow key={p.id} payment={p} onCancel={() => setEditing(null)} onSaved={() => { setEditing(null); onEdited(); }} />
         ) : (
           <tr key={p.id} className="border-t border-white/5">
