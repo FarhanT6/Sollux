@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { monthRentDue } from '../lib/rentDue';
+import { monthRentDue, backRentByMonth } from '../lib/rentDue';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { Decimal } from '@prisma/client/runtime/library';
@@ -43,8 +43,17 @@ router.get('/monthly', async (req, res, next) => {
       const expected  = monthRentDue(lease, new Date(Date.UTC(year, month - 1, 1)));
       const collected = lease.rentPayments.reduce((s, p) => s + toNum(p.amount), 0);
       // Money sent to the balance from earlier months did not pay this month.
-      const towardMonth = lease.rentPayments.reduce((s, p) => s + toNum(p.amount) - toNum(p.appliedToArrears), 0);
-      const remaining = Math.max(0, expected - towardMonth);
+      const loggedToward = lease.rentPayments.reduce((s, p) => s + toNum(p.amount) - toNum(p.appliedToArrears), 0);
+      // A month already rolled into the back-rent balance owes what that
+      // balance leaves on it, oldest months paid first (lib/rentDue.ts
+      // backRentByMonth): $10,000 owed at $3,000 a month shows the last
+      // three months owed in full, the one before short $1,000, and older
+      // months paid. Only while there is back rent: with
+      // none, the months read from what was logged for them.
+      const key = `${year}-${String(month).padStart(2, '0')}`;
+      const fromBalance = toNum(lease.arrearsBalance) > 0.005 ? backRentByMonth(lease).get(key) : undefined;
+      const remaining = fromBalance != null ? Math.min(expected, fromBalance) : Math.max(0, expected - loggedToward);
+      const towardMonth = fromBalance != null ? Math.max(0, expected - remaining) : loggedToward;
       const tenant    = lease.leaseTenants[0]?.tenant.fullName ?? 'Unknown';
       const tenantId  = lease.leaseTenants[0]?.tenant.id ?? null;
       return {
@@ -58,7 +67,7 @@ router.get('/monthly', async (req, res, next) => {
         collected,
         remaining,
         arrearsBalance: toNum(lease.arrearsBalance),
-        status: towardMonth <= 0 ? 'unpaid' : towardMonth >= expected ? 'paid' : 'partial',
+        status: towardMonth <= 0.005 ? 'unpaid' : towardMonth >= expected - 0.005 ? 'paid' : 'partial',
         payments: lease.rentPayments.map(p => ({
           id: p.id,
           amount: toNum(p.amount),
