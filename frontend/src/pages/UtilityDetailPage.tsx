@@ -1545,6 +1545,13 @@ export default function UtilityDetailPage() {
             <button onClick={openWebsite} className="hover:text-gray-300 transition-colors" title={website ? website.url : 'Search for this provider\'s website'}>
               {siteLabel ? `${siteLabel} ↗` : 'Find website ↗'}
             </button>
+            {(account as any)?.nextFetch && (account as any)?.hasCredentials && (
+              <span title={(account as any).nextFetch.learned
+                ? `Its bills come about every ${(account as any).nextFetch.cycleDays} days (the longest usual gap between its statements), so Sollux fetches from then; if nothing is there yet it tries again after 1, 2, 4 and then 7 days.`
+                : `Not enough bills yet to learn its cycle; using ${(account as any).nextFetch.cycleDays} days.`}>
+                {(account as any).nextFetch.on <= todayISO() ? 'Auto-fetch: due now' : `Next auto-fetch ${fmtDate((account as any).nextFetch.on, 'MMM d')}`}
+              </span>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-3">

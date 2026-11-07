@@ -17,6 +17,23 @@
 import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 
+/**
+ * What a tenant's share is taken of: the bill's own charges for the period.
+ * A statement's amountDue can also hold an arrangement installment billed
+ * inside it (SDG&E: $300.00 of charges + a $100.00 payment-plan installment
+ * on the owner's old balance = $400.00) and late fees or penalties - the
+ * owner's debts, not the tenant's usage. Both come off; a past due balance
+ * is never in amountDue (it is pastDueCarried).
+ */
+export function usageChargeOf(s: { amountDue: unknown; paymentPlanAmount?: unknown; penaltiesFees?: unknown }): number {
+  const amt = Number(s.amountDue ?? 0);
+  const plan = Number(s.paymentPlanAmount ?? 0);
+  const fees = Math.max(0, Number(s.penaltiesFees ?? 0));
+  let base = plan > 0 && amt > plan ? amt - plan : amt;
+  if (fees > 0 && base > fees) base -= fees;
+  return Math.round(base * 100) / 100;
+}
+
 export type RuleMode = 'PERCENT' | 'FULL' | 'FLAT_MONTHLY';
 export interface Rule {
   category: string;      // WATER | ELECTRIC | GAS | SEWER | TRASH | INTERNET | OTHER
@@ -148,7 +165,7 @@ export async function draftInvoice(leaseId: string, userId: string, fromISO: str
           { billingPeriodEnd: null, statementDate: { gte: from, lte: to } },
         ],
       },
-      select: { id: true, utilityAccountId: true, statementDate: true, billingPeriodStart: true, billingPeriodEnd: true, amountDue: true },
+      select: { id: true, utilityAccountId: true, statementDate: true, billingPeriodStart: true, billingPeriodEnd: true, amountDue: true, paymentPlanAmount: true, penaltiesFees: true },
       orderBy: { statementDate: 'asc' },
     });
 
@@ -166,7 +183,7 @@ export async function draftInvoice(leaseId: string, userId: string, fromISO: str
         ? `${s.billingPeriodStart.toISOString().slice(0, 10)} – ${s.billingPeriodEnd.toISOString().slice(0, 10)}`
         : s.statementDate.toISOString().slice(0, 10);
       if (billed.has(s.id)) { alreadyBilled.push({ statementId: s.id, label, period, invoiceId: billed.get(s.id)! }); continue; }
-      const base = num(s.amountDue);
+      const base = usageChargeOf(s);
       const share = rule.mode === 'FULL' ? 100 : num(rule.value);
       lines.push({
         key: s.id,
@@ -500,7 +517,7 @@ export async function reimbursableItems(leaseId: string, userId: string, months 
       isDownPayment: false, isScheduled: false,
       OR: [{ billingPeriodEnd: { gte: since } }, { billingPeriodEnd: null, statementDate: { gte: since } }],
     },
-    select: { id: true, utilityAccountId: true, statementDate: true, billingPeriodStart: true, billingPeriodEnd: true, amountDue: true },
+    select: { id: true, utilityAccountId: true, statementDate: true, billingPeriodStart: true, billingPeriodEnd: true, amountDue: true, paymentPlanAmount: true, penaltiesFees: true },
     orderBy: { statementDate: 'desc' },
   }) : [];
   const allocs = await db.reimbursementAllocation.findMany({
@@ -522,7 +539,7 @@ export async function reimbursableItems(leaseId: string, userId: string, months 
     const acct = byAccount.get(s.utilityAccountId)!;
     const rule = statementRules.find(r => r.category === acct.category);
     const share = rule ? (rule.mode === 'FULL' ? 100 : num(rule.value)) : 100;
-    const base = num(s.amountDue);
+    const base = usageChargeOf(s);
     looseItems.push(loose({
       key: s.id, utilityAccountId: acct.id, statementId: s.id, category: acct.category, label: accountLabel(acct),
       periodDate: monthStart(s.billingPeriodEnd ?? s.statementDate).toISOString(),

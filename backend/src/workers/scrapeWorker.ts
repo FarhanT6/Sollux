@@ -2,6 +2,7 @@ import { Worker, Job } from 'bullmq';
 import { jobStarted, jobEnded } from './heartbeat';
 import { withAiContext } from '../ai/meter';
 import { overdueAfterDays, billCycleDays } from '../lib/billCadence';
+import { nextBillExpected } from '../services/nextFetch';
 import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';
@@ -152,10 +153,10 @@ const DAY = 86400000;
  *   for ever.
  */
 async function scheduledSkip(accountId: string, cadence: string | null, lastRun: Date | null, billPosted: boolean): Promise<string | null> {
-  const last = await db.statement.findFirst({ where: { utilityAccountId: accountId }, orderBy: { statementDate: 'desc' }, select: { statementDate: true, createdAt: true } });
-  const cycle = billCycleDays(cadence);
-  const age = last ? Date.now() - last.statementDate.getTime() : Infinity;
-  if (age < (cycle - (billPosted ? 10 : 3)) * DAY) return `the ${last!.statementDate.toISOString().slice(0, 10)} statement is the latest; the next is not due yet`;
+  // The next bill is due when this account's bills usually come out, learned from its own history.
+  const { on, last } = await nextBillExpected(accountId, cadence);
+  const lead = billPosted ? 10 * DAY : 0;
+  if (on && Date.now() < on.getTime() - lead) return `the ${last!.statementDate.toISOString().slice(0, 10)} statement is the latest; the next is expected about ${on.toISOString().slice(0, 10)}`;
   const sinceRun = lastRun ? Date.now() - lastRun.getTime() : Infinity;
   if (sinceRun < 20 * 3600000) return 'already ran today';
   // Runs since the newest statement came in that brought nothing.
