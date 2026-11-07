@@ -150,10 +150,27 @@ function OverviewTab({ budget, onChanged }: { budget: BudgetSummary; onChanged: 
   );
 }
 
-// ─── Rent Collection table (filterable, sorted by property) ──
+// ─── Rent Collection table ──
+//
+// One row per lease, organized the way it is worked through: search by
+// tenant, unit or property; quick filters (owes this month, behind on back
+// rent, paid…); sort by property, name or what is owed; and grouped by
+// property with each property's subtotals, a group folded with a click.
+// The choices are remembered between visits.
 
-const RENT_STATUS_FILTERS = ['all', 'paid', 'partial', 'unpaid'] as const;
-type RentStatusFilter = typeof RENT_STATUS_FILTERS[number];
+type RentView = 'all' | 'owes' | 'arrears' | 'paid' | 'partial' | 'unpaid';
+const RENT_VIEWS: { key: RentView; label: string }[] = [
+  { key: 'all', label: 'All' }, { key: 'owes', label: 'Owes this month' }, { key: 'arrears', label: 'Back rent' },
+  { key: 'unpaid', label: 'Unpaid' }, { key: 'partial', label: 'Partial' }, { key: 'paid', label: 'Paid' },
+];
+type RentSort = 'property' | 'tenant' | 'owed' | 'remaining' | 'arrears';
+const PREFS = 'sollux:rent-table';
+type Prefs = { view: RentView; sort: RentSort; group: boolean; folded: string[] };
+const loadPrefs = (): Prefs => {
+  const d: Prefs = { view: 'all', sort: 'property', group: true, folded: [] };
+  try { return { ...d, ...JSON.parse(localStorage.getItem(PREFS) ?? '{}') }; } catch { return d; }
+};
+const savePrefs = (p: Prefs) => { try { localStorage.setItem(PREFS, JSON.stringify(p)); } catch { /* private window */ } };
 
 function RentCollectionTable({ rows, outstanding, expected, collected, onChanged, period }: {
   /** The month the table is showing, YYYY-MM — what a logged payment applies to by default. */
@@ -162,12 +179,14 @@ function RentCollectionTable({ rows, outstanding, expected, collected, onChanged
   outstanding: number; expected: number; collected: number;
   onChanged: () => void;
 }) {
+  const [prefs, setPrefs] = useState<Prefs>(loadPrefs);
+  const set = (p: Partial<Prefs>) => setPrefs(cur => { const next = { ...cur, ...p }; savePrefs(next); return next; });
   const [propertyFilter, setPropertyFilter] = useState('all');
-  const [statusFilter, setStatusFilter] = useState<RentStatusFilter>('all');
+  const [q, setQ] = useState('');
   const [logRent, setLogRent] = useState<import('../types').BudgetRentRow | null>(null);
-  // Clicking a name opens that lease's payment history under the row, so
-  // "paid" and "partial" can be checked against the actual payments without
-  // leaving the table.
+  // The back-rent figure being set from its row (the Arrears cell).
+  const [arrearsFor, setArrearsFor] = useState<import('../types').BudgetRentRow | null>(null);
+  // Clicking a name opens that lease's payment history under the row.
   const [openLease, setOpenLease] = useState<string | null>(null);
   const [history, setHistory] = useState<Record<string, RentPayment[] | 'loading'>>({});
   function toggleHistory(leaseId: string) {
@@ -182,59 +201,134 @@ function RentCollectionTable({ rows, outstanding, expected, collected, onChanged
   const properties = useMemo(() => {
     const seen = new Map<string, string>();
     for (const r of rows) seen.set(r.propertyId, r.property);
-    return [...seen.entries()]
-      .map(([id, name]) => ({ id, name }))
-      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    return [...seen.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
   }, [rows]);
 
-  const sortedRows = useMemo(() => {
-    return [...rows]
-      .filter(r => propertyFilter === 'all' || r.propertyId === propertyFilter)
-      .filter(r => statusFilter === 'all' || r.status === statusFilter)
-      .sort((a, b) =>
-        a.property.localeCompare(b.property, undefined, { numeric: true }) ||
-        a.unit.localeCompare(b.unit, undefined, { numeric: true }) ||
-        a.tenant.localeCompare(b.tenant, undefined, { numeric: true })
-      );
-  }, [rows, propertyFilter, statusFilter]);
+  const owed = (r: typeof rows[number]) => r.remaining + r.arrearsBalance;
+  const matchesView = (r: typeof rows[number], v: RentView) =>
+    v === 'all' ? true : v === 'owes' ? r.remaining > 0.005 : v === 'arrears' ? r.arrearsBalance > 0.005 : r.status === v;
+  const counts = useMemo(() => Object.fromEntries(RENT_VIEWS.map(v => [v.key, rows.filter(r => matchesView(r, v.key)).length])) as Record<RentView, number>, [rows]);
 
-  const filtered = propertyFilter !== 'all' || statusFilter !== 'all';
-  const totalExpected  = filtered ? sortedRows.reduce((s, r) => s + r.expected, 0) : expected;
-  const totalCollected = filtered ? sortedRows.reduce((s, r) => s + r.collected, 0) : collected;
-  const totalRemaining = sortedRows.reduce((s, r) => s + r.remaining, 0);
-  const totalArrears   = sortedRows.reduce((s, r) => s + r.arrearsBalance, 0);
+  const sortedRows = useMemo(() => {
+    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+    const cmpProp = (a: typeof rows[number], b: typeof rows[number]) =>
+      a.property.localeCompare(b.property, undefined, { numeric: true }) || a.unit.localeCompare(b.unit, undefined, { numeric: true });
+    return rows
+      .filter(r => propertyFilter === 'all' || r.propertyId === propertyFilter)
+      .filter(r => matchesView(r, prefs.view))
+      .filter(r => words.every(w => `${r.tenant} ${r.unit} ${r.property}`.toLowerCase().includes(w)))
+      .sort((a, b) =>
+        prefs.sort === 'tenant' ? a.tenant.localeCompare(b.tenant, undefined, { numeric: true })
+        : prefs.sort === 'owed' ? owed(b) - owed(a) || cmpProp(a, b)
+        : prefs.sort === 'remaining' ? b.remaining - a.remaining || cmpProp(a, b)
+        : prefs.sort === 'arrears' ? b.arrearsBalance - a.arrearsBalance || cmpProp(a, b)
+        : cmpProp(a, b) || a.tenant.localeCompare(b.tenant));
+  }, [rows, propertyFilter, prefs.view, prefs.sort, q]);
+
+  // Grouped by property, in the order the sort puts each property's first row.
+  const groups = useMemo(() => {
+    if (!prefs.group) return [{ id: '', name: '', rows: sortedRows }];
+    const by = new Map<string, { id: string; name: string; rows: typeof sortedRows }>();
+    for (const r of sortedRows) {
+      const g = by.get(r.propertyId) ?? { id: r.propertyId, name: r.property, rows: [] };
+      g.rows.push(r); by.set(r.propertyId, g);
+    }
+    return [...by.values()];
+  }, [sortedRows, prefs.group]);
+
+  const filtered = propertyFilter !== 'all' || prefs.view !== 'all' || q.trim() !== '';
+  const sum = (rs: typeof rows, k: 'expected' | 'collected' | 'remaining' | 'arrearsBalance') => rs.reduce((s, r) => s + r[k], 0);
+  const totalExpected  = filtered ? sum(sortedRows, 'expected') : expected;
+  const totalCollected = filtered ? sum(sortedRows, 'collected') : collected;
+  const totalRemaining = filtered ? sum(sortedRows, 'remaining') : outstanding;
+  const totalArrears   = sum(sortedRows, 'arrearsBalance');
+  const folded = new Set(prefs.folded);
+  const fold = (id: string) => set({ folded: folded.has(id) ? prefs.folded.filter(x => x !== id) : [...prefs.folded, id] });
+  const chip = (on: boolean) => `text-xs px-2.5 py-1 rounded-full border ${on ? 'border-amber-500 text-amber-400' : 'border-white/10 text-gray-400 hover:text-gray-200'}`;
+
+  const rowEl = (row: typeof rows[number]) => (
+    <Fragment key={row.leaseId}>
+      <tr className="border-b border-white/5 hover:bg-white/2">
+        <td className={`py-2 text-white font-medium ${prefs.group ? 'pl-4' : ''}`}>
+          <button onClick={() => toggleHistory(row.leaseId)} className="hover:text-amber-400 text-left" title="Payment history">
+            {row.tenant} <span className="text-gray-600 text-xs">{openLease === row.leaseId ? '▴' : '▾'}</span>
+          </button>
+        </td>
+        <td className="py-2 text-gray-400">{prefs.group ? row.unit : `${row.unit} · ${row.property}`}</td>
+        <td className="py-2 text-right text-gray-300">{fmt(row.expected)}</td>
+        <td className="py-2 text-right text-emerald-500">{fmt(row.collected)}</td>
+        <td className="py-2 text-right text-amber-500">{row.remaining > 0 ? fmt(row.remaining) : '—'}</td>
+        <td className="py-2 text-right">
+          <button onClick={() => setArrearsFor(row)} title="Set or correct back rent"
+            className={`${row.arrearsBalance > 0 ? 'text-red-500' : 'text-gray-600'} hover:text-amber-400 hover:underline decoration-dotted`}>
+            {row.arrearsBalance > 0 ? fmt(row.arrearsBalance) : '—'}
+          </button>
+        </td>
+        <td className="py-2 pl-3">
+          <span className={`text-xs px-2 py-0.5 rounded-full ${
+            row.status === 'paid' ? 'bg-emerald-900/40 text-emerald-500' : row.status === 'partial' ? 'bg-amber-900/50 text-amber-500' : 'bg-red-900/50 text-red-500'}`}>
+            {row.status}
+          </span>
+        </td>
+        <td className="py-2 text-right">
+          {row.status !== 'paid' && <button onClick={() => setLogRent(row)} className="text-xs text-amber-400 hover:text-amber-300">Log payment</button>}
+        </td>
+      </tr>
+      {openLease === row.leaseId && (
+        <tr className="border-b border-white/5">
+          <td colSpan={8} className="py-3 px-3" style={{ background: 'rgba(255,255,255,0.03)' }}>
+            <PaymentHistory row={row} payments={history[row.leaseId]} onLog={() => setLogRent(row)}
+              onEdited={() => {
+                getRentPayments({ leaseId: row.leaseId }).then(p => setHistory(h => ({ ...h, [row.leaseId]: p }))).catch(() => {});
+                onChanged();
+              }} />
+          </td>
+        </tr>
+      )}
+    </Fragment>
+  );
 
   return (
     <div className="mt-3">
-      <div className="flex items-center gap-2 mb-3 flex-wrap">
+      <div className="flex items-center gap-2 mb-2 flex-wrap">
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search tenant, unit or property…" className="input-dark text-xs w-60" />
         <select value={propertyFilter} onChange={e => setPropertyFilter(e.target.value)} className="input-dark text-xs">
           <option value="all">All properties</option>
           {properties.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
-        <div className="flex gap-1">
-          {RENT_STATUS_FILTERS.map(s => (
-            <button key={s} onClick={() => setStatusFilter(s)}
-              className={`text-xs px-2.5 py-1 rounded-full border capitalize ${
-                statusFilter === s
-                  ? 'border-amber-500 text-amber-400'
-                  : 'border-white/10 text-gray-400 hover:text-gray-200'
-              }`}>
-              {s}
-            </button>
-          ))}
-        </div>
-        {filtered && (
-          <button onClick={() => { setPropertyFilter('all'); setStatusFilter('all'); }}
-            className="text-xs text-gray-500 hover:text-gray-300 ml-1">Clear filters</button>
+        <select value={prefs.sort} onChange={e => set({ sort: e.target.value as RentSort })} className="input-dark text-xs" title="Sort">
+          <option value="property">Sort: property & unit</option>
+          <option value="tenant">Sort: tenant name</option>
+          <option value="owed">Sort: most owed (month + back rent)</option>
+          <option value="remaining">Sort: most left this month</option>
+          <option value="arrears">Sort: most back rent</option>
+        </select>
+        <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
+          <input type="checkbox" checked={prefs.group} onChange={e => set({ group: e.target.checked })} /> Group by property
+        </label>
+        {prefs.group && groups.length > 1 && (
+          <button onClick={() => set({ folded: folded.size ? [] : groups.map(g => g.id) })} className="text-xs text-gray-500 hover:text-gray-300">
+            {folded.size ? 'Expand all' : 'Collapse all'}
+          </button>
         )}
         <span className="text-xs text-gray-500 ml-auto">{sortedRows.length} of {rows.length} tenants</span>
+      </div>
+      <div className="flex gap-1 mb-3 flex-wrap">
+        {RENT_VIEWS.map(v => (
+          <button key={v.key} onClick={() => set({ view: v.key })} className={chip(prefs.view === v.key)}>
+            {v.label} <span className="text-gray-500">{counts[v.key]}</span>
+          </button>
+        ))}
+        {filtered && (
+          <button onClick={() => { setPropertyFilter('all'); setQ(''); set({ view: 'all' }); }} className="text-xs text-gray-500 hover:text-gray-300 ml-1">Clear filters</button>
+        )}
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-gray-500 text-xs uppercase tracking-wider border-b border-white/5">
               <th className="text-left pb-2">Tenant</th>
-              <th className="text-left pb-2">Unit / Property</th>
+              <th className="text-left pb-2">{prefs.group ? 'Unit' : 'Unit / Property'}</th>
               <th className="text-right pb-2">Expected</th>
               <th className="text-right pb-2">Collected</th>
               <th className="text-right pb-2">Remaining</th>
@@ -244,67 +338,36 @@ function RentCollectionTable({ rows, outstanding, expected, collected, onChanged
             </tr>
           </thead>
           <tbody>
-            {sortedRows.map(row => (
-              <Fragment key={row.leaseId}>
-              <tr className="border-b border-white/5 hover:bg-white/2">
-                <td className="py-2 text-white font-medium">
-                  <button onClick={() => toggleHistory(row.leaseId)} className="hover:text-amber-400 text-left" title="Payment history">
-                    {row.tenant} <span className="text-gray-600 text-xs">{openLease === row.leaseId ? '▴' : '▾'}</span>
-                  </button>
-                </td>
-                <td className="py-2 text-gray-400">{row.unit} · {row.property}</td>
-                <td className="py-2 text-right text-gray-300">{fmt(row.expected)}</td>
-                <td className="py-2 text-right text-emerald-500">{fmt(row.collected)}</td>
-                <td className="py-2 text-right text-amber-500">{row.remaining > 0 ? fmt(row.remaining) : '—'}</td>
-                <td className="py-2 text-right text-red-500">{row.arrearsBalance > 0 ? fmt(row.arrearsBalance) : '—'}</td>
-                <td className="py-2 pl-3">
-                  <span className={`text-xs px-2 py-0.5 rounded-full ${
-                    row.status === 'paid'    ? 'bg-emerald-900/40 text-emerald-500' :
-                    row.status === 'partial' ? 'bg-amber-900/50 text-amber-500' :
-                                               'bg-red-900/50 text-red-500'
-                  }`}>
-                    {row.status}
-                  </span>
-                </td>
-                <td className="py-2 text-right">
-                  {row.status !== 'paid' && (
-                    <button onClick={() => setLogRent(row)} className="text-xs text-amber-400 hover:text-amber-300">Log payment</button>
-                  )}
-                </td>
-              </tr>
-              {openLease === row.leaseId && (
-                <tr className="border-b border-white/5">
-                  <td colSpan={8} className="py-3 px-3" style={{ background: 'rgba(255,255,255,0.03)' }}>
-                    <PaymentHistory
-                      row={row}
-                      payments={history[row.leaseId]}
-                      onLog={() => setLogRent(row)}
-                      onEdited={() => {
-                        getRentPayments({ leaseId: row.leaseId }).then(p => setHistory(h => ({ ...h, [row.leaseId]: p }))).catch(() => {});
-                        onChanged();
-                      }}
-                    />
+            {groups.map(g => prefs.group ? (
+              <Fragment key={g.id}>
+                <tr className="border-b border-white/10 cursor-pointer select-none" style={{ background: 'rgba(255,255,255,0.025)' }} onClick={() => fold(g.id)}>
+                  <td colSpan={2} className="py-2 text-gray-200 font-medium">
+                    <span className="text-gray-500 text-xs inline-block w-4">{folded.has(g.id) ? '▸' : '▾'}</span>{g.name}
+                    <span className="text-xs text-gray-500 font-normal"> · {g.rows.length} tenant{g.rows.length === 1 ? '' : 's'}{(() => { const n = g.rows.filter(r => r.remaining > 0.005).length; return n ? ` · ${n} owe` : ' · all paid'; })()}</span>
                   </td>
+                  <td className="py-2 text-right text-gray-400">{fmt(sum(g.rows, 'expected'))}</td>
+                  <td className="py-2 text-right text-emerald-600">{fmt(sum(g.rows, 'collected'))}</td>
+                  <td className="py-2 text-right text-amber-600">{sum(g.rows, 'remaining') > 0 ? fmt(sum(g.rows, 'remaining')) : '—'}</td>
+                  <td className="py-2 text-right text-red-600">{sum(g.rows, 'arrearsBalance') > 0 ? fmt(sum(g.rows, 'arrearsBalance')) : '—'}</td>
+                  <td colSpan={2} />
                 </tr>
-              )}
+                {!folded.has(g.id) && g.rows.map(rowEl)}
               </Fragment>
-            ))}
+            ) : <Fragment key="flat">{g.rows.map(rowEl)}</Fragment>)}
           </tbody>
           <tfoot>
             <tr className="text-sm font-semibold text-white border-t border-white/10">
               <td colSpan={2} className="pt-2">{filtered ? 'Filtered total' : 'Total'}</td>
               <td className="pt-2 text-right">{fmt(totalExpected)}</td>
               <td className="pt-2 text-right text-emerald-500">{fmt(totalCollected)}</td>
-              <td className="pt-2 text-right text-amber-500">{(filtered ? totalRemaining : outstanding) > 0 ? fmt(filtered ? totalRemaining : outstanding) : '—'}</td>
+              <td className="pt-2 text-right text-amber-500">{totalRemaining > 0 ? fmt(totalRemaining) : '—'}</td>
               <td className="pt-2 text-right text-red-500">{fmt(totalArrears)}</td>
               <td />
               <td />
             </tr>
           </tfoot>
         </table>
-        {sortedRows.length === 0 && (
-          <p className="text-center text-gray-500 py-8">No tenants match the current filters.</p>
-        )}
+        {sortedRows.length === 0 && <p className="text-center text-gray-500 py-8">No tenants match the current filters.</p>}
       </div>
 
       {logRent && (
@@ -315,6 +378,7 @@ function RentCollectionTable({ rows, outstanding, expected, collected, onChanged
           onSaved={() => { setLogRent(null); onChanged(); }}
         />
       )}
+      {arrearsFor && <ArrearsAsOfDialog leaseId={arrearsFor.leaseId} tenant={arrearsFor.tenant} onClose={() => setArrearsFor(null)} onSaved={onChanged} />}
     </div>
   );
 }
