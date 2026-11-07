@@ -48,10 +48,13 @@ router.get('/monthly', async (req, res, next) => {
       // balance leaves on it, oldest months paid first (lib/rentDue.ts
       // backRentByMonth): $10,000 owed at $3,000 a month shows the last
       // three months owed in full, the one before short $1,000, and older
-      // months paid. Only while there is back rent: with
-      // none, the months read from what was logged for them.
+      // months paid.
+      // Every tenant, back rent or none: a month that has ended owes only what the
+      // balance leaves on it, so a tenant with no back rent reads paid for every
+      // month back to move-in. A lease not yet rolled at all counts through last month.
       const key = `${year}-${String(month).padStart(2, '0')}`;
-      const fromBalance = toNum(lease.arrearsBalance) > 0.005 ? backRentByMonth(lease).get(key) : undefined;
+      const lastEnded = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() - 1, 1));
+      const fromBalance = backRentByMonth({ ...lease, arrearsCaughtUpThrough: lease.arrearsCaughtUpThrough ?? lastEnded }).get(key);
       const remaining = fromBalance != null ? Math.min(expected, fromBalance) : Math.max(0, expected - loggedToward);
       const towardMonth = fromBalance != null ? Math.max(0, expected - remaining) : loggedToward;
       const tenant    = lease.leaseTenants[0]?.tenant.fullName ?? 'Unknown';
