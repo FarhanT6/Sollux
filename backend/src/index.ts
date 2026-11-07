@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import './config/playwrightPath';
 import express from 'express';
+import { stripDataUrls } from './lib/dataUrl';
+import { repairLeaseUploadsOnce } from './services/repairUploads';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
@@ -165,6 +167,8 @@ app.use('/api/clickup/webhook', express.raw({ type: '*/*', limit: '1mb' }));
 app.use('/api/public/audit-requests', express.json({ limit: '70mb' }));
 app.use('/api/ai/agent', express.json({ limit: '120mb' }));
 app.use(express.json({ limit: '10mb' }));
+// Base64 uploads sent as a whole data URL: the "data:…;base64," label is taken off before any route decodes them.
+app.use((req, _res, next) => { if (req.body && typeof req.body === 'object') stripDataUrls(req.body); next(); });
 // A request that takes long is named in the log (path only — no query, no
 // body), so a slow page can be traced to the call behind it.
 app.use((req, res, next) => {
@@ -289,6 +293,8 @@ app.use(errorHandler);
 
 const server = app.listen(PORT, () => {
   console.log(`🌅 Sollux API running on http://localhost:${PORT}`);
+  // Once: lease files stored with a data-URL label decoded into them are restored (services/repairUploads.ts).
+  if (process.env.NODE_ENV !== 'test') setTimeout(() => { void repairLeaseUploadsOnce().catch(err => console.warn('[RepairUploads]', err instanceof Error ? err.message : err)); }, 60_000).unref();
 });
 // The owner's computers running the connector, and the worker's browser sessions on them.
 attachConnector(server);
