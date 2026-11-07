@@ -1459,6 +1459,8 @@ export interface UnitTurnover {
     lastRent: number;
     lastTenants: string[];
   } | null;
+  /** Empty from the acquisition date to the first move-in. */
+  sinceAcquisition?: { acquiredOn: string; firstMoveIn: string; daysVacant: number; rentLost: number; rent: number; tenants: string[] } | null;
 }
 
 export interface TurnoverReport {
@@ -1468,6 +1470,8 @@ export interface TurnoverReport {
     longestVacancyDays: number | null;
     totalDaysVacant: number;
     totalRentLost: number;
+    /** Units whose property has no acquisition date: vacancy before the first lease is not counted. */
+    noAcquisitionDate?: number;
     avgTenancyMonths: number | null;
     avgRentChange: number | null;
     currentlyVacant: number;

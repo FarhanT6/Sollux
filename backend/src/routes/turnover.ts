@@ -68,7 +68,7 @@ router.get('/', async (req, res, next) => {
         },
       },
       include: {
-        property: { select: { id: true, address: true, nickname: true } },
+        property: { select: { id: true, address: true, nickname: true, acquisitionDate: true } },
         leases: {
           include: { leaseTenants: { include: { tenant: { select: { fullName: true } } } } },
           orderBy: { startDate: 'asc' },
@@ -84,6 +84,8 @@ router.get('/', async (req, res, next) => {
     let totalRentLost = 0;
     let ongoingRentLost = 0;
     let currentlyVacant = 0;
+    // Units on a property with no acquisition date: vacancy before the first lease can't be counted.
+    let noAcquisitionDate = 0;
     const allTurnoverDays: number[] = [];
     const allTenancyMonths: number[] = [];
     const allRentChanges: number[] = [];
@@ -153,6 +155,24 @@ router.get('/', async (req, res, next) => {
         allRentChanges.push(newRent - previousRent);
       }
 
+      // Empty from the day the property was bought until its first tenant moved
+      // in: rent lost too, at the rent that tenant pays. Without an acquisition
+      // date, or with a tenant already in place when it was bought, there is none.
+      let sinceAcquisition = null;
+      const acquired = unit.property.acquisitionDate;
+      if (!acquired) noAcquisitionDate++;
+      const first = leases[0];
+      if (acquired && first.startDate && first.startDate > acquired) {
+        const days = daysBetween(acquired, first.startDate);
+        if (days > 0) {
+          const rent = Number(first.rentAmount);
+          const lost = round2(days * dailyRate(rent));
+          sinceAcquisition = { acquiredOn: acquired.toISOString(), firstMoveIn: first.startDate.toISOString(), daysVacant: days, rentLost: lost, rent, tenants: tenantNames(first) };
+          totalDaysVacant += days;
+          totalRentLost += lost;
+        }
+      }
+
       // Vacant right now? True when no lease is ACTIVE and the most recent one
       // has already ended. This is money still being lost, so it is tracked
       // separately from settled turnovers rather than mixed into them.
@@ -184,6 +204,7 @@ router.get('/', async (req, res, next) => {
         tenancies,
         turnovers,
         currentVacancy,
+        sinceAcquisition,
       });
     }
 
@@ -201,6 +222,7 @@ router.get('/', async (req, res, next) => {
         currentlyVacant,
         ongoingRentLost: round2(ongoingRentLost),
         unitsTracked: unitReports.length,
+        noAcquisitionDate,
       },
       units: unitReports.sort((a, b) =>
         a.propertyAddress.localeCompare(b.propertyAddress) || a.unitLabel.localeCompare(b.unitLabel)),

@@ -967,7 +967,7 @@ function TurnoverTab({ report }: { report: TurnoverReport | null }) {
         <Stat label="Turnovers" value={String(summary.turnovers)}
           sub={summary.avgVacancyDays != null ? `${summary.avgVacancyDays} days avg vacant` : undefined} />
         <Stat label="Rent lost to vacancy" value={money(summary.totalRentLost)} tone={summary.totalRentLost > 0 ? 'red' : undefined}
-          sub={summary.totalDaysVacant > 0 ? `over ${days(summary.totalDaysVacant)}` : 'no vacancy recorded'} />
+          sub={summary.totalDaysVacant > 0 ? `over ${days(summary.totalDaysVacant)}` : summary.noAcquisitionDate ? 'add the Acquired date (Edit) to count the time empty after purchase' : 'no vacancy recorded'} />
         <Stat label="Avg tenancy" value={summary.avgTenancyMonths != null ? `${summary.avgTenancyMonths} mo` : '—'}
           sub={summary.unitsTracked > 1 ? `across ${summary.unitsTracked} units` : undefined} />
         <Stat label="Vacant now" value={String(summary.currentlyVacant)}
@@ -1013,6 +1013,16 @@ function UnitTurnoverCard({ unit }: { unit: UnitTurnover }) {
           <span className="text-gray-400">
             {' '}since {fmtDateSafe(unit.currentVacancy.vacatedOn)} — {names(unit.currentVacancy.lastTenants)} moved out.
             {' '}{money(unit.currentVacancy.lostSoFar)} lost at {money(unit.currentVacancy.lastRent)}/mo, and counting.
+          </span>
+        </div>
+      )}
+
+      {unit.sinceAcquisition && (
+        <div className="px-4 py-2.5 text-xs" style={{ background: 'rgba(245,166,35,0.06)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+          <span className="text-amber-300 font-medium">Vacant {unit.sinceAcquisition.daysVacant} days after acquisition</span>
+          <span className="text-gray-400">
+            {' '}— bought {fmtDateSafe(unit.sinceAcquisition.acquiredOn)}, {names(unit.sinceAcquisition.tenants)} moved in {fmtDateSafe(unit.sinceAcquisition.firstMoveIn)}.
+            {' '}{money(unit.sinceAcquisition.rentLost)} lost at {money(unit.sinceAcquisition.rent)}/mo.
           </span>
         </div>
       )}
