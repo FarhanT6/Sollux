@@ -48,6 +48,8 @@ export default function LogRentPaymentModal({ target, period, onClose, onSaved }
   const [method, setMethod] = useState<RentPaymentMethod>('ZELLE');
   const [pending, setPending] = useState(false);
   const [allToArrears, setAllToArrears] = useState(false);
+  // A past payment logged only for the record: back rent is left as the owner has it.
+  const [recordOnly, setRecordOnly] = useState(false);
   const [bankAccountId, setBankAccountId] = useState('');
   const [reference, setReference] = useState('');
   const [notes, setNotes] = useState('');
@@ -78,7 +80,7 @@ export default function LogRentPaymentModal({ target, period, onClose, onSaved }
   useEffect(() => { getBankAccounts().then(a => setAccounts(a.filter(x => x.accountType !== 'CREDIT_CARD'))).catch(() => {}); }, []);
   const months = useMemo(() => monthOptions(thisMonth), [thisMonth]);
   const amt = parseFloat(amount);
-  const extra = !allToArrears && amt > target.rent ? amt - target.rent : 0;
+  const extra = !allToArrears && !recordOnly && amt > target.rent ? amt - target.rent : 0;
 
   async function save() {
     if (!(amt > 0)) { setErr('Enter the amount received.'); return; }
@@ -123,7 +125,7 @@ export default function LogRentPaymentModal({ target, period, onClose, onSaved }
         paidDate,
         method,
         status: pending ? 'PENDING' : 'RECEIVED',
-        ...(allToArrears ? { appliedToArrears: amt } : {}),
+        ...(recordOnly ? { applyTo: 'HISTORY' as const } : allToArrears ? { appliedToArrears: amt } : {}),
         ...(bankAccountId && BANK_LINKED_METHODS.includes(method) ? { bankAccountId } : {}),
         notes: [reference ? `Ref ${reference}` : null, notes || null].filter(Boolean).join(' · ') || undefined,
       });
@@ -220,6 +222,10 @@ export default function LogRentPaymentModal({ target, period, onClose, onSaved }
         {kind === 'rent' && <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
           <input type="checkbox" checked={allToArrears} onChange={e => setAllToArrears(e.target.checked)} />
           All of it pays back rent (none toward {monthLabel(forMonth)})
+        </label>}
+        {kind === 'rent' && <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer" title="For backdating payment history when the back-rent figure you have is already right">
+          <input type="checkbox" checked={recordOnly} onChange={e => setRecordOnly(e.target.checked)} />
+          Record only — leave back rent as it is
         </label>}
         {kind === 'rent' && extra > 0.005 && <p className="text-xs text-gray-500">{fmtMoney(target.rent)} goes to {monthLabel(forMonth)}'s rent; the other {fmtMoney(extra)} pays down back rent.</p>}
         </>}

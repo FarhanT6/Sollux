@@ -222,7 +222,7 @@ router.post('/:id/arrears-as-of', async (req, res, next) => {
     if (body.through >= today.slice(0, 7)) return res.status(400).json({ error: 'Choose a month that has ended: this month\'s rent is counted on its own, not in back rent.' });
     const result = arrearsAsOf({
       lease, amount: body.amount, through: body.through, asOf: body.asOf, today,
-      payments: lease.rentPayments.map(p => ({ id: p.id, amount: Number(p.amount), appliedToArrears: Number(p.appliedToArrears), periodDate: p.periodDate, paidDate: p.paidDate, status: p.status })),
+      payments: lease.rentPayments.map(p => ({ id: p.id, amount: Number(p.amount), appliedToArrears: Number(p.appliedToArrears), periodDate: p.periodDate, paidDate: p.paidDate, status: p.status, applyTo: p.applyTo })),
       charges: lease.rentCharges.map(c => ({ amount: Number(c.amount), periodDate: c.periodDate })),
     });
     if (body.save) {

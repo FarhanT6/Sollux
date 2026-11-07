@@ -24,7 +24,10 @@ export interface RecordPaymentInput {
   applyTo?: ApplyTo | null;
 }
 
-export type ApplyTo = 'CURRENT' | 'ARREARS';
+/** HISTORY: logged for the record only — the back-rent balance the owner keeps is left as it is. */
+export type ApplyTo = 'CURRENT' | 'ARREARS' | 'HISTORY';
+/** Payments that count toward rent and back rent: every one but a record-only (HISTORY) one. */
+export const countsTowardRent = { OR: [{ applyTo: null }, { applyTo: { not: 'HISTORY' } }] };
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const nextPeriod = (p: Date) => new Date(Date.UTC(p.getUTCFullYear(), p.getUTCMonth() + 1, 1));
@@ -48,6 +51,8 @@ export async function creditedTo(leaseId: string, periodDate: Date, excludePayme
       // When re-splitting an edited payment, its own old row must not count
       // as prior coverage of the period.
       ...(excludePaymentId ? { id: { not: excludePaymentId } } : {}),
+      // A record-only payment covered nothing as far as the balance is concerned.
+      ...countsTowardRent,
     },
     select: { amount: true, appliedToArrears: true },
   });
@@ -83,7 +88,7 @@ export async function splitPayment(
     where: { id: leaseId },
     select: { rentAmount: true, arrearsBalance: true, paymentsApplyTo: true, arrearsCaughtUpThrough: true, startDate: true, firstMonthRent: true },
   });
-  if (!lease) return { toArrears: 0, settledRolled: 0 };
+  if (!lease || applyTo === 'HISTORY') return { toArrears: 0, settledRolled: 0 };
   const arrears = Math.max(0, Number(lease.arrearsBalance));
   const rolledIn = !!lease.arrearsCaughtUpThrough && periodDate.getTime() <= lease.arrearsCaughtUpThrough.getTime();
   const order = applyTo ?? (lease.paymentsApplyTo === 'ARREARS' ? 'ARREARS' : 'CURRENT');
@@ -102,6 +107,7 @@ export async function recordRentPayment(input: RecordPaymentInput) {
   // A pending payment pays down nothing until it arrives.
   const split: Split = status === 'PENDING'
     ? { toArrears: 0, settledRolled: 0 }
+    : input.applyTo === 'HISTORY' ? { toArrears: 0, settledRolled: 0 }
     : input.appliedToArrears != null ? { toArrears: input.appliedToArrears, settledRolled: 0 }
     : await splitPayment(input.leaseId, input.periodDate, input.amount, undefined, input.applyTo);
   const appliedToArrears = split.toArrears;
@@ -158,6 +164,10 @@ export async function repriceRentPayment(paymentId: string, next: {
     select: { leaseId: true, appliedToArrears: true, settledRolledRent: true, applyTo: true },
   });
   if (!existing) return { toArrears: 0, settledRolled: 0 };
+  // Record only: the balance the owner keeps stands. A payment switched to it
+  // keeps the balance as it is now (the owner's figure already reflects it);
+  // one switched away from it is applied fresh below (it took nothing off before).
+  if ((next.applyTo !== undefined ? next.applyTo : existing.applyTo) === 'HISTORY') return { toArrears: 0, settledRolled: 0 };
 
   // Reverse the old effect first, on whichever lease it applied to.
   const previous = round2(Number(existing.appliedToArrears) + Number(existing.settledRolledRent));

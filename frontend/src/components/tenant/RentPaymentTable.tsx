@@ -47,7 +47,7 @@ export default function RentPaymentTable({ payments, onEdited }: {
             <td className="py-1 text-gray-200">{monthOf(p.periodDate)}</td>
             <td className="py-1 text-gray-400">{day(p.paidDate)}</td>
             <td className="py-1 text-right text-emerald-500 font-mono">{money(Number(p.amount))}</td>
-            <td className="py-1 text-right text-gray-500 font-mono">{Number(p.appliedToArrears) > 0 ? money(Number(p.appliedToArrears)) : '—'}</td>
+            <td className="py-1 text-right text-gray-500 font-mono">{p.applyTo === 'HISTORY' ? <span className="font-sans" title="Logged for the record; back rent was left as it is">record only</span> : Number(p.appliedToArrears) > 0 ? money(Number(p.appliedToArrears)) : '—'}</td>
             <td className="py-1 pl-4 text-gray-400">{RENT_PAYMENT_METHOD_LABELS[p.method] ?? p.method}</td>
             <td className={`py-1 pl-4 ${p.status === 'RECEIVED' ? 'text-emerald-500' : 'text-amber-500'}`}>{p.status === 'RECEIVED' ? 'received' : 'pending'}</td>
             <td className="py-1 pl-4 text-gray-500 truncate max-w-[200px]">{p.notes || ''}</td>
@@ -107,6 +107,7 @@ function PaymentEditRow({ payment: p, onCancel, onSaved }: { payment: RentPaymen
         <select value={f.applyTo} onChange={set('applyTo')} className={input} title="Where the payment goes first">
           <option value="CURRENT">Month first</option>
           <option value="ARREARS">Arrears first</option>
+          <option value="HISTORY">Record only</option>
         </select>
       </td>
       <td className="py-1.5 pl-4">

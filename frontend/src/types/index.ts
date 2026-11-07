@@ -249,7 +249,8 @@ export interface ScheduledRentIncrease {
   createdAt: string;
 }
 
-export type PaymentApplyTo = 'CURRENT' | 'ARREARS';
+/** HISTORY: logged for the record only — the back-rent balance is left as it is. */
+export type PaymentApplyTo = 'CURRENT' | 'ARREARS' | 'HISTORY';
 
 /** A late fee added to one month's rent. */
 export interface RentCharge {

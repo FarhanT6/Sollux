@@ -29,8 +29,9 @@ const RentPaymentSchema = z.object({
   bankAccountId: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
   // Where this payment goes first: this month's rent, or the balance owed
-  // from earlier months. null = the tenant's setting.
-  applyTo: z.enum(['CURRENT', 'ARREARS']).optional().nullable(),
+  // from earlier months. null = the tenant's setting. HISTORY: kept as a
+  // record only — the back-rent balance is not touched, now or at month end.
+  applyTo: z.enum(['CURRENT', 'ARREARS', 'HISTORY']).optional().nullable(),
 });
 
 router.get('/', async (req, res, next) => {
