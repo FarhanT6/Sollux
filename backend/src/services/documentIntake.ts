@@ -91,6 +91,10 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
   // ...and the statement it belongs to: the reading updates that row and
   // never files a new one.
   statementId?: string;
+  // The one of forAccounts the fetch had open when it got this document
+  // (the portal agent says which): filed there unless the document prints
+  // another listed account's number.
+  designated?: string;
 } = {}): Promise<IntakeResult> {
   // parseBill defaults to AI; this path must pass the choice through or
   // every bulk import silently bills per PDF regardless of what was picked.
@@ -143,7 +147,8 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
     const digits = String(ex.accountNumber ?? '').replace(/\D/g, '');
     const hits = digits ? opts.forAccounts.filter(a => a.last4 && digits.includes(a.last4)) : [];
     // By its printed number; a document with none is the one account's the fetch was for.
-    const pick = hits.length === 1 ? hits[0] : !digits && opts.forAccounts.length === 1 ? opts.forAccounts[0] : null;
+    const chosen = opts.designated ? opts.forAccounts.find(a => a.id === opts.designated) ?? null : null;
+    const pick = hits.length === 1 ? hits[0] : chosen ?? (!digits && opts.forAccounts.length === 1 ? opts.forAccounts[0] : null);
     if (pick) { utilityAccountId = pick.id; fetchedFor = true; }
   }
 
