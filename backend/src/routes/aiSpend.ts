@@ -51,7 +51,16 @@ const FEATURES: Record<string, string> = {
   'ask-question': 'Ask Sollux (quick answer)',
   'fallback-test': 'Fallback model check',
 };
-const nameOf = (f: string) => FEATURES[f] ?? (f.startsWith('read-') ? `Reading a ${f.slice(5)} document` : f);
+const SOURCES: Record<string, string> = {
+  'statement-audit': 'Check against PDFs',
+  'reread': 'Re-read statements',
+  'inbox': 'nightly email reader',
+  'portal': 'portal fetch',
+  'drive': 'Drive import',
+};
+const baseName = (f: string) => FEATURES[f] ?? (f.startsWith('read-') ? `Reading a ${f.slice(5)} document` : f);
+/** "bill-read@inbox" → "Reading a bill PDF — nightly email reader". */
+const nameOf = (f: string) => { const [base, src] = f.split('@'); return src ? `${baseName(base)} — ${SOURCES[src] ?? src}` : baseName(base); };
 
 router.get('/', async (req: Request, res: Response) => {
   const since = monthStart();
@@ -71,6 +80,19 @@ router.get('/', async (req: Request, res: Response) => {
       .then(rows => db.portalRecipe.count({ where: { key: { in: rows.map(r => `acct:${r.id}`) } } })),
   ]);
   const fallbacks = await db.aiUsage.groupBy({ by: ['feature'], where: { createdAt: { gte: since }, fellBack: true, ...mine }, _count: { _all: true } });
+  // What ran lately: the last 24 hours by feature, and each of the last 14 days.
+  const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const fortnight = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+  const [lastDay, lately] = await Promise.all([
+    db.aiUsage.groupBy({ by: ['feature'], where: { createdAt: { gte: dayAgo }, test: false, ...mine }, _sum: { costUsd: true }, _count: { _all: true } }),
+    db.aiUsage.findMany({ where: { createdAt: { gte: fortnight }, test: false, ...mine }, select: { createdAt: true, costUsd: true } }),
+  ]);
+  const perDay = new Map<string, { cost: number; calls: number }>();
+  for (const r of lately) {
+    const d = r.createdAt.toISOString().slice(0, 10);
+    const e = perDay.get(d) ?? { cost: 0, calls: 0 };
+    e.cost += Number(r.costUsd); e.calls++; perDay.set(d, e);
+  }
   const fb = new Map(fallbacks.map(f => [f.feature, f._count._all]));
   res.json({
     month: since.toISOString().slice(0, 7),
@@ -88,6 +110,8 @@ router.get('/', async (req: Request, res: Response) => {
       cachedShare: (() => { const r = f._sum.cacheReadTokens ?? 0, i = f._sum.inputTokens ?? 0; return r + i ? r / (r + i) : 0; })(),
     })).sort((a, b) => b.cost - a.cost),
     recent: recent.map(r => ({ ...r, costUsd: Number(r.costUsd), name: nameOf(r.feature) })),
+    lastDay: lastDay.map(f => ({ feature: f.feature, name: nameOf(f.feature), calls: f._count._all, cost: Number(f._sum.costUsd ?? 0) })).sort((a, b) => b.cost - a.cost),
+    byDay: [...perDay.entries()].map(([day, v]) => ({ day, cost: Number(v.cost.toFixed(4)), calls: v.calls })).sort((a, b) => b.day.localeCompare(a.day)),
   });
 });
 

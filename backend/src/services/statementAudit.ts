@@ -166,7 +166,7 @@ export async function startStatementAudit(userId: string, opts: { perAccount?: n
         try {
           const buf = await downloadDocument(s.pdfS3Key);
           const name = s.pdfS3Key.split('/').pop() || 'statement.pdf';
-          const parsed = await withAiContext({ userId }, () => parseBill(buf, name, userId, 'ai'));
+          const parsed = await withAiContext({ userId, source: 'statement-audit' }, () => parseBill(buf, name, userId, 'ai'));
           if (parsed.error) throw new Error(parsed.error);
           const loggedInWindow = await loggedBetweenBills(acct.id, s);
           for (const f of compareStatement(s, parsed.extracted, loggedInWindow)) run.findings.push({ ...who, ...f });
@@ -211,13 +211,14 @@ export async function fixStatement(userId: string, statementId: string): Promise
     select: { id: true, pdfS3Key: true, rawDataJson: true, utilityAccount: { select: { id: true, accountNumber: true } } },
   });
   if (!s || !s.pdfS3Key) throw Object.assign(new Error('Statement not found'), { status: 404 });
-  const buf = await downloadDocument(s.pdfS3Key);
-  const name = s.pdfS3Key.split('/').pop() || 'statement.pdf';
+  const pdfKey = s.pdfS3Key;
+  const buf = await downloadDocument(pdfKey);
+  const name = pdfKey.split('/').pop() || 'statement.pdf';
   const source = String((s.rawDataJson as any)?.source ?? 'pdf_import');
   const last4 = String(s.utilityAccount.accountNumber ?? '').replace(/\D/g, '').slice(-4);
-  const result = await intakeBill(buf, name, userId, 'ai', `audit-fix-${Date.now()}`, source, {
-    forAccounts: [{ id: s.utilityAccount.id, last4 }], pdfKey: s.pdfS3Key, statementId: s.id,
-  });
+  const result = await withAiContext({ userId, source: 'statement-audit' }, () => intakeBill(buf, name, userId, 'ai', `audit-fix-${Date.now()}`, source, {
+    forAccounts: [{ id: s.utilityAccount.id, last4 }], pdfKey, statementId: s.id,
+  }));
   if (result.outcome === 'filed') {
     const inProgress = live.get(userId);
     if (inProgress) { if (!inProgress.fixed.includes(statementId)) inProgress.fixed.push(statementId); await save(userId, inProgress); }

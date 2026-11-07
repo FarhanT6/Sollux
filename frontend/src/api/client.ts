@@ -1401,6 +1401,9 @@ export interface AiSpend {
   month: string; spent: number; budget: number | null; scope?: 'app' | 'account'; primaryModel: string; fallbackModel: string | null; portalRecipes: number;
   features: AiSpendFeature[];
   recent: { createdAt: string; feature: string; name: string; model: string; costUsd: number; fellBack: boolean; test: boolean; inputTokens: number; outputTokens: number; cacheReadTokens: number }[];
+  /** The last 24 hours by feature, and each of the last 14 days (tests left out). */
+  lastDay?: { feature: string; name: string; calls: number; cost: number }[];
+  byDay?: { day: string; cost: number; calls: number }[];
 }
 export interface AiTestResult { key: string; name: string; status: 'pending' | 'running' | 'ok' | 'problem' | 'skipped'; detail?: string; cost?: number; calls?: number; models?: string[]; fellBack?: boolean; ms?: number }
 export interface AiTestState { checks: { key: string; name: string }[]; run: { startedAt: string; finishedAt?: string; results: AiTestResult[] } | null; apiKey: boolean }

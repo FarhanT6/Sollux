@@ -129,7 +129,7 @@ const worker = new Worker<DriveImportJobData>(
       for (const file of files) {
         try {
           const buffer = await downloadFile(drive, file.id);
-          const r = await intakeBill(buffer, file.name, userId, method === 'ai' ? 'ai' : 'regex', jobId, 'drive_import');
+          const r = await withAiContext({ userId, source: 'drive' }, () => intakeBill(buffer, file.name, userId, method === 'ai' ? 'ai' : 'regex', jobId, 'drive_import'));
           if (r.outcome === 'filed') autoImported++;
           else if (r.outcome === 'review') needsReview.push(r.reviewItem);
           else if (r.outcome === 'error') errors.push(r.error);
