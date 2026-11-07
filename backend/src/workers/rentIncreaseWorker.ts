@@ -88,7 +88,7 @@ export async function accrueOverdueRent(now = new Date()): Promise<number> {
   const inPeriod = (d: Date, p: Date) => periodStart(new Date(d)).getTime() === p.getTime();
   const owedFor = (lease: typeof leases[number], p: Date) => {
     const credited = lease.rentPayments
-      .filter(x => inPeriod(x.periodDate, p) && x.status === 'RECEIVED')
+      .filter(x => inPeriod(x.periodDate, p) && x.status === 'RECEIVED' && x.applyTo !== 'HISTORY')
       .reduce((s, x) => s + Number(x.amount) - Number(x.appliedToArrears), 0);
     const charges = lease.rentCharges.filter(c => inPeriod(c.periodDate, p)).reduce((s, c) => s + Number(c.amount), 0);
     return Math.max(0, Math.round((monthRentDue(lease, p) + charges - credited) * 100) / 100);

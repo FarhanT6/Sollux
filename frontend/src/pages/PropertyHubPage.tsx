@@ -2482,11 +2482,12 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                         onChange={e => setPayExpectedDate(e.target.value)} className="input-dark text-xs w-36" />
                     )}
                     {/* Where the money goes first: some tenants pay down the old balance, others this month. */}
-                    {payFor === 'RENT' && (Number(lease.arrearsBalance ?? 0) > 0 || payApplyTo === 'ARREARS') && (
+                    {payFor === 'RENT' && (Number(lease.arrearsBalance ?? 0) > 0 || payApplyTo !== 'CURRENT') && (
                       <select value={payApplyTo} onChange={e => setPayApplyTo(e.target.value as PaymentApplyTo)} className="input-dark text-xs"
-                        title="Where this payment goes first">
+                        title="Where this payment goes first — or, for a past payment you are only recording, leave back rent as it is">
                         <option value="CURRENT">To this month first</option>
                         <option value="ARREARS">To arrears first</option>
+                        <option value="HISTORY">Record only — back rent stays</option>
                       </select>
                     )}
                     <input placeholder="Notes (optional)" value={payNotes} onChange={e => setPayNotes(e.target.value)} className="input-dark text-xs flex-1 min-w-32" />
@@ -2659,6 +2660,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                                         className="input-dark text-xs" title="Where this payment goes first">
                                         <option value="CURRENT">To its month first</option>
                                         <option value="ARREARS">To arrears first</option>
+                                        <option value="HISTORY">Record only — back rent stays</option>
                                       </select>
                                     </div>
                                   </td>

@@ -10,7 +10,7 @@
  */
 import { monthRentDue, type LeaseRent } from './rentDue';
 
-export interface AsOfPayment { id: string; amount: number; appliedToArrears: number; periodDate: Date; paidDate: Date; status: string }
+export interface AsOfPayment { id: string; amount: number; appliedToArrears: number; periodDate: Date; paidDate: Date; status: string; applyTo?: string | null }
 export interface AsOfCharge { amount: number; periodDate: Date }
 export interface AsOfLine { kind: 'payment' | 'month'; label: string; date: string; amount: number }
 
@@ -25,7 +25,9 @@ export function arrearsAsOf(input: {
   const lines: AsOfLine[] = [];
   let balance = input.amount;
 
-  for (const p of input.payments) {
+  // A record-only payment is not counted against the balance.
+  const payments = input.payments.filter(p => p.applyTo !== 'HISTORY');
+  for (const p of payments) {
     if (p.status !== 'RECEIVED' || p.paidDate.toISOString().slice(0, 10) < asOf) continue;
     const off = ym(p.periodDate) <= through ? p.amount : p.appliedToArrears;
     if (off <= 0.005) continue;
@@ -42,7 +44,7 @@ export function arrearsAsOf(input: {
     const month = `${y}-${String(m).padStart(2, '0')}`;
     if (month >= current) break;
     const period = new Date(`${month}-01T00:00:00.000Z`);
-    const credited = input.payments.filter(p => p.status === 'RECEIVED' && ym(p.periodDate) === month).reduce((s, p) => s + p.amount - p.appliedToArrears, 0);
+    const credited = payments.filter(p => p.status === 'RECEIVED' && ym(p.periodDate) === month).reduce((s, p) => s + p.amount - p.appliedToArrears, 0);
     const charged = input.charges.filter(c => ym(c.periodDate) === month).reduce((s, c) => s + c.amount, 0);
     const owed = Math.max(0, r2(monthRentDue(input.lease, period) + charged - credited));
     lastRolled = month;
