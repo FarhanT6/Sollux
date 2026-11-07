@@ -10,6 +10,7 @@ import NativeLock from './components/NativeLock';
 import { installErrorReporting } from './lib/telemetry';
 import { initTheme } from './lib/theme';
 import { installFullText } from './lib/fullText';
+import { installDragSafeClicks } from './lib/dragSafeClicks';
 
 const CLERK_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
 
@@ -18,6 +19,8 @@ installErrorReporting();
 initTheme();
 // Cut-off text shows in full on hover (a tap unfolds it on a phone).
 installFullText();
+// Highlighting text past a popup's edge does not close it.
+installDragSafeClicks();
 
 // Shown when the app is built without a Clerk key. Deliberately plain — it
 // must not depend on anything that could itself be missing at this point.
