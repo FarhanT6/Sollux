@@ -1427,7 +1427,11 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
     } finally { setSavingEdit(false); }
   }
 
-  async function handleLeaseDocUpload(leaseId: string, file: File) {
+  // Several files: one after another, the lease's terms read from the first agreement only.
+  async function handleLeaseDocUploads(leaseId: string, files: File[]) {
+    for (const [n, f] of files.entries()) await handleLeaseDocUpload(leaseId, f, n === 0);
+  }
+  async function handleLeaseDocUpload(leaseId: string, file: File, readTerms = true) {
     setUploadingDoc(true);
     try {
       const reader = new FileReader();
@@ -1451,7 +1455,7 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
       setLeaseDocs(prev => ({ ...prev, [leaseId]: docs }));
 
       // For a lease agreement, offer to read the term dates out of the PDF.
-      if (docCategory === 'LEASE') {
+      if (docCategory === 'LEASE' && readTerms) {
         setExtracting(true);
         try {
           const terms = await extractLeaseTerms(leaseId, base64, file.name);
@@ -2038,11 +2042,11 @@ function TenantsTab({ propertyId, leases, setLeases, propertyType }: {
                           {LEASE_DOC_CATEGORIES.map(c => <option key={c} value={c}>{DOCUMENT_CATEGORY_LABELS[c]}</option>)}
                         </select>
                         <label className="text-xs text-amber-400 hover:text-amber-300 cursor-pointer">
-                          {uploadingDoc ? 'Uploading…' : extracting ? 'Reading lease…' : '+ Import file'}
-                          <input type="file" accept="application/pdf,image/*" className="hidden" disabled={uploadingDoc || extracting}
-                            onChange={e => { const f = e.target.files?.[0]; if (f) handleLeaseDocUpload(lease.id, f); e.target.value = ''; }} />
+                          {uploadingDoc ? 'Uploading…' : extracting ? 'Reading lease…' : '+ Import files'}
+                          <input type="file" multiple accept="application/pdf,image/*" className="hidden" disabled={uploadingDoc || extracting}
+                            onChange={e => { const fs = Array.from(e.target.files ?? []); e.target.value = ''; if (fs.length) void handleLeaseDocUploads(lease.id, fs); }} />
                         </label>
-                        <DriveButton disabled={uploadingDoc || extracting} onFiles={fs => handleLeaseDocUpload(lease.id, fs[0])} />
+                        <DriveButton multiple disabled={uploadingDoc || extracting} onFiles={fs => void handleLeaseDocUploads(lease.id, fs)} />
                         {docCategory === 'LEASE' && <span className="text-xs text-gray-600">read automatically when attached</span>}
                       </div>
 
@@ -2926,9 +2930,9 @@ function NewLeaseModal({ propertyId, isCommercial, onClose, onCreated }: {
     } finally { setReading(null); }
   }
 
-  function attachDoc(f: File, category: string) {
+  function attachDoc(f: File, category: string, read = true) {
     setDocs(d => [...d, { file: f, category }]);
-    if (category === 'LEASE') readAgreement(f);
+    if (category === 'LEASE' && read) readAgreement(f);
   }
 
   const rentNum = parseFloat(form.rentAmount || '0') || 0;
@@ -3264,11 +3268,11 @@ function NewLeaseModal({ propertyId, isCommercial, onClose, onCreated }: {
                   {LEASE_DOC_CATEGORIES.map(c => <option key={c} value={c}>{DOCUMENT_CATEGORY_LABELS[c]}</option>)}
                 </select>
                 <label className="text-xs text-amber-400 hover:text-amber-300 cursor-pointer">
-                  + Attach file
-                  <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png"
+                  + Attach files
+                  <input type="file" multiple className="hidden" accept=".pdf,.jpg,.jpeg,.png"
                     onChange={e => {
-                      const f = e.target.files?.[0];
-                      if (f) attachDoc(f, docCategory);
+                      // Several at once, all under the chosen category; an agreement is read from the first.
+                      Array.from(e.target.files ?? []).forEach((f, n) => attachDoc(f, docCategory, n === 0));
                       e.target.value = '';
                     }} />
                 </label>

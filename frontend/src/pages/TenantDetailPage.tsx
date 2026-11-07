@@ -512,17 +512,26 @@ function LeaseCard({ lease, maintenance, onChanged, inPanel }: {
 function LeaseDocuments({ leaseId, legacyUrl, onLegacyRemoved }: { leaseId: string; legacyUrl?: string | null; onLegacyRemoved: () => void }) {
   const [docs, setDocs] = useState<Document[] | null>(null);
   const [category, setCategory] = useState('LEASE');
-  const [busy, setBusy] = useState(false);
+  // Uploading: "2 of 5", or '' when idle.
+  const [busy, setBusy] = useState('');
   const reload = () => getLeaseDocuments(leaseId).then(setDocs).catch(() => setDocs([]));
   useEffect(() => { reload(); }, [leaseId]);
 
-  async function upload(file: File) {
-    setBusy(true);
-    try {
-      const base64 = await readFileAsBase64(file);
-      await addLeaseDocument(leaseId, { fileData: base64, filename: file.name, category });
-      await reload();
-    } finally { setBusy(false); }
+  // Several files at once, one after another, all under the chosen category.
+  async function upload(files: File[]) {
+    const failed: string[] = [];
+    for (const [n, file] of files.entries()) {
+      setBusy(files.length > 1 ? `${n + 1} of ${files.length}` : '1');
+      try {
+        const base64 = await readFileAsBase64(file);
+        await addLeaseDocument(leaseId, { fileData: base64, filename: file.name, category });
+      } catch (err: any) {
+        failed.push(`${file.name}${err?.response?.status === 413 ? ' (too large)' : ''}`);
+      }
+    }
+    await reload();
+    setBusy('');
+    if (failed.length) alert(`Could not upload: ${failed.join(', ')}`);
   }
   async function view(id: string) {
     const { url } = await getLeaseDocumentViewUrl(leaseId, id);
@@ -548,10 +557,10 @@ function LeaseDocuments({ leaseId, legacyUrl, onLegacyRemoved }: { leaseId: stri
         <select value={category} onChange={e => setCategory(e.target.value)} className="input-dark text-xs py-0.5">
           {categories.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
         </select>
-        <label className={`text-xs cursor-pointer ${busy ? 'text-gray-600' : 'text-amber-400 hover:text-amber-300'}`}>
-          {busy ? 'Uploading…' : '+ Add file'}
-          <input type="file" accept="application/pdf,image/*" className="hidden" disabled={busy}
-            onChange={e => e.target.files?.[0] && upload(e.target.files[0])} />
+        <label className={`text-xs cursor-pointer ${busy ? 'text-gray-600' : 'text-amber-400 hover:text-amber-300'}`} title="Pick one or several files">
+          {busy ? `Uploading${busy === '1' ? '' : ` ${busy}`}…` : '+ Add files'}
+          <input type="file" multiple accept="application/pdf,image/*" className="hidden" disabled={!!busy}
+            onChange={e => { const fs = Array.from(e.target.files ?? []); e.target.value = ''; if (fs.length) void upload(fs); }} />
         </label>
       </div>
       {docs == null ? (
