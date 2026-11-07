@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { repairStoredFile } from '../services/repairUploads';
 import { z } from 'zod';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
@@ -474,6 +475,7 @@ router.get('/:id/document', async (req, res, next) => {
     if (!lease) return res.status(404).json({ error: 'Lease not found' });
     if (!lease.documentUrl) return res.status(404).json({ error: 'No document available' });
 
+    await repairStoredFile(lease.documentUrl);
     const url = await getSignedDocumentUrl(lease.documentUrl);
     res.json({ url, expiresIn: 3600 });
   } catch (err) { next(err); }
@@ -577,6 +579,8 @@ router.get('/:id/documents/:docId/url', async (req, res, next) => {
       where: { id: req.params.docId, userId: req.dbUserId!, linkedType: 'Lease', linkedId: req.params.id },
     });
     if (!doc) return res.status(404).json({ error: 'Document not found' });
+    // An upload stored with its data-URL label decoded in would not open: restored first.
+    await repairStoredFile(doc.s3Key);
     const url = await getSignedDocumentUrl(doc.s3Key);
     res.json({ url });
   } catch (err) { next(err); }
