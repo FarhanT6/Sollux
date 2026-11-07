@@ -694,7 +694,7 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
       if (pdfsSeen.has(hash) || run.downloads >= maxDownloads) continue;
       pdfsSeen.set(hash, `late download ${pdfsSeen.size + 1}`);
       run.downloads++; n++;
-      const r = await intakeBill(pdf, `${account.providerName.replace(/[^\w]+/g, '_')}_statement_${run.downloads}.pdf`, userId, 'ai', batchId, 'portal', { forAccounts }).catch(err => ({ outcome: 'error' as const, error: String(err) }));
+      const r = await withAiContext({ userId, source: 'portal' }, () => intakeBill(pdf, `${account.providerName.replace(/[^\w]+/g, '_')}_statement_${run.downloads}.pdf`, userId, 'ai', batchId, 'portal', { forAccounts })).catch(err => ({ outcome: 'error' as const, error: String(err) }));
       if (r.outcome === 'filed') { run.filed++; run.filedFor![r.utilityAccountId] = (run.filedFor![r.utilityAccountId] ?? 0) + 1; }
       else if (r.outcome === 'review') { run.review++; review.push(r.reviewItem); }
       else if (r.outcome !== 'error') run.applied++;
@@ -1038,7 +1038,7 @@ Always end with the finish tool, never with a message. If the page seems gone or
               pdfsSeen.set(hash, String(i.statementDate ?? `statement ${pdfsSeen.size + 1}`));
               run.downloads++;
               const name = `${account.providerName.replace(/[^\w]+/g, '_')}_${String(i.statementDate ?? run.downloads).replace(/[^\w-]+/g, '_')}.pdf`;
-              const r = await intakeBill(pdf, name, userId, 'ai', batchId, 'portal', { forAccounts });
+              const r = await withAiContext({ userId, source: 'portal' }, () => intakeBill(pdf, name, userId, 'ai', batchId, 'portal', { forAccounts }));
               if (r.outcome === 'filed') { run.filed++; run.filedFor![r.utilityAccountId] = (run.filedFor![r.utilityAccountId] ?? 0) + 1; }
               else if (r.outcome === 'review') { run.review++; review.push(r.reviewItem); }
               else if (r.outcome === 'error') content = `Saved, but: ${r.error}`;

@@ -39,7 +39,8 @@ export function costOf(model: string, u: Pick<Anthropic.Usage, 'input_tokens' | 
 }
 
 /** Who a call is for, carried through async work without threading it through every function. */
-export interface AiContext { userId?: string | null; test?: boolean }
+/** `source`: the job a bill read ran for (statement-audit, reread, inbox, portal, drive), so the spend page can say which job spent it. */
+export interface AiContext { userId?: string | null; test?: boolean; source?: string }
 const store = new AsyncLocalStorage<AiContext>();
 export const withAiContext = <T>(ctx: AiContext, fn: () => Promise<T>): Promise<T> => store.run({ ...store.getStore(), ...ctx }, fn);
 const ctx = () => store.getStore() ?? {};
@@ -136,7 +137,9 @@ export async function checkBudget(feature: string): Promise<void> {
 /** Write one call's tokens and cost. Never throws: a failed write must not fail the feature. */
 export async function recordUsage(feature: string, model: string, usage: Anthropic.Usage, fellBack = false): Promise<number> {
   const cost = costOf(model, usage);
-  const { userId = null, test = false } = ctx();
+  const { userId = null, test = false, source } = ctx();
+  // A bill read is tagged with the job it ran for: "bill-read@inbox".
+  if (source && feature.startsWith('bill-')) feature = `${feature}@${source}`;
   if (spent) { spent.total += cost; if (userId) spent.byUser.set(userId, (spent.byUser.get(userId) ?? 0) + cost); }
   await db.aiUsage.create({
     data: {

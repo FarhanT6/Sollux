@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import PortalLogin from './utility/PortalLogin';
 import { getAiSpend, setAiBudget, getAiTest, startAiTest, getPortalTests, testPortal, cancelFetch, type AiSpend, type AiTestState, type PortalTestAccount, type WorkerStatus, type QueueSnapshot, fillLookupFromBills } from '../api/client';
 import { fmtMoney } from '../lib/money';
-import { fmtMoment } from '../lib/date';
+import { fmtDate, fmtMoment } from '../lib/date';
 import PortalCodeBanner from './utility/PortalCodeBanner';
 import ConnectorCard from './ConnectorCard';
 import { toast } from '../lib/toast';
@@ -242,6 +242,41 @@ export default function AiSpendPanel() {
             website={loginFor.website} onClose={() => setLoginFor(null)} onSaved={() => void getPortalTests().then(setPortal)} />
         )}
       </div>
+
+      {(spend.lastDay?.length || spend.byDay?.length) ? (
+        <div className="card p-5 grid gap-5 md:grid-cols-2">
+          <div>
+            <h2 className="text-sm font-semibold text-white">Last 24 hours</h2>
+            <p className="text-xs text-gray-500 mb-2">What ran, overnight jobs included. A bill read says which job it was for.</p>
+            {spend.lastDay?.length ? (
+              <div className="space-y-1">
+                {spend.lastDay.map(f => (
+                  <div key={f.feature} className="flex justify-between gap-3 text-xs">
+                    <span className="text-gray-400 truncate">{f.name} · {f.calls} call{f.calls === 1 ? '' : 's'}</span>
+                    <span className="text-gray-200 whitespace-nowrap">{fmtCost(f.cost)}</span>
+                  </div>
+                ))}
+                <div className="flex justify-between gap-3 text-xs pt-1 border-t border-white/10">
+                  <span className="text-gray-300">Total</span>
+                  <span className="text-white font-medium">{fmtCost(spend.lastDay.reduce((t, f) => t + f.cost, 0))}</span>
+                </div>
+              </div>
+            ) : <p className="text-xs text-gray-500">Nothing in the last 24 hours.</p>}
+          </div>
+          <div>
+            <h2 className="text-sm font-semibold text-white">By day</h2>
+            <p className="text-xs text-gray-500 mb-2">The last 14 days (UTC).</p>
+            <div className="space-y-1">
+              {(spend.byDay ?? []).map(d => (
+                <div key={d.day} className="flex justify-between gap-3 text-xs">
+                  <span className="text-gray-400">{fmtDate(d.day, 'EEE, MMM d')} · {d.calls} call{d.calls === 1 ? '' : 's'}</span>
+                  <span className="text-gray-200 whitespace-nowrap">{fmtCost(d.cost)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {spend.recent.length > 0 && (
         <div className="card p-5">

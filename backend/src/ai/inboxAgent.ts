@@ -361,7 +361,7 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
 
           const handle = async (buffer: Buffer, filename: string, emailBody = false) => {
             documents++;
-            const r = await intakeBill(buffer, filename, userId, 'ai', batchId, 'email', { emailBody });
+            const r = await withAiContext({ userId, source: 'inbox' }, () => intakeBill(buffer, filename, userId, 'ai', batchId, 'email', { emailBody }));
             if (r.outcome === 'filed') { sum.filed++; accountId = r.utilityAccountId; outcomes.push('filed'); }
             else if (r.outcome === 'review') { sum.review++; review.push(r.reviewItem); outcomes.push('review'); }
             else if (r.outcome === 'error') { sum.errors.push(r.error); problems.push(r.error); outcomes.push('error'); }
