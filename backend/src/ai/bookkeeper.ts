@@ -5,7 +5,7 @@ import { db } from '../config/db';
 import { getPaymentPriorities } from '../services/paymentPriority';
 import { watchDeadlines } from './deadlineWatcher';
 import { payDayBrief } from './payDayBrief';
-import { draftRentReminders } from './rentCollections';
+import { draftRentReminders, tidyReminders } from './rentCollections';
 import { detectLeaks } from './leakDetective';
 
 /**
@@ -184,6 +184,7 @@ export async function runBookkeeperForUser(userId: string): Promise<{ raised: nu
   // ── Late rent: reminders drafted for the owner to send
   try {
     await draftRentReminders(userId, now);
+    await tidyReminders(userId).catch(() => 0);
     const waiting = await db.messageDraft.count({ where: { userId, status: 'DRAFT' } });
     const home = properties[0];
     if (waiting && home) {
