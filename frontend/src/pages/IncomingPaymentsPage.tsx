@@ -3,7 +3,7 @@ import SearchSelect from '../components/ui/SearchSelect';
 import { format } from 'date-fns';
 import {
   getIncomingTransactions, syncIncomingTransactions, incomingEmailSyncState, matchIncomingTransaction,
-  applyIncomingTransaction, ignoreIncomingTransaction, getLeases,
+  applyIncomingTransaction, ignoreIncomingTransaction, unignoreIncomingTransaction, getLeases,
 } from '../api/client';
 import type { IncomingTransaction, IncomingTransactionStatus, Lease } from '../types';
 import { fmtDate } from '../lib/date';
@@ -119,6 +119,10 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
     await ignoreIncomingTransaction(id);
     load();
   }
+  async function handleUnignore(id: string) {
+    await unignoreIncomingTransaction(id);
+    load();
+  }
 
   return (
     <div className={embedded ? '' : 'p-6 max-w-4xl mx-auto'}>
@@ -198,7 +202,7 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
                     Applied to {tx.matchedLease?.leaseTenants.map(lt => lt.tenant.fullName).join(', ')} ({tx.matchedLease?.unit.property.nickname || tx.matchedLease?.unit.property.address})
                   </p>
                 ) : tx.status === 'IGNORED' ? (
-                  <p className="text-xs text-gray-600">Ignored</p>
+                  <p className="text-xs text-gray-600">Ignored · <button onClick={() => void handleUnignore(tx.id)} className="text-amber-400 hover:text-amber-300 font-medium">Undo</button></p>
                 ) : (
                   <>
                     <SearchSelect

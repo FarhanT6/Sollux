@@ -255,4 +255,18 @@ router.post('/:id/ignore', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// POST /:id/unignore — ignored by mistake: back in the list to match and apply
+// (suggested for its tenant when one was matched, else unmatched).
+router.post('/:id/unignore', async (req, res, next) => {
+  try {
+    const tx = await db.incomingTransaction.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
+    if (!tx) return res.status(404).json({ error: 'Transaction not found' });
+    if (tx.status !== 'IGNORED') return res.status(400).json({ error: 'Not ignored' });
+    let leaseId = tx.matchedLeaseId;
+    if (!leaseId && tx.name) leaseId = (await matchPayer(tx.source === 'email' ? tx.name : extractCounterpartyName(tx.name), memoOf(tx), req.dbUserId!).catch(() => null))?.leaseId ?? null;
+    const updated = await db.incomingTransaction.update({ where: { id: tx.id }, data: { status: leaseId ? 'SUGGESTED' : 'UNMATCHED', matchedLeaseId: leaseId } });
+    res.json(updated);
+  } catch (err) { next(err); }
+});
+
 export default router;

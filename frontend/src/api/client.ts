@@ -1081,6 +1081,8 @@ export const applyIncomingTransaction = (id: string, forMonth?: string, extraTo?
   }).then(r => r.data);
 export const ignoreIncomingTransaction = (id: string) =>
   api.post<IncomingTransaction>(`/transactions/${id}/ignore`).then(r => r.data);
+export const unignoreIncomingTransaction = (id: string) =>
+  api.post<IncomingTransaction>(`/transactions/${id}/unignore`).then(r => r.data);
 
 // Outgoing transactions (hardware-store expenses, utility bill payments)
 export const getOutgoingTransactions = (status?: IncomingTransactionStatus) =>
