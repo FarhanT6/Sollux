@@ -2841,3 +2841,47 @@ model HouseholdMember {
   @@index([userId])
   @@map("household_members")
 }
+
+/// Money the owner holds outside a bank: cash and the payment apps (Personal ->
+/// Finances -> Income -> Cash & apps). Its balance is the opening balance plus
+/// rent received by that method since startedAt, plus and minus the movements
+/// (services/wallets.ts). One per kind per owner.
+model Wallet {
+  id             String           @id @default(cuid())
+  userId         String
+  /// CASH | VENMO | CASH_APP | PAYPAL | APPLE_CASH
+  kind           String
+  /// Rent received by this method on or after this date counts in.
+  startedAt      DateTime
+  openingBalance Decimal          @default(0) @db.Decimal(12, 2)
+  createdAt      DateTime         @default(now())
+  movements      WalletMovement[]
+
+  @@unique([userId, kind])
+  @@map("wallets")
+}
+
+/// Money into or out of a wallet other than rent: a transfer to a bank (read from
+/// the app's email or entered), cash deposited, spent, moved to another wallet, a correction.
+model WalletMovement {
+  id            String   @id @default(cuid())
+  walletId      String
+  wallet        Wallet   @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  date          DateTime
+  /// Positive in, negative out.
+  amount        Decimal  @db.Decimal(12, 2)
+  /// TO_BANK | SPENT | TO_WALLET | FROM_WALLET | ADJUSTMENT | OTHER_IN
+  type          String
+  bankAccountId String?
+  /// The paired movement in the other wallet, for TO_WALLET / FROM_WALLET.
+  pairId        String?
+  description   String?
+  /// 'email' (read from the app's transfer email) or 'manual'; the email's Message-ID.
+  source        String?
+  sourceRef     String?
+  createdAt     DateTime @default(now())
+
+  @@index([walletId, date])
+  @@index([sourceRef])
+  @@map("wallet_movements")
+}

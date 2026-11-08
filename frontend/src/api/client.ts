@@ -1575,3 +1575,15 @@ export interface CreditSnapshotT {
 export interface CreditHealthT { snapshot: CreditSnapshotT; insights: CardInsightT[]; cards: { id: string; name: string; last4: string | null; status: string; utilization: number | null; balance: number; limit: number | null; health: CardHealthT }[] }
 export const getCreditHealth = (member?: string) => api.get<CreditHealthT>('/credit-cards/health', { params: member ? { member } : {} }).then(r => r.data);
 export const getCardHealth = (id: string) => api.get<CardHealthT>(`/credit-cards/${id}/health`).then(r => r.data);
+
+// ── Cash & payment-app balances (backend services/wallets.ts) ──
+export type WalletKind = 'CASH' | 'VENMO' | 'CASH_APP' | 'PAYPAL' | 'APPLE_CASH';
+export type WalletMovementType = 'TO_BANK' | 'SPENT' | 'TO_WALLET' | 'FROM_WALLET' | 'ADJUSTMENT' | 'OTHER_IN';
+export interface WalletEntryT { id: string; date: string; amount: number; kind: 'RENT' | WalletMovementType; description: string; bankAccountId?: string | null; bankAccountName?: string | null; source?: string | null; movementId?: string | null }
+export interface WalletT { id: string; kind: WalletKind; label: string; startedAt: string; openingBalance: number; rentIn: number; movedIn: number; movedOut: number; balance: number; entries: WalletEntryT[] }
+export interface WalletsT { wallets: WalletT[]; total: number }
+export const getWallets = () => api.get<WalletsT>('/wallets').then(r => r.data);
+export const updateWallet = (id: string, data: { openingBalance?: number; startedAt?: string }) => api.patch<WalletsT>(`/wallets/${id}`, data).then(r => r.data);
+export const addWalletMovement = (id: string, data: { date: string; amount: number; type: WalletMovementType; bankAccountId?: string | null; toWalletId?: string | null; description?: string | null }) =>
+  api.post<WalletsT>(`/wallets/${id}/movements`, data).then(r => r.data);
+export const deleteWalletMovement = (mid: string) => api.delete<WalletsT>(`/wallets/movements/${mid}`).then(r => r.data);
