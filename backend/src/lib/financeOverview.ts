@@ -32,7 +32,7 @@ export async function buildOverview(userId: string, year: number, propertyId?: s
       select: { ...leaseSelect, unit: { select: { propertyId: true } } },
     }),
     db.rentPayment.findMany({
-      where: { status: 'RECEIVED', paidDate: { gte: yearStart, lt: yearEnd }, lease: { unit: { propertyId: { in: ids } } } },
+      where: { status: 'RECEIVED', notIncome: false, paidDate: { gte: yearStart, lt: yearEnd }, lease: { unit: { propertyId: { in: ids } } } },
       select: { amount: true, paidDate: true, lease: { select: { unit: { select: { propertyId: true } } } } },
     }),
   ]);

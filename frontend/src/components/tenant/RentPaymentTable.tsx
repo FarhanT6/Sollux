@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { updateRentPayment, deleteRentPayment } from '../../api/client';
 import type { RentPayment, RentPaymentMethod } from '../../types';
-import { RENT_PAYMENT_METHOD_LABELS } from '../../types';
+import { RENT_PAYMENT_METHOD_LABELS, creditLabel } from '../../types';
 import { fmtDate } from '../../lib/date';
 
 /**
@@ -48,7 +48,7 @@ export default function RentPaymentTable({ payments, onEdited }: {
             <td className="py-1 text-gray-400">{day(p.paidDate)}</td>
             <td className="py-1 text-right text-emerald-500 font-mono">{money(Number(p.amount))}</td>
             <td className="py-1 text-right text-gray-500 font-mono">{p.applyTo === 'HISTORY' ? <span className="font-sans" title="Logged for the record; back rent was left as it is">record only</span> : Number(p.appliedToArrears) > 0 ? money(Number(p.appliedToArrears)) : '—'}</td>
-            <td className="py-1 pl-4 text-gray-400">{RENT_PAYMENT_METHOD_LABELS[p.method] ?? p.method}</td>
+            <td className="py-1 pl-4 text-gray-400">{p.method === 'CREDIT' ? <span className="text-sky-300" title="A credit toward rent — no money received">Credit · {creditLabel(p.creditFor)}</span> : RENT_PAYMENT_METHOD_LABELS[p.method] ?? p.method}</td>
             <td className={`py-1 pl-4 ${p.status === 'RECEIVED' ? 'text-emerald-500' : 'text-amber-500'}`}>{p.status === 'RECEIVED' ? 'received' : 'pending'}</td>
             <td className="py-1 pl-4 text-gray-500 truncate max-w-[200px]">{p.notes || ''}</td>
             <td className="py-1 pl-4 text-right"><button onClick={() => setEditing(p.id)} className="text-gray-500 hover:text-amber-400">Edit</button></td>

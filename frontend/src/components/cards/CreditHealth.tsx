@@ -105,8 +105,10 @@ export function CardHistory({ h, insights }: { h: CardHealthT; insights: CardIns
                   <td className="pl-4 whitespace-nowrap text-white">{fmtDate(r.closingDate, 'MMM d, yyyy')}</td>
                   <td className="text-gray-400 whitespace-nowrap">{r.dueDate ? fmtDate(r.dueDate, 'MMM d') : '—'}</td>
                   <td className="text-right">{fmtMoney(r.minimum)}</td>
-                  <td className="text-gray-400 whitespace-nowrap">{r.paidOn ? fmtDate(r.paidOn, 'MMM d') : '—'}{r.lateFee > 0 && <span className="block text-xs text-red-400">{fmtMoney(r.lateFee)} late fee</span>}</td>
-                  <td><span className={`pill ${STATUS[r.status][1]}`}>{STATUS[r.status][0]}{r.daysLate ? ` · ${r.daysLate} days` : ''}</span>{r.note && <span className="block text-xs text-gray-600 max-w-xs">{r.note}</span>}</td>
+                  <td className="text-gray-400 whitespace-nowrap">{r.paidOn ? fmtDate(r.paidOn, 'MMM d') : '—'}{r.lateFee > 0 && (r.lateFeeWaivedOn
+                    ? <span className="block text-xs"><span className="text-gray-500 line-through">{fmtMoney(r.lateFee)} late fee</span> <span className="text-emerald-400">waived {fmtDate(r.lateFeeWaivedOn, 'MMM d')}</span></span>
+                    : <span className="block text-xs text-red-400">{fmtMoney(r.lateFee)} late fee</span>)}</td>
+                  <td><span className={`pill ${STATUS[r.status][1]}`}>{STATUS[r.status][0]}{r.daysLate ? ` · ${r.daysLate} days` : ''}</span>{r.lateFeeWaivedOn && <span className="pill pill-green ml-1">Fee waived</span>}{r.note && <span className="block text-xs text-gray-600 max-w-xs">{r.note}</span>}</td>
                   <td className="pr-4 text-xs">{r.reported ? <span className="text-red-400">Reported {r.reported} days late</span> : r.status === 'LATE' || r.status === 'PAST_DUE' ? <span className="text-gray-500">Under 30 days — not reported</span> : <span className="text-gray-600">—</span>}</td>
                 </tr>
               ))}
@@ -116,7 +118,7 @@ export function CardHistory({ h, insights }: { h: CardHealthT; insights: CardIns
         </div>
         {(h.lateEvents.length > 0 || h.returned.length > 0) && (
           <div className="mt-2 space-y-1 text-xs text-gray-400">
-            {h.lateEvents.map((e, i) => <p key={i}>Late fee {fmtMoney(e.fee)} charged {fmtDate(e.date, 'MMM d, yyyy')}{e.forDueDate ? ` for the ${fmtDate(e.forDueDate, 'MMM d')} due date` : ' (for a statement not on file)'}{e.waived ? <span className="text-emerald-400"> — refunded</span> : ''}.</p>)}
+            {h.lateEvents.map((e, i) => <p key={i}>Late fee {fmtMoney(e.fee)} charged {fmtDate(e.date, 'MMM d, yyyy')}{e.forDueDate ? ` for the ${fmtDate(e.forDueDate, 'MMM d')} due date` : ' (for a statement not on file)'}{e.waived ? <span className="text-emerald-400"> — waived (credited back {fmtDate(e.waivedOn!, 'MMM d, yyyy')})</span> : <span className="text-red-400"> — not refunded; you can call and ask</span>}.</p>)}
             {h.returned.map((r, i) => <p key={i} className="text-red-400/90">Payment of {fmtMoney(r.amount)} on {fmtDate(r.paidOn, 'MMM d, yyyy')} was returned on {fmtDate(r.returnedOn, 'MMM d')}.</p>)}
           </div>
         )}

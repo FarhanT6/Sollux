@@ -969,6 +969,14 @@ model RentPayment {
   // card fee the tenant paid on top of the rent (bank payments carry none).
   stripePaymentIntentId String?   @unique
   tenantFee             Decimal?  @db.Decimal(10, 2)
+  /// A credit toward rent (method CREDIT, no money received): what it was for
+  /// (lib/rentCredits: REPAIR, MATERIALS, UTILITY_BILL, YARD_WORK, OTHER_EXPENSE,
+  /// DEPOSIT, CONCESSION, OVERPAYMENT, OTHER) and the property expense recorded with it.
+  creditFor        String?
+  expenseId        String?
+  /// Not rent income: a concession or discount, or an earlier overpayment already counted.
+  /// Left out of P&L, Schedule E, cash flow and the finance overview.
+  notIncome        Boolean           @default(false)
   createdAt        DateTime          @default(now())
 
   @@index([leaseId, periodDate])
@@ -1039,6 +1047,9 @@ enum RentPaymentMethod {
   // Handed over / deposited directly into one of the owner's accounts. Which
   // account is recorded on RentPayment.bankAccountId.
   BANK_DEPOSIT
+  // A credit toward rent: no money changed hands (the tenant paid for a repair
+  // or a bill, a concession, a deposit applied). What for is on RentPayment.creditFor.
+  CREDIT
   OTHER
 }
 

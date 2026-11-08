@@ -34,7 +34,7 @@ test('payment history: on time by the due date, a returned payment does not coun
     ['2026-06-11', 'ON_TIME', '2026-06-15'],
   ]);
   assert.deepEqual(h.returned, [{ paidOn: '2026-06-08', returnedOn: '2026-06-12', amount: 1000 }]);
-  assert.deepEqual(h.lateEvents.map(e => [e.date, e.fee, e.waived, e.onFile]), [['2026-06-12', 25, true, false]]);
+  assert.deepEqual(h.lateEvents.map(e => [e.date, e.fee, e.waived, e.waivedOn, e.onFile]), [['2026-06-12', 25, true, '2026-07-13', false]]);
   assert.equal(h.daysPastDue, 12);
   assert.equal(h.daysUntil30, 18);
   assert.equal(h.last12.late, 2);  // the late fee's missed date, and October unpaid today

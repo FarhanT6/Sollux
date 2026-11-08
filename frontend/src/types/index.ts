@@ -16,7 +16,26 @@ export type LeaseStatus = 'ACTIVE' | 'ENDED' | 'PENDING' | 'TERMINATED';
 export type RentPaymentMethod =
   | 'CASH' | 'CHECK' | 'ZELLE' | 'ACH' | 'MONEY_ORDER' | 'CARD'
   | 'VENMO' | 'PAYPAL' | 'CASH_APP' | 'APPLE_CASH' | 'BANK_DEPOSIT'
-  | 'SECTION_8' | 'RENTAL_ASSISTANCE' | 'OTHER';
+  | 'SECTION_8' | 'RENTAL_ASSISTANCE' | 'CREDIT' | 'OTHER';
+
+/**
+ * Credits toward rent (backend lib/rentCredits): what the tenant is credited for.
+ * A cost the tenant paid for the property is rent income plus that expense;
+ * a concession or a carried overpayment is not income.
+ */
+export type CreditReason = 'REPAIR' | 'MATERIALS' | 'UTILITY_BILL' | 'YARD_WORK' | 'OTHER_EXPENSE' | 'DEPOSIT' | 'CONCESSION' | 'OVERPAYMENT' | 'OTHER';
+export const CREDIT_REASONS: { key: CreditReason; label: string; short: string; expense: string | null; income: boolean }[] = [
+  { key: 'REPAIR', label: 'A repair the tenant paid for', short: 'Repair', expense: 'Repairs & maintenance', income: true },
+  { key: 'MATERIALS', label: 'Materials / supplies the tenant bought', short: 'Materials', expense: 'Supplies', income: true },
+  { key: 'UTILITY_BILL', label: 'A utility bill the tenant paid', short: 'Utility bill', expense: 'Utilities', income: true },
+  { key: 'YARD_WORK', label: 'Yard work / landscaping', short: 'Yard work', expense: 'Landscaping', income: true },
+  { key: 'OTHER_EXPENSE', label: 'Another property cost the tenant paid', short: 'Property cost', expense: 'Other', income: true },
+  { key: 'DEPOSIT', label: 'Security deposit applied to rent', short: 'Deposit applied', expense: null, income: true },
+  { key: 'CONCESSION', label: 'Concession / discount (move-in special, goodwill)', short: 'Concession', expense: null, income: false },
+  { key: 'OVERPAYMENT', label: 'Earlier overpayment carried forward', short: 'Overpayment carried', expense: null, income: false },
+  { key: 'OTHER', label: 'Other', short: 'Other', expense: null, income: false },
+];
+export const creditLabel = (r?: string | null) => CREDIT_REASONS.find(x => x.key === r)?.short ?? 'Credit';
 
 // Committed but not yet disbursed vs. actually in hand. Pending money never
 // counts toward a month's rent or pays down arrears.
@@ -48,6 +67,7 @@ export const RENT_PAYMENT_METHOD_LABELS: Record<RentPaymentMethod, string> = {
   PAYPAL:       'PayPal',
   APPLE_CASH:   'Apple Cash',
   MONEY_ORDER:  'Money order',
+  CREDIT:       'Credit (no money received)',
   CARD:         'Card',
   OTHER:        'Other',
 };
@@ -277,6 +297,10 @@ export interface RentPayment {
   notes?: string;
   /** Where the owner sent this payment first; null = the tenant's setting. */
   applyTo?: PaymentApplyTo | null;
+  /** A credit toward rent: what it was for (CREDIT_REASON_LABELS) and the property expense recorded with it. */
+  creditFor?: CreditReason | null;
+  expenseId?: string | null;
+  notIncome?: boolean;
   createdAt: string;
   lease?: Lease & { unit?: Unit & { property?: Pick<Property, 'id' | 'address' | 'nickname'> } };
 }

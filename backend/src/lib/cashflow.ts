@@ -70,7 +70,8 @@ export async function getCashflow(year: number, userId: string, propertyId?: str
 
   const [rentPayments, leases, loans, statements] = await Promise.all([
     db.rentPayment.findMany({
-      where: { status: 'RECEIVED', periodDate: { gte: yearStart, lt: yearEnd }, lease: { unit: { propertyId: { in: ids } } } },
+      // Cash in: a credit brought no money (a tenant-paid cost shows as the expense it replaced; that nets out).
+      where: { status: 'RECEIVED', notIncome: false, periodDate: { gte: yearStart, lt: yearEnd }, lease: { unit: { propertyId: { in: ids } } } },
       select: {
         periodDate: true, amount: true, paidDate: true,
         lease: { select: { unit: { select: { propertyId: true, unitLabel: true } }, leaseTenants: { select: { tenant: { select: { fullName: true } } } } } },

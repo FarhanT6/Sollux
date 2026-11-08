@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { getRentPayments } from '../../api/client';
 import type { RentPayment } from '../../types';
-import { RENT_PAYMENT_METHOD_LABELS } from '../../types';
+import { RENT_PAYMENT_METHOD_LABELS, creditLabel } from '../../types';
 import { fmtMoney } from '../../lib/money';
 
 const monthOf = (iso: string) => new Date(iso).toLocaleDateString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' });
@@ -43,7 +43,7 @@ export default function RentPaymentHistory({ leaseId, refreshKey = 0 }: { leaseI
                 <td className="py-1 text-gray-400">{day(p.paidDate)}</td>
                 <td className="py-1 text-right text-emerald-500">{fmtMoney(Number(p.amount))}</td>
                 <td className="py-1 text-right text-gray-500">{Number(p.appliedToArrears) > 0 ? fmtMoney(Number(p.appliedToArrears)) : '—'}</td>
-                <td className="py-1 pl-4 text-gray-400">{RENT_PAYMENT_METHOD_LABELS[p.method] ?? p.method}{p.bankAccount ? ` → ${p.bankAccount.name}` : ''}</td>
+                <td className="py-1 pl-4 text-gray-400">{p.method === 'CREDIT' ? <span className="text-sky-300" title="A credit toward rent — no money received">Credit · {creditLabel(p.creditFor)}</span> : <>{RENT_PAYMENT_METHOD_LABELS[p.method] ?? p.method}{p.bankAccount ? ` → ${p.bankAccount.name}` : ''}</>}</td>
                 <td className={`py-1 pl-4 ${p.status === 'RECEIVED' ? 'text-emerald-500' : 'text-amber-500'}`}>{p.status === 'RECEIVED' ? 'received' : 'pending'}</td>
                 <td className="py-1 pl-4 text-gray-500 truncate max-w-[220px]">{p.notes || ''}</td>
               </tr>

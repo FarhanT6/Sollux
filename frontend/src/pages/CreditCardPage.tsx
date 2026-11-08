@@ -55,6 +55,21 @@ function Transactions({ card, properties }: { card: CreditCardT; properties: Pro
   const [adding, setAdding] = useState<{ date: string; description: string; amount: string; category: string } | null>(null);
   async function load() { setRows(await getCardTransactions(card.id, { q: q || undefined, category: category || undefined, statementId: statementId || undefined })); }
   useEffect(() => { const t = setTimeout(() => void load(), 250); return () => clearTimeout(t); }, [q, category, statementId, card.id]);
+  // A fee and the credit that gave it back ("PREVIOUS CYCLE LATE FEE" ↔ "Late Fee Credit",
+  // "RETURNED CHECK CHG" ↔ "REFUND RETURN CK CHG"): same amount, the credit within four months after.
+  const refunds = useMemo(() => {
+    const pair = new Map<string, { date: string; other: string }>();
+    const all = rows ?? [];
+    const fees = all.filter(t => t.kind === 'FEE' && Number(t.amount) > 0).sort((a, b) => a.date.localeCompare(b.date));
+    const credits = all.filter(t => Number(t.amount) < 0 && t.kind === 'CREDIT' && /FEE|CHG|CHARGE/i.test(t.description));
+    const word = (d: string) => (/LATE/i.test(d) ? 'late' : /RETURN|CK|CHECK/i.test(d) ? 'return' : 'fee');
+    for (const f of fees) {
+      const fit = credits.filter(c => !pair.has(c.id) && Math.abs(Number(c.amount) + Number(f.amount)) < 0.005 && c.date >= f.date && Date.parse(c.date) - Date.parse(f.date) <= 120 * 86_400_000)
+        .sort((a, b) => Number(word(b.description) === word(f.description)) - Number(word(a.description) === word(f.description)) || a.date.localeCompare(b.date))[0];
+      if (fit) { pair.set(f.id, { date: fit.date, other: fit.description }); pair.set(fit.id, { date: f.date, other: f.description }); }
+    }
+    return pair;
+  }, [rows]);
   const charged = (rows ?? []).filter(r => Number(r.amount) > 0).reduce((t, r) => t + Number(r.amount), 0);
   const credited = (rows ?? []).filter(r => Number(r.amount) < 0).reduce((t, r) => t - Number(r.amount), 0);
   const input = 'input-dark text-sm';
@@ -91,10 +106,13 @@ function Transactions({ card, properties }: { card: CreditCardT; properties: Pro
                     <option value="">—</option>{TXN_CATEGORIES.map(c => <option key={c}>{c}</option>)}
                   </select>
                 </td>
-                <td className={`text-right whitespace-nowrap ${Number(t.amount) < 0 ? 'text-emerald-400' : 'text-white'}`}>{fmtMoney(t.amount)}{t.kind !== 'PURCHASE' && <span className="block text-xs text-gray-600">{t.kind.replace('_', ' ').toLowerCase()}</span>}</td>
+                <td className={`text-right whitespace-nowrap ${Number(t.amount) < 0 ? 'text-emerald-400' : 'text-white'}`}>{refunds.has(t.id) && Number(t.amount) > 0 ? <span className="text-gray-500 line-through">{fmtMoney(t.amount)}</span> : fmtMoney(t.amount)}{t.kind !== 'PURCHASE' && <span className="block text-xs text-gray-600">{t.kind === 'PAYMENT' && Number(t.amount) > 0 ? 'payment returned' : t.kind.replace('_', ' ').toLowerCase()}</span>}
+                  {refunds.has(t.id) && (Number(t.amount) > 0
+                    ? <span className="block text-xs text-emerald-400" title={refunds.get(t.id)!.other}>waived {fmtDate(refunds.get(t.id)!.date, 'MMM d')}</span>
+                    : <span className="block text-xs text-emerald-400" title={refunds.get(t.id)!.other}>refunds the {fmtDate(refunds.get(t.id)!.date, 'MMM d')} {/LATE/i.test(refunds.get(t.id)!.other) ? 'late fee' : 'fee'}</span>)}</td>
                 <td className="text-xs">
                   {t.expenseId ? <span className="pill pill-green">Filed to {properties.find(p => p.id === t.propertyId)?.nickname || properties.find(p => p.id === t.propertyId)?.address || 'property'}</span>
-                    : Number(t.amount) > 0 && (moving?.id === t.id ? (
+                    : Number(t.amount) > 0 && t.kind === 'PURCHASE' && (moving?.id === t.id ? (
                       <span className="flex gap-1 items-center">
                         <select className="input-dark text-xs" value={moving.propertyId} onChange={e => setMoving({ ...moving, propertyId: e.target.value })}><option value="">Property…</option>{properties.map(p => <option key={p.id} value={p.id}>{p.nickname || p.address}</option>)}</select>
                         <select className="input-dark text-xs" value={moving.category} onChange={e => setMoving({ ...moving, category: e.target.value })}>{Object.entries(EXPENSE_CATEGORY_LABELS).filter(([k]) => !['AUTO_LOAN', 'AUTO_INSURANCE', 'CREDIT_CARD', 'MEDICAL', 'PHONE', 'STUDENT_LOAN', 'LIFE_INSURANCE', 'SUBSCRIPTIONS'].includes(k)).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
