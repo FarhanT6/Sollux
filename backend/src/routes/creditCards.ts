@@ -9,6 +9,7 @@
 import { Router } from 'express';
 import { memberFilter, memberOk } from './household';
 import { mergeCards, findCardFor } from '../services/cardIntake';
+import { duplicateGroups } from '../lib/cardDuplicates';
 import { creditHealth, oneCardHealth } from '../services/cardHealthReport';
 import { syncStatementPayments, statementPaymentFor, refreshCardCycle, ON_STATEMENT } from '../services/cardPayments';
 import { z } from 'zod';
@@ -139,6 +140,34 @@ router.post('/read-statement', async (req, res, next) => {
     res.json({ fields: result.fields, cardId: card?.id ?? null, cardName: card?.name ?? null });
   } catch (err: any) {
     if (err?.message) return res.status(422).json({ error: err.message });
+    next(err);
+  }
+});
+
+// GET /duplicates — cards that look like one account filed more than once (lib/cardDuplicates).
+router.get('/duplicates', async (req, res, next) => {
+  try {
+    const cards = await db.creditCard.findMany({
+      where: { userId: req.dbUserId! },
+      select: { id: true, name: true, last4: true, status: true, memberId: true, createdAt: true, statements: { select: { closingDate: true, newBalance: true, fromEmail: true } } },
+    });
+    const names = new Map(cards.map(c => [c.id, c.name]));
+    res.json(duplicateGroups(cards).map(g => ({ ...g, names: g.cardIds.map(id => names.get(id)) })));
+  } catch (err) { next(err); }
+});
+
+// POST /merge-group { keepId, cardIds } — fold every card of a duplicate group into the one kept.
+router.post('/merge-group', async (req, res, next) => {
+  try {
+    const { keepId, cardIds } = z.object({ keepId: z.string(), cardIds: z.array(z.string()).min(2).max(20) }).parse(req.body);
+    let moved = 0;
+    for (const id of cardIds.filter(x => x !== keepId)) { const r = await mergeCards(req.dbUserId!, id, keepId); moved += r.statements; }
+    // The kept card's cycle and its statements' payments, from what it has now.
+    await refreshCardCycle(keepId);
+    for (const s of await db.cardStatement.findMany({ where: { cardId: keepId }, select: { id: true } })) await syncStatementPayments(s.id);
+    res.json({ keepId, statementsMoved: moved });
+  } catch (err: any) {
+    if (err?.status) return res.status(err.status).json({ error: err.message });
     next(err);
   }
 });

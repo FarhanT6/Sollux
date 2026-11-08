@@ -6,6 +6,7 @@ import { attachDbUser } from '../middleware/requireAuth';
 import { uploadDocument, getSignedDocumentUrl, detectContentType } from '../services/s3Service';
 import { readManagerStatement } from '../services/managerStatement';
 import { applyManagerStatement } from '../services/managerStatementApply';
+import { fetchManagerStatements } from '../services/managerStatementFetch';
 
 const router = Router();
 router.use(attachDbUser);
@@ -160,6 +161,15 @@ router.post('/statements/:id/apply', async (req, res, next) => {
     if (err?.status) return res.status(err.status).json({ error: err.message });
     next(err);
   }
+});
+
+// POST /api/reconciliation/fetch-email — look through the connected Gmail (the last 6 months)
+// for manager statements now, and record the ones not fetched yet.
+router.post('/fetch-email', async (req, res, next) => {
+  try {
+    const days = Math.min(400, Math.max(7, Number(req.body?.days) || 180));
+    res.json(await fetchManagerStatements(req.dbUserId!, days));
+  } catch (err) { next(err); }
 });
 
 // ── Reading a statement ──────────────────────────────────────

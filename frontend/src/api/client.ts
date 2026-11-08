@@ -346,6 +346,9 @@ export const createReconciliationProfile = (data: Partial<ReconciliationProfile>
   api.post<ReconciliationProfile>('/reconciliation/profiles', data).then(r => r.data);
 export const updateReconciliationProfile = (id: string, data: Partial<ReconciliationProfile>) =>
   api.patch<ReconciliationProfile>(`/reconciliation/profiles/${id}`, data).then(r => r.data);
+/** Look through the connected Gmail for manager statements now and record the new ones. */
+export const fetchManagerStatementsFromEmail = (days = 180) =>
+  api.post<{ mailboxes: number; looked: number; found: number; recorded: number; already: number; details: string[]; errors: string[] }>('/reconciliation/fetch-email', { days }, { timeout: 600_000 }).then(r => r.data);
 export const deleteReconciliationProfile = (id: string) =>
   api.delete(`/reconciliation/profiles/${id}`);
 export const getReconciliationStatements = (profileId?: string) =>
@@ -1587,3 +1590,8 @@ export const updateWallet = (id: string, data: { openingBalance?: number; starte
 export const addWalletMovement = (id: string, data: { date: string; amount: number; type: WalletMovementType; bankAccountId?: string | null; toWalletId?: string | null; description?: string | null }) =>
   api.post<WalletsT>(`/wallets/${id}/movements`, data).then(r => r.data);
 export const deleteWalletMovement = (mid: string) => api.delete<WalletsT>(`/wallets/movements/${mid}`).then(r => r.data);
+
+/** Cards that look like one account filed more than once (backend lib/cardDuplicates). */
+export interface CardDuplicateGroup { keepId: string; cardIds: string[]; names: string[]; reason: string; differentOwners: boolean }
+export const getCardDuplicates = () => api.get<CardDuplicateGroup[]>('/credit-cards/duplicates').then(r => r.data);
+export const mergeCardGroup = (keepId: string, cardIds: string[]) => api.post<{ keepId: string; statementsMoved: number }>('/credit-cards/merge-group', { keepId, cardIds }).then(r => r.data);
