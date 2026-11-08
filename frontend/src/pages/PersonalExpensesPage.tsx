@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { householdMembers } from '../components/household/BelongsTo';
 import { getExpenses, createExpense, deleteExpense } from '../api/client';
 import type { Expense, ExpenseCategory } from '../types';
 import { EXPENSE_CATEGORY_LABELS, PERSONAL_EXPENSE_CATEGORIES } from '../types';
@@ -21,6 +22,9 @@ export default function PersonalExpensesPage({ embedded, member, newFor }: { emb
     vendor: '', description: '',
   });
   const [saving, setSaving] = useState(false);
+  // The household, so Everyone can say whose each expense is.
+  const [people, setPeople] = useState<{ id: string; name: string }[]>([]);
+  useEffect(() => { void householdMembers().then(setPeople); }, []);
 
   const load = () => getExpenses({ isPersonal: true, member }).then(setExpenses);
 
@@ -146,7 +150,7 @@ export default function PersonalExpensesPage({ embedded, member, newFor }: { emb
                           {rows.map(e => (
                             <tr key={e.id}>
                               <td className="px-4 py-2 text-gray-400 text-xs whitespace-nowrap">{fmtDate(e.date, 'MMM d, yyyy')}</td>
-                              <td className="px-4 py-2 text-gray-300 text-xs">{e.vendor || e.description || '—'}</td>
+                              <td className="px-4 py-2 text-gray-300 text-xs">{e.vendor || e.description || '—'}{member === undefined && people.length > 0 && <span className="ml-2 text-gray-500">{e.memberId ? people.find(p => p.id === e.memberId)?.name ?? '' : 'Me'}</span>}</td>
                               <td className="px-4 py-2 text-right font-mono text-white">{money(Number(e.amount))}</td>
                               <td className="px-4 py-2 text-right w-16">
                                 <button onClick={() => handleDelete(e.id)} className="text-xs text-red-500 hover:text-red-400">Del</button>

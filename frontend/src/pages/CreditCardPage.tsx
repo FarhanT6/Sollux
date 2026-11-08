@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import BelongsTo from '../components/household/BelongsTo';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   getCreditCard, getCreditCards, deleteCreditCard, updateCreditCard, deleteCardStatement, cardStatementUrl, getCardTransactions, updateCardTransaction,
@@ -137,6 +138,7 @@ export default function CreditCardPage() {
         breadcrumb={[{ label: 'Personal', href: '/personal?tab=cards' }, { label: card.name }]}
         action={<div className="flex gap-2"><button onClick={() => { setImporting(true); setEditing(false); }} className="btn btn-primary text-xs">Upload statement</button><button onClick={() => setPaying({ date: todayISO(), amount: p.statementRemaining ? String(p.statementRemaining) : '', fromBankAccountId: card.autopayFromBankAccountId ?? '', confirmation: '' })} className="btn text-xs">Log payment</button><button onClick={() => { setEditing(true); setImporting(false); }} className="btn text-xs">Edit card</button></div>} />
       <div className="px-6 py-5">
+        <BelongsTo kind="card" id={card.id} memberId={card.memberId} onChanged={load} className="mb-3" />
         {editing && <CardEditor card={card} onDone={async saved => { setEditing(false); if (saved) await load(); }} />}
         {importing && <StatementImport cards={cards} fixedCardId={card.id} onDone={async () => { setImporting(false); await load(); }} />}
         {paying && (

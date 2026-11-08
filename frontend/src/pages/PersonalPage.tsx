@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { getCreditCards, createCardFromBankAccount, getLoans, getExpenses, getHousehold, assignToMember, type CreditCardT, type CardsSummary, type HouseholdMemberT } from '../api/client';
 import PeopleDialog from '../components/household/PeopleDialog';
+import { forgetHousehold } from '../components/household/BelongsTo';
 import type { Loan } from '../types';
 import { PageHeader, EmptyState } from '../components/ui';
 import PersonalExpensesPage from './PersonalExpensesPage';
@@ -252,11 +253,13 @@ function OverviewTab({ cards, summary, go, member, people, pick }: {
   const loanDebt = loans.reduce((t, l) => t + Number(l.currentBalance ?? 0), 0);
   const upcoming = cards.filter(c => c.status !== 'CLOSED' && c.position.nextDueDate && (c.position.minimumRemaining > 0 || c.position.statementRemaining > 0))
     .sort((a, b) => +new Date(a.position.nextDueDate!) - +new Date(b.position.nextDueDate!));
+  // Everyone, with a household: each card named with whose it is.
+  const tag = (c: { memberId?: string | null }) => (!member && people?.length ? ` (${c.memberId ? people.find(p => p.id === c.memberId)?.name ?? '?' : 'Me'})` : '');
   const alerts = [
-    ...cards.filter(c => c.position.statementStatus === 'PAST_DUE').map(c => ({ tone: 'text-red-400', text: `${c.name} is past due — ${fmtMoney(c.position.minimumRemaining)} minimum`, id: c.id })),
-    ...cards.filter(c => c.position.promoEndsInDays != null && c.position.promoEndsInDays <= 60).map(c => ({ tone: 'text-amber-400', text: `${c.name}: promotional rate ends in ${c.position.promoEndsInDays} days; ${fmtMoney(c.position.balance)} will start accruing at ${c.purchaseApr ?? '?'}%`, id: c.id })),
-    ...cards.filter(c => (c.position.utilization ?? 0) >= 30).map(c => ({ tone: 'text-amber-400', text: `${c.name} is at ${c.position.utilization}% utilization. Below 30% is better for your credit score`, id: c.id })),
-    ...cards.filter(c => c.position.nextAnnualFee && (+new Date(c.position.nextAnnualFee) - Date.now()) < 45 * 86400000).map(c => ({ tone: 'text-gray-300', text: `${c.name}: ${fmtMoney(c.annualFee)} annual fee posts ${fmtDate(c.position.nextAnnualFee!, 'MMMM yyyy')}`, id: c.id })),
+    ...cards.filter(c => c.position.statementStatus === 'PAST_DUE').map(c => ({ tone: 'text-red-400', text: `${c.name}${tag(c)} is past due — ${fmtMoney(c.position.minimumRemaining)} minimum`, id: c.id })),
+    ...cards.filter(c => c.position.promoEndsInDays != null && c.position.promoEndsInDays <= 60).map(c => ({ tone: 'text-amber-400', text: `${c.name}${tag(c)}: promotional rate ends in ${c.position.promoEndsInDays} days; ${fmtMoney(c.position.balance)} will start accruing at ${c.purchaseApr ?? '?'}%`, id: c.id })),
+    ...cards.filter(c => (c.position.utilization ?? 0) >= 30).map(c => ({ tone: 'text-amber-400', text: `${c.name}${tag(c)} is at ${c.position.utilization}% utilization. Below 30% is better for your credit score`, id: c.id })),
+    ...cards.filter(c => c.position.nextAnnualFee && (+new Date(c.position.nextAnnualFee) - Date.now()) < 45 * 86400000).map(c => ({ tone: 'text-gray-300', text: `${c.name}${tag(c)}: ${fmtMoney(c.annualFee)} annual fee posts ${fmtDate(c.position.nextAnnualFee!, 'MMMM yyyy')}`, id: c.id })),
   ];
   if (phone) return (
     <>
@@ -277,7 +280,7 @@ function OverviewTab({ cards, summary, go, member, people, pick }: {
       <Section header="Card payments coming up">
         {upcoming.length === 0 && <Row title="Nothing due" chevron={false} />}
         {upcoming.map(c => (
-          <Row key={c.id} to={`/personal/cards/${c.id}`} title={c.name}
+          <Row key={c.id} to={`/personal/cards/${c.id}`} title={`${c.name}${tag(c)}`}
             subtitle={<><span className={c.position.statementStatus === 'PAST_DUE' ? 'ios-red' : ''}>{fmtDate(c.position.nextDueDate!, 'MMM d')}</span> · {c.autopay !== 'NONE' ? 'autopay' : 'pay manually'}</>}
             value={<><span className="strong">{fmtMoney(c.position.minimumRemaining)}</span><span className="small">{fmtMoney(c.position.statementRemaining)} statement</span></>} />
         ))}
@@ -322,7 +325,7 @@ function OverviewTab({ cards, summary, go, member, people, pick }: {
         {upcoming.length === 0 ? <p className="text-sm text-gray-500">Nothing due.</p> : upcoming.map(c => (
           <Link key={c.id} to={`/personal/cards/${c.id}`} className="flex items-center gap-3 text-sm py-1">
             <span className={`w-24 text-xs ${c.position.statementStatus === 'PAST_DUE' ? 'text-red-400' : 'text-gray-300'}`}>{fmtDate(c.position.nextDueDate!, 'MMM d')}</span>
-            <span className="flex-1 text-gray-200">{c.name}</span>
+            <span className="flex-1 text-gray-200">{c.name}{tag(c) && <span className="text-xs text-gray-500">{tag(c)}</span>}</span>
             <span className="text-xs text-gray-500 w-40 text-right">{c.autopay !== 'NONE' ? 'autopay on' : 'pay manually'}</span>
             <span className="w-32 text-right text-white">{fmtMoney(c.position.minimumRemaining)} min</span>
             <span className="w-36 text-right text-gray-400">{fmtMoney(c.position.statementRemaining)} statement</span>
@@ -340,7 +343,7 @@ export default function PersonalPage() {
   // The household: with nobody added this is the owner's page alone, as it always was.
   const [people, setPeople] = useState<HouseholdMemberT[]>([]);
   const [managing, setManaging] = useState(false);
-  const loadPeople = () => getHousehold().then(h => setPeople(h.members)).catch(() => setPeople([]));
+  const loadPeople = () => { forgetHousehold(); return getHousehold().then(h => setPeople(h.members)).catch(() => setPeople([])); };
   useEffect(() => { void loadPeople(); }, []);
   const rawPerson = params.get('person') ?? 'all';
   const person = people.length && (rawPerson === 'me' || people.some(p => p.id === rawPerson)) ? rawPerson : 'all';

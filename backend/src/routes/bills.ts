@@ -27,7 +27,7 @@ router.get('/', async (req, res, next) => {
         utilityAccounts: {
           where: { isActive: true },
           select: {
-            id: true, providerName: true, providerSlug: true, category: true, accountNumber: true, loginUrl: true, isPersonal: true,
+            id: true, providerName: true, providerSlug: true, category: true, accountNumber: true, loginUrl: true, isPersonal: true, memberId: true,
             notes: true, serviceLabel: true, billingCadence: true, unit: { select: { unitLabel: true } },
           },
           orderBy: [{ category: 'asc' }, { providerName: 'asc' }],
@@ -80,6 +80,8 @@ router.get('/', async (req, res, next) => {
       id: a.id, propertyId, providerName: a.providerName, category: a.category, billingCadence: a.billingCadence,
       last4: a.accountNumber ? String(a.accountNumber).replace(/\D/g, '').slice(-4) || null : null,
       serves: a.unit?.unitLabel ?? a.serviceLabel ?? null, notes: a.notes,
+      // Whose a personal bill is in the household (null: the owner's).
+      memberId: a.memberId ?? null,
       website: websiteFor(a)?.url ?? null,
       statements: stmtsBy.get(a.id) ?? [], payments: paysBy.get(a.id) ?? [],
     });
