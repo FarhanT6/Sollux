@@ -264,6 +264,11 @@ function OverviewTab({ cards, summary, go, member, people, ownerLabel, pick }: {
   const loanDebt = loans.reduce((t, l) => t + Number(l.currentBalance ?? 0), 0);
   const upcoming = cards.filter(c => c.status !== 'CLOSED' && c.position.nextDueDate && (c.position.minimumRemaining > 0 || c.position.statementRemaining > 0))
     .sort((a, b) => +new Date(a.position.nextDueDate!) - +new Date(b.position.nextDueDate!));
+  // Every other open card, so none goes missing from the overview: paid, nothing due, or no statement yet.
+  const others = cards.filter(c => c.status !== 'CLOSED' && !upcoming.includes(c));
+  const otherNote = (c: CreditCardT) => !c.position.latestClosingDate
+    ? 'No statement yet — upload one to see what is due'
+    : c.position.statementStatus === 'PAID_IN_FULL' ? 'Statement paid' : c.position.statementStatus === 'MINIMUM_MET' ? 'Minimum paid' : c.position.statementStatus === 'NO_BALANCE' ? 'No balance' : 'Nothing due';
   // Everyone, with a household: each card named with whose it is.
   const tag = (c: { memberId?: string | null }) => (!member && people?.length ? ` (${c.memberId ? people.find(p => p.id === c.memberId)?.name ?? '?' : ownerLabel ?? 'Me'})` : '');
   const alerts = [
@@ -296,6 +301,11 @@ function OverviewTab({ cards, summary, go, member, people, ownerLabel, pick }: {
             value={<><span className="strong">{fmtMoney(c.position.minimumRemaining)}</span><span className="small">{fmtMoney(c.position.statementRemaining)} statement</span></>} />
         ))}
       </Section>
+      {others.length > 0 && (
+        <Section header="Other cards">
+          {others.map(c => <Row key={c.id} to={`/personal/cards/${c.id}`} title={`${c.name}${tag(c)}`} subtitle={otherNote(c)} value={<span className="strong">{fmtMoney(c.position.balance)}</span>} />)}
+        </Section>
+      )}
     </>
   );
   return (
@@ -342,6 +352,17 @@ function OverviewTab({ cards, summary, go, member, people, ownerLabel, pick }: {
             <span className="w-36 text-right text-gray-400">{fmtMoney(c.position.statementRemaining)} statement</span>
           </Link>
         ))}
+        {others.length > 0 && <>
+          <p className="section-label mt-4">Other cards</p>
+          {others.map(c => (
+            <Link key={c.id} to={`/personal/cards/${c.id}`} className="flex items-center gap-3 text-sm py-1">
+              <span className="w-24 text-xs text-gray-500">—</span>
+              <span className="flex-1 text-gray-200">{c.name}{tag(c) && <span className="text-xs text-gray-500">{tag(c)}</span>}</span>
+              <span className={`text-xs w-72 text-right ${c.position.latestClosingDate ? 'text-gray-500' : 'text-amber-400/90'}`}>{otherNote(c)}</span>
+              <span className="w-36 text-right text-gray-400">{fmtMoney(c.position.balance)} balance</span>
+            </Link>
+          ))}
+        </>}
       </div>
     </div>
   );

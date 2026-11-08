@@ -344,6 +344,8 @@ export const getReconciliationProfiles = () =>
   api.get<ReconciliationProfile[]>('/reconciliation/profiles').then(r => r.data);
 export const createReconciliationProfile = (data: Partial<ReconciliationProfile>) =>
   api.post<ReconciliationProfile>('/reconciliation/profiles', data).then(r => r.data);
+export const updateReconciliationProfile = (id: string, data: Partial<ReconciliationProfile>) =>
+  api.patch<ReconciliationProfile>(`/reconciliation/profiles/${id}`, data).then(r => r.data);
 export const deleteReconciliationProfile = (id: string) =>
   api.delete(`/reconciliation/profiles/${id}`);
 export const getReconciliationStatements = (profileId?: string) =>
@@ -364,6 +366,10 @@ export interface ManagerDraftLine {
   propertyHint: string | null; payee: string | null; unit: string | null;
   propertyId: string | null; leaseId: string | null; loanId: string | null; category: string | null;
   alreadyRecorded: boolean; include: boolean;
+  /** On an earlier statement from this manager (a year-to-date statement repeats lines). */
+  onEarlierStatement?: boolean;
+  /** Recorded already when the statement came in by email. */
+  recordedNow?: boolean;
 }
 export interface ManagerStatementDraft {
   manager: string | null; periodStart: string | null; periodEnd: string | null; statementDate: string | null;
@@ -374,6 +380,8 @@ export const readManagerStatement = (fileData: string, filename: string) =>
   api.post<ManagerStatementDraft>('/reconciliation/read', { fileData, filename }, { timeout: 300_000 }).then(r => r.data);
 export const importManagerStatement = (data: {
   profileId: string | null; managerName: string; statementDate: string; documentKey: string | null; lines: ManagerDraftLine[];
+  /** The emailed draft this review replaces. */
+  replaceId?: string | null;
 }) => api.post<{ id: string; profileId: string }>('/reconciliation/import', data).then(r => r.data);
 export const getReconciliationDocumentUrl = (id: string) =>
   api.get<{ url: string }>(`/reconciliation/statements/${id}/document`).then(r => r.data);
