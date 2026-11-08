@@ -11,6 +11,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { askClaude, jsonIn, needsJson } from '../ai/models';
 import { fileBlockForClaude } from './pdfImportService';
+import { layoutText } from './pdfForms';
+import { readCardStatementText } from '../lib/cardStatementText';
 import { matchProperty, type DocumentMatch } from './documentClassifyService';
 import { cleanRow } from './loanPaymentDetails';
 
@@ -183,6 +185,11 @@ const blockFor = (file: ReadFile) => fileBlockForClaude(Buffer.from(file.data, '
 export async function readDocument(kind: ReadKind, files: ReadFile[], userId: string): Promise<{ fields: Record<string, any>; match: DocumentMatch | null }> {
   if (!files.length) throw new Error('Add at least one page.');
   if (files.length > 12) throw new Error('At most 12 pages or photos per document.');
+  // A card statement whose text adds up is read for free; Claude only reads the ones it can't.
+  if (kind === 'card_statement') {
+    const free = await cardStatementFromText(files);
+    if (free) return { fields: free, match: null };
+  }
   const content: Anthropic.ContentBlockParam[] = [];
   for (const f of files) content.push(await blockFor(f));
   content.push({ type: 'text', text: PROMPTS[kind] });
@@ -201,6 +208,18 @@ export async function readDocument(kind: ReadKind, files: ReadFile[], userId: st
   const address = kind === 'citation' ? fields.violationAddress : kind === 'tax_bill' || kind === 'tax_form' ? fields.propertyAddress : null;
   const match = address ? await matchProperty(address, userId) : null;
   return { fields, match };
+}
+
+/** The statement read from its PDFs' own text, or null when any page is a photo or the text doesn't add up. */
+async function cardStatementFromText(files: ReadFile[]): Promise<Record<string, any> | null> {
+  const texts: string[] = [];
+  for (const f of files) {
+    const buf = Buffer.from(f.data, 'base64');
+    if (buf.subarray(0, 5).toString('latin1') !== '%PDF-') return null;
+    texts.push(await layoutText(buf));
+  }
+  const read = readCardStatementText(texts.join('\n'));
+  return read ? { ...shape('card_statement', read), readBy: 'text' } : null;
 }
 
 const num = (v: unknown): number | null => {
