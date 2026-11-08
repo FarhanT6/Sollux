@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  getInsights, markInsightRead, dismissInsight, markAllInsightsRead, runBookkeeper, getSavings, startSavingsResearch,
+  getInsights, markInsightRead, dismissInsight, markAllInsightsRead, runBookkeeper, getSavings, startSavingsResearch, getCreditHealth, type CreditHealthT,
   type Saving, type SavingsResearch, type CompanyResearch, type InsuranceCheck,
 } from '../api/client';
 import type { AIInsight, InsightSeverity } from '../types';
@@ -9,6 +9,7 @@ import { PageHeader, InsightCard, EmptyState, Skeleton } from '../components/ui'
 import { fmtMoney } from '../lib/money';
 import { fmtDate } from '../lib/date';
 import { describeApiError } from '../lib/apiError';
+import { CreditSnapshot, CardInsightList } from '../components/cards/CreditHealth';
 
 /**
  * Insights, by topic. Savings first: how much the owner can save a year and
@@ -21,16 +22,16 @@ import { describeApiError } from '../lib/apiError';
  * insurance, taxes, tenants and the rest, each topic's savings on top.
  */
 
-type Topic = 'savings' | 'late' | 'utilities' | 'loans' | 'insurance' | 'taxes' | 'tenants' | 'other';
+type Topic = 'savings' | 'late' | 'credit' | 'utilities' | 'loans' | 'insurance' | 'taxes' | 'tenants' | 'other';
 const TOPICS: { key: Topic; label: string }[] = [
-  { key: 'savings', label: 'Savings' }, { key: 'late', label: 'Late fees & bills due' }, { key: 'utilities', label: 'Utilities' },
+  { key: 'savings', label: 'Savings' }, { key: 'late', label: 'Late fees & bills due' }, { key: 'credit', label: 'Credit cards' }, { key: 'utilities', label: 'Utilities' },
   { key: 'loans', label: 'Loans' }, { key: 'insurance', label: 'Insurance' }, { key: 'taxes', label: 'Taxes' },
   { key: 'tenants', label: 'Tenants' }, { key: 'other', label: 'Other' },
 ];
 const SEVERITY_RANK: Record<InsightSeverity, number> = { ALERT: 3, WARNING: 2, INFO: 1 };
 
 /** What an insight is about, from the bookkeeper's key, else its account's category. */
-function topicOf(i: AIInsight): Exclude<Topic, 'savings'> {
+function topicOf(i: AIInsight): Exclude<Topic, 'savings' | 'credit'> {
   const k = (i.dedupeKey ?? '').split(':')[0];
   if (['late-fee', 'overdue', 'due-soon', 'installment'].includes(k)) return 'late';
   if (['loan-maturity', 'loan-balance', 'rate-reset', 'prepay-ends'].includes(k)) return 'loans';
@@ -45,10 +46,10 @@ function topicOf(i: AIInsight): Exclude<Topic, 'savings'> {
   if (c || i.insightType === 'ANOMALY' || i.insightType === 'OUTAGE') return 'utilities';
   return 'other';
 }
-const SAVING_TOPIC: Record<Saving['kind'], Exclude<Topic, 'savings'>> = {
+const SAVING_TOPIC: Record<Saving['kind'], Exclude<Topic, 'savings' | 'credit'>> = {
   LATE_FEES: 'late', CARD_FEES: 'late', RISING_BILL: 'utilities', IDLE_SERVICE: 'utilities', DUPLICATE_SERVICE: 'utilities', INSURANCE_UP: 'insurance', HIGH_RATE_LOAN: 'loans',
 };
-const companyTopic = (c: CompanyResearch): Exclude<Topic, 'savings'> => (c.category === 'INSURANCE' ? 'insurance' : 'utilities');
+const companyTopic = (c: CompanyResearch): Exclude<Topic, 'savings' | 'credit'> => (c.category === 'INSURANCE' ? 'insurance' : 'utilities');
 const tacticTotal = (c: CompanyResearch) => c.tactics.reduce((t, x) => t + (x.perYear ?? 0), 0);
 const overpay = (x: InsuranceCheck) => (x.high_ ? Math.max(0, Math.round(x.paying - x.typical)) : 0);
 
@@ -61,6 +62,10 @@ export default function InsightsPage() {
   const [runNote, setRunNote] = useState<string | null>(null);
   const [savings, setSavings] = useState<{ savings: Saving[]; total: number; research: SavingsResearch | null } | null>(null);
   const [researchErr, setResearchErr] = useState('');
+  // Credit cards: payment history, utilization, and what the cards cost (services/cardHealthReport).
+  const [credit, setCredit] = useState<CreditHealthT | null>(null);
+  useEffect(() => { void getCreditHealth().then(setCredit).catch(() => {}); }, []);
+  const cardSavings = (credit?.insights ?? []).filter(i => (i.perYear ?? 0) > 0);
 
   const loadSavings = useCallback(() => getSavings().then(setSavings).catch(() => {}), []);
   useEffect(() => {
@@ -93,7 +98,7 @@ export default function InsightsPage() {
   async function handleMarkAllRead() { await markAllInsightsRead(); setInsights(p => p.map(i => ({ ...i, isRead: true }))); }
 
   const research_ = savings?.research ?? null;
-  const fromRecords = savings?.total ?? 0;
+  const fromRecords = (savings?.total ?? 0) + cardSavings.reduce((t, i) => t + (i.perYear ?? 0), 0);
   const fromCompanies = (research_?.results ?? []).reduce((t, c) => t + tacticTotal(c), 0);
   const fromInsurance = (research_?.insurance ?? []).reduce((t, x) => t + overpay(x), 0);
 
@@ -102,8 +107,8 @@ export default function InsightsPage() {
     for (const i of insights) { const t = topicOf(i); m.set(t, [...(m.get(t) ?? []), i]); }
     return m;
   }, [insights]);
-  const count = (t: Topic) => t === 'savings'
-    ? (savings?.savings.length ?? 0) + (research_?.results ?? []).reduce((n, c) => n + c.tactics.length, 0) + (research_?.insurance ?? []).filter(x => x.high_).length
+  const count = (t: Topic) => t === 'credit' ? (credit?.insights.length ?? 0) : t === 'savings'
+    ? (savings?.savings.length ?? 0) + cardSavings.length + (research_?.results ?? []).reduce((n, c) => n + c.tactics.length, 0) + (research_?.insurance ?? []).filter(x => x.high_).length
     : (byTopic.get(t)?.length ?? 0) + (savings?.savings ?? []).filter(s => SAVING_TOPIC[s.kind] === t).length;
 
   const propertyOptions = Array.from(new Map(insights.filter(i => i.property).map(i => [i.propertyId, i.property?.nickname || i.property?.address || ''])).entries());
@@ -119,7 +124,7 @@ export default function InsightsPage() {
       <div className="px-4 md:px-6 py-5">
         {/* How much, at a glance */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
-          <Stat label="From your records" value={fromRecords} hint="late fees, card fees, rising bills, idle and duplicate services" />
+          <Stat label="From your records" value={fromRecords} hint="late fees, card fees and interest, rising bills, idle and duplicate services" />
           <Stat label="From company offers" value={fromCompanies} hint={research_ ? `${research_.results.length} companies looked into` : 'not looked into yet'} />
           <Stat label="Insurance above typical" value={fromInsurance} hint={research_?.insurance ? `${research_.insurance.filter(x => x.high_).length} of ${research_.insurance.length} properties high` : 'not checked yet'} />
         </div>
@@ -137,8 +142,13 @@ export default function InsightsPage() {
           <div className="space-y-6">
             <ResearchBar research={research_} onStart={() => void research()} error={researchErr} />
             <SavingsGroup title="From your records" items={savings?.savings ?? null} />
+            {cardSavings.length > 0 && <CardInsightList items={cardSavings} title="Credit cards" />}
             <InsuranceChecks checks={research_?.insurance ?? []} />
             <Companies list={research_?.results ?? []} />
+          </div>
+        ) : topic === 'credit' ? (
+          <div className="space-y-6">
+            {credit ? <><CreditSnapshot s={credit.snapshot} /><CardInsightList items={credit.insights} title="Save money and protect your credit" /></> : <Skeleton className="h-24" />}
           </div>
         ) : (
           <>

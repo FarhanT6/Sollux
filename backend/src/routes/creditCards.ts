@@ -9,6 +9,7 @@
 import { Router } from 'express';
 import { memberFilter, memberOk } from './household';
 import { mergeCards, findCardFor } from '../services/cardIntake';
+import { creditHealth, oneCardHealth } from '../services/cardHealthReport';
 import { syncStatementPayments, statementPaymentFor, refreshCardCycle, ON_STATEMENT } from '../services/cardPayments';
 import { z } from 'zod';
 import { db } from '../config/db';
@@ -140,6 +141,20 @@ router.post('/read-statement', async (req, res, next) => {
     if (err?.message) return res.status(422).json({ error: err.message });
     next(err);
   }
+});
+
+// GET /health — payment history, what the cards cost, the credit snapshot and insights (?member= for one person's cards).
+router.get('/health', async (req, res, next) => {
+  try { res.json(await creditHealth(req.dbUserId!, memberFilter(req.query.member))); } catch (err) { next(err); }
+});
+
+// GET /:id/health — one card's payment history and costs.
+router.get('/:id/health', async (req, res, next) => {
+  try {
+    const h = await oneCardHealth(req.dbUserId!, req.params.id);
+    if (!h) return res.status(404).json({ error: 'Card not found' });
+    res.json(h);
+  } catch (err) { next(err); }
 });
 
 router.get('/:id', async (req, res, next) => {

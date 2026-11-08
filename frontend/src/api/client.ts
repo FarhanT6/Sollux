@@ -1545,3 +1545,25 @@ export const arrearsAsOf = (leaseId: string, body: { amount: number; through: st
 /** A tenant's utility payment on one invoice, with where it was deposited and a note (matched to the invoice's lines). */
 export const payUtilityInvoice = (id: string, body: { amount: number; paidAt: string; method: string; bankAccountId?: string | null; notes?: string | null }) =>
   api.post(`/reimbursements/invoices/${id}/payment`, body).then(r => r.data);
+
+// ── Credit health (payment history, card costs, credit insights) ──
+export type CardPayStatus = 'ON_TIME' | 'LATE' | 'PAST_DUE' | 'DUE' | 'NOT_LOGGED' | 'NONE_DUE';
+export interface CardPayRow { statementId: string; closingDate: string; dueDate: string | null; minimum: number; status: CardPayStatus; paidOn: string | null; paidByDue: number; daysLate: number | null; reported: null | '30' | '60' | '90+'; lateFee: number; note: string | null }
+export interface CardCostMonth { month: string; interest: number; lateFees: number; otherFees: number; refunds: number }
+export interface CardHealthT {
+  history: CardPayRow[];
+  lateEvents: { date: string; fee: number; waived: boolean; forDueDate: string | null; onFile: boolean }[];
+  returned: { paidOn: string; returnedOn: string; amount: number }[];
+  costs: CardCostMonth[];
+  last12: { interest: number; lateFees: number; otherFees: number; refunds: number; net: number; onTime: number; late: number; worstDaysLate: number };
+  allTime: { interest: number; lateFees: number; otherFees: number; refunds: number; net: number };
+  daysPastDue: number; daysUntil30: number | null; onTimeStreak: number;
+}
+export interface CardInsightT { kind: string; severity: 'ALERT' | 'WARNING' | 'INFO'; cardId: string | null; cardName: string | null; title: string; detail: string; action: string; perYear: number | null; script?: string | null }
+export interface CreditSnapshotT {
+  utilization: number | null; debt: number; limits: number; onTime12: number; late12: number; worstDaysLate12: number; cardsPastDue: number; cardsOver30: number; feesAndInterest12: number;
+  paymentHistory: 'GOOD' | 'FAIR' | 'POOR' | 'UNKNOWN'; utilizationBand: 'EXCELLENT' | 'GOOD' | 'HIGH' | 'VERY_HIGH' | 'UNKNOWN';
+}
+export interface CreditHealthT { snapshot: CreditSnapshotT; insights: CardInsightT[]; cards: { id: string; name: string; last4: string | null; status: string; utilization: number | null; balance: number; limit: number | null; health: CardHealthT }[] }
+export const getCreditHealth = (member?: string) => api.get<CreditHealthT>('/credit-cards/health', { params: member ? { member } : {} }).then(r => r.data);
+export const getCardHealth = (id: string) => api.get<CardHealthT>(`/credit-cards/${id}/health`).then(r => r.data);
