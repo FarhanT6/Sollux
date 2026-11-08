@@ -264,7 +264,7 @@ export const deleteNotice = (id: string) =>
   api.delete(`/notices/${id}`);
 
 // Expenses
-export const getExpenses = (params?: { propertyId?: string; isCapEx?: boolean; isPersonal?: boolean }) =>
+export const getExpenses = (params?: { propertyId?: string; isCapEx?: boolean; isPersonal?: boolean; member?: string }) =>
   api.get<Expense[]>('/expenses', { params }).then(r => r.data);
 export const createExpense = (data: Partial<Expense>) =>
   api.post<Expense>('/expenses', data).then(r => r.data);
@@ -274,7 +274,7 @@ export const deleteExpense = (id: string) =>
   api.delete(`/expenses/${id}`);
 
 // Loans
-export const getLoans = (params?: { propertyId?: string; isPersonal?: boolean; isActive?: boolean }) =>
+export const getLoans = (params?: { propertyId?: string; isPersonal?: boolean; isActive?: boolean; member?: string }) =>
   api.get<Loan[]>('/loans', { params }).then(r => r.data);
 export const getLoan = (id: string) =>
   api.get<Loan>(`/loans/${id}`).then(r => r.data);
@@ -615,6 +615,8 @@ export interface CardPosition {
 }
 export interface CreditCardT {
   id: string; name: string; issuer?: string | null; network?: string | null; last4?: string | null; cardholderName?: string | null; isBusiness: boolean;
+  /** The household member the card belongs to; null is the owner. */
+  memberId?: string | null;
   propertyId?: string | null; bankAccountId?: string | null; status: 'ACTIVE' | 'FROZEN' | 'CLOSED'; openedDate?: string | null; closedDate?: string | null;
   expiration?: string | null; creditLimit?: number | string | null; cashAdvanceLimit?: number | string | null; currentBalance?: number | string | null; balanceAsOf?: string | null;
   statementClosingDay?: number | null; paymentDueDay?: number | null; purchaseApr?: number | string | null; cashAdvanceApr?: number | string | null;
@@ -637,8 +639,18 @@ export interface CardStatementT {
 export interface CardPaymentT { id: string; date: string; amount: number | string; fromBankAccountId?: string | null; fromBankAccountName?: string | null; confirmation?: string | null; method?: string | null; notes?: string | null; statementId?: string | null }
 export interface CardTxnT { id: string; date: string; postDate?: string | null; description: string; merchant?: string | null; amount: number | string; kind: string; category?: string | null; cardholder?: string | null; isBusiness: boolean; propertyId?: string | null; expenseId?: string | null; notes?: string | null; statementId?: string | null }
 export interface CardsSummary { cards: number; debt: number; limits: number; available: number; utilization: number | null; monthlyInterest: number; minimumsDue30d: number; pastDue: number; promosEnding60d: number; annualFees: number; rewardsValue: number; interestYtd: number }
-export const getCreditCards = () =>
-  api.get<{ cards: CreditCardT[]; summary: CardsSummary; paymentSourceCards: { id: string; name: string; last4?: string | null; bank?: string | null; cardNetwork?: string | null; cardExpiry?: string | null }[] }>('/credit-cards').then(r => r.data);
+/** `member`: one person's cards ('me' = the owner's own, an id = that household member's); omitted = everyone's. */
+export const getCreditCards = (member?: string) =>
+  api.get<{ cards: CreditCardT[]; summary: CardsSummary; paymentSourceCards: { id: string; name: string; last4?: string | null; bank?: string | null; cardNetwork?: string | null; cardExpiry?: string | null }[] }>('/credit-cards', { params: member ? { member } : {} }).then(r => r.data);
+
+// Household: people whose own money is tracked under Personal (the owner is not a row).
+export interface HouseholdMemberT { id: string; name: string; sortOrder: number; linked?: { cards: number; loans: number; bills: number } }
+export const getHousehold = () => api.get<{ members: HouseholdMemberT[]; me: { cards: number; loans: number; bills: number } }>('/household').then(r => r.data);
+export const addHouseholdMember = (name: string) => api.post<HouseholdMemberT>('/household', { name }).then(r => r.data);
+export const renameHouseholdMember = (id: string, name: string) => api.patch<HouseholdMemberT>(`/household/${id}`, { name }).then(r => r.data);
+export const removeHouseholdMember = (id: string) => api.delete(`/household/${id}`);
+export const assignToMember = (kind: 'card' | 'loan' | 'expense' | 'bill', id: string, memberId: string | null) =>
+  api.post('/household/assign', { kind, id, memberId }).then(r => r.data);
 export const getCreditCard = (id: string) => api.get<CreditCardT>(`/credit-cards/${id}`).then(r => r.data);
 export const createCreditCard = (data: Record<string, any>) => api.post<CreditCardT>('/credit-cards', data).then(r => r.data);
 export const createCardFromBankAccount = (bankAccountId: string) => api.post<CreditCardT>(`/credit-cards/from-bank-account/${bankAccountId}`).then(r => r.data);
