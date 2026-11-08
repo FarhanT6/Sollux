@@ -2440,9 +2440,14 @@ model CardPayment {
   confirmation      String?
   method            String?
   notes             String?
+  /// The statement that lists this payment among its lines: it is already in
+  /// that statement's new balance. Set when a statement is saved; a payment
+  /// read from a statement (method "On statement") is created with it.
+  postedStatementId String?
   createdAt         DateTime       @default(now())
 
   @@index([cardId, date])
+  @@index([postedStatementId])
   @@map("card_payments")
 }
 

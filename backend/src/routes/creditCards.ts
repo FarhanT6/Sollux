@@ -9,6 +9,7 @@
 import { Router } from 'express';
 import { memberFilter, memberOk } from './household';
 import { mergeCards, findCardFor } from '../services/cardIntake';
+import { syncStatementPayments, statementPaymentFor, refreshCardCycle, ON_STATEMENT } from '../services/cardPayments';
 import { z } from 'zod';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
@@ -149,6 +150,9 @@ router.get('/:id', async (req, res, next) => {
       },
     });
     if (!card) return res.status(404).json({ error: 'Card not found' });
+    // What each statement's lines are: "2 payments", not "2 transactions".
+    const kinds = await db.cardTransaction.groupBy({ by: ['statementId', 'kind'], where: { cardId: card.id, statementId: { not: null } }, _count: { _all: true } });
+    const lineKinds = (sid: string) => Object.fromEntries(kinds.filter(k => k.statementId === sid).map(k => [k.kind, k._count._all]));
     const banks = await db.bankAccount.findMany({ where: { userId: req.dbUserId! }, select: { id: true, name: true, last4: true } });
     const bankName = new Map(banks.map(b => [b.id, b.last4 ? `${b.name} ••${b.last4}` : b.name]));
     // Spending by category over the last 12 months, from the transactions.
@@ -165,7 +169,7 @@ router.get('/:id', async (req, res, next) => {
     }
     res.json({
       ...withPosition(card),
-      statements: card.statements.map(s => ({ ...s, transactionCount: s._count.transactions, hasDocument: Array.isArray(s.documents) && (s.documents as any[]).length > 0, documents: undefined })),
+      statements: card.statements.map(s => ({ ...s, transactionCount: s._count.transactions, lineKinds: lineKinds(s.id), hasDocument: Array.isArray(s.documents) && (s.documents as any[]).length > 0, documents: undefined })),
       payments: card.payments.map(p => ({ ...p, fromBankAccountName: p.fromBankAccountId ? bankName.get(p.fromBankAccountId) ?? null : null })),
       autopayFromName: card.autopayFromBankAccountId ? bankName.get(card.autopayFromBankAccountId) ?? null : null,
       spending: { byCategory, byMonth },
@@ -258,15 +262,19 @@ router.post('/:id/statements', async (req, res, next) => {
       ...pick('penaltyApr', t.penaltyApr), ...pick('introApr', t.introApr), ...pick('introAprType', t.introAprType),
       ...pick('introAprEndDate', t.introAprEndDate ? new Date(t.introAprEndDate) : null), ...pick('rewardsProgram', t.rewardsProgram), ...pick('rewardsType', t.rewardsType),
       ...pick('issuer', t.issuer), ...pick('network', t.network), ...pick('cardholderName', t.cardholderName),
+      ...pick('lateFee', t.lateFee), ...pick('annualFee', t.annualFee), ...pick('foreignTransactionFee', t.foreignTransactionFee),
+      ...pick('balanceTransferFee', t.balanceTransferFee), ...pick('cashAdvanceFee', t.cashAdvanceFee), ...pick('phone', t.phone), ...pick('loginUrl', t.loginUrl),
       ...(card.last4 == null && t.last4 ? { last4: t.last4 } : {}),
-      ...(isNewest ? { statementClosingDay: s.closingDate.getUTCDate(), ...(s.dueDate ? { paymentDueDay: s.dueDate.getUTCDate() } : {}) } : {}),
       ...(Array.isArray(t.authorizedUsers) && t.authorizedUsers.length && !card.authorizedUsers ? { authorizedUsers: t.authorizedUsers } : {}),
     };
     // A statement newer than the balance typed in supersedes it.
     if (isNewest && card.balanceAsOf && card.balanceAsOf < s.closingDate) { update.currentBalance = null; update.balanceAsOf = null; }
     if (Object.keys(update).length) await db.creditCard.update({ where: { id: card.id }, data: update as any });
+    await refreshCardCycle(card.id);
+    // Its payment lines and the payments logged: one payment each, not two.
+    const paid = await syncStatementPayments(statement.id);
 
-    res.status(201).json({ statement, transactionsAdded: added });
+    res.status(201).json({ statement, transactionsAdded: added, paymentsLinked: paid.linked, paymentsAdded: paid.created });
   } catch (err) { next(err); }
 });
 
@@ -275,7 +283,11 @@ router.delete('/statements/:sid', async (req, res, next) => {
     const s = await db.cardStatement.findFirst({ where: { id: req.params.sid, card: { userId: req.dbUserId! } } });
     if (!s) return res.status(404).json({ error: 'Not found' });
     await db.cardTransaction.deleteMany({ where: { statementId: s.id, expenseId: null } });
+    // Payments read from it go with it; ones the owner logged stay, unlinked.
+    await db.cardPayment.deleteMany({ where: { postedStatementId: s.id, method: ON_STATEMENT } });
+    await db.cardPayment.updateMany({ where: { postedStatementId: s.id }, data: { postedStatementId: null } });
     await db.cardStatement.delete({ where: { id: s.id } });
+    await refreshCardCycle(s.cardId);
     res.status(204).send();
   } catch (err) { next(err); }
 });
@@ -373,6 +385,15 @@ router.post('/:id/payments', async (req, res, next) => {
     const date = new Date(p.date);
     // A payment pays the newest statement that closed before it.
     const statement = await db.cardStatement.findFirst({ where: { cardId: card.id, closingDate: { lt: date } }, orderBy: { closingDate: 'desc' }, select: { id: true } });
+    // Already on a statement (read from it before it was logged): fill that one in rather than log it twice.
+    const listed = await statementPaymentFor(card.id, date, p.amount);
+    if (listed) {
+      const merged = await db.cardPayment.update({
+        where: { id: listed.id },
+        data: { fromBankAccountId: p.fromBankAccountId ?? listed.fromBankAccountId, confirmation: p.confirmation ?? listed.confirmation, method: p.method ?? null, notes: p.notes ?? listed.notes },
+      });
+      return res.status(200).json({ ...merged, alreadyOnStatement: true });
+    }
     res.status(201).json(await db.cardPayment.create({ data: { ...p, date, cardId: card.id, statementId: statement?.id ?? null } }));
   } catch (err) { next(err); }
 });
