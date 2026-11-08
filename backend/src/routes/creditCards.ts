@@ -7,6 +7,7 @@
  * Card numbers are never stored: last four digits only.
  */
 import { Router } from 'express';
+import { memberFilter, memberOk } from './household';
 import { z } from 'zod';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
@@ -29,6 +30,8 @@ const CardFields = z.object({
   last4: z.string().regex(/^\d{4}$/).nullable().optional(),
   cardholderName: z.string().nullable().optional(),
   isBusiness: z.boolean().optional(),
+  /// The household member the card belongs to; null is the owner.
+  memberId: z.string().nullable().optional(),
   propertyId: z.string().nullable().optional(),
   bankAccountId: z.string().nullable().optional(),
   status: z.enum(['ACTIVE', 'FROZEN', 'CLOSED']).optional(),
@@ -67,7 +70,8 @@ const TxnFields = z.object({
 async function ownedCard(id: string, userId: string) {
   return db.creditCard.findFirst({ where: { id, userId } });
 }
-async function checkRefs(userId: string, d: { propertyId?: string | null; bankAccountId?: string | null; autopayFromBankAccountId?: string | null }) {
+async function checkRefs(userId: string, d: { propertyId?: string | null; bankAccountId?: string | null; autopayFromBankAccountId?: string | null; memberId?: string | null }) {
+  if (!(await memberOk(userId, d.memberId))) return 'Person not found';
   if (d.propertyId && !(await db.property.findFirst({ where: { id: d.propertyId, userId }, select: { id: true } }))) return 'Property not found';
   for (const b of [d.bankAccountId, d.autopayFromBankAccountId]) {
     if (b && !(await db.bankAccount.findFirst({ where: { id: b, userId }, select: { id: true } }))) return 'Bank account not found';
@@ -81,7 +85,8 @@ router.get('/', async (req, res, next) => {
   try {
     const userId = req.dbUserId!;
     const cards = await db.creditCard.findMany({
-      where: { userId },
+      // ?member=: one person's cards ('me' is the owner's own), or everyone's.
+      where: { userId, ...memberFilter(req.query.member) },
       include: { statements: { orderBy: { closingDate: 'desc' }, take: 13 }, payments: { orderBy: { date: 'desc' }, take: 20 } },
       orderBy: [{ status: 'asc' }, { sortOrder: 'asc' }, { createdAt: 'asc' }],
     });

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
-import { getCreditCards, createCardFromBankAccount, getLoans, getExpenses, type CreditCardT, type CardsSummary } from '../api/client';
+import { getCreditCards, createCardFromBankAccount, getLoans, getExpenses, getHousehold, assignToMember, type CreditCardT, type CardsSummary, type HouseholdMemberT } from '../api/client';
+import PeopleDialog from '../components/household/PeopleDialog';
 import type { Loan } from '../types';
 import { PageHeader, EmptyState } from '../components/ui';
 import PersonalExpensesPage from './PersonalExpensesPage';
@@ -29,6 +30,8 @@ export const STATUS_PILL: Record<string, { label: string; pill: string }> = {
   MINIMUM_MET: { label: 'Minimum paid', pill: 'pill-amber' }, DUE: { label: 'Due', pill: 'pill-gray' }, PAST_DUE: { label: 'Past due', pill: 'pill-red' },
 };
 export const utilTone = (u: number | null) => (u == null ? 'text-gray-400' : u >= 50 ? 'text-red-400' : u >= 30 ? 'text-amber-400' : 'text-emerald-400');
+/** A card just added while one person is shown is theirs. */
+const assignCard = (id: string, memberId: string | null) => assignToMember('card', id, memberId).catch(() => {});
 const monthsUntil = (iso?: string | null) => (iso ? Math.max(0, Math.round((+new Date(iso) - Date.now()) / (30.44 * 86400000))) : null);
 
 function UtilBar({ pct }: { pct: number | null }) {
@@ -41,7 +44,7 @@ function UtilBar({ pct }: { pct: number | null }) {
   );
 }
 
-function CardsTab({ cards, summary, sources, reload }: { cards: CreditCardT[]; summary: CardsSummary; sources: { id: string; name: string; last4?: string | null }[]; reload: () => Promise<void> }) {
+function CardsTab({ cards, summary, sources, reload, whose, newFor }: { cards: CreditCardT[]; summary: CardsSummary; sources: { id: string; name: string; last4?: string | null }[]; reload: () => Promise<void>; whose?: (memberId?: string | null) => string | null; newFor?: string | null }) {
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);
   const [budget, setBudget] = useState('');
@@ -68,8 +71,8 @@ function CardsTab({ cards, summary, sources, reload }: { cards: CreditCardT[]; s
         <button onClick={() => { setImporting(true); setAdding(false); }} className="btn btn-primary text-xs">Upload a statement</button>
         <button onClick={() => { setAdding(true); setImporting(false); }} className="btn text-xs">+ Add card by hand</button>
       </div>
-      {importing && <StatementImport cards={cards} onDone={async id => { setImporting(false); await reload(); if (id) nav(`/personal/cards/${id}`); }} />}
-      {adding && <CardEditor onDone={async c => { setAdding(false); await reload(); if (c) nav(`/personal/cards/${c.id}`); }} />}
+      {importing && <StatementImport cards={cards} onDone={async id => { setImporting(false); if (id && newFor !== undefined) await assignCard(id, newFor); await reload(); if (id) nav(`/personal/cards/${id}`); }} />}
+      {adding && <CardEditor onDone={async c => { setAdding(false); if (c && newFor !== undefined) await assignCard(c.id, newFor); await reload(); if (c) nav(`/personal/cards/${c.id}`); }} />}
 
       {sources.length > 0 && (
         <div className="card p-3 mb-4 text-xs text-gray-400 flex items-center gap-2 flex-wrap">
@@ -117,7 +120,7 @@ function CardsTab({ cards, summary, sources, reload }: { cards: CreditCardT[]; s
               return (
                 <Link key={c.id} to={`/personal/cards/${c.id}`} className="rounded-xl px-5 py-4 flex items-center gap-4 flex-wrap hover:opacity-90" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.06)' }}>
                   <div className="w-56">
-                    <p className="text-sm font-semibold text-white">{c.name}</p>
+                    <p className="text-sm font-semibold text-white">{c.name}{whose?.(c.memberId) && <span className="ml-2 text-xs font-normal px-1.5 py-0.5 rounded bg-white/5 text-gray-400">{whose(c.memberId)}</span>}</p>
                     <p className="text-xs text-gray-500">{[c.network, c.last4 ? `••${c.last4}` : null].filter(Boolean).join(' ')}{c.isBusiness ? ' · business' : ''}{c.status !== 'ACTIVE' ? ` · ${c.status.toLowerCase()}` : ''}</p>
                   </div>
                   <div className="w-44">
@@ -176,10 +179,10 @@ function CardsTab({ cards, summary, sources, reload }: { cards: CreditCardT[]; s
   );
 }
 
-function LoansTab() {
+function LoansTab({ member, whose }: { member?: string; whose?: (memberId?: string | null) => string | null }) {
   const phone = usePhone();
   const [loans, setLoans] = useState<Loan[] | null>(null);
-  useEffect(() => { void getLoans({ isPersonal: true }).then(l => setLoans(l as any)); }, []);
+  useEffect(() => { void getLoans({ isPersonal: true, member }).then(l => setLoans(l as any)); }, [member]);
   if (loans == null) return <p className="text-sm text-gray-500">Loading…</p>;
   if (!loans.length) return <EmptyState title="No personal loans" body="Auto loans, student loans and personal loans marked Personal on the Loans tab appear here." />;
   const total = loans.reduce((t, l: any) => t + Number(l.currentBalance ?? 0), 0);
@@ -203,7 +206,7 @@ function LoansTab() {
         <table className="table-base">
           <thead><tr><th className="pl-4">Lender</th><th>Type</th><th className="text-right">Balance</th><th className="text-right">Rate</th><th className="text-right">Monthly</th><th className="pr-4"></th></tr></thead>
           <tbody>{loans.map((l: any) => (
-            <tr key={l.id}><td className="pl-4 text-white">{l.lender}</td><td className="text-gray-400">{String(l.loanType).replace('_', ' ').toLowerCase()}</td>
+            <tr key={l.id}><td className="pl-4 text-white">{l.lender}{whose?.(l.memberId) && <span className="ml-2 text-xs px-1.5 py-0.5 rounded bg-white/5 text-gray-400">{whose(l.memberId)}</span>}</td><td className="text-gray-400">{String(l.loanType).replace('_', ' ').toLowerCase()}</td>
               <td className="text-right">{l.currentBalance != null ? fmtMoney(l.currentBalance) : '—'}</td><td className="text-right text-gray-400">{l.interestRate != null ? `${Number(l.interestRate)}%` : '—'}</td>
               <td className="text-right">{l.monthlyPayment != null ? fmtMoney(l.monthlyPayment) : '—'}</td><td className="pr-4 text-right"><Link to={`/loans/${l.id}`} className="text-xs text-gray-500 hover:text-gray-300">Open</Link></td></tr>
           ))}</tbody>
@@ -213,19 +216,39 @@ function LoansTab() {
   );
 }
 
-function OverviewTab({ cards, summary, go }: { cards: CreditCardT[]; summary: CardsSummary; go: (t: TabKey) => void }) {
+function OverviewTab({ cards, summary, go, member, people, pick }: {
+  cards: CreditCardT[]; summary: CardsSummary; go: (t: TabKey) => void;
+  /** One person's ('me' or a member id), or undefined for everyone. */
+  member?: string;
+  /** The household, when there is one: Everyone shows a row per person. */
+  people?: { id: string; name: string }[];
+  pick?: (person: string) => void;
+}) {
   const phone = usePhone();
   const [loans, setLoans] = useState<any[]>([]);
   const [spent, setSpent] = useState<{ month: number; last: number } | null>(null);
   useEffect(() => {
-    void getLoans({ isPersonal: true }).then(l => setLoans(l as any));
-    void getExpenses({ isPersonal: true } as any).then((ex: any[]) => {
+    void getLoans({ isPersonal: true, member }).then(l => setLoans(l as any));
+    void getExpenses({ isPersonal: true, member } as any).then((ex: any[]) => {
       const now = new Date(); const ym = (d: Date) => `${d.getFullYear()}-${d.getMonth()}`;
       const last = new Date(now.getFullYear(), now.getMonth() - 1, 1);
       const sum = (k: string) => ex.filter(e => ym(new Date(e.date)) === k).reduce((t, e) => t + Number(e.amount), 0);
       setSpent({ month: sum(ym(now)), last: sum(ym(last)) });
     }).catch(() => {});
-  }, []);
+  }, [member]);
+  // Everyone, with a household: each person's own totals, side by side.
+  const byPerson = !member && people?.length ? [{ id: 'me', name: 'Me' }, ...people].map(p => {
+    const mine = (x: { memberId?: string | null }) => (p.id === 'me' ? !x.memberId : x.memberId === p.id);
+    const pc = cards.filter(c => c.status !== 'CLOSED' && mine(c));
+    const debt = pc.reduce((t, c) => t + c.position.balance, 0);
+    const limit = pc.reduce((t, c) => t + Number(c.position.limit ?? 0), 0);
+    const pl = loans.filter(mine);
+    const loanDebt = pl.reduce((t, l) => t + Number(l.currentBalance ?? 0), 0);
+    return {
+      ...p, cards: pc.length, debt, util: limit > 0 ? Math.round((debt / limit) * 10000) / 100 : null, loans: pl.length, loanDebt,
+      due: pc.reduce((t, c) => t + (c.position.minimumRemaining ?? 0), 0), pastDue: pc.filter(c => c.position.statementStatus === 'PAST_DUE').length,
+    };
+  }) : null;
   const loanDebt = loans.reduce((t, l) => t + Number(l.currentBalance ?? 0), 0);
   const upcoming = cards.filter(c => c.status !== 'CLOSED' && c.position.nextDueDate && (c.position.minimumRemaining > 0 || c.position.statementRemaining > 0))
     .sort((a, b) => +new Date(a.position.nextDueDate!) - +new Date(b.position.nextDueDate!));
@@ -269,6 +292,25 @@ function OverviewTab({ cards, summary, go }: { cards: CreditCardT[]; summary: Ca
         <div className="stat-card"><p className="text-xs text-gray-500">Total personal debt</p><p className="text-lg font-semibold text-white">{fmtMoney(summary.debt + loanDebt)}</p></div>
         <button onClick={() => go('expenses')} className="stat-card text-left"><p className="text-xs text-gray-500">Personal expenses this month</p><p className="text-lg font-semibold text-white">{spent ? fmtMoney(spent.month) : '—'}</p><p className="text-xs text-gray-500">{spent ? `${fmtMoney(spent.last)} last month` : ''}</p></button>
       </div>
+      {byPerson && (
+        <div className="card p-4 mb-5 overflow-x-auto">
+          <p className="section-label">By person</p>
+          <table className="w-full text-sm">
+            <thead><tr className="text-xs text-gray-500"><th className="text-left font-normal pb-1">Person</th><th className="text-right font-normal">Card debt</th><th className="text-right font-normal">Utilization</th><th className="text-right font-normal">Loans</th><th className="text-right font-normal">Total debt</th><th className="text-right font-normal">Minimums due</th><th /></tr></thead>
+            <tbody>{byPerson.map(p => (
+              <tr key={p.id} className="border-t border-white/5">
+                <td className="py-1.5"><button onClick={() => pick?.(p.id)} className="text-white hover:text-amber-400">{p.name}</button> <span className="text-xs text-gray-600">{p.cards} card{p.cards === 1 ? '' : 's'}{p.loans ? ` · ${p.loans} loan${p.loans === 1 ? '' : 's'}` : ''}</span></td>
+                <td className="text-right text-gray-200">{fmtMoney(p.debt)}</td>
+                <td className={`text-right ${utilTone(p.util)}`}>{p.util != null ? `${p.util}%` : '—'}</td>
+                <td className="text-right text-gray-300">{fmtMoney(p.loanDebt)}</td>
+                <td className="text-right text-white font-medium">{fmtMoney(p.debt + p.loanDebt)}</td>
+                <td className="text-right text-gray-300">{fmtMoney(p.due)}</td>
+                <td className="text-right text-xs">{p.pastDue > 0 && <span className="text-red-400">{p.pastDue} past due</span>}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
       {alerts.length > 0 && (
         <div className="card p-4 mb-5 space-y-1.5">
           <p className="section-label">Needs attention</p>
@@ -295,22 +337,46 @@ export default function PersonalPage() {
   const [params, setParams] = useSearchParams();
   const tab = (params.get('tab') as TabKey) || 'overview';
   const phone = usePhone();
+  // The household: with nobody added this is the owner's page alone, as it always was.
+  const [people, setPeople] = useState<HouseholdMemberT[]>([]);
+  const [managing, setManaging] = useState(false);
+  const loadPeople = () => getHousehold().then(h => setPeople(h.members)).catch(() => setPeople([]));
+  useEffect(() => { void loadPeople(); }, []);
+  const rawPerson = params.get('person') ?? 'all';
+  const person = people.length && (rawPerson === 'me' || people.some(p => p.id === rawPerson)) ? rawPerson : 'all';
+  const member = person === 'all' ? undefined : person;
+  const whose = (memberId?: string | null) => (person !== 'all' || !people.length ? null : memberId ? people.find(p => p.id === memberId)?.name ?? null : 'Me');
+  // New records made while one person is shown are theirs.
+  const newFor = person === 'all' ? undefined : person === 'me' ? null : person;
   const [data, setData] = useState<Awaited<ReturnType<typeof getCreditCards>> | null>(null);
-  const reload = async () => setData(await getCreditCards());
-  useEffect(() => { void reload(); }, []);
-  const go = (t: TabKey) => setParams({ tab: t }, { replace: true });
+  const reload = async () => setData(await getCreditCards(member));
+  useEffect(() => { setData(null); void reload(); }, [member]);
+  const go = (t: TabKey) => setParams(p => { p.set('tab', t); return p; }, { replace: true });
+  const pick = (p: string) => setParams(cur => { if (p === 'all') cur.delete('person'); else cur.set('person', p); return cur; }, { replace: true });
+  const bar = (
+    <div className="flex items-center gap-1 flex-wrap">
+      {people.length > 0 && [{ id: 'all', name: 'Everyone' }, { id: 'me', name: 'Me' }, ...people].map(p => (
+        <button key={p.id} onClick={() => pick(p.id)}
+          className={`text-xs px-3 py-1 rounded-full border ${person === p.id ? 'border-amber-500 text-amber-400' : 'border-white/10 text-gray-400 hover:text-gray-200'}`}>{p.name}</button>
+      ))}
+      <button onClick={() => setManaging(true)} className="text-xs text-gray-500 hover:text-amber-400 ml-1">{people.length ? 'People…' : '+ Add household members'}</button>
+    </div>
+  );
+  const dialog = managing && <PeopleDialog onClose={() => setManaging(false)} onChanged={() => { void loadPeople(); void reload(); }} />;
   // Personal bills moved to the Bills page's Personal section.
   const content = (tab as string) === 'bills' ? <Navigate to="/bills" replace />
-    : tab === 'expenses' ? <PersonalExpensesPage embedded />
-    : tab === 'loans' ? <LoansTab />
+    : tab === 'expenses' ? <PersonalExpensesPage embedded member={member} newFor={newFor} />
+    : tab === 'loans' ? <LoansTab member={member} whose={whose} />
     : data == null ? <p className="text-sm text-gray-500">Loading…</p>
-    : tab === 'cards' ? <CardsTab cards={data.cards} summary={data.summary} sources={data.paymentSourceCards} reload={reload} />
-    : <OverviewTab cards={data.cards} summary={data.summary} go={go} />;
+    : tab === 'cards' ? <CardsTab cards={data.cards} summary={data.summary} sources={data.paymentSourceCards} reload={reload} whose={whose} newFor={newFor} />
+    : <OverviewTab cards={data.cards} summary={data.summary} go={go} member={member} people={people} pick={pick} />;
   if (phone) return (
     <Screen title="Personal" back onRefresh={reload}>
       <Segmented<TabKey> label="Section" value={tab} onChange={t => setParams({ tab: t }, { replace: true })}
         options={TABS.map(t => ({ value: t.key, label: t.key === 'cards' ? 'Cards' : t.label }))} />
+      <div style={{ margin: '0 0 14px' }}>{bar}</div>
       {tab === 'expenses' ? <div className="ios-embedded">{content}</div> : content}
+      {dialog}
     </Screen>
   );
   return (
@@ -322,9 +388,11 @@ export default function PersonalPage() {
             style={tab === t.key ? undefined : { background: 'rgba(255,255,255,0.05)' }}>{t.label}</button>
         ))}
       </div>
+      <div className="px-6 pt-3">{bar}</div>
       <div className="px-6 py-5">
         {content}
       </div>
+      {dialog}
     </div>
   );
 }

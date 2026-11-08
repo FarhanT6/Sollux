@@ -305,6 +305,8 @@ export interface Expense {
   description?: string;
   isCapEx: boolean;
   isPersonal: boolean;
+  /** The household member it belongs to (Personal → people); null is the owner. */
+  memberId?: string | null;
   documentUrl?: string;
   createdAt: string;
   property?: Pick<Property, 'id' | 'address' | 'nickname'>;
@@ -554,6 +556,8 @@ export interface Loan {
   prepaymentPenaltyJson?: PrepaymentPenalty | null;
   notes?: string;
   isPersonal: boolean;
+  /** The household member a personal loan belongs to; null is the owner. */
+  memberId?: string | null;
   isActive: boolean;
   // The owner's account this loan is usually paid from (pay planner).
   payFromBankAccountId?: string | null;
@@ -938,6 +942,8 @@ export interface MonthlyPnL {
 export interface UtilityAccount {
   /** The owner's own bill, kept for fetching and paying but not a cost of the property (the Bills page's Personal section). */
   isPersonal?: boolean;
+  /** The household member a personal bill belongs to; null is the owner. */
+  memberId?: string | null;
   id: string;
   propertyId: string;
   providerName: string;

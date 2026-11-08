@@ -209,6 +209,8 @@ model UtilityAccount {
   // property's costs, P&L, operating expenses and Schedule E, and shown
   // under Personal -> Bills and the Bills page's Personal section.
   isPersonal       Boolean         @default(false)
+  /// The household member a personal bill belongs to; null is the owner.
+  memberId         String?
   accountNumber    String? // last 4 only
   accountNumberEnc String? // AES-256 encrypted
   usernameEnc      String?
@@ -1074,6 +1076,8 @@ model Expense {
   description String?
   isCapEx     Boolean         @default(false)
   isPersonal  Boolean         @default(false)
+  /// The household member a personal expense belongs to; null is the owner.
+  memberId    String?
   documentUrl String?
   /// The citation or permit this money was paid toward, when there is one.
   complianceItemId String?
@@ -1160,6 +1164,8 @@ model Loan {
   rateAdjustmentMonths      Int? // how often the rate resets, e.g. 12 for annual
   nextRateAdjustment        DateTime? // next date the rate is due to reset; advances each time it fires
   isPersonal                Boolean         @default(false)
+  /// The household member a personal loan belongs to; null is the owner.
+  memberId                  String?
   isActive                  Boolean         @default(true)
   // The account this loan is usually paid from. The pay planner starts
   // there and only moves to another account when this one cannot cover it.
@@ -2311,6 +2317,8 @@ model TaxPayment {
 model CreditCard {
   id                    String    @id @default(cuid())
   userId                String
+  /// The household member the card belongs to (Personal → people); null is the owner.
+  memberId              String?
   name                  String
   issuer                String?
   /// Visa | Mastercard | American Express | Discover
@@ -2778,4 +2786,18 @@ model AppSetting {
   updatedAt DateTime @updatedAt
 
   @@map("app_settings")
+}
+
+/// People in the owner's household whose own money is tracked under
+/// Personal (a parent's or a sibling's cards, loans and bills). The owner
+/// is not a row: anything with no member is theirs.
+model HouseholdMember {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("household_members")
 }

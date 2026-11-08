@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { memberFilter, memberOk } from './household';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
@@ -76,6 +77,8 @@ const LoanSchema = z.object({
   prepaymentPenaltyJson: PrepaymentPenaltySchema.optional(),
   notes: z.string().optional().nullable(),
   isPersonal: z.boolean().default(false),
+  // The household member a personal loan belongs to; null is the owner.
+  memberId: z.string().optional().nullable(),
   isActive: z.boolean().default(true),
   // The owner's account this loan is usually paid from (pay planner).
   payFromBankAccountId: z.string().optional().nullable(),
@@ -149,6 +152,7 @@ router.get('/', async (req, res, next) => {
         ...(propertyId ? { propertyId: propertyId as string } : {}),
         ...(isPersonal !== undefined ? { isPersonal: isPersonal === 'true' } : {}),
         ...(isActive !== undefined ? { isActive: isActive === 'true' } : {}),
+        ...memberFilter(req.query.member),
       },
       include: {
         property: { select: { id: true, address: true, nickname: true } },
@@ -343,6 +347,7 @@ function deriveDefaultNextAdjustment(rateAdjustmentMonths: number, originationDa
 router.post('/', async (req, res, next) => {
   try {
     const data = LoanSchema.parse(req.body);
+    if (!(await memberOk(req.dbUserId!, data.memberId))) return res.status(404).json({ error: 'Person not found' });
     if (data.propertyId) {
       const prop = await db.property.findFirst({ where: { id: data.propertyId, userId: req.dbUserId! } });
       if (!prop) return res.status(404).json({ error: 'Property not found' });
@@ -376,6 +381,7 @@ router.patch('/:id', async (req, res, next) => {
     const { propertyId, prepaymentPenaltyJson, accountNumber, payFromBankAccountId, ...rest } = LoanSchema.partial().parse(req.body);
     const existing = await db.loan.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
     if (!existing) return res.status(404).json({ error: 'Loan not found' });
+    if (!(await memberOk(req.dbUserId!, rest.memberId))) return res.status(404).json({ error: 'Person not found' });
     if (payFromBankAccountId) {
       const acct = await db.bankAccount.findFirst({ where: { id: payFromBankAccountId, userId: req.dbUserId! } });
       if (!acct) return res.status(404).json({ error: 'Bank account not found' });

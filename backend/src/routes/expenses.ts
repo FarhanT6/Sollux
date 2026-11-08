@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { memberFilter, memberOk } from './household';
 import { z } from 'zod';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
@@ -15,6 +16,8 @@ const ExpenseFields = z.object({
   description: z.string().optional().nullable(),
   isCapEx: z.boolean().default(false),
   isPersonal: z.boolean().default(false),
+  // The household member a personal expense belongs to; null is the owner.
+  memberId: z.string().optional().nullable(),
   documentUrl: z.string().optional().nullable(),
   complianceItemId: z.string().optional().nullable(),
 });
@@ -33,6 +36,7 @@ router.get('/', async (req, res, next) => {
         ...(isCapEx !== undefined ? { isCapEx: isCapEx === 'true' } : {}),
         ...(isPersonal !== undefined ? { isPersonal: isPersonal === 'true' } : {}),
         ...(category ? { category: category as any } : {}),
+        ...memberFilter(req.query.member),
       },
       include: { property: { select: { id: true, address: true, nickname: true } } },
       orderBy: { date: 'desc' },
@@ -86,6 +90,7 @@ router.get('/', async (req, res, next) => {
 router.post('/', async (req, res, next) => {
   try {
     const data = ExpenseSchema.parse(req.body);
+    if (!(await memberOk(req.dbUserId!, data.memberId))) return res.status(404).json({ error: 'Person not found' });
     if (data.propertyId) {
       const property = await db.property.findFirst({ where: { id: data.propertyId, userId: req.dbUserId! } });
       if (!property) return res.status(404).json({ error: 'Property not found' });
@@ -100,6 +105,7 @@ router.patch('/:id', async (req, res, next) => {
     const data = ExpenseFields.partial().parse(req.body);
     const existing = await db.expense.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
     if (!existing) return res.status(404).json({ error: 'Expense not found' });
+    if (!(await memberOk(req.dbUserId!, data.memberId))) return res.status(404).json({ error: 'Person not found' });
     if (data.propertyId) {
       const property = await db.property.findFirst({ where: { id: data.propertyId, userId: req.dbUserId! } });
       if (!property) return res.status(404).json({ error: 'Property not found' });

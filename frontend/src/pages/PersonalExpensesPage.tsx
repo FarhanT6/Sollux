@@ -9,7 +9,8 @@ import { fmtDate, todayISO } from '../lib/date';
 
 const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 
-export default function PersonalExpensesPage({ embedded }: { embedded?: boolean } = {}) {
+/** `member`: one household person's expenses ('me' = the owner's), omitted = everyone's; `newFor`: whose a new one is (undefined: the owner's). */
+export default function PersonalExpensesPage({ embedded, member, newFor }: { embedded?: boolean; member?: string; newFor?: string | null } = {}) {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [loading, setLoading] = useState(true);
   const [openCategory, setOpenCategory] = useState<ExpenseCategory | null>(null);
@@ -21,9 +22,9 @@ export default function PersonalExpensesPage({ embedded }: { embedded?: boolean 
   });
   const [saving, setSaving] = useState(false);
 
-  const load = () => getExpenses({ isPersonal: true }).then(setExpenses);
+  const load = () => getExpenses({ isPersonal: true, member }).then(setExpenses);
 
-  useEffect(() => { load().finally(() => setLoading(false)); }, []);
+  useEffect(() => { setLoading(true); load().finally(() => setLoading(false)); }, [member]);
 
   const byCategory = useMemo(() => {
     const map = new Map<ExpenseCategory, Expense[]>();
@@ -46,7 +47,7 @@ export default function PersonalExpensesPage({ embedded }: { embedded?: boolean 
     if (!form.amount) return;
     setSaving(true);
     try {
-      await createExpense({ ...form, isPersonal: true, propertyId: undefined, amount: parseFloat(form.amount) });
+      await createExpense({ ...form, isPersonal: true, propertyId: undefined, amount: parseFloat(form.amount), ...(newFor ? { memberId: newFor } : {}) });
       await load();
       setShowForm(false);
       setForm(f => ({ ...f, amount: '', vendor: '', description: '' }));
