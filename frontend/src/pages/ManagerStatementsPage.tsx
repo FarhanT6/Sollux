@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   readManagerStatement, importManagerStatement, applyReconciliationStatement, deleteReconciliationStatement,
-  getReconciliationStatements, getReconciliationDocumentUrl, getLeases, getLoans, getProperties, getReconciliationProfiles, updateReconciliationProfile,
+  getReconciliationStatements, getReconciliationDocumentUrl, getLeases, getLoans, getProperties, getReconciliationProfiles, updateReconciliationProfile, fetchManagerStatementsFromEmail,
   type ManagerStatementDraft, type ManagerDraftLine, type ManagerLineKind,
 } from '../api/client';
 import type { Lease, Loan, Property, ReconciliationProfile, ReconciliationStatement } from '../types';
@@ -40,6 +40,18 @@ export default function ManagerStatementsPage({ initialFile }: { /** Handed over
   const loadProfiles = useCallback(() => getReconciliationProfiles().then(setProfiles).catch(() => {}), []);
   useEffect(() => { void loadProfiles(); }, [loadProfiles]);
   const [reading, setReading] = useState('');
+  const [checking, setChecking] = useState(false);
+  const [checked, setChecked] = useState<string | null>(null);
+  async function checkEmail() {
+    setChecking(true); setChecked(null); setError('');
+    try {
+      const r = await fetchManagerStatementsFromEmail();
+      setChecked(!r.mailboxes ? 'No Gmail is connected yet — connect it where bills are fetched from email.'
+        : `${r.recorded ? `Recorded ${r.recorded} new statement${r.recorded === 1 ? '' : 's'}.` : 'No new statements.'}${r.already ? ` ${r.already} already fetched.` : ''} Looked through ${r.looked} email${r.looked === 1 ? '' : 's'} from the last 6 months.${r.errors.length ? ` ${r.errors.length} could not be read: ${r.errors[0]}` : ''}`);
+      await load(); await loadProfiles();
+    } catch (e) { setError(describeApiError(e, 'Could not check your email.')); }
+    finally { setChecking(false); }
+  }
   const [error, setError] = useState('');
 
   const load = useCallback(() => getReconciliationStatements().then(setList).catch(e => setError(describeApiError(e, 'Could not load statements.'))), []);
@@ -73,12 +85,14 @@ export default function ManagerStatementsPage({ initialFile }: { /** Handed over
           <p className="text-xs text-gray-500 mt-0.5">The monthly owner statement from your property manager, as a PDF or a photo. Sollux reads every line and matches it to your properties, tenants and loans; you check it before anything is recorded.</p>
           <p className="text-xs text-gray-400 mt-1.5">Statements emailed to your connected Gmail are fetched and recorded on their own each night: rent for the month each line shows, and each loan marked paid for that month. Lines already on an earlier statement, or already recorded, are skipped.</p>
         </div>
+        <button onClick={() => void checkEmail()} disabled={checking} className="btn text-sm px-4 py-2 disabled:opacity-60">{checking ? 'Checking email…' : 'Check email now'}</button>
         <label className={`btn-primary text-sm px-4 py-2 cursor-pointer ${reading ? 'opacity-60 pointer-events-none' : ''}`}>
           {reading ? `Reading ${reading}…` : 'Choose file'}
           <input type="file" accept="application/pdf,image/*" className="hidden" onChange={e => { void pick(e.target.files?.[0]); e.target.value = ''; }} />
         </label>
       </div>
       {error && <p className="text-sm text-red-400 mb-3">{error}</p>}
+      {checked && <p className="text-sm text-gray-300 mb-3">{checked}</p>}
 
       {profiles.length > 0 && (
         <div className="rounded-xl p-4 mb-5 space-y-2" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.06)' }}>

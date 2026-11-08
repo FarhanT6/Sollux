@@ -9,6 +9,7 @@ import PersonalExpensesPage from './PersonalExpensesPage';
 import CardEditor from '../components/cards/CardEditor';
 import StatementImport from '../components/cards/StatementImport';
 import { CreditSnapshot, CardInsightList } from '../components/cards/CreditHealth';
+import DuplicateCards from '../components/cards/DuplicateCards';
 import { fmtMoney } from '../lib/money';
 import { fmtDate } from '../lib/date';
 import { simulatePayoff, type Strategy } from '../lib/payoff';
@@ -85,6 +86,7 @@ function CardsTab({ cards, summary, sources, reload, whose, newFor, member }: { 
         </div>
       )}
 
+      <DuplicateCards cardIds={cards.map(c => c.id)} onMerged={() => void reload()} />
       {phone && (
         <div className="ios-chips" style={{ marginBottom: 20 }}>
           <div className="ios-chip"><div className="k">Card debt</div><div className="v">{fmtMoney(summary.debt)}</div><div className="k">{summary.cards} open</div></div>
@@ -226,8 +228,10 @@ function LoansTab({ member, whose }: { member?: string; whose?: (memberId?: stri
   );
 }
 
-function OverviewTab({ cards, summary, go, member, people, ownerLabel, pick }: {
+function OverviewTab({ cards, summary, go, member, people, ownerLabel, pick, reload }: {
   cards: CreditCardT[]; summary: CardsSummary; go: (t: TabKey) => void;
+  /** After cards are merged. */
+  reload?: () => void;
   /** One person's ('me' or a member id), or undefined for everyone. */
   member?: string;
   /** The household, when there is one: Everyone shows a row per person. */
@@ -288,6 +292,7 @@ function OverviewTab({ cards, summary, go, member, people, ownerLabel, pick }: {
         <button className="ios-chip" style={{ textAlign: 'left', border: 0 }} onClick={() => go('cards')}><div className="k">Utilization</div><div className={`v ${utilTone(summary.utilization)}`}>{summary.utilization != null ? `${summary.utilization}%` : '—'}</div></button>
         <button className="ios-chip" style={{ textAlign: 'left', border: 0 }} onClick={() => go('expenses')}><div className="k">Spent this month</div><div className="v">{spent ? fmtMoney(spent.month) : '—'}</div>{spent && <div className="k">{fmtMoney(spent.last)} last month</div>}</button>
       </div>
+      <DuplicateCards cardIds={cards.map(c => c.id)} onMerged={() => reload?.()} />
       {alerts.length > 0 && (
         <Section header="Needs attention">
           {alerts.map((a, i) => <Row key={i} to={`/personal/cards/${a.id}`} wrap title={<span className={a.tone}>{a.text}</span>} />)}
@@ -310,6 +315,7 @@ function OverviewTab({ cards, summary, go, member, people, ownerLabel, pick }: {
   );
   return (
     <div>
+      <DuplicateCards cardIds={cards.map(c => c.id)} onMerged={() => reload?.()} />
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
         <button onClick={() => go('cards')} className="stat-card text-left"><p className="text-xs text-gray-500">Credit card debt</p><p className="text-lg font-semibold text-white">{fmtMoney(summary.debt)}</p><p className={`text-xs ${utilTone(summary.utilization)}`}>{summary.utilization != null ? `${summary.utilization}% utilization` : ''}</p></button>
         <button onClick={() => go('loans')} className="stat-card text-left"><p className="text-xs text-gray-500">Personal loans</p><p className="text-lg font-semibold text-white">{fmtMoney(loanDebt)}</p><p className="text-xs text-gray-500">{loans.length} loans</p></button>
@@ -413,7 +419,7 @@ export default function PersonalPage() {
     : tab === 'loans' ? <LoansTab member={member} whose={whose} />
     : data == null ? <p className="text-sm text-gray-500">Loading…</p>
     : tab === 'cards' ? <CardsTab cards={data.cards} summary={data.summary} sources={data.paymentSourceCards} reload={reload} whose={whose} newFor={newFor} member={member} />
-    : <OverviewTab cards={data.cards} summary={data.summary} go={go} member={member} people={people.map(p => ({ id: p.id, name: label(p.id) }))} ownerLabel={ownerLabel} pick={pick} />;
+    : <OverviewTab cards={data.cards} summary={data.summary} go={go} member={member} people={people.map(p => ({ id: p.id, name: label(p.id) }))} ownerLabel={ownerLabel} pick={pick} reload={() => void reload()} />;
   if (phone) return (
     <Screen title="Personal" back onRefresh={reload}>
       <Segmented<TabKey> label="Section" value={tab} onChange={t => setParams({ tab: t }, { replace: true })}
