@@ -42,6 +42,8 @@ function payload(fields: Record<string, any>) {
     cashAdvanceLimit: fields.cashAdvanceLimit, balanceTransferApr: fields.balanceTransferApr, penaltyApr: fields.penaltyApr, introApr: fields.introApr,
     introAprType: fields.introAprType, introAprEndDate: fields.introAprEndDate, rewardsProgram: fields.rewardsProgram, rewardsType: fields.rewardsType,
     issuer: fields.issuer, network: fields.network, cardholderName: fields.cardholderName, last4: fields.last4, authorizedUsers: fields.authorizedUsers,
+    lateFee: fields.lateFee, annualFee: fields.annualFee, foreignTransactionFee: fields.foreignTransactionFee, balanceTransferFee: fields.balanceTransferFee,
+    cashAdvanceFee: fields.cashAdvanceFee, phone: fields.phone, loginUrl: fields.loginUrl,
   };
   return { statement, terms, transactions: fields.transactions ?? [] };
 }

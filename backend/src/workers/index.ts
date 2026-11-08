@@ -10,6 +10,7 @@ import { scrapeQueue, insightQueue, gmailQueue } from './queues';
 import { db } from '../config/db';
 import { runNoticeReminders, importEarlierNotices } from '../services/noticeTracker';
 import { detachEmailPrintouts, detachCardEmailPrintouts } from '../services/emailPrintouts';
+import { backfillCardPayments } from '../services/cardPayments';
 import { decrypt } from '../crypto/encrypt';
 import { runDailyBalanceSnapshot } from './balanceSnapshotWorker';
 import { syncAllWatchedAccounts } from '../services/transactionMatchService';
@@ -188,6 +189,9 @@ setTimeout(() => {
   detachCardEmailPrintouts()
     .then(r => r.detached && console.log(`[Cards] ${r.detached} email printout(s) taken off card statements (${r.checked} checked)`))
     .catch(err => console.warn('[Cards] email printouts not checked:', err instanceof Error ? err.message : err));
+  // Card statements' payment lines linked to the payments logged (one payment, not two), and each card's cycle from its newest statement.
+  backfillCardPayments()
+    .catch(err => console.warn('[Cards] payments not linked:', err instanceof Error ? err.message : err));
   // Notices read before they were tracked: brought in once (idempotent).
   importEarlierNotices()
     .then(r => r.created && console.log(`[Notices] ${r.created} earlier notice(s) brought into the tracker, ${r.open} still open`))

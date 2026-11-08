@@ -634,11 +634,11 @@ export interface CardStatementT {
   purchases?: number | string | null; balanceTransfers?: number | string | null; cashAdvances?: number | string | null; feesCharged?: number | string | null;
   interestCharged?: number | string | null; newBalance: number | string; minimumPayment?: number | string | null; creditLimit?: number | string | null;
   availableCredit?: number | string | null; purchaseApr?: number | string | null; rewardsEarned?: number | string | null; rewardsBalance?: number | string | null;
-  minPayoffMonths?: number | null; minPayoffTotal?: number | string | null; transactionCount?: number; hasDocument?: boolean;
+  minPayoffMonths?: number | null; minPayoffTotal?: number | string | null; transactionCount?: number; lineKinds?: Record<string, number>; hasDocument?: boolean;
   /** Figures from a "your statement is ready" email; no statement PDF yet. */
   fromEmail?: boolean;
 }
-export interface CardPaymentT { id: string; date: string; amount: number | string; fromBankAccountId?: string | null; fromBankAccountName?: string | null; confirmation?: string | null; method?: string | null; notes?: string | null; statementId?: string | null }
+export interface CardPaymentT { id: string; date: string; amount: number | string; fromBankAccountId?: string | null; fromBankAccountName?: string | null; confirmation?: string | null; method?: string | null; notes?: string | null; statementId?: string | null; postedStatementId?: string | null }
 export interface CardTxnT { id: string; date: string; postDate?: string | null; description: string; merchant?: string | null; amount: number | string; kind: string; category?: string | null; cardholder?: string | null; isBusiness: boolean; propertyId?: string | null; expenseId?: string | null; notes?: string | null; statementId?: string | null }
 export interface CardsSummary { cards: number; debt: number; limits: number; available: number; utilization: number | null; monthlyInterest: number; minimumsDue30d: number; pastDue: number; promosEnding60d: number; annualFees: number; rewardsValue: number; interestYtd: number }
 /** `member`: one person's cards ('me' = the owner's own, an id = that household member's); omitted = everyone's. */

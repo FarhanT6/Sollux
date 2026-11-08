@@ -112,6 +112,16 @@ function Transactions({ card, properties }: { card: CreditCardT; properties: Pro
   );
 }
 
+const KIND_WORD: Record<string, [string, string]> = {
+  PAYMENT: ['payment', 'payments'], PURCHASE: ['purchase', 'purchases'], CREDIT: ['credit', 'credits'], FEE: ['fee', 'fees'],
+  INTEREST: ['interest charge', 'interest charges'], CASH_ADVANCE: ['cash advance', 'cash advances'], BALANCE_TRANSFER: ['balance transfer', 'balance transfers'],
+};
+/** "2 payments · 1 purchase" for a statement's lines. */
+function lineLabel(kinds: Record<string, number> | undefined, total: number) {
+  const parts = Object.entries(kinds ?? {}).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${(KIND_WORD[k] ?? [k.toLowerCase(), k.toLowerCase()])[n === 1 ? 0 : 1]}`);
+  return parts.length ? parts.join(' · ') : `${total} lines`;
+}
+
 export default function CreditCardPage() {
   const { id } = useParams<{ id: string }>();
   const [params, setParams] = useSearchParams();
@@ -122,6 +132,14 @@ export default function CreditCardPage() {
   const [banks, setBanks] = useState<{ id: string; name: string; last4?: string | null; accountType?: string }[]>([]);
   const [editing, setEditing] = useState(false);
   const [importing, setImporting] = useState(false);
+  // A statement's own lines, opened under its row (undefined closed, null loading).
+  const [lines, setLines] = useState<Record<string, CardTxnT[] | null | undefined>>({});
+  async function toggleLines(sid: string) {
+    if (lines[sid] !== undefined) { setLines(l => ({ ...l, [sid]: undefined })); return; }
+    setLines(l => ({ ...l, [sid]: null }));
+    const rows = await getCardTransactions(card!.id, { statementId: sid });
+    setLines(l => ({ ...l, [sid]: rows }));
+  }
   const [paying, setPaying] = useState<{ date: string; amount: string; fromBankAccountId: string; confirmation: string } | null>(null);
   const [balance, setBalance] = useState<string | null>(null);
   const nav = useNavigate();
@@ -232,12 +250,14 @@ export default function CreditCardPage() {
             <table className="table-base">
               <thead><tr><th className="pl-4">Closed</th><th>Due</th><th className="text-right">Previous</th><th className="text-right">Payments</th><th className="text-right">Purchases</th><th className="text-right">Fees</th><th className="text-right">Interest</th><th className="text-right">New balance</th><th className="text-right">Minimum</th><th className="text-right">Rewards</th><th className="pr-4"></th></tr></thead>
               <tbody>
-                {(card.statements ?? []).map(s => (
+                {(card.statements ?? []).flatMap(s => [
                   <tr key={s.id}>
                     <td className="pl-4 whitespace-nowrap text-white">{fmtDate(s.closingDate, 'MMM d, yyyy')}
                       {s.fromEmail
                         ? <span className="block text-xs text-amber-400/80" title="Balance, minimum and due date from the issuer's email. Upload the statement and it replaces this.">from the email · no statement yet</span>
-                        : <span className="block text-xs text-gray-600">{s.transactionCount ?? 0} transactions</span>}</td>
+                        : (s.transactionCount ?? 0) > 0
+                          ? <button onClick={() => void toggleLines(s.id)} className="block text-xs text-gray-500 hover:text-amber-300">{lineLabel(s.lineKinds, s.transactionCount ?? 0)} {lines[s.id] !== undefined ? '▾' : '▸'}</button>
+                          : <span className="block text-xs text-gray-600">no lines read</span>}</td>
                     <td className="text-gray-400 whitespace-nowrap">{s.dueDate ? fmtDate(s.dueDate, 'MMM d') : '—'}</td>
                     <td className="text-right">{m(s.previousBalance)}</td><td className="text-right text-emerald-400">{m(s.paymentsCredits)}</td><td className="text-right">{m(s.purchases)}</td>
                     <td className={`text-right ${Number(s.feesCharged ?? 0) > 0 ? 'text-red-400' : ''}`}>{m(s.feesCharged)}</td><td className={`text-right ${Number(s.interestCharged ?? 0) > 0 ? 'text-red-400' : ''}`}>{m(s.interestCharged)}</td>
@@ -247,8 +267,23 @@ export default function CreditCardPage() {
                       <button onClick={() => { setParams({ tab: 'transactions' }, { replace: true }); }} className="text-xs text-gray-500 hover:text-gray-300 mr-2">Lines</button>
                       <button onClick={async () => { if (confirm('Delete this statement and the transactions read from it?')) { await deleteCardStatement(s.id); await load(); } }} className="text-xs text-gray-600 hover:text-red-400">✕</button>
                     </td>
-                  </tr>
-                ))}
+                  </tr>,
+                  lines[s.id] !== undefined && (
+                    <tr key={`${s.id}-lines`}><td colSpan={11} className="pl-8 pr-4 pb-3">
+                      {lines[s.id] === null ? <p className="text-xs text-gray-500">Loading…</p> : (
+                        <table className="w-full text-xs">
+                          <tbody>{lines[s.id]!.map(t => (
+                            <tr key={t.id} className="border-t border-white/5">
+                              <td className="py-1 text-gray-500 whitespace-nowrap w-28">{fmtDate(t.date, 'MMM d, yyyy')}</td>
+                              <td className="py-1 text-gray-300">{t.merchant || t.description}</td>
+                              <td className="py-1 text-gray-500">{t.kind.replace('_', ' ').toLowerCase()}</td>
+                              <td className={`py-1 text-right whitespace-nowrap ${Number(t.amount) < 0 ? 'text-emerald-400' : 'text-white'}`}>{fmtMoney(t.amount)}</td>
+                            </tr>))}</tbody>
+                        </table>
+                      )}
+                    </td></tr>
+                  ),
+                ])}
                 {(card.statements ?? []).length === 0 && <tr><td colSpan={11} className="pl-4 text-sm text-gray-500">No statements yet.</td></tr>}
               </tbody>
             </table>
@@ -263,7 +298,7 @@ export default function CreditCardPage() {
               <thead><tr><th className="pl-4">Date</th><th className="text-right">Amount</th><th>From</th><th>Confirmation</th><th className="pr-4"></th></tr></thead>
               <tbody>
                 {(card.payments ?? []).map(pm => (
-                  <tr key={pm.id}><td className="pl-4 text-white">{fmtDate(pm.date, 'MMM d, yyyy')}</td><td className="text-right text-emerald-400">{fmtMoney(pm.amount)}</td><td className="text-gray-400">{pm.fromBankAccountName ?? '—'}</td><td className="text-gray-400">{pm.confirmation ?? '—'}</td>
+                  <tr key={pm.id}><td className="pl-4 text-white">{fmtDate(pm.date, 'MMM d, yyyy')}</td><td className="text-right text-emerald-400">{fmtMoney(pm.amount)}</td><td className="text-gray-400">{pm.fromBankAccountName ?? (pm.method === 'On statement' ? <span className="text-xs text-gray-500" title={pm.notes ?? ''}>On the statement — log it to add the bank account</span> : '—')}{pm.postedStatementId && pm.method !== 'On statement' && <span className="block text-xs text-gray-600">✓ on its statement</span>}</td><td className="text-gray-400">{pm.confirmation ?? '—'}</td>
                     <td className="pr-4 text-right"><button onClick={async () => { await deleteCardPayment(pm.id); await load(); }} className="text-xs text-gray-600 hover:text-red-400">✕</button></td></tr>
                 ))}
                 {(card.payments ?? []).length === 0 && <tr><td colSpan={5} className="pl-4 text-sm text-gray-500">No payments logged. Use "Log payment" above; each one counts against the statement before it.</td></tr>}

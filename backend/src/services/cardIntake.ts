@@ -13,6 +13,7 @@
 import { db } from '../config/db';
 import { isEmailPrintout } from './emailPrintouts';
 import { uploadDocument } from './s3Service';
+import { refreshCardCycle } from './cardPayments';
 import type { ExtractedBillData } from './pdfImportService';
 
 export interface CardIntakeResult { cardId: string; cardName: string; created: boolean; statementId: string | null }
@@ -106,10 +107,12 @@ export async function fileCardStatement(userId: string, ex: ExtractedBillData, p
       where: { id: card.id },
       data: {
         ...fill('creditLimit', fields.creditLimit), ...fill('purchaseApr', fields.purchaseApr),
-        ...(isNewest ? { statementClosingDay: closing.getUTCDate(), ...(due ? { paymentDueDay: due.getUTCDate() } : {}) } : {}),
         ...(isNewest && card.balanceAsOf && card.balanceAsOf < closing ? { currentBalance: null, balanceAsOf: null } : {}),
+        // An email's date is not a closing date: only its due day is kept, when none is known.
+        ...(fromEmail && due && card.paymentDueDay == null ? { paymentDueDay: due.getUTCDate() } : {}),
       },
     });
+    await refreshCardCycle(card.id);
   } else if (due) {
     // A payment-due alert with no statement behind it: the due day is still worth keeping.
     await db.creditCard.update({ where: { id: card.id }, data: { paymentDueDay: card.paymentDueDay ?? due.getUTCDate() } });

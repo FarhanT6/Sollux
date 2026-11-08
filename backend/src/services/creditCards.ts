@@ -29,7 +29,8 @@ export function cardPosition(card: any) {
   const payments = card.payments ?? [];
   const latest = statements[0] ?? null;
   const closedAt = latest ? new Date(latest.closingDate) : null;
-  const paidSinceClose = closedAt ? payments.filter((p: any) => new Date(p.date) > closedAt).reduce((t: number, p: any) => t + Number(p.amount), 0) : 0;
+  // A payment a statement lists is in that statement's balance already, whatever date it was logged under.
+  const paidSinceClose = closedAt ? payments.filter((p: any) => new Date(p.date) > closedAt && !p.postedStatementId).reduce((t: number, p: any) => t + Number(p.amount), 0) : 0;
 
   // The balance now: an entered balance when it is newer than the statement,
   // else the statement's balance less what has been paid since it closed.

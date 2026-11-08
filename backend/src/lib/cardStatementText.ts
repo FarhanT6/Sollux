@@ -37,6 +37,8 @@ export interface CardTextReading {
   purchaseApr: number | null; cashAdvanceApr: number | null; balanceTransferApr: number | null; penaltyApr: number | null;
   introApr: null; introAprType: null; introAprEndDate: null;
   daysInCycle: number | null;
+  lateFee: number | null; annualFee: number | null; foreignTransactionFee: number | null; balanceTransferFee: number | null; cashAdvanceFee: number | null;
+  phone: string | null; loginUrl: string | null;
   rewardsProgram: string | null; rewardsType: 'POINTS' | 'MILES' | 'CASHBACK' | null; rewardsEarned: number | null; rewardsBalance: null;
   minPayoffMonths: number | null; minPayoffTotal: number | null;
   authorizedUsers: never[];
@@ -286,6 +288,20 @@ export function readCardStatementText(input: string): CardTextReading | null {
   // "Days in Billing Cycle 31" with only the closing date printed: the cycle opened 30 days before it closed.
   if (!periodStart && days) periodStart = new Date(Date.parse(`${closingDate}T00:00:00Z`) - (Number(days) - 1) * 86_400_000).toISOString().slice(0, 10);
   const dailyCash = figure(text, ['Total Daily Cash this month']);
+  const lateFee = text.match(/late\s+fee\s+(?:of\s+)?up\s+to\s+\$\s?([\d,]+(?:\.\d{2})?)/i);
+  const annualFee = figure(text, ['Annual Fee', 'Annual Membership Fee'], /No\s+$/i);
+  // Customer service: the number by its label; Apple Card's "Contact us … at 877-255-5923".
+  const PHONE = String.raw`(?:1[-.\s])?\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}`;
+  const phone = text.match(new RegExp(String.raw`(?:Customer\s+Service|Account\s+Inquiries|Call\s+Customer\s+Service)[^\d\n]{0,80}?(?:\n[^\d\n]{0,80}?)?(${PHONE})`, 'i'))?.[1]
+    ?? text.match(new RegExp(String.raw`Contact\s+us[^\n]{0,60}?(${PHONE})`, 'i'))?.[1] ?? null;
+  // Where to pay: "Make your payment at chase.com/paycard", else the first site on the first page (not an email address).
+  const SITE = String.raw`(?:https?:\/\/)?(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|net)(?:\/[a-z0-9]+)?`;
+  const loginUrl = text.match(new RegExp(String.raw`(?:payment\s+at|pay\s+online\s+at|Manage\s+your\s+account\s+online:?)\s+(${SITE})\b`, 'i'))?.[1]
+    ?? firstPage.match(new RegExp(String.raw`(?<![@\w.])(${SITE})\b`, 'i'))?.[1] ?? null;
+  // Points: Chase's "Total points transferred to Aeroplan 237" / "Total points earned this period".
+  const points = text.match(/Total\s+points\s+transferred\s+to[\s\S]{0,80}?\n[ \t]*[A-Za-z®]+[ \t]+([\d,]+)[ \t]*(?:\n|$)/i)
+    ?? text.match(/Total\s+points\s+earned(?:\s+this\s+(?:period|month))?[ \t:]+([\d,]+)\b/i);
+  const program = /AEROPLAN/i.test(firstPage) ? 'Aeroplan' : /Ultimate\s+Rewards/i.test(text) ? 'Chase Ultimate Rewards' : /Membership\s+Rewards/i.test(text) ? 'Membership Rewards' : null;
   const penalty = text.match(/Penalty\s+APR\s+(?:of\s+)?(\d{1,2}(?:\.\d{1,3})?)\s?%/i);
 
   return {
@@ -304,7 +320,11 @@ export function readCardStatementText(input: string): CardTextReading | null {
     penaltyApr: penalty ? Number(penalty[1]) : null,
     introApr: null, introAprType: null, introAprEndDate: null,
     daysInCycle: days ? Number(days) : null,
-    rewardsProgram: dailyCash != null ? 'Daily Cash' : null, rewardsType: dailyCash != null ? 'CASHBACK' : null, rewardsEarned: dailyCash, rewardsBalance: null,
+    lateFee: lateFee ? Number(lateFee[1].replace(/,/g, '')) : null, annualFee: annualFee != null && annualFee > 0 ? annualFee : null,
+    foreignTransactionFee: null, balanceTransferFee: null, cashAdvanceFee: null,
+    phone, loginUrl: loginUrl ? loginUrl.replace(/^https?:\/\//, '').toLowerCase() : null,
+    rewardsProgram: dailyCash != null ? 'Daily Cash' : program, rewardsType: dailyCash != null ? 'CASHBACK' : program ? 'POINTS' : null,
+    rewardsEarned: dailyCash ?? (points ? Number(points[1].replace(/,/g, '')) : null), rewardsBalance: null,
     minPayoffMonths: payoff ? Number(payoff[1]) * 12 : null, minPayoffTotal: payoff ? money(`$${payoff[2]}`) : null,
     authorizedUsers: [],
     transactions: reconciled(transactionsOf(text, closingDate), newBalance - previousBalance, interestCharged, closingDate),
