@@ -24,6 +24,8 @@ import { fileBlockForClaude } from '../services/pdfImportService';
 import { reviewInsurance } from '../services/insuranceReview';
 import { opexFacts, rangeFor } from '../services/operatingExpenses';
 import { buildStatement } from '../lib/opexStatement';
+import { creditHealth } from '../services/cardHealthReport';
+import { cardPosition } from '../services/creditCards';
 
 /** A file the owner attached in the chat: stored under their own chat folder (routes/ai.ts). */
 export interface ChatAttachment { key: string; name: string }
@@ -51,6 +53,7 @@ const TOOLS: Anthropic.Tool[] = [
   { name: 'loan_tracker', description: "Every active loan for a month (YYYY-MM): owed, paid, due date, status (paid/partial/upcoming/due/late), how it's paid.", input_schema: { type: 'object', properties: { month: { type: 'string' } } } },
   { name: 'rent_status', description: "This month's rent: who is late past grace, how much, how many days; plus each lease's back rent.", input_schema: { type: 'object', properties: {} } },
   { name: 'pay_plan', description: 'What to pay in the next N days (default 14), which account has room for each, and how to pay.', input_schema: { type: 'object', properties: { days: { type: 'number' } } } },
+  { name: 'credit_cards', description: "The owner's and household's credit cards: each card's balance, limit, utilization, APR, minimum and due date, its payment history (each statement paid on time, late by how many days, past due, 30/60/90-day reporting), late fees, other fees and interest paid by month and in the last 12 months (refunds netted), returned payments, deferred-interest promotions; the credit snapshot (utilization, on-time payments) and money-saving insights with what to say when calling the issuer. Pass cardId for one card's statements and their lines.", input_schema: { type: 'object', properties: { cardId: { type: 'string' } } } },
   { name: 'alerts', description: 'Open alerts and reminders (overdue bills, balloons, leaks, deadlines).', input_schema: { type: 'object', properties: {} } },
   { name: 'log_rent_payment', description: 'Propose logging a rent payment. The owner must confirm before it is recorded.', input_schema: { type: 'object', properties: { leaseId: { type: 'string' }, amount: { type: 'number' }, month: { type: 'string', description: 'YYYY-MM the rent is for' }, paidDate: { type: 'string', description: 'YYYY-MM-DD received' }, method: { type: 'string', enum: ['ZELLE', 'CHECK', 'CASH', 'ACH', 'BANK_DEPOSIT', 'SECTION_8', 'RENTAL_ASSISTANCE', 'VENMO', 'CASH_APP', 'PAYPAL', 'APPLE_CASH', 'MONEY_ORDER', 'CARD', 'OTHER'] }, notes: { type: 'string' } }, required: ['leaseId', 'amount', 'month', 'paidDate'] } },
   { name: 'log_loan_payment', description: 'Propose logging a loan payment. The owner must confirm before it is recorded.', input_schema: { type: 'object', properties: { loanId: { type: 'string' }, amount: { type: 'number' }, date: { type: 'string', description: 'YYYY-MM-DD paid' }, month: { type: 'string', description: 'YYYY-MM it covers' }, method: { type: 'string', enum: ['AUTOPAY', 'ONLINE', 'CHECK', 'ZELLE', 'BANK_DEPOSIT', 'CASH', 'WIRE', 'DEDUCTED', 'OTHER'] }, notes: { type: 'string' } }, required: ['loanId', 'amount', 'date'] } },
@@ -231,6 +234,19 @@ export async function runReadTool(userId: string, name: string, input: any, toda
       const acct = new Map(plan.accounts.map(a => [a.id, a.name]));
       return { totals: plan.totals, payments: plan.obligations.map(o => ({ what: o.label, detail: o.detail, amount: o.amount, due: o.dueDate.slice(0, 10), status: o.status, from: o.payFrom.map(p => acct.get(p.accountId)), howToPay: o.howToPay })), warnings: plan.warnings };
     }
+    case 'credit_cards': {
+      if (input.cardId) {
+        const c = await db.creditCard.findFirst({ where: { id: String(input.cardId), userId }, include: {
+          statements: { orderBy: { closingDate: 'desc' }, take: 24, include: { transactions: { orderBy: { date: 'asc' }, select: { date: true, description: true, amount: true, kind: true, category: true, reference: true } } } },
+          payments: { orderBy: { date: 'desc' }, take: 60, select: { date: true, amount: true, method: true, confirmation: true, notes: true } },
+        } });
+        if (!c) return { error: 'Card not found' };
+        const { statements, payments, ...card } = c;
+        return { card: { ...card, position: cardPosition(c) }, statements: statements.map(({ documents: _d, ...s }) => s), payments };
+      }
+      const h = await creditHealth(userId);
+      return { snapshot: h.snapshot, insights: h.insights, cards: h.cards.map(c => ({ ...c, health: { ...c.health, history: c.health.history.slice(0, 12), costs: c.health.costs.slice(0, 12) } })) };
+    }
     case 'alerts': {
       const ins = await db.aIInsight.findMany({ where: { property: { userId }, isDismissed: false }, orderBy: [{ severity: 'desc' }, { createdAt: 'desc' }], take: 30, select: { severity: true, title: true, body: true } });
       return ins;
@@ -300,7 +316,7 @@ async function create(client: Anthropic, base: { system: string; messages: Anthr
  */
 export async function assistantTurn(userId: string, history: ChatTurn[], today: string): Promise<{ answer: string; actions: PendingAction[] }> {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const system = `You are Sollux, the assistant inside a real-estate owner's property-management app (rentals, utilities, loans, taxes). Today is ${today}. You can see everything the owner has in Sollux except the vault and saved passwords: every bill and its PDF (open_file reads the document itself — usage, line items, true-up, notices), payments, payment plans, loans, rent, taxes, insurance, documents and expenses. Answer from the tools — never guess amounts, dates or ids, and never say you cannot see a bill: open it. Look things up before answering; use find to get ids. Match the question: a quick lookup gets a short answer; "why is this bill so high" or "what changed" gets a real analysis — open every relevant statement PDF (several months), compare usage (kWh, therms, gallons) and its time-of-use split, rates, credits and their balances (an SDG&E bill's net-metering summary page lists each month's net usage and the NEM credit left), charges by provider (delivery vs a CCA's generation), and fees; say what changed and when, separate what the bills prove from what they cannot show (a net-metered bill shows net grid usage, not solar production), and end with the next checks to make. Read any file or screenshot the owner attached (usage graphs, a solar app, a letter) as evidence. Search the web when outside facts help (a tariff, an installer, a program), and say where a fact came from. Ask one focused question when an answer depends on something only the owner knows.
+  const system = `You are Sollux, the assistant inside a real-estate owner's property-management app (rentals, utilities, loans, taxes). Today is ${today}. You can see everything the owner has in Sollux except the vault and saved passwords: every bill and its PDF (open_file reads the document itself — usage, line items, true-up, notices), payments, payment plans, loans, credit cards (credit_cards: payment history, late fees, interest, utilization, money-saving moves), rent, taxes, insurance, documents and expenses. Answer from the tools — never guess amounts, dates or ids, and never say you cannot see a bill: open it. Look things up before answering; use find to get ids. Match the question: a quick lookup gets a short answer; "why is this bill so high" or "what changed" gets a real analysis — open every relevant statement PDF (several months), compare usage (kWh, therms, gallons) and its time-of-use split, rates, credits and their balances (an SDG&E bill's net-metering summary page lists each month's net usage and the NEM credit left), charges by provider (delivery vs a CCA's generation), and fees; say what changed and when, separate what the bills prove from what they cannot show (a net-metered bill shows net grid usage, not solar production), and end with the next checks to make. Read any file or screenshot the owner attached (usage graphs, a solar app, a letter) as evidence. Search the web when outside facts help (a tariff, an installer, a program), and say where a fact came from. Ask one focused question when an answer depends on something only the owner knows.
 Format with Markdown: **bold**, bullet and numbered lists, ### headings for a long answer, and tables (| a | b |). To show a chart, add a fenced block in this exact form — the app draws it:
 \`\`\`chart
 {"type":"bar","title":"Net grid usage by bill","unit":"kWh","labels":["May","Jun","Jul"],"series":[{"name":"Net kWh","values":[-1010,-990,-901]}]}

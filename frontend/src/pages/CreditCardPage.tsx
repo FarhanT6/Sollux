@@ -5,12 +5,14 @@ import {
   getCreditCard, getCreditCards, deleteCreditCard, mergeCreditCard, updateCreditCard, deleteCardStatement, cardStatementUrl, getCardTransactions, updateCardTransaction,
   deleteCardTransaction, cardTransactionToExpense, createCardTransaction, createCardPayment, deleteCardPayment, getBankAccounts, getProperties,
   type CreditCardT, type CardTxnT,
+  getCardHealth, getCreditHealth, type CardHealthT, type CardInsightT,
 } from '../api/client';
 import type { Property } from '../types';
 import { EXPENSE_CATEGORY_LABELS } from '../types';
 import { PageHeader } from '../components/ui';
 import CardEditor from '../components/cards/CardEditor';
 import StatementImport from '../components/cards/StatementImport';
+import { CardHistory } from '../components/cards/CreditHealth';
 import { STATUS_PILL, utilTone } from './PersonalPage';
 import { fmtMoney } from '../lib/money';
 import { fmtDate, todayISO } from '../lib/date';
@@ -26,7 +28,7 @@ import BackLink from '../components/ui/BackLink';
 const nameKey = (n: string) => n.toLowerCase().replace(/\(.*?\)/g, ' ').replace(/[•·]+\s*\d{3,4}/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
 const sameName = (a: string, b: string) => { const x = nameKey(a), y = nameKey(b); return !!x && !!y && (x === y || x.startsWith(y) || y.startsWith(x)); };
 
-const TABS = ['overview', 'statements', 'transactions', 'payments'] as const;
+const TABS = ['overview', 'history', 'statements', 'transactions', 'payments'] as const;
 type Tab = typeof TABS[number];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const TXN_CATEGORIES = ['Groceries', 'Dining', 'Gas', 'Travel', 'Shopping', 'Utilities', 'Home improvement', 'Insurance', 'Medical', 'Subscriptions', 'Entertainment', 'Services', 'Fees & interest', 'Other'];
@@ -132,6 +134,13 @@ export default function CreditCardPage() {
   const [banks, setBanks] = useState<{ id: string; name: string; last4?: string | null; accountType?: string }[]>([]);
   const [editing, setEditing] = useState(false);
   const [importing, setImporting] = useState(false);
+  // Payment history, costs and this card's insights — loaded when the History tab opens.
+  const [history, setHistory] = useState<{ h: CardHealthT; insights: CardInsightT[] } | null>(null);
+  useEffect(() => {
+    if (tab !== 'history' || !id) return;
+    setHistory(null);
+    void Promise.all([getCardHealth(id), getCreditHealth()]).then(([h, all]) => setHistory({ h, insights: all.insights.filter(i => i.cardId === id) })).catch(() => {});
+  }, [tab, id, card?.statements?.length, card?.payments?.length]);
   const newestStatement = useMemo(() => [...(card?.statements ?? [])].filter(s => !s.fromEmail).sort((a, b) => b.closingDate.localeCompare(a.closingDate))[0] ?? null, [card]);
   // A statement's own lines, opened under its row (undefined closed, null loading).
   const [lines, setLines] = useState<Record<string, CardTxnT[] | null | undefined>>({});
@@ -259,6 +268,8 @@ export default function CreditCardPage() {
             </div>
           </div>
         )}
+
+        {tab === 'history' && (history ? <CardHistory h={history.h} insights={history.insights} /> : <p className="text-sm text-gray-500">Loading…</p>)}
 
         {tab === 'statements' && (
           <div className="card overflow-x-auto">

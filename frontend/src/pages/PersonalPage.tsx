@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
-import { getCreditCards, createCardFromBankAccount, getLoans, getExpenses, getHousehold, assignToMember, type CreditCardT, type CardsSummary, type HouseholdT } from '../api/client';
+import { getCreditCards, getCreditHealth, type CreditHealthT, createCardFromBankAccount, getLoans, getExpenses, getHousehold, assignToMember, type CreditCardT, type CardsSummary, type HouseholdT } from '../api/client';
 import PeopleDialog from '../components/household/PeopleDialog';
 import { forgetHousehold, whoLabel } from '../components/household/BelongsTo';
 import type { Loan } from '../types';
@@ -8,6 +8,7 @@ import { PageHeader, EmptyState } from '../components/ui';
 import PersonalExpensesPage from './PersonalExpensesPage';
 import CardEditor from '../components/cards/CardEditor';
 import StatementImport from '../components/cards/StatementImport';
+import { CreditSnapshot, CardInsightList } from '../components/cards/CreditHealth';
 import { fmtMoney } from '../lib/money';
 import { fmtDate } from '../lib/date';
 import { simulatePayoff, type Strategy } from '../lib/payoff';
@@ -45,7 +46,9 @@ function UtilBar({ pct }: { pct: number | null }) {
   );
 }
 
-function CardsTab({ cards, summary, sources, reload, whose, newFor }: { cards: CreditCardT[]; summary: CardsSummary; sources: { id: string; name: string; last4?: string | null }[]; reload: () => Promise<void>; whose?: (memberId?: string | null) => string | null; newFor?: string | null }) {
+function CardsTab({ cards, summary, sources, reload, whose, newFor, member }: { cards: CreditCardT[]; summary: CardsSummary; sources: { id: string; name: string; last4?: string | null }[]; reload: () => Promise<void>; whose?: (memberId?: string | null) => string | null; newFor?: string | null; member?: string }) {
+  const [health, setHealth] = useState<CreditHealthT | null>(null);
+  useEffect(() => { void getCreditHealth(member).then(setHealth).catch(() => {}); }, [member, cards]);
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);
   const [budget, setBudget] = useState('');
@@ -99,6 +102,12 @@ function CardsTab({ cards, summary, sources, reload, whose, newFor }: { cards: C
         <div className="stat-card"><p className="text-xs text-gray-500">Rewards value</p><p className="text-lg font-semibold text-emerald-400">{fmtMoney(summary.rewardsValue)}</p></div>
         <div className="stat-card"><p className="text-xs text-gray-500">Annual fees</p><p className="text-lg font-semibold text-white">{fmtMoney(summary.annualFees)}</p>{summary.promosEnding60d > 0 && <p className="text-xs text-amber-400">{summary.promosEnding60d} promo rate ending soon</p>}</div>
       </div>
+      {health && (health.insights.length > 0 || health.snapshot.onTime12 + health.snapshot.late12 > 0) && (
+        <div className="space-y-4 mb-5">
+          <CreditSnapshot s={health.snapshot} />
+          <CardInsightList items={health.insights} title="Save money and protect your credit" />
+        </div>
+      )}
 
       {phone && cards.length > 0 ? (
         <Section action={cards.some(c => c.status === 'CLOSED') ? { label: showClosed ? 'Hide closed' : 'Show closed', onClick: () => setShowClosed(v => !v) } : undefined}>
@@ -382,7 +391,7 @@ export default function PersonalPage() {
     : tab === 'expenses' ? <PersonalExpensesPage embedded member={member} newFor={newFor} />
     : tab === 'loans' ? <LoansTab member={member} whose={whose} />
     : data == null ? <p className="text-sm text-gray-500">Loading…</p>
-    : tab === 'cards' ? <CardsTab cards={data.cards} summary={data.summary} sources={data.paymentSourceCards} reload={reload} whose={whose} newFor={newFor} />
+    : tab === 'cards' ? <CardsTab cards={data.cards} summary={data.summary} sources={data.paymentSourceCards} reload={reload} whose={whose} newFor={newFor} member={member} />
     : <OverviewTab cards={data.cards} summary={data.summary} go={go} member={member} people={people.map(p => ({ id: p.id, name: label(p.id) }))} ownerLabel={ownerLabel} pick={pick} />;
   if (phone) return (
     <Screen title="Personal" back onRefresh={reload}>
