@@ -17,6 +17,7 @@ import { decrypt } from '../crypto/encrypt';
 import { syncLoanFromComponents } from './loanComponents';
 import { Prisma } from '@prisma/client';
 import { flattenFormFields, layoutText } from './pdfForms';
+import { readCardStatementText, type CardTextReading } from '../lib/cardStatementText';
 import { compareWithOwner, type StatementConflict } from './statementConflict';
 
 // Read the API key directly from the .env file — reliable regardless of
@@ -4065,6 +4066,26 @@ export function applyNetMeteringFromText(text: string, ex: ExtractedBillData): v
   if (ex.currentCharges == null && ex.amountDue != null) ex.currentCharges = ex.amountDue;
 }
 
+/** A card statement read from its text, in the shape a bill read takes (documentKind 'credit_card_statement'). */
+function cardStatementBill(c: CardTextReading): ExtractedBillData {
+  return {
+    providerName: c.issuer ?? c.cardName, serviceAddress: null, accountNumber: c.last4,
+    statementDate: c.closingDate, dueDate: c.dueDate, billingPeriodStart: c.periodStart, billingPeriodEnd: c.closingDate,
+    amountDue: c.minimumPayment, previousBalance: c.previousBalance, paymentsReceived: c.paymentsCredits, currentCharges: c.purchases,
+    paymentPlanAmount: null, statedTotalDue: c.newBalance,
+    documentKind: 'credit_card_statement',
+    creditCard: {
+      issuer: c.issuer, cardName: c.cardName, network: c.network, last4: c.last4, cardholderName: c.cardholderName,
+      closingDate: c.closingDate, periodStart: c.periodStart, dueDate: c.dueDate,
+      previousBalance: c.previousBalance, paymentsCredits: c.paymentsCredits, purchases: c.purchases, feesCharged: c.feesCharged, interestCharged: c.interestCharged,
+      newBalance: c.newBalance, minimumPayment: c.minimumPayment, creditLimit: c.creditLimit, availableCredit: c.availableCredit, purchaseApr: c.purchaseApr,
+    },
+    penaltyDate: null, amountAfterDueDate: null, agingBuckets: null,
+    lateFee: null, usageValue: null, usageUnit: null, ratePlan: null, isPaid: false, utilityType: 'other',
+    chargeBreakdown: null, alerts: [],
+  };
+}
+
 // ── Main entry point ──────────────────────────────────────────────────────────
 
 export async function parseBill(
@@ -4094,7 +4115,14 @@ export async function parseBill(
     let layerText = '';
     if (!isImage) { try { layerText = flattened ? await layoutText(buffer) : (await pdfParse(buffer)).text; } catch { /* no text layer */ } }
     const scanned = !isImage && noTextLayer(layerText);
-    if (isImage) {
+    // A credit card statement whose own summary adds up is read from its
+    // text, for free, whichever method was chosen; Claude reads the rest.
+    const cardText = !isImage && !scanned && /Minimum\s+Payment|Payment\s+Due\s+By/i.test(layerText)
+      ? readCardStatementText(flattened ? layerText : await layoutText(buffer)) : null;
+    if (cardText) {
+      extractedBy = 'text';
+      extracted = cardStatementBill(cardText);
+    } else if (isImage) {
       extractedBy = 'ai';
       if (method === 'regex') extractionNote = 'Images are always read by Claude; text extraction needs a PDF.';
       extracted = await extractWithClaude(buffer, filename);
@@ -4144,7 +4172,11 @@ export async function parseBill(
         && ((extracted.currentCharges ?? 0) > 0 || extracted.billingPeriodStart || extracted.billingPeriodEnd)) {
       extracted.documentKind = 'bill';
     }
-    repairMisreadPeriodYear(extracted);
+    // A card statement keeps its figures as read: the fixers below are for
+    // utility bills, and the Home Depot card's "a credit balance of $1.00 or
+    // more" notice turned a $40.00 credit into a $1.00 one.
+    const isCard = extracted.documentKind === 'credit_card_statement';
+    if (!isCard) repairMisreadPeriodYear(extracted);
     // The text layer settles what the figures cannot: a bill in credit.
     // A scanned PDF's text is transcribed by Claude; if that fails, the
     // figures stand as read.
@@ -4153,7 +4185,7 @@ export async function parseBill(
       try { text = await transcribeWithClaude(buffer, filename); }
       catch (e) { console.warn(`[PDFImport] ${filename}: transcription failed (${e instanceof Error ? e.message : e})`); text = ''; }
     }
-    if (text) {
+    if (text && !isCard) {
       try {
         if (!extracted.providerWebsite) extracted.providerWebsite = websiteFromText(text);
         applyLedgerFromText(text, extracted);
@@ -4175,14 +4207,16 @@ export async function parseBill(
         applyAdjustmentChargesFromText(extracted, rowsText);
       } catch { /* the table stays as Claude read it */ }
     }
-    paymentsFromTransactions(extracted);
-    // A screenshot has no text layer; what Claude read of a premium finance
-    // ledger is shaped here.
-    shapePremiumFinance(extracted);
-    reconcileWithStatedTotal(extracted);
-    sanitiseLateFee(extracted);
-    sanitiseCurrentCharges(extracted);
-    derivePaymentPlanFromBreakdown(extracted);
+    if (!isCard) {
+      paymentsFromTransactions(extracted);
+      // A screenshot has no text layer; what Claude read of a premium finance
+      // ledger is shaped here.
+      shapePremiumFinance(extracted);
+      reconcileWithStatedTotal(extracted);
+      sanitiseLateFee(extracted);
+      sanitiseCurrentCharges(extracted);
+      derivePaymentPlanFromBreakdown(extracted);
+    }
     const match     = await matchToAccount(extracted, userId);
     // A bill for a period the owner entered by hand, with a different
     // amount, waits for the owner's choice instead of overwriting it.

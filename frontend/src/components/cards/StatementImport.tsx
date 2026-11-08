@@ -6,8 +6,9 @@ import { fmtDate } from '../../lib/date';
 import { describeApiError } from '../../lib/apiError';
 
 /**
- * Upload a credit card statement: Claude reads the summary, every rate and
- * every transaction; the owner checks the figures and saves. The statement
+ * Upload a credit card statement: its summary, rates and transactions are
+ * read from the PDF's own text when they add up (no AI used), else by
+ * Claude; the owner checks the figures and saves. The statement
  * files under the card whose last four digits it prints — or under a new
  * card set up from it — and the newest statement keeps the card's terms,
  * limit and cycle current.
@@ -92,6 +93,7 @@ export default function StatementImport({ cards, fixedCardId, onDone }: { cards:
             {[fields.issuer, fields.cardName].filter(Boolean).join(' ') || 'Card'}{fields.last4 ? ` ••${fields.last4}` : ''} · {fields.periodStart ? `${fmtDate(fields.periodStart, 'MMM d')} – ` : ''}{fields.closingDate ? fmtDate(fields.closingDate, 'MMM d, yyyy') : 'closing date?'}
             {' · '}{txns.length} transactions ({fmtMoney(charges)} charged, {fmtMoney(credits)} paid or credited)
             {fields.purchaseApr != null ? ` · ${fields.purchaseApr}% APR` : ''}{fields.rewardsBalance != null ? ` · ${Number(fields.rewardsBalance).toLocaleString()} rewards` : ''}
+            {fields.readBy === 'text' && <p className="mt-1 text-emerald-400">Read from the statement's own text — no AI credits used.{txns.length === 0 && fields.previousBalance !== fields.newBalance ? ' Its transactions could not be read without AI; the summary is complete.' : ''}</p>}
           </div>
           {!fixedCardId && (
             <div className="max-w-md">
