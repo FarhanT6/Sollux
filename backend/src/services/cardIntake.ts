@@ -24,6 +24,21 @@ const sanitize = (s: string) => s.replace(/[^\w.\- ]+/g, '').slice(0, 120) || 's
 /** A card's name for matching: "PayPal Credit (Synchrony Bank)" and "PayPal Credit" are one. */
 export const cardNameKey = (n: string) => n.toLowerCase().replace(/\(.*?\)/g, ' ').replace(/[•·]+\s*\d{3,4}/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
 
+/**
+ * The card a statement belongs to: by its last four; else, for a statement
+ * that prints none (PayPal Credit, Apple Card), the card of the same name,
+ * else the only card from this issuer.
+ */
+export async function findCardFor(userId: string, w: { last4: string | null; cardName: string | null; issuer: string | null }) {
+  if (w.last4) return db.creditCard.findFirst({ where: { userId, last4: w.last4 } });
+  const all = await db.creditCard.findMany({ where: { userId, status: { not: 'CLOSED' } }, orderBy: { createdAt: 'asc' } });
+  const want = cardNameKey(w.cardName ?? '');
+  const byName = want ? all.filter(c => !c.last4 && (cardNameKey(c.name) === want || cardNameKey(c.name).startsWith(want) || want.startsWith(cardNameKey(c.name)) || cardNameKey(c.name).endsWith(` ${want}`))) : [];
+  const first = w.issuer?.split(/\s+/)[0]?.toLowerCase();
+  const sameIssuer = first ? all.filter(c => (c.issuer ?? '').toLowerCase().includes(first)) : [];
+  return byName[0] ?? (sameIssuer.length === 1 ? sameIssuer[0] : null);
+}
+
 export async function fileCardStatement(userId: string, ex: ExtractedBillData, pdf: Buffer | null, filename: string): Promise<CardIntakeResult> {
   const cc = ex.creditCard ?? {};
   const last4 = (cc.last4 ?? ex.accountNumber ?? '').replace(/\D/g, '').slice(-4) || null;
@@ -34,15 +49,7 @@ export async function fileCardStatement(userId: string, ex: ExtractedBillData, p
   // Credit), the card of the same name, else the only card from this issuer. An
   // issuer with several cards (Synchrony: PayPal Credit and two Lowe's cards) made
   // a new card for every PayPal Credit statement.
-  let card = last4 ? await db.creditCard.findFirst({ where: { userId, last4 } }) : null;
-  if (!card && !last4) {
-    const all = await db.creditCard.findMany({ where: { userId, status: { not: 'CLOSED' } }, orderBy: { createdAt: 'asc' } });
-    const want = cardNameKey(cc.cardName ?? '');
-    const byName = want ? all.filter(c => !c.last4 && (cardNameKey(c.name) === want || cardNameKey(c.name).startsWith(want) || want.startsWith(cardNameKey(c.name)))) : [];
-    const first = issuer?.split(/\s+/)[0]?.toLowerCase();
-    const sameIssuer = first ? all.filter(c => (c.issuer ?? '').toLowerCase().includes(first)) : [];
-    card = byName[0] ?? (sameIssuer.length === 1 ? sameIssuer[0] : null);
-  }
+  let card = await findCardFor(userId, { last4, cardName: cc.cardName ?? null, issuer });
   let created = false;
   if (!card) {
     card = await db.creditCard.create({
