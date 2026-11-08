@@ -13,7 +13,7 @@
 import { db } from '../config/db';
 import { isEmailPrintout } from './emailPrintouts';
 import { uploadDocument } from './s3Service';
-import { refreshCardCycle } from './cardPayments';
+import { refreshCardCycle, syncStatementPayments } from './cardPayments';
 import type { ExtractedBillData } from './pdfImportService';
 
 export interface CardIntakeResult { cardId: string; cardName: string; created: boolean; statementId: string | null }
@@ -91,6 +91,13 @@ export async function fileCardStatement(userId: string, ex: ExtractedBillData, p
       previousBalance: num(cc.previousBalance), paymentsCredits: num(cc.paymentsCredits), purchases: num(cc.purchases),
       feesCharged: num(cc.feesCharged), interestCharged: num(cc.interestCharged), newBalance,
       minimumPayment: num(cc.minimumPayment), creditLimit: num(cc.creditLimit), availableCredit: num(cc.availableCredit), purchaseApr: num(cc.purchaseApr),
+      // Read from the statement's text: the rest of what it prints.
+      ...(cc.transactions ? {
+        cashAdvanceApr: num(cc.cashAdvanceApr), daysInCycle: num(cc.daysInCycle) != null ? Math.trunc(num(cc.daysInCycle)!) : null,
+        minPayoffMonths: num(cc.minPayoffMonths) != null ? Math.trunc(num(cc.minPayoffMonths)!) : null, minPayoffTotal: num(cc.minPayoffTotal),
+        pastDueAmount: num(cc.pastDueAmount), feesYtd: num(cc.feesYtd), interestYtd: num(cc.interestYtd), rewardsEarned: num(cc.rewardsEarned),
+        promotions: (cc.promotions ?? undefined) as any,
+      } : {}),
     };
     const st = await db.cardStatement.upsert({
       where: { cardId_closingDate: { cardId: card.id, closingDate: closing } },
@@ -99,6 +106,18 @@ export async function fileCardStatement(userId: string, ex: ExtractedBillData, p
       update: fromEmail ? {} : { ...fields, fromEmail: false, ...(documents.length ? { documents } : {}) },
     });
     statementId = st.id;
+    // Its lines, as the card page's upload keeps them: re-reading a statement replaces them, a line moved to a property's expenses stays.
+    if (!fromEmail && Array.isArray(cc.transactions)) {
+      await db.cardTransaction.deleteMany({ where: { statementId: st.id, expenseId: null } });
+      const kept = await db.cardTransaction.findMany({ where: { statementId: st.id }, select: { date: true, amount: true, description: true } });
+      const seen = new Set(kept.map(t => `${t.date.toISOString().slice(0, 10)}|${Number(t.amount).toFixed(2)}|${t.description}`));
+      const rows = cc.transactions.filter(t => !seen.has(`${t.date}|${t.amount.toFixed(2)}|${t.description}`)).map(t => ({
+        cardId: card!.id, statementId: st.id, date: new Date(`${t.date}T00:00:00Z`), postDate: t.postDate ? new Date(`${t.postDate}T00:00:00Z`) : null,
+        description: t.description, merchant: t.merchant, amount: t.amount, kind: t.kind, category: t.category, reference: t.reference ?? null, isBusiness: card!.isBusiness,
+      }));
+      if (rows.length) await db.cardTransaction.createMany({ data: rows });
+      await syncStatementPayments(st.id);
+    }
     // The newest statement sets the card's cycle and terms; an older one only fills blanks.
     const newest = await db.cardStatement.findFirst({ where: { cardId: card.id }, orderBy: { closingDate: 'desc' }, select: { id: true } });
     const isNewest = newest?.id === st.id;
@@ -107,6 +126,9 @@ export async function fileCardStatement(userId: string, ex: ExtractedBillData, p
       where: { id: card.id },
       data: {
         ...fill('creditLimit', fields.creditLimit), ...fill('purchaseApr', fields.purchaseApr),
+        // The card's terms the statement prints: the newest statement sets them, an older one fills blanks.
+        ...Object.fromEntries(Object.entries(cc.terms ?? {}).filter(([k, v]) => v != null && (isNewest || (card as any)[k] == null))
+          .map(([k, v]) => [k, k === 'introAprEndDate' ? new Date(`${v}T00:00:00Z`) : v])),
         ...(isNewest && card.balanceAsOf && card.balanceAsOf < closing ? { currentBalance: null, balanceAsOf: null } : {}),
         // An email's date is not a closing date: only its due day is kept, when none is known.
         ...(fromEmail && due && card.paymentDueDay == null ? { paymentDueDay: due.getUTCDate() } : {}),

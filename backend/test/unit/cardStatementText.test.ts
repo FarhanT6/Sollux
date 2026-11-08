@@ -149,3 +149,52 @@ test('a utility bill is not a card statement', () => {
   const bill = `City Water Department\nAccount Number 123456-654321\nPrevious Balance $80.00\nPayments -$80.00\nCurrent Charges $75.00\nTotal Amount Due $75.00\nDue Date 10/25/2026\n${LEGAL}`;
   assert.equal(readCardStatementText(bill), null);
 });
+
+// A store card with a Reference # column, credits marked by a trailing minus, and a returned payment.
+const storeCardActivity = `Account number ending in 4321
+Summary of Account Activity  Payment Information
+Previous Balance  $100.00  New Balance  $1,180.00
+Payments  +$950.00  Minimum Payment Due  $29.00
+Other Credits  -  $20.00  Payment Due Date  August 8, 2026
+Purchases/Other Debits  +$100.00
+Fees Charged  +$50.00
+Interest Charged  +$0.00
+Past Due Amount  $0.00
+Credit Limit  $3,000.00
+Statement Closing Date  07/12/2026
+Days in Billing Cycle  31
+Only the minimum payment  8 months  $1,200
+You must pay your promotional balance of  $100.00  in full by  12/08/27  to avoid paying deferred interest charges.
+This Account is Issued by Citibank, N.A.
+TRANSACTIONS
+Trans Date  Description  Reference #  Amount
+06/12  REFUND RETURN CK CHG  F123456AB000XYZ  $  20.00  -
+06/12  PAYMENT REVERSAL  F123456AB000XYA  $  1,000.00
+06/15  PAY-BY-PHONE PAYMENT     ANYTOWN    IL  P123456AB000XYB  $  50.00  -
+06/20  THE HOME DEPOT ANYTOWN  CA  0123456  $  100.00
+PLUMBING
+FEES
+06/12  RETURNED CHECK CHG  $  50.00
+TOTAL FEES FOR THIS PERIOD  $  50.00
+Total Fees Charged in 2026  $50.00
+${LEGAL}`;
+
+test('a returned payment, trailing-minus credits, references, departments and promotions', () => {
+  const r = readCardStatementText(storeCardActivity)!;
+  assert.ok(r);
+  // Payments net of the reversal put the balance up: 100 + 950 − 20 + 100 + 50 = 1,180.
+  assert.equal(r.paymentsCredits, -930);
+  assert.equal(r.pastDueAmount, 0);
+  assert.equal(r.feesYtd, 50);
+  assert.deepEqual([r.minPayoffMonths, r.minPayoffTotal], [8, 1200]);
+  assert.deepEqual(r.promotions.map(p => [p.balance, p.payBy]), [[100, '2027-12-08']]);
+  assert.equal(r.introAprEndDate, '2027-12-08');
+  assert.deepEqual(r.transactions.map(t => [t.kind, t.amount, t.reference, t.description]), [
+    ['CREDIT', -20, 'F123456AB000XYZ', 'REFUND RETURN CK CHG'],
+    ['PAYMENT', 1000, 'F123456AB000XYA', 'PAYMENT REVERSAL'],
+    ['PAYMENT', -50, 'P123456AB000XYB', 'PAY-BY-PHONE PAYMENT ANYTOWN IL'],
+    ['PURCHASE', 100, '0123456', 'THE HOME DEPOT ANYTOWN CA · PLUMBING'],
+    ['FEE', 50, null, 'RETURNED CHECK CHG'],
+  ]);
+  assert.equal(r.transactions[3].category, 'Home improvement');
+});
