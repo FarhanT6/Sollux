@@ -279,10 +279,19 @@ export function shape(kind: ReadKind, d: any): Record<string, any> {
     }).filter((t: any) => t.date && t.description && t.amount != null) : [];
     const users = Array.isArray(d.authorizedUsers) ? d.authorizedUsers.map((u: any) => ({ name: str(u?.name), last4: u?.last4 ? String(u.last4).replace(/\D/g, '').slice(-4) : null })).filter((u: any) => u.name) : [];
     const pos = (v: unknown) => { const n = num(v); return n == null ? null : Math.abs(n); };
+    // Payments are read as a positive figure, but a period whose payment bounced
+    // (Home Depot: "Payments +$1,236.14", a reversal outweighing the payments)
+    // took the balance up. When the summary only adds up with them the other way, they are.
+    let paid = pos(d.paymentsCredits);
+    const prev = num(d.previousBalance), nb = num(d.newBalance);
+    if (paid != null && prev != null && nb != null) {
+      const rest = (pos(d.purchases) ?? 0) + (pos(d.cashAdvances) ?? 0) + (pos(d.balanceTransfers) ?? 0) + (pos(d.feesCharged) ?? 0) + (pos(d.interestCharged) ?? 0);
+      if (Math.abs(prev - paid + rest - nb) > 0.02 && Math.abs(prev + paid + rest - nb) <= 0.02) paid = -paid;
+    }
     return {
       issuer: str(d.issuer), cardName: str(d.cardName), network: str(d.network), last4: last4 && last4.length === 4 ? last4 : null, cardholderName: str(d.cardholderName),
       periodStart: day(d.periodStart), closingDate: day(d.closingDate), dueDate: day(d.dueDate),
-      previousBalance: num(d.previousBalance), paymentsCredits: pos(d.paymentsCredits), purchases: pos(d.purchases), balanceTransfers: pos(d.balanceTransfers),
+      previousBalance: num(d.previousBalance), paymentsCredits: paid, purchases: pos(d.purchases), balanceTransfers: pos(d.balanceTransfers),
       cashAdvances: pos(d.cashAdvances), feesCharged: pos(d.feesCharged), interestCharged: pos(d.interestCharged), newBalance: num(d.newBalance), minimumPayment: pos(d.minimumPayment),
       creditLimit: pos(d.creditLimit), cashAdvanceLimit: pos(d.cashAdvanceLimit), availableCredit: num(d.availableCredit),
       purchaseApr: pos(d.purchaseApr), cashAdvanceApr: pos(d.cashAdvanceApr), balanceTransferApr: pos(d.balanceTransferApr), penaltyApr: pos(d.penaltyApr),

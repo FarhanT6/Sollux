@@ -198,3 +198,11 @@ test('a returned payment, trailing-minus credits, references, departments and pr
   ]);
   assert.equal(r.transactions[3].category, 'Home improvement');
 });
+
+test('an AI read whose payments only add up the other way (a bounced payment) is turned around', async () => {
+  const { shape } = await import('../../src/services/documentReader');
+  const f = shape('card_statement', { previousBalance: 221, paymentsCredits: 1207.14, purchases: 29, feesCharged: 29, interestCharged: 0, newBalance: 1486.14 });
+  assert.equal(f.paymentsCredits, -1207.14);
+  const ok = shape('card_statement', { previousBalance: 1000, paymentsCredits: 300, purchases: 534.56, newBalance: 1234.56 });
+  assert.equal(ok.paymentsCredits, 300);
+});
