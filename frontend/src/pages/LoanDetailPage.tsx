@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from 'react';
+import BelongsTo from '../components/household/BelongsTo';
 import { usePhone } from '../ios';
 import LoanScreen from './phone/LoanScreen';
 import { useParams, Link } from 'react-router-dom';
@@ -900,6 +901,7 @@ export default function LoanDetailPage() {
         </div>
         <div className="flex items-center gap-2">
           {loan.isPersonal && <span className="pill pill-purple">Personal</span>}
+          {loan.isPersonal && <BelongsTo kind="loan" id={loan.id} memberId={loan.memberId} />}
           {!loan.isActive && <span className="pill pill-gray">Closed</span>}
           {loan.maturityDate && (
             <button onClick={() => setShowExtend(true)} className="btn text-sm">Extend</button>

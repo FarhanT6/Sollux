@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import BelongsTo from '../components/household/BelongsTo';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   getBillsSheet, getLoanTrackerYear, getCatchUpLoans, runCatchUp, undoCatchUp, type CatchUpLoan, getStatementDownloadUrl, patchStatement, markStatementUnpaid, createPayment, createLoanPayment,
@@ -252,6 +253,7 @@ export function BillsSheet({ propertyId }: { propertyId?: string } = {}) {
                           <td className="px-3 py-2 sticky left-0 z-10" style={{ background: '#1e1e1e' }}>
                             <Link to={`/properties/${a.propertyId ?? p.id}/utilities/${a.id}`} className="text-gray-100 hover:text-amber-400 font-medium">{a.providerName}</Link>
                             {p.personal && <button onClick={() => void moveBack(a)} className="ml-2 text-[11px] text-gray-500 hover:text-amber-400" title="Back to the property's costs">Move back</button>}
+                            {p.personal && <div><BelongsTo kind="bill" id={a.id} memberId={(a as any).memberId} /></div>}
                             <div className="text-gray-500 flex gap-1.5 items-center">
                               <span>{CATEGORY[a.category] ?? a.category}</span>
                               {a.last4 && <span>••{a.last4}</span>}
