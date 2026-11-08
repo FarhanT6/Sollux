@@ -157,6 +157,8 @@ app.use('/api/reconciliation/read', express.json({ limit: '40mb' }));
 // Document uploads (lease agreements, applications, insurance/tax/maintenance
 // scans) can be large multi-page PDFs — allow well above the default cap.
 app.use('/api/leases', express.json({ limit: '50mb' }));
+// A card statement's PDFs go up with it (Upload a statement, one statement per request).
+app.use('/api/credit-cards', express.json({ limit: '50mb' }));
 app.use('/api/scanned-documents', express.json({ limit: '50mb' }));
 app.use('/api/legal', express.json({ limit: '50mb' }));
 // Repair requests carry up to six photos.

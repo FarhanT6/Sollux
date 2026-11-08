@@ -8,7 +8,7 @@
  */
 import { Router } from 'express';
 import { memberFilter, memberOk } from './household';
-import { mergeCards } from '../services/cardIntake';
+import { mergeCards, findCardFor } from '../services/cardIntake';
 import { z } from 'zod';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
@@ -130,8 +130,8 @@ router.post('/read-statement', async (req, res, next) => {
   try {
     const { files } = z.object({ files: z.array(File).min(1).max(20) }).parse(req.body);
     const result = await readDocument('card_statement', files, req.dbUserId!);
-    const last4 = result.fields.last4;
-    const card = last4 ? await db.creditCard.findFirst({ where: { userId: req.dbUserId!, last4 }, select: { id: true, name: true } }) : null;
+    const f = result.fields;
+    const card = await findCardFor(req.dbUserId!, { last4: f.last4 ?? null, cardName: f.cardName ?? null, issuer: f.issuer ?? null });
     res.json({ fields: result.fields, cardId: card?.id ?? null, cardName: card?.name ?? null });
   } catch (err: any) {
     if (err?.message) return res.status(422).json({ error: err.message });
