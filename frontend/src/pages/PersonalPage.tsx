@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
-import { getCreditCards, createCardFromBankAccount, getLoans, getExpenses, getHousehold, assignToMember, type CreditCardT, type CardsSummary, type HouseholdMemberT } from '../api/client';
+import { getCreditCards, createCardFromBankAccount, getLoans, getExpenses, getHousehold, assignToMember, type CreditCardT, type CardsSummary, type HouseholdT } from '../api/client';
 import PeopleDialog from '../components/household/PeopleDialog';
-import { forgetHousehold } from '../components/household/BelongsTo';
+import { forgetHousehold, whoLabel } from '../components/household/BelongsTo';
 import type { Loan } from '../types';
 import { PageHeader, EmptyState } from '../components/ui';
 import PersonalExpensesPage from './PersonalExpensesPage';
@@ -217,12 +217,14 @@ function LoansTab({ member, whose }: { member?: string; whose?: (memberId?: stri
   );
 }
 
-function OverviewTab({ cards, summary, go, member, people, pick }: {
+function OverviewTab({ cards, summary, go, member, people, ownerLabel, pick }: {
   cards: CreditCardT[]; summary: CardsSummary; go: (t: TabKey) => void;
   /** One person's ('me' or a member id), or undefined for everyone. */
   member?: string;
   /** The household, when there is one: Everyone shows a row per person. */
   people?: { id: string; name: string }[];
+  /** What the owner's own things are called: Me, or the owner's name to someone else signed in. */
+  ownerLabel?: string;
   pick?: (person: string) => void;
 }) {
   const phone = usePhone();
@@ -238,7 +240,7 @@ function OverviewTab({ cards, summary, go, member, people, pick }: {
     }).catch(() => {});
   }, [member]);
   // Everyone, with a household: each person's own totals, side by side.
-  const byPerson = !member && people?.length ? [{ id: 'me', name: 'Me' }, ...people].map(p => {
+  const byPerson = !member && people?.length ? [{ id: 'me', name: ownerLabel ?? 'Me' }, ...people].map(p => {
     const mine = (x: { memberId?: string | null }) => (p.id === 'me' ? !x.memberId : x.memberId === p.id);
     const pc = cards.filter(c => c.status !== 'CLOSED' && mine(c));
     const debt = pc.reduce((t, c) => t + c.position.balance, 0);
@@ -254,7 +256,7 @@ function OverviewTab({ cards, summary, go, member, people, pick }: {
   const upcoming = cards.filter(c => c.status !== 'CLOSED' && c.position.nextDueDate && (c.position.minimumRemaining > 0 || c.position.statementRemaining > 0))
     .sort((a, b) => +new Date(a.position.nextDueDate!) - +new Date(b.position.nextDueDate!));
   // Everyone, with a household: each card named with whose it is.
-  const tag = (c: { memberId?: string | null }) => (!member && people?.length ? ` (${c.memberId ? people.find(p => p.id === c.memberId)?.name ?? '?' : 'Me'})` : '');
+  const tag = (c: { memberId?: string | null }) => (!member && people?.length ? ` (${c.memberId ? people.find(p => p.id === c.memberId)?.name ?? '?' : ownerLabel ?? 'Me'})` : '');
   const alerts = [
     ...cards.filter(c => c.position.statementStatus === 'PAST_DUE').map(c => ({ tone: 'text-red-400', text: `${c.name}${tag(c)} is past due — ${fmtMoney(c.position.minimumRemaining)} minimum`, id: c.id })),
     ...cards.filter(c => c.position.promoEndsInDays != null && c.position.promoEndsInDays <= 60).map(c => ({ tone: 'text-amber-400', text: `${c.name}${tag(c)}: promotional rate ends in ${c.position.promoEndsInDays} days; ${fmtMoney(c.position.balance)} will start accruing at ${c.purchaseApr ?? '?'}%`, id: c.id })),
@@ -341,14 +343,18 @@ export default function PersonalPage() {
   const tab = (params.get('tab') as TabKey) || 'overview';
   const phone = usePhone();
   // The household: with nobody added this is the owner's page alone, as it always was.
-  const [people, setPeople] = useState<HouseholdMemberT[]>([]);
+  const [hh, setHh] = useState<HouseholdT | null>(null);
+  const people = hh?.members ?? [];
   const [managing, setManaging] = useState(false);
-  const loadPeople = () => { forgetHousehold(); return getHousehold().then(h => setPeople(h.members)).catch(() => setPeople([])); };
+  const loadPeople = () => { forgetHousehold(); return getHousehold().then(setHh).catch(() => setHh(null)); };
+  // "Me" is whoever is signed in; the owner shows by name to a person with their own login.
+  const label = (memberId: string | null) => whoLabel(hh, memberId);
+  const ownerLabel = label(null);
   useEffect(() => { void loadPeople(); }, []);
   const rawPerson = params.get('person') ?? 'all';
   const person = people.length && (rawPerson === 'me' || people.some(p => p.id === rawPerson)) ? rawPerson : 'all';
   const member = person === 'all' ? undefined : person;
-  const whose = (memberId?: string | null) => (person !== 'all' || !people.length ? null : memberId ? people.find(p => p.id === memberId)?.name ?? null : 'Me');
+  const whose = (memberId?: string | null) => (person !== 'all' || !people.length ? null : label(memberId ?? null));
   // New records made while one person is shown are theirs.
   const newFor = person === 'all' ? undefined : person === 'me' ? null : person;
   const [data, setData] = useState<Awaited<ReturnType<typeof getCreditCards>> | null>(null);
@@ -358,7 +364,12 @@ export default function PersonalPage() {
   const pick = (p: string) => setParams(cur => { if (p === 'all') cur.delete('person'); else cur.set('person', p); return cur; }, { replace: true });
   const bar = (
     <div className="flex items-center gap-1 flex-wrap">
-      {people.length > 0 && [{ id: 'all', name: 'Everyone' }, { id: 'me', name: 'Me' }, ...people].map(p => (
+      {people.length > 0 && [
+        { id: 'all', name: 'Everyone' },
+        // The signed-in person first, as Me.
+        ...(hh?.viewerMemberId ? [{ id: hh.viewerMemberId, name: 'Me' }, { id: 'me', name: ownerLabel }] : [{ id: 'me', name: 'Me' }]),
+        ...people.filter(p => p.id !== hh?.viewerMemberId),
+      ].map(p => (
         <button key={p.id} onClick={() => pick(p.id)}
           className={`text-xs px-3 py-1 rounded-full border ${person === p.id ? 'border-amber-500 text-amber-400' : 'border-white/10 text-gray-400 hover:text-gray-200'}`}>{p.name}</button>
       ))}
@@ -372,7 +383,7 @@ export default function PersonalPage() {
     : tab === 'loans' ? <LoansTab member={member} whose={whose} />
     : data == null ? <p className="text-sm text-gray-500">Loading…</p>
     : tab === 'cards' ? <CardsTab cards={data.cards} summary={data.summary} sources={data.paymentSourceCards} reload={reload} whose={whose} newFor={newFor} />
-    : <OverviewTab cards={data.cards} summary={data.summary} go={go} member={member} people={people} pick={pick} />;
+    : <OverviewTab cards={data.cards} summary={data.summary} go={go} member={member} people={people.map(p => ({ id: p.id, name: label(p.id) }))} ownerLabel={ownerLabel} pick={pick} />;
   if (phone) return (
     <Screen title="Personal" back onRefresh={reload}>
       <Segmented<TabKey> label="Section" value={tab} onChange={t => setParams({ tab: t }, { replace: true })}

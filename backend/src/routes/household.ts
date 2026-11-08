@@ -22,7 +22,23 @@ router.get('/', async (req, res, next) => {
       loans: await db.loan.count({ where: { userId, isPersonal: true, memberId } }),
       bills: await db.utilityAccount.count({ where: { property: { userId }, isPersonal: true, memberId } }),
     });
-    res.json({ members: await Promise.all(members.map(async m => ({ ...m, linked: await count(m.id) }))), me: await count(null) });
+    // Who is looking: the owner, or someone signed in with their own login on the account
+    // (shared family access), matched to their person by the login linked to it, else by name.
+    const owner = await db.user.findUnique({ where: { id: userId }, select: { fullName: true } });
+    const actingId = req.actingUserId ?? userId;
+    const logins = await db.user.findMany({ where: { ownerUserId: userId }, select: { id: true, fullName: true, email: true } });
+    let viewerMemberId: string | null = null;
+    if (actingId !== userId) {
+      const me = await db.user.findUnique({ where: { id: actingId }, select: { fullName: true } });
+      const norm = (s: string | null | undefined) => (s ?? '').toLowerCase().replace(/\(.*?\)/g, '').replace(/\s+/g, ' ').trim();
+      const linked = members.find(m => m.loginUserId === actingId) ?? members.find(m => !m.loginUserId && norm(m.name) === norm(me?.fullName));
+      viewerMemberId = linked?.id ?? null;
+    }
+    res.json({
+      members: await Promise.all(members.map(async m => ({ ...m, linked: await count(m.id) }))), me: await count(null),
+      ownerName: owner?.fullName ?? 'Owner', viewerMemberId, viewerIsOwner: actingId === userId,
+      logins: req.isAccountOwner ? logins : [],
+    });
   } catch (err) { next(err); }
 });
 
@@ -39,10 +55,16 @@ router.post('/', async (req, res, next) => {
 
 router.patch('/:id', async (req, res, next) => {
   try {
-    const { name } = z.object({ name: z.string().trim().min(1).max(60) }).parse(req.body);
+    const { name, loginUserId } = z.object({ name: z.string().trim().min(1).max(60).optional(), loginUserId: z.string().nullable().optional() }).parse(req.body);
     const m = await db.householdMember.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
     if (!m) return res.status(404).json({ error: 'Not found' });
-    res.json(await db.householdMember.update({ where: { id: m.id }, data: { name } }));
+    // A login can be linked only to someone with shared access to this account, and only by the owner.
+    if (loginUserId !== undefined) {
+      if (!req.isAccountOwner) return res.status(403).json({ error: 'Only the account owner links logins.' });
+      if (loginUserId && !(await db.user.findFirst({ where: { id: loginUserId, ownerUserId: req.dbUserId! }, select: { id: true } }))) return res.status(404).json({ error: 'Login not found' });
+      if (loginUserId) await db.householdMember.updateMany({ where: { userId: req.dbUserId!, loginUserId, id: { not: m.id } }, data: { loginUserId: null } });
+    }
+    res.json(await db.householdMember.update({ where: { id: m.id }, data: { ...(name ? { name } : {}), ...(loginUserId !== undefined ? { loginUserId } : {}) } }));
   } catch (err) {
     if (err instanceof z.ZodError) return res.status(400).json({ error: 'Give the person a name.' });
     next(err);
