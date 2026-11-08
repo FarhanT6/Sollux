@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import {
   getHousehold, addHouseholdMember, renameHouseholdMember, removeHouseholdMember, assignToMember,
-  getCreditCards, getLoans, getPersonalUtilities, type HouseholdMemberT,
+  getCreditCards, getLoans, getPersonalUtilities, linkHouseholdLogin, type HouseholdMemberT, type HouseholdT,
 } from '../../api/client';
 import { describeApiError } from '../../lib/apiError';
+import { whoLabel, forgetHousehold } from './BelongsTo';
 
 type Item = { kind: 'card' | 'loan' | 'bill'; id: string; label: string; memberId: string | null };
 
@@ -15,6 +16,7 @@ type Item = { kind: 'card' | 'loan' | 'bill'; id: string; label: string; memberI
  */
 export default function PeopleDialog({ onClose, onChanged }: { onClose: () => void; onChanged: () => void }) {
   const [members, setMembers] = useState<HouseholdMemberT[] | null>(null);
+  const [hh, setHh] = useState<HouseholdT | null>(null);
   const [items, setItems] = useState<Item[] | null>(null);
   const [name, setName] = useState('');
   const [editing, setEditing] = useState<{ id: string; name: string } | null>(null);
@@ -23,7 +25,7 @@ export default function PeopleDialog({ onClose, onChanged }: { onClose: () => vo
   const load = async () => {
     try {
       const [h, cards, loans, bills] = await Promise.all([getHousehold(), getCreditCards(), getLoans({ isPersonal: true }), getPersonalUtilities().catch(() => [])]);
-      setMembers(h.members);
+      setMembers(h.members); setHh(h);
       setItems([
         ...cards.cards.filter(c => c.status !== 'CLOSED').map(c => ({ kind: 'card' as const, id: c.id, label: `${c.name}${c.last4 ? ` ••${c.last4}` : ''}`, memberId: c.memberId ?? null })),
         ...loans.map((l: any) => ({ kind: 'loan' as const, id: l.id, label: `${l.lender}${l.loanType ? ` · ${String(l.loanType).replace('_', ' ').toLowerCase()}` : ''}`, memberId: l.memberId ?? null })),
@@ -35,7 +37,7 @@ export default function PeopleDialog({ onClose, onChanged }: { onClose: () => vo
 
   async function run(fn: () => Promise<unknown>) {
     setErr('');
-    try { await fn(); await load(); onChanged(); } catch (e) { setErr(describeApiError(e, 'That did not save.')); }
+    try { await fn(); forgetHousehold(); await load(); onChanged(); } catch (e) { setErr(describeApiError(e, 'That did not save.')); }
   }
   const assign = (it: Item, memberId: string | null) => {
     setItems(cur => cur?.map(x => (x.kind === it.kind && x.id === it.id ? { ...x, memberId } : x)) ?? null);
@@ -53,8 +55,8 @@ export default function PeopleDialog({ onClose, onChanged }: { onClose: () => vo
             <div key={it.id} className="flex items-center justify-between gap-3 py-1.5">
               <span className="text-sm text-gray-200 truncate">{it.label}</span>
               <select value={it.memberId ?? ''} onChange={e => assign(it, e.target.value || null)} className="input-dark text-xs">
-                <option value="">Me</option>
-                {(members ?? []).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                <option value="">{whoLabel(hh, null)}</option>
+                {(members ?? []).map(m => <option key={m.id} value={m.id}>{whoLabel(hh, m.id)}</option>)}
               </select>
             </div>
           ))}
@@ -76,7 +78,7 @@ export default function PeopleDialog({ onClose, onChanged }: { onClose: () => vo
         <div className="px-5 pb-5 overflow-y-auto space-y-5">
           {err && <p className="text-xs text-red-400">{err}</p>}
           <div className="space-y-1.5">
-            <div className="flex items-center justify-between py-1"><span className="text-sm text-gray-200">Me</span><span className="text-xs text-gray-600">you — anything not given to someone else</span></div>
+            <div className="flex items-center justify-between py-1"><span className="text-sm text-gray-200">{hh?.viewerMemberId ? hh.ownerName : 'Me'}</span><span className="text-xs text-gray-600">{hh?.viewerMemberId ? 'the account owner — anything not given to someone else' : 'you — anything not given to someone else'}</span></div>
             {(members ?? []).map(m => (
               <div key={m.id} className="flex items-center justify-between gap-2 py-1">
                 {editing?.id === m.id ? (
@@ -86,8 +88,15 @@ export default function PeopleDialog({ onClose, onChanged }: { onClose: () => vo
                   </form>
                 ) : (
                   <>
-                    <span className="text-sm text-gray-200">{m.name} <span className="text-xs text-gray-600">{[m.linked?.cards ? `${m.linked.cards} card${m.linked.cards === 1 ? '' : 's'}` : null, m.linked?.loans ? `${m.linked.loans} loan${m.linked.loans === 1 ? '' : 's'}` : null, m.linked?.bills ? `${m.linked.bills} bill${m.linked.bills === 1 ? '' : 's'}` : null].filter(Boolean).join(' · ')}</span></span>
-                    <span className="flex gap-2">
+                    <span className="text-sm text-gray-200">{m.name}{hh?.viewerMemberId === m.id ? ' (me)' : ''} <span className="text-xs text-gray-600">{[m.linked?.cards ? `${m.linked.cards} card${m.linked.cards === 1 ? '' : 's'}` : null, m.linked?.loans ? `${m.linked.loans} loan${m.linked.loans === 1 ? '' : 's'}` : null, m.linked?.bills ? `${m.linked.bills} bill${m.linked.bills === 1 ? '' : 's'}` : null].filter(Boolean).join(' · ')}</span></span>
+                    <span className="flex gap-2 items-center">
+                      {/* Their own login on this account: signed in as them, they are "Me". */}
+                      {(hh?.logins.length ?? 0) > 0 && (
+                        <select value={m.loginUserId ?? ''} onChange={e => void run(() => linkHouseholdLogin(m.id, e.target.value || null))} className="input-dark text-xs py-0.5" title="Their own Sollux login on this account: signed in as them, they see themselves as Me">
+                          <option value="">No login</option>
+                          {hh!.logins.map(l => <option key={l.id} value={l.id}>Signs in as {l.fullName || l.email}</option>)}
+                        </select>
+                      )}
                       <button onClick={() => setEditing({ id: m.id, name: m.name })} className="text-xs text-gray-500 hover:text-gray-300">Rename</button>
                       <button onClick={() => { if (confirm(`Remove ${m.name}? Their cards, loans and bills stay, as yours.`)) void run(() => removeHouseholdMember(m.id)); }} className="text-xs text-gray-500 hover:text-red-400">Remove</button>
                     </span>

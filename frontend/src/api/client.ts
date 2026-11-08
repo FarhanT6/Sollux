@@ -644,8 +644,11 @@ export const getCreditCards = (member?: string) =>
   api.get<{ cards: CreditCardT[]; summary: CardsSummary; paymentSourceCards: { id: string; name: string; last4?: string | null; bank?: string | null; cardNetwork?: string | null; cardExpiry?: string | null }[] }>('/credit-cards', { params: member ? { member } : {} }).then(r => r.data);
 
 // Household: people whose own money is tracked under Personal (the owner is not a row).
-export interface HouseholdMemberT { id: string; name: string; sortOrder: number; linked?: { cards: number; loans: number; bills: number } }
-export const getHousehold = () => api.get<{ members: HouseholdMemberT[]; me: { cards: number; loans: number; bills: number } }>('/household').then(r => r.data);
+export interface HouseholdMemberT { id: string; name: string; sortOrder: number; loginUserId?: string | null; linked?: { cards: number; loans: number; bills: number } }
+/** Who is looking: the owner, or a person with their own login on the account (then they are "Me" and the owner shows by name). */
+export interface HouseholdT { members: HouseholdMemberT[]; me: { cards: number; loans: number; bills: number }; ownerName: string; viewerMemberId: string | null; viewerIsOwner: boolean; logins: { id: string; fullName: string; email: string }[] }
+export const getHousehold = () => api.get<HouseholdT>('/household').then(r => r.data);
+export const linkHouseholdLogin = (id: string, loginUserId: string | null) => api.patch<HouseholdMemberT>(`/household/${id}`, { loginUserId }).then(r => r.data);
 export const addHouseholdMember = (name: string) => api.post<HouseholdMemberT>('/household', { name }).then(r => r.data);
 export const renameHouseholdMember = (id: string, name: string) => api.patch<HouseholdMemberT>(`/household/${id}`, { name }).then(r => r.data);
 export const removeHouseholdMember = (id: string) => api.delete(`/household/${id}`);
