@@ -1009,14 +1009,27 @@ function UnitTurnoverCard({ unit }: { unit: UnitTurnover }) {
 
       {unit.currentVacancy && (
         <div className="px-4 py-2.5 text-xs" style={{ background: 'rgba(239,68,68,0.08)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-          <span className="text-red-400 font-medium">Vacant {unit.currentVacancy.daysVacant} days</span>
-          <span className="text-gray-400">
-            {' '}since {fmtDateSafe(unit.currentVacancy.vacatedOn)} — {names(unit.currentVacancy.lastTenants)} moved out.
-            {' '}{money(unit.currentVacancy.lostSoFar)} lost at {money(unit.currentVacancy.lastRent)}/mo, and counting.
-          </span>
+          {unit.currentVacancy.neverLet ? (<>
+            <span className="text-red-400 font-medium">Vacant{unit.currentVacancy.daysVacant != null ? ` ${unit.currentVacancy.daysVacant} days` : ''}</span>
+            <span className="text-gray-400"> — no tenant on record{unit.currentVacancy.vacatedOn ? ` since it was bought ${fmtDateSafe(unit.currentVacancy.vacatedOn)}` : ''}. Add a lease (or a past one under Occupancy history) to count the rent lost.</span>
+          </>) : unit.currentVacancy.vacatedOn == null ? (<>
+            <span className="text-red-400 font-medium">Vacant</span>
+            <span className="text-gray-400"> — {names(unit.currentVacancy.lastTenants)}'s lease ended with no end date. Add the move-out date (Edit on the lease) to count the days and rent lost.</span>
+          </>) : (<>
+            <span className="text-red-400 font-medium">Vacant {unit.currentVacancy.daysVacant} days</span>
+            <span className="text-gray-400">
+              {' '}since {fmtDateSafe(unit.currentVacancy.vacatedOn)} — {names(unit.currentVacancy.lastTenants)} moved out.
+              {' '}{money(unit.currentVacancy.lostSoFar ?? 0)} lost at {money(unit.currentVacancy.lastRent ?? 0)}/mo, and counting.
+            </span>
+          </>)}
         </div>
       )}
 
+      {unit.earlierNotOnRecord && (
+        <div className="px-4 py-2 text-xs text-gray-500" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+          The first tenant on record moved in over a year after the property was bought, so earlier tenants aren't entered. Add them (past leases) to count those turnovers.
+        </div>
+      )}
       {unit.sinceAcquisition && (
         <div className="px-4 py-2.5 text-xs" style={{ background: 'rgba(245,166,35,0.06)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
           <span className="text-amber-300 font-medium">Vacant {unit.sinceAcquisition.daysVacant} days after acquisition</span>
