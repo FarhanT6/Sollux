@@ -8,6 +8,7 @@
  */
 import { Router } from 'express';
 import { memberFilter, memberOk } from './household';
+import { mergeCards } from '../services/cardIntake';
 import { z } from 'zod';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
@@ -182,6 +183,20 @@ router.patch('/:id', async (req, res, next) => {
     if (data.currentBalance !== undefined && data.balanceAsOf === undefined) (data as any).balanceAsOf = data.currentBalance == null ? null : new Date();
     res.json(await db.creditCard.update({ where: { id: req.params.id }, data: data as any }));
   } catch (err) { next(err); }
+});
+
+// POST /:id/merge { intoId } — this card is the same account as another (a
+// statement with no last four filed as a new card): everything moves there
+// and this one goes (services/cardIntake.ts mergeCards).
+router.post('/:id/merge', async (req, res, next) => {
+  try {
+    const { intoId } = z.object({ intoId: z.string() }).parse(req.body);
+    res.json(await mergeCards(req.dbUserId!, req.params.id, intoId));
+  } catch (err: any) {
+    if (err?.status === 404) return res.status(404).json({ error: err.message });
+    if (err instanceof z.ZodError) return res.status(400).json({ error: 'Choose the card to merge into.' });
+    next(err);
+  }
 });
 
 router.delete('/:id', async (req, res, next) => {

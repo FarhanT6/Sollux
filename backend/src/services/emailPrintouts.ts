@@ -52,3 +52,32 @@ export async function detachEmailPrintouts(): Promise<{ checked: number; detache
   }
   return { checked, detached };
 }
+
+/**
+ * Card statements saved with an email printout as their document (a "your
+ * statement is ready" email, filed before printouts were told apart): the
+ * printout comes off and the statement is marked as from the email; its
+ * figures stay. Runs once per statement.
+ */
+export async function detachCardEmailPrintouts(): Promise<{ checked: number; detached: number }> {
+  const rows = await db.cardStatement.findMany({ where: { fromEmail: false, NOT: { documents: { equals: Prisma.DbNull } } }, select: { id: true, documents: true }, take: 2000 });
+  let checked = 0, detached = 0;
+  for (const st of rows) {
+    const docs = Array.isArray(st.documents) ? (st.documents as { key: string; name: string; printoutChecked?: boolean }[]) : [];
+    if (!docs.length || docs.every(d => d.printoutChecked)) continue;
+    checked++;
+    const keep: typeof docs = [];
+    let printouts = 0;
+    for (const d of docs) {
+      let printout = false;
+      try { printout = await isEmailPrintout(await downloadDocument(d.key)); } catch { keep.push(d); continue; }
+      if (printout) printouts++; else keep.push({ ...d, printoutChecked: true });
+    }
+    await db.cardStatement.update({
+      where: { id: st.id },
+      data: { documents: keep.length ? (keep as unknown as Prisma.InputJsonValue) : Prisma.DbNull, ...(printouts && !keep.length ? { fromEmail: true } : {}) },
+    });
+    if (printouts) detached++;
+  }
+  return { checked, detached };
+}
