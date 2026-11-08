@@ -137,7 +137,7 @@ async function loadFacts(propertyIds: string[], range: DateRange) {
       select: { ...leaseSelect, unit: { select: { propertyId: true } } },
     }),
     db.rentPayment.findMany({
-      where: { paidDate: { gte: range.start, lt: range.end }, lease: { unit: { propertyId: { in: propertyIds } } } },
+      where: { paidDate: { gte: range.start, lt: range.end }, notIncome: false, lease: { unit: { propertyId: { in: propertyIds } } } },
       select: { amount: true, lease: { select: { unit: { select: { propertyId: true } } } } },
     }),
     db.expense.findMany({
@@ -274,7 +274,7 @@ export async function getMonthlyPnL(year: number, userId: string, propertyId?: s
       where: { ...leaseWhere, OR: [{ startDate: null }, { startDate: { lt: yearEnd } }], AND: { OR: [{ status: 'ACTIVE' }, { endDate: null }, { endDate: { gt: yearStart } }] } },
       select: leaseSelect,
     }),
-    db.rentPayment.findMany({ where: { paidDate: { gte: yearStart, lt: yearEnd }, ...leaseFilter } }),
+    db.rentPayment.findMany({ where: { paidDate: { gte: yearStart, lt: yearEnd }, notIncome: false, ...leaseFilter } }),
     db.expense.findMany({ where: { date: { gte: yearStart, lt: yearEnd }, isCapEx: false, isPersonal: false, ...propertyFilter } }),
     db.insurancePolicy.findMany({ where: { isPersonal: false, isActive: true, ...propertyFilter } }),
     db.taxAssessment.findMany({ where: propertyFilter }),

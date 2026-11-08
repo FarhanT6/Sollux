@@ -22,6 +22,10 @@ export interface RecordPaymentInput {
   appliedToArrears?: number;
   /** Where this payment goes first; omit to use the lease's setting. */
   applyTo?: ApplyTo | null;
+  /** A credit toward rent (method CREDIT): what it was for, the expense recorded with it, and whether it is income. */
+  creditFor?: string | null;
+  expenseId?: string | null;
+  notIncome?: boolean;
 }
 
 /** HISTORY: logged for the record only — the back-rent balance the owner keeps is left as it is. */
@@ -124,6 +128,9 @@ export async function recordRentPayment(input: RecordPaymentInput) {
       bankAccountId: input.bankAccountId ?? null,
       notes: input.notes ?? null,
       applyTo: input.applyTo ?? null,
+      creditFor: input.creditFor ?? null,
+      expenseId: input.expenseId ?? null,
+      notIncome: input.notIncome ?? false,
       appliedToArrears,
       settledRolledRent: split.settledRolled,
     },

@@ -27,9 +27,12 @@ export interface PayRow {
   status: PayStatus; paidOn: string | null; paidByDue: number; daysLate: number | null;
   /** Credit-reporting bucket: none under 30 days. */
   reported: null | '30' | '60' | '90+';
-  lateFee: number; note: string | null;
+  lateFee: number;
+  /** The late fee was refunded (a "Late Fee Credit"), and when. */
+  lateFeeWaivedOn: string | null;
+  note: string | null;
 }
-export interface LateEvent { date: string; fee: number; waived: boolean; forDueDate: string | null; onFile: boolean }
+export interface LateEvent { date: string; fee: number; waived: boolean; waivedOn: string | null; forDueDate: string | null; onFile: boolean }
 export interface CostMonth { month: string; interest: number; lateFees: number; otherFees: number; refunds: number }
 export interface ReturnedPayment { paidOn: string; returnedOn: string; amount: number }
 
@@ -98,7 +101,7 @@ export function cardHealth(statements: HStatement[], payments: HPayment[], today
     const prior = sts.filter(s => s.due != null && s.due < f.t).pop();
     // An issuer charges the fee within days of the missed date; one much later is for a statement not on file.
     const onFile = !!prior && f.t - prior.due! <= 35 * DAY;
-    return { date: iso(f.t), fee: r2(f.fee), waived: ri >= 0, forDueDate: onFile ? iso(prior!.due!) : null, onFile };
+    return { date: iso(f.t), fee: r2(f.fee), waived: ri >= 0, waivedOn: ri >= 0 ? iso(refundLines[ri].t) : null, forDueDate: onFile ? iso(prior!.due!) : null, onFile };
   });
 
   // Payments go to the oldest minimum still owed among the statements closed before them;
@@ -107,9 +110,9 @@ export function cardHealth(statements: HStatement[], payments: HPayment[], today
   const history: PayRow[] = sts.map((s, i) => {
     const next = sts[i + 1];
     const minimum = Number(s.minimumPayment ?? 0);
-    const base = { statementId: s.id, closingDate: iso(s.c), dueDate: s.due != null ? iso(s.due) : null, minimum: r2(minimum), lateFee: 0, note: null as string | null };
+    const base = { statementId: s.id, closingDate: iso(s.c), dueDate: s.due != null ? iso(s.due) : null, minimum: r2(minimum), lateFee: 0, lateFeeWaivedOn: null as string | null, note: null as string | null };
     const fee = lateEvents.find(e => e.forDueDate && s.due != null && e.forDueDate === iso(s.due));
-    if (fee) base.lateFee = fee.fee;
+    if (fee) { base.lateFee = fee.fee; base.lateFeeWaivedOn = fee.waivedOn; }
     if (Number(s.newBalance) <= 0.005 || minimum <= 0.005 || s.due == null) {
       // Nothing owed: payments made in its cycle are spent on it all the same, so they don't pay a later one.
       for (const p of pool) if (p.t > s.c && (!next || p.t <= next.c)) p.left = 0;

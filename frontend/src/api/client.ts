@@ -1548,11 +1548,11 @@ export const payUtilityInvoice = (id: string, body: { amount: number; paidAt: st
 
 // ── Credit health (payment history, card costs, credit insights) ──
 export type CardPayStatus = 'ON_TIME' | 'LATE' | 'PAST_DUE' | 'DUE' | 'NOT_LOGGED' | 'NONE_DUE';
-export interface CardPayRow { statementId: string; closingDate: string; dueDate: string | null; minimum: number; status: CardPayStatus; paidOn: string | null; paidByDue: number; daysLate: number | null; reported: null | '30' | '60' | '90+'; lateFee: number; note: string | null }
+export interface CardPayRow { statementId: string; closingDate: string; dueDate: string | null; minimum: number; status: CardPayStatus; paidOn: string | null; paidByDue: number; daysLate: number | null; reported: null | '30' | '60' | '90+'; lateFee: number; lateFeeWaivedOn: string | null; note: string | null }
 export interface CardCostMonth { month: string; interest: number; lateFees: number; otherFees: number; refunds: number }
 export interface CardHealthT {
   history: CardPayRow[];
-  lateEvents: { date: string; fee: number; waived: boolean; forDueDate: string | null; onFile: boolean }[];
+  lateEvents: { date: string; fee: number; waived: boolean; waivedOn: string | null; forDueDate: string | null; onFile: boolean }[];
   returned: { paidOn: string; returnedOn: string; amount: number }[];
   costs: CardCostMonth[];
   last12: { interest: number; lateFees: number; otherFees: number; refunds: number; net: number; onTime: number; late: number; worstDaysLate: number };

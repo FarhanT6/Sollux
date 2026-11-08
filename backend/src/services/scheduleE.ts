@@ -66,7 +66,7 @@ export async function buildScheduleE(userId: string, year: number) {
     let capex = 0, fines = 0;
 
     const [rent, expenses, statements, taxes, loans] = await Promise.all([
-      db.rentPayment.findMany({ where: { lease: { unit: { propertyId: p.id } }, paidDate: { gte: start, lt: end }, status: 'RECEIVED' }, select: { amount: true } }),
+      db.rentPayment.findMany({ where: { lease: { unit: { propertyId: p.id } }, paidDate: { gte: start, lt: end }, status: 'RECEIVED', notIncome: false }, select: { amount: true } }),
       db.expense.findMany({ where: { propertyId: p.id, isPersonal: false, date: { gte: start, lt: end } }, select: { category: true, amount: true, isCapEx: true } }),
       db.statement.findMany({
         where: { isScheduled: false, utilityAccount: { propertyId: p.id, escrowLoanId: null, isPersonal: false }, OR: [{ dueDate: { gte: start, lt: end } }, { dueDate: null, statementDate: { gte: start, lt: end } }] },

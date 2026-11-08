@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { recordRentPayment, repriceRentPayment } from '../services/rentPaymentService';
+import { CREDIT_REASONS, CREDIT_REASON, type CreditReason } from '../lib/rentCredits';
 
 const router = Router();
 router.use(attachDbUser);
@@ -17,8 +18,12 @@ const RentPaymentSchema = z.object({
   paidDate: z.string().transform(s => new Date(s)),
   method: z.enum([
     'CASH','CHECK','ZELLE','ACH','MONEY_ORDER','CARD',
-    'VENMO','PAYPAL','CASH_APP','APPLE_CASH','BANK_DEPOSIT','SECTION_8','RENTAL_ASSISTANCE','OTHER',
+    'VENMO','PAYPAL','CASH_APP','APPLE_CASH','BANK_DEPOSIT','SECTION_8','RENTAL_ASSISTANCE','CREDIT','OTHER',
   ]).default('OTHER'),
+  // A credit toward rent (method CREDIT): what it was for, and whether to record the
+  // property expense the tenant paid (on by default for repairs, materials, bills).
+  creditFor: z.enum(CREDIT_REASONS).optional().nullable(),
+  recordExpense: z.boolean().optional(),
   // PENDING = approved/committed but not yet disbursed. Assistance programs
   // routinely sit here for weeks.
   status: z.enum(['PENDING','RECEIVED']).default('RECEIVED'),
@@ -67,13 +72,36 @@ router.post('/', async (req, res, next) => {
       const acct = await db.bankAccount.findFirst({ where: { id: data.bankAccountId, userId: req.dbUserId! } });
       if (!acct) return res.status(404).json({ error: 'Bank account not found' });
     }
+    // A credit: no money received. What it was for decides whether it is income and
+    // whether the tenant paid a property cost, recorded as that property's expense.
+    let credit: { creditFor: string; expenseId: string | null; notIncome: boolean } | null = null;
+    if (data.method === 'CREDIT') {
+      if (!data.creditFor) return res.status(400).json({ error: 'Say what the credit was for.' });
+      if (!data.notes?.trim()) return res.status(400).json({ error: 'Describe what the credit was for (e.g. "replaced the water heater").' });
+      const reason = CREDIT_REASON[data.creditFor as CreditReason];
+      let expenseId: string | null = null;
+      if (reason.expense && data.recordExpense !== false) {
+        const full = await db.lease.findUnique({ where: { id: lease.id }, select: { unit: { select: { propertyId: true, unitLabel: true } }, leaseTenants: { select: { tenant: { select: { fullName: true } } }, take: 1 } } });
+        const who = full?.leaseTenants[0]?.tenant.fullName ?? 'the tenant';
+        const expense = await db.expense.create({
+          data: {
+            userId: req.dbUserId!, propertyId: full!.unit.propertyId, category: reason.expense, amount: data.amount, date: data.paidDate,
+            vendor: `Paid by tenant (${who})`, description: `${data.notes.trim()} — paid by ${who}${full?.unit.unitLabel ? `, ${full.unit.unitLabel}` : ''}, credited against rent`,
+          },
+        });
+        expenseId = expense.id;
+      }
+      credit = { creditFor: data.creditFor, expenseId, notIncome: !reason.income };
+    }
     const payment = await recordRentPayment({
+      ...(credit ?? {}),
       leaseId: data.leaseId,
       periodDate: data.periodDate,
       amount: data.amount,
       paidDate: data.paidDate,
       method: data.method,
-      status: data.status,
+      // A credit settles rent now; there is no money to wait for.
+      status: data.method === 'CREDIT' ? 'RECEIVED' : data.status,
       expectedDate: data.expectedDate,
       bankAccountId: data.bankAccountId,
       notes: data.notes,
@@ -131,9 +159,14 @@ router.patch('/:id', async (req, res, next) => {
         ...(data.bankAccountId !== undefined ? { bankAccountId: data.bankAccountId } : {}),
         ...(data.notes !== undefined ? { notes: data.notes } : {}),
         ...(data.applyTo !== undefined ? { applyTo: data.applyTo } : {}),
+        ...(data.creditFor !== undefined && existing.method === 'CREDIT' ? { creditFor: data.creditFor, notIncome: data.creditFor ? !CREDIT_REASON[data.creditFor as CreditReason].income : existing.notIncome } : {}),
       },
       include: { bankAccount: { select: { id: true, name: true, bank: true, last4: true, accountType: true, ownerLabel: true, cardNetwork: true } } },
     });
+    // The expense recorded with a credit follows its amount and date.
+    if (existing.expenseId && (amount !== Number(existing.amount) || data.paidDate)) {
+      await db.expense.updateMany({ where: { id: existing.expenseId, userId: req.dbUserId! }, data: { amount, ...(data.paidDate ? { date: data.paidDate } : {}) } });
+    }
     res.json(payment);
   } catch (err) { next(err); }
 });
@@ -145,6 +178,8 @@ router.delete('/:id', async (req, res, next) => {
     });
     if (!existing) return res.status(404).json({ error: 'Payment not found' });
     await db.rentPayment.delete({ where: { id: req.params.id } });
+    // A credit's property expense goes with it.
+    if (existing.expenseId) await db.expense.deleteMany({ where: { id: existing.expenseId, userId: req.dbUserId! } });
     // Put back whatever this payment knocked off the balance, or deleting a
     // mistaken payment would permanently understate what the tenant owes.
     const restored = Number(existing.appliedToArrears) + Number(existing.settledRolledRent);

@@ -208,7 +208,7 @@ async function loadT12Data(propertyId: string, userId: string) {
 
   const [rentPayments, expenses, utilityAccounts] = await Promise.all([
     db.rentPayment.findMany({
-      where: { paidDate: { gte: rangeStart, lt: rangeEnd }, lease: { unit: { propertyId } } },
+      where: { paidDate: { gte: rangeStart, lt: rangeEnd }, notIncome: false, lease: { unit: { propertyId } } },
       select: { amount: true, paidDate: true },
     }),
     db.expense.findMany({

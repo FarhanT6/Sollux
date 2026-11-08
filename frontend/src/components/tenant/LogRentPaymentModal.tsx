@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createRentPayment, addLeaseDeposit, getBankAccounts, getReimbursableItems, payUtilityInvoice, createReimbursementPayment, type OpenInvoice } from '../../api/client';
 import type { BankAccount, RentPaymentMethod } from '../../types';
-import { RENT_PAYMENT_METHODS, RENT_PAYMENT_METHOD_LABELS, BANK_LINKED_METHODS } from '../../types';
+import { RENT_PAYMENT_METHODS, RENT_PAYMENT_METHOD_LABELS, BANK_LINKED_METHODS, CREDIT_REASONS, type CreditReason } from '../../types';
 import { todayISO, thisMonthISO } from '../../lib/date';
 import { fmtMoney } from '../../lib/money';
 import { bankAccountLabel } from '../../lib/bankAccountLabel';
@@ -17,6 +17,10 @@ import { describeApiError } from '../../lib/apiError';
  *
  * Utilities: the same dialog logs a tenant paying back utilities, on their
  * open utility invoice (or on the lease's utility payments when none is open).
+ *
+ * Credit: rent settled without money — the tenant paid for a repair or a bill,
+ * a concession, a deposit applied. It says what for; a cost the tenant paid is
+ * also recorded as that property's expense (rent income and the expense net out).
  */
 export interface LogRentTarget {
   leaseId: string; tenant: string; unit: string; property: string;
@@ -57,7 +61,11 @@ export default function LogRentPaymentModal({ target, period, onClose, onSaved }
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // Rent, or a utility payment (on the lease's utility invoices).
-  const [kind, setKind] = useState<'rent' | 'deposit' | 'utilities'>('rent');
+  const [kind, setKind] = useState<'rent' | 'deposit' | 'utilities' | 'credit'>('rent');
+  // Credit toward rent: what for, and whether to record the property expense the tenant paid.
+  const [creditFor, setCreditFor] = useState<CreditReason>('REPAIR');
+  const [recordExpense, setRecordExpense] = useState(true);
+  const reason = CREDIT_REASONS.find(r => r.key === creditFor)!;
   // Rent + deposit: the security deposit part; the rest is rent for the month chosen.
   const [deposit, setDeposit] = useState('');
   const [invoices, setInvoices] = useState<OpenInvoice[] | null>(null);
@@ -80,10 +88,10 @@ export default function LogRentPaymentModal({ target, period, onClose, onSaved }
   useEffect(() => { getBankAccounts().then(a => setAccounts(a.filter(x => x.accountType !== 'CREDIT_CARD'))).catch(() => {}); }, []);
   const months = useMemo(() => monthOptions(thisMonth), [thisMonth]);
   const amt = parseFloat(amount);
-  const extra = !allToArrears && !recordOnly && amt > target.rent ? amt - target.rent : 0;
+  const extra = (kind === 'rent' || kind === 'credit') && !allToArrears && !recordOnly && amt > target.rent ? amt - target.rent : 0;
 
   async function save() {
-    if (!(amt > 0)) { setErr('Enter the amount received.'); return; }
+    if (!(amt > 0)) { setErr(kind === 'credit' ? 'Enter the amount credited.' : 'Enter the amount received.'); return; }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(paidDate)) { setErr('Enter the date the money was received.'); return; }
     setSaving(true); setErr(null);
     const note = [reference ? `Ref ${reference}` : null, notes || null].filter(Boolean).join(' · ') || null;
@@ -104,6 +112,20 @@ export default function LogRentPaymentModal({ target, period, onClose, onSaved }
         onSaved();
       } catch (e) {
         setErr(describeApiError(e, 'The payment was not saved.'));
+      } finally { setSaving(false); }
+      return;
+    }
+    if (kind === 'credit') {
+      if (!notes.trim()) { setErr('Say what the credit is for — e.g. "replaced the water heater" or "move-in special".'); setSaving(false); return; }
+      try {
+        await createRentPayment({
+          leaseId: target.leaseId, periodDate: `${forMonth}-01T00:00:00.000Z`, amount: amt, paidDate, method: 'CREDIT', status: 'RECEIVED',
+          creditFor, recordExpense: !!reason.expense && recordExpense, notes: notes.trim(),
+          ...(recordOnly ? { applyTo: 'HISTORY' as const } : allToArrears ? { appliedToArrears: amt } : {}),
+        });
+        onSaved();
+      } catch (e) {
+        setErr(describeApiError(e, 'The credit was not saved.'));
       } finally { setSaving(false); }
       return;
     }
@@ -146,27 +168,28 @@ export default function LogRentPaymentModal({ target, period, onClose, onSaved }
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.6)' }} onClick={onClose}>
       <div className="card p-5 w-full max-w-lg space-y-3 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div>
-          <p className="text-sm font-semibold text-white">Log {kind === 'utilities' ? 'utility' : kind === 'deposit' ? 'rent + deposit' : 'rent'} payment — {target.tenant}</p>
+          <p className="text-sm font-semibold text-white">{kind === 'credit' ? 'Credit toward rent' : `Log ${kind === 'utilities' ? 'utility' : kind === 'deposit' ? 'rent + deposit' : 'rent'} payment`} — {target.tenant}</p>
           <p className="text-xs text-gray-500">{target.unit} · {target.property} · rent {fmtMoney(target.rent)}{target.arrears > 0 ? <span className="text-red-400"> · {fmtMoney(target.arrears)} back rent owed</span> : null}</p>
         </div>
 
         {/* What it pays: rent, or utilities the tenant pays back. */}
         <div className="flex gap-1 p-0.5 rounded-lg w-fit" style={{ background: 'rgba(255,255,255,0.05)' }}>
-          {(['rent', 'deposit', 'utilities'] as const).map(k => (
+          {(['rent', 'deposit', 'utilities', 'credit'] as const).map(k => (
             <button key={k} type="button" onClick={() => {
               setKind(k); setAllToArrears(false);
               if (k === 'rent') setAmount(String(owedNow > 0 ? owedNow : target.rent));
+              else if (k === 'credit') setAmount('');
               else if (k === 'deposit') { const r = owedNow > 0 ? owedNow : target.rent; setDeposit(String(target.rent)); setAmount(String(r + target.rent)); }
               else if (invoices?.[0]) { setInvoiceId(invoices[0].id); setAmount(invoices[0].outstanding.toFixed(2)); }
             }}
               className={`text-xs px-3 py-1 rounded-md ${kind === k ? 'bg-white/10 text-white' : 'text-gray-500 hover:text-gray-300'}`}>
-              {k === 'rent' ? 'Rent' : k === 'deposit' ? 'Rent + deposit' : 'Utilities'}
+              {k === 'rent' ? 'Rent' : k === 'deposit' ? 'Rent + deposit' : k === 'utilities' ? 'Utilities' : 'Credit'}
             </button>
           ))}
         </div>
 
         <div>
-          <span className={label}>Amount received</span>
+          <span className={label}>{kind === 'credit' ? 'Amount credited toward rent' : 'Amount received'}</span>
           <input type="number" step="0.01" inputMode="decimal" className={input} value={amount} onChange={e => setAmount(e.target.value)} autoFocus />
           {kind === 'rent' && <div className="flex flex-wrap gap-1.5 mt-1.5">
             {quick('Full rent', target.rent)}
@@ -175,6 +198,29 @@ export default function LogRentPaymentModal({ target, period, onClose, onSaved }
             {quick('Back rent only', target.arrears)}
           </div>}
         </div>
+
+        {kind === 'credit' && (
+          <div className="space-y-2">
+            <div>
+              <span className={label}>Credit for</span>
+              <select className={input} value={creditFor} onChange={e => setCreditFor(e.target.value as CreditReason)}>
+                {CREDIT_REASONS.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <span className={label}>What for</span>
+              <input className={input} value={notes} onChange={e => setNotes(e.target.value)} placeholder={creditFor === 'REPAIR' ? 'e.g. replaced the water heater, receipt from Home Depot' : creditFor === 'CONCESSION' ? 'e.g. half off first month, move-in special' : 'What the credit is for'} />
+            </div>
+            {reason.expense ? (
+              <label className="flex items-start gap-2 text-xs text-gray-400 cursor-pointer">
+                <input type="checkbox" className="mt-0.5" checked={recordExpense} onChange={e => setRecordExpense(e.target.checked)} />
+                <span>Also record {amt > 0 ? fmtMoney(amt) : 'it'} as a {reason.expense.toLowerCase()} expense on this property. The tenant paid a cost that was yours: it counts as rent received and as the expense, so your books and Schedule E net out.</span>
+              </label>
+            ) : (
+              <p className="text-[11px] text-gray-500">{reason.income ? 'Counts as rent received (income) — no money changes hands.' : "Settles rent owed but isn't income — left out of P&L, cash flow and Schedule E."}</p>
+            )}
+          </div>
+        )}
 
         {kind === 'deposit' && (
           <div>
@@ -214,22 +260,23 @@ export default function LogRentPaymentModal({ target, period, onClose, onSaved }
             </select>
           </div>
           <div>
-            <span className={label}>Date received</span>
+            <span className={label}>{kind === 'credit' ? 'Date of the credit' : 'Date received'}</span>
             <input type="date" className={input} value={paidDate} onChange={e => setPaidDate(e.target.value)} />
           </div>
         </div>
 
-        {kind === 'rent' && <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
+        {(kind === 'rent' || kind === 'credit') && <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
           <input type="checkbox" checked={allToArrears} onChange={e => setAllToArrears(e.target.checked)} />
           All of it pays back rent (none toward {monthLabel(forMonth)})
         </label>}
-        {kind === 'rent' && <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer" title="For backdating payment history when the back-rent figure you have is already right">
+        {(kind === 'rent' || kind === 'credit') && <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer" title="For backdating payment history when the back-rent figure you have is already right">
           <input type="checkbox" checked={recordOnly} onChange={e => setRecordOnly(e.target.checked)} />
           Record only — leave back rent as it is
         </label>}
-        {kind === 'rent' && extra > 0.005 && <p className="text-xs text-gray-500">{fmtMoney(target.rent)} goes to {monthLabel(forMonth)}'s rent; the other {fmtMoney(extra)} pays down back rent.</p>}
+        {(kind === 'rent' || kind === 'credit') && extra > 0.005 && <p className="text-xs text-gray-500">{fmtMoney(target.rent)} goes to {monthLabel(forMonth)}'s rent; the other {fmtMoney(extra)} pays down back rent.</p>}
         </>}
 
+        {kind !== 'credit' && <>
         <div className="grid grid-cols-2 gap-3">
           <div>
             <span className={label}>How it was paid</span>
@@ -259,11 +306,12 @@ export default function LogRentPaymentModal({ target, period, onClose, onSaved }
           </div>) : <div />}
         </div>
         <div><span className={label}>Notes</span><input className={input} value={notes} onChange={e => setNotes(e.target.value)} /></div>
+        </>}
 
         {err && <p className="text-xs text-red-400">{err}</p>}
         <div className="flex justify-end gap-2">
           <button onClick={onClose} className="btn text-xs">Cancel</button>
-          <button onClick={save} disabled={saving} className="btn btn-primary text-xs disabled:opacity-50">{saving ? 'Saving…' : `Log ${amt > 0 ? fmtMoney(amt) : 'payment'}`}</button>
+          <button onClick={save} disabled={saving} className="btn btn-primary text-xs disabled:opacity-50">{saving ? 'Saving…' : kind === 'credit' ? `Credit ${amt > 0 ? fmtMoney(amt) : ''}`.trim() : `Log ${amt > 0 ? fmtMoney(amt) : 'payment'}`}</button>
         </div>
       </div>
     </div>
