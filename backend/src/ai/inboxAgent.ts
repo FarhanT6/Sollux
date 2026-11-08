@@ -10,6 +10,9 @@
  *    is printed to a PDF from the email itself and goes through the same path;
  *  - anything else is noted and left alone.
  *
+ * A property manager's statement (Finances → Income → Manager statements) is
+ * read as one, not as a bill, and saved as a draft for the owner to review.
+ *
  * Each message is handled once (InboxMessage), so re-running never double
  * files or double bills. Payment confirmations are recorded, not filed.
  */
@@ -21,6 +24,7 @@ import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { intakeBill, type ReviewItem } from '../services/documentIntake';
 import { parseP2PEmail, recordP2PEmail } from '../services/p2pPaymentEmails';
+import { intakeManagerStatement, looksLikeManagerStatement, managerForSender } from '../services/managerStatementEmail';
 
 const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string }>;
 
@@ -373,6 +377,8 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
           };
 
           try {
+            // A manager's statement: from an address the owner's manager uses, or reading like one.
+            const fromManager = pdfs.length ? await managerForSender(userId, from) : null;
             if (pdfs.length) {
               for (const p of pdfs) {
                 const att = await gmail.users.messages.attachments.get({ userId: 'me', messageId, id: p.body!.attachmentId! });
@@ -380,6 +386,13 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
                 let text = '';
                 try { text = (await pdfParse(buffer)).text; } catch { /* scanned or odd — let Claude decide if the email says bill */ }
                 const scanned = text.replace(/\s/g, '').length < 200;
+                if (fromManager || (!scanned && looksLikeManagerStatement(text))) {
+                  documents++;
+                  const r = await withAiContext({ userId, source: 'inbox' }, () =>
+                    intakeManagerStatement(userId, buffer, p.filename || `${subject || 'statement'}.pdf`, from, receivedAt, `${rfcMessageId ?? messageId}|${p.filename ?? ''}`));
+                  sum.applied++; outcomes.push('manager'); skips.push(r.detail);
+                  continue;
+                }
                 if (scanned ? !BILL_SUBJECT.test(subject) : !looksLikeBill(text)) { outcomes.push('skipped'); skips.push(`${p.filename || 'attachment'}: no amount or bill wording`); continue; }
                 await handle(buffer, p.filename || `${subject || 'email'}.pdf`);
               }
@@ -419,11 +432,11 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
             sum.errors.push(`${subject || messageId}: ${why}`);
           }
 
-          let best = ['filed', 'review', 'notice', 'policy', 'error', 'online'].find(o => outcomes.includes(o)) ?? 'skipped';
+          let best = ['filed', 'manager', 'review', 'notice', 'policy', 'error', 'online'].find(o => outcomes.includes(o)) ?? 'skipped';
           if (best === 'error' && retrying.has(messageId)) best = 'failed';
           if (best === 'skipped') sum.skipped++;
           // An error says why, so the log can be acted on.
-          await record(best, problems.length ? problems.join('; ') : best === 'skipped' || best === 'online' || best === 'filed' ? (skips.join('; ') || (best === 'filed' ? null : 'nothing to read')) : null, accountId);
+          await record(best, problems.length ? problems.join('; ') : best === 'skipped' || best === 'online' || best === 'filed' || best === 'manager' ? (skips.join('; ') || (best === 'filed' ? null : 'nothing to read')) : null, accountId);
         }
         // Stopping at the limit is progress, not an error: it was shown as
         // "backfilling (with errors)", and a 30-day backfill crept along at

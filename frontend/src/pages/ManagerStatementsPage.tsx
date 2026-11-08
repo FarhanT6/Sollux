@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   readManagerStatement, importManagerStatement, applyReconciliationStatement, deleteReconciliationStatement,
-  getReconciliationStatements, getReconciliationDocumentUrl, getLeases, getLoans, getProperties,
+  getReconciliationStatements, getReconciliationDocumentUrl, getLeases, getLoans, getProperties, getReconciliationProfiles, updateReconciliationProfile,
   type ManagerStatementDraft, type ManagerDraftLine, type ManagerLineKind,
 } from '../api/client';
-import type { Lease, Loan, Property, ReconciliationStatement } from '../types';
+import type { Lease, Loan, Property, ReconciliationProfile, ReconciliationStatement } from '../types';
 import { fmtMoney } from '../lib/money';
 import { fmtDate } from '../lib/date';
 import { fileToPayload } from '../lib/files';
@@ -18,6 +18,12 @@ import { describeApiError } from '../lib/apiError';
  * check the lines; applying records the rent, the loan payments and the
  * costs, which then show in Costs and the Overview. Rent already on record
  * for that tenant and month is left out so nothing counts twice.
+ *
+ * From email: a statement emailed to a connected Gmail (from the address a
+ * manager uses, or reading like an owner statement) is fetched and recorded on
+ * its own — rent for the month each line shows, each loan line as that month's
+ * payment — skipping what an earlier statement already had. Lines it could not
+ * match wait under Review.
  */
 
 const KIND_LABEL: Record<ManagerLineKind, string> = {
@@ -29,7 +35,10 @@ const CATEGORY_OF: Partial<Record<ManagerLineKind, string>> = { MANAGEMENT_FEE: 
 
 export default function ManagerStatementsPage({ initialFile }: { /** Handed over from Add's drop zone: read at once. */ initialFile?: File } = {}) {
   const [list, setList] = useState<ReconciliationStatement[] | null>(null);
-  const [draft, setDraft] = useState<ManagerStatementDraft | null>(null);
+  const [draft, setDraft] = useState<(ManagerStatementDraft & { replaceId?: string | null }) | null>(null);
+  const [profiles, setProfiles] = useState<ReconciliationProfile[]>([]);
+  const loadProfiles = useCallback(() => getReconciliationProfiles().then(setProfiles).catch(() => {}), []);
+  useEffect(() => { void loadProfiles(); }, [loadProfiles]);
   const [reading, setReading] = useState('');
   const [error, setError] = useState('');
 
@@ -62,6 +71,7 @@ export default function ManagerStatementsPage({ initialFile }: { /** Handed over
         <div className="flex-1 min-w-[240px]">
           <p className="font-semibold text-white">Upload a manager's statement</p>
           <p className="text-xs text-gray-500 mt-0.5">The monthly owner statement from your property manager, as a PDF or a photo. Sollux reads every line and matches it to your properties, tenants and loans; you check it before anything is recorded.</p>
+          <p className="text-xs text-gray-400 mt-1.5">Statements emailed to your connected Gmail are fetched and recorded on their own each night: rent for the month each line shows, and each loan marked paid for that month. Lines already on an earlier statement, or already recorded, are skipped.</p>
         </div>
         <label className={`btn-primary text-sm px-4 py-2 cursor-pointer ${reading ? 'opacity-60 pointer-events-none' : ''}`}>
           {reading ? `Reading ${reading}…` : 'Choose file'}
@@ -69,6 +79,14 @@ export default function ManagerStatementsPage({ initialFile }: { /** Handed over
         </label>
       </div>
       {error && <p className="text-sm text-red-400 mb-3">{error}</p>}
+
+      {profiles.length > 0 && (
+        <div className="rounded-xl p-4 mb-5 space-y-2" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.06)' }}>
+          <p className="text-sm font-semibold text-white">Fetched from email</p>
+          <p className="text-xs text-gray-500">A PDF from these addresses is read as that manager's statement. Sollux adds the sender itself the first time it spots one; add another address if the manager uses more than one.</p>
+          {profiles.map(p => <SenderRow key={p.id} profile={p} onSaved={() => void loadProfiles()} />)}
+        </div>
+      )}
 
       {list && !list.length && <p className="text-sm text-gray-500">No statements yet.</p>}
       {!!list?.length && (
@@ -81,10 +99,15 @@ export default function ManagerStatementsPage({ initialFile }: { /** Handed over
                   <td className="px-4 py-2 text-gray-200">{fmtDate(s.statementDate)}</td>
                   <td className="px-4 py-2 text-gray-300">{s.profile?.name}</td>
                   <td className="px-4 py-2 text-right tabular-nums text-gray-200">{fmtMoney(s.netAmount)}</td>
-                  <td className="px-4 py-2">{s.status === 'APPLIED' ? <span className="text-xs text-emerald-400">Recorded {s.appliedAt ? fmtDate(s.appliedAt) : ''}</span> : <span className="text-xs text-amber-400">Not recorded yet</span>}</td>
+                  <td className="px-4 py-2">
+                    {s.status === 'APPLIED' ? <span className="text-xs text-emerald-400">Recorded {s.appliedAt ? fmtDate(s.appliedAt) : ''}</span> : <span className="text-xs text-amber-400">Not recorded yet</span>}
+                    {s.source === 'email' && <span className="block text-xs text-gray-500">From email{s.receivedAt ? ` · ${fmtDate(s.receivedAt)}` : ''}</span>}
+                    {!!s.draftJson?.needsLook && s.status === 'APPLIED' && <span className="block text-xs text-amber-400">{s.draftJson.needsLook} line{s.draftJson.needsLook === 1 ? '' : 's'} not matched — review</span>}
+                  </td>
                   <td className="px-4 py-2 text-right whitespace-nowrap text-xs">
                     {s.documentS3Key && <button onClick={() => void openFile(s.id)} className="text-gray-400 hover:text-white mr-3">File</button>}
-                    {s.status !== 'APPLIED' && <button onClick={async () => { try { await applyReconciliationStatement(s.id); void load(); } catch (e) { setError(describeApiError(e, 'Could not record it.')); } }} className="text-amber-400 hover:text-amber-300 mr-3">Record</button>}
+                    {s.draftJson && (s.status !== 'APPLIED' || !!s.draftJson.needsLook) && <button onClick={() => setDraft({ ...s.draftJson!, replaceId: s.id })} className="text-amber-400 hover:text-amber-300 mr-3">Review</button>}
+                    {s.status !== 'APPLIED' && !s.draftJson && <button onClick={async () => { try { await applyReconciliationStatement(s.id); void load(); } catch (e) { setError(describeApiError(e, 'Could not record it.')); } }} className="text-amber-400 hover:text-amber-300 mr-3">Record</button>}
                     {s.status !== 'APPLIED' && <button onClick={async () => { if (confirm('Delete this statement?')) { await deleteReconciliationStatement(s.id); void load(); } }} className="text-gray-500 hover:text-red-400">Delete</button>}
                   </td>
                 </tr>
@@ -97,7 +120,23 @@ export default function ManagerStatementsPage({ initialFile }: { /** Handed over
   );
 }
 
-function Review({ draft, onCancel, onDone }: { draft: ManagerStatementDraft; onCancel: () => void; onDone: () => void }) {
+/** A manager's sending addresses: a PDF from one is read as their statement. */
+function SenderRow({ profile, onSaved }: { profile: ReconciliationProfile; onSaved: () => void }) {
+  const [v, setV] = useState(profile.emailFrom ?? '');
+  const [state, setState] = useState('');
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs">
+      <span className="text-gray-300 w-40 truncate">{profile.name}</span>
+      <input className="input-dark text-xs flex-1 min-w-[220px]" placeholder="manager@example.com" value={v} onChange={e => { setV(e.target.value); setState(''); }} />
+      <button className="btn text-xs" disabled={v === (profile.emailFrom ?? '')} onClick={async () => {
+        try { await updateReconciliationProfile(profile.id, { emailFrom: v }); setState('Saved'); onSaved(); } catch (e) { setState(describeApiError(e, 'Not saved')); }
+      }}>Save</button>
+      {state && <span className="text-gray-500">{state}</span>}
+    </div>
+  );
+}
+
+function Review({ draft, onCancel, onDone }: { draft: ManagerStatementDraft & { replaceId?: string | null }; onCancel: () => void; onDone: () => void }) {
   const [lines, setLines] = useState<ManagerDraftLine[]>(draft.lines);
   const [manager, setManager] = useState(draft.manager ?? '');
   const [date, setDate] = useState(draft.statementDate ?? draft.periodEnd ?? new Date().toISOString().slice(0, 10));
@@ -118,14 +157,14 @@ function Review({ draft, onCancel, onDone }: { draft: ManagerStatementDraft; onC
     const names = (l as any).leaseTenants?.map((t: any) => t.tenant?.fullName).filter(Boolean).join(', ') || 'No tenant';
     return `${names} · ${l.unit?.unitLabel ?? ''} · ${l.unit?.property?.nickname || l.unit?.property?.address || ''}${l.status !== 'ACTIVE' ? ' (ended)' : ''}`;
   };
-  const included = lines.filter(l => l.include);
+  const included = lines.filter(l => l.include && !l.recordedNow);
   const sum = (f: (l: ManagerDraftLine) => boolean) => included.filter(f).reduce((t, l) => t + l.amount, 0);
 
   async function save() {
     if (!manager.trim()) { setErr('Name the manager.'); return; }
     setSaving(true); setErr('');
     try {
-      const r = await importManagerStatement({ profileId: draft.profileId, managerName: manager.trim(), statementDate: date, documentKey: draft.documentKey, lines });
+      const r = await importManagerStatement({ profileId: draft.profileId, managerName: manager.trim(), statementDate: date, documentKey: draft.documentKey, lines: lines.filter(l => !l.recordedNow), replaceId: draft.replaceId ?? null });
       await applyReconciliationStatement(r.id);
       onDone();
     } catch (e) { setErr(describeApiError(e, 'Could not record the statement.')); }
@@ -145,7 +184,7 @@ function Review({ draft, onCancel, onDone }: { draft: ManagerStatementDraft; onC
         </div>
       </div>
       <p className="text-xs text-gray-500 mb-3">
-        Check each line. Rent is recorded on the tenant's lease, loan payments on the loan, and fees and repairs as the property's costs. Lines left unticked are kept on the statement but not recorded{lines.some(l => l.alreadyRecorded) ? ' — rent already on record for that tenant and month starts unticked' : ''}.
+        Check each line. Rent is recorded on the tenant's lease, loan payments on the loan, and fees and repairs as the property's costs. Lines left unticked are kept on the statement but not recorded{lines.some(l => l.alreadyRecorded || l.onEarlierStatement) ? ' — lines on an earlier statement, and rent or loan payments already on record for that month, start unticked' : ''}.
       </p>
 
       <div className="rounded-xl overflow-x-auto" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.06)' }}>
@@ -157,12 +196,14 @@ function Review({ draft, onCancel, onDone }: { draft: ManagerStatementDraft; onC
           <tbody>
             {lines.map((l, i) => (
               <tr key={i} className={`border-t border-white/5 ${l.include ? '' : 'opacity-50'}`}>
-                <td className="px-3 py-2"><input type="checkbox" checked={l.include} onChange={e => set(i, { include: e.target.checked })} /></td>
+                <td className="px-3 py-2"><input type="checkbox" checked={l.include} disabled={l.recordedNow} onChange={e => set(i, { include: e.target.checked })} /></td>
                 <td className="px-2 py-2 text-gray-400 whitespace-nowrap">{l.date ? fmtDate(l.date) : '—'}</td>
                 <td className="px-2 py-2 text-gray-200">
                   {l.description}
                   {(l.payee || l.propertyHint) && <div className="text-gray-500">{[l.payee, l.propertyHint].filter(Boolean).join(' · ')}</div>}
-                  {l.alreadyRecorded && <div className="text-amber-400">Already recorded for this tenant and month</div>}
+                  {l.recordedNow && <div className="text-emerald-400">Recorded when the email came in</div>}
+                  {!l.recordedNow && l.onEarlierStatement && <div className="text-gray-500">On an earlier statement — already counted</div>}
+                  {!l.recordedNow && !l.onEarlierStatement && l.alreadyRecorded && <div className="text-amber-400">Already recorded {l.kind === 'LOAN_PAYMENT' ? 'for this loan' : 'for this tenant'} and month</div>}
                 </td>
                 <td className="px-2 py-2">
                   <select className={input} value={l.kind} onChange={e => { const k = e.target.value as ManagerLineKind; set(i, { kind: k, category: CATEGORY_OF[k] ?? null, include: k !== 'OWNER_DRAW' && k !== 'OTHER' && l.include }); }}>

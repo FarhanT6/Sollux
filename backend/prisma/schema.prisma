@@ -1303,6 +1303,9 @@ model ReconciliationProfile {
   managementFeeCategory String? // ExpenseCategory string, if this profile deducts a mgmt fee
   loanIds               Json // string[] of Loan ids this profile also collects payments for
   notes                 String?
+  /// The addresses the manager emails statements from (comma separated): a PDF
+  /// from one of them is read as this manager's statement (services/managerStatementEmail).
+  emailFrom             String?
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
@@ -1326,9 +1329,16 @@ model ReconciliationStatement {
   appliedAt        DateTime?
   createdRecordIds Json? // { rentPaymentIds: [], loanPaymentIds: [], expenseIds: [] } — for traceability
   notes            String?
+  /// Fetched from the owner's email: 'email', the message it came in (for dedupe) and when.
+  source           String?
+  sourceRef        String?
+  receivedAt       DateTime?
+  /// The statement as read (services/managerStatement StatementDraft), for the owner to review before it is recorded.
+  draftJson        Json?
   createdAt        DateTime              @default(now())
 
   @@index([userId, profileId])
+  @@index([userId, sourceRef])
   @@map("reconciliation_statements")
 }
 

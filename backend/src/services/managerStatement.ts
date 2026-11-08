@@ -55,6 +55,10 @@ export interface DraftLine {
   category: string | null;
   /** Rent already recorded for this lease in this month, close to this amount: left out unless the owner says otherwise. */
   alreadyRecorded: boolean;
+  /** On an earlier statement from this manager already (a year-to-date statement repeats every month's lines): left out. */
+  onEarlierStatement?: boolean;
+  /** Recorded already when the statement came in by email (it records itself). */
+  recordedNow?: boolean;
   include: boolean;
 }
 
@@ -75,6 +79,15 @@ export async function readManagerStatement(userId: string, file: Buffer, name: s
   });
   const raw = jsonIn(text);
   if (!raw || !Array.isArray(raw.lines)) throw Object.assign(new Error(`Could not read a statement from ${name}.`), { status: 422 });
+  return matchManagerStatement(userId, raw);
+}
+
+/**
+ * The statement as read (the model's JSON) matched to the owner's records: each line's property,
+ * lease or loan; rent and loan months already on record, and lines already on an earlier
+ * statement from this manager, left out. Separate from the read so it can be tested without one.
+ */
+export async function matchManagerStatement(userId: string, raw: any): Promise<StatementDraft> {
 
   const [properties, leases, loans, profiles] = await Promise.all([
     db.property.findMany({ where: { userId }, select: { id: true, address: true, nickname: true } }),
@@ -141,6 +154,47 @@ export async function readManagerStatement(userId: string, file: Buffer, name: s
         && Math.abs(Number(r.amount) - x.amount) <= Math.max(1, x.amount * 0.02));
       if (x.alreadyRecorded) x.include = false;
     }
+  }
+
+  // A loan month already paid (logged by hand, or marked paid to date): not paid again.
+  const loanLines = lines.filter(x => x.kind === 'LOAN_PAYMENT' && x.loanId && x.include);
+  if (loanLines.length) {
+    const paid = await db.loanPayment.findMany({
+      where: { loanId: { in: [...new Set(loanLines.map(x => x.loanId!))] }, status: 'PAID' },
+      select: { loanId: true, amount: true, date: true, periodDate: true },
+    });
+    const fallback = iso(raw.periodEnd) ?? iso(raw.statementDate);
+    for (const x of loanLines) {
+      const month = (x.date ?? fallback)?.slice(0, 7);
+      if (!month) continue;
+      x.alreadyRecorded = paid.some(r => r.loanId === x.loanId
+        && (r.periodDate ?? r.date).toISOString().slice(0, 7) === month
+        && Math.abs(Number(r.amount) - x.amount) <= Math.max(1, x.amount * 0.02));
+      if (x.alreadyRecorded) x.include = false;
+    }
+  }
+
+  // A year-to-date statement repeats every earlier month's lines. Lines already on an earlier
+  // statement from this manager (same date, amount, direction and wording) are left out, so
+  // nothing is recorded twice; repeated lines are counted, so two equal fees on one statement stay.
+  const earlier = await db.reconciliationStatement.findMany({
+    where: { userId, ...(profile ? { profileId: profile.id } : {}) }, select: { lineItems: true },
+  });
+  const key = (date: string | null, amount: number, credit: boolean, description: string) =>
+    `${date ?? ''}|${amount.toFixed(2)}|${credit ? 'C' : 'D'}|${description.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()}`;
+  const seen = new Map<string, number>();
+  for (const st of earlier) {
+    const counts = new Map<string, number>();
+    for (const li of (Array.isArray(st.lineItems) ? st.lineItems : []) as any[]) {
+      const k = key(li?.date ?? null, Number(li?.amount ?? 0), li?.direction === 'CREDIT', String(li?.description ?? ''));
+      counts.set(k, (counts.get(k) ?? 0) + 1);
+    }
+    for (const [k, n] of counts) seen.set(k, Math.max(seen.get(k) ?? 0, n));
+  }
+  for (const x of lines) {
+    const k = key(x.date, x.amount, x.direction === 'IN', x.description);
+    const left = seen.get(k) ?? 0;
+    if (left > 0) { x.onEarlierStatement = true; x.include = false; seen.set(k, left - 1); }
   }
 
   const sum = (f: (x: DraftLine) => boolean) => Math.round(lines.filter(f).reduce((t, x) => t + x.amount, 0) * 100) / 100;

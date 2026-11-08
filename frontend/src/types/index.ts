@@ -373,14 +373,20 @@ export interface ReconciliationProfile {
   managementFeeCategory?: string | null;
   loanIds: string[];
   notes?: string | null;
+  /** The addresses the manager emails statements from (comma separated). */
+  emailFrom?: string | null;
   createdAt: string;
 }
 
 export interface ReconciliationStatement {
   id: string;
   profileId: string;
-  profile?: { id: string; name: string };
+  profile?: { id: string; name: string; emailFrom?: string | null };
   statementDate: string;
+  /** 'email' when fetched from the owner's email; it records itself, and draftJson keeps the read for lines left to review. */
+  source?: string | null;
+  receivedAt?: string | null;
+  draftJson?: (import('../api/client').ManagerStatementDraft & { needsLook?: number }) | null;
   documentS3Key?: string | null;
   documentUrl?: string | null;
   lineItems: ReconciliationLineItem[];

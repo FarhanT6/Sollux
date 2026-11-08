@@ -5,6 +5,7 @@ import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { uploadDocument, getSignedDocumentUrl, detectContentType } from '../services/s3Service';
 import { readManagerStatement } from '../services/managerStatement';
+import { applyManagerStatement } from '../services/managerStatementApply';
 
 const router = Router();
 router.use(attachDbUser);
@@ -20,6 +21,8 @@ const ProfileSchema = z.object({
   managementFeeCategory: z.string().optional().nullable(),
   loanIds: z.array(z.string()).default([]),
   notes: z.string().optional().nullable(),
+  // The addresses the manager emails statements from: a PDF from one of them is read as this manager's statement.
+  emailFrom: z.string().max(500).optional().nullable().transform(v => (v == null ? v : v.split(/[,\s;]+/).map(x => x.trim().toLowerCase()).filter(x => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x)).join(', ') || null)),
 });
 
 const LineItemSchema = z.object({
@@ -96,7 +99,7 @@ router.get('/statements', async (req, res, next) => {
     const { profileId } = req.query;
     const statements = await db.reconciliationStatement.findMany({
       where: { userId: req.dbUserId!, ...(profileId ? { profileId: profileId as string } : {}) },
-      include: { profile: { select: { id: true, name: true } } },
+      include: { profile: { select: { id: true, name: true, emailFrom: true } } },
       orderBy: { statementDate: 'desc' },
     });
     res.json(statements);
@@ -151,80 +154,12 @@ router.post('/statements/:id/document', async (req, res, next) => {
 // represent, in one transaction. A statement can only be applied once.
 router.post('/statements/:id/apply', async (req, res, next) => {
   try {
-    const statement = await db.reconciliationStatement.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
-    if (!statement) return res.status(404).json({ error: 'Statement not found' });
-    if (statement.status === 'APPLIED') return res.status(400).json({ error: 'Statement has already been applied' });
-
-    const profile = await db.reconciliationProfile.findFirst({ where: { id: statement.profileId, userId: req.dbUserId! } });
-    if (!profile) return res.status(404).json({ error: 'Profile not found' });
-
-    const lineItems = statement.lineItems as unknown as z.infer<typeof LineItemSchema>[];
-    const periodDate = new Date(statement.statementDate.getFullYear(), statement.statementDate.getMonth(), 1);
-
-    const rentPaymentIds: string[] = [];
-    const loanPaymentIds: string[] = [];
-    const expenseIds: string[] = [];
-
-    await db.$transaction(async tx => {
-      for (const item of lineItems) {
-        if (item.include === false) continue;
-        const itemDate = item.date ? new Date(item.date) : statement.statementDate;
-
-        if (item.type === 'RENT' && item.targetId) {
-          const p = await tx.rentPayment.create({
-            data: {
-              leaseId: item.targetId,
-              // The month the rent was for: the line's own date when it has one.
-              periodDate: item.date ? new Date(Date.UTC(itemDate.getUTCFullYear(), itemDate.getUTCMonth(), 1)) : periodDate,
-              amount: item.amount,
-              paidDate: itemDate,
-              method: 'OTHER',
-              notes: `Reconciled via ${profile.name} statement (${item.description ?? ''})`.trim(),
-            },
-          });
-          rentPaymentIds.push(p.id);
-        } else if (item.type === 'LOAN_PAYMENT' && item.targetId) {
-          const p = await tx.loanPayment.create({
-            data: {
-              loanId: item.targetId,
-              date: itemDate,
-              amount: item.amount,
-              status: 'PAID',
-              notes: `Reconciled via ${profile.name} statement (${item.description ?? ''})`.trim(),
-            },
-          });
-          loanPaymentIds.push(p.id);
-        } else if (item.type === 'EXPENSE' && (item.propertyId ?? profile.propertyId)) {
-          const e = await tx.expense.create({
-            data: {
-              userId: req.dbUserId!,
-              propertyId: (item.propertyId ?? profile.propertyId)!,
-              category: (item.category ?? profile.managementFeeCategory ?? 'PROPERTY_MANAGEMENT') as any,
-              amount: item.amount,
-              date: itemDate,
-              vendor: profile.name,
-              description: item.description || undefined,
-              isCapEx: false,
-              isPersonal: false,
-            },
-          });
-          expenseIds.push(e.id);
-        }
-      }
-
-      await tx.reconciliationStatement.update({
-        where: { id: statement.id },
-        data: {
-          status: 'APPLIED',
-          appliedAt: new Date(),
-          createdRecordIds: { rentPaymentIds, loanPaymentIds, expenseIds } as unknown as Prisma.InputJsonValue,
-        },
-      });
-    });
-
-    const updated = await db.reconciliationStatement.findUnique({ where: { id: statement.id } });
-    res.json(updated);
-  } catch (err) { next(err); }
+    await applyManagerStatement(req.dbUserId!, req.params.id);
+    res.json(await db.reconciliationStatement.findUnique({ where: { id: req.params.id } }));
+  } catch (err: any) {
+    if (err?.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
 });
 
 // ── Reading a statement ──────────────────────────────────────
@@ -255,6 +190,8 @@ const ImportSchema = z.object({
   statementDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   documentKey: z.string().optional().nullable(),
   notes: z.string().max(2000).optional().nullable(),
+  /** The emailed draft this review replaces (it keeps where it came from, so the email is not fetched again). */
+  replaceId: z.string().optional().nullable(),
   lines: z.array(z.object({
     date: z.string().nullable().optional(), description: z.string().max(300), kind: z.string(), amount: z.number().positive(),
     direction: z.enum(['IN', 'OUT']), propertyId: z.string().nullable().optional(), leaseId: z.string().nullable().optional(),
@@ -298,13 +235,22 @@ router.post('/import', async (req, res, next) => {
       date: l.date ?? null, category: l.category ?? null, propertyId: l.propertyId ?? null, include: l.include,
     }));
     const net = lineItems.reduce((t, li) => t + (li.direction === 'CREDIT' ? li.amount : -li.amount), 0);
+    // The emailed statement this review came from: a draft is replaced (keeping where it came from);
+    // one already recorded keeps its records, and its lines left to review are now done.
+    const from = d.replaceId ? await db.reconciliationStatement.findFirst({ where: { id: d.replaceId, userId } }) : null;
+    const replaced = from && from.status !== 'APPLIED' ? from : null;
     const statement = await db.reconciliationStatement.create({
       data: {
         userId, profileId: profile.id, statementDate: new Date(`${d.statementDate}T00:00:00.000Z`),
-        lineItems: lineItems as unknown as Prisma.InputJsonValue, netAmount: Math.round(net * 100) / 100, notes: d.notes ?? null,
-        documentS3Key: d.documentKey ?? null,
+        lineItems: lineItems as unknown as Prisma.InputJsonValue, netAmount: Math.round(net * 100) / 100, notes: d.notes ?? replaced?.notes ?? null,
+        documentS3Key: d.documentKey ?? replaced?.documentS3Key ?? null,
+        ...(replaced ? { source: replaced.source, sourceRef: replaced.sourceRef, receivedAt: replaced.receivedAt } : {}),
       },
     });
+    if (replaced) await db.reconciliationStatement.delete({ where: { id: replaced.id } });
+    else if (from?.draftJson && typeof from.draftJson === 'object') {
+      await db.reconciliationStatement.update({ where: { id: from.id }, data: { draftJson: { ...(from.draftJson as Record<string, unknown>), needsLook: 0 } as Prisma.InputJsonValue } });
+    }
     res.status(201).json({ id: statement.id, profileId: profile.id });
   } catch (err) {
     if (err instanceof z.ZodError) return res.status(400).json({ error: 'Some lines are incomplete.' });
