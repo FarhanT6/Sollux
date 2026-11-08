@@ -635,6 +635,8 @@ export interface CardStatementT {
   interestCharged?: number | string | null; newBalance: number | string; minimumPayment?: number | string | null; creditLimit?: number | string | null;
   availableCredit?: number | string | null; purchaseApr?: number | string | null; rewardsEarned?: number | string | null; rewardsBalance?: number | string | null;
   minPayoffMonths?: number | null; minPayoffTotal?: number | string | null; transactionCount?: number; hasDocument?: boolean;
+  /** Figures from a "your statement is ready" email; no statement PDF yet. */
+  fromEmail?: boolean;
 }
 export interface CardPaymentT { id: string; date: string; amount: number | string; fromBankAccountId?: string | null; fromBankAccountName?: string | null; confirmation?: string | null; method?: string | null; notes?: string | null; statementId?: string | null }
 export interface CardTxnT { id: string; date: string; postDate?: string | null; description: string; merchant?: string | null; amount: number | string; kind: string; category?: string | null; cardholder?: string | null; isBusiness: boolean; propertyId?: string | null; expenseId?: string | null; notes?: string | null; statementId?: string | null }
@@ -659,6 +661,8 @@ export const createCreditCard = (data: Record<string, any>) => api.post<CreditCa
 export const createCardFromBankAccount = (bankAccountId: string) => api.post<CreditCardT>(`/credit-cards/from-bank-account/${bankAccountId}`).then(r => r.data);
 export const updateCreditCard = (id: string, data: Record<string, any>) => api.patch<CreditCardT>(`/credit-cards/${id}`, data).then(r => r.data);
 export const deleteCreditCard = (id: string) => api.delete(`/credit-cards/${id}`);
+/** This card is the same account as `intoId`: everything moves there and this card goes. */
+export const mergeCreditCard = (id: string, intoId: string) => api.post<{ statements: number; transactions: number; payments: number }>(`/credit-cards/${id}/merge`, { intoId }).then(r => r.data);
 export const readCardStatement = (files: FilePayload[]) =>
   api.post<{ fields: Record<string, any>; cardId: string | null; cardName: string | null }>('/credit-cards/read-statement', { files }).then(r => r.data);
 export const saveCardStatement = (cardId: string, body: { statement: Record<string, any>; transactions?: Record<string, any>[]; terms?: Record<string, any>; files?: FilePayload[] }) =>

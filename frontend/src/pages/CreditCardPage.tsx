@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import BelongsTo from '../components/household/BelongsTo';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
-  getCreditCard, getCreditCards, deleteCreditCard, updateCreditCard, deleteCardStatement, cardStatementUrl, getCardTransactions, updateCardTransaction,
+  getCreditCard, getCreditCards, deleteCreditCard, mergeCreditCard, updateCreditCard, deleteCardStatement, cardStatementUrl, getCardTransactions, updateCardTransaction,
   deleteCardTransaction, cardTransactionToExpense, createCardTransaction, createCardPayment, deleteCardPayment, getBankAccounts, getProperties,
   type CreditCardT, type CardTxnT,
 } from '../api/client';
@@ -21,6 +21,10 @@ import BackLink from '../components/ui/BackLink';
  * transactions and payments. A charge that was for a property moves into
  * that property's expenses from here.
  */
+
+/** Two card names that are one account: "PayPal Credit (Synchrony Bank)" and "PayPal Credit". */
+const nameKey = (n: string) => n.toLowerCase().replace(/\(.*?\)/g, ' ').replace(/[•·]+\s*\d{3,4}/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+const sameName = (a: string, b: string) => { const x = nameKey(a), y = nameKey(b); return !!x && !!y && (x === y || x.startsWith(y) || y.startsWith(x)); };
 
 const TABS = ['overview', 'statements', 'transactions', 'payments'] as const;
 type Tab = typeof TABS[number];
@@ -230,7 +234,10 @@ export default function CreditCardPage() {
               <tbody>
                 {(card.statements ?? []).map(s => (
                   <tr key={s.id}>
-                    <td className="pl-4 whitespace-nowrap text-white">{fmtDate(s.closingDate, 'MMM d, yyyy')}<span className="block text-xs text-gray-600">{s.transactionCount ?? 0} transactions</span></td>
+                    <td className="pl-4 whitespace-nowrap text-white">{fmtDate(s.closingDate, 'MMM d, yyyy')}
+                      {s.fromEmail
+                        ? <span className="block text-xs text-amber-400/80" title="Balance, minimum and due date from the issuer's email. Upload the statement and it replaces this.">from the email · no statement yet</span>
+                        : <span className="block text-xs text-gray-600">{s.transactionCount ?? 0} transactions</span>}</td>
                     <td className="text-gray-400 whitespace-nowrap">{s.dueDate ? fmtDate(s.dueDate, 'MMM d') : '—'}</td>
                     <td className="text-right">{m(s.previousBalance)}</td><td className="text-right text-emerald-400">{m(s.paymentsCredits)}</td><td className="text-right">{m(s.purchases)}</td>
                     <td className={`text-right ${Number(s.feesCharged ?? 0) > 0 ? 'text-red-400' : ''}`}>{m(s.feesCharged)}</td><td className={`text-right ${Number(s.interestCharged ?? 0) > 0 ? 'text-red-400' : ''}`}>{m(s.interestCharged)}</td>
@@ -267,7 +274,24 @@ export default function CreditCardPage() {
 
         <div className="mt-8 flex justify-between">
           <BackLink fallback="/personal?tab=cards" className="text-xs text-gray-500 hover:text-gray-300">← All cards</BackLink>
-          <button onClick={async () => { if (confirm('Delete this card, its statements, transactions and payments? Expenses already filed to properties stay.')) { await deleteCreditCard(card.id); nav('/personal?tab=cards'); } }} className="text-xs text-red-400 hover:text-red-300">Delete card</button>
+          <div className="flex items-center gap-3">
+            {/* The same account filed twice (a statement with no last four): fold this one into the other. */}
+            {cards.filter(c => c.id !== card.id).length > 0 && (
+              <select value="" className="input-dark text-xs" title="This card is the same account as another one: move its statements, transactions and payments there"
+                onChange={async e => {
+                  const into = cards.find(c => c.id === e.target.value);
+                  if (!into || !confirm(`Merge this card into "${into.name}"? Its statements, transactions and payments move there and this card is removed. A statement both have for the same date is kept once.`)) return;
+                  await mergeCreditCard(card.id, into.id);
+                  nav(`/personal/cards/${into.id}`);
+                }}>
+                <option value="">Same account as…</option>
+                {[...cards.filter(c => c.id !== card.id)].sort((a, b) => Number(sameName(b.name, card.name)) - Number(sameName(a.name, card.name))).map(c => (
+                  <option key={c.id} value={c.id}>{sameName(c.name, card.name) ? '★ ' : ''}{c.name}{c.last4 ? ` ••${c.last4}` : ''}</option>
+                ))}
+              </select>
+            )}
+            <button onClick={async () => { if (confirm('Delete this card, its statements, transactions and payments? Expenses already filed to properties stay.')) { await deleteCreditCard(card.id); nav('/personal?tab=cards'); } }} className="text-xs text-red-400 hover:text-red-300">Delete card</button>
+          </div>
         </div>
       </div>
     </div>
