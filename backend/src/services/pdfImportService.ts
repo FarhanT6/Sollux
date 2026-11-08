@@ -217,6 +217,12 @@ export interface ExtractedBillData {
     closingDate?: string | null; periodStart?: string | null; dueDate?: string | null;
     previousBalance?: number | null; paymentsCredits?: number | null; purchases?: number | null; feesCharged?: number | null; interestCharged?: number | null;
     newBalance?: number | null; minimumPayment?: number | null; creditLimit?: number | null; availableCredit?: number | null; purchaseApr?: number | null;
+    /** Read from the statement's text (lib/cardStatementText): everything the card page's upload keeps. */
+    cashAdvanceApr?: number | null; daysInCycle?: number | null; minPayoffMonths?: number | null; minPayoffTotal?: number | null;
+    pastDueAmount?: number | null; feesYtd?: number | null; interestYtd?: number | null; rewardsEarned?: number | null;
+    promotions?: { balance: number; payBy: string; description: string | null }[] | null;
+    terms?: Record<string, unknown> | null;
+    transactions?: { date: string; postDate: string | null; description: string; merchant: string | null; amount: number; kind: string; category: string | null; reference?: string | null }[] | null;
   } | null;
   lateFee:            number | null;
   usageValue:         number | null;
@@ -4079,6 +4085,14 @@ function cardStatementBill(c: CardTextReading): ExtractedBillData {
       closingDate: c.closingDate, periodStart: c.periodStart, dueDate: c.dueDate,
       previousBalance: c.previousBalance, paymentsCredits: c.paymentsCredits, purchases: c.purchases, feesCharged: c.feesCharged, interestCharged: c.interestCharged,
       newBalance: c.newBalance, minimumPayment: c.minimumPayment, creditLimit: c.creditLimit, availableCredit: c.availableCredit, purchaseApr: c.purchaseApr,
+      cashAdvanceApr: c.cashAdvanceApr, daysInCycle: c.daysInCycle, minPayoffMonths: c.minPayoffMonths, minPayoffTotal: c.minPayoffTotal,
+      pastDueAmount: c.pastDueAmount, feesYtd: c.feesYtd, interestYtd: c.interestYtd, rewardsEarned: c.rewardsEarned, promotions: c.promotions,
+      terms: {
+        cashAdvanceLimit: c.cashAdvanceLimit, balanceTransferApr: c.balanceTransferApr, penaltyApr: c.penaltyApr,
+        introApr: c.introApr, introAprType: c.introAprType, introAprEndDate: c.introAprEndDate,
+        lateFee: c.lateFee, annualFee: c.annualFee, phone: c.phone, loginUrl: c.loginUrl, rewardsProgram: c.rewardsProgram, rewardsType: c.rewardsType,
+      },
+      transactions: c.transactions,
     },
     penaltyDate: null, amountAfterDueDate: null, agingBuckets: null,
     lateFee: null, usageValue: null, usageUnit: null, ratePlan: null, isPaid: false, utilityType: 'other',

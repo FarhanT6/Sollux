@@ -61,12 +61,14 @@ const StatementFields = z.object({
   feesCharged: money, interestCharged: money, newBalance: z.number(), minimumPayment: money, creditLimit: money,
   availableCredit: money, purchaseApr: money, cashAdvanceApr: money, rewardsEarned: money, rewardsBalance: money,
   daysInCycle: z.number().int().nullable().optional(), minPayoffMonths: z.number().int().nullable().optional(), minPayoffTotal: money,
+  pastDueAmount: money, feesYtd: money, interestYtd: money,
+  promotions: z.array(z.object({ balance: z.number(), payBy: z.string(), description: z.string().nullable().optional() })).max(50).nullable().optional(),
 });
 
 const TxnFields = z.object({
   date: z.string(), postDate: z.string().nullable().optional(), description: z.string().min(1), merchant: z.string().nullable().optional(),
   amount: z.number(), kind: z.enum(['PURCHASE', 'PAYMENT', 'CREDIT', 'FEE', 'INTEREST', 'CASH_ADVANCE', 'BALANCE_TRANSFER']).optional(),
-  category: z.string().nullable().optional(), cardholder: z.string().nullable().optional(),
+  category: z.string().nullable().optional(), cardholder: z.string().nullable().optional(), reference: z.string().max(60).nullable().optional(),
 });
 
 async function ownedCard(id: string, userId: string) {
@@ -246,7 +248,7 @@ router.post('/:id/statements', async (req, res, next) => {
         .map(t => ({
           cardId: card.id, statementId: statement.id, date: new Date(t.date), postDate: t.postDate ? new Date(t.postDate) : null,
           description: t.description, merchant: t.merchant ?? null, amount: t.amount, kind: t.kind ?? (t.amount < 0 ? 'CREDIT' : 'PURCHASE'),
-          category: t.category ?? null, cardholder: t.cardholder ?? null, isBusiness: card.isBusiness,
+          category: t.category ?? null, cardholder: t.cardholder ?? null, reference: t.reference ?? null, isBusiness: card.isBusiness,
         }));
       if (rows.length) added = (await db.cardTransaction.createMany({ data: rows })).count;
     }
@@ -386,7 +388,7 @@ router.post('/:id/payments', async (req, res, next) => {
     // A payment pays the newest statement that closed before it.
     const statement = await db.cardStatement.findFirst({ where: { cardId: card.id, closingDate: { lt: date } }, orderBy: { closingDate: 'desc' }, select: { id: true } });
     // Already on a statement (read from it before it was logged): fill that one in rather than log it twice.
-    const listed = await statementPaymentFor(card.id, date, p.amount);
+    const listed = await statementPaymentFor(card.id, date, p.amount, p.confirmation);
     if (listed) {
       const merged = await db.cardPayment.update({
         where: { id: listed.id },

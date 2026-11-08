@@ -133,7 +133,9 @@ Return ONLY valid JSON, no markdown:
   "rewardsEarned": number or null — earned this period, "rewardsBalance": number or null — total available,
   "minPayoffMonths": number or null, "minPayoffTotal": number or null — from the 'minimum payment warning' box,
   "authorizedUsers": [{ "name": "…", "last4": "1234" }],
-  "transactions": [{ "date": "YYYY-MM-DD transaction date", "postDate": "YYYY-MM-DD or null", "description": "as printed", "merchant": "clean merchant name", "amount": number — positive for a charge, negative for a payment or credit, "kind": "PURCHASE | PAYMENT | CREDIT | FEE | INTEREST | CASH_ADVANCE | BALANCE_TRANSFER", "category": "Groceries | Dining | Gas | Travel | Shopping | Utilities | Home improvement | Insurance | Medical | Subscriptions | Entertainment | Services | Fees & interest | Other", "cardholder": "name when the statement groups by cardholder, else null" }]
+  "pastDueAmount": number or null, "feesYtd": number or null — total fees charged this year, "interestYtd": number or null — total interest charged this year,
+  "promotions": [{ "balance": number, "payBy": "YYYY-MM-DD", "description": "e.g. No interest if paid in full within 18 months" }] — every deferred-interest / promotional balance with the date it must be paid by,
+  "transactions": [{ "date": "YYYY-MM-DD transaction date", "postDate": "YYYY-MM-DD or null", "description": "as printed, with the store department or promotion note printed under it", "merchant": "clean merchant name", "reference": "the line's reference / confirmation number when printed, else null", "amount": number — positive for a charge, negative for a payment or credit; a payment reversal or returned payment is kind PAYMENT with a POSITIVE amount (it puts the balance back up), "kind": "PURCHASE | PAYMENT | CREDIT | FEE | INTEREST | CASH_ADVANCE | BALANCE_TRANSFER", "category": "Groceries | Dining | Gas | Travel | Shopping | Utilities | Home improvement | Insurance | Medical | Subscriptions | Entertainment | Services | Fees & interest | Other", "cardholder": "name when the statement groups by cardholder, else null" }]
 }
 Transaction dates without a year take the year of the billing period (a December charge on a January statement is the prior year).`,
   loan_sheet: `This is the owner's list of their loans and mortgages — a table with one loan per row. Read every row, in order, exactly as typed.
@@ -222,7 +224,8 @@ async function cardStatementFromText(files: ReadFile[]): Promise<Record<string, 
     texts.push(await layoutText(buf));
   }
   const read = readCardStatementText(texts.join('\n'));
-  return read ? { ...shape('card_statement', read), readBy: 'text' } : null;
+  // The text keeps the payments' sign: a period whose reversed payment outweighed its payments has negative payments.
+  return read ? { ...shape('card_statement', read), paymentsCredits: read.paymentsCredits, readBy: 'text' } : null;
 }
 
 const num = (v: unknown): number | null => {
@@ -268,9 +271,11 @@ export function shape(kind: ReadKind, d: any): Record<string, any> {
     const txns = Array.isArray(d.transactions) ? d.transactions.map((t: any) => {
       const amount = num(t?.amount);
       const kind = kinds.includes(t?.kind) ? t.kind : amount != null && amount < 0 ? 'CREDIT' : 'PURCHASE';
-      // Payments and credits reduce the balance: negative, whatever sign came back.
-      const signed = amount == null ? null : ['PAYMENT', 'CREDIT'].includes(kind) ? -Math.abs(amount) : Math.abs(amount);
-      return { date: day(t?.date), postDate: day(t?.postDate), description: str(t?.description) ? scrubTin(String(t.description)) : null, merchant: str(t?.merchant), amount: signed, kind, category: str(t?.category), cardholder: str(t?.cardholder) };
+      // Payments and credits reduce the balance: negative, whatever sign came back; a reversed payment puts it back up.
+      const reversal = kind === 'PAYMENT' && /PAYMENT\s+REVERS|REVERS\w*\s+(?:OF\s+)?PAYMENT|RETURNED\s+PAYMENT|PAYMENT\s+RETURN|\bNSF\b/i.test(String(t?.description ?? ''));
+      const signed = amount == null ? null : reversal ? Math.abs(amount) : ['PAYMENT', 'CREDIT'].includes(kind) ? -Math.abs(amount) : Math.abs(amount);
+      const ref = str(t?.reference);
+      return { date: day(t?.date), postDate: day(t?.postDate), description: str(t?.description) ? scrubTin(String(t.description)) : null, merchant: str(t?.merchant), amount: signed, kind, category: str(t?.category), cardholder: str(t?.cardholder), reference: ref && ref.length <= 60 ? ref : null };
     }).filter((t: any) => t.date && t.description && t.amount != null) : [];
     const users = Array.isArray(d.authorizedUsers) ? d.authorizedUsers.map((u: any) => ({ name: str(u?.name), last4: u?.last4 ? String(u.last4).replace(/\D/g, '').slice(-4) : null })).filter((u: any) => u.name) : [];
     const pos = (v: unknown) => { const n = num(v); return n == null ? null : Math.abs(n); };
@@ -288,6 +293,8 @@ export function shape(kind: ReadKind, d: any): Record<string, any> {
       rewardsProgram: str(d.rewardsProgram), rewardsType: ['POINTS', 'MILES', 'CASHBACK'].includes(d.rewardsType) ? d.rewardsType : null,
       rewardsEarned: num(d.rewardsEarned), rewardsBalance: num(d.rewardsBalance), minPayoffMonths: num(d.minPayoffMonths), minPayoffTotal: num(d.minPayoffTotal),
       authorizedUsers: users, transactions: txns,
+      pastDueAmount: num(d.pastDueAmount), feesYtd: num(d.feesYtd), interestYtd: num(d.interestYtd),
+      promotions: Array.isArray(d.promotions) ? d.promotions.map((p: any) => ({ balance: num(p?.balance), payBy: day(p?.payBy), description: str(p?.description) })).filter((p: any) => p.balance != null && p.payBy) : [],
     };
   }
   if (kind === 'loan_sheet') {

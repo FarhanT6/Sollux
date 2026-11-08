@@ -23,3 +23,8 @@ test("a payment posted on another statement is not taken; the owner's own is pre
   assert.deepEqual(matchLines(line, [pay('other', '2026-10-07', 29, { postedStatementId: 's0' })], 's1'), [null]);
   assert.deepEqual(matchLines(line, [pay('read', '2026-10-08', 29, { method: ON_STATEMENT }), pay('mine', '2026-10-05', 29)], 's1'), ['mine']);
 });
+
+test('the same confirmation number matches even a week apart; a reversed payment matches only a reversal', () => {
+  assert.deepEqual(matchLines([{ date: d('2026-10-08'), amount: 29, reference: 'P632139753156462' }], [pay('p1', '2026-10-01', 29, { confirmation: '632139753156462' })], 's1'), ['p1']);
+  assert.deepEqual(matchLines([{ date: d('2026-06-12'), amount: -1436.14 }], [pay('p1', '2026-06-08', 1436.14)], 's1'), [null]);
+});

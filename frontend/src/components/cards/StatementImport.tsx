@@ -37,6 +37,8 @@ function payload(fields: Record<string, any>) {
     creditLimit: fields.creditLimit, availableCredit: fields.availableCredit, purchaseApr: fields.purchaseApr, cashAdvanceApr: fields.cashAdvanceApr,
     rewardsEarned: fields.rewardsEarned, rewardsBalance: fields.rewardsBalance, daysInCycle: fields.daysInCycle != null ? Math.trunc(fields.daysInCycle) : null,
     minPayoffMonths: fields.minPayoffMonths != null ? Math.trunc(fields.minPayoffMonths) : null, minPayoffTotal: fields.minPayoffTotal,
+    pastDueAmount: fields.pastDueAmount ?? null, feesYtd: fields.feesYtd ?? null, interestYtd: fields.interestYtd ?? null,
+    promotions: Array.isArray(fields.promotions) ? fields.promotions : null,
   };
   const terms = {
     cashAdvanceLimit: fields.cashAdvanceLimit, balanceTransferApr: fields.balanceTransferApr, penaltyApr: fields.penaltyApr, introApr: fields.introApr,
@@ -221,12 +223,19 @@ function Editor({ fields, setFields, cardId, setCardId, cards, fixedCardId, savi
           ? <p className="text-amber-400">The summary doesn't add up: previous balance − payments + charges + fees + interest = {fmtMoney(computed)}, but the new balance reads {fmtMoney(fields.newBalance)}. Check the figures against the statement.</p>
           : <p className="text-emerald-400">✓ The summary adds up to the new balance.</p>
       )}
+      {(Array.isArray(fields.promotions) && fields.promotions.length > 0) && (
+        <div className="text-gray-400">
+          <span className="text-gray-500">Promotional balances: </span>
+          {fields.promotions.map((p: any, i: number) => <span key={i} className="mr-3">{fmtMoney(p.balance)} — pay in full by {fmtDate(p.payBy, 'MMM d, yyyy')}</span>)}
+        </div>
+      )}
+      {Number(fields.pastDueAmount ?? 0) > 0 && <p className="text-red-400">Past due: {fmtMoney(fields.pastDueAmount)}</p>}
       {txns.length > 0 && (
         <details>
           <summary className="text-gray-500 cursor-pointer">{txns.length} transactions read</summary>
           <div className="max-h-64 overflow-y-auto mt-2">
             <table className="table-base">
-              <tbody>{txns.map((t, i) => <tr key={i}><td className="text-xs whitespace-nowrap">{t.date}</td><td className="text-xs">{t.merchant || t.description}</td><td className="text-xs text-gray-500">{t.category}</td><td className={`text-xs text-right ${t.amount < 0 ? 'text-emerald-400' : ''}`}>{fmtMoney(t.amount)}</td></tr>)}</tbody>
+              <tbody>{txns.map((t, i) => <tr key={i}><td className="text-xs whitespace-nowrap">{t.date}</td><td className="text-xs">{t.description}{t.reference && <span className="block text-gray-600">Ref {t.reference}</span>}</td><td className="text-xs text-gray-500">{t.kind?.replace('_', ' ').toLowerCase()}{t.category ? ` · ${t.category}` : ''}</td><td className={`text-xs text-right ${t.amount < 0 ? 'text-emerald-400' : ''}`}>{fmtMoney(t.amount)}</td></tr>)}</tbody>
             </table>
           </div>
         </details>

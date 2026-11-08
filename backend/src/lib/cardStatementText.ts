@@ -26,7 +26,12 @@ export interface CardTextTransaction {
   kind: 'PURCHASE' | 'PAYMENT' | 'CREDIT' | 'FEE' | 'INTEREST' | 'CASH_ADVANCE' | 'BALANCE_TRANSFER';
   category: string | null;
   cardholder: string | null;
+  /** The issuer's reference / confirmation number for the line ("P632139753156462"). */
+  reference?: string | null;
 }
+
+/** A deferred-interest promotion: pay this balance in full by the date or the interest comes back. */
+export interface CardPromotion { balance: number; payBy: string; description: string | null }
 
 export interface CardTextReading {
   issuer: string | null; cardName: string | null; network: string | null; last4: string | null; cardholderName: string | null;
@@ -35,7 +40,9 @@ export interface CardTextReading {
   feesCharged: number | null; interestCharged: number | null; newBalance: number; minimumPayment: number | null;
   creditLimit: number | null; cashAdvanceLimit: number | null; availableCredit: number | null;
   purchaseApr: number | null; cashAdvanceApr: number | null; balanceTransferApr: number | null; penaltyApr: number | null;
-  introApr: null; introAprType: null; introAprEndDate: null;
+  introApr: number | null; introAprType: 'PURCHASE' | null; introAprEndDate: string | null;
+  pastDueAmount: number | null; feesYtd: number | null; interestYtd: number | null;
+  promotions: CardPromotion[];
   daysInCycle: number | null;
   lateFee: number | null; annualFee: number | null; foreignTransactionFee: number | null; balanceTransferFee: number | null; cashAdvanceFee: number | null;
   phone: string | null; loginUrl: string | null;
@@ -47,7 +54,7 @@ export interface CardTextReading {
 
 // A dollar figure: "$1,234.56", "-$620.00", "+$236.12", "$40.00 CR", "$20,100", "-.05".
 // Never a percentage ("23.99%") or the start of a longer number.
-const MONEY = String.raw`[-+]?\s?\$\s?-?[\d,]*\d(?:\.\d{2})?(?:[ \t]*CR\b)?|[-+]?[\d,]*\.\d{2}(?:[ \t]*CR\b)?`;
+const MONEY = String.raw`[-+]?[ \t]*\$[ \t]*-?[\d,]*\d(?:\.\d{2})?(?:[ \t]*CR\b)?|[-+]?[\d,]*\.\d{2}(?:[ \t]*CR\b)?`;
 const MONEY_END = String.raw`(?![\d%.])`;
 
 const MONTHS: Record<string, number> = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12 };
@@ -91,18 +98,28 @@ const before = (text: string, m: RegExpMatchArray) => {
 // Words that make a label about another statement.
 const OTHER_CYCLE = /(?:Previous|Prior|Last|Next)\s+(?:Monthly\s+|Statement\s+)?$/i;
 
-/** The first figure printed right after one of the labels, on the same line. */
-function figure(text: string, labels: string[], not?: RegExp): number | null {
+/** The first figure printed right after one of the labels, on the same line, as printed ("-  $1,465.14", "+$29.00"). */
+function printed(text: string, labels: string[], not?: RegExp): string | null {
   for (const l of labels) {
     const re = new RegExp(String.raw`(?:^|[^A-Za-z])(${label(l)})[ \t:]*(${MONEY})${MONEY_END}`, 'gim');
     for (const m of text.matchAll(re)) {
       if (not && not.test(before(text, m))) continue;
-      const v = money(m[2]);
-      if (Number.isFinite(v)) return v;
+      if (Number.isFinite(money(m[2]))) return m[2];
     }
   }
   return null;
 }
+/** The first figure printed right after one of the labels, on the same line. */
+function figure(text: string, labels: string[], not?: RegExp): number | null {
+  const p = printed(text, labels, not);
+  return p == null ? null : money(p);
+}
+/**
+ * What a payments line did to the balance. Printed with a minus (or no sign)
+ * it took the balance down; with a plus it put it up: a payment reversed in
+ * the period (a returned check) outweighed the payments made.
+ */
+const paidEffect = (p: string | null) => (p == null ? 0 : /^\s*\+/.test(p) ? Math.abs(money(p)) : -Math.abs(money(p)));
 
 /** The first date printed right after one of the labels, on the same line. */
 function dateAfter(text: string, labels: string[], not?: RegExp): string | null {
@@ -154,15 +171,28 @@ const CARD_NAMES: [RegExp, string][] = [
   [/Double\s+Cash/i, 'Double Cash'],
 ];
 
+// A payment that came back (returned check, NSF): it puts the balance back up.
+const REVERSAL = /PAYMENT\s+REVERS|REVERS\w*\s+(?:OF\s+)?PAYMENT|RETURNED\s+PAYMENT|PAYMENT\s+RETURN|\bNSF\b|DISHONOU?RED/i;
+
 function kindOf(section: CardTextTransaction['kind'] | null, description: string, amount: number): CardTextTransaction['kind'] {
   const d = description.toUpperCase();
-  if (amount < 0) return /PAYMENT|THANK YOU|AUTOPAY|ACH DEPOSIT|APPLE CASH/.test(d) && !/REVERSAL|REFUND|RETURN/.test(d) ? 'PAYMENT' : 'CREDIT';
+  if (amount < 0) return /PAYMENT|THANK YOU|AUTOPAY|ACH DEPOSIT|APPLE CASH/.test(d) && !/REVERSAL|REFUND|RETURN|CREDIT\b/.test(d) ? 'PAYMENT' : 'CREDIT';
+  if (REVERSAL.test(d)) return 'PAYMENT';
   if (/INTEREST CHARGE|PURCHASE INTEREST|INTEREST CHARGED/.test(d) || section === 'INTEREST') return 'INTEREST';
-  if (/\bLATE FEE\b|\bANNUAL FEE\b|\bFOREIGN TRANSACTION FEE\b|\bFEE\b/.test(d) || section === 'FEE') return 'FEE';
+  if (/\bFEE\b|\bCHG\b|RETURNED CHECK|RETURN(?:ED)? PAYMENT CHARGE/.test(d) || section === 'FEE') return 'FEE';
   if (section === 'CASH_ADVANCE') return 'CASH_ADVANCE';
   if (section === 'BALANCE_TRANSFER') return 'BALANCE_TRANSFER';
   return 'PURCHASE';
 }
+
+// Stores whose card statements name the department under each purchase.
+const MERCHANTS: [RegExp, string, string][] = [
+  [/^THE HOME DEPOT\b|^HOME DEPOT\b/i, 'The Home Depot', 'Home improvement'],
+  [/^LOWE'?S\b/i, "Lowe's", 'Home improvement'],
+];
+// A reference / confirmation number at the end of a line: "P632139753156462", "F919600HK000QFAUT", "0533063".
+const REF = /^(?:[A-Z]{1,2}\d[A-Z0-9]{5,}|\d{6,})$/;
+const PAGE_NOISE = /^(?:TOTAL\b|CARD ENDING\b|Trans(?:action)? Date\b|Date\b|Reference\b|\.$|Page\b|Account number\b|Payment Due Date\b|New Balance\b|Past Due\b|Minimum Payment\b|HD \d|PLEASE SEE|Statement Enclosed)/i;
 
 function transactionsOf(text: string, closing: string): CardTextTransaction[] {
   const [cy, cm] = closing.split('-').map(Number);
@@ -174,35 +204,61 @@ function transactionsOf(text: string, closing: string): CardTextTransaction[] {
     // No year printed: the billing period's — a December charge on a January statement is the year before.
     return iso(mo > cm ? cy - 1 : cy, mo, Number(m[2]));
   };
+  // Only a statement with a "Reference #" column ends its lines with one.
+  const hasRefs = /Reference\s*#/i.test(text);
   const out: CardTextTransaction[] = [];
   let section: CardTextTransaction['kind'] | null = null;
-  const row = new RegExp(String.raw`^(\d{1,2}/\d{1,2}(?:/\d{2,4})?)\s+(?:(\d{1,2}/\d{1,2}(?:/\d{2,4})?)\s+)?(.+?)\s+(\(?-?\s?\$?\s?-?[\d,]*\.\d{2}\)?)$`);
+  let last: CardTextTransaction | null = null;   // the purchase a department or promotion line under it belongs to
+  // "05/26  THE HOME DEPOT EL CENTRO CA 0533063  $ 1,405.09", "06/15 … $ 200.00 -" (a credit), "04/26 Payment Thank You -620.00", "(12.00)".
+  const row = new RegExp(String.raw`^(\d{1,2}/\d{1,2}(?:/\d{2,4})?)\s+(?:(\d{1,2}/\d{1,2}(?:/\d{2,4})?)\s+)?(.+?)\s+(\(?-?\$?\s?-?[\d,]*\.\d{2}\)?)(?:\s(-|CR))?$`);
   for (const raw of text.split('\n')) {
     const line = raw.replace(/\s+/g, ' ').trim();
     if (!line) continue;
-    if (/^(?:PAYMENTS(?: AND OTHER CREDITS)?|Payments)$/i.test(line)) { section = 'PAYMENT'; continue; }
-    if (/^(?:PURCHASES?(?: AND (?:OTHER )?(?:ADJUSTMENTS|DEBITS))?|Transactions|STANDARD PURCHASES)$/i.test(line)) { section = 'PURCHASE'; continue; }
-    if (/^FEES(?: CHARGED)?$/i.test(line)) { section = 'FEE'; continue; }
-    if (/^INTEREST(?: CHARGED)?$/i.test(line)) { section = 'INTEREST'; continue; }
-    if (/^CASH ADVANCES?$/i.test(line)) { section = 'CASH_ADVANCE'; continue; }
-    if (/^BALANCE TRANSFERS?$/i.test(line)) { section = 'BALANCE_TRANSFER'; continue; }
+    if (/^(?:PAYMENTS(?: AND OTHER CREDITS)?|Payments)$/i.test(line)) { section = 'PAYMENT'; last = null; continue; }
+    if (/^(?:PURCHASES?(?: AND (?:OTHER )?(?:ADJUSTMENTS|DEBITS))?|Transactions|STANDARD PURCHASES)$/i.test(line)) { section = 'PURCHASE'; last = null; continue; }
+    if (/^FEES(?: CHARGED)?$/i.test(line)) { section = 'FEE'; last = null; continue; }
+    if (/^INTEREST(?: CHARGED)?$/i.test(line)) { section = 'INTEREST'; last = null; continue; }
+    if (/^CASH ADVANCES?$/i.test(line)) { section = 'CASH_ADVANCE'; last = null; continue; }
+    if (/^BALANCE TRANSFERS?$/i.test(line)) { section = 'BALANCE_TRANSFER'; last = null; continue; }
+    // The table on later pages and the promotions detail are not transactions.
+    if (/^(?:ACTIVITY AND PROMOTIONS DETAIL|INTEREST CHARGE CALCULATION|\d{4} Totals Year-to-Date)/i.test(line)) { section = null; last = null; continue; }
     const m = line.match(row);
-    if (!m) continue;
+    if (!m) {
+      if (!last) continue;
+      // "PROMOTIONAL PURCHASE: To avoid interest charges, please pay the above in full by 12/08/2027."
+      const promo = line.match(/PROMOTIONAL PURCHASE:.*?in full by (\d{1,2}\/\d{1,2}\/\d{2,4})/i);
+      if (promo) { const d = date(promo[1]); if (d) last.description += ` · promotional: no interest if paid in full by ${d}`; continue; }
+      // The store department under a purchase: "PLUMBING", "HARDWARE SEASONAL/GARDEN".
+      const dept = line.replace(/\s+FEES$/, '');
+      if (/^[A-Z][A-Z &/,.'-]{2,40}$/.test(dept) && !PAGE_NOISE.test(dept) && !/^(?:FEES|INTEREST)/.test(dept)) { last.description += ` · ${dept}`; last = null; continue; }
+      if (!PAGE_NOISE.test(line)) last = null;
+      continue;
+    }
     const day = dated(m[1]);
     if (!day) continue;
     let description = m[3].trim();
     // Apple Card prints the Daily Cash earned ("2% $22.00") between the description and the amount.
     description = description.replace(/\s+\d{1,2}%\s+\$[\d,]*\.\d{2}$/, '').trim();
+    let reference: string | null = null;
+    if (hasRefs) {
+      const words = description.split(' ');
+      if (words.length > 1 && REF.test(words[words.length - 1])) { reference = words.pop()!; description = words.join(' '); }
+    }
     if (!/[A-Za-z]/.test(description) || /^Page\b/i.test(description)) continue;
     let amount = money(m[4].replace(/[()]/g, ''));
-    if (/^\(.*\)$/.test(m[4])) amount = -Math.abs(amount);
+    if (/^\(.*\)$/.test(m[4]) || m[5]) amount = -Math.abs(amount);
     if (!Number.isFinite(amount) || amount === 0 && !/\.00$/.test(m[4])) continue;
     const kind = kindOf(section, description, amount);
-    out.push({
-      date: day, postDate: m[2] ? dated(m[2]) : null, description, merchant: null,
-      amount: ['PAYMENT', 'CREDIT'].includes(kind) ? -Math.abs(amount) : Math.abs(amount),
-      kind, category: kind === 'FEE' || kind === 'INTEREST' ? 'Fees & interest' : null, cardholder: null,
-    });
+    const store = MERCHANTS.find(([re]) => re.test(description));
+    const t: CardTextTransaction = {
+      date: day, postDate: m[2] ? dated(m[2]) : null, description, merchant: store?.[1] ?? null,
+      // Payments and credits take the balance down; a reversed payment puts it back up.
+      amount: kind === 'PAYMENT' && REVERSAL.test(description) ? Math.abs(amount) : ['PAYMENT', 'CREDIT'].includes(kind) ? -Math.abs(amount) : Math.abs(amount),
+      kind, category: kind === 'FEE' || kind === 'INTEREST' ? 'Fees & interest' : kind === 'PURCHASE' ? store?.[2] ?? null : null, cardholder: null,
+      reference,
+    };
+    out.push(t);
+    last = kind === 'PURCHASE' ? t : null;
   }
   return out;
 }
@@ -267,8 +323,8 @@ export function readCardStatementText(input: string): CardTextReading | null {
   if (minimumPayment == null) minimumPayment = figure(text, ['Payment Due']);
 
   const previousBalance = figure(text, ['Previous Balance', 'Previous Monthly Balance', 'Previous Statement Balance']);
-  const paymentsOnly = figure(text, ['Payment, Credits', 'Payments, Credits', 'Payments and Other Credits', 'Payments and Credits', 'Total payments for this period', 'Payments']);
-  const otherCredits = figure(text, ['Other Credits']);
+  const paymentsOnly = printed(text, ['Payment, Credits', 'Payments, Credits', 'Payments and Other Credits', 'Payments and Credits', 'Total payments for this period', 'Payments']);
+  const otherCredits = printed(text, ['Other Credits']);
   const purchases = figure(text, ['Purchases/Other Debits', 'Purchases and Adjustments', 'Purchases', 'Total charges, credits and returns']);
   const cashAdvances = figure(text, ['Cash Advances']);
   const balanceTransfers = figure(text, ['Balance Transfers']);
@@ -276,14 +332,16 @@ export function readCardStatementText(input: string): CardTextReading | null {
   const interestCharged = figure(text, ['Interest Charged', 'Total interest for this period', 'Total interest for this month', 'Interest Charge on Purchases']);
 
   if (newBalance == null || previousBalance == null || paymentsOnly == null || purchases == null) return null;
-  const paymentsCredits = Number((Math.abs(paymentsOnly) + Math.abs(otherCredits ?? 0)).toFixed(2));
+  // What came off the balance: payments and credits, less any payment reversed (negative when reversals outweigh them).
+  const paymentsCredits = Number((-(paidEffect(paymentsOnly) + paidEffect(otherCredits))).toFixed(2));
   // The summary must add up, or the figures came from the wrong places.
   const sum = previousBalance - paymentsCredits + purchases + Math.abs(cashAdvances ?? 0) + Math.abs(balanceTransfers ?? 0) + Math.abs(feesCharged ?? 0) + Math.abs(interestCharged ?? 0);
   if (Math.abs(sum - newBalance) > 0.02) return null;
   // A statement with a balance owed has a due date.
   if (!dueDate && newBalance > 0 && (minimumPayment ?? 0) > 0) return null;
 
-  const payoff = text.match(/Only\s+(?:the\s+)?minimum(?:\s+payment)?\s+(\d{1,2})\s+years?\s+\$([\d,]+)/i);
+  // "Only the minimum payment 12 years $5,150", "… 8 months $221".
+  const payoff = text.match(/Only\s+(?:the\s+)?minimum(?:\s+payment)?\s+(\d{1,3})\s+(years?|months?)\s+\$([\d,]+)/i);
   const days = text.match(/Days\s+in\s+Billing\s+(?:Cycle|Period)[ \t:]*(\d{2})\b/i)?.[1] ?? text.match(/\b(\d{2})\s+Days\s+in\s+Billing\s+(?:Cycle|Period)/i)?.[1];
   // "Days in Billing Cycle 31" with only the closing date printed: the cycle opened 30 days before it closed.
   if (!periodStart && days) periodStart = new Date(Date.parse(`${closingDate}T00:00:00Z`) - (Number(days) - 1) * 86_400_000).toISOString().slice(0, 10);
@@ -302,6 +360,17 @@ export function readCardStatementText(input: string): CardTextReading | null {
   const points = text.match(/Total\s+points\s+transferred\s+to[\s\S]{0,80}?\n[ \t]*[A-Za-z®]+[ \t]+([\d,]+)[ \t]*(?:\n|$)/i)
     ?? text.match(/Total\s+points\s+earned(?:\s+this\s+(?:period|month))?[ \t:]+([\d,]+)\b/i);
   const program = /AEROPLAN/i.test(firstPage) ? 'Aeroplan' : /Ultimate\s+Rewards/i.test(text) ? 'Chase Ultimate Rewards' : /Membership\s+Rewards/i.test(text) ? 'Membership Rewards' : null;
+  // "You must pay your promotional balance of $1,405.09 in full by 12/08/27 to avoid paying deferred interest charges."
+  const promotions: CardPromotion[] = [];
+  for (const pm of text.matchAll(/promotional\s+balance\s+of\s+\$\s?([\d,]+\.\d{2})\s+in\s+full\s+by\s+(\d{1,2}\/\d{1,2}\/\d{2,4})/gi)) {
+    const payBy = date(pm[2]);
+    if (payBy && !promotions.some(x => x.payBy === payBy)) promotions.push({ balance: money(`$${pm[1]}`), payBy, description: 'Deferred interest: pay in full by this date or the interest from the purchase date is charged' });
+  }
+  promotions.sort((a, b) => a.payBy.localeCompare(b.payBy));
+  const soonest = promotions.find(x => x.payBy >= closingDate) ?? null;
+  const year = closingDate.slice(0, 4);
+  const feesYtd = figure(text, [`Total Fees Charged in ${year}`, 'Total fees charged in', 'Total Fees Charged Year-to-Date']);
+  const interestYtd = figure(text, [`Total Interest Charged in ${year}`, `Total interest charged in ${year}`, 'Total Interest Charged Year-to-Date']);
   const penalty = text.match(/Penalty\s+APR\s+(?:of\s+)?(\d{1,2}(?:\.\d{1,3})?)\s?%/i);
 
   return {
@@ -318,14 +387,15 @@ export function readCardStatementText(input: string): CardTextReading | null {
     cashAdvanceApr: rate(text, ['Cash Advances', 'Standard Cash Advance', 'Cash Advance']),
     balanceTransferApr: rate(text, ['Balance Transfers', 'Balance Transfer']),
     penaltyApr: penalty ? Number(penalty[1]) : null,
-    introApr: null, introAprType: null, introAprEndDate: null,
+    introApr: soonest ? 0 : null, introAprType: soonest ? 'PURCHASE' : null, introAprEndDate: soonest?.payBy ?? null,
+    pastDueAmount: figure(text, ['Past Due Amount', 'Amount Past Due']), feesYtd, interestYtd, promotions,
     daysInCycle: days ? Number(days) : null,
     lateFee: lateFee ? Number(lateFee[1].replace(/,/g, '')) : null, annualFee: annualFee != null && annualFee > 0 ? annualFee : null,
     foreignTransactionFee: null, balanceTransferFee: null, cashAdvanceFee: null,
     phone, loginUrl: loginUrl ? loginUrl.replace(/^https?:\/\//, '').toLowerCase() : null,
     rewardsProgram: dailyCash != null ? 'Daily Cash' : program, rewardsType: dailyCash != null ? 'CASHBACK' : program ? 'POINTS' : null,
     rewardsEarned: dailyCash ?? (points ? Number(points[1].replace(/,/g, '')) : null), rewardsBalance: null,
-    minPayoffMonths: payoff ? Number(payoff[1]) * 12 : null, minPayoffTotal: payoff ? money(`$${payoff[2]}`) : null,
+    minPayoffMonths: payoff ? Number(payoff[1]) * (/^year/i.test(payoff[2]) ? 12 : 1) : null, minPayoffTotal: payoff ? money(`$${payoff[3]}`) : null,
     authorizedUsers: [],
     transactions: reconciled(transactionsOf(text, closingDate), newBalance - previousBalance, interestCharged, closingDate),
   };

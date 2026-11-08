@@ -2415,6 +2415,12 @@ model CardStatement {
   /// "If you make only the minimum payment…" — months and total cost.
   minPayoffMonths  Int?
   minPayoffTotal   Decimal?   @db.Decimal(12, 2)
+  pastDueAmount    Decimal?   @db.Decimal(12, 2)
+  /// Fees and interest charged so far this year, as the statement prints them.
+  feesYtd          Decimal?   @db.Decimal(12, 2)
+  interestYtd      Decimal?   @db.Decimal(12, 2)
+  /// Deferred-interest promotions: [{ balance, payBy: "YYYY-MM-DD", description }].
+  promotions       Json?
   documents        Json?
   /// Figures from a "your statement is ready" email, not the statement itself:
   /// no PDF is kept, and the real statement replaces it when it comes in.
@@ -2469,6 +2475,8 @@ model CardTransaction {
   kind        String         @default("PURCHASE")
   category    String?
   cardholder  String?
+  /// The issuer's reference / confirmation number printed on the line.
+  reference   String?
   isBusiness  Boolean        @default(false)
   propertyId  String?
   expenseId   String?

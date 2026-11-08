@@ -83,7 +83,7 @@ function Transactions({ card, properties }: { card: CreditCardT; properties: Pro
             {(rows ?? []).map(t => (
               <tr key={t.id}>
                 <td className="pl-4 whitespace-nowrap text-gray-400">{fmtDate(t.date, 'MMM d, yyyy')}</td>
-                <td><span className="text-gray-200">{t.merchant || t.description}</span>{t.merchant && <span className="block text-xs text-gray-600 truncate max-w-xs">{t.description}</span>}{t.cardholder && <span className="block text-xs text-gray-600">{t.cardholder}</span>}</td>
+                <td><span className="text-gray-200">{t.merchant || t.description}</span>{t.merchant && <span className="block text-xs text-gray-600 truncate max-w-xs">{t.description}</span>}{t.cardholder && <span className="block text-xs text-gray-600">{t.cardholder}</span>}{t.reference && <span className="block text-xs text-gray-600">Ref {t.reference}</span>}</td>
                 <td>
                   <select className="input-dark text-xs" value={t.category ?? ''} onChange={async e => { await updateCardTransaction(t.id, { category: e.target.value || null }); await load(); }}>
                     <option value="">—</option>{TXN_CATEGORIES.map(c => <option key={c}>{c}</option>)}
@@ -132,6 +132,7 @@ export default function CreditCardPage() {
   const [banks, setBanks] = useState<{ id: string; name: string; last4?: string | null; accountType?: string }[]>([]);
   const [editing, setEditing] = useState(false);
   const [importing, setImporting] = useState(false);
+  const newestStatement = useMemo(() => [...(card?.statements ?? [])].filter(s => !s.fromEmail).sort((a, b) => b.closingDate.localeCompare(a.closingDate))[0] ?? null, [card]);
   // A statement's own lines, opened under its row (undefined closed, null loading).
   const [lines, setLines] = useState<Record<string, CardTxnT[] | null | undefined>>({});
   async function toggleLines(sid: string) {
@@ -211,6 +212,20 @@ export default function CreditCardPage() {
               <Row k="Payment due" v={card.paymentDueDay ? `day ${card.paymentDueDay}` : '—'} />
               <Row k="Autopay" v={`${AUTOPAY[card.autopay] ?? card.autopay}${card.autopay === 'FIXED' ? ` ${m(card.autopayAmount)}` : ''}${card.autopayFromName ? ` from ${card.autopayFromName}` : ''}`} tone={card.autopay === 'NONE' ? 'text-amber-400' : undefined} />
               <Row k="Last statement" v={p.latestClosingDate ? <>{fmtDate(p.latestClosingDate, 'MMM d, yyyy')} {st && <span className={`pill ${st.pill} ml-1`}>{st.label}</span>}</> : '—'} />
+              {newestStatement && Number(newestStatement.pastDueAmount ?? 0) > 0 && <Row k="Past due" v={fmtMoney(newestStatement.pastDueAmount!)} tone="text-red-400" />}
+              {newestStatement && (newestStatement.feesYtd != null || newestStatement.interestYtd != null) && (
+                <Row k={`This year (to ${fmtDate(newestStatement.closingDate, 'MMM d')})`} v={`${fmtMoney(newestStatement.feesYtd ?? 0)} fees · ${fmtMoney(newestStatement.interestYtd ?? 0)} interest`} />
+              )}
+              {(newestStatement?.promotions ?? []).length > 0 && (
+                <>
+                  <p className="section-label mt-4">Promotional balances</p>
+                  {newestStatement!.promotions!.map((pr, i) => {
+                    const days = Math.round((Date.parse(`${pr.payBy}T00:00:00Z`) - Date.parse(`${todayISO()}T00:00:00Z`)) / 86_400_000);
+                    return <Row key={i} k={`Pay ${fmtMoney(pr.balance)} by`} v={`${fmtDate(pr.payBy, 'MMM d, yyyy')}${days >= 0 ? ` · ${days} days` : ' · passed'}`} tone={days >= 0 && days <= 60 ? 'text-amber-400' : undefined} />;
+                  })}
+                  <p className="text-xs text-gray-600 mt-1">Deferred interest: a balance not paid in full by its date is charged interest back to the purchase date.</p>
+                </>
+              )}
             </div>
             <div className="card p-4">
               <p className="section-label">Limits & fees</p>
@@ -275,7 +290,7 @@ export default function CreditCardPage() {
                           <tbody>{lines[s.id]!.map(t => (
                             <tr key={t.id} className="border-t border-white/5">
                               <td className="py-1 text-gray-500 whitespace-nowrap w-28">{fmtDate(t.date, 'MMM d, yyyy')}</td>
-                              <td className="py-1 text-gray-300">{t.merchant || t.description}</td>
+                              <td className="py-1 text-gray-300">{t.description}{t.reference && <span className="block text-gray-600">Ref {t.reference}</span>}</td>
                               <td className="py-1 text-gray-500">{t.kind.replace('_', ' ').toLowerCase()}</td>
                               <td className={`py-1 text-right whitespace-nowrap ${Number(t.amount) < 0 ? 'text-emerald-400' : 'text-white'}`}>{fmtMoney(t.amount)}</td>
                             </tr>))}</tbody>
@@ -298,7 +313,7 @@ export default function CreditCardPage() {
               <thead><tr><th className="pl-4">Date</th><th className="text-right">Amount</th><th>From</th><th>Confirmation</th><th className="pr-4"></th></tr></thead>
               <tbody>
                 {(card.payments ?? []).map(pm => (
-                  <tr key={pm.id}><td className="pl-4 text-white">{fmtDate(pm.date, 'MMM d, yyyy')}</td><td className="text-right text-emerald-400">{fmtMoney(pm.amount)}</td><td className="text-gray-400">{pm.fromBankAccountName ?? (pm.method === 'On statement' ? <span className="text-xs text-gray-500" title={pm.notes ?? ''}>On the statement — log it to add the bank account</span> : '—')}{pm.postedStatementId && pm.method !== 'On statement' && <span className="block text-xs text-gray-600">✓ on its statement</span>}</td><td className="text-gray-400">{pm.confirmation ?? '—'}</td>
+                  <tr key={pm.id}><td className="pl-4 text-white">{fmtDate(pm.date, 'MMM d, yyyy')}</td><td className={`text-right ${Number(pm.amount) < 0 ? 'text-red-400' : 'text-emerald-400'}`}>{fmtMoney(pm.amount)}{Number(pm.amount) < 0 && <span className="block text-xs">returned</span>}</td><td className="text-gray-400">{pm.fromBankAccountName ?? (pm.method === 'On statement' ? <span className="text-xs text-gray-500" title={pm.notes ?? ''}>On the statement — log it to add the bank account</span> : '—')}{pm.postedStatementId && pm.method !== 'On statement' && <span className="block text-xs text-gray-600">✓ on its statement</span>}</td><td className="text-gray-400">{pm.confirmation ?? '—'}</td>
                     <td className="pr-4 text-right"><button onClick={async () => { await deleteCardPayment(pm.id); await load(); }} className="text-xs text-gray-600 hover:text-red-400">✕</button></td></tr>
                 ))}
                 {(card.payments ?? []).length === 0 && <tr><td colSpan={5} className="pl-4 text-sm text-gray-500">No payments logged. Use "Log payment" above; each one counts against the statement before it.</td></tr>}
