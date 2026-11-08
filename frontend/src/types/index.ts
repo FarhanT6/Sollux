@@ -1453,12 +1453,17 @@ export interface UnitTurnover {
   tenancies: Tenancy[];
   turnovers: Turnover[];
   currentVacancy: {
-    vacatedOn: string;
-    daysVacant: number;
-    lostSoFar: number;
-    lastRent: number;
+    /** Null when not known: a lease ended with no end date, or a unit never let on a property with no acquisition date. */
+    vacatedOn: string | null;
+    daysVacant: number | null;
+    lostSoFar: number | null;
+    lastRent: number | null;
     lastTenants: string[];
+    /** No lease ever recorded on the unit. */
+    neverLet?: boolean;
   } | null;
+  /** The first lease on record starts over a year after the purchase: earlier tenants were not entered. */
+  earlierNotOnRecord?: boolean;
   /** Empty from the acquisition date to the first move-in. */
   sinceAcquisition?: { acquiredOn: string; firstMoveIn: string; daysVacant: number; rentLost: number; rent: number; tenants: string[] } | null;
 }

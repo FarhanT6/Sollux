@@ -92,7 +92,20 @@ router.get('/', async (req, res, next) => {
 
     for (const unit of units) {
       const leases = unit.leases.filter(l => REAL_STATUSES.has(l.status));
-      if (leases.length === 0) continue;
+      // A unit never let is vacant too (Unit 480): since the property was
+      // bought when that is known; there is no rent on record to price it at.
+      if (leases.length === 0) {
+        const acquiredAt = unit.property.acquisitionDate;
+        currentlyVacant += 1;
+        if (!acquiredAt) noAcquisitionDate++;
+        unitReports.push({
+          unitId: unit.id, unitLabel: unit.unitLabel, propertyId: unit.property.id,
+          propertyAddress: unit.property.nickname || unit.property.address,
+          tenancies: [], turnovers: [], sinceAcquisition: null,
+          currentVacancy: { vacatedOn: acquiredAt ? acquiredAt.toISOString() : null, daysVacant: acquiredAt ? daysBetween(acquiredAt, now) : null, lostSoFar: null, lastRent: null, lastTenants: [], neverLet: true },
+        });
+        continue;
+      }
 
       const tenantNames = (l: (typeof leases)[number]) =>
         l.leaseTenants.map(lt => lt.tenant.fullName);
@@ -159,12 +172,17 @@ router.get('/', async (req, res, next) => {
       // in: rent lost too, at the rent that tenant pays. Without an acquisition
       // date, or with a tenant already in place when it was bought, there is none.
       let sinceAcquisition = null;
+      let earlierNotOnRecord = false;
       const acquired = unit.property.acquisitionDate;
       if (!acquired) noAcquisitionDate++;
       const first = leases[0];
       if (acquired && first.startDate && first.startDate > acquired) {
         const days = daysBetween(acquired, first.startDate);
-        if (days > 0) {
+        // A first lease on record that starts more than a year after the
+        // purchase says earlier tenants were not entered, not that it sat
+        // empty that long: not counted, the unit says so instead.
+        if (days > 365) earlierNotOnRecord = true;
+        else if (days > 0) {
           const rent = Number(first.rentAmount);
           const lost = round2(days * dailyRate(rent));
           sinceAcquisition = { acquiredOn: acquired.toISOString(), firstMoveIn: first.startDate.toISOString(), daysVacant: days, rentLost: lost, rent, tenants: tenantNames(first) };
@@ -179,7 +197,11 @@ router.get('/', async (req, res, next) => {
       const last = leases[leases.length - 1];
       let currentVacancy = null;
       const hasActive = leases.some(l => l.status === 'ACTIVE');
-      if (!hasActive && last.endDate && last.endDate < now) {
+      if (!hasActive && !last.endDate) {
+        // Ended without a move-out date (Ruben, Unit 498): vacant, since when unknown.
+        currentVacancy = { vacatedOn: null, daysVacant: null, lostSoFar: null, lastRent: Number(last.rentAmount), lastTenants: tenantNames(last), neverLet: false };
+        currentlyVacant += 1;
+      } else if (!hasActive && last.endDate && last.endDate < now) {
         const days = daysBetween(last.endDate, now);
         const lastRent = Number(last.rentAmount);
         const lostSoFar = round2(days * dailyRate(lastRent));
@@ -189,6 +211,7 @@ router.get('/', async (req, res, next) => {
           lostSoFar,
           lastRent,
           lastTenants: tenantNames(last),
+          neverLet: false,
         };
         currentlyVacant += 1;
         ongoingRentLost += lostSoFar;
@@ -205,6 +228,7 @@ router.get('/', async (req, res, next) => {
         turnovers,
         currentVacancy,
         sinceAcquisition,
+        earlierNotOnRecord,
       });
     }
 
