@@ -564,6 +564,7 @@ const OUTCOME_STYLE: Record<string, { label: string; cls: string }> = {
   skipped: { label: 'Skipped',     cls: 'text-gray-500' },
   online: { label: 'Bill online only', cls: 'text-amber-300' },
   manager: { label: 'Manager statement', cls: 'text-blue-400' },
+  wallet: { label: 'Transfer to bank', cls: 'text-blue-400' },
 };
 
 const OUTCOME_WHY: Record<string, string> = {

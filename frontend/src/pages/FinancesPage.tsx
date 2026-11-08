@@ -6,6 +6,7 @@ import CostsPage from './CostsPage';
 import OperatingExpensesPage from './OperatingExpensesPage';
 import IncomingPaymentsPage from './IncomingPaymentsPage';
 import ManagerStatementsPage from './ManagerStatementsPage';
+import WalletsPage from './WalletsPage';
 import LoanPaymentTracker from '../components/loans/LoanPaymentTracker';
 
 export type Tab = 'overview' | 'costs' | 'loans' | 'income';
@@ -51,10 +52,11 @@ export const FINANCE_SECTIONS: { key: Tab; label: string; subtitle: string; view
   },
   {
     // Rent itself (this month, who is behind) is under Properties -> Tenants & rent.
-    key: 'income', label: 'Income', subtitle: 'Money coming in: transfers matched to tenants, and manager statements',
+    key: 'income', label: 'Income', subtitle: 'Money coming in: transfers matched to tenants, manager statements, and cash and app balances',
     views: [
       { key: 'incoming', label: 'Incoming payments', subtitle: 'Transfers, checks and deposits into watched bank accounts, matched to tenants', render: () => <IncomingPaymentsPage embedded /> },
       { key: 'manager', label: 'Manager statements', subtitle: 'Upload your property manager\'s monthly statement: rent, fees, repairs and loan payments read and recorded', render: () => <ManagerStatementsPage /> },
+      { key: 'wallets', label: 'Cash & apps', subtitle: 'Cash, Venmo, Cash App, PayPal and Apple Cash: rent received by each, and where it went', render: () => <WalletsPage /> },
     ],
   },
 ];

@@ -24,6 +24,7 @@ import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { intakeBill, type ReviewItem } from '../services/documentIntake';
 import { parseP2PEmail, recordP2PEmail } from '../services/p2pPaymentEmails';
+import { parseWithdrawalEmail, recordWithdrawal } from '../services/walletEmails';
 import { intakeManagerStatement, looksLikeManagerStatement, managerForSender } from '../services/managerStatementEmail';
 
 const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string }>;
@@ -56,6 +57,9 @@ const SERVICE_NOTICE_BODY = /service (interruption|suspension|disconnection|term
 // Money received through Zelle, Venmo, Cash App, PayPal or Apple Cash: rent, read without Claude.
 const P2P_HINT = /zelle|venmo|cash ?app|paypal|apple cash|sent you|paid you|received money|got money|been paid/i;
 const P2P_SENDER = /@(\w+\.)*(venmo\.com|cash\.app|square\.com|squareup\.com)\b/i;
+// Money leaving a payment app for a bank: recorded as a transfer out of that wallet (services/walletEmails).
+const WITHDRAW_HINT = /transfer|withdr[ae]w|cash(ed)? out|deposit(ed)? to your bank/i;
+const WALLET_SENDER = /@(\w+\.)*(venmo\.com|cash\.app|square\.com|squareup\.com|paypal\.com|apple\.com)\b/i;
 
 export interface InboxRunSummary {
   mailboxes: number; read: number; filed: number; review: number; applied: number; skipped: number; errors: string[]; jobId: string | null;
@@ -259,7 +263,7 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
         await readPaymentHistory(userId, token, gmail, sum).catch(err => sum.errors.push(`${token.email}: payment history: ${err instanceof Error ? err.message : String(err)}`));
         const since = token.backfillFrom
           ?? (token.lastScanAt ? new Date(token.lastScanAt.getTime() - 24 * 3600 * 1000) : new Date(Date.now() - FIRST_RUN_DAYS * 24 * 3600 * 1000));
-        const q = `after:${Math.floor(since.getTime() / 1000)} -category:promotions -category:social (has:attachment OR subject:(bill OR statement OR invoice OR due OR notice OR premium OR renewal OR tax OR cancellation OR disconnection) OR subject:(zelle OR venmo OR "cash app" OR "apple cash" OR "sent you" OR "paid you" OR "received money" OR "got money" OR "been paid") OR from:(venmo.com OR cash.app OR square.com))`;
+        const q = `after:${Math.floor(since.getTime() / 1000)} -category:promotions -category:social (has:attachment OR subject:(bill OR statement OR invoice OR due OR notice OR premium OR renewal OR tax OR cancellation OR disconnection) OR subject:(zelle OR venmo OR "cash app" OR "apple cash" OR "sent you" OR "paid you" OR "received money" OR "got money" OR "been paid") OR from:(venmo.com OR cash.app OR square.com) OR (from:(paypal.com OR apple.com) subject:(transfer OR withdraw OR withdrawn OR "cash out" OR "apple cash")))`;
 
         const ids: string[] = [];
         let pageToken: string | undefined;
@@ -326,13 +330,21 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
           // "JACOB ADAMS sent you $4,452.00": a tenant's payment, before the
           // receipt rule below (a bank's "Zelle payment received" is not a bill
           // receipt). Goes to Finances -> Incoming, logged when the tenant is certain.
-          if (P2P_HINT.test(subject) || P2P_SENDER.test(from)) {
+          if (P2P_HINT.test(subject) || P2P_SENDER.test(from) || (WALLET_SENDER.test(from) && WITHDRAW_HINT.test(subject))) {
             try {
               const html = await textOf('text/html');
               const text = html ? htmlToText(html) : await textOf('text/plain');
               const p2p = parseP2PEmail(from, subject, text, receivedAt);
               if (p2p) {
                 const r = await recordP2PEmail(userId, p2p, rfcMessageId ?? messageId);
+                sum.applied++;
+                await record(r.outcome, r.detail);
+                continue;
+              }
+              // Money moved from Venmo / Cash App / PayPal / Apple Cash to a bank.
+              const out = parseWithdrawalEmail(from, subject, text, receivedAt);
+              if (out) {
+                const r = await recordWithdrawal(userId, out, rfcMessageId ?? messageId);
                 sum.applied++;
                 await record(r.outcome, r.detail);
                 continue;
