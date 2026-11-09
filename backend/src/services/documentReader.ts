@@ -187,13 +187,15 @@ function anthropic(): Anthropic {
 const blockFor = (file: ReadFile) => fileBlockForClaude(Buffer.from(file.data, 'base64'), file.name);
 
 /** The fields of one document read from all its pages, and the property it concerns. */
-export async function readDocument(kind: ReadKind, files: ReadFile[], userId: string): Promise<{ fields: Record<string, any>; match: DocumentMatch | null }> {
+export async function readDocument(kind: ReadKind, files: ReadFile[], userId: string, opts: { noAi?: boolean } = {}): Promise<{ fields: Record<string, any>; match: DocumentMatch | null }> {
   if (!files.length) throw new Error('Add at least one page.');
   if (files.length > 12) throw new Error('At most 12 pages or photos per document.');
   // A card statement whose text adds up is read for free; Claude only reads the ones it can't.
   if (kind === 'card_statement') {
     const free = await cardStatementFromText(files);
     if (free) return { fields: free, match: null };
+    // Backfilling old statements without AI: one the free reader can't read is left for the owner, not sent to Claude.
+    if (opts.noAi) throw Object.assign(new Error('The free reader could not read this statement (a scan, or a layout it does not know). Read it with AI, or leave it.'), { status: 422, needsAi: true });
   }
   const content: Anthropic.ContentBlockParam[] = [];
   for (const f of files) content.push(await blockFor(f));

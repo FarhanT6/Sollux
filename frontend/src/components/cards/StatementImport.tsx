@@ -17,7 +17,7 @@ import { describeApiError } from '../../lib/apiError';
  */
 
 type Status = 'waiting' | 'reading' | 'read' | 'saving' | 'saved' | 'error';
-interface Item { key: number; files: FilePayload[]; fields: Record<string, any> | null; cardId: string; status: Status; err: string | null }
+interface Item { key: number; files: FilePayload[]; fields: Record<string, any> | null; cardId: string; status: Status; err: string | null; needsAi?: boolean }
 
 const isPdf = (f: FilePayload) => /\.pdf$/i.test(f.name) || f.data.startsWith('JVBER');
 const addsUp = (f: Record<string, any> | null) => {
@@ -56,6 +56,9 @@ export default function StatementImport({ cards, fixedCardId, onDone }: { cards:
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // Backfilling old statements: the free reader only, so nothing spends AI credits; what it can't read waits.
+  const [noAi, setNoAi] = useState(() => { try { return localStorage.getItem('card-upload-no-ai') === '1'; } catch { return false; } });
+  const setNoAiKept = (v: boolean) => { setNoAi(v); try { localStorage.setItem('card-upload-no-ai', v ? '1' : '0'); } catch { /* not kept */ } };
 
   const patch = (key: number, p: Partial<Item>) => setItems(xs => xs.map(x => (x.key === key ? { ...x, ...p } : x)));
 
@@ -69,12 +72,20 @@ export default function StatementImport({ cards, fixedCardId, onDone }: { cards:
     if (queue.length === 1) setOpen(queue[0].key);
     for (const it of queue) {
       patch(it.key, { status: 'reading' });
-      try {
-        const r = await readCardStatement(it.files);
-        patch(it.key, { status: 'read', fields: r.fields, cardId: fixedCardId ?? r.cardId ?? '__new' });
-      } catch (e) { patch(it.key, { status: 'error', err: describeApiError(e, 'Could not read the statement.') }); }
+      await readOne(it, noAi);
     }
     setBusy(false);
+  }
+
+  async function readOne(it: Item, freeOnly: boolean) {
+    patch(it.key, { status: 'reading', err: null, needsAi: false });
+    try {
+      const r = await readCardStatement(it.files, { noAi: freeOnly });
+      patch(it.key, { status: 'read', fields: r.fields, cardId: fixedCardId ?? r.cardId ?? '__new' });
+    } catch (e: any) {
+      const needsAi = !!e?.response?.data?.needsAi;
+      patch(it.key, { status: 'error', needsAi, err: needsAi ? 'Not read — the free reader could not read it' : describeApiError(e, 'Could not read the statement.') });
+    }
   }
 
   async function saveItems(keys: number[]) {
@@ -135,6 +146,12 @@ export default function StatementImport({ cards, fixedCardId, onDone }: { cards:
         </div>
       )}
       {files.length > 1 && <p className="text-xs text-gray-600">Each PDF is read as its own statement; photos together are the pages of one statement.</p>}
+      {!busy && files.length > 0 && (
+        <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer" title="For backfilling old statements: nothing is sent to the AI">
+          <input type="checkbox" checked={noAi} onChange={e => setNoAiKept(e.target.checked)} />
+          No AI — free reader only. A statement it can't read is set aside (you can read it with AI one by one).
+        </label>
+      )}
 
       {items.length > 1 && (
         <div className="flex items-center gap-3 flex-wrap text-xs">
@@ -161,6 +178,7 @@ export default function StatementImport({ cards, fixedCardId, onDone }: { cards:
                 <span className={it.status === 'error' ? 'text-red-400' : it.status === 'saved' ? 'text-emerald-400' : it.status === 'read' && !addsUp(f) ? 'text-amber-400' : 'text-gray-500'}>
                   {it.status === 'waiting' ? 'Waiting…' : it.status === 'reading' ? 'Reading…' : it.status === 'saving' ? 'Saving…' : it.status === 'saved' ? 'Saved'
                     : it.status === 'error' ? (it.err ?? 'Failed') : addsUp(f) ? `Adds up${f?.readBy === 'text' ? ' · no AI used' : ''}` : "Doesn't add up — open to check"}
+                  {it.status === 'error' && it.needsAi && !busy && <button onClick={() => void readOne(it, false)} className="ml-2 text-amber-400 hover:text-amber-300">Read with AI</button>}
                 </span>
               </div>
               {isOpen && f && it.status !== 'saved' && (

@@ -133,13 +133,13 @@ router.post('/from-bank-account/:bankAccountId', async (req, res, next) => {
 // POST /read-statement — read a statement's pages; match the card by its last four.
 router.post('/read-statement', async (req, res, next) => {
   try {
-    const { files } = z.object({ files: z.array(File).min(1).max(20) }).parse(req.body);
-    const result = await readDocument('card_statement', files, req.dbUserId!);
+    const { files, noAi } = z.object({ files: z.array(File).min(1).max(20), noAi: z.boolean().optional() }).parse(req.body);
+    const result = await readDocument('card_statement', files, req.dbUserId!, { noAi });
     const f = result.fields;
     const card = await findCardFor(req.dbUserId!, { last4: f.last4 ?? null, cardName: f.cardName ?? null, issuer: f.issuer ?? null });
     res.json({ fields: result.fields, cardId: card?.id ?? null, cardName: card?.name ?? null });
   } catch (err: any) {
-    if (err?.message) return res.status(422).json({ error: err.message });
+    if (err?.message) return res.status(422).json({ error: err.message, needsAi: !!err.needsAi });
     next(err);
   }
 });

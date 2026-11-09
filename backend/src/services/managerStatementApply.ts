@@ -7,13 +7,14 @@
  */
 import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
-import { COST_KINDS, lineKey, type LineKind, type LineRule } from '../lib/managerStatementMatch';
+import { COST_KINDS, lineKey, type LineKind, type LineRule, type LoanSplit } from '../lib/managerStatementMatch';
 import type { StatementDraft } from './managerStatement';
 
 /** A reviewed line as the owner left it (the draft's lines, edited). */
 export interface ReviewedLine {
   date?: string | null; description: string; kind: string; amount: number; direction: 'IN' | 'OUT';
   propertyId?: string | null; leaseId?: string | null; loanId?: string | null; category?: string | null; bankAccountId?: string | null; include: boolean;
+  splits?: LoanSplit[] | null;
 }
 
 /**
@@ -21,6 +22,10 @@ export interface ReviewedLine {
  * a loan line at a loan, a cost or reimbursement at a property. "You paid the manager" is kept (with the
  * account it came from) but records nothing: it funds the other lines, which are recorded themselves.
  */
+/** Parts that each name a loan and add up to the line. */
+const validSplits = (l: { amount: number; splits?: LoanSplit[] | null }) =>
+  !!l.splits && l.splits.length > 1 && l.splits.every(p => p.loanId && p.amount > 0) && Math.abs(l.splits.reduce((t, p) => t + p.amount, 0) - l.amount) < 0.01;
+
 export function lineItemsFrom(lines: ReviewedLine[]) {
   return lines.map(l => {
     const cost = COST_KINDS.includes(l.kind as LineKind);
@@ -29,6 +34,8 @@ export function lineItemsFrom(lines: ReviewedLine[]) {
       type, targetId: l.kind === 'RENT' ? l.leaseId ?? null : l.kind === 'LOAN_PAYMENT' ? l.loanId ?? null : null,
       targetLabel: l.kind, description: l.description, amount: l.amount, direction: l.direction === 'IN' ? 'CREDIT' : 'DEBIT',
       date: l.date ?? null, category: l.category ?? null, propertyId: l.propertyId ?? null, bankAccountId: l.kind === 'OWNER_PAYMENT' ? l.bankAccountId ?? null : null,
+      // Kept whole (so the next statement's same line is known), with its parts when it paid several loans.
+      splits: type === 'LOAN_PAYMENT' && validSplits(l) ? l.splits : null,
       include: l.include && (type === 'RENT' || type === 'LOAN_PAYMENT' ? !!(l.leaseId || l.loanId) : type === 'EXPENSE' ? !!l.propertyId : true),
     };
   });
@@ -49,7 +56,15 @@ export async function learnLineRules(profileId: string, lines: ReviewedLine[]) {
     const chosen = l.kind === 'OWNER_PAYMENT' || l.kind === 'OWNER_DRAW'
       || (l.include && (l.kind === 'RENT' ? !!l.leaseId : l.kind === 'LOAN_PAYMENT' ? !!l.loanId : COST_KINDS.includes(l.kind as LineKind) ? !!l.propertyId : false));
     if (!chosen) continue;
-    rules[key] = { kind: l.kind as LineKind, propertyId: l.propertyId ?? null, leaseId: l.leaseId ?? null, loanId: l.loanId ?? null, category: l.category ?? null, bankAccountId: l.bankAccountId ?? null };
+    const before = rules[key];
+    if (l.kind === 'LOAN_PAYMENT' && validSplits(l)) {
+      // A split is remembered for lines of this exact total; the line's loan otherwise stays what it was.
+      const splits = [...(before?.splits ?? []).filter(sp => Math.abs(sp.total - l.amount) >= 0.005), { total: l.amount, parts: l.splits! }];
+      rules[key] = { ...(before ?? { kind: 'LOAN_PAYMENT' }), kind: 'LOAN_PAYMENT', loanId: before?.loanId ?? l.splits![0].loanId, propertyId: l.propertyId ?? before?.propertyId ?? null, splits };
+      changed = true;
+      continue;
+    }
+    rules[key] = { kind: l.kind as LineKind, propertyId: l.propertyId ?? null, leaseId: l.leaseId ?? null, loanId: l.loanId ?? null, category: l.category ?? null, bankAccountId: l.bankAccountId ?? null, ...(before?.splits ? { splits: before.splits } : {}) };
     changed = true;
   }
   if (changed) await db.reconciliationProfile.update({ where: { id: profileId }, data: { lineRules: rules as unknown as Prisma.InputJsonValue } });
@@ -58,6 +73,8 @@ export async function learnLineRules(profileId: string, lines: ReviewedLine[]) {
 interface Item {
   type: 'RENT' | 'LOAN_PAYMENT' | 'EXPENSE' | 'OTHER'; targetId?: string | null; description?: string | null;
   amount: number; direction: 'CREDIT' | 'DEBIT'; date?: string | null; category?: string | null; propertyId?: string | null; include?: boolean;
+  /** A loan line that paid several loans: each part recorded on its loan. */
+  splits?: LoanSplit[] | null;
 }
 
 const COSTLIKE = ['RENT', 'LOAN_PAYMENT', 'MANAGEMENT_FEE', 'REPAIR', 'UTILITY', 'OTHER_EXPENSE', 'REIMBURSEMENT'];
@@ -106,11 +123,15 @@ export async function applyManagerStatement(userId: string, statementId: string)
         });
         rentPaymentIds.push(p.id);
       } else if (item.type === 'LOAN_PAYMENT' && item.targetId) {
-        // Paid for the month the statement shows it; the manager took it out of the rent.
-        const p = await tx.loanPayment.create({
-          data: { loanId: item.targetId, date: itemDate, periodDate: monthOf(itemDate), amount: item.amount, status: 'PAID', method: 'DEDUCTED', notes: note },
-        });
-        loanPaymentIds.push(p.id);
+        // Paid for the month the statement shows it; the manager took it out of the rent. A line that paid
+        // several loans records each loan's part.
+        for (const part of item.splits?.length ? item.splits : [{ loanId: item.targetId, amount: item.amount }]) {
+          if (!(await tx.loan.findFirst({ where: { id: part.loanId, userId }, select: { id: true } }))) continue;
+          const p = await tx.loanPayment.create({
+            data: { loanId: part.loanId, date: itemDate, periodDate: monthOf(itemDate), amount: part.amount, status: 'PAID', method: 'DEDUCTED', notes: item.splits?.length ? `${note} — part of ${item.amount.toFixed(2)}` : note },
+          });
+          loanPaymentIds.push(p.id);
+        }
       } else if (item.type === 'EXPENSE' && (item.propertyId ?? profile.propertyId)) {
         const e = await tx.expense.create({
           data: {
