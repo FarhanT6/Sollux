@@ -7,6 +7,7 @@ import { uploadDocument, getSignedDocumentUrl, detectContentType } from '../serv
 import { readManagerStatement } from '../services/managerStatement';
 import { applyManagerStatement, lineItemsFrom, learnLineRules } from '../services/managerStatementApply';
 import { fetchManagerStatements } from '../services/managerStatementFetch';
+import { undoManagerStatement, redoManagerStatements } from '../services/managerStatementRedo';
 
 const router = Router();
 router.use(attachDbUser);
@@ -159,6 +160,37 @@ router.post('/statements/:id/apply', async (req, res, next) => {
     res.json(await db.reconciliationStatement.findUnique({ where: { id: req.params.id } }));
   } catch (err: any) {
     if (err?.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
+// POST /statements/:id/undo — remove what a statement recorded; it stays listed (as Undone) so its email is not fetched again.
+router.post('/statements/:id/undo', async (req, res, next) => {
+  try { await undoManagerStatement(req.dbUserId!, req.params.id); res.json({ ok: true }); }
+  catch (err: any) { if (err?.status) return res.status(err.status).json({ error: err.message }); next(err); }
+});
+
+// POST /profiles/:id/redo — record every emailed statement from this manager again, oldest first,
+// with what has been chosen since; PDFs that are not statements are set aside.
+router.post('/profiles/:id/redo', async (req, res, next) => {
+  try {
+    const p = await db.reconciliationProfile.findFirst({ where: { id: req.params.id, userId: req.dbUserId! }, select: { id: true } });
+    if (!p) return res.status(404).json({ error: 'Manager not found' });
+    res.json(await redoManagerStatements(req.dbUserId!, p.id));
+  } catch (err) { next(err); }
+});
+
+// POST /statements/:id/review { lines } — an emailed statement reviewed: what was chosen is remembered
+// for the manager, and every emailed statement from them is recorded again with it.
+router.post('/statements/:id/review', async (req, res, next) => {
+  try {
+    const st = await db.reconciliationStatement.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
+    if (!st) return res.status(404).json({ error: 'Statement not found' });
+    const { lines } = z.object({ lines: ImportSchema.shape.lines }).parse(req.body);
+    await learnLineRules(st.profileId, lines);
+    res.json(await redoManagerStatements(req.dbUserId!, st.profileId));
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ error: 'Some lines are incomplete.' });
     next(err);
   }
 });

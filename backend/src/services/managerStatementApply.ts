@@ -8,6 +8,7 @@
 import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { COST_KINDS, lineKey, type LineKind, type LineRule } from '../lib/managerStatementMatch';
+import type { StatementDraft } from './managerStatement';
 
 /** A reviewed line as the owner left it (the draft's lines, edited). */
 export interface ReviewedLine {
@@ -59,6 +60,18 @@ interface Item {
   amount: number; direction: 'CREDIT' | 'DEBIT'; date?: string | null; category?: string | null; propertyId?: string | null; include?: boolean;
 }
 
+const COSTLIKE = ['RENT', 'LOAN_PAYMENT', 'MANAGEMENT_FEE', 'REPAIR', 'UTILITY', 'OTHER_EXPENSE', 'REIMBURSEMENT'];
+
+/** A read statement as stored: its lines, what records itself, and what is left for the owner. */
+export function statementFromDraft(draft: StatementDraft & { documentKey?: string }) {
+  const lineItems = lineItemsFrom(draft.lines);
+  const recordable = new Set(lineItems.map((li, i) => (li.include ? i : -1)).filter(i => i >= 0));
+  const needsLook = draft.lines.filter((l, i) => !recordable.has(i) && !l.onEarlierStatement && !l.alreadyRecorded && COSTLIKE.includes(l.kind)).length;
+  const reviewDraft = { ...draft, lines: draft.lines.map((l, i) => (recordable.has(i) ? { ...l, include: false, recordedNow: true } : { ...l, recordedNow: false })) };
+  const net = lineItems.reduce((t, li) => t + (li.direction === 'CREDIT' ? li.amount : -li.amount), 0);
+  return { lineItems, needsLook, reviewDraft, net: Math.round(net * 100) / 100 };
+}
+
 export async function applyManagerStatement(userId: string, statementId: string) {
   const statement = await db.reconciliationStatement.findFirst({ where: { id: statementId, userId } });
   if (!statement) throw Object.assign(new Error('Statement not found'), { status: 404 });
@@ -67,6 +80,15 @@ export async function applyManagerStatement(userId: string, statementId: string)
   if (!profile) throw Object.assign(new Error('Profile not found'), { status: 404 });
 
   const lineItems = statement.lineItems as unknown as Item[];
+  // A line another of this manager's recorded statements already recorded is not recorded again
+  // (the same month read twice: a statement uploaded by hand and also emailed, a year-to-date repeat).
+  const key = (li: Item) => `${li.date ?? ''}|${Number(li.amount).toFixed(2)}|${li.direction === 'CREDIT' ? 'C' : 'D'}|${String(li.description ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()}`;
+  const recorded = new Map<string, number>();
+  for (const other of await db.reconciliationStatement.findMany({ where: { userId, profileId: statement.profileId, status: 'APPLIED', id: { not: statement.id } }, select: { lineItems: true } })) {
+    const counts = new Map<string, number>();
+    for (const li of (Array.isArray(other.lineItems) ? other.lineItems : []) as unknown as Item[]) if (li.include !== false) counts.set(key(li), (counts.get(key(li)) ?? 0) + 1);
+    for (const [k, n] of counts) recorded.set(k, Math.max(recorded.get(k) ?? 0, n));
+  }
   const periodDate = new Date(Date.UTC(statement.statementDate.getUTCFullYear(), statement.statementDate.getUTCMonth(), 1));
   const monthOf = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
   const rentPaymentIds: string[] = [], loanPaymentIds: string[] = [], expenseIds: string[] = [];
@@ -74,6 +96,8 @@ export async function applyManagerStatement(userId: string, statementId: string)
   await db.$transaction(async tx => {
     for (const item of lineItems) {
       if (item.include === false) continue;
+      const left = recorded.get(key(item)) ?? 0;
+      if (left > 0) { recorded.set(key(item), left - 1); continue; }
       const itemDate = item.date ? new Date(`${item.date.slice(0, 10)}T00:00:00.000Z`) : statement.statementDate;
       const note = `Reconciled via ${profile.name} statement (${item.description ?? ''})`.trim();
       if (item.type === 'RENT' && item.targetId) {

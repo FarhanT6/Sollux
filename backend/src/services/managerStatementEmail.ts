@@ -17,7 +17,7 @@ import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { readManagerStatement, type StatementDraft } from './managerStatement';
 import { uploadDocument } from './s3Service';
-import { applyManagerStatement, lineItemsFrom } from './managerStatementApply';
+import { applyManagerStatement, statementFromDraft } from './managerStatementApply';
 
 /** "Owner Statement", "Statement of Cash Flows", with rent collected and a management fee: from the PDF's own text. */
 export function looksLikeManagerStatement(text: string): boolean {
@@ -26,6 +26,15 @@ export function looksLikeManagerStatement(text: string): boolean {
   const rent = /rent\s+(?:received|collected|income|receipts?)|rents?\s+received|rental\s+income/i.test(t);
   const fee = /(?:property\s+)?management\s+fees?|\bproperty\s+management\b|mgmt\s+fee|leasing\s+fee/i.test(t);
   return (title && (rent || fee)) || (rent && fee && /owner|transfer\s+(?:to|from)\s+owner/i.test(t));
+}
+
+/**
+ * Whether an emailed PDF is a manager's statement. A PDF with text must read like one, even from the
+ * manager's own address: a manager who is also a lender sends loan letters and schedules from it too.
+ * A scanned PDF (no text to check) counts when it comes from the manager.
+ */
+export function isManagerStatementPdf(text: string, fromManager: boolean): boolean {
+  return text.replace(/\s/g, '').length >= 200 ? looksLikeManagerStatement(text) : fromManager;
 }
 
 /** The address in a From header: "Monty James <monty@example.com>" → "monty@example.com". */
@@ -73,20 +82,15 @@ export async function intakeManagerStatement(userId: string, file: Buffer, filen
 
   const documentKey = `${userId}/reconciliation/uploads/${Date.now()}-${sanitize(filename)}`;
   await (deps.upload ?? uploadDocument)(documentKey, file);
-  // Recorded only when every line it records points at its record; the owner settles the rest in the review.
-  const lineItems = lineItemsFrom(draft.lines);
   // What records itself; the rest (new, but not matched to a record) waits for the owner.
-  const recordable = new Set(lineItems.map((li, i) => (li.include ? i : -1)).filter(i => i >= 0));
-  const needsLook = draft.lines.filter((l, i) => !recordable.has(i) && !l.onEarlierStatement && !l.alreadyRecorded && ['RENT', 'LOAN_PAYMENT', 'MANAGEMENT_FEE', 'REPAIR', 'UTILITY', 'OTHER_EXPENSE', 'REIMBURSEMENT'].includes(l.kind)).length;
-  const reviewDraft = { ...draft, documentKey, lines: draft.lines.map((l, i) => (recordable.has(i) ? { ...l, include: false, recordedNow: true } : l)) };
-  const net = lineItems.reduce((t, li) => t + (li.direction === 'CREDIT' ? li.amount : -li.amount), 0);
+  const { lineItems, needsLook, reviewDraft, net } = statementFromDraft({ ...draft, documentKey });
   const date = draft.statementDate ?? draft.periodEnd ?? (receivedAt ?? new Date()).toISOString().slice(0, 10);
   const st = await db.reconciliationStatement.create({
     data: {
       userId, profileId: profile.id, statementDate: new Date(`${date}T00:00:00.000Z`), documentS3Key: documentKey,
-      lineItems: lineItems as unknown as Prisma.InputJsonValue, netAmount: Math.round(net * 100) / 100,
+      lineItems: lineItems as unknown as Prisma.InputJsonValue, netAmount: net,
       notes: `Fetched from email (${from.slice(0, 120)})`, source: 'email', sourceRef: ref, receivedAt,
-      draftJson: { ...reviewDraft, needsLook } as unknown as Prisma.InputJsonValue,
+      draftJson: { ...reviewDraft, documentKey, needsLook, verified: true } as unknown as Prisma.InputJsonValue,
     },
   });
   const done = await applyManagerStatement(userId, st.id);

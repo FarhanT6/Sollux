@@ -346,6 +346,13 @@ export const createReconciliationProfile = (data: Partial<ReconciliationProfile>
   api.post<ReconciliationProfile>('/reconciliation/profiles', data).then(r => r.data);
 export const updateReconciliationProfile = (id: string, data: Partial<ReconciliationProfile>) =>
   api.patch<ReconciliationProfile>(`/reconciliation/profiles/${id}`, data).then(r => r.data);
+/** Remove what a manager statement recorded; it stays listed as Undone. */
+export const undoReconciliationStatement = (id: string) => api.post(`/reconciliation/statements/${id}/undo`).then(r => r.data);
+export interface ManagerRedoSummary { statements: number; notStatements: number; rent: number; loanPayments: number; expenses: number; needsLook: number }
+/** Record every emailed statement from this manager again, oldest first, with what has been chosen since. */
+export const redoManagerStatements = (profileId: string) => api.post<ManagerRedoSummary>(`/reconciliation/profiles/${profileId}/redo`, {}, { timeout: 300_000 }).then(r => r.data);
+/** An emailed statement reviewed: the choices are remembered and every emailed statement from the manager is recorded again. */
+export const reviewEmailedStatement = (id: string, lines: ManagerDraftLine[]) => api.post<ManagerRedoSummary>(`/reconciliation/statements/${id}/review`, { lines }, { timeout: 300_000 }).then(r => r.data);
 /** Look through the connected Gmail for manager statements now and record the new ones. */
 export const fetchManagerStatementsFromEmail = (days = 180) =>
   api.post<{ mailboxes: number; looked: number; found: number; recorded: number; already: number; details: string[]; errors: string[] }>('/reconciliation/fetch-email', { days }, { timeout: 600_000 }).then(r => r.data);

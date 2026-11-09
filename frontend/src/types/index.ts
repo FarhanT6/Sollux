@@ -391,7 +391,8 @@ export interface ReconciliationStatement {
   documentUrl?: string | null;
   lineItems: ReconciliationLineItem[];
   netAmount: number;
-  status: 'DRAFT' | 'APPLIED';
+  /** UNDONE: what it recorded was removed. NOT_A_STATEMENT: an emailed PDF that is not a statement (nothing recorded). */
+  status: 'DRAFT' | 'APPLIED' | 'UNDONE' | 'NOT_A_STATEMENT';
   appliedAt?: string | null;
   createdRecordIds?: { rentPaymentIds: string[]; loanPaymentIds: string[]; expenseIds: string[] } | null;
   notes?: string | null;

@@ -95,3 +95,39 @@ test('a choice made once fills the same line in next time, back months that were
   const ownerLine = (st!.lineItems as any[]).find(li => li.description === 'Transfer from Owner');
   assert.equal(ownerLine.targetLabel, 'OWNER_PAYMENT', 'the owner\'s transfer is kept as paid by the owner, not money sent to them');
 });
+
+test('redo: a lender letter from the manager is set aside and what it recorded removed; the real ones are recorded once', { skip }, async () => {
+  const { db } = api;
+  // A real PDF with text (pdf-lib), without the inbox agent (it opens queue connections).
+  const textToPdf = async (text: string) => {
+    const { PDFDocument, StandardFonts } = await import('pdf-lib');
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const page = doc.addPage([612, 792]);
+    text.split('\n').forEach((line, i) => page.drawText(line, { x: 40, y: 750 - i * 13, size: 10, font }));
+    return Buffer.from(await doc.save());
+  };
+  const { applyManagerStatement } = await import('../../src/services/managerStatementApply');
+  const { redoManagerStatements, undoManagerStatement } = await import('../../src/services/managerStatementRedo');
+  const profile = (await db.reconciliationProfile.findFirst({ where: { userId: ids.user } }))!;
+  // A loan schedule the manager (also a lender) emailed, read as a statement before PDFs were checked.
+  const bogus = await db.reconciliationStatement.create({ data: {
+    userId: ids.user, profileId: profile.id, statementDate: new Date('2026-01-15'), source: 'email', sourceRef: 'msg-0|note.pdf', receivedAt: new Date('2026-01-15'),
+    documentS3Key: 'bogus.pdf', netAmount: -75, draftJson: { lines: [], verified: false },
+    lineItems: [{ type: 'EXPENSE', description: 'Late charge', amount: 75, direction: 'DEBIT', date: '2026-01-15', category: 'OTHER', propertyId: ids.property, include: true }],
+  } });
+  await applyManagerStatement(ids.user, bogus.id);
+  const counts = async () => [await db.rentPayment.count({ where: { leaseId: ids.lease } }), await db.loanPayment.count({ where: { loan: { userId: ids.user } } }), await db.expense.count({ where: { userId: ids.user } })];
+  const [rent0, loans0, exp0] = await counts();
+
+  const letter = await textToPdf('Promissory Note - Payment Schedule\nBorrower: Sample Owner\nPrincipal $150,000.00\nInterest rate 10%\nMonthly interest payment $1,250.00 due on the 1st of each month.\nBalance after payment $150,000.00\n'.repeat(3));
+  const r = await redoManagerStatements(ids.user, profile.id, { download: async () => letter });
+  assert.equal(r.notStatements, 1);
+  assert.equal((await db.reconciliationStatement.findUnique({ where: { id: bogus.id } }))!.status, 'NOT_A_STATEMENT');
+  assert.deepEqual(await counts(), [rent0, loans0, exp0 - 1], 'only the letter\'s cost is gone; the statements recorded the same again');
+
+  const apr = (await db.reconciliationStatement.findFirst({ where: { sourceRef: 'msg-3|apr.pdf' } }))!;
+  await undoManagerStatement(ids.user, apr.id);
+  assert.equal((await db.reconciliationStatement.findUnique({ where: { id: apr.id } }))!.status, 'UNDONE');
+  assert.ok((await counts())[1] < loans0, 'its loan payments are removed');
+});
