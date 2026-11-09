@@ -24,9 +24,38 @@ export function loadGooglePicker(): Promise<void> {
 export class DriveNotConnected extends Error {}
 
 const GOOGLE_DOC = 'application/vnd.google-apps.document';
+const FOLDER = 'application/vnd.google-apps.folder';
+/** The most PDFs a picked folder brings in at once. */
+export const FOLDER_LIMIT = 150;
 
-/** Opens the picker; resolves with the chosen files (empty when cancelled). Throws DriveNotConnected when no Drive account is connected. */
-export async function pickFromDrive(opts: { mimeTypes?: string; multiple?: boolean } = {}): Promise<File[]> {
+/** The PDFs in a Drive folder and the folders inside it, oldest first by name order Drive gives. */
+async function pdfsInFolder(folderId: string, accessToken: string): Promise<{ id: string; name: string; mimeType: string }[]> {
+  const out: { id: string; name: string; mimeType: string }[] = [];
+  const stack = [folderId];
+  while (stack.length && out.length < FOLDER_LIMIT) {
+    const parent = stack.shift()!;
+    let pageToken = '';
+    do {
+      const q = encodeURIComponent(`'${parent}' in parents and trashed = false`);
+      const r = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=nextPageToken,files(id,name,mimeType)&pageSize=200&orderBy=name&supportsAllDrives=true&includeItemsFromAllDrives=true${pageToken ? `&pageToken=${pageToken}` : ''}`,
+        { headers: { Authorization: `Bearer ${accessToken}` } });
+      if (!r.ok) throw new Error(`Could not list the folder in Drive (${r.status}).`);
+      const j = await r.json() as { nextPageToken?: string; files?: { id: string; name: string; mimeType: string }[] };
+      for (const f of j.files ?? []) {
+        if (f.mimeType === FOLDER) stack.push(f.id);
+        else if (f.mimeType === 'application/pdf' && out.length < FOLDER_LIMIT) out.push(f);
+      }
+      pageToken = j.nextPageToken ?? '';
+    } while (pageToken && out.length < FOLDER_LIMIT);
+  }
+  return out;
+}
+
+/**
+ * Opens the picker; resolves with the chosen files (empty when cancelled). Throws DriveNotConnected when no Drive account is connected.
+ * With `folders`, a folder can be chosen too: every PDF in it (and its folders) comes back, up to FOLDER_LIMIT.
+ */
+export async function pickFromDrive(opts: { mimeTypes?: string; multiple?: boolean; folders?: boolean } = {}): Promise<File[]> {
   const apiKey = import.meta.env.VITE_GOOGLE_PICKER_API_KEY;
   if (!apiKey) throw new Error('Google Drive is not set up for this app (VITE_GOOGLE_PICKER_API_KEY).');
   const status = await getDriveStatus();
@@ -40,6 +69,7 @@ export async function pickFromDrive(opts: { mimeTypes?: string; multiple?: boole
     const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
       .setMimeTypes(opts.mimeTypes ?? `application/pdf,image/png,image/jpeg,image/webp,${GOOGLE_DOC}`)
       .setIncludeFolders(true)
+      .setSelectFolderEnabled(!!opts.folders)
       // Thumbnails, not just names, so the right file can be told apart before it is chosen.
       .setMode(google.picker.DocsViewMode.GRID);
     let builder = new google.picker.PickerBuilder()
@@ -54,7 +84,14 @@ export async function pickFromDrive(opts: { mimeTypes?: string; multiple?: boole
     builder.build().setVisible(true);
   });
 
-  return downloadDriveFiles(docs, accessToken);
+  // A folder picked: its PDFs.
+  const picked: { id: string; name: string; mimeType: string }[] = [];
+  for (const d of docs) {
+    if (d.mimeType === FOLDER) picked.push(...await pdfsInFolder(d.id, accessToken));
+    else picked.push(d);
+  }
+  const seen = new Set<string>();
+  return downloadDriveFiles(picked.filter(d => !seen.has(d.id) && !!seen.add(d.id)), accessToken);
 }
 
 /** Picked Drive files fetched into the browser (a Google Doc as a PDF). */

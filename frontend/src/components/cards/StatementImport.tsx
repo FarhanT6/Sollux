@@ -4,6 +4,7 @@ import { filesToPayload } from '../../lib/files';
 import { fmtMoney } from '../../lib/money';
 import { fmtDate } from '../../lib/date';
 import { describeApiError } from '../../lib/apiError';
+import DriveButton from '../DriveButton';
 
 /**
  * Upload credit card statements: its summary, rates and transactions are
@@ -137,6 +138,8 @@ export default function StatementImport({ cards, fixedCardId, onDone }: { cards:
           <label className="btn text-xs cursor-pointer">Add statement PDFs or photos
             <input type="file" accept="application/pdf,image/*" multiple className="hidden" onChange={async e => { const x = await filesToPayload(e.target.files); setFiles(p => [...p, ...x]); e.target.value = ''; }} />
           </label>
+          {/* Statements kept in Google Drive: pick files, or a whole folder of them. */}
+          <DriveButton multiple folders className="btn text-xs" label="From Google Drive" onFiles={async fs => { const x = await filesToPayload(fs); setFiles(p => [...p, ...x]); }} />
           {files.map((f, i) => <span key={i} className="text-xs text-gray-400 px-2 py-1 rounded" style={{ background: 'rgba(255,255,255,0.05)' }}>{f.name} <button onClick={() => setFiles(ps => ps.filter((_, j) => j !== i))} className="text-gray-600 hover:text-red-400 ml-1">✕</button></span>)}
           {files.length > 0 && (
             <button onClick={() => void readAll()} className="btn btn-primary text-xs">
