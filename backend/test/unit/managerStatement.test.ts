@@ -38,3 +38,22 @@ test('cost lines are filed under their category', () => {
   assert.equal(categoryFor('REPAIR'), 'REPAIRS_MAINTENANCE');
   assert.equal(categoryFor('RENT'), null);
 });
+
+test('a loan line goes to the lender it names; the manager\'s own loan list never picks one alone', async () => {
+  const { pickLoan, namesSomeone } = await import('../../src/lib/managerStatementMatch');
+  const loans = [
+    { id: 'monty', lender: 'Morgan Ellis', propertyId: 'p1' },
+    { id: 'paul', lender: 'Paul Rivera', propertyId: null },          // a private loan with no property on file
+    { id: 'bank', lender: 'Example Community Bank', propertyId: 'p2' },
+  ];
+  const mine = ['monty'];
+  // Named: Paul's line goes to Paul's loan though it has no property and the manager lists only the other one.
+  assert.equal(pickLoan('Loan repayment - Paul', loans, { propertyId: 'p1', mine })?.id, 'paul');
+  assert.equal(pickLoan('Loan interest - Ellis $150K', loans, { propertyId: 'p1', mine })?.id, 'monty');
+  // Names someone Sollux has no loan for: waits for the owner, not the property's only loan or the manager's.
+  assert.equal(pickLoan('Loan repayment - Colucci', loans, { propertyId: 'p1', mine }), null);
+  // Names no one: the property's only loan.
+  assert.equal(pickLoan('Mortgage payment', loans, { propertyId: 'p2', mine })?.id, 'bank');
+  assert.equal(namesSomeone('Loan repayment - Colucci'), true);
+  assert.equal(namesSomeone('Mortgage interest payment $1,250.00'), false);
+});

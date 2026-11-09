@@ -65,23 +65,11 @@ export async function redoManagerStatements(userId: string, profileId: string,
   // 2. Each recorded again from the lines it was read with, against what is recorded now.
   // One that fails is reported and left undone; the rest still go (one bad statement left them all undone).
   for (const st of keep) {
-    const d = (st.draftJson && typeof st.draftJson === 'object' ? st.draftJson : {}) as Record<string, any>;
     const when = (st.receivedAt ?? st.statementDate).toISOString().slice(0, 10);
-    if (!Array.isArray(d.lines)) { sum.failed.push(`${when}: its lines were not kept — delete it and fetch it again`); continue; }
     try {
-    const raw = {
-      manager: d.manager, periodStart: d.periodStart, periodEnd: d.periodEnd, statementDate: d.statementDate,
-      beginningBalance: d.beginningBalance, endingBalance: d.endingBalance,
-      lines: d.lines.map((l: any) => ({ date: l.date, property: l.propertyHint, payee: l.payee, unit: l.unit, description: l.description, kind: l.kind, amount: l.amount, direction: l.direction })),
-    };
-    const draft = await matchManagerStatement(userId, raw, profileId);
-    const { lineItems, needsLook, reviewDraft, net } = statementFromDraft({ ...draft, documentKey: d.documentKey });
-    await db.reconciliationStatement.update({
-      where: { id: st.id },
-      data: { status: 'DRAFT', lineItems: lineItems as unknown as Prisma.InputJsonValue, netAmount: net, draftJson: { ...reviewDraft, documentKey: d.documentKey, needsLook, verified: true } as unknown as Prisma.InputJsonValue },
-    });
-    const done = await applyManagerStatement(userId, st.id);
-    sum.statements++; sum.rent += done.rent; sum.loanPayments += done.loanPayments; sum.expenses += done.expenses; sum.needsLook += needsLook;
+      const done = await recordFromLines(userId, st);
+      if (!done) { sum.failed.push(`${when}: its lines were not kept — delete it and fetch it again`); continue; }
+      sum.statements++; sum.rent += done.rent; sum.loanPayments += done.loanPayments; sum.expenses += done.expenses; sum.needsLook += done.needsLook;
     } catch (err) {
       const why = err instanceof Error ? err.message.split('\n')[0].slice(0, 200) : String(err);
       console.warn(`[Manager] statement ${st.id} not recorded again:`, why);
@@ -90,6 +78,42 @@ export async function redoManagerStatements(userId: string, profileId: string,
     }
   }
   return sum;
+}
+
+/**
+ * One statement recorded again from the lines it was read with (no new AI read), matched with what the
+ * owner has chosen since (lineRules) and against what is recorded now. Null when its lines were not kept.
+ */
+async function recordFromLines(userId: string, st: { id: string; profileId: string; draftJson: unknown }) {
+  const d = (st.draftJson && typeof st.draftJson === 'object' ? st.draftJson : {}) as Record<string, any>;
+  if (!Array.isArray(d.lines)) return null;
+  const raw = {
+    manager: d.manager, periodStart: d.periodStart, periodEnd: d.periodEnd, statementDate: d.statementDate,
+    beginningBalance: d.beginningBalance, endingBalance: d.endingBalance,
+    lines: d.lines.map((l: any) => ({ date: l.date, property: l.propertyHint, payee: l.payee, unit: l.unit, description: l.description, kind: l.kind, amount: l.amount, direction: l.direction })),
+  };
+  const draft = await matchManagerStatement(userId, raw, st.profileId);
+  const { lineItems, needsLook, reviewDraft, net } = statementFromDraft({ ...draft, documentKey: d.documentKey });
+  await db.reconciliationStatement.update({
+    where: { id: st.id },
+    data: { status: 'DRAFT', lineItems: lineItems as unknown as Prisma.InputJsonValue, netAmount: net, draftJson: { ...reviewDraft, documentKey: d.documentKey, needsLook, verified: true } as unknown as Prisma.InputJsonValue },
+  });
+  const done = await applyManagerStatement(userId, st.id);
+  return { ...done, needsLook };
+}
+
+/**
+ * Record one statement again (an undone one, or one to refresh): what it recorded before is removed first,
+ * then it is recorded from its lines with today's choices. Lines another recorded statement has are skipped.
+ */
+export async function recordStatementAgain(userId: string, id: string) {
+  const st = await db.reconciliationStatement.findFirst({ where: { id, userId } });
+  if (!st) throw Object.assign(new Error('Statement not found'), { status: 404 });
+  if (st.status === 'NOT_A_STATEMENT') throw Object.assign(new Error('This PDF was set aside as not a statement.'), { status: 409 });
+  if (st.status === 'APPLIED') await undoManagerStatement(userId, id, 'UNDONE');
+  const done = await recordFromLines(userId, st);
+  if (!done) throw Object.assign(new Error('Its lines were not kept — delete it and fetch it again (Check email now), or upload it.'), { status: 409 });
+  return done;
 }
 
 /** Delete a statement, with what it recorded (rent, loan payments, costs). An emailed one can then be fetched again. */

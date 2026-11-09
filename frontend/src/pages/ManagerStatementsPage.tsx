@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   readManagerStatement, importManagerStatement, applyReconciliationStatement, deleteReconciliationStatement,
-  getReconciliationStatements, getReconciliationDocumentUrl, getLeases, getLoans, getProperties, getBankAccounts, getReconciliationProfiles, updateReconciliationProfile, fetchManagerStatementsFromEmail, undoReconciliationStatement, redoManagerStatements, startOverManager, reviewEmailedStatement, mergeManagers, type ManagerRedoSummary,
+  getReconciliationStatements, getReconciliationDocumentUrl, getLeases, getLoans, getProperties, getBankAccounts, getReconciliationProfiles, updateReconciliationProfile, fetchManagerStatementsFromEmail, undoReconciliationStatement, redoManagerStatements, startOverManager, recordManagerStatementAgain, reviewEmailedStatement, mergeManagers, type ManagerRedoSummary,
   type ManagerStatementDraft, type ManagerDraftLine, type ManagerLineKind,
 } from '../api/client';
 import type { BankAccount, ExpenseCategory, Lease, Loan, Property, ReconciliationProfile, ReconciliationStatement } from '../types';
@@ -69,6 +69,17 @@ export default function ManagerStatementsPage({ initialFile }: { /** Handed over
         : `Started over: deleted ${r.deleted} statement${r.deleted === 1 ? '' : 's'} and what ${r.deleted === 1 ? 'it' : 'they'} recorded, then fetched ${f.recorded} from your email and recorded ${f.recorded === 1 ? 'it' : 'each'} again.${f.errors.length ? ` ${f.errors.length} could not be read: ${f.errors[0]}` : ''}`);
       await load(); await loadProfiles();
     } catch (e) { setError(describeApiError(e, 'Could not start over.')); await load(); }
+    finally { setRedoing(null); }
+  }
+  // One statement recorded again from its lines (an undone one).
+  async function recordAgain(s: ReconciliationStatement) {
+    setRedoing(s.id); setError(''); setChecked(null);
+    try {
+      const r = await recordManagerStatementAgain(s.id);
+      const parts = [[r.rent, 'rent'], [r.loanPayments, 'loan payment'], [r.expenses, 'cost']].filter(([n]) => (n as number) > 0).map(([n, w]) => `${n} ${w}${n === 1 || w === 'rent' ? '' : 's'}`);
+      setChecked(`Recorded the ${fmtDate(s.statementDate)} statement again: ${parts.length ? parts.join(', ') : 'nothing new — its lines are on another statement or already on record'}.${r.needsLook ? ` ${r.needsLook} line${r.needsLook === 1 ? '' : 's'} still need${r.needsLook === 1 ? 's' : ''} you — Review.` : ''}`);
+      await load();
+    } catch (e) { setError(describeApiError(e, 'Could not record it again.')); }
     finally { setRedoing(null); }
   }
   async function remove(s: ReconciliationStatement) {
@@ -186,7 +197,7 @@ export default function ManagerStatementsPage({ initialFile }: { /** Handed over
         <div className="rounded-xl p-4 mb-5 text-xs text-gray-400 space-y-1.5" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.06)' }}>
           <p className="text-sm font-semibold text-white">How the emailed statements are recorded</p>
           <p>Each statement your manager emails is listed below, oldest at the bottom. A year-to-date statement repeats every earlier month, so from each one only the lines not on an earlier statement are recorded — that's why most rows say “Nothing new”. Rent is recorded for the month on the line, loan payments as that month's payment, fees and taxes as the property's costs.</p>
-          <p>A line Sollux can't match waits under <span className="text-amber-400">Review</span>. What you choose there is remembered, and every statement is recorded again with it, so earlier months fill in too. <span className="text-gray-300">Undo</span> removes what one statement recorded; <span className="text-gray-300">Delete</span> removes the statement too. <span className="text-gray-300">Start over</span> deletes all of a manager's statements and fetches them from your email again.</p>
+          <p>A line Sollux can't match waits under <span className="text-amber-400">Review</span>. What you choose there is remembered, and every statement is recorded again with it, so earlier months fill in too. <span className="text-gray-300">Undo</span> removes what one statement recorded and <span className="text-gray-300">Record again</span> puts it back; <span className="text-gray-300">Review</span> on any statement lets you change a line (a loan paid to the wrong lender, say) — the choice is remembered and every statement is recorded again with it. <span className="text-gray-300">Delete</span> removes the statement too. <span className="text-gray-300">Start over</span> deletes all of a manager's statements and fetches them from your email again.</p>
           <div className="flex flex-wrap gap-2 pt-1">
             {emailManagers.map(([id, name]) => (
               <button key={id} disabled={redoing === id} onClick={() => void redo(id)} className="btn text-xs disabled:opacity-50" title="Undo and record every emailed statement from this manager again, oldest first, with what you've chosen so far">
@@ -219,7 +230,10 @@ export default function ManagerStatementsPage({ initialFile }: { /** Handed over
                   </td>
                   <td className="px-4 py-2 text-right whitespace-nowrap text-xs">
                     {s.documentS3Key && <button onClick={() => void openFile(s.id)} className="text-gray-400 hover:text-white mr-3">File</button>}
-                    {s.draftJson && s.status !== 'NOT_A_STATEMENT' && (s.status === 'DRAFT' || (!!s.draftJson.needsLook && (s.source !== 'email' || newestOf.get(s.profileId) === s.id))) && <button onClick={() => setDraft({ ...s.draftJson!, replaceId: s.id, fromEmail: s.source === 'email' })} className="text-amber-400 hover:text-amber-300 mr-3">Review</button>}
+                    {s.status === 'UNDONE' && s.draftJson && <button disabled={!!redoing} onClick={() => void recordAgain(s)} className="text-amber-400 hover:text-amber-300 mr-3 disabled:opacity-50" title="Record it again from its lines, with what you've chosen since">{redoing === s.id ? 'Recording…' : 'Record again'}</button>}
+                    {s.draftJson && s.status !== 'NOT_A_STATEMENT' && <button onClick={() => setDraft({ ...s.draftJson!, replaceId: s.id, fromEmail: s.source === 'email' })}
+                      className={`mr-3 ${s.status === 'DRAFT' || (!!s.draftJson.needsLook && (s.source !== 'email' || newestOf.get(s.profileId) === s.id)) ? 'text-amber-400 hover:text-amber-300' : 'text-gray-400 hover:text-white'}`}
+                      title="See every line and what it was recorded as; change one and it's remembered">Review</button>}
                     {s.status === 'DRAFT' && !s.draftJson && <button onClick={async () => { try { await applyReconciliationStatement(s.id); void load(); } catch (e) { setError(describeApiError(e, 'Could not record it.')); } }} className="text-amber-400 hover:text-amber-300 mr-3" title="Lines another statement already recorded are skipped">Record</button>}
                     {s.status === 'APPLIED' && <button onClick={async () => { if (confirm('Remove the rent, loan payments and costs this statement recorded?')) { try { await undoReconciliationStatement(s.id); void load(); } catch (e) { setError(describeApiError(e, 'Could not undo it.')); } } }} className="text-gray-500 hover:text-white mr-3">Undo</button>}
                     <button onClick={() => void remove(s)} className="text-gray-500 hover:text-red-400">Delete</button>

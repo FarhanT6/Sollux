@@ -78,6 +78,30 @@ export function lenderScore(hint: string, lender: string): number {
   return hits === l.length ? 2 : hits > 0 ? 1 : 0;
 }
 
+/** Words that say a line is a loan payment without saying whose ("Loan repayment", "Mortgage interest"). */
+const LOAN_WORDS = new Set(['repayment', 'repay', 'payment', 'payments', 'pmt', 'interest', 'principal', 'escrow', 'monthly', 'note', 'installment', 'to', 'for', 'from', 'paid', 'private', 'lender', 'refinance', 'heloc']);
+/** Whether a loan line names someone (a lender or a person): "Loan repayment - Colucci" does, "Mortgage payment" does not. */
+export function namesSomeone(hint: string): boolean {
+  return words(hint).some(w => w.length > 1 && !LOAN_WORDS.has(w) && !/^\d/.test(w));
+}
+
+/**
+ * The loan a loan line pays. A lender named on the line decides: one on the line's property first, then any
+ * of the owner's loans (a private loan often has no property on file). Being on the manager's list of loans
+ * only breaks a tie between named ones — it never picks a loan alone: "Loan repayment - Paul" went to the
+ * manager's other lender's loan because that one was on the list. A line that names no one is the
+ * property's only loan; otherwise it waits for the owner to choose (and the choice is remembered).
+ */
+export function pickLoan<T extends { id: string; lender: string; propertyId: string | null }>(hint: string, loans: T[], o: { propertyId: string | null; mine: string[] }): T | null {
+  const score = (x: T) => { const n = lenderScore(hint, x.lender); return n > 0 ? n * 2 + (o.mine.includes(x.id) ? 1 : 0) : 0; };
+  const here = loans.filter(x => !o.propertyId || !x.propertyId || x.propertyId === o.propertyId);
+  const named = best(here, score) ?? (here.length < loans.length ? best(loans, score) : null);
+  if (named) return named;
+  if (namesSomeone(hint)) return null;
+  const own = o.propertyId ? loans.filter(x => x.propertyId === o.propertyId) : loans;
+  return own.length === 1 ? own[0] : null;
+}
+
 /** The one best candidate, or null when none fits or two fit equally well. */
 export function best<T>(items: T[], score: (t: T) => number): T | null {
   let top: T | null = null, topScore = 0, tie = false;

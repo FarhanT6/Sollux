@@ -7,7 +7,7 @@ import { uploadDocument, getSignedDocumentUrl, detectContentType } from '../serv
 import { readManagerStatement } from '../services/managerStatement';
 import { applyManagerStatement, lineItemsFrom, learnLineRules } from '../services/managerStatementApply';
 import { fetchManagerStatements } from '../services/managerStatementFetch';
-import { undoManagerStatement, redoManagerStatements, deleteManagerStatement, startOverManager } from '../services/managerStatementRedo';
+import { undoManagerStatement, redoManagerStatements, deleteManagerStatement, startOverManager, recordStatementAgain } from '../services/managerStatementRedo';
 
 const router = Router();
 router.use(attachDbUser);
@@ -167,6 +167,12 @@ router.post('/statements/:id/apply', async (req, res, next) => {
 // POST /statements/:id/undo — remove what a statement recorded; it stays listed (as Undone) so its email is not fetched again.
 router.post('/statements/:id/undo', async (req, res, next) => {
   try { await undoManagerStatement(req.dbUserId!, req.params.id); res.json({ ok: true }); }
+  catch (err: any) { if (err?.status) return res.status(err.status).json({ error: err.message }); next(err); }
+});
+
+// POST /statements/:id/record-again — one statement recorded again from its lines (an undone one, or to refresh it).
+router.post('/statements/:id/record-again', async (req, res, next) => {
+  try { res.json(await recordStatementAgain(req.dbUserId!, req.params.id)); }
   catch (err: any) { if (err?.status) return res.status(err.status).json({ error: err.message }); next(err); }
 });
 

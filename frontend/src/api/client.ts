@@ -349,6 +349,8 @@ export const updateReconciliationProfile = (id: string, data: Partial<Reconcilia
 /** Remove what a manager statement recorded; it stays listed as Undone. */
 export const undoReconciliationStatement = (id: string) => api.post(`/reconciliation/statements/${id}/undo`).then(r => r.data);
 export interface ManagerRedoSummary { statements: number; notStatements: number; rent: number; loanPayments: number; expenses: number; needsLook: number; failed?: string[] }
+/** Record one statement again from its lines (an undone one, or to refresh it), with what has been chosen since. */
+export const recordManagerStatementAgain = (id: string) => api.post<{ rent: number; loanPayments: number; expenses: number; needsLook: number }>(`/reconciliation/statements/${id}/record-again`, {}, { timeout: 120_000 }).then(r => r.data);
 /** Record every emailed statement from this manager again, oldest first, with what has been chosen since. */
 export const redoManagerStatements = (profileId: string) => api.post<ManagerRedoSummary>(`/reconciliation/profiles/${profileId}/redo`, {}, { timeout: 300_000 }).then(r => r.data);
 /** Two managers that are one: everything moves to intoId, and its emailed statements are recorded again. */
