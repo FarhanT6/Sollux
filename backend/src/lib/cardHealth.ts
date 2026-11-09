@@ -52,7 +52,11 @@ export interface CardHealth {
   lateEvents: LateEvent[];
   returned: ReturnedPayment[];
   costs: CostMonth[];
-  last12: { interest: number; lateFees: number; otherFees: number; refunds: number; net: number; onTime: number; late: number; worstDaysLate: number };
+  last12: {
+    interest: number; lateFees: number; otherFees: number; refunds: number; net: number; onTime: number; late: number; worstDaysLate: number;
+    /** Lates reported to the bureaus: 30 or more days past due on a statement date. */
+    reported: number;
+  };
   allTime: { interest: number; lateFees: number; otherFees: number; refunds: number; net: number };
   /** The newest statement's minimum not paid and its due date gone: days past due now. */
   daysPastDue: number;
@@ -242,6 +246,7 @@ export function cardHealth(statements: HStatement[], payments: HPayment[], today
       onTime: recent.filter(h => h.status === 'ON_TIME' || h.status === 'NOT_LOGGED').length,
       late: recent.filter(h => h.status === 'LATE' || h.status === 'PAST_DUE').length + orphanLate,
       worstDaysLate: Math.max(0, ...recent.map(h => h.daysLate ?? 0)),
+      reported: recent.filter(h => h.reported).length,
     },
     allTime: sum(costs),
     daysPastDue, daysUntil30: daysPastDue > 0 && daysPastDue < 30 ? 30 - daysPastDue : null,

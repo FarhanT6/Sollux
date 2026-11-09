@@ -13,6 +13,7 @@ import { PageHeader } from '../components/ui';
 import CardEditor from '../components/cards/CardEditor';
 import StatementImport from '../components/cards/StatementImport';
 import CardFetch from '../components/cards/CardFetch';
+import CardPayments from '../components/cards/CardPayments';
 import { CardHistory } from '../components/cards/CreditHealth';
 import { STATUS_PILL, utilTone } from './PersonalPage';
 import { fmtMoney } from '../lib/money';
@@ -339,20 +340,7 @@ export default function CreditCardPage() {
 
         {tab === 'transactions' && <Transactions card={card} properties={properties} />}
 
-        {tab === 'payments' && (
-          <div className="card overflow-x-auto">
-            <table className="table-base">
-              <thead><tr><th className="pl-4">Date</th><th className="text-right">Amount</th><th>From</th><th>Confirmation</th><th className="pr-4"></th></tr></thead>
-              <tbody>
-                {(card.payments ?? []).map(pm => (
-                  <tr key={pm.id}><td className="pl-4 text-white">{fmtDate(pm.date, 'MMM d, yyyy')}</td><td className={`text-right ${Number(pm.amount) < 0 ? 'text-red-400' : 'text-emerald-400'}`}>{fmtMoney(pm.amount)}{Number(pm.amount) < 0 && <span className="block text-xs">returned</span>}</td><td className="text-gray-400">{pm.fromBankAccountName ?? (pm.method === 'On statement' ? <span className="text-xs text-gray-500" title={pm.notes ?? ''}>On the statement — log it to add the bank account</span> : '—')}{pm.postedStatementId && pm.method !== 'On statement' && <span className="block text-xs text-gray-600">✓ on its statement</span>}</td><td className="text-gray-400">{pm.confirmation ?? '—'}</td>
-                    <td className="pr-4 text-right"><button onClick={async () => { await deleteCardPayment(pm.id); await load(); }} className="text-xs text-gray-600 hover:text-red-400">✕</button></td></tr>
-                ))}
-                {(card.payments ?? []).length === 0 && <tr><td colSpan={5} className="pl-4 text-sm text-gray-500">No payments logged. Use "Log payment" above; each one counts against the statement before it.</td></tr>}
-              </tbody>
-            </table>
-          </div>
-        )}
+        {tab === 'payments' && <CardPayments payments={card.payments ?? []} statements={card.statements ?? []} onDelete={async id => { await deleteCardPayment(id); await load(); }} />}
 
         <div className="mt-8 flex justify-between">
           <BackLink fallback="/personal?tab=cards" className="text-xs text-gray-500 hover:text-gray-300">← All cards</BackLink>

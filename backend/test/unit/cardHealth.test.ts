@@ -85,6 +85,15 @@ test('a minimum that includes the past-due amount is not counted twice (the Chas
   assert.equal(row('aug').status, 'ON_TIME');
   // Nothing was ever 30 days past due on a statement date: nothing reported.
   assert.deepEqual(h.history.filter(r => r.reported), []);
+  assert.equal(h.last12.reported, 0);
+  // The insight says so, and payment history reads Fair (late, not reported), not Poor.
+  const { insights, snapshot } = cardInsights([{ id: 'c', name: 'Travel Card', status: 'ACTIVE', autopay: 'NONE', health: h, paid90: 1700, promotions: [], minPayoffMonths: null,
+    position: { balance: 17800, limit: 18000, utilization: 98.9, apr: 24, introActive: false, monthlyInterest: 350, minimumPayment: 575, statementStatus: 'DUE', minimumRemaining: 575, nextDueDate: '2026-12-28' } }], today);
+  const late = insights.find(i => i.kind === 'LATE_FEES')!;
+  assert.match(late.detail, /none was 30 days past due on a statement date/);
+  assert.doesNotMatch(late.detail, /which issuers report/);
+  assert.equal(snapshot.reported12, 0);
+  assert.equal(snapshot.paymentHistory, 'FAIR');
 });
 
 test('nothing logged but the next statement shows nothing past due: probably paid, not late', () => {
