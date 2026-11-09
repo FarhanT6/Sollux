@@ -6,7 +6,7 @@
  * matches (its last four, else its bank's name).
  */
 import { db } from '../config/db';
-import { ensureWallets, addMovement, type WalletKind } from './wallets';
+import { ensureWallets, addMovement, WALLET_LABEL, type WalletKind } from './wallets';
 
 export interface Withdrawal { wallet: Exclude<WalletKind, 'CASH'>; amount: number; date: Date; last4: string | null; bank: string | null; instant: boolean }
 
@@ -52,7 +52,7 @@ export async function recordWithdrawal(userId: string, w: Withdrawal, ref: strin
   const byLast4 = w.last4 ? banks.filter(b => b.last4 === w.last4) : [];
   const byBank = w.bank ? banks.filter(b => `${b.bank ?? ''} ${b.name}`.toLowerCase().includes(w.bank!.toLowerCase())) : [];
   const account = byLast4.length === 1 ? byLast4[0] : byBank.length === 1 ? byBank[0] : null;
-  const label = { VENMO: 'Venmo', CASH_APP: 'Cash App', PAYPAL: 'PayPal', APPLE_CASH: 'Apple Cash' }[w.wallet];
+  const label = WALLET_LABEL[w.wallet];
   const where = account ? `${account.name}${account.last4 ? ` ••${account.last4}` : ''}` : [w.bank, w.last4 && `ending ${w.last4}`].filter(Boolean).join(' ') || 'your bank';
   await addMovement(userId, wallet.id, {
     date: w.date, amount: w.amount, type: 'TO_BANK', bankAccountId: account?.id ?? null, source: 'email', sourceRef: ref,

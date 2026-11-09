@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getWallets, updateWallet, addWalletMovement, deleteWalletMovement, getBankAccounts, type WalletsT, type WalletT, type WalletMovementType } from '../api/client';
+import { getWallets, updateWallet, addWalletMovement, deleteWalletMovement, getBankAccounts, depositChecks, undoCheckDeposit, type WalletsT, type WalletT, type WalletMovementType } from '../api/client';
 import type { BankAccount } from '../types';
 import { fmtMoney } from '../lib/money';
 import { fmtDate, todayISO } from '../lib/date';
@@ -7,15 +7,16 @@ import { describeApiError } from '../lib/apiError';
 import { bankAccountLabel } from '../lib/bankAccountLabel';
 
 /**
- * Cash & apps: what's sitting in cash, Venmo, Cash App, PayPal and Apple Cash
- * (backend services/wallets.ts). Rent logged by that method since the wallet's
+ * Cash, checks & apps: what's sitting in cash, checks not yet deposited, Venmo,
+ * Cash App, PayPal and Apple Cash (backend services/wallets.ts). A rent check or
+ * money order stays on hand until it is marked deposited into a bank account. Rent logged by that method since the wallet's
  * start date counts in; a "transferred to your bank" email from the app takes it
  * out to that bank account; the owner records the rest — cash deposited or
  * spent, money moved between apps, a correction.
  */
 
 const TYPE_LABEL: Record<string, string> = {
-  RENT: 'Rent received', TO_BANK: 'To a bank account', SPENT: 'Spent', TO_WALLET: 'Moved to another app / cash',
+  RENT: 'Rent received', CHECK_DEPOSIT: 'Deposited', TO_BANK: 'To a bank account', SPENT: 'Spent', TO_WALLET: 'Moved to another app / cash',
   FROM_WALLET: 'Moved in from another app / cash', ADJUSTMENT: 'Correction', OTHER_IN: 'Other money in',
 };
 
@@ -33,16 +34,16 @@ export default function WalletsPage() {
   return (
     <div className="space-y-4">
       <div className="rounded-xl p-4" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.06)' }}>
-        <p className="text-sm font-semibold text-white">Cash and payment apps: {fmtMoney(data.total)}</p>
-        <p className="text-xs text-gray-500 mt-0.5">Rent you log as cash, Venmo, Cash App, PayPal or Apple Cash adds to that balance. When an app emails you that money was transferred to your bank, it's taken out to that account on its own. Record the rest yourself: cash deposited or spent, money moved between apps, a correction.</p>
+        <p className="text-sm font-semibold text-white">Cash, checks and payment apps: {fmtMoney(data.total)}</p>
+        <p className="text-xs text-gray-500 mt-0.5">Rent you log as cash, a check or money order, Venmo, Cash App, PayPal or Apple Cash adds to that balance. A check stays under Checks until you mark it deposited (or pick the bank account when you log it). When an app emails you that money was transferred to your bank, it's taken out to that account on its own. Record the rest yourself: cash deposited or spent, money moved between apps, a correction.</p>
       </div>
       {err && <p className="text-sm text-red-400">{err}</p>}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {data.wallets.map(w => (
           <button key={w.id} onClick={() => setOpen(open === w.id ? null : w.id)} className={`stat-card text-left ${open === w.id ? 'ring-1 ring-amber-400/60' : ''}`}>
             <p className="text-xs text-gray-500">{w.label}</p>
             <p className={`text-lg font-semibold ${w.balance < 0 ? 'text-red-400' : 'text-white'}`}>{fmtMoney(w.balance)}</p>
-            <p className="text-xs text-gray-500">{fmtMoney(w.rentIn)} rent in · {fmtMoney(w.movedOut)} out</p>
+            <p className="text-xs text-gray-500">{w.kind === 'CHECK' ? `${w.onHand?.length ?? 0} on hand · ${fmtMoney(w.movedOut)} deposited` : `${fmtMoney(w.rentIn)} rent in · ${fmtMoney(w.movedOut)} out`}</p>
           </button>
         ))}
       </div>
@@ -72,6 +73,7 @@ function WalletDetail({ w, all, banks, onChange }: { w: WalletT; all: WalletT[];
 
   return (
     <div className="rounded-xl p-4 space-y-4" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.06)' }}>
+      {w.kind === 'CHECK' && <ChecksOnHand w={w} banks={banks} onChange={onChange} />}
       <div className="flex flex-wrap items-end gap-3">
         <p className="text-sm font-semibold text-white mr-auto">{w.label}</p>
         <div><span className={label}>Counting from</span><input type="date" className="input-dark text-sm" value={startedAt} onChange={e => setStartedAt(e.target.value)} /></div>
@@ -83,7 +85,7 @@ function WalletDetail({ w, all, banks, onChange }: { w: WalletT; all: WalletT[];
       <div className="grid grid-cols-2 md:grid-cols-6 gap-3 items-end">
         <div className="md:col-span-2"><span className={label}>Where it went (or came from)</span>
           <select className={input} value={form.type} onChange={e => setForm({ ...form, type: e.target.value as WalletMovementType })}>
-            <option value="TO_BANK">{w.kind === 'CASH' ? 'Deposited into a bank account' : 'Transferred to a bank account'}</option>
+            <option value="TO_BANK">{w.kind === 'CASH' || w.kind === 'CHECK' ? 'Deposited into a bank account' : 'Transferred to a bank account'}</option>
             <option value="SPENT">Spent (paid for something)</option>
             <option value="TO_WALLET">Moved to another app / cash</option>
             <option value="OTHER_IN">Other money in</option>
@@ -111,15 +113,69 @@ function WalletDetail({ w, all, banks, onChange }: { w: WalletT; all: WalletT[];
           {w.entries.map(e => (
             <tr key={e.id}>
               <td className="pl-0 text-gray-400 whitespace-nowrap">{fmtDate(e.date, 'MMM d, yyyy')}</td>
-              <td className="text-gray-300">{TYPE_LABEL[e.kind] ?? e.kind}{e.source === 'email' && <span className="block text-xs text-gray-600">from the app's email</span>}</td>
-              <td className="text-gray-400 text-xs">{e.kind === 'TO_BANK' && e.bankAccountName ? e.bankAccountName : e.description}</td>
+              <td className="text-gray-300">{e.kind === 'RENT' && e.method === 'MONEY_ORDER' ? 'Money order received' : e.kind === 'RENT' && w.kind === 'CHECK' ? 'Check received' : TYPE_LABEL[e.kind] ?? e.kind}{e.source === 'email' && <span className="block text-xs text-gray-600">from the app's email</span>}</td>
+              <td className="text-gray-400 text-xs">{(e.kind === 'TO_BANK' || e.kind === 'CHECK_DEPOSIT') && e.bankAccountName ? `${e.kind === 'CHECK_DEPOSIT' ? `${e.description} → ` : ''}${e.bankAccountName}` : `${e.checkNumber ? `#${e.checkNumber} · ` : ''}${e.description}`}
+                {e.kind === 'RENT' && w.kind === 'CHECK' && <span className={`block ${e.deposited ? 'text-gray-600' : 'text-amber-400'}`}>{e.deposited ? `Deposited ${fmtDate(e.deposited.date, 'MMM d')}${e.deposited.bankAccountName ? ` into ${e.deposited.bankAccountName}` : ''}` : 'On hand — not deposited yet'}</span>}</td>
               <td className={`text-right tabular-nums ${e.amount < 0 ? 'text-red-300' : 'text-emerald-400'}`}>{e.amount < 0 ? '−' : '+'}{fmtMoney(Math.abs(e.amount))}</td>
-              <td className="text-right">{e.movementId && <button onClick={async () => { if (confirm('Remove this entry?')) onChange(await deleteWalletMovement(e.movementId!)); }} className="text-xs text-gray-600 hover:text-red-400">✕</button>}</td>
+              <td className="text-right">{e.movementId && <button onClick={async () => { if (confirm('Remove this entry?')) onChange(await deleteWalletMovement(e.movementId!)); }} className="text-xs text-gray-600 hover:text-red-400">✕</button>}
+                {e.kind === 'CHECK_DEPOSIT' && e.rentPaymentId && <button onClick={async () => { if (confirm('Not deposited after all? The check goes back on hand.')) onChange(await undoCheckDeposit(e.rentPaymentId!)); }} className="text-xs text-gray-600 hover:text-amber-400" title="Undo the deposit">Undo</button>}</td>
             </tr>
           ))}
           {!w.entries.length && <tr><td colSpan={5} className="pl-0 text-sm text-gray-500">Nothing since {fmtDate(w.startedAt, 'MMM d, yyyy')}.</td></tr>}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/** The checks not deposited yet: tick the ones going to the bank together, choose the account, Deposit. */
+function ChecksOnHand({ w, banks, onChange }: { w: WalletT; banks: BankAccount[]; onChange: (d: WalletsT) => void }) {
+  const onHand = w.onHand ?? [];
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [bankAccountId, setBankAccountId] = useState('');
+  const [date, setDate] = useState(todayISO());
+  const [err, setErr] = useState('');
+  const total = onHand.filter(c => picked.has(c.rentPaymentId)).reduce((t, c) => t + c.amount, 0);
+  const toggle = (id: string) => setPicked(p => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  async function deposit() {
+    if (!picked.size) { setErr('Tick the checks you deposited.'); return; }
+    if (!bankAccountId) { setErr('Choose the bank account.'); return; }
+    setErr('');
+    try { onChange(await depositChecks([...picked], bankAccountId, date)); setPicked(new Set()); }
+    catch (e) { setErr(describeApiError(e, 'Not saved.')); }
+  }
+  return (
+    <div className="space-y-2">
+      <p className="text-sm font-semibold text-white">Checks on hand {onHand.length > 0 && <span className="text-gray-500 font-normal">· {onHand.length} · {fmtMoney(onHand.reduce((t, c) => t + c.amount, 0))}</span>}</p>
+      {!onHand.length ? <p className="text-xs text-gray-500">None — every check logged since {fmtDate(w.startedAt, 'MMM d, yyyy')} has been deposited. Log a check or money order as rent and it waits here until it's deposited.</p> : (
+        <>
+          <table className="table-base">
+            <thead><tr><th className="pl-0 w-8"><input type="checkbox" checked={picked.size === onHand.length} onChange={e => setPicked(e.target.checked ? new Set(onHand.map(c => c.rentPaymentId)) : new Set())} /></th><th>Received</th><th>Check</th><th>From</th><th className="text-right">Amount</th></tr></thead>
+            <tbody>
+              {onHand.map(c => (
+                <tr key={c.rentPaymentId} className="cursor-pointer" onClick={() => toggle(c.rentPaymentId)}>
+                  <td className="pl-0"><input type="checkbox" checked={picked.has(c.rentPaymentId)} onChange={() => toggle(c.rentPaymentId)} onClick={e => e.stopPropagation()} /></td>
+                  <td className="text-gray-400 whitespace-nowrap">{fmtDate(c.date, 'MMM d, yyyy')}</td>
+                  <td className="text-gray-300">{c.checkNumber ? `#${c.checkNumber}` : '—'}</td>
+                  <td className="text-gray-400 text-xs">{c.description}</td>
+                  <td className="text-right tabular-nums text-white">{fmtMoney(c.amount)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="flex flex-wrap items-end gap-3">
+            <div><span className="block text-xs text-gray-500 mb-1">Deposited into</span>
+              <select className="input-dark text-sm" value={bankAccountId} onChange={e => setBankAccountId(e.target.value)}>
+                <option value="">Choose…</option>{banks.map(b => <option key={b.id} value={b.id}>{bankAccountLabel(b)}</option>)}
+              </select></div>
+            <div><span className="block text-xs text-gray-500 mb-1">On</span><input type="date" className="input-dark text-sm" value={date} onChange={e => setDate(e.target.value)} /></div>
+            <button className="btn btn-primary text-xs disabled:opacity-50" disabled={!picked.size} onClick={() => void deposit()}>
+              {picked.size ? `Deposit ${picked.size} check${picked.size === 1 ? '' : 's'} · ${fmtMoney(total)}` : 'Deposit'}
+            </button>
+          </div>
+          {err && <p className="text-xs text-red-400">{err}</p>}
+        </>
+      )}
     </div>
   );
 }

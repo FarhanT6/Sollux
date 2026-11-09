@@ -961,6 +961,9 @@ model RentPayment {
   // nullable and SetNull so removing a bank account never destroys payments.
   bankAccountId    String?
   bankAccount      BankAccount?      @relation(fields: [bankAccountId], references: [id], onDelete: SetNull)
+  /// A check or money order taken to the bank: when it went in (into bankAccountId). Null with a bank account
+  /// set means it was deposited the day it was received; null without one means it is still on hand.
+  depositedAt      DateTime?
   notes            String?
   // CURRENT or ARREARS when the owner chose where this payment goes; null =
   // the lease's paymentsApplyTo. Kept so editing the payment keeps the choice.
@@ -2888,7 +2891,7 @@ model HouseholdMember {
 model Wallet {
   id             String           @id @default(cuid())
   userId         String
-  /// CASH | VENMO | CASH_APP | PAYPAL | APPLE_CASH
+  /// CASH | VENMO | CASH_APP | PAYPAL | APPLE_CASH | CHECK (checks and money orders on hand)
   kind           String
   /// Rent received by this method on or after this date counts in.
   startedAt      DateTime
