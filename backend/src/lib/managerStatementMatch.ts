@@ -24,7 +24,14 @@ export function lineKey(description: string): string {
 }
 
 /** What the owner chose for a line, remembered per manager (ReconciliationProfile.lineRules). */
-export interface LineRule { kind: LineKind; propertyId?: string | null; leaseId?: string | null; loanId?: string | null; category?: string | null; bankAccountId?: string | null }
+export interface LineRule {
+  kind: LineKind; propertyId?: string | null; leaseId?: string | null; loanId?: string | null; category?: string | null; bankAccountId?: string | null;
+  /** A loan line that paid two loans at once ("Loan repayment - Colucci" when there were two Colucci loans): how a
+   *  line of exactly this total was split. A different amount of the same line goes to loanId. */
+  splits?: { total: number; parts: LoanSplit[] }[];
+}
+/** One loan's part of a line that paid several. */
+export interface LoanSplit { loanId: string; amount: number }
 
 const STOP = new Set(['the', 'and', 'of', 'llc', 'inc', 'co', 'st', 'street', 'rd', 'road', 'ave', 'avenue', 'dr', 'drive', 'ln', 'lane', 'way', 'blvd', 'ct', 'court', 'pl', 'unit', 'apt', 'suite', 'ste', 'n', 's', 'e', 'w', 'bank', 'mortgage', 'loan', 'servicing', 'financial']);
 

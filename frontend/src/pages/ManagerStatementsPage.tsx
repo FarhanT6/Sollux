@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   readManagerStatement, importManagerStatement, applyReconciliationStatement, deleteReconciliationStatement,
-  getReconciliationStatements, getReconciliationDocumentUrl, getLeases, getLoans, getProperties, getBankAccounts, getReconciliationProfiles, updateReconciliationProfile, fetchManagerStatementsFromEmail, undoReconciliationStatement, redoManagerStatements, reviewEmailedStatement, type ManagerRedoSummary,
+  getReconciliationStatements, getReconciliationDocumentUrl, getLeases, getLoans, getProperties, getBankAccounts, getReconciliationProfiles, updateReconciliationProfile, fetchManagerStatementsFromEmail, undoReconciliationStatement, redoManagerStatements, reviewEmailedStatement, mergeManagers, type ManagerRedoSummary,
   type ManagerStatementDraft, type ManagerDraftLine, type ManagerLineKind,
 } from '../api/client';
 import type { BankAccount, ExpenseCategory, Lease, Loan, Property, ReconciliationProfile, ReconciliationStatement } from '../types';
@@ -110,6 +110,24 @@ export default function ManagerStatementsPage({ initialFile }: { /** Handed over
   const others = (list ?? []).filter(s => s.status === 'NOT_A_STATEMENT');
   const shown = (list ?? []).filter(s => showOthers || s.status !== 'NOT_A_STATEMENT');
   const emailManagers = [...new Map((list ?? []).filter(s => s.source === 'email').map(s => [s.profileId, s.profile?.name ?? 'Manager'])).entries()];
+  // Each year-to-date statement repeats every earlier month, so the same unmatched lines are on all of them:
+  // they are counted, and reviewed, on each manager's newest statement only.
+  const newestOf = new Map<string, string>();
+  for (const s of [...(list ?? [])].filter(x => x.source === 'email' && x.draftJson && x.status === 'APPLIED')
+    .sort((a, b) => String(b.receivedAt ?? b.statementDate).localeCompare(String(a.receivedAt ?? a.statementDate)))) {
+    if (!newestOf.has(s.profileId)) newestOf.set(s.profileId, s.id);
+  }
+  // A manager whose name is what another's statements are headed with ("Pacific Coast Executive Realty" for Monty James's): one manager.
+  const sameAs = profiles.flatMap(p => {
+    const other = (list ?? []).find(s => s.profileId !== p.id && s.source === 'email' && String(s.draftJson?.manager ?? '').trim().toLowerCase() === p.name.trim().toLowerCase());
+    return other ? [{ from: p, intoId: other.profileId, intoName: other.profile?.name ?? 'the other manager' }] : [];
+  });
+  async function merge(fromId: string, intoId: string) {
+    setRedoing(intoId); setError(''); setChecked(null);
+    try { const r = await mergeManagers(fromId, intoId); setChecked(`Merged into one manager. ${redoNote(r)}`); await load(); await loadProfiles(); }
+    catch (e) { setError(describeApiError(e, 'Could not merge them.')); }
+    finally { setRedoing(null); }
+  }
 
   return (
     <div>
@@ -132,9 +150,16 @@ export default function ManagerStatementsPage({ initialFile }: { /** Handed over
         <div className="rounded-xl p-4 mb-5 space-y-2" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.06)' }}>
           <p className="text-sm font-semibold text-white">Fetched from email</p>
           <p className="text-xs text-gray-500">A PDF from these addresses is read as that manager's statement. Sollux adds the sender itself the first time it spots one; add another address if the manager uses more than one.</p>
-          {profiles.map(p => <SenderRow key={p.id} profile={p} onSaved={() => void loadProfiles()} />)}
+          {profiles.map(p => <SenderRow key={p.id} profile={p} others={profiles.filter(o => o.id !== p.id)} onMerge={intoId => void merge(p.id, intoId)} onSaved={() => void loadProfiles()} />)}
         </div>
       )}
+
+      {sameAs.map(x => (
+        <div key={x.from.id} className="rounded-xl p-4 mb-3 flex flex-wrap items-center gap-3" style={{ background: '#1e1e1e', border: '1px solid rgba(245,166,35,0.35)' }}>
+          <p className="text-sm text-gray-200 flex-1 min-w-[260px]">“{x.from.name}” and “{x.intoName}” look like the same manager — {x.intoName}'s statements are headed “{x.from.name}”. As two managers, some lines are counted on both.</p>
+          <button disabled={!!redoing} onClick={() => void merge(x.from.id, x.intoId)} className="btn btn-primary text-xs disabled:opacity-50">{redoing === x.intoId ? 'Merging…' : 'Merge into one'}</button>
+        </div>
+      ))}
 
       {emailManagers.length > 0 && (
         <div className="rounded-xl p-4 mb-5 text-xs text-gray-400 space-y-1.5" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.06)' }}>
@@ -164,11 +189,11 @@ export default function ManagerStatementsPage({ initialFile }: { /** Handed over
                   <td className="px-4 py-2">
                     <span className={`text-xs ${recordedText(s).cls}`}>{recordedText(s).text}</span>
                     <span className="block text-xs text-gray-500">{s.source === 'email' ? `Emailed ${s.receivedAt ? fmtDate(s.receivedAt) : ''}` : 'Uploaded'}{s.status === 'APPLIED' && s.appliedAt ? ` · recorded ${fmtDate(s.appliedAt)}` : ''}</span>
-                    {!!s.draftJson?.needsLook && s.status === 'APPLIED' && <span className="block text-xs text-amber-400">{s.draftJson.needsLook} line{s.draftJson.needsLook === 1 ? '' : 's'} not matched — review</span>}
+                    {!!s.draftJson?.needsLook && s.status === 'APPLIED' && newestOf.get(s.profileId) === s.id && <span className="block text-xs text-amber-400">{s.draftJson.needsLook} line{s.draftJson.needsLook === 1 ? '' : 's'} to match, across every month — review</span>}
                   </td>
                   <td className="px-4 py-2 text-right whitespace-nowrap text-xs">
                     {s.documentS3Key && <button onClick={() => void openFile(s.id)} className="text-gray-400 hover:text-white mr-3">File</button>}
-                    {s.draftJson && s.status !== 'NOT_A_STATEMENT' && (s.status === 'DRAFT' || !!s.draftJson.needsLook) && <button onClick={() => setDraft({ ...s.draftJson!, replaceId: s.id, fromEmail: s.source === 'email' })} className="text-amber-400 hover:text-amber-300 mr-3">Review</button>}
+                    {s.draftJson && s.status !== 'NOT_A_STATEMENT' && (s.status === 'DRAFT' || (!!s.draftJson.needsLook && (s.source !== 'email' || newestOf.get(s.profileId) === s.id))) && <button onClick={() => setDraft({ ...s.draftJson!, replaceId: s.id, fromEmail: s.source === 'email' })} className="text-amber-400 hover:text-amber-300 mr-3">Review</button>}
                     {s.status === 'DRAFT' && !s.draftJson && <button onClick={async () => { try { await applyReconciliationStatement(s.id); void load(); } catch (e) { setError(describeApiError(e, 'Could not record it.')); } }} className="text-amber-400 hover:text-amber-300 mr-3" title="Lines another statement already recorded are skipped">Record</button>}
                     {s.status === 'APPLIED' && <button onClick={async () => { if (confirm('Remove the rent, loan payments and costs this statement recorded?')) { try { await undoReconciliationStatement(s.id); void load(); } catch (e) { setError(describeApiError(e, 'Could not undo it.')); } } }} className="text-gray-500 hover:text-white mr-3">Undo</button>}
                     {s.status !== 'APPLIED' && s.source !== 'email' && <button onClick={async () => { if (confirm('Delete this statement?')) { await deleteReconciliationStatement(s.id); void load(); } }} className="text-gray-500 hover:text-red-400">Delete</button>}
@@ -188,8 +213,53 @@ export default function ManagerStatementsPage({ initialFile }: { /** Handed over
   );
 }
 
+const loanLabel = (x: Loan, propName: Map<string, string>) =>
+  `${x.lender}${x.accountLast4 ? ` ••${x.accountLast4}` : ''}${x.propertyId && propName.get(x.propertyId) ? ` · ${propName.get(x.propertyId)}` : ''}${x.isActive ? '' : ' (paid off)'}`;
+
+/**
+ * The loan a loan line paid — or, for a line that paid two loans at once ("Loan repayment" to a lender
+ * who held two loans, one since paid off), each loan's part. Remembered for lines of the same total.
+ */
+function LoanChoice({ line, loans, propName, input, onChange }: { line: ManagerDraftLine; loans: Loan[]; propName: Map<string, string>; input: string; onChange: (p: Partial<ManagerDraftLine>) => void }) {
+  const parts = line.splits ?? null;
+  const options = <>{loans.map(x => <option key={x.id} value={x.id}>{loanLabel(x, propName)}</option>)}</>;
+  if (!parts) {
+    return (
+      <div>
+        <select className={input} value={line.loanId ?? ''} onChange={e => onChange({ loanId: e.target.value || null })}>
+          <option value="">Choose the loan…</option>{options}
+        </select>
+        <button type="button" className="text-[11px] text-gray-500 hover:text-amber-300 mt-0.5" disabled={line.recordedNow}
+          onClick={() => onChange({ splits: [{ loanId: line.loanId ?? '', amount: line.amount }, { loanId: '', amount: 0 }] })}>Split between loans</button>
+      </div>
+    );
+  }
+  const sum = parts.reduce((t, p) => t + (Number(p.amount) || 0), 0);
+  const setPart = (k: number, patch: Partial<{ loanId: string; amount: number }>) => {
+    const next = parts.map((p, j) => (j === k ? { ...p, ...patch } : p));
+    // The last part takes what is left, so the parts always add up to the line.
+    if (k < next.length - 1 && patch.amount !== undefined) next[next.length - 1] = { ...next[next.length - 1], amount: Math.max(0, Math.round((line.amount - next.slice(0, -1).reduce((t, p) => t + (Number(p.amount) || 0), 0)) * 100) / 100) };
+    onChange({ splits: next, loanId: next[0].loanId || null });
+  };
+  return (
+    <div className="space-y-1">
+      {parts.map((p, k) => (
+        <div key={k} className="flex gap-1">
+          <select className={input} value={p.loanId} onChange={e => setPart(k, { loanId: e.target.value })}><option value="">Loan…</option>{options}</select>
+          <input type="number" step="0.01" className="input-dark text-xs w-24" value={p.amount || ''} onChange={e => setPart(k, { amount: Number(e.target.value) })} />
+        </div>
+      ))}
+      <div className="flex gap-3 text-[11px]">
+        <button type="button" className="text-gray-500 hover:text-amber-300" onClick={() => onChange({ splits: [...parts, { loanId: '', amount: 0 }] })}>+ another loan</button>
+        <button type="button" className="text-gray-500 hover:text-red-300" onClick={() => onChange({ splits: null })}>One loan</button>
+        {Math.abs(sum - line.amount) > 0.005 && <span className="text-amber-400">parts add to {sum.toFixed(2)}, not {line.amount.toFixed(2)}</span>}
+      </div>
+    </div>
+  );
+}
+
 /** A manager's sending addresses: a PDF from one is read as their statement. */
-function SenderRow({ profile, onSaved }: { profile: ReconciliationProfile; onSaved: () => void }) {
+function SenderRow({ profile, others, onMerge, onSaved }: { profile: ReconciliationProfile; others: ReconciliationProfile[]; onMerge: (intoId: string) => void; onSaved: () => void }) {
   const [v, setV] = useState(profile.emailFrom ?? '');
   const [state, setState] = useState('');
   return (
@@ -199,6 +269,13 @@ function SenderRow({ profile, onSaved }: { profile: ReconciliationProfile; onSav
       <button className="btn text-xs" disabled={v === (profile.emailFrom ?? '')} onClick={async () => {
         try { await updateReconciliationProfile(profile.id, { emailFrom: v }); setState('Saved'); onSaved(); } catch (e) { setState(describeApiError(e, 'Not saved')); }
       }}>Save</button>
+      {others.length > 0 && (
+        <select className="input-dark text-xs" value="" title="This manager is the same as another one (a person and their company): merge them"
+          onChange={e => { const o = others.find(x => x.id === e.target.value); if (o && confirm(`Merge “${profile.name}” into “${o.name}”? Its statements and choices move there and every statement is recorded again, so nothing is counted twice.`)) onMerge(o.id); }}>
+          <option value="">Same manager as…</option>
+          {others.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+        </select>
+      )}
       {state && <span className="text-gray-500">{state}</span>}
     </div>
   );
@@ -217,7 +294,8 @@ function Review({ draft, onCancel, onDone, redoNote }: { draft: ManagerStatement
   useEffect(() => {
     void getProperties().then(setProperties).catch(() => {});
     void getLeases().then(setLeases).catch(() => {});
-    void getLoans({ isActive: true }).then(setLoans).catch(() => {});
+    // Paid-off loans too: an earlier month on a year-to-date statement can be a payment on a loan since paid off.
+    void getLoans().then(ls => setLoans([...ls].sort((a, b) => Number(b.isActive) - Number(a.isActive)))).catch(() => {});
     void getBankAccounts().then(b => setBanks(b.filter(x => x.accountType !== 'CREDIT_CARD'))).catch(() => {});
   }, []);
 
@@ -225,12 +303,16 @@ function Review({ draft, onCancel, onDone, redoNote }: { draft: ManagerStatement
   // earlier months on a year-to-date statement that were never recorded get it too, and are ticked.
   const set = (i: number, patch: Partial<ManagerDraftLine>) => setLines(ls => {
     const key = lineKey(ls[i].description);
-    const { include: _inc, ...shared } = patch;
-    const chosen = ['leaseId', 'loanId', 'propertyId'].some(k => (patch as any)[k]);
+    const { include: _inc, splits, ...shared } = patch;
+    const chosen = ['leaseId', 'loanId', 'propertyId'].some(k => (patch as any)[k]) || !!splits?.length;
+    const amount = ls[i].amount;
     return ls.map((l, j) => {
       if (j === i) return { ...l, ...patch };
-      if (l.recordedNow || lineKey(l.description) !== key || !Object.keys(shared).length) return l;
-      return { ...l, ...shared, include: chosen && !l.onEarlierStatement && !l.alreadyRecorded ? true : l.include };
+      if (l.recordedNow || lineKey(l.description) !== key) return l;
+      // A split goes to the same line of the same amount only (another month's different amount paid one loan).
+      const mine = { ...shared, ...(splits !== undefined && Math.abs(l.amount - amount) < 0.005 ? { splits } : {}) };
+      if (!Object.keys(mine).length) return l;
+      return { ...l, ...mine, include: chosen && !l.onEarlierStatement && !l.alreadyRecorded ? true : l.include };
     });
   });
   const propName = useMemo(() => new Map(properties.map(p => [p.id, p.nickname || p.address])), [properties]);
@@ -306,10 +388,7 @@ function Review({ draft, onCancel, onDone, redoNote }: { draft: ManagerStatement
                       {leases.map(x => <option key={x.id} value={x.id}>{leaseLabel(x)}</option>)}
                     </select>
                   ) : l.kind === 'LOAN_PAYMENT' ? (
-                    <select className={input} value={l.loanId ?? ''} onChange={e => set(i, { loanId: e.target.value || null })}>
-                      <option value="">Choose the loan…</option>
-                      {loans.map(x => <option key={x.id} value={x.id}>{x.lender}{x.accountLast4 ? ` ••${x.accountLast4}` : ''}{x.propertyId && propName.get(x.propertyId) ? ` · ${propName.get(x.propertyId)}` : ''}</option>)}
-                    </select>
+                    <LoanChoice line={l} loans={loans} propName={propName} input={input} onChange={patch => set(i, patch)} />
                   ) : COST_KINDS.includes(l.kind) ? (
                     <div className="flex gap-1">
                       <select className={input} value={l.propertyId ?? ''} onChange={e => set(i, { propertyId: e.target.value || null })}>

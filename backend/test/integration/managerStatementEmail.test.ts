@@ -31,6 +31,7 @@ before(async () => {
 });
 after(async () => { if (!skip) await api.stop(); });
 
+const send = (method: string, path: string, body?: unknown) => fetch(`${api.url}/api${path}`, { method, headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
 const month = (m: string) => [
   { date: `2026-${m}-02`, property: '1200 Elm Grove Ln', payee: 'Acme Clinic', description: 'Rent Received', kind: 'RENT', amount: 5000, direction: 'IN' },
   { date: `2026-${m}-02`, property: '1200 Elm Grove Ln', payee: null, description: 'Property Management', kind: 'MANAGEMENT_FEE', amount: 100, direction: 'OUT' },
@@ -130,4 +131,36 @@ test('redo: a lender letter from the manager is set aside and what it recorded r
   await undoManagerStatement(ids.user, apr.id);
   assert.equal((await db.reconciliationStatement.findUnique({ where: { id: apr.id } }))!.status, 'UNDONE');
   assert.ok((await counts())[1] < loans0, 'its loan payments are removed');
+});
+
+test('one manager filed under two names is merged and each line counted once; a split line pays both loans', { skip }, async () => {
+  const { db } = api;
+  const { applyManagerStatement, learnLineRules } = await import('../../src/services/managerStatementApply');
+  const { intakeManagerStatement } = await import('../../src/services/managerStatementEmail');
+  const monty = (await db.reconciliationProfile.findFirst({ where: { userId: ids.user } }))!;
+  // The same manager under the company name its statements are headed with, with a reviewed statement that repeats March's fee.
+  const company = await db.reconciliationProfile.create({ data: { userId: ids.user, name: 'Sample Realty', loanIds: [] } });
+  const dup = await db.reconciliationStatement.create({ data: {
+    userId: ids.user, profileId: company.id, statementDate: new Date('2026-03-31'), netAmount: -100,
+    lineItems: [{ type: 'EXPENSE', description: 'Property Management', amount: 100, direction: 'DEBIT', date: '2026-03-02', category: 'PROPERTY_MANAGEMENT', propertyId: ids.property, include: true }],
+  } });
+  await applyManagerStatement(ids.user, dup.id);
+  const marchFees = () => db.expense.count({ where: { userId: ids.user, description: 'Property Management', date: new Date('2026-03-02T00:00:00Z') } });
+  assert.equal(await marchFees(), 2, 'counted under both names');
+  const r = await send('POST', `/reconciliation/profiles/${company.id}/merge`, { intoId: monty.id });
+  assert.equal(r.status, 200);
+  assert.equal(await marchFees(), 1, 'one manager: counted once');
+  const merged = (await db.reconciliationProfile.findUnique({ where: { id: monty.id } }))!;
+  assert.match(merged.name, /Sample Realty/);
+  assert.equal(await db.reconciliationProfile.count({ where: { id: company.id } }), 0);
+
+  // A lender's line that paid two loans at once, split once and remembered for that total.
+  await learnLineRules(monty.id, [{ description: 'Loan repayment - Both', kind: 'LOAN_PAYMENT', amount: 1500, direction: 'OUT', loanId: ids.alpha, include: true,
+    splits: [{ loanId: ids.alpha, amount: 1000 }, { loanId: ids.beta, amount: 500 }] }]);
+  const before = await db.loanPayment.count({ where: { date: new Date('2026-05-02T00:00:00Z') } });
+  await intakeManagerStatement(ids.user, Buffer.from('%PDF-1.4'), 'may.pdf', 'manager@example.com', new Date('2026-06-01'), 'msg-5|may.pdf',
+    reader([{ date: '2026-05-02', property: null, payee: null, description: 'Loan repayment - Both', kind: 'LOAN_PAYMENT', amount: 1500, direction: 'OUT' }]));
+  const may = await db.loanPayment.findMany({ where: { date: new Date('2026-05-02T00:00:00Z') }, orderBy: { amount: 'desc' } });
+  assert.equal(may.length - before, 2);
+  assert.deepEqual(may.map(p => [p.loanId, Number(p.amount)]), [[ids.alpha, 1000], [ids.beta, 500]]);
 });

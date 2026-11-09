@@ -11,7 +11,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { db } from '../config/db';
 import { askClaude, jsonIn, needsJson } from '../ai/models';
 import { fileBlockForClaude } from './pdfImportService';
-import { best, categoryFor, leaseScore, lenderScore, propertyScore, words, lineKey, type LineKind, type LineRule } from '../lib/managerStatementMatch';
+import { best, categoryFor, leaseScore, lenderScore, propertyScore, words, lineKey, type LineKind, type LineRule, type LoanSplit } from '../lib/managerStatementMatch';
 
 const PROMPT = `This is a property manager's statement to an owner (an owner statement): rent the manager collected, minus what the manager paid or deducted, and what was sent to the owner.
 
@@ -63,6 +63,8 @@ export interface DraftLine {
   bankAccountId?: string | null;
   /** Filled in from what the owner chose for this line on an earlier statement. */
   learned?: boolean;
+  /** A loan line split across loans (it paid two at once); the parts add up to the amount. */
+  splits?: LoanSplit[] | null;
   include: boolean;
 }
 
@@ -99,13 +101,18 @@ export async function matchManagerStatement(userId: string, raw: any, profileId?
       where: { unit: { property: { userId } } },
       select: { id: true, status: true, startDate: true, unit: { select: { unitLabel: true, propertyId: true } }, leaseTenants: { select: { tenant: { select: { fullName: true } } } } },
     }),
-    db.loan.findMany({ where: { userId, isActive: true }, select: { id: true, lender: true, propertyId: true } }),
+    // Paid-off loans too: a remembered choice can point at one (an earlier month paid a loan since paid off).
+    db.loan.findMany({ where: { userId }, select: { id: true, lender: true, propertyId: true, isActive: true } }),
     db.reconciliationProfile.findMany({ where: { userId }, select: { id: true, name: true, propertyId: true, loanIds: true, lineRules: true } }),
   ]);
   const manager = typeof raw.manager === 'string' ? raw.manager.trim() : null;
   // The manager: the one this came from (an emailed statement's sender), else the one the statement names.
   const profile = (profileId ? profiles.find(p => p.id === profileId) : null)
-    ?? (manager ? best(profiles, p => (words(p.name).length && words(p.name).every(w => words(manager).includes(w)) ? 2 : 0)) : null);
+    ?? (manager ? best(profiles, p => {
+      // Either name inside the other: a manager merged from two names ("Monty James · Pacific Coast Executive Realty") is found by either.
+      const a = words(p.name), b = words(manager);
+      return a.length && b.length && (a.every(w => b.includes(w)) || b.every(w => a.includes(w))) ? 2 : 0;
+    }) : null);
   const rules = (profile?.lineRules && typeof profile.lineRules === 'object' && !Array.isArray(profile.lineRules) ? profile.lineRules : {}) as unknown as Record<string, LineRule>;
   const exists = { property: new Set(properties.map(p => p.id)), lease: new Set(leases.map(x => x.id)), loan: new Set(loans.map(x => x.id)) };
 
@@ -125,7 +132,10 @@ export async function matchManagerStatement(userId: string, raw: any, profileId?
     if (!property && profile?.propertyId) property = properties.find(p => p.id === profile.propertyId) ?? null;
 
     let leaseId: string | null = kind === 'RENT' && rule?.leaseId && exists.lease.has(rule.leaseId) ? rule.leaseId : null;
-    let loanId: string | null = kind === 'LOAN_PAYMENT' && rule?.loanId && exists.loan.has(rule.loanId) ? rule.loanId : null;
+    // A line of exactly a total the owner split before is split the same way; otherwise the loan chosen for it.
+    const amt = Math.abs(Number(l?.amount));
+    const split = kind === 'LOAN_PAYMENT' ? rule?.splits?.find(sp => Math.abs(sp.total - amt) < 0.005 && sp.parts.every(p => exists.loan.has(p.loanId))) : undefined;
+    let loanId: string | null = split ? split.parts[0].loanId : kind === 'LOAN_PAYMENT' && rule?.loanId && exists.loan.has(rule.loanId) ? rule.loanId : null;
     if (kind === 'RENT' && !leaseId) {
       const pool = leases.filter(x => !property || x.unit.propertyId === property.id)
         .map(x => ({ id: x.id, propertyId: x.unit.propertyId, active: x.status === 'ACTIVE', unitLabel: x.unit.unitLabel, tenantNames: x.leaseTenants.map(t => t.tenant.fullName) }));
@@ -137,7 +147,7 @@ export async function matchManagerStatement(userId: string, raw: any, profileId?
     }
     if (kind === 'LOAN_PAYMENT' && !loanId) {
       const mine = profile ? (profile.loanIds as string[] | null) ?? [] : [];
-      const pool = loans.filter(x => !property || x.propertyId === property.id);
+      const pool = loans.filter(x => x.isActive && (!property || x.propertyId === property.id));
       const m = best(pool, x => lenderScore([payee, l?.description].filter(Boolean).join(' '), x.lender) * 2 + (mine.includes(x.id) ? 1 : 0))
         ?? (pool.length === 1 ? pool[0] : null);
       if (m) { loanId = m.id; if (!property && m.propertyId) property = properties.find(p => p.id === m.propertyId) ?? null; }
@@ -147,6 +157,7 @@ export async function matchManagerStatement(userId: string, raw: any, profileId?
       direction: l?.direction === 'IN' ? 'IN' : 'OUT', propertyHint, payee, unit,
       propertyId: property?.id ?? null, leaseId, loanId, category: rule?.category ?? categoryFor(kind),
       bankAccountId: kind === 'OWNER_PAYMENT' ? rule?.bankAccountId ?? null : null, learned: !!rule,
+      splits: split ? split.parts : null,
       // A payment the owner made to the manager is kept (it is what the month cost them), not recorded as a cost.
       alreadyRecorded: false, include: kind !== 'OWNER_DRAW' && kind !== 'OTHER',
     });

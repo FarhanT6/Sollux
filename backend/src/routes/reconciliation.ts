@@ -180,6 +180,35 @@ router.post('/profiles/:id/redo', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// POST /profiles/:id/merge { intoId } — two managers that are one (a person and the company their statements are
+// headed with): statements, remembered choices and sending addresses move to intoId, which keeps both names, and
+// its emailed statements are recorded again so nothing is counted twice.
+router.post('/profiles/:id/merge', async (req, res, next) => {
+  try {
+    const { intoId } = z.object({ intoId: z.string() }).parse(req.body);
+    const userId = req.dbUserId!;
+    const [from, into] = await Promise.all([
+      db.reconciliationProfile.findFirst({ where: { id: req.params.id, userId } }),
+      db.reconciliationProfile.findFirst({ where: { id: intoId, userId } }),
+    ]);
+    if (!from || !into || from.id === into.id) return res.status(404).json({ error: 'Manager not found' });
+    const obj = (j: unknown) => (j && typeof j === 'object' && !Array.isArray(j) ? j as Record<string, unknown> : {});
+    const addrs = [...new Set([into.emailFrom, from.emailFrom].flatMap(a => (a ?? '').split(/[,\s;]+/)).filter(a => a.includes('@')))];
+    const names = into.name.toLowerCase().includes(from.name.toLowerCase()) ? into.name : `${into.name} · ${from.name}`;
+    await db.$transaction([
+      db.reconciliationStatement.updateMany({ where: { profileId: from.id, userId }, data: { profileId: into.id } }),
+      db.reconciliationProfile.update({ where: { id: into.id }, data: {
+        name: names.slice(0, 190), emailFrom: addrs.join(', ') || null, propertyId: into.propertyId ?? from.propertyId,
+        // The kept manager's choices win; the other's fill in what it had not chosen.
+        lineRules: { ...obj(from.lineRules), ...obj(into.lineRules) } as Prisma.InputJsonValue,
+        loanIds: [...new Set([...((into.loanIds as string[] | null) ?? []), ...((from.loanIds as string[] | null) ?? [])])] as unknown as Prisma.InputJsonValue,
+      } }),
+      db.reconciliationProfile.delete({ where: { id: from.id } }),
+    ]);
+    res.json(await redoManagerStatements(userId, into.id));
+  } catch (err) { next(err); }
+});
+
 // POST /statements/:id/review { lines } — an emailed statement reviewed: what was chosen is remembered
 // for the manager, and every emailed statement from them is recorded again with it.
 router.post('/statements/:id/review', async (req, res, next) => {
@@ -238,6 +267,7 @@ const ImportSchema = z.object({
     date: z.string().nullable().optional(), description: z.string().max(300), kind: z.string(), amount: z.number().positive(),
     direction: z.enum(['IN', 'OUT']), propertyId: z.string().nullable().optional(), leaseId: z.string().nullable().optional(),
     loanId: z.string().nullable().optional(), category: z.string().nullable().optional(), bankAccountId: z.string().nullable().optional(), include: z.boolean(),
+    splits: z.array(z.object({ loanId: z.string(), amount: z.number().positive() })).max(6).nullable().optional(),
   })).min(1).max(500),
 });
 
@@ -263,7 +293,10 @@ router.post('/import', async (req, res, next) => {
       if (['MANAGEMENT_FEE', 'REPAIR', 'UTILITY', 'OTHER_EXPENSE', 'REIMBURSEMENT'].includes(l.kind) && !l.propertyId) return res.status(400).json({ error: `Choose the property for "${l.description}", or leave it out.` });
     }
 
-    let profile = d.profileId ? await db.reconciliationProfile.findFirst({ where: { id: d.profileId, userId } }) : null;
+    // A reviewed emailed statement stays with its manager, whatever name the statement is headed with.
+    const reviewedOf = d.replaceId ? await db.reconciliationStatement.findFirst({ where: { id: d.replaceId, userId }, select: { profileId: true } }) : null;
+    let profile = reviewedOf ? await db.reconciliationProfile.findFirst({ where: { id: reviewedOf.profileId, userId } }) : null;
+    profile ??= d.profileId ? await db.reconciliationProfile.findFirst({ where: { id: d.profileId, userId } }) : null;
     if (!profile) {
       const only = ids('propertyId');
       profile = await db.reconciliationProfile.create({

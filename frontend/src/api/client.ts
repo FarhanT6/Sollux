@@ -351,6 +351,8 @@ export const undoReconciliationStatement = (id: string) => api.post(`/reconcilia
 export interface ManagerRedoSummary { statements: number; notStatements: number; rent: number; loanPayments: number; expenses: number; needsLook: number }
 /** Record every emailed statement from this manager again, oldest first, with what has been chosen since. */
 export const redoManagerStatements = (profileId: string) => api.post<ManagerRedoSummary>(`/reconciliation/profiles/${profileId}/redo`, {}, { timeout: 300_000 }).then(r => r.data);
+/** Two managers that are one: everything moves to intoId, and its emailed statements are recorded again. */
+export const mergeManagers = (fromId: string, intoId: string) => api.post<ManagerRedoSummary>(`/reconciliation/profiles/${fromId}/merge`, { intoId }, { timeout: 300_000 }).then(r => r.data);
 /** An emailed statement reviewed: the choices are remembered and every emailed statement from the manager is recorded again. */
 export const reviewEmailedStatement = (id: string, lines: ManagerDraftLine[]) => api.post<ManagerRedoSummary>(`/reconciliation/statements/${id}/review`, { lines }, { timeout: 300_000 }).then(r => r.data);
 /** Look through the connected Gmail for manager statements now and record the new ones. */
@@ -384,6 +386,8 @@ export interface ManagerDraftLine {
   bankAccountId?: string | null;
   /** Filled in from what was chosen for this line on an earlier statement. */
   learned?: boolean;
+  /** A loan line split across loans (it paid two at once); the parts add up to the amount. */
+  splits?: { loanId: string; amount: number }[] | null;
 }
 export interface ManagerStatementDraft {
   manager: string | null; periodStart: string | null; periodEnd: string | null; statementDate: string | null;
@@ -687,8 +691,9 @@ export const updateCreditCard = (id: string, data: Record<string, any>) => api.p
 export const deleteCreditCard = (id: string) => api.delete(`/credit-cards/${id}`);
 /** This card is the same account as `intoId`: everything moves there and this card goes. */
 export const mergeCreditCard = (id: string, intoId: string) => api.post<{ statements: number; transactions: number; payments: number }>(`/credit-cards/${id}/merge`, { intoId }).then(r => r.data);
-export const readCardStatement = (files: FilePayload[]) =>
-  api.post<{ fields: Record<string, any>; cardId: string | null; cardName: string | null }>('/credit-cards/read-statement', { files }).then(r => r.data);
+/** `noAi`: the free reader only — a statement it can't read comes back as an error (needsAi) instead of going to Claude. */
+export const readCardStatement = (files: FilePayload[], opts: { noAi?: boolean } = {}) =>
+  api.post<{ fields: Record<string, any>; cardId: string | null; cardName: string | null }>('/credit-cards/read-statement', { files, noAi: opts.noAi }).then(r => r.data);
 export const saveCardStatement = (cardId: string, body: { statement: Record<string, any>; transactions?: Record<string, any>[]; terms?: Record<string, any>; files?: FilePayload[] }) =>
   api.post<{ statement: CardStatementT; transactionsAdded: number }>(`/credit-cards/${cardId}/statements`, body).then(r => r.data);
 export const deleteCardStatement = (sid: string) => api.delete(`/credit-cards/statements/${sid}`);
