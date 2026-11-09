@@ -10,9 +10,11 @@ import { pickFromDrive, DriveNotConnected } from '../lib/drivePicker';
  * computer; Choose another goes back to Drive. With no Drive connected it
  * offers to connect one first.
  */
-export default function DriveButton({ onFiles, multiple, disabled, className, label = 'From Google Drive' }: {
+export default function DriveButton({ onFiles, multiple, folders, disabled, className, label = 'From Google Drive' }: {
   onFiles: (files: File[]) => void;
   multiple?: boolean;
+  /** A folder can be picked too: every PDF in it. */
+  folders?: boolean;
   disabled?: boolean;
   className?: string;
   label?: string;
@@ -23,7 +25,7 @@ export default function DriveButton({ onFiles, multiple, disabled, className, la
   async function open() {
     setBusy(true);
     try {
-      const files = await pickFromDrive({ multiple });
+      const files = await pickFromDrive({ multiple, folders });
       if (files.length) setPicked(files);
     } catch (e) {
       if (e instanceof DriveNotConnected) {
