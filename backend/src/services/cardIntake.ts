@@ -40,7 +40,9 @@ export async function findCardFor(userId: string, w: { last4: string | null; car
   return byName[0] ?? (sameIssuer.length === 1 ? sameIssuer[0] : null);
 }
 
-export async function fileCardStatement(userId: string, ex: ExtractedBillData, pdf: Buffer | null, filename: string): Promise<CardIntakeResult> {
+export async function fileCardStatement(userId: string, ex: ExtractedBillData, pdf: Buffer | null, filename: string,
+  /** The card it was fetched for (its website login): filed there unless it prints another card's last four. */
+  opts: { cardId?: string } = {}): Promise<CardIntakeResult> {
   const cc = ex.creditCard ?? {};
   const last4 = (cc.last4 ?? ex.accountNumber ?? '').replace(/\D/g, '').slice(-4) || null;
   const issuer = cc.issuer ?? ex.providerName ?? null;
@@ -50,7 +52,10 @@ export async function fileCardStatement(userId: string, ex: ExtractedBillData, p
   // Credit), the card of the same name, else the only card from this issuer. An
   // issuer with several cards (Synchrony: PayPal Credit and two Lowe's cards) made
   // a new card for every PayPal Credit statement.
-  let card = await findCardFor(userId, { last4, cardName: cc.cardName ?? null, issuer });
+  let card = opts.cardId ? await db.creditCard.findFirst({ where: { id: opts.cardId, userId } }) : null;
+  // One issuer login can show two cards: a statement printing the other's last four is the other's.
+  if (card && last4 && card.last4 && card.last4 !== last4) card = null;
+  card ??= await findCardFor(userId, { last4, cardName: cc.cardName ?? null, issuer });
   let created = false;
   if (!card) {
     card = await db.creditCard.create({
@@ -188,6 +193,10 @@ export async function mergeCards(userId: string, fromId: string, intoId: string)
       if ((into as any)[k] == null && (from as any)[k] != null) fill[k] = (from as any)[k];
     }
     if (Object.keys(fill).length) await tx.creditCard.update({ where: { id: into.id }, data: fill as any });
+    // The website login goes with the kept card when it has none of its own.
+    if (!(await tx.cardLogin.findUnique({ where: { cardId: into.id }, select: { cardId: true } }))) {
+      await tx.cardLogin.updateMany({ where: { cardId: from.id }, data: { cardId: into.id } });
+    }
     await tx.creditCard.delete({ where: { id: from.id } });
   });
   return moved;

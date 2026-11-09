@@ -95,6 +95,10 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
   // (the portal agent says which): filed there unless the document prints
   // another listed account's number.
   designated?: string;
+  // A card's own fetch (portalAgent runCardAgent): a card statement goes to
+  // that card, and anything else it brings back goes to review, never to a
+  // utility account.
+  forCard?: string;
 } = {}): Promise<IntakeResult> {
   // parseBill defaults to AI; this path must pass the choice through or
   // every bulk import silently bills per PDF regardless of what was picked.
@@ -136,8 +140,13 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
   // A credit card statement goes to its card (Personal → Credit cards),
   // which is created if Sollux does not have it yet.
   if (ex.documentKind === 'credit_card_statement') {
-    const r = await fileCardStatement(userId, ex, docBuffer, filename);
+    const r = await fileCardStatement(userId, ex, docBuffer, filename, { cardId: opts.forCard });
     return { outcome: 'card', cardId: r.cardId, cardName: r.cardName, created: r.created };
+  }
+  if (opts.forCard) {
+    const pendingKey = `pending-review/${userId}/${batchId}/${sanitizeFilename(filename)}`;
+    await uploadDocument(pendingKey, buffer);
+    return { outcome: 'review', reviewItem: { filename, s3Key: pendingKey, extracted: ex, match } };
   }
 
   let utilityAccountId = match.utilityAccountId;

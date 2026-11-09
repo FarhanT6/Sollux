@@ -19,6 +19,7 @@
 import { checkBudget, withAiContext } from './meter';
 import { providerForEmail, findProvider } from '../lib/providerDirectory';
 import { scrapeQueue } from '../workers/queues';
+import { cardStartUrl } from '../lib/cardIssuerSites';
 import { google, gmail_v1 } from 'googleapis';
 import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
@@ -383,7 +384,11 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
             else if (r.outcome === 'error') { sum.errors.push(r.error); problems.push(r.error); outcomes.push('error'); }
             else if (r.outcome === 'skipped') { outcomes.push('skipped'); skips.push(`${filename}: ${r.reason}`); }
             else if (r.outcome === 'expense') { sum.filed++; outcomes.push('filed'); skips.push(r.duplicate ? 'expense already recorded' : 'recorded as an expense on the property'); }
-            else if (r.outcome === 'card') { sum.filed++; outcomes.push('filed'); skips.push(`credit card ${r.cardName}${r.created ? ' (new card added)' : ''}`); }
+            else if (r.outcome === 'card') {
+              sum.filed++; outcomes.push('filed'); skips.push(`credit card ${r.cardName}${r.created ? ' (new card added)' : ''}`);
+              // A "your statement is ready" email: the statement itself is on the card's website.
+              if (emailBody && await fetchPostedCard(r.cardId).catch(() => false)) skips.push('fetching the statement PDF from the card\'s website');
+            }
             else if (r.outcome === 'not_a_bill') { outcomes.push('skipped'); skips.push(`${filename}: read, not a bill`); }
             else { sum.applied++; outcomes.push(r.outcome); }
           };
@@ -506,8 +511,9 @@ export async function runInboxAgentForEveryone(): Promise<void> {
  * the provider names queued. One run per account per day (the job id).
  */
 async function fetchPostedBill(userId: string, from: string): Promise<string[]> {
+  const cards = await fetchPostedCards(userId, from).catch(() => [] as string[]);
   const site = providerForEmail(from);
-  if (!site) return [];
+  if (!site) return cards;
   const accounts = await db.utilityAccount.findMany({
     where: { property: { userId }, syncEnabled: true, isActive: true, usernameEnc: { not: null } },
     select: { id: true, providerName: true, providerSlug: true },
@@ -517,5 +523,33 @@ async function fetchPostedBill(userId: string, from: string): Promise<string[]> 
   for (const a of mine) {
     await scrapeQueue.add('scrape', { utilityAccountId: a.id, trigger: 'bill_posted' }, { jobId: `bill-posted-${a.id}-${day}`, attempts: 1, removeOnComplete: { count: 100 }, removeOnFail: { count: 50 } });
   }
-  return [...new Set(mine.map(a => a.providerName))];
+  return [...new Set([...mine.map(a => a.providerName), ...cards])];
+}
+
+/** The last two labels of a host name: alertsp.chase.com → chase.com. */
+const rootDomain = (host: string) => host.toLowerCase().split('.').filter(Boolean).slice(-2).join('.');
+
+/** Queue a card's fetch from its website (scrapeWorker cardJob), once a day. False when it has no login or fetching is off. */
+async function fetchPostedCard(cardId: string): Promise<boolean> {
+  const login = await db.cardLogin.findUnique({ where: { cardId }, select: { autoFetch: true } });
+  if (!login?.autoFetch) return false;
+  const day = new Date().toISOString().slice(0, 10);
+  await scrapeQueue.add('scrape', { utilityAccountId: '', cardId, trigger: 'bill_posted' }, { jobId: `card-posted-${cardId}-${day}`, attempts: 1, removeOnComplete: { count: 100 }, removeOnFail: { count: 50 } });
+  return true;
+}
+
+/** A card issuer's "your statement is ready" email with no figures: the cards whose website is the sender's domain are fetched. */
+async function fetchPostedCards(userId: string, from: string): Promise<string[]> {
+  const sender = rootDomain(from.match(/@([\w.-]+)/)?.[1] ?? '');
+  if (!sender) return [];
+  const logins = await db.cardLogin.findMany({ where: { userId, autoFetch: true }, select: { cardId: true, loginUrl: true, card: { select: { name: true, issuer: true, loginUrl: true, status: true } } } });
+  const names: string[] = [];
+  for (const l of logins) {
+    if (l.card.status === 'CLOSED') continue;
+    const url = cardStartUrl(l.card, l.loginUrl);
+    let host = '';
+    try { host = url ? new URL(url).hostname : ''; } catch { /* not a web address */ }
+    if (host && rootDomain(host) === sender && await fetchPostedCard(l.cardId)) names.push(l.card.name);
+  }
+  return names;
 }

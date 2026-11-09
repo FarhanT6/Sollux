@@ -18,6 +18,10 @@ import { attachDbUser } from '../middleware/requireAuth';
 import { uploadDocument, getSignedDocumentUrl } from '../services/s3Service';
 import { readDocument } from '../services/documentReader';
 import { cardPosition, portfolio } from '../services/creditCards';
+import { encrypt, decrypt } from '../crypto/encrypt';
+import { asUrl, cardStartUrl } from '../lib/cardIssuerSites';
+import { scrapeQueue } from '../workers/queues';
+import { submitCardCode } from '../scrapers/portalAgent';
 
 const router = Router();
 router.use(attachDbUser);
@@ -232,6 +236,107 @@ router.patch('/:id', async (req, res, next) => {
     // A balance typed in is dated today unless a date was given.
     if (data.currentBalance !== undefined && data.balanceAsOf === undefined) (data as any).balanceAsOf = data.currentBalance == null ? null : new Date();
     res.json(await db.creditCard.update({ where: { id: req.params.id }, data: data as any }));
+  } catch (err) { next(err); }
+});
+
+// ── Fetching statements from the card's website (scrapers/portalAgent.ts runCardAgent) ──
+// The login is kept encrypted on card_logins; the encrypted fields are never returned.
+const LoginFields = z.object({
+  username: z.string().trim().min(1).max(200).optional(),
+  password: z.string().min(1).max(200).optional(),
+  loginUrl: z.string().trim().max(500).nullable().optional(),
+  autoFetch: z.boolean().optional(),
+});
+
+async function loginState(cardId: string) {
+  const [card, l] = await Promise.all([
+    db.creditCard.findUnique({ where: { id: cardId }, select: { name: true, issuer: true, loginUrl: true } }),
+    db.cardLogin.findUnique({ where: { cardId }, select: { usernameEnc: true, loginUrl: true, autoFetch: true, status: true, progress: true, error: true, startedAt: true, lastRunAt: true, lastFetchedAt: true, mfaPrompt: true, mfaRequestedAt: true } }),
+  ]);
+  let username: string | null = null;
+  try { username = l ? decrypt(l.usernameEnc) : null; } catch { /* unreadable: the owner enters it again */ }
+  return {
+    hasLogin: !!l, username, loginUrl: l?.loginUrl ?? null, autoFetch: l?.autoFetch ?? true,
+    // Where the agent starts: the saved page, else the one the statement prints, else the issuer's site.
+    startUrl: card ? cardStartUrl(card, l?.loginUrl) : null,
+    fetch: l ? { status: l.status, progress: l.progress, error: l.error, startedAt: l.startedAt, lastRunAt: l.lastRunAt, lastFetchedAt: l.lastFetchedAt, mfaPrompt: l.mfaPrompt, mfaRequestedAt: l.mfaRequestedAt } : null,
+  };
+}
+
+router.get('/:id/login', async (req, res, next) => {
+  try {
+    if (!(await ownedCard(req.params.id, req.dbUserId!))) return res.status(404).json({ error: 'Card not found' });
+    res.json(await loginState(req.params.id));
+  } catch (err) { next(err); }
+});
+
+// PUT /:id/login — save the website login (a blank password keeps the saved one).
+router.put('/:id/login', async (req, res, next) => {
+  try {
+    const card = await ownedCard(req.params.id, req.dbUserId!);
+    if (!card) return res.status(404).json({ error: 'Card not found' });
+    const d = LoginFields.parse(req.body);
+    const loginUrl = d.loginUrl === undefined ? undefined : d.loginUrl ? asUrl(d.loginUrl) : null;
+    if (d.loginUrl && !loginUrl) return res.status(400).json({ error: 'That website address does not look right.' });
+    const had = await db.cardLogin.findUnique({ where: { cardId: card.id }, select: { cardId: true } });
+    if (!had && (!d.username || !d.password)) return res.status(400).json({ error: 'Enter the username and password for the card\'s website.' });
+    const data = {
+      ...(d.username ? { usernameEnc: encrypt(d.username) } : {}),
+      ...(d.password ? { passwordEnc: encrypt(d.password) } : {}),
+      ...(loginUrl !== undefined ? { loginUrl } : {}),
+      ...(d.autoFetch !== undefined ? { autoFetch: d.autoFetch } : {}),
+      // A new login is tried afresh: no back-off carried over from the old one.
+      ...(d.username || d.password ? { misses: 0, error: null } : {}),
+    };
+    if (had) await db.cardLogin.update({ where: { cardId: card.id }, data });
+    else await db.cardLogin.create({ data: { cardId: card.id, userId: req.dbUserId!, usernameEnc: encrypt(d.username!), passwordEnc: encrypt(d.password!), loginUrl: loginUrl ?? null, autoFetch: d.autoFetch ?? true } });
+    res.json(await loginState(card.id));
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ error: 'Check the username, password and website.' });
+    next(err);
+  }
+});
+
+router.delete('/:id/login', async (req, res, next) => {
+  try {
+    if (!(await ownedCard(req.params.id, req.dbUserId!))) return res.status(404).json({ error: 'Card not found' });
+    await db.cardLogin.deleteMany({ where: { cardId: req.params.id } });
+    await db.portalSession.deleteMany({ where: { utilityAccountId: `card:${req.params.id}` } });
+    res.status(204).send();
+  } catch (err) { next(err); }
+});
+
+// POST /:id/fetch — fetch the new statements now (the owner is watching: a code can be typed here).
+router.post('/:id/fetch', async (req, res, next) => {
+  try {
+    if (!(await ownedCard(req.params.id, req.dbUserId!))) return res.status(404).json({ error: 'Card not found' });
+    const l = await db.cardLogin.findUnique({ where: { cardId: req.params.id }, select: { status: true, startedAt: true } });
+    if (!l) return res.status(400).json({ error: 'Add the card website\'s login first.' });
+    if (l.status === 'PENDING' && l.startedAt && Date.now() - l.startedAt.getTime() < 30 * 60_000) return res.status(409).json({ error: 'A fetch is already running for this card.' });
+    await db.cardLogin.update({ where: { cardId: req.params.id }, data: { status: 'PENDING', progress: 'Waiting for the browser', error: null, startedAt: new Date(), mfaPrompt: null, mfaRequestedAt: null, mfaCodeEnc: null } });
+    await scrapeQueue.add('scrape', { utilityAccountId: '', cardId: req.params.id, manual: true }, { jobId: `card-manual-${req.params.id}-${Date.now()}`, attempts: 1, removeOnComplete: { count: 100 }, removeOnFail: { count: 50 } });
+    res.status(202).json(await loginState(req.params.id));
+  } catch (err) { next(err); }
+});
+
+// POST /:id/fetch/code { code } — the code the website sent (or "done" after a step the owner did in their Chrome).
+router.post('/:id/fetch/code', async (req, res, next) => {
+  try {
+    const code = String(req.body?.code ?? '').trim();
+    if (!/^[A-Za-z0-9-]{3,12}$/.test(code)) return res.status(400).json({ error: 'Enter the code the card\'s website sent.' });
+    if (!(await ownedCard(req.params.id, req.dbUserId!))) return res.status(404).json({ error: 'Card not found' });
+    const l = await db.cardLogin.findUnique({ where: { cardId: req.params.id }, select: { mfaPrompt: true } });
+    if (!l?.mfaPrompt) return res.status(409).json({ error: 'Nothing is waiting for a code on this card.' });
+    await submitCardCode(req.params.id, code);
+    res.status(204).send();
+  } catch (err) { next(err); }
+});
+
+router.post('/:id/fetch/cancel', async (req, res, next) => {
+  try {
+    if (!(await ownedCard(req.params.id, req.dbUserId!))) return res.status(404).json({ error: 'Card not found' });
+    await db.cardLogin.updateMany({ where: { cardId: req.params.id, status: 'PENDING' }, data: { status: 'CANCELLED', progress: null, error: 'Cancelled by you.', mfaPrompt: null, mfaRequestedAt: null, mfaCodeEnc: null } });
+    res.json(await loginState(req.params.id));
   } catch (err) { next(err); }
 });
 

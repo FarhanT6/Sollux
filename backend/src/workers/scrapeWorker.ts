@@ -7,7 +7,8 @@ import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';
 import { getScraperProvider } from '../scrapers/registry';
-import { runPortalAgent } from '../scrapers/portalAgent';
+import { runPortalAgent, runCardAgent } from '../scrapers/portalAgent';
+import { cardFetchSkip } from '../lib/cardFetchSchedule';
 import { uploadDocument, buildStatementKey } from '../services/s3Service';
 import { guardWorker } from './redisGuard';
 import { insightQueue, scrapeQueue, createWorkerConnection, workerTuning } from './queues';
@@ -15,6 +16,8 @@ import { websiteFor, isLookupPage } from '../lib/providerDirectory';
 
 interface ScrapeJobData {
   utilityAccountId: string;
+  /** A credit card's statements from its issuer's website (cardJob); utilityAccountId is then empty. */
+  cardId?: string;
   /** Pressed Sync: the portal agent runs even if it ran recently. */
   manual?: boolean;
   /** Why it was queued: a provider's "your bill is ready" email fetches the statement at once. */
@@ -240,9 +243,68 @@ export async function agentJob(job: Job<ScrapeJobData>, account: { id: string; p
     console.log(`[ScrapeWorker] Portal agent ${account.providerName}: ${r.downloads} downloaded, ${r.filed} filed, ${r.review} to review; ${r.replayed ?? 0} steps replayed, ${r.aiSteps ?? 0} Claude turns, $${(r.costUsd ?? 0).toFixed(3)}${r.error ? ` — ${r.error}` : ''}`);
 }
 
+/**
+ * A card's statements fetched from its issuer's website (runCardAgent): Fetch
+ * statements on the card, the schedule after each closing date, or a
+ * "statement ready" email. Its live line, outcome and the code it waits on are
+ * on the card's login row (card_logins). Never retried automatically.
+ */
+async function cardJob(job: Job<ScrapeJobData>): Promise<void> {
+  const cardId = job.data.cardId!;
+  const login = await db.cardLogin.findUnique({
+    where: { cardId },
+    select: { autoFetch: true, lastRunAt: true, misses: true, status: true, card: { select: { name: true, status: true, statementClosingDay: true } } },
+  });
+  if (!login) return;
+  const manual = !!job.data.manual;
+  if (manual) {
+    // Cancelled while it waited in the queue.
+    if (login.status === 'CANCELLED') return;
+  } else {
+    if (login.status === 'PENDING') return; // one is running already
+    const newest = await db.cardStatement.findFirst({ where: { cardId, fromEmail: false }, orderBy: { closingDate: 'desc' }, select: { closingDate: true, createdAt: true } });
+    const skip = cardFetchSkip({
+      now: new Date(), autoFetch: login.autoFetch, closed: login.card.status === 'CLOSED',
+      newestClosing: newest?.closingDate ?? null, newestSavedAt: newest?.createdAt ?? null, closingDay: login.card.statementClosingDay,
+      lastRunAt: login.lastRunAt, misses: login.misses, billPosted: job.data.trigger === 'bill_posted',
+    });
+    if (skip) { console.log(`[ScrapeWorker] Card ${login.card.name}: not fetching — ${skip}`); return; }
+  }
+  await db.cardLogin.update({ where: { cardId }, data: { status: 'PENDING', startedAt: new Date(), progress: 'Starting the browser', error: null } });
+  // The live line on the card: at most one write every 2 seconds, the latest always lands.
+  let lastWrite = 0, latest = '', timer: NodeJS.Timeout | null = null;
+  const write = () => {
+    timer = null; lastWrite = Date.now();
+    void db.cardLogin.updateMany({ where: { cardId, status: 'PENDING' }, data: { progress: latest.slice(0, 300) } }).catch(() => {});
+  };
+  const onProgress = (text: string) => {
+    latest = text;
+    if (timer) return;
+    const wait = 2000 - (Date.now() - lastWrite);
+    if (wait <= 0) write(); else timer = setTimeout(write, wait);
+  };
+  const r = await withAiContext({ test: !!job.data.test }, () => runCardAgent(cardId, {
+    interactive: manual, onProgress,
+    cancelled: async () => (await db.cardLogin.findUnique({ where: { cardId }, select: { status: true } }))?.status === 'CANCELLED',
+  })).catch(err => ({ ok: false, filed: 0, review: 0, applied: 0, downloads: 0, summary: '', error: readableError(err instanceof Error ? err.message : String(err)) }) as Awaited<ReturnType<typeof runCardAgent>>);
+  if (timer) clearTimeout(timer);
+  const cancelled = r.error === 'Cancelled by you.';
+  const failure = readableError(r.error ?? 'The agent stopped.');
+  // A run nobody asked for that brought nothing counts toward the back-off; a statement resets it.
+  const misses = r.filed > 0 ? 0 : manual ? login.misses : login.misses + 1;
+  await db.cardLogin.update({
+    where: { cardId },
+    data: r.ok
+      ? { status: 'SUCCESS', error: null, lastFetchedAt: new Date(), misses, progress: (r.downloads ? downloadSummary(r) : (r.summary || 'Nothing new on the website')).slice(0, 300) }
+      : { status: cancelled ? 'CANCELLED' : 'FAILED', error: failure.slice(0, 1000), misses, progress: null },
+  });
+  console.log(`[ScrapeWorker] Card agent ${login.card.name}: ${r.downloads} downloaded, ${r.filed} filed, ${r.review} to review; ${r.aiSteps ?? 0} Claude turns, $${(r.costUsd ?? 0).toFixed(3)}${r.error ? ` — ${r.error}` : ''}`);
+}
+
 const worker = new Worker<ScrapeJobData>(
   'scrape',
   async (job: Job<ScrapeJobData>) => {
+    if (job.data.cardId) return cardJob(job);
     const { utilityAccountId } = job.data;
     console.log(`[ScrapeWorker] Starting job for account ${utilityAccountId}`);
 
@@ -746,7 +808,8 @@ export async function handOffActiveJobs(): Promise<number> {
   await worker.pause(true).catch(() => {});
   let n = 0;
   for (const [id, data] of running) {
-    await scrapeQueue.add('scrape', { ...data }, { jobId: `resume-${data.utilityAccountId}-${Date.now()}`, lifo: true, removeOnComplete: { count: 100 }, removeOnFail: { count: 50 } }).catch(() => {});
+    await scrapeQueue.add('scrape', { ...data }, { jobId: `resume-${data.cardId ? `card-${data.cardId}` : data.utilityAccountId}-${Date.now()}`, lifo: true, removeOnComplete: { count: 100 }, removeOnFail: { count: 50 } }).catch(() => {});
+    if (data.cardId) await db.cardLogin.update({ where: { cardId: data.cardId }, data: { progress: 'Paused for an app update — starts again in a minute' } }).catch(() => {});
     if (data.syncJobId) await db.syncJob.update({ where: { id: data.syncJobId }, data: { progress: 'Paused for an app update — starts again in a minute' } }).catch(() => {});
     console.log(`[ScrapeWorker] Handing job ${id} (${data.utilityAccountId}) back to the queue for the next worker`);
     n++;

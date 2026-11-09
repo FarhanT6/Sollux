@@ -690,6 +690,22 @@ export const createCardFromBankAccount = (bankAccountId: string) => api.post<Cre
 export const updateCreditCard = (id: string, data: Record<string, any>) => api.patch<CreditCardT>(`/credit-cards/${id}`, data).then(r => r.data);
 export const deleteCreditCard = (id: string) => api.delete(`/credit-cards/${id}`);
 /** This card is the same account as `intoId`: everything moves there and this card goes. */
+/** A card's website login (never the password) and its last fetch from the website. */
+export interface CardLoginT {
+  hasLogin: boolean; username: string | null; loginUrl: string | null; autoFetch: boolean;
+  /** Where the agent starts: the saved page, else the one the statement prints, else the issuer's site. */
+  startUrl: string | null;
+  fetch: {
+    status: 'PENDING' | 'SUCCESS' | 'FAILED' | 'CANCELLED' | null; progress: string | null; error: string | null;
+    startedAt: string | null; lastRunAt: string | null; lastFetchedAt: string | null; mfaPrompt: string | null; mfaRequestedAt: string | null;
+  } | null;
+}
+export const getCardLogin = (id: string) => api.get<CardLoginT>(`/credit-cards/${id}/login`).then(r => r.data);
+export const saveCardLogin = (id: string, data: { username?: string; password?: string; loginUrl?: string | null; autoFetch?: boolean }) => api.put<CardLoginT>(`/credit-cards/${id}/login`, data).then(r => r.data);
+export const deleteCardLogin = (id: string) => api.delete(`/credit-cards/${id}/login`);
+export const fetchCardStatements = (id: string) => api.post<CardLoginT>(`/credit-cards/${id}/fetch`).then(r => r.data);
+export const submitCardCode = (id: string, code: string) => api.post(`/credit-cards/${id}/fetch/code`, { code });
+export const cancelCardFetch = (id: string) => api.post<CardLoginT>(`/credit-cards/${id}/fetch/cancel`).then(r => r.data);
 export const mergeCreditCard = (id: string, intoId: string) => api.post<{ statements: number; transactions: number; payments: number }>(`/credit-cards/${id}/merge`, { intoId }).then(r => r.data);
 /** `noAi`: the free reader only — a statement it can't read comes back as an error (needsAi) instead of going to Claude. */
 export const readCardStatement = (files: FilePayload[], opts: { noAi?: boolean } = {}) =>
