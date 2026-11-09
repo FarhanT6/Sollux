@@ -5,7 +5,7 @@ import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { uploadDocument, getSignedDocumentUrl, detectContentType } from '../services/s3Service';
 import { readManagerStatement } from '../services/managerStatement';
-import { applyManagerStatement } from '../services/managerStatementApply';
+import { applyManagerStatement, lineItemsFrom, learnLineRules } from '../services/managerStatementApply';
 import { fetchManagerStatements } from '../services/managerStatementFetch';
 
 const router = Router();
@@ -205,7 +205,7 @@ const ImportSchema = z.object({
   lines: z.array(z.object({
     date: z.string().nullable().optional(), description: z.string().max(300), kind: z.string(), amount: z.number().positive(),
     direction: z.enum(['IN', 'OUT']), propertyId: z.string().nullable().optional(), leaseId: z.string().nullable().optional(),
-    loanId: z.string().nullable().optional(), category: z.string().nullable().optional(), include: z.boolean(),
+    loanId: z.string().nullable().optional(), category: z.string().nullable().optional(), bankAccountId: z.string().nullable().optional(), include: z.boolean(),
   })).min(1).max(500),
 });
 
@@ -228,7 +228,7 @@ router.post('/import', async (req, res, next) => {
     for (const l of d.lines.filter(l => l.include)) {
       if (l.kind === 'RENT' && !l.leaseId) return res.status(400).json({ error: `Choose the lease for "${l.description}", or leave it out.` });
       if (l.kind === 'LOAN_PAYMENT' && !l.loanId) return res.status(400).json({ error: `Choose the loan for "${l.description}", or leave it out.` });
-      if (['MANAGEMENT_FEE', 'REPAIR', 'UTILITY', 'OTHER_EXPENSE'].includes(l.kind) && !l.propertyId) return res.status(400).json({ error: `Choose the property for "${l.description}", or leave it out.` });
+      if (['MANAGEMENT_FEE', 'REPAIR', 'UTILITY', 'OTHER_EXPENSE', 'REIMBURSEMENT'].includes(l.kind) && !l.propertyId) return res.status(400).json({ error: `Choose the property for "${l.description}", or leave it out.` });
     }
 
     let profile = d.profileId ? await db.reconciliationProfile.findFirst({ where: { id: d.profileId, userId } }) : null;
@@ -238,12 +238,11 @@ router.post('/import', async (req, res, next) => {
         data: { userId, name: d.managerName, propertyId: only.length === 1 ? only[0] : null, managementFeeCategory: 'PROPERTY_MANAGEMENT', loanIds: ids('loanId') as unknown as Prisma.InputJsonValue },
       });
     }
-    const lineItems = d.lines.map(l => ({
-      type: l.kind === 'RENT' ? 'RENT' : l.kind === 'LOAN_PAYMENT' ? 'LOAN_PAYMENT' : ['MANAGEMENT_FEE', 'REPAIR', 'UTILITY', 'OTHER_EXPENSE'].includes(l.kind) ? 'EXPENSE' : 'OTHER',
-      targetId: l.kind === 'RENT' ? l.leaseId ?? null : l.kind === 'LOAN_PAYMENT' ? l.loanId ?? null : null,
-      targetLabel: l.kind, description: l.description, amount: l.amount, direction: l.direction === 'IN' ? 'CREDIT' : 'DEBIT',
-      date: l.date ?? null, category: l.category ?? null, propertyId: l.propertyId ?? null, include: l.include,
-    }));
+    if (d.lines.some(l => l.bankAccountId) && await db.bankAccount.count({ where: { userId, id: { in: d.lines.map(l => l.bankAccountId).filter((x): x is string => !!x) } } })
+      !== new Set(d.lines.map(l => l.bankAccountId).filter(Boolean)).size) return res.status(400).json({ error: 'A line points at a bank account that is not yours.' });
+    const lineItems = lineItemsFrom(d.lines);
+    // What was chosen here is how this manager's same lines are filled in next time.
+    await learnLineRules(profile.id, d.lines);
     const net = lineItems.reduce((t, li) => t + (li.direction === 'CREDIT' ? li.amount : -li.amount), 0);
     // The emailed statement this review came from: a draft is replaced (keeping where it came from);
     // one already recorded keeps its records, and its lines left to review are now done.

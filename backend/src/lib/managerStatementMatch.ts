@@ -6,7 +6,25 @@
  * means, or left for the owner to choose when two fit or none does.
  */
 
-export type LineKind = 'RENT' | 'MANAGEMENT_FEE' | 'REPAIR' | 'UTILITY' | 'LOAN_PAYMENT' | 'OTHER_EXPENSE' | 'OWNER_DRAW' | 'OTHER';
+export type LineKind = 'RENT' | 'MANAGEMENT_FEE' | 'REPAIR' | 'UTILITY' | 'LOAN_PAYMENT' | 'OTHER_EXPENSE' | 'REIMBURSEMENT' | 'OWNER_PAYMENT' | 'OWNER_DRAW' | 'OTHER';
+
+/** Kinds recorded as a property's cost (a reimbursement as a negative one, offsetting the cost it pays back). */
+export const COST_KINDS: LineKind[] = ['MANAGEMENT_FEE', 'REPAIR', 'UTILITY', 'OTHER_EXPENSE', 'REIMBURSEMENT'];
+
+/**
+ * A line's wording as a key for what the owner chose for it before: lowercase, words and amounts kept
+ * ("loan interest james $150k"), dates and punctuation dropped. Two lines with the same key are the same
+ * kind of line every month.
+ */
+export function lineKey(description: string): string {
+  return String(description ?? '').toLowerCase()
+    .replace(/\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/g, ' ')
+    .replace(/\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b\.?(?:\s+\d{4})?/g, ' ')
+    .replace(/[^a-z0-9$]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/** What the owner chose for a line, remembered per manager (ReconciliationProfile.lineRules). */
+export interface LineRule { kind: LineKind; propertyId?: string | null; leaseId?: string | null; loanId?: string | null; category?: string | null; bankAccountId?: string | null }
 
 const STOP = new Set(['the', 'and', 'of', 'llc', 'inc', 'co', 'st', 'street', 'rd', 'road', 'ave', 'avenue', 'dr', 'drive', 'ln', 'lane', 'way', 'blvd', 'ct', 'court', 'pl', 'unit', 'apt', 'suite', 'ste', 'n', 's', 'e', 'w', 'bank', 'mortgage', 'loan', 'servicing', 'financial']);
 

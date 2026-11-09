@@ -1306,6 +1306,9 @@ model ReconciliationProfile {
   /// The addresses the manager emails statements from (comma separated): a PDF
   /// from one of them is read as this manager's statement (services/managerStatementEmail).
   emailFrom             String?
+  /// What the owner chose for each kind of line, by its wording (lib/managerStatementMatch lineKey ->
+  /// LineRule): the next statement's same lines are filled in and recorded the same way.
+  lineRules             Json?
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 

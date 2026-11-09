@@ -7,6 +7,52 @@
  */
 import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
+import { COST_KINDS, lineKey, type LineKind, type LineRule } from '../lib/managerStatementMatch';
+
+/** A reviewed line as the owner left it (the draft's lines, edited). */
+export interface ReviewedLine {
+  date?: string | null; description: string; kind: string; amount: number; direction: 'IN' | 'OUT';
+  propertyId?: string | null; leaseId?: string | null; loanId?: string | null; category?: string | null; bankAccountId?: string | null; include: boolean;
+}
+
+/**
+ * The statement's stored lines. A line is recorded only when it points at its record: rent at a lease,
+ * a loan line at a loan, a cost or reimbursement at a property. "You paid the manager" is kept (with the
+ * account it came from) but records nothing: it funds the other lines, which are recorded themselves.
+ */
+export function lineItemsFrom(lines: ReviewedLine[]) {
+  return lines.map(l => {
+    const cost = COST_KINDS.includes(l.kind as LineKind);
+    const type = l.kind === 'RENT' ? 'RENT' : l.kind === 'LOAN_PAYMENT' ? 'LOAN_PAYMENT' : cost ? 'EXPENSE' : 'OTHER';
+    return {
+      type, targetId: l.kind === 'RENT' ? l.leaseId ?? null : l.kind === 'LOAN_PAYMENT' ? l.loanId ?? null : null,
+      targetLabel: l.kind, description: l.description, amount: l.amount, direction: l.direction === 'IN' ? 'CREDIT' : 'DEBIT',
+      date: l.date ?? null, category: l.category ?? null, propertyId: l.propertyId ?? null, bankAccountId: l.kind === 'OWNER_PAYMENT' ? l.bankAccountId ?? null : null,
+      include: l.include && (type === 'RENT' || type === 'LOAN_PAYMENT' ? !!(l.leaseId || l.loanId) : type === 'EXPENSE' ? !!l.propertyId : true),
+    };
+  });
+}
+
+/**
+ * Remember what the owner chose for each line (its kind and record, by its wording) on the manager's profile,
+ * so the next statement's same lines are filled in and recorded the same way.
+ */
+export async function learnLineRules(profileId: string, lines: ReviewedLine[]) {
+  const p = await db.reconciliationProfile.findUnique({ where: { id: profileId }, select: { lineRules: true } });
+  const rules = { ...((p?.lineRules && typeof p.lineRules === 'object' && !Array.isArray(p.lineRules) ? p.lineRules : {}) as unknown as Record<string, LineRule>) };
+  let changed = false;
+  for (const l of lines) {
+    const key = lineKey(l.description);
+    if (!key || l.kind === 'OTHER') continue;
+    // Only a choice that was made: a recorded line with its record, or a line kept on purpose (paid by / sent to the owner).
+    const chosen = l.kind === 'OWNER_PAYMENT' || l.kind === 'OWNER_DRAW'
+      || (l.include && (l.kind === 'RENT' ? !!l.leaseId : l.kind === 'LOAN_PAYMENT' ? !!l.loanId : COST_KINDS.includes(l.kind as LineKind) ? !!l.propertyId : false));
+    if (!chosen) continue;
+    rules[key] = { kind: l.kind as LineKind, propertyId: l.propertyId ?? null, leaseId: l.leaseId ?? null, loanId: l.loanId ?? null, category: l.category ?? null, bankAccountId: l.bankAccountId ?? null };
+    changed = true;
+  }
+  if (changed) await db.reconciliationProfile.update({ where: { id: profileId }, data: { lineRules: rules as unknown as Prisma.InputJsonValue } });
+}
 
 interface Item {
   type: 'RENT' | 'LOAN_PAYMENT' | 'EXPENSE' | 'OTHER'; targetId?: string | null; description?: string | null;
@@ -45,7 +91,8 @@ export async function applyManagerStatement(userId: string, statementId: string)
         const e = await tx.expense.create({
           data: {
             userId, propertyId: (item.propertyId ?? profile.propertyId)!, category: (item.category ?? profile.managementFeeCategory ?? 'PROPERTY_MANAGEMENT') as any,
-            amount: item.amount, date: itemDate, vendor: profile.name, description: item.description || undefined, isCapEx: false, isPersonal: false,
+            // Money paid back toward a cost (a tenant's tax reimbursement) offsets it.
+            amount: item.direction === 'CREDIT' ? -Math.abs(item.amount) : item.amount, date: itemDate, vendor: profile.name, description: item.description || undefined, isCapEx: false, isPersonal: false,
           },
         });
         expenseIds.push(e.id);
