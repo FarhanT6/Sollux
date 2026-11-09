@@ -7,7 +7,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
-import { walletReport, addMovement, deleteMovement, MOVEMENT_TYPES } from '../services/wallets';
+import { walletReport, addMovement, deleteMovement, depositChecks, undoCheckDeposit, MOVEMENT_TYPES } from '../services/wallets';
 
 const router = Router();
 router.use(attachDbUser);
@@ -35,6 +35,20 @@ router.post('/:id/movements', async (req, res, next) => {
     await addMovement(req.dbUserId!, req.params.id, d);
     res.status(201).json(await walletReport(req.dbUserId!));
   } catch (err) { fail(res, next)(err); }
+});
+
+// POST /checks/deposit { rentPaymentIds, bankAccountId, date } — checks taken to the bank (one deposit slip).
+router.post('/checks/deposit', async (req, res, next) => {
+  try {
+    const d = z.object({ rentPaymentIds: z.array(z.string()).min(1).max(200), bankAccountId: z.string(), date: day }).parse(req.body);
+    await depositChecks(req.dbUserId!, d.rentPaymentIds, d.bankAccountId, d.date);
+    res.json(await walletReport(req.dbUserId!));
+  } catch (err) { fail(res, next)(err); }
+});
+
+// POST /checks/:rentPaymentId/undeposit — the check is on hand again.
+router.post('/checks/:rentPaymentId/undeposit', async (req, res, next) => {
+  try { await undoCheckDeposit(req.dbUserId!, req.params.rentPaymentId); res.json(await walletReport(req.dbUserId!)); } catch (err) { fail(res, next)(err); }
 });
 
 router.delete('/movements/:mid', async (req, res, next) => {

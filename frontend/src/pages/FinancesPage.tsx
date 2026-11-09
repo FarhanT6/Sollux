@@ -56,7 +56,7 @@ export const FINANCE_SECTIONS: { key: Tab; label: string; subtitle: string; view
     views: [
       { key: 'incoming', label: 'Incoming payments', subtitle: 'Transfers, checks and deposits into watched bank accounts, matched to tenants', render: () => <IncomingPaymentsPage embedded /> },
       { key: 'manager', label: 'Manager statements', subtitle: 'Upload your property manager\'s monthly statement: rent, fees, repairs and loan payments read and recorded', render: () => <ManagerStatementsPage /> },
-      { key: 'wallets', label: 'Cash & apps', subtitle: 'Cash, Venmo, Cash App, PayPal and Apple Cash: rent received by each, and where it went', render: () => <WalletsPage /> },
+      { key: 'wallets', label: 'Cash, checks & apps', subtitle: 'Cash, checks not yet deposited, Venmo, Cash App, PayPal and Apple Cash: rent received by each, and where it went', render: () => <WalletsPage /> },
     ],
   },
 ];
