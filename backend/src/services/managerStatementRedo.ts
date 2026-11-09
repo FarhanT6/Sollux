@@ -18,7 +18,7 @@ import { applyManagerStatement, statementFromDraft } from './managerStatementApp
 import { isManagerStatementPdf } from './managerStatementEmail';
 import { downloadDocument } from './s3Service';
 
-const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string }>;
+import pdfParse from '../lib/pdfParse';
 /** Remove what a statement recorded; keep it (as UNDONE or NOT_A_STATEMENT) so its email is not fetched again. */
 export async function undoManagerStatement(userId: string, id: string, status: 'UNDONE' | 'NOT_A_STATEMENT' = 'UNDONE') {
   const st = await db.reconciliationStatement.findFirst({ where: { id, userId } });
@@ -32,12 +32,16 @@ export async function undoManagerStatement(userId: string, id: string, status: '
   ]);
 }
 
-export interface RedoSummary { statements: number; notStatements: number; rent: number; loanPayments: number; expenses: number; needsLook: number }
+export interface RedoSummary {
+  statements: number; notStatements: number; rent: number; loanPayments: number; expenses: number; needsLook: number;
+  /** Statements that could not be recorded again (each left undone, with why). */
+  failed: string[];
+}
 
 /** Undo and record again every emailed statement from this manager, oldest first. */
 export async function redoManagerStatements(userId: string, profileId: string,
   deps: { download?: (key: string) => Promise<Buffer> } = {}): Promise<RedoSummary> {
-  const sum: RedoSummary = { statements: 0, notStatements: 0, rent: 0, loanPayments: 0, expenses: 0, needsLook: 0 };
+  const sum: RedoSummary = { statements: 0, notStatements: 0, rent: 0, loanPayments: 0, expenses: 0, needsLook: 0, failed: [] };
   const sts = await db.reconciliationStatement.findMany({
     where: { userId, profileId, source: 'email', status: { not: 'NOT_A_STATEMENT' } },
     orderBy: [{ receivedAt: 'asc' }, { statementDate: 'asc' }, { createdAt: 'asc' }],
@@ -59,9 +63,12 @@ export async function redoManagerStatements(userId: string, profileId: string,
     keep.push(st);
   }
   // 2. Each recorded again from the lines it was read with, against what is recorded now.
+  // One that fails is reported and left undone; the rest still go (one bad statement left them all undone).
   for (const st of keep) {
     const d = (st.draftJson && typeof st.draftJson === 'object' ? st.draftJson : {}) as Record<string, any>;
-    if (!Array.isArray(d.lines)) continue;
+    const when = (st.receivedAt ?? st.statementDate).toISOString().slice(0, 10);
+    if (!Array.isArray(d.lines)) { sum.failed.push(`${when}: its lines were not kept — delete it and fetch it again`); continue; }
+    try {
     const raw = {
       manager: d.manager, periodStart: d.periodStart, periodEnd: d.periodEnd, statementDate: d.statementDate,
       beginningBalance: d.beginningBalance, endingBalance: d.endingBalance,
@@ -75,8 +82,49 @@ export async function redoManagerStatements(userId: string, profileId: string,
     });
     const done = await applyManagerStatement(userId, st.id);
     sum.statements++; sum.rent += done.rent; sum.loanPayments += done.loanPayments; sum.expenses += done.expenses; sum.needsLook += needsLook;
+    } catch (err) {
+      const why = err instanceof Error ? err.message.split('\n')[0].slice(0, 200) : String(err);
+      console.warn(`[Manager] statement ${st.id} not recorded again:`, why);
+      await db.reconciliationStatement.update({ where: { id: st.id }, data: { status: 'UNDONE' } }).catch(() => {});
+      sum.failed.push(`${when}: ${why}`);
+    }
   }
   return sum;
+}
+
+/** Delete a statement, with what it recorded (rent, loan payments, costs). An emailed one can then be fetched again. */
+export async function deleteManagerStatement(userId: string, id: string): Promise<void> {
+  const st = await db.reconciliationStatement.findFirst({ where: { id, userId }, select: { id: true, status: true } });
+  if (!st) throw Object.assign(new Error('Statement not found'), { status: 404 });
+  if (st.status === 'APPLIED') await undoManagerStatement(userId, id, 'UNDONE');
+  await db.reconciliationStatement.delete({ where: { id } });
+}
+
+export interface StartOverSummary {
+  deleted: number;
+  fetched: { mailboxes: number; looked: number; found: number; recorded: number; already: number; details: string[]; errors: string[] };
+}
+
+/**
+ * Start over for one manager: every statement deleted with what it recorded —
+ * emailed and uploaded alike; PDFs set aside as not statements are kept so they
+ * are not read again — then the manager's emails are fetched again, back to the
+ * oldest one deleted, and each read and recorded afresh, oldest first. The
+ * manager's remembered choices and addresses stay, so the lines fill themselves in.
+ */
+export async function startOverManager(userId: string, profileId: string,
+  deps: { fetch?: (userId: string, days: number) => Promise<StartOverSummary['fetched']> } = {}): Promise<StartOverSummary> {
+  const sts = await db.reconciliationStatement.findMany({
+    where: { userId, profileId, status: { not: 'NOT_A_STATEMENT' } },
+    select: { id: true, receivedAt: true, statementDate: true },
+  });
+  const oldest = Math.min(Date.now(), ...sts.map(s => (s.receivedAt ?? s.statementDate).getTime()));
+  for (const s of sts) await deleteManagerStatement(userId, s.id);
+  // Far enough back for the oldest one, with a little room (and never under the usual six months).
+  const days = Math.min(400, Math.max(180, Math.ceil((Date.now() - oldest) / 86_400_000) + 10));
+  // Loaded here: the fetch reads Gmail through the inbox agent, which tests leave out.
+  const fetch = deps.fetch ?? (await import('./managerStatementFetch')).fetchManagerStatements;
+  return { deleted: sts.length, fetched: await fetch(userId, days) };
 }
 
 /** Once, at worker start: managers whose emailed statements were never checked are redone. */

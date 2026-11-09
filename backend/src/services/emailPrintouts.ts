@@ -12,7 +12,7 @@ import { db } from '../config/db';
 import { downloadDocument } from './s3Service';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string }>;
+import pdfParse from '../lib/pdfParse';
 
 export async function isEmailPrintout(pdf: Buffer): Promise<boolean> {
   // The plain-text printout is marked in its metadata (and its text layer is

@@ -18,7 +18,7 @@ import {
 } from 'pdf-lib';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const pdfParse = require('pdf-parse') as (buf: Buffer, opts?: { pagerender?: (page: any) => Promise<string> }) => Promise<{ text: string }>;
+import pdfParse from '../lib/pdfParse';
 
 /**
  * The PDF with every visible form field's appearance drawn into its page and

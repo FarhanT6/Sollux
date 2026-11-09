@@ -343,7 +343,7 @@ Important extraction tips:
 // ── Regex-based extraction (free, no API calls) ───────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string }>;
+import pdfParse from '../lib/pdfParse';
 
 function parseDollar(s: string): number | null {
   const m = s.match(/\$?\s*([\d,]+\.?\d*)/);
