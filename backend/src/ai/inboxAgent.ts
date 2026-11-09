@@ -25,7 +25,7 @@ import { db } from '../config/db';
 import { intakeBill, type ReviewItem } from '../services/documentIntake';
 import { parseP2PEmail, recordP2PEmail } from '../services/p2pPaymentEmails';
 import { parseWithdrawalEmail, recordWithdrawal } from '../services/walletEmails';
-import { intakeManagerStatement, looksLikeManagerStatement, managerForSender } from '../services/managerStatementEmail';
+import { intakeManagerStatement, isManagerStatementPdf, managerForSender } from '../services/managerStatementEmail';
 
 const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string }>;
 
@@ -398,7 +398,7 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
                 let text = '';
                 try { text = (await pdfParse(buffer)).text; } catch { /* scanned or odd — let Claude decide if the email says bill */ }
                 const scanned = text.replace(/\s/g, '').length < 200;
-                if (fromManager || (!scanned && looksLikeManagerStatement(text))) {
+                if (isManagerStatementPdf(text, !!fromManager)) {
                   documents++;
                   const r = await withAiContext({ userId, source: 'inbox' }, () =>
                     intakeManagerStatement(userId, buffer, p.filename || `${subject || 'statement'}.pdf`, from, receivedAt, `${rfcMessageId ?? messageId}|${p.filename ?? ''}`));

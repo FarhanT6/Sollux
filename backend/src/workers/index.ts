@@ -11,6 +11,7 @@ import { db } from '../config/db';
 import { runNoticeReminders, importEarlierNotices } from '../services/noticeTracker';
 import { detachEmailPrintouts, detachCardEmailPrintouts } from '../services/emailPrintouts';
 import { backfillCardPayments } from '../services/cardPayments';
+import { redoUncheckedManagerStatements } from '../services/managerStatementRedo';
 import { decrypt } from '../crypto/encrypt';
 import { runDailyBalanceSnapshot } from './balanceSnapshotWorker';
 import { syncAllWatchedAccounts } from '../services/transactionMatchService';
@@ -192,6 +193,10 @@ setTimeout(() => {
   // Card statements' payment lines linked to the payments logged (one payment, not two), and each card's cycle from its newest statement.
   backfillCardPayments()
     .catch(err => console.warn('[Cards] payments not linked:', err instanceof Error ? err.message : err));
+  // Manager statements fetched before each PDF was checked: lender letters from the manager's address set
+  // aside, the rest recorded again in order (once; each statement is marked checked).
+  redoUncheckedManagerStatements()
+    .catch(err => console.warn('[Manager] statements not checked:', err instanceof Error ? err.message : err));
   // Notices read before they were tracked: brought in once (idempotent).
   importEarlierNotices()
     .then(r => r.created && console.log(`[Notices] ${r.created} earlier notice(s) brought into the tracker, ${r.open} still open`))

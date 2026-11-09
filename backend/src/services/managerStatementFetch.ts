@@ -11,7 +11,7 @@ import { google } from 'googleapis';
 import { db } from '../config/db';
 import { oauthFor, walk, decode } from '../ai/inboxAgent';
 import { withAiContext } from '../ai/meter';
-import { intakeManagerStatement, looksLikeManagerStatement, managerForSender } from './managerStatementEmail';
+import { intakeManagerStatement, isManagerStatementPdf, managerForSender } from './managerStatementEmail';
 
 const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string }>;
 
@@ -70,7 +70,7 @@ export async function fetchManagerStatements(userId: string, days = 180): Promis
         const buffer = decode(att.data.data);
         let text = '';
         try { text = (await pdfParse(buffer)).text; } catch { /* scanned: only the manager's own address counts */ }
-        if (!fromManager && !looksLikeManagerStatement(text)) continue;
+        if (!isManagerStatementPdf(text, !!fromManager)) continue;
         sum.found++;
         const r = await withAiContext({ userId, source: 'manager-statement' }, () => intakeManagerStatement(userId, buffer, p.filename || `${subject || 'statement'}.pdf`, from, receivedAt, ref));
         if (/already fetched/.test(r.detail)) sum.already++; else { sum.recorded++; sum.details.push(`${receivedAt?.toISOString().slice(0, 10) ?? ''} ${r.detail}`); }
