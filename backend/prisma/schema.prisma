@@ -2407,9 +2407,45 @@ model CreditCard {
   statements   CardStatement[]
   payments     CardPayment[]
   transactions CardTransaction[]
+  /// The issuer website login the portal agent fetches statements with. Its own
+  /// table so a card read in full never carries the encrypted login.
+  login        CardLogin?
 
   @@index([userId])
   @@map("credit_cards")
+}
+
+/// A card's website login for fetching its statements (scrapers/portalAgent.ts, runCardAgent).
+/// usernameEnc, passwordEnc and mfaCodeEnc are encrypted and never returned by the API.
+model CardLogin {
+  cardId         String    @id
+  userId         String
+  /// Where the agent starts; else the card's own loginUrl (from a statement), else the issuer's site.
+  loginUrl       String?
+  usernameEnc    String
+  passwordEnc    String
+  /// Fetch the new statement a few days after each closing date.
+  autoFetch      Boolean   @default(true)
+  /// PENDING | SUCCESS | FAILED | CANCELLED — the last fetch.
+  status         String?
+  progress       String?
+  error          String?
+  startedAt      DateTime?
+  lastRunAt      DateTime?
+  lastFetchedAt  DateTime?
+  /// Scheduled runs since the newest statement that brought nothing (backs off).
+  misses         Int       @default(0)
+  /// A verification code or a step the running agent waits on the owner for.
+  mfaPrompt      String?
+  mfaRequestedAt DateTime?
+  mfaCodeEnc     String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  card CreditCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("card_logins")
 }
 
 /// A monthly statement, every line of its account summary.

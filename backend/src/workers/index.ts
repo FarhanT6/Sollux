@@ -100,6 +100,20 @@ async function scheduleAllInsights() {
 // Run scrapes every 6 hours
 setInterval(scheduleAllScrapes, 6 * 60 * 60 * 1000);
 
+// Cards with a website login: looked at every 6 hours; the worker fetches only
+// once a new statement can be out (lib/cardFetchSchedule.ts), so most of these end at once.
+async function scheduleCardFetches() {
+  const logins = await db.cardLogin.findMany({ where: { autoFetch: true, card: { status: { not: 'CLOSED' } } }, select: { cardId: true } });
+  const slot = Math.floor(Date.now() / (6 * 3_600_000));
+  for (const { cardId } of logins) {
+    await scrapeQueue.add('scrape', { utilityAccountId: '', cardId }, { jobId: `card-${cardId}-${slot}`, attempts: 1, removeOnComplete: { count: 100 }, removeOnFail: { count: 50 } });
+  }
+  if (logins.length) console.log(`[Scheduler] Checked ${logins.length} card login(s) for new statements`);
+}
+const cardFetches = () => void scheduleCardFetches().catch(err => console.warn('[Scheduler] card fetches:', err instanceof Error ? err.message : err));
+setTimeout(cardFetches, 5 * 60_000);
+setInterval(cardFetches, 6 * 60 * 60 * 1000);
+
 // Property-tax lookups older than 30 days run again (services/taxLookupJobs.ts).
 const refreshTaxes = () => import('../services/taxLookupJobs').then(m => m.refreshTaxLookups())
   .then(n => { if (n) console.log(`[TaxLookup] Queued ${n} monthly refresh(es)`); })

@@ -31,6 +31,7 @@ import { findEmailedCode, findEmailedLink, mailMiss, type MailReport } from '../
 import { loadRecipe, saveRecipe, recipeWorked, replay, targetOf, refLocator, setRefFrames, type RecipeStep, typeLikeAPerson, clickLikeAPerson, findLoginBoxes, putInBox } from './portalRecipe';
 import { intakeBill, type ReviewItem } from '../services/documentIntake';
 import { BaseScraperProvider } from './base';
+import { cardIssuerSite, cardStartUrl } from '../lib/cardIssuerSites';
 
 // A run that needs more than this is lost, not nearly done; each step resends
 // the conversation (cached), so the last steps cost the most.
@@ -461,41 +462,87 @@ export interface AgentOptions {
 export async function runPortalAgent(accountId: string, opts: AgentOptions = {}): Promise<PortalRun> {
   // The spend is the account owner's (ai/meter.ts).
   const owner = await db.utilityAccount.findUnique({ where: { id: accountId }, select: { property: { select: { userId: true } } } });
-  return withAiContext({ userId: owner?.property.userId ?? null }, () => runAgent(accountId, opts));
+  return withAiContext({ userId: owner?.property.userId ?? null }, () => runAgent({ kind: 'utility', id: accountId }, opts));
 }
 
-async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRun> {
+/**
+ * The same agent for a credit card: it signs in to the issuer's website with
+ * the card's login (card_logins) and downloads the statements after the newest
+ * one on file — only the newest when the card has none (older statements are
+ * uploaded, read free). What it downloads is filed to the card (intakeBill forCard).
+ */
+export async function runCardAgent(cardId: string, opts: AgentOptions = {}): Promise<PortalRun> {
+  const owner = await db.creditCard.findUnique({ where: { id: cardId }, select: { userId: true } });
+  return withAiContext({ userId: owner?.userId ?? null }, () => runAgent({ kind: 'card', id: cardId }, opts));
+}
+
+/** What a run is for, in the shape the agent reads: a utility account, or a card made to look like one. */
+interface AgentAccount {
+  id: string; providerName: string; providerSlug: string | null; loginUrl: string | null;
+  lookupName: string | null; lookupCustomerId: string | null; usernameEnc: string | null; passwordEnc: string | null;
+  accountNumber: string | null; accountNumberEnc: string | null;
+  property: { userId: string; address: string };
+  /** The newest statement with its PDF on file. */
+  statements: { statementDate: Date }[];
+  /** A card's name ("Home Depot Consumer Credit Card"), for a card's run. */
+  cardName?: string;
+  /** A card issuer's home page, to start again from. */
+  home?: string | null;
+}
+
+async function cardAccount(cardId: string): Promise<AgentAccount | null> {
+  const c = await db.creditCard.findUnique({
+    where: { id: cardId },
+    select: {
+      id: true, userId: true, name: true, issuer: true, last4: true, loginUrl: true,
+      login: { select: { loginUrl: true, usernameEnc: true, passwordEnc: true } },
+      statements: { orderBy: { closingDate: 'desc' }, take: 12, select: { closingDate: true, documents: true, fromEmail: true } },
+    },
+  });
+  if (!c) return null;
+  const withPdf = c.statements.find(s => !s.fromEmail && Array.isArray(s.documents) && s.documents.length > 0);
+  return {
+    id: c.id, providerName: c.issuer?.trim() || c.name, providerSlug: null, loginUrl: cardStartUrl(c, c.login?.loginUrl),
+    lookupName: null, lookupCustomerId: null, usernameEnc: c.login?.usernameEnc ?? null, passwordEnc: c.login?.passwordEnc ?? null,
+    accountNumber: c.last4, accountNumberEnc: null, property: { userId: c.userId, address: '' },
+    statements: withPdf ? [{ statementDate: withPdf.closingDate }] : [], cardName: c.name, home: cardIssuerSite(c),
+  };
+}
+
+async function runAgent(target: { kind: 'utility' | 'card'; id: string }, opts: AgentOptions): Promise<PortalRun> {
   // Every status line says which browser it is in: the "Opening …" line alone
   // was replaced by the next one before anyone could read it.
   let where = '';
   const say = (t: string) => { try { opts.onProgress?.(where ? `${where} · ${t}` : t); } catch { /* status only */ } };
-  const account = await db.utilityAccount.findUnique({
-    where: { id: accountId },
+  const isCard = target.kind === 'card';
+  const account: AgentAccount | null = isCard ? await cardAccount(target.id) : await db.utilityAccount.findUnique({
+    where: { id: target.id },
     select: {
       id: true, providerName: true, providerSlug: true, loginUrl: true, lookupName: true, lookupCustomerId: true, usernameEnc: true, passwordEnc: true, accountNumber: true, accountNumberEnc: true,
       property: { select: { userId: true, address: true } },
       statements: { where: { pdfS3Key: { not: null } }, orderBy: { statementDate: 'desc' }, take: 1, select: { statementDate: true } },
     },
   });
-  if (!account) return { ok: false, filed: 0, review: 0, applied: 0, downloads: 0, summary: '', error: 'Account not found' };
+  if (!account) return { ok: false, filed: 0, review: 0, applied: 0, downloads: 0, summary: '', error: isCard ? 'Card not found' : 'Account not found' };
   // The login page: the one the owner saved (or a bill printed), else the
   // provider directory's; the agent finds "Sign in" from a home page.
   // An account with no login starts on the provider's bill lookup page when
   // there is one (the saved website is often the city's home page).
-  const loginUrl = opts.startUrl ?? (!account.usernameEnc ? lookupStartFor(account) : websiteFor(account)?.url) ?? null;
+  // A card starts on the page the owner saved, else the one its statement prints, else its issuer's site.
+  const loginUrl = opts.startUrl ?? (isCard ? account.loginUrl : (!account.usernameEnc ? lookupStartFor(account) : websiteFor(account)?.url)) ?? null;
   const customerId = account.lookupCustomerId?.trim() ?? '';
   // The website is the biller's lookup page: the bills are found there by
   // account number and name, and this run never signs in — no sign-in tool,
   // no saved route, no going to a sign-in page.
-  const lookup = isLookupPage(loginUrl) || (!account.usernameEnc && !!customerId);
+  const lookup = !isCard && (isLookupPage(loginUrl) || (!account.usernameEnc && !!customerId));
   // The full account number, for a lookup without signing in. Not hidden from the
   // page text: the agent picks the right account on a portal by its number.
   const fullNumber = (() => { try { return account.accountNumberEnc ? decrypt(account.accountNumberEnc).trim() : ''; } catch { return ''; } })();
   const lookupName = account.lookupName?.trim() ?? '';
   const fail = (error: string): PortalRun => ({ ok: false, filed: 0, review: 0, applied: 0, downloads: 0, summary: '', error });
-  if (!loginUrl) return fail('Add the provider\'s website (Website on the account) so the agent knows where to sign in.');
+  if (!loginUrl) return fail(isCard ? 'Add the card\'s website (Website login on the card) so the agent knows where to sign in.' : 'Add the provider\'s website (Website on the account) so the agent knows where to sign in.');
   if (lookup && !fullNumber) return fail('This account\'s website is a bill lookup page, which needs the full account number: add it on the account (Edit).');
-  if (!lookup && (!account.usernameEnc || !account.passwordEnc)) return fail('Add your portal username and password (Edit on the account) so Sollux can fetch statements.');
+  if (!lookup && (!account.usernameEnc || !account.passwordEnc)) return fail(isCard ? 'Add the card website\'s username and password (Website login on the card) so Sollux can fetch statements.' : 'Add your portal username and password (Edit on the account) so Sollux can fetch statements.');
   const username = account.usernameEnc ? decrypt(account.usernameEnc) : '', password = account.passwordEnc ? decrypt(account.passwordEnc) : '';
   const start = new URL(loginUrl);
   const allowed = new Set([rootOf(start.hostname)]);
@@ -517,7 +564,9 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
    * need its PDF fetched.
    */
   const fetchFrom = async (id: string, lastPdf: Date | null | undefined): Promise<string | null> => {
-    const rows = await db.statement.findMany({ where: { utilityAccountId: id, isScheduled: false, statementDate: { lte: new Date() } }, orderBy: { statementDate: 'desc' }, take: 2, select: { statementDate: true } });
+    const rows = isCard
+      ? (await db.cardStatement.findMany({ where: { cardId: id, closingDate: { lte: new Date() } }, orderBy: { closingDate: 'desc' }, take: 2, select: { closingDate: true } })).map(r => ({ statementDate: r.closingDate }))
+      : await db.statement.findMany({ where: { utilityAccountId: id, isScheduled: false, statementDate: { lte: new Date() } }, orderBy: { statementDate: 'desc' }, take: 2, select: { statementDate: true } });
     const floor = rows[1]?.statementDate ?? null;
     const d = [lastPdf ?? null, floor].filter((x): x is Date => !!x).sort((a, b) => b.getTime() - a.getTime())[0];
     return d ? d.toISOString().slice(0, 10) : null;
@@ -545,7 +594,19 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
   // The browser a person would use; the session is kept so a trusted device stays trusted.
   // The browser's memory from the last good run ("remember this device"):
   // the worker's disk is wiped on every deploy, so it is kept in the database.
-  const saved = await db.portalSession.findUnique({ where: { utilityAccountId: account.id } }).catch(() => null);
+  // A card's is kept under its own key (portal_sessions is keyed by account id).
+  const sessionKey = isCard ? `card:${account.id}` : account.id;
+  const saved = await db.portalSession.findUnique({ where: { utilityAccountId: sessionKey } }).catch(() => null);
+  // The owner's answer to a code or a step the agent waits on, on the account or the card's login.
+  const askOwner = (prompt: string | null) => (isCard
+    ? db.cardLogin.update({ where: { cardId: account.id }, data: { mfaPrompt: prompt, mfaRequestedAt: prompt ? new Date() : null, mfaCodeEnc: null } })
+    : db.utilityAccount.update({ where: { id: account.id }, data: { mfaPrompt: prompt, mfaRequestedAt: prompt ? new Date() : null, mfaCodeEnc: null } }));
+  const ownerAnswer = async (): Promise<string | null> => (isCard
+    ? await db.cardLogin.findUnique({ where: { cardId: account.id }, select: { mfaCodeEnc: true } })
+    : await db.utilityAccount.findUnique({ where: { id: account.id }, select: { mfaCodeEnc: true } }))?.mfaCodeEnc ?? null;
+  // A downloaded statement filed: to the card a card's run is for, else to the accounts this run fetches for.
+  const fileOne = (pdf: Buffer, name: string, designated?: string) => withAiContext({ userId, source: 'portal' },
+    () => intakeBill(pdf, name, userId, 'ai', batchId, 'portal', isCard ? { forCard: account.id } : { forAccounts, designated }));
   // A browser that looks like the Chrome it is (scrapers/browser.ts), with the
   // saved cookies restored. The agent reads pages as text: images, video and
   // fonts only cost memory (a 512MB worker ran out with Chrome on a heavy portal).
@@ -697,8 +758,9 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
       if (pdfsSeen.has(hash) || run.downloads >= maxDownloads) continue;
       pdfsSeen.set(hash, `late download ${pdfsSeen.size + 1}`);
       run.downloads++; n++;
-      const r = await withAiContext({ userId, source: 'portal' }, () => intakeBill(pdf, `${account.providerName.replace(/[^\w]+/g, '_')}_statement_${run.downloads}.pdf`, userId, 'ai', batchId, 'portal', { forAccounts })).catch(err => ({ outcome: 'error' as const, error: String(err) }));
+      const r = await fileOne(pdf, `${account.providerName.replace(/[^\w]+/g, '_')}_statement_${run.downloads}.pdf`).catch(err => ({ outcome: 'error' as const, error: String(err) }));
       if (r.outcome === 'filed') { run.filed++; run.filedFor![r.utilityAccountId] = (run.filedFor![r.utilityAccountId] ?? 0) + 1; }
+      else if (r.outcome === 'card') { run.filed++; run.filedFor![r.cardId] = (run.filedFor![r.cardId] ?? 0) + 1; }
       else if (r.outcome === 'review') { run.review++; review.push(r.reviewItem); }
       else if (r.outcome !== 'error') run.applied++;
     }
@@ -794,12 +856,15 @@ async function runAgent(accountId: string, opts: AgentOptions): Promise<PortalRu
     return `${what}\n\n${lastPage}${await tabsNote()}`;
   };
 
-  const system = `You operate a web browser for a property owner to collect their statements from ${account.providerName}'s customer portal — any bill they track: utilities, phone and internet, insurance, loans and mortgages, HOA dues. Account ${account.accountNumber ? `ending ${String(account.accountNumber).slice(-4)}` : ''} at ${account.property.address}.
+  const cardLast4 = account.accountNumber ? String(account.accountNumber).slice(-4) : '';
+  const system = `${isCard
+    ? `You operate a web browser for a property owner to collect their credit card statements from ${account.providerName}'s website. The card is ${account.cardName ?? 'their card'}${cardLast4 ? ` ending ${cardLast4}` : ''}.`
+    : `You operate a web browser for a property owner to collect their statements from ${account.providerName}'s customer portal — any bill they track: utilities, phone and internet, insurance, loans and mortgages, HOA dues. Account ${account.accountNumber ? `ending ${String(account.accountNumber).slice(-4)}` : ''} at ${account.property.address}.`}
 This is the owner's own account, signed in with the owner's own login at the owner's request. Notices shown to everyone before signing in — a government "authorized use only" warning (student-loan servicers), a cookie banner, an "I understand / Accept / Continue" on such a notice — are addressed to the account holder, who is the owner: acknowledge them and carry on. That is not agreeing to anything new on the account.
 ${others.length ? `This login holds several of the owner's accounts. Fetch every one of them in this one visit — sign in once, then for each account open it (account picker, "switch account", or a list of accounts) and its billing / statement history, and download each statement PDF dated after its date, newest first:
 - ${account.accountNumber ? `account ending ${String(account.accountNumber).slice(-4)}` : 'this account'} at ${account.property.address}: after ${since ?? 'the last 12 months'}
 ${othersFrom.map(o => `- ${o.accountNumber ? `account ending ${String(o.accountNumber).slice(-4)}` : 'an account'} at ${o.property.address}: after ${o.from ?? 'the last 12 months'}`).join('\n')}
-Give download_statement and save_page_as_statement the account's last 4 (account) for each one, so it is filed to that account. At most ${maxDownloads} downloads in all. An account the portal does not list is not an error: say so and carry on. Finish with outcome done when every listed account is checked, and fill in accounts with each one's result (downloaded, nothing_new, not_listed, or not_checked if you did not get to it) — an account is only nothing_new if you opened its own statement history.` : lookup ? `Goal: this account's bills are found on the biller's lookup page you start on, by account number and the name on the bill — never by signing in. Do not open a sign-in or register page, even if one is offered. Sollux fills in the lookup fields and presses Search for you where it can; otherwise fill them with fill_account_number (part 'customer' for a Customer ID field, 'name' for a name field), then open the invoices / bill history and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If the lookup shows the bills but offers no statement PDF (Tyler Munis self service shows each bill as a page, not a document), open each bill dated after ${since ?? 'the last 12 months'} — its bill or charges detail, showing the amount, due date and charges — and call save_page_as_statement on it with that bill's date; if there is only an account summary with the current bill, save that. If the lookup says the account was not found, finish with blocked and quote what it said. If there is nothing newer, finish with outcome done.` : `Goal: log in, open the billing / statement history, and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If there is nothing newer, finish with outcome done.`}
+Give download_statement and save_page_as_statement the account's last 4 (account) for each one, so it is filed to that account. At most ${maxDownloads} downloads in all. An account the portal does not list is not an error: say so and carry on. Finish with outcome done when every listed account is checked, and fill in accounts with each one's result (downloaded, nothing_new, not_listed, or not_checked if you did not get to it) — an account is only nothing_new if you opened its own statement history.` : lookup ? `Goal: this account's bills are found on the biller's lookup page you start on, by account number and the name on the bill — never by signing in. Do not open a sign-in or register page, even if one is offered. Sollux fills in the lookup fields and presses Search for you where it can; otherwise fill them with fill_account_number (part 'customer' for a Customer ID field, 'name' for a name field), then open the invoices / bill history and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If the lookup shows the bills but offers no statement PDF (Tyler Munis self service shows each bill as a page, not a document), open each bill dated after ${since ?? 'the last 12 months'} — its bill or charges detail, showing the amount, due date and charges — and call save_page_as_statement on it with that bill's date; if there is only an account summary with the current bill, save that. If the lookup says the account was not found, finish with blocked and quote what it said. If there is nothing newer, finish with outcome done.` : isCard ? `Goal: log in, open this card's statements ("Statements", "Statements & documents", "Documents", "View statements"), and ${since ? `download each monthly statement PDF with a closing date after ${since} — newest first, at most ${MAX_DOWNLOADS}` : 'download the newest monthly statement PDF only — older ones are brought in separately'}; give download_statement the statement's closing date. ${cardLast4 ? `If the login holds several cards, open the one ending ${cardLast4} and download only its statements.` : ''} If there is nothing newer, finish with outcome done.` : `Goal: log in, open the billing / statement history, and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If there is nothing newer, finish with outcome done.`}
 Rules: use fill_login for credentials (you never see them). If the portal offers where to send a verification code, choose email over text or a phone call. If it emails a sign-in link instead of a code, call open_emailed_link (the owner is never asked for it); if none arrives, finish with no_code. When a code has been sent, call ask_owner_for_code (it reads the code from the owner's email, or asks the owner), then type_code. Pass any "Remember this device", "Trust this browser", "Keep me signed in" or "Don't ask again" checkbox as rememberRef so the next visit is not asked again. Never pay, enroll, change settings, accept offers or send messages. If a "Verify you are human" / "I'm not a robot" checkbox is on the page, call tick_captcha before submitting. If the page you start on asks for an account number (a bill lookup), use fill_account_number there rather than going to the sign-in. If the sign-in stays blocked by such a check, look for a way in without signing in — "Pay as guest", "Quick pay", "View bill", "Find my account" — and use fill_account_number (with the property's ZIP code if asked); statements found that way count the same. If a captcha still blocks you (a picture puzzle, or the check keeps failing), finish with captcha (on the owner's own computer they may solve it, and you are then shown the page to carry on). If the login you submit is rejected, finish with bad_login. An "incorrect username or password" message already on the page before you have submitted anything is left over from an earlier visit: sign in anyway, once. If a code you entered is rejected, ask_owner_for_code once more for a fresh one; after a second rejection finish with no_code — never start the login over.
 Once you are signed in (you see the account, a greeting, a Log out button), an error after that — a bill viewer that fails, "unable to process your request" on one page — is not the site refusing the browser: go back and try another way to the statements ("View bill", "Billing history", "Documents", "View policy documents", "Statements"), and finish with blocked, saying which page failed, only when none works. Before signing in: if the site refuses the browser itself (Access Denied, "invalid request", "unable to process your request" right after submitting the sign-in, a bot check), finish with turned_away at once: never submit the login a second time — each retry makes the site more suspicious and can lock the owner's account.
 If the portal has no statement documents at all (premium financing, some lenders), use save_page_as_statement on each account's payment schedule / history page, and on its main summary page when that shows an amount due or fees due (late fee, NSF fee) — so new fees are caught on every fetch.
@@ -1008,9 +1073,14 @@ Always end with the finish tool, never with a message. If the page seems gone or
               // Already on file for that date: nothing to click for. A saved
               // page is always read again — its fees change after the bill.
               const day = u.name === 'download_statement' && /^\d{4}-\d{2}-\d{2}$/.test(String(i.statementDate ?? '')) ? new Date(`${i.statementDate}T12:00:00Z`) : null;
-              const onFile = day ? await db.statement.findMany({ where: { utilityAccountId: { in: [account.id, ...others.map(o => o.id)] }, isScheduled: false, statementDate: { gte: new Date(day.getTime() - 36e5 * 36), lte: new Date(day.getTime() + 36e5 * 36) } }, select: { utilityAccountId: true, pdfS3Key: true, statementDate: true } }) : [];
+              const onFile = day && !isCard ? await db.statement.findMany({ where: { utilityAccountId: { in: [account.id, ...others.map(o => o.id)] }, isScheduled: false, statementDate: { gte: new Date(day.getTime() - 36e5 * 36), lte: new Date(day.getTime() + 36e5 * 36) } }, select: { utilityAccountId: true, pdfS3Key: true, statementDate: true } }) : [];
               // On file with its PDF, or an older month on file without one (only the newest may still need its PDF).
               const settled = await Promise.all(onFile.map(async r => !!r.pdfS3Key || !!(await db.statement.findFirst({ where: { utilityAccountId: r.utilityAccountId, isScheduled: false, statementDate: { gt: new Date(r.statementDate.getTime() + 36e5 * 36), lte: new Date() } }, select: { id: true } }))));
+              // A card's statement for that closing date (a few days either way), saved with its PDF.
+              if (day && isCard) {
+                const near = await db.cardStatement.findMany({ where: { cardId: account.id, closingDate: { gte: new Date(day.getTime() - 3 * 864e5), lte: new Date(day.getTime() + 3 * 864e5) } }, select: { documents: true, fromEmail: true } });
+                settled.push(near.some(s => !s.fromEmail && Array.isArray(s.documents) && s.documents.length > 0));
+              }
               if (day && settled.some(Boolean)) {
                 content = `The ${i.statementDate} statement is already on file — not downloaded. Downloaded this run: ${got}. Move to an older or newer one, or finish.`;
                 break;
@@ -1045,8 +1115,9 @@ Always end with the finish tool, never with a message. If the page seems gone or
               // match (an Eternal Hills contract page) is filed to it instead of going to review.
               const said = String(i.account ?? '').replace(/\D/g, '').slice(-4);
               const designated = said ? forAccounts.find(a => a.last4 === said)?.id : forAccounts.length === 1 ? forAccounts[0].id : undefined;
-              const r = await withAiContext({ userId, source: 'portal' }, () => intakeBill(pdf, name, userId, 'ai', batchId, 'portal', { forAccounts, designated }));
+              const r = await fileOne(pdf, name, designated);
               if (r.outcome === 'filed') { run.filed++; run.filedFor![r.utilityAccountId] = (run.filedFor![r.utilityAccountId] ?? 0) + 1; }
+              else if (r.outcome === 'card') { run.filed++; run.filedFor![r.cardId] = (run.filedFor![r.cardId] ?? 0) + 1; }
               else if (r.outcome === 'review') { run.review++; review.push(r.reviewItem); if (designated) reviewedFor.add(designated); }
               else if (r.outcome === 'error') content = `Saved, but: ${r.error}`;
               else run.applied++;
@@ -1062,7 +1133,7 @@ Always end with the finish tool, never with a message. If the page seems gone or
               // A Fetch the owner pressed shows the code box at once: the code is
               // taken from the email or from the owner, whichever comes first, so
               // nobody waits on an email search that cannot find it.
-              if (opts.interactive) await db.utilityAccount.update({ where: { id: account.id }, data: { mfaPrompt: String(i.prompt).slice(0, 300), mfaRequestedAt: new Date(), mfaCodeEnc: null } });
+              if (opts.interactive) await askOwner(String(i.prompt).slice(0, 300));
               say(opts.interactive ? 'Looking for the code in your email — or type it in the box' : 'Looking for the verification code in your email');
               let stop = false;
               const fromEmail = findEmailedCode(userId, { since, host: mailHost, providerName: account.providerName, timeoutMs: 120_000, exclude: [...triedCodes], report, stop: () => stop || cancelled }).catch(() => null)
@@ -1072,8 +1143,8 @@ Always end with the finish tool, never with a message. If the page seems gone or
                 const until = Date.now() + CODE_WAIT_MS;
                 while (!stop && !cancelled && Date.now() < until) {
                   await new Promise(r => setTimeout(r, 3000));
-                  const a = await db.utilityAccount.findUnique({ where: { id: account.id }, select: { mfaCodeEnc: true } });
-                  if (a?.mfaCodeEnc) return { code: decrypt(a.mfaCodeEnc), by: 'owner' };
+                  const answer = await ownerAnswer();
+                  if (answer) return { code: decrypt(answer), by: 'owner' };
                 }
                 return null;
               })();
@@ -1083,7 +1154,7 @@ Always end with the finish tool, never with a message. If the page seems gone or
                 void fromEmail.then(settle); void fromOwner.then(settle);
               });
               stop = true;
-              if (opts.interactive) await db.utilityAccount.update({ where: { id: account.id }, data: { mfaPrompt: null, mfaRequestedAt: null, mfaCodeEnc: null } });
+              if (opts.interactive) await askOwner(null);
               if (got) {
                 code = got.code.trim(); secrets.push(code); usedCode = true;
                 content = got.by === 'email' ? 'The code arrived by email. Use type_code.' : 'The owner gave the code. Use type_code.';
@@ -1185,16 +1256,15 @@ Always end with the finish tool, never with a message. If the page seems gone or
                 const prompt = refusedSignIn
                   ? `Sign in to ${site} yourself in the Chrome window on ${connector!.name} — the site refused the automated sign-in — then press Done.`
                   : `Tick "Verify you are human" in the Chrome window on ${connector!.name} — sign in or search there too if you like — then type done here.`;
-                await db.utilityAccount.update({ where: { id: account.id }, data: { mfaPrompt: prompt, mfaRequestedAt: new Date(), mfaCodeEnc: null } });
+                await askOwner(prompt);
                 say(prompt);
                 const until = Date.now() + CODE_WAIT_MS;
                 let done = false;
                 while (!done && !cancelled && Date.now() < until) {
                   await new Promise(r => setTimeout(r, 3000));
-                  const a = await db.utilityAccount.findUnique({ where: { id: account.id }, select: { mfaCodeEnc: true } });
-                  done = !!a?.mfaCodeEnc;
+                  done = !!(await ownerAnswer());
                 }
-                await db.utilityAccount.update({ where: { id: account.id }, data: { mfaPrompt: null, mfaRequestedAt: null, mfaCodeEnc: null } });
+                await askOwner(null);
                 // Take the window back: the owner's tab on the portal, as they left it.
                 const again = await connectorFor(userId);
                 if (again && !cancelled) {
@@ -1237,7 +1307,7 @@ Always end with the finish tool, never with a message. If the page seems gone or
               // not reached from the site itself: start once from the home page.
               if (['turned_away', 'blocked'].includes(String(i.outcome)) && !triedHome && !lookup) {
                 triedHome = true;
-                const home = findProvider(account.providerName, account.providerSlug)?.site ?? `${start.origin}/`;
+                const home = (isCard ? account.home : findProvider(account.providerName, account.providerSlug)?.site) ?? `${start.origin}/`;
                 try {
                   const h = new URL(home);
                   if (h.href !== page.url()) {
@@ -1334,13 +1404,14 @@ Always end with the finish tool, never with a message. If the page seems gone or
         const state = await ctx.storageState();
         const cookies = state.cookies.filter(k => !BOT_COOKIE.test(k.name));
         // The same login's other accounts share the sign-in (and its trusted device).
-        for (const id of [account.id, ...others.map(o => o.id)]) {
+        for (const id of [sessionKey, ...others.map(o => o.id)]) {
           await db.portalSession.upsert({ where: { utilityAccountId: id }, create: { utilityAccountId: id, stateEnc: encrypt(JSON.stringify({ cookies })) }, update: { stateEnc: encrypt(JSON.stringify({ cookies })) } });
         }
       } catch (err) { console.warn('[PortalAgent] session not saved:', err instanceof Error ? err.message.split('\n')[0] : err); }
     }
     await shutdown();
-    await db.utilityAccount.update({ where: { id: account.id }, data: { lastAgentRunAt: new Date(), mfaPrompt: null, mfaRequestedAt: null, mfaCodeEnc: null } }).catch(() => {});
+    if (isCard) await db.cardLogin.update({ where: { cardId: account.id }, data: { lastRunAt: new Date(), mfaPrompt: null, mfaRequestedAt: null, mfaCodeEnc: null } }).catch(() => {});
+    else await db.utilityAccount.update({ where: { id: account.id }, data: { lastAgentRunAt: new Date(), mfaPrompt: null, mfaRequestedAt: null, mfaCodeEnc: null } }).catch(() => {});
   }
 
   // Turned away (said so, or the summary shows it whatever outcome was picked):
@@ -1374,4 +1445,9 @@ Always end with the finish tool, never with a message. If the page seems gone or
 /** Store the code the owner typed, for the running agent to pick up. */
 export async function submitPortalCode(accountId: string, code: string): Promise<void> {
   await db.utilityAccount.update({ where: { id: accountId }, data: { mfaCodeEnc: encrypt(code.trim()) } });
+}
+
+/** The same for a card's fetch. */
+export async function submitCardCode(cardId: string, code: string): Promise<void> {
+  await db.cardLogin.update({ where: { cardId }, data: { mfaCodeEnc: encrypt(code.trim()) } });
 }

@@ -14,8 +14,11 @@ import { describeApiError } from '../../lib/apiError';
  */
 export const isHandOff = (prompt: string) => /^Tick "Verify you are human"|^Sign in to .+ yourself in the Chrome window/.test(prompt);
 
-export default function PortalCodeBanner({ accountId, prompt, requestedAt, providerName, onSent }: {
+export default function PortalCodeBanner({ accountId, prompt, requestedAt, providerName, onSent, submit, className }: {
   accountId: string; prompt: string; requestedAt?: string | null; providerName: string; onSent?: () => void;
+  /** Where the code goes, when it is not a utility account's fetch (a card's: submitCardCode). */
+  submit?: (code: string) => Promise<unknown>;
+  className?: string;
 }) {
   const [code, setCode] = useState('');
   const [state, setState] = useState<'idle' | 'sending' | 'sent'>('idle');
@@ -27,12 +30,12 @@ export default function PortalCodeBanner({ accountId, prompt, requestedAt, provi
 
   async function send() {
     setState('sending'); setErr(null);
-    try { await submitPortalCode(accountId, handOff ? 'done' : code); setState('sent'); onSent?.(); }
+    try { const v = handOff ? 'done' : code; await (submit ? submit(v) : submitPortalCode(accountId, v)); setState('sent'); onSent?.(); }
     catch (e) { setState('idle'); setErr(describeApiError(e, 'Could not send the code.')); }
   }
 
   return (
-    <div className="mx-6 mt-4 rounded-xl p-4" style={{ background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.35)' }}>
+    <div className={className ?? 'mx-6 mt-4 rounded-xl p-4'} style={{ background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.35)' }}>
       <p className="text-sm font-medium text-amber-300">{handOff ? `Your turn in the Chrome window` : `${providerName} sent a verification code`}</p>
       <p className="text-xs text-gray-400 mt-0.5">{prompt}{minutesLeft != null ? ` · about ${minutesLeft} min left` : ''}</p>
       {state === 'sent' ? (

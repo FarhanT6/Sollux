@@ -12,6 +12,7 @@ import { EXPENSE_CATEGORY_LABELS } from '../types';
 import { PageHeader } from '../components/ui';
 import CardEditor from '../components/cards/CardEditor';
 import StatementImport from '../components/cards/StatementImport';
+import CardFetch from '../components/cards/CardFetch';
 import { CardHistory } from '../components/cards/CreditHealth';
 import { STATUS_PILL, utilTone } from './PersonalPage';
 import { fmtMoney } from '../lib/money';
@@ -220,6 +221,8 @@ export default function CreditCardPage() {
           <div className="stat-card"><p className="text-xs text-gray-500">Interest</p><p className={`text-lg font-semibold ${p.monthlyInterest > 0 ? 'text-red-400' : 'text-white'}`}>{fmtMoney(p.monthlyInterest)}/mo</p><p className="text-xs text-gray-600">{fmtMoney(p.interestYtd)} this year · {fmtMoney(p.feesYtd)} fees</p></div>
           <div className="stat-card"><p className="text-xs text-gray-500">Rewards</p><p className="text-lg font-semibold text-emerald-400">{p.rewardsValue != null ? fmtMoney(p.rewardsValue) : '—'}</p><p className="text-xs text-gray-600">{p.rewardsBalance != null ? `${Number(p.rewardsBalance).toLocaleString()} ${card.rewardsType === 'CASHBACK' ? 'cash back' : (card.rewardsType ?? 'points').toLowerCase()}` : ''}</p></div>
         </div>
+
+        {card.status !== 'CLOSED' && <CardFetch card={card} onFetched={() => void load()} />}
 
         <div className="flex gap-1 mb-4">
           {TABS.map(t => <button key={t} onClick={() => setParams({ tab: t }, { replace: true })} className={`text-xs px-3 py-1.5 rounded-lg capitalize ${tab === t ? 'text-white' : 'text-gray-500'}`} style={{ background: tab === t ? 'rgba(255,255,255,0.08)' : 'transparent' }}>{t}{t === 'statements' ? ` (${card.statements?.length ?? 0})` : t === 'payments' ? ` (${card.payments?.length ?? 0})` : ''}</button>)}
