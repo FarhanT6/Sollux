@@ -81,7 +81,7 @@ export function CardHistory({ h, insights }: { h: CardHealthT; insights: CardIns
       {h.daysPastDue > 0 && (
         <div className="card p-3 text-sm" style={{ borderColor: 'rgba(239,68,68,0.4)' }}>
           <span className="text-red-400 font-medium">{h.daysPastDue} days past due.</span>{' '}
-          <span className="text-gray-300">{h.daysUntil30 ? `${h.daysUntil30} day${h.daysUntil30 === 1 ? '' : 's'} until it can be reported to the credit bureaus as 30 days late.` : 'Past 30 days: issuers report this to the credit bureaus.'}</span>
+          <span className="text-gray-300">{h.daysUntil30 ? `In ${h.daysUntil30} day${h.daysUntil30 === 1 ? '' : 's'} it is 30 days past due; still unpaid on the statement date after that, it is reported to the credit bureaus as 30 days late.` : 'Over 30 days past due: still unpaid on the next statement date, it is reported to the credit bureaus.'}</span>
         </div>
       )}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
@@ -109,7 +109,11 @@ export function CardHistory({ h, insights }: { h: CardHealthT; insights: CardIns
                     ? <span className="block text-xs"><span className="text-gray-500 line-through">{fmtMoney(r.lateFee)} late fee</span> <span className="text-emerald-400">waived {fmtDate(r.lateFeeWaivedOn, 'MMM d')}</span></span>
                     : <span className="block text-xs text-red-400">{fmtMoney(r.lateFee)} late fee</span>)}</td>
                   <td><span className={`pill ${STATUS[r.status][1]}`}>{STATUS[r.status][0]}{r.daysLate ? ` · ${r.daysLate} days` : ''}</span>{r.lateFeeWaivedOn && <span className="pill pill-green ml-1">Fee waived</span>}{r.note && <span className="block text-xs text-gray-600 max-w-xs">{r.note}</span>}</td>
-                  <td className="pr-4 text-xs">{r.reported ? <span className="text-red-400">Reported {r.reported} days late</span> : r.status === 'LATE' || r.status === 'PAST_DUE' ? <span className="text-gray-500">Under 30 days — not reported</span> : <span className="text-gray-600">—</span>}</td>
+                  <td className="pr-4 text-xs">{r.reported
+                    ? <span className="text-red-400" title={r.pastDueAtStatement ? `${r.pastDueAtStatement.days} days past due on the ${fmtDate(r.pastDueAtStatement.date, 'MMM d')} statement` : undefined}>Reported {r.reported} days late</span>
+                    : r.status === 'LATE' || r.status === 'PAST_DUE'
+                      ? <span className="text-gray-500">{r.pastDueAtStatement ? `${r.pastDueAtStatement.days} day${r.pastDueAtStatement.days === 1 ? '' : 's'} past due on the ${fmtDate(r.pastDueAtStatement.date, 'MMM d')} statement` : r.status === 'LATE' ? 'Paid before the next statement' : 'Not past due on a statement date yet'} — not reported</span>
+                      : <span className="text-gray-600">—</span>}</td>
                 </tr>
               ))}
               {!h.history.length && <tr><td colSpan={6} className="pl-4 text-sm text-gray-500">No statements yet.</td></tr>}
