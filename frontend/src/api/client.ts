@@ -1601,13 +1601,13 @@ export interface CardHealthT {
   lateEvents: { date: string; fee: number; waived: boolean; waivedOn: string | null; forDueDate: string | null; onFile: boolean }[];
   returned: { paidOn: string; returnedOn: string; amount: number }[];
   costs: CardCostMonth[];
-  last12: { interest: number; lateFees: number; otherFees: number; refunds: number; net: number; onTime: number; late: number; worstDaysLate: number };
+  last12: { interest: number; lateFees: number; otherFees: number; refunds: number; net: number; onTime: number; late: number; worstDaysLate: number; reported: number };
   allTime: { interest: number; lateFees: number; otherFees: number; refunds: number; net: number };
   daysPastDue: number; daysUntil30: number | null; onTimeStreak: number;
 }
 export interface CardInsightT { kind: string; severity: 'ALERT' | 'WARNING' | 'INFO'; cardId: string | null; cardName: string | null; title: string; detail: string; action: string; perYear: number | null; script?: string | null }
 export interface CreditSnapshotT {
-  utilization: number | null; debt: number; limits: number; onTime12: number; late12: number; worstDaysLate12: number; cardsPastDue: number; cardsOver30: number; feesAndInterest12: number;
+  utilization: number | null; debt: number; limits: number; onTime12: number; late12: number; worstDaysLate12: number; reported12: number; cardsPastDue: number; cardsOver30: number; feesAndInterest12: number;
   paymentHistory: 'GOOD' | 'FAIR' | 'POOR' | 'UNKNOWN'; utilizationBand: 'EXCELLENT' | 'GOOD' | 'HIGH' | 'VERY_HIGH' | 'UNKNOWN';
 }
 export interface CreditHealthT { snapshot: CreditSnapshotT; insights: CardInsightT[]; cards: { id: string; name: string; last4: string | null; status: string; utilization: number | null; balance: number; limit: number | null; health: CardHealthT }[] }

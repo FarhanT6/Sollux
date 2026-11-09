@@ -42,6 +42,8 @@ export interface InsightCard {
 export interface CreditSnapshot {
   utilization: number | null; debt: number; limits: number;
   onTime12: number; late12: number; worstDaysLate12: number; cardsPastDue: number; cardsOver30: number;
+  /** Lates in the last 12 months reported to the bureaus (30+ days past due on a statement date). */
+  reported12: number;
   feesAndInterest12: number;
   /** Plain-words reading of the two factors Sollux can see. */
   paymentHistory: 'GOOD' | 'FAIR' | 'POOR' | 'UNKNOWN'; utilizationBand: 'EXCELLENT' | 'GOOD' | 'HIGH' | 'VERY_HIGH' | 'UNKNOWN';
@@ -83,7 +85,7 @@ export function cardInsights(cards: InsightCard[], today: Date = new Date()): { 
       out.push({
         kind: 'LATE_FEES', severity: 'WARNING', cardId: c.id, cardName: c.name, perYear: lateNet > 0 ? Math.round(lateNet * 100) / 100 : null,
         title: `Late payments on ${c.name}`,
-        detail: `${h.last12.late} late payment${h.last12.late === 1 ? '' : 's'} in the last 12 months${h.last12.lateFees ? `, ${money2(h.last12.lateFees)} in late fees` : ''}${waived ? ` (${lateNet > 0 ? `${money2(waived)}` : 'all'} refunded)` : ''}${h.last12.worstDaysLate >= 30 ? `; one ran ${h.last12.worstDaysLate} days late, which issuers report` : ''}.`,
+        detail: `${h.last12.late} late payment${h.last12.late === 1 ? '' : 's'} in the last 12 months${h.last12.lateFees ? `, ${money2(h.last12.lateFees)} in late fees` : ''}${waived ? ` (${lateNet > 0 ? `${money2(waived)}` : 'all'} refunded)` : ''}${h.last12.reported ? `; ${h.last12.reported} ${h.last12.reported === 1 ? 'was' : 'were'} still 30+ days past due on a statement date, which issuers report to the credit bureaus` : '; none was 30 days past due on a statement date, so none was reported to the credit bureaus'}.`,
         action: `${lateNet > 0 ? `Call${call} and ask for a one-time courtesy waiver of the late fee — most issuers give one. ` : ''}${c.autopay === 'NONE' ? 'Turn on autopay for at least the minimum so a due date is never missed.' : 'Autopay is on — check it covers the minimum and the account it draws from has the money.'}`,
         script: lateNet > 0 ? `"Hi, I was charged a ${money2(h.last12.lateFees)} late fee. I've paid and I'm setting up autopay so it won't happen again. Could you waive it as a one-time courtesy?" If they say no, ask once more for a partial credit, then thank them.` : null,
       });
@@ -217,13 +219,15 @@ export function cardInsights(cards: InsightCard[], today: Date = new Date()): { 
   const onTime12 = open.reduce((t, c) => t + c.health.last12.onTime, 0);
   const late12 = open.reduce((t, c) => t + c.health.last12.late, 0);
   const worst = Math.max(0, ...open.map(c => c.health.last12.worstDaysLate), ...open.map(c => c.health.daysPastDue));
+  const reported12 = open.reduce((t, c) => t + c.health.last12.reported, 0);
   const snapshot: CreditSnapshot = {
     utilization: util, debt: Math.round(debt * 100) / 100, limits: Math.round(limits * 100) / 100,
-    onTime12, late12, worstDaysLate12: worst,
+    onTime12, late12, worstDaysLate12: worst, reported12,
     cardsPastDue: open.filter(c => c.health.daysPastDue > 0).length,
     cardsOver30: open.filter(c => (c.position.utilization ?? 0) > 30).length,
     feesAndInterest12: Math.round(open.reduce((t, c) => t + c.health.last12.net, 0) * 100) / 100,
-    paymentHistory: onTime12 + late12 === 0 ? 'UNKNOWN' : worst >= 30 ? 'POOR' : late12 > 0 ? 'FAIR' : 'GOOD',
+    // Poor is a late on the credit report (or one about to be): a payment made late but before it was 30 days past due on a statement date is not.
+    paymentHistory: onTime12 + late12 === 0 ? 'UNKNOWN' : reported12 > 0 || open.some(c => c.health.daysPastDue >= 30) ? 'POOR' : late12 > 0 ? 'FAIR' : 'GOOD',
     utilizationBand: util == null ? 'UNKNOWN' : util < 10 ? 'EXCELLENT' : util < 30 ? 'GOOD' : util < 50 ? 'HIGH' : 'VERY_HIGH',
   };
   const rankSev = { ALERT: 0, WARNING: 1, INFO: 2 } as const;
