@@ -165,6 +165,24 @@ test('one manager filed under two names is merged and each line counted once; a 
   assert.deepEqual(may.map(p => [p.loanId, Number(p.amount)]), [[ids.alpha, 1000], [ids.beta, 500]]);
 });
 
+test('an undone statement is recorded again on its own, with what it recorded before', { skip }, async () => {
+  const { db } = api;
+  const st = (await db.reconciliationStatement.findFirst({ where: { userId: ids.user, status: 'APPLIED', source: 'email', NOT: { createdRecordIds: { equals: null as any } } }, orderBy: { receivedAt: 'asc' } }))!;
+  const before = st.createdRecordIds as { rentPaymentIds?: string[]; loanPaymentIds?: string[]; expenseIds?: string[] };
+  const count = (c: typeof before) => (c.rentPaymentIds?.length ?? 0) + (c.loanPaymentIds?.length ?? 0) + (c.expenseIds?.length ?? 0);
+  assert.ok(count(before) > 0);
+  assert.equal((await send('POST', `/reconciliation/statements/${st.id}/undo`)).status, 200);
+  assert.equal((await db.reconciliationStatement.findUnique({ where: { id: st.id } }))!.status, 'UNDONE');
+  const r = await send('POST', `/reconciliation/statements/${st.id}/record-again`);
+  assert.equal(r.status, 200);
+  const after = (await db.reconciliationStatement.findUnique({ where: { id: st.id } }))!;
+  assert.equal(after.status, 'APPLIED');
+  assert.equal(count(after.createdRecordIds as typeof before), count(before), 'the same records come back');
+  // A letter set aside is not recorded.
+  const letter = await db.reconciliationStatement.findFirst({ where: { userId: ids.user, status: 'NOT_A_STATEMENT' } });
+  if (letter) assert.equal((await send('POST', `/reconciliation/statements/${letter.id}/record-again`)).status, 409);
+});
+
 test('a statement is deleted with what it recorded; start over deletes all of a manager\'s and fetches them again', { skip }, async () => {
   const { db } = api;
   const { startOverManager } = await import('../../src/services/managerStatementRedo');

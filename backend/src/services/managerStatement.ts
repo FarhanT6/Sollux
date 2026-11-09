@@ -11,7 +11,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { db } from '../config/db';
 import { askClaude, jsonIn, needsJson } from '../ai/models';
 import { fileBlockForClaude } from './pdfImportService';
-import { best, categoryFor, leaseScore, lenderScore, propertyScore, words, lineKey, type LineKind, type LineRule, type LoanSplit } from '../lib/managerStatementMatch';
+import { best, categoryFor, leaseScore, lenderScore, pickLoan, propertyScore, words, lineKey, type LineKind, type LineRule, type LoanSplit } from '../lib/managerStatementMatch';
 
 const PROMPT = `This is a property manager's statement to an owner (an owner statement): rent the manager collected, minus what the manager paid or deducted, and what was sent to the owner.
 
@@ -147,9 +147,7 @@ export async function matchManagerStatement(userId: string, raw: any, profileId?
     }
     if (kind === 'LOAN_PAYMENT' && !loanId) {
       const mine = profile ? (profile.loanIds as string[] | null) ?? [] : [];
-      const pool = loans.filter(x => x.isActive && (!property || x.propertyId === property.id));
-      const m = best(pool, x => lenderScore([payee, l?.description].filter(Boolean).join(' '), x.lender) * 2 + (mine.includes(x.id) ? 1 : 0))
-        ?? (pool.length === 1 ? pool[0] : null);
+      const m = pickLoan([payee, l?.description].filter(Boolean).join(' '), loans.filter(x => x.isActive), { propertyId: property?.id ?? null, mine });
       if (m) { loanId = m.id; if (!property && m.propertyId) property = properties.find(p => p.id === m.propertyId) ?? null; }
     }
     lines.push({
