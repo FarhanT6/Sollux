@@ -73,3 +73,25 @@ test('an emailed statement records itself, once, and the next year-to-date one o
   assert.equal(await db.rentPayment.count({ where: { leaseId: ids.lease } }), 3);
   assert.equal(await db.loanPayment.count({ where: { loanId: ids.beta } }), 3);
 });
+
+test('a choice made once fills the same line in next time, back months that were never recorded included', { skip }, async () => {
+  const { intakeManagerStatement } = await import('../../src/services/managerStatementEmail');
+  const { learnLineRules } = await import('../../src/services/managerStatementApply');
+  const { db } = api;
+  const profile = (await db.reconciliationProfile.findFirst({ where: { userId: ids.user } }))!;
+  // The owner says what the unmatched lender line is, and that the owner's transfer came from their account.
+  await learnLineRules(profile.id, [
+    { description: 'Loan repayment - Unknown', kind: 'LOAN_PAYMENT', amount: 250, direction: 'OUT', loanId: ids.beta, include: true },
+    { description: 'Transfer from Owner', kind: 'OWNER_PAYMENT', amount: 1600, direction: 'IN', bankAccountId: null, include: true },
+  ]);
+  const unknown = (m: string) => ({ date: `2026-${m}-20`, property: null, payee: 'Unknown Lender', description: 'Loan repayment - Unknown', kind: 'LOAN_PAYMENT', amount: 250, direction: 'OUT' });
+  const owner = (m: string) => ({ date: `2026-${m}-07`, property: null, payee: null, description: 'Transfer from Owner', kind: 'OWNER_DRAW', amount: 1600, direction: 'IN' });
+  const before = await db.loanPayment.count({ where: { loanId: ids.beta } });
+  const r = await intakeManagerStatement(ids.user, Buffer.from('%PDF-1.4'), 'apr.pdf', 'manager@example.com', new Date('2026-05-01'), 'msg-3|apr.pdf', reader([...month('03'), unknown('02'), unknown('04'), owner('04'), ...month('04')]));
+  // April's four lines, and the February and April "Unknown" lines now that it is known (February's was never recorded).
+  assert.match(r.detail, /recorded 1 rent, 4 loan payments, 1 cost/);
+  assert.equal(await db.loanPayment.count({ where: { loanId: ids.beta } }), before + 3);
+  const st = await db.reconciliationStatement.findFirst({ where: { sourceRef: 'msg-3|apr.pdf' } });
+  const ownerLine = (st!.lineItems as any[]).find(li => li.description === 'Transfer from Owner');
+  assert.equal(ownerLine.targetLabel, 'OWNER_PAYMENT', 'the owner\'s transfer is kept as paid by the owner, not money sent to them');
+});

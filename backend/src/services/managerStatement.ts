@@ -11,7 +11,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { db } from '../config/db';
 import { askClaude, jsonIn, needsJson } from '../ai/models';
 import { fileBlockForClaude } from './pdfImportService';
-import { best, categoryFor, leaseScore, lenderScore, propertyScore, words, type LineKind } from '../lib/managerStatementMatch';
+import { best, categoryFor, leaseScore, lenderScore, propertyScore, words, lineKey, type LineKind, type LineRule } from '../lib/managerStatementMatch';
 
 const PROMPT = `This is a property manager's statement to an owner (an owner statement): rent the manager collected, minus what the manager paid or deducted, and what was sent to the owner.
 
@@ -26,7 +26,7 @@ Return ONLY a JSON object, no commentary:
     "payee": string or null — the tenant (for rent), vendor (for a repair), lender (for a loan payment), as printed,
     "unit": string or null,
     "description": string — as printed,
-    "kind": "RENT" | "MANAGEMENT_FEE" | "REPAIR" | "UTILITY" | "LOAN_PAYMENT" | "OTHER_EXPENSE" | "OWNER_DRAW" | "OTHER",
+    "kind": "RENT" | "MANAGEMENT_FEE" | "REPAIR" | "UTILITY" | "LOAN_PAYMENT" | "OTHER_EXPENSE" | "REIMBURSEMENT" | "OWNER_PAYMENT" | "OWNER_DRAW" | "OTHER",
     "amount": number — positive,
     "direction": "IN" (money collected for the owner) | "OUT" (money paid out or deducted, including what was sent to the owner)
   }]
@@ -34,7 +34,7 @@ Return ONLY a JSON object, no commentary:
 
 Rules:
 - One line per transaction as printed; do not merge or invent lines, and leave out subtotals and running balances.
-- RENT is rent (and late fees or other charges) collected from a tenant. MANAGEMENT_FEE is the manager's own fee or commission. REPAIR is maintenance, repairs, cleaning, landscaping, a handyman. UTILITY is a utility bill the manager paid. LOAN_PAYMENT is a mortgage or loan payment made from the owner's money. OWNER_DRAW is money sent to the owner (owner distribution, owner payment, draw). OTHER_EXPENSE is any other cost; OTHER anything else (a deposit held, a reserve).
+- RENT is rent (and late fees or other charges) collected from a tenant. MANAGEMENT_FEE is the manager's own fee or commission. REPAIR is maintenance, repairs, cleaning, landscaping, a handyman. UTILITY is a utility bill the manager paid. LOAN_PAYMENT is a mortgage or loan payment made from the owner's money. OWNER_DRAW is money sent to the owner (owner distribution, draw). OWNER_PAYMENT is money the owner paid in to the manager ("Transfer from Owner", owner contribution) to cover the costs. OTHER_EXPENSE is any other cost (property taxes paid, insurance); REIMBURSEMENT is money paid back toward a cost (a tenant's tax or insurance reimbursement). OTHER anything else (a deposit held, a reserve).
 - A statement covering several properties names each line's property; carry the section's property onto its lines.`;
 
 let client: Anthropic | null = null;
@@ -59,6 +59,10 @@ export interface DraftLine {
   onEarlierStatement?: boolean;
   /** Recorded already when the statement came in by email (it records itself). */
   recordedNow?: boolean;
+  /** For "you paid the manager": the owner's account it came out of. */
+  bankAccountId?: string | null;
+  /** Filled in from what the owner chose for this line on an earlier statement. */
+  learned?: boolean;
   include: boolean;
 }
 
@@ -70,16 +74,16 @@ export interface StatementDraft {
 }
 
 const iso = (v: unknown) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
-const KINDS: LineKind[] = ['RENT', 'MANAGEMENT_FEE', 'REPAIR', 'UTILITY', 'LOAN_PAYMENT', 'OTHER_EXPENSE', 'OWNER_DRAW', 'OTHER'];
+const KINDS: LineKind[] = ['RENT', 'MANAGEMENT_FEE', 'REPAIR', 'UTILITY', 'LOAN_PAYMENT', 'OTHER_EXPENSE', 'REIMBURSEMENT', 'OWNER_PAYMENT', 'OWNER_DRAW', 'OTHER'];
 
-export async function readManagerStatement(userId: string, file: Buffer, name: string): Promise<StatementDraft> {
+export async function readManagerStatement(userId: string, file: Buffer, name: string, profileId?: string | null): Promise<StatementDraft> {
   const { text } = await askClaude(anthropic(), {
     label: name, feature: 'manager-statement', maxTokens: 8000, check: needsJson,
     messages: [{ role: 'user', content: [await fileBlockForClaude(file, name), { type: 'text', text: PROMPT }] }],
   });
   const raw = jsonIn(text);
   if (!raw || !Array.isArray(raw.lines)) throw Object.assign(new Error(`Could not read a statement from ${name}.`), { status: 422 });
-  return matchManagerStatement(userId, raw);
+  return matchManagerStatement(userId, raw, profileId);
 }
 
 /**
@@ -87,7 +91,7 @@ export async function readManagerStatement(userId: string, file: Buffer, name: s
  * lease or loan; rent and loan months already on record, and lines already on an earlier
  * statement from this manager, left out. Separate from the read so it can be tested without one.
  */
-export async function matchManagerStatement(userId: string, raw: any): Promise<StatementDraft> {
+export async function matchManagerStatement(userId: string, raw: any, profileId?: string | null): Promise<StatementDraft> {
 
   const [properties, leases, loans, profiles] = await Promise.all([
     db.property.findMany({ where: { userId }, select: { id: true, address: true, nickname: true } }),
@@ -96,25 +100,33 @@ export async function matchManagerStatement(userId: string, raw: any): Promise<S
       select: { id: true, status: true, startDate: true, unit: { select: { unitLabel: true, propertyId: true } }, leaseTenants: { select: { tenant: { select: { fullName: true } } } } },
     }),
     db.loan.findMany({ where: { userId, isActive: true }, select: { id: true, lender: true, propertyId: true } }),
-    db.reconciliationProfile.findMany({ where: { userId }, select: { id: true, name: true, propertyId: true, loanIds: true } }),
+    db.reconciliationProfile.findMany({ where: { userId }, select: { id: true, name: true, propertyId: true, loanIds: true, lineRules: true } }),
   ]);
   const manager = typeof raw.manager === 'string' ? raw.manager.trim() : null;
-  const profile = manager ? best(profiles, p => (words(p.name).length && words(p.name).every(w => words(manager).includes(w)) ? 2 : 0)) : null;
+  // The manager: the one this came from (an emailed statement's sender), else the one the statement names.
+  const profile = (profileId ? profiles.find(p => p.id === profileId) : null)
+    ?? (manager ? best(profiles, p => (words(p.name).length && words(p.name).every(w => words(manager).includes(w)) ? 2 : 0)) : null);
+  const rules = (profile?.lineRules && typeof profile.lineRules === 'object' && !Array.isArray(profile.lineRules) ? profile.lineRules : {}) as unknown as Record<string, LineRule>;
+  const exists = { property: new Set(properties.map(p => p.id)), lease: new Set(leases.map(x => x.id)), loan: new Set(loans.map(x => x.id)) };
 
   const lines: DraftLine[] = [];
   for (const l of raw.lines as any[]) {
     const amount = Math.abs(Number(l?.amount));
     if (!(amount > 0)) continue;
-    const kind: LineKind = KINDS.includes(l?.kind) ? l.kind : 'OTHER';
+    // What the owner chose for this line before decides its kind and record; the reading only fills what it leaves open.
+    const rule = rules[lineKey(String(l?.description ?? ''))] as LineRule | undefined;
+    const kind: LineKind = rule && KINDS.includes(rule.kind) ? rule.kind : KINDS.includes(l?.kind) ? l.kind : 'OTHER';
     const propertyHint = typeof l?.property === 'string' ? l.property : null;
     const payee = typeof l?.payee === 'string' ? l.payee : null;
     const unit = typeof l?.unit === 'string' ? l.unit : null;
     // The property: as printed, else the manager's own property, else the only one a lease or loan points at.
-    let property = propertyHint ? best(properties, p => propertyScore(propertyHint, p)) : null;
+    let property = rule?.propertyId && exists.property.has(rule.propertyId) ? properties.find(p => p.id === rule.propertyId)! : null;
+    property ??= propertyHint ? best(properties, p => propertyScore(propertyHint, p)) : null;
     if (!property && profile?.propertyId) property = properties.find(p => p.id === profile.propertyId) ?? null;
 
-    let leaseId: string | null = null, loanId: string | null = null;
-    if (kind === 'RENT') {
+    let leaseId: string | null = kind === 'RENT' && rule?.leaseId && exists.lease.has(rule.leaseId) ? rule.leaseId : null;
+    let loanId: string | null = kind === 'LOAN_PAYMENT' && rule?.loanId && exists.loan.has(rule.loanId) ? rule.loanId : null;
+    if (kind === 'RENT' && !leaseId) {
       const pool = leases.filter(x => !property || x.unit.propertyId === property.id)
         .map(x => ({ id: x.id, propertyId: x.unit.propertyId, active: x.status === 'ACTIVE', unitLabel: x.unit.unitLabel, tenantNames: x.leaseTenants.map(t => t.tenant.fullName) }));
       const hint = [payee, unit].filter(Boolean).join(' ');
@@ -123,7 +135,7 @@ export async function matchManagerStatement(userId: string, raw: any): Promise<S
         ?? (property && pool.filter(x => x.active).length === 1 ? pool.find(x => x.active)! : null);
       if (m) { leaseId = m.id; if (!property) property = properties.find(p => p.id === m.propertyId) ?? null; }
     }
-    if (kind === 'LOAN_PAYMENT') {
+    if (kind === 'LOAN_PAYMENT' && !loanId) {
       const mine = profile ? (profile.loanIds as string[] | null) ?? [] : [];
       const pool = loans.filter(x => !property || x.propertyId === property.id);
       const m = best(pool, x => lenderScore([payee, l?.description].filter(Boolean).join(' '), x.lender) * 2 + (mine.includes(x.id) ? 1 : 0))
@@ -133,7 +145,9 @@ export async function matchManagerStatement(userId: string, raw: any): Promise<S
     lines.push({
       date: iso(l?.date), description: String(l?.description ?? '').slice(0, 300), kind, amount,
       direction: l?.direction === 'IN' ? 'IN' : 'OUT', propertyHint, payee, unit,
-      propertyId: property?.id ?? null, leaseId, loanId, category: categoryFor(kind),
+      propertyId: property?.id ?? null, leaseId, loanId, category: rule?.category ?? categoryFor(kind),
+      bankAccountId: kind === 'OWNER_PAYMENT' ? rule?.bankAccountId ?? null : null, learned: !!rule,
+      // A payment the owner made to the manager is kept (it is what the month cost them), not recorded as a cost.
       alreadyRecorded: false, include: kind !== 'OWNER_DRAW' && kind !== 'OTHER',
     });
   }
@@ -177,8 +191,9 @@ export async function matchManagerStatement(userId: string, raw: any): Promise<S
   // A year-to-date statement repeats every earlier month's lines. Lines already on an earlier
   // statement from this manager (same date, amount, direction and wording) are left out, so
   // nothing is recorded twice; repeated lines are counted, so two equal fees on one statement stay.
+  // Only lines that were recorded count: one left unrecorded (no loan chosen) comes back to be recorded now.
   const earlier = await db.reconciliationStatement.findMany({
-    where: { userId, ...(profile ? { profileId: profile.id } : {}) }, select: { lineItems: true },
+    where: { userId, status: 'APPLIED', ...(profile ? { profileId: profile.id } : {}) }, select: { lineItems: true },
   });
   const key = (date: string | null, amount: number, credit: boolean, description: string) =>
     `${date ?? ''}|${amount.toFixed(2)}|${credit ? 'C' : 'D'}|${description.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()}`;
@@ -186,6 +201,7 @@ export async function matchManagerStatement(userId: string, raw: any): Promise<S
   for (const st of earlier) {
     const counts = new Map<string, number>();
     for (const li of (Array.isArray(st.lineItems) ? st.lineItems : []) as any[]) {
+      if (li?.include === false) continue;
       const k = key(li?.date ?? null, Number(li?.amount ?? 0), li?.direction === 'CREDIT', String(li?.description ?? ''));
       counts.set(k, (counts.get(k) ?? 0) + 1);
     }

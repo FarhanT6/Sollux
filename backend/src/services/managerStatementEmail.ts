@@ -17,7 +17,7 @@ import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { readManagerStatement, type StatementDraft } from './managerStatement';
 import { uploadDocument } from './s3Service';
-import { applyManagerStatement } from './managerStatementApply';
+import { applyManagerStatement, lineItemsFrom } from './managerStatementApply';
 
 /** "Owner Statement", "Statement of Cash Flows", with rent collected and a management fee: from the PDF's own text. */
 export function looksLikeManagerStatement(text: string): boolean {
@@ -47,12 +47,14 @@ const sanitize = (s: string) => s.replace(/[^\w.\- ]+/g, '').slice(0, 120) || 's
  */
 export async function intakeManagerStatement(userId: string, file: Buffer, filename: string, from: string, receivedAt: Date | null, ref: string,
   /** The read and the file store; replaced in tests so no AI call or upload is made. */
-  deps: { read?: (userId: string, file: Buffer, name: string) => Promise<StatementDraft>; upload?: (key: string, file: Buffer) => Promise<unknown> } = {}):
+  deps: { read?: (userId: string, file: Buffer, name: string, profileId?: string | null) => Promise<StatementDraft>; upload?: (key: string, file: Buffer) => Promise<unknown> } = {}):
   Promise<{ outcome: 'manager'; detail: string; statementId: string | null }> {
   const already = await db.reconciliationStatement.findFirst({ where: { userId, sourceRef: ref }, select: { id: true } });
   if (already) return { outcome: 'manager', detail: 'manager statement already fetched', statementId: already.id };
 
-  const draft: StatementDraft = await (deps.read ?? readManagerStatement)(userId, file, filename);
+  // The sender's manager, when known: its remembered choices fill the lines in.
+  const sender = await managerForSender(userId, from);
+  const draft: StatementDraft = await (deps.read ?? readManagerStatement)(userId, file, filename, sender?.id ?? null);
   const name = draft.manager?.trim() || from.replace(/<[^>]+>/, '').replace(/"/g, '').trim() || 'Property manager';
   const addr = senderAddress(from);
 
@@ -72,16 +74,10 @@ export async function intakeManagerStatement(userId: string, file: Buffer, filen
   const documentKey = `${userId}/reconciliation/uploads/${Date.now()}-${sanitize(filename)}`;
   await (deps.upload ?? uploadDocument)(documentKey, file);
   // Recorded only when every line it records points at its record; the owner settles the rest in the review.
-  const lineItems = draft.lines.map(l => ({
-    type: l.kind === 'RENT' ? 'RENT' : l.kind === 'LOAN_PAYMENT' ? 'LOAN_PAYMENT' : ['MANAGEMENT_FEE', 'REPAIR', 'UTILITY', 'OTHER_EXPENSE'].includes(l.kind) ? 'EXPENSE' : 'OTHER',
-    targetId: l.kind === 'RENT' ? l.leaseId : l.kind === 'LOAN_PAYMENT' ? l.loanId : null,
-    targetLabel: l.kind, description: l.description, amount: l.amount, direction: l.direction === 'IN' ? 'CREDIT' : 'DEBIT',
-    date: l.date, category: l.category, propertyId: l.propertyId,
-    include: l.include && (l.kind === 'RENT' ? !!l.leaseId : l.kind === 'LOAN_PAYMENT' ? !!l.loanId : ['MANAGEMENT_FEE', 'REPAIR', 'UTILITY', 'OTHER_EXPENSE'].includes(l.kind) ? !!l.propertyId : true),
-  }));
+  const lineItems = lineItemsFrom(draft.lines);
   // What records itself; the rest (new, but not matched to a record) waits for the owner.
   const recordable = new Set(lineItems.map((li, i) => (li.include ? i : -1)).filter(i => i >= 0));
-  const needsLook = draft.lines.filter((l, i) => !recordable.has(i) && !l.onEarlierStatement && !l.alreadyRecorded && ['RENT', 'LOAN_PAYMENT', 'MANAGEMENT_FEE', 'REPAIR', 'UTILITY', 'OTHER_EXPENSE'].includes(l.kind)).length;
+  const needsLook = draft.lines.filter((l, i) => !recordable.has(i) && !l.onEarlierStatement && !l.alreadyRecorded && ['RENT', 'LOAN_PAYMENT', 'MANAGEMENT_FEE', 'REPAIR', 'UTILITY', 'OTHER_EXPENSE', 'REIMBURSEMENT'].includes(l.kind)).length;
   const reviewDraft = { ...draft, documentKey, lines: draft.lines.map((l, i) => (recordable.has(i) ? { ...l, include: false, recordedNow: true } : l)) };
   const net = lineItems.reduce((t, li) => t + (li.direction === 'CREDIT' ? li.amount : -li.amount), 0);
   const date = draft.statementDate ?? draft.periodEnd ?? (receivedAt ?? new Date()).toISOString().slice(0, 10);

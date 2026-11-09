@@ -363,7 +363,7 @@ export const applyReconciliationStatement = (id: string) =>
 export const deleteReconciliationStatement = (id: string) =>
   api.delete(`/reconciliation/statements/${id}`);
 /** A manager's statement read into lines and matched to properties, leases and loans — a draft to review. */
-export type ManagerLineKind = 'RENT' | 'MANAGEMENT_FEE' | 'REPAIR' | 'UTILITY' | 'LOAN_PAYMENT' | 'OTHER_EXPENSE' | 'OWNER_DRAW' | 'OTHER';
+export type ManagerLineKind = 'RENT' | 'MANAGEMENT_FEE' | 'REPAIR' | 'UTILITY' | 'LOAN_PAYMENT' | 'OTHER_EXPENSE' | 'REIMBURSEMENT' | 'OWNER_PAYMENT' | 'OWNER_DRAW' | 'OTHER';
 export interface ManagerDraftLine {
   date: string | null; description: string; kind: ManagerLineKind; amount: number; direction: 'IN' | 'OUT';
   propertyHint: string | null; payee: string | null; unit: string | null;
@@ -373,6 +373,10 @@ export interface ManagerDraftLine {
   onEarlierStatement?: boolean;
   /** Recorded already when the statement came in by email. */
   recordedNow?: boolean;
+  /** For "you paid the manager": the account it came out of. */
+  bankAccountId?: string | null;
+  /** Filled in from what was chosen for this line on an earlier statement. */
+  learned?: boolean;
 }
 export interface ManagerStatementDraft {
   manager: string | null; periodStart: string | null; periodEnd: string | null; statementDate: string | null;

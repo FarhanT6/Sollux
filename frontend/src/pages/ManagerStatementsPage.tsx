@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   readManagerStatement, importManagerStatement, applyReconciliationStatement, deleteReconciliationStatement,
-  getReconciliationStatements, getReconciliationDocumentUrl, getLeases, getLoans, getProperties, getReconciliationProfiles, updateReconciliationProfile, fetchManagerStatementsFromEmail,
+  getReconciliationStatements, getReconciliationDocumentUrl, getLeases, getLoans, getProperties, getBankAccounts, getReconciliationProfiles, updateReconciliationProfile, fetchManagerStatementsFromEmail,
   type ManagerStatementDraft, type ManagerDraftLine, type ManagerLineKind,
 } from '../api/client';
-import type { Lease, Loan, Property, ReconciliationProfile, ReconciliationStatement } from '../types';
+import type { BankAccount, ExpenseCategory, Lease, Loan, Property, ReconciliationProfile, ReconciliationStatement } from '../types';
+import { EXPENSE_CATEGORY_LABELS } from '../types';
+import { bankAccountLabel } from '../lib/bankAccountLabel';
 import { fmtMoney } from '../lib/money';
 import { fmtDate } from '../lib/date';
 import { fileToPayload } from '../lib/files';
@@ -28,10 +30,19 @@ import { describeApiError } from '../lib/apiError';
 
 const KIND_LABEL: Record<ManagerLineKind, string> = {
   RENT: 'Rent collected', MANAGEMENT_FEE: 'Management fee', REPAIR: 'Repair / maintenance', UTILITY: 'Utility',
-  LOAN_PAYMENT: 'Loan payment', OTHER_EXPENSE: 'Other cost', OWNER_DRAW: 'Sent to you', OTHER: 'Other (not recorded)',
+  LOAN_PAYMENT: 'Loan payment', OTHER_EXPENSE: 'Other cost', REIMBURSEMENT: 'Reimbursement (offsets a cost)',
+  OWNER_PAYMENT: 'You paid the manager', OWNER_DRAW: 'Sent to you', OTHER: 'Other (not recorded)',
 };
-const COST_KINDS: ManagerLineKind[] = ['MANAGEMENT_FEE', 'REPAIR', 'UTILITY', 'OTHER_EXPENSE'];
-const CATEGORY_OF: Partial<Record<ManagerLineKind, string>> = { MANAGEMENT_FEE: 'PROPERTY_MANAGEMENT', REPAIR: 'REPAIRS_MAINTENANCE', UTILITY: 'UTILITIES', OTHER_EXPENSE: 'OTHER' };
+const COST_KINDS: ManagerLineKind[] = ['MANAGEMENT_FEE', 'REPAIR', 'UTILITY', 'OTHER_EXPENSE', 'REIMBURSEMENT'];
+const CATEGORY_OF: Partial<Record<ManagerLineKind, string>> = { MANAGEMENT_FEE: 'PROPERTY_MANAGEMENT', REPAIR: 'REPAIRS_MAINTENANCE', UTILITY: 'UTILITIES', OTHER_EXPENSE: 'OTHER', REIMBURSEMENT: 'OTHER' };
+// The property-cost categories a statement line can be filed under.
+const PROPERTY_CATEGORIES = (Object.keys(EXPENSE_CATEGORY_LABELS) as ExpenseCategory[])
+  .filter(k => !['AUTO_LOAN', 'AUTO_INSURANCE', 'CREDIT_CARD', 'MEDICAL', 'PHONE', 'STUDENT_LOAN', 'LIFE_INSURANCE', 'SUBSCRIPTIONS', 'MORTGAGE_DEBT_SERVICE'].includes(k));
+/** A line's wording as the key for "the same line" (backend lib/managerStatementMatch lineKey). */
+const lineKey = (d: string) => String(d ?? '').toLowerCase()
+  .replace(/\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/g, ' ')
+  .replace(/\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b\.?(?:\s+\d{4})?/g, ' ')
+  .replace(/[^a-z0-9$]+/g, ' ').replace(/\s+/g, ' ').trim();
 
 export default function ManagerStatementsPage({ initialFile }: { /** Handed over from Add's drop zone: read at once. */ initialFile?: File } = {}) {
   const [list, setList] = useState<ReconciliationStatement[] | null>(null);
@@ -157,21 +168,34 @@ function Review({ draft, onCancel, onDone }: { draft: ManagerStatementDraft & { 
   const [properties, setProperties] = useState<Property[]>([]);
   const [leases, setLeases] = useState<Lease[]>([]);
   const [loans, setLoans] = useState<Loan[]>([]);
+  const [banks, setBanks] = useState<BankAccount[]>([]);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
   useEffect(() => {
     void getProperties().then(setProperties).catch(() => {});
     void getLeases().then(setLeases).catch(() => {});
     void getLoans({ isActive: true }).then(setLoans).catch(() => {});
+    void getBankAccounts().then(b => setBanks(b.filter(x => x.accountType !== 'CREDIT_CARD'))).catch(() => {});
   }, []);
 
-  const set = (i: number, patch: Partial<ManagerDraftLine>) => setLines(ls => ls.map((l, j) => (j === i ? { ...l, ...patch } : l)));
+  // A choice for one line fills in every line with the same wording (the same loan every month, the same fee):
+  // earlier months on a year-to-date statement that were never recorded get it too, and are ticked.
+  const set = (i: number, patch: Partial<ManagerDraftLine>) => setLines(ls => {
+    const key = lineKey(ls[i].description);
+    const { include: _inc, ...shared } = patch;
+    const chosen = ['leaseId', 'loanId', 'propertyId'].some(k => (patch as any)[k]);
+    return ls.map((l, j) => {
+      if (j === i) return { ...l, ...patch };
+      if (l.recordedNow || lineKey(l.description) !== key || !Object.keys(shared).length) return l;
+      return { ...l, ...shared, include: chosen && !l.onEarlierStatement && !l.alreadyRecorded ? true : l.include };
+    });
+  });
   const propName = useMemo(() => new Map(properties.map(p => [p.id, p.nickname || p.address])), [properties]);
   const leaseLabel = (l: Lease) => {
     const names = (l as any).leaseTenants?.map((t: any) => t.tenant?.fullName).filter(Boolean).join(', ') || 'No tenant';
     return `${names} · ${l.unit?.unitLabel ?? ''} · ${l.unit?.property?.nickname || l.unit?.property?.address || ''}${l.status !== 'ACTIVE' ? ' (ended)' : ''}`;
   };
-  const included = lines.filter(l => l.include && !l.recordedNow);
+  const included = lines.filter(l => l.include && !l.recordedNow && l.kind !== 'OWNER_PAYMENT');
   const sum = (f: (l: ManagerDraftLine) => boolean) => included.filter(f).reduce((t, l) => t + l.amount, 0);
 
   async function save() {
@@ -198,7 +222,7 @@ function Review({ draft, onCancel, onDone }: { draft: ManagerStatementDraft & { 
         </div>
       </div>
       <p className="text-xs text-gray-500 mb-3">
-        Check each line. Rent is recorded on the tenant's lease, loan payments on the loan, and fees and repairs as the property's costs. Lines left unticked are kept on the statement but not recorded{lines.some(l => l.alreadyRecorded || l.onEarlierStatement) ? ' — lines on an earlier statement, and rent or loan payments already on record for that month, start unticked' : ''}.
+        Check each line. Rent is recorded on the tenant's lease, loan payments on the loan, and fees and repairs as the property's costs. What you choose for a line is remembered for this manager: next month the same lines fill in and record themselves. Lines left unticked are kept on the statement but not recorded{lines.some(l => l.alreadyRecorded || l.onEarlierStatement) ? ' — lines on an earlier statement, and rent or loan payments already on record for that month, start unticked' : ''}.
       </p>
 
       <div className="rounded-xl overflow-x-auto" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.06)' }}>
@@ -216,11 +240,12 @@ function Review({ draft, onCancel, onDone }: { draft: ManagerStatementDraft & { 
                   {l.description}
                   {(l.payee || l.propertyHint) && <div className="text-gray-500">{[l.payee, l.propertyHint].filter(Boolean).join(' · ')}</div>}
                   {l.recordedNow && <div className="text-emerald-400">Recorded when the email came in</div>}
+                  {!l.recordedNow && l.learned && <div className="text-sky-300/80">Filled in from last time</div>}
                   {!l.recordedNow && l.onEarlierStatement && <div className="text-gray-500">On an earlier statement — already counted</div>}
                   {!l.recordedNow && !l.onEarlierStatement && l.alreadyRecorded && <div className="text-amber-400">Already recorded {l.kind === 'LOAN_PAYMENT' ? 'for this loan' : 'for this tenant'} and month</div>}
                 </td>
                 <td className="px-2 py-2">
-                  <select className={input} value={l.kind} onChange={e => { const k = e.target.value as ManagerLineKind; set(i, { kind: k, category: CATEGORY_OF[k] ?? null, include: k !== 'OWNER_DRAW' && k !== 'OTHER' && l.include }); }}>
+                  <select className={input} value={l.kind} onChange={e => { const k = e.target.value as ManagerLineKind; set(i, { kind: k, category: CATEGORY_OF[k] ?? null, include: k === 'OWNER_PAYMENT' || (k !== 'OWNER_DRAW' && k !== 'OTHER' && l.include) }); }}>
                     {(Object.keys(KIND_LABEL) as ManagerLineKind[]).map(k => <option key={k} value={k}>{KIND_LABEL[k]}</option>)}
                   </select>
                 </td>
@@ -236,9 +261,19 @@ function Review({ draft, onCancel, onDone }: { draft: ManagerStatementDraft & { 
                       {loans.map(x => <option key={x.id} value={x.id}>{x.lender}{x.accountLast4 ? ` ••${x.accountLast4}` : ''}{x.propertyId && propName.get(x.propertyId) ? ` · ${propName.get(x.propertyId)}` : ''}</option>)}
                     </select>
                   ) : COST_KINDS.includes(l.kind) ? (
-                    <select className={input} value={l.propertyId ?? ''} onChange={e => set(i, { propertyId: e.target.value || null })}>
-                      <option value="">Choose the property…</option>
-                      {properties.map(p => <option key={p.id} value={p.id}>{p.nickname || p.address}</option>)}
+                    <div className="flex gap-1">
+                      <select className={input} value={l.propertyId ?? ''} onChange={e => set(i, { propertyId: e.target.value || null })}>
+                        <option value="">Choose the property…</option>
+                        {properties.map(p => <option key={p.id} value={p.id}>{p.nickname || p.address}</option>)}
+                      </select>
+                      <select className={input} value={l.category ?? 'OTHER'} onChange={e => set(i, { category: e.target.value })} title="What kind of cost">
+                        {PROPERTY_CATEGORIES.map(k => <option key={k} value={k}>{EXPENSE_CATEGORY_LABELS[k]}</option>)}
+                      </select>
+                    </div>
+                  ) : l.kind === 'OWNER_PAYMENT' ? (
+                    <select className={input} value={l.bankAccountId ?? ''} onChange={e => set(i, { bankAccountId: e.target.value || null })} title="The account it came out of">
+                      <option value="">From which account…</option>
+                      {banks.map(b => <option key={b.id} value={b.id}>From {bankAccountLabel(b)}</option>)}
                     </select>
                   ) : <span className="text-gray-600">Not recorded</span>}
                 </td>
