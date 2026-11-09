@@ -28,7 +28,7 @@ import { parseP2PEmail, recordP2PEmail } from '../services/p2pPaymentEmails';
 import { parseWithdrawalEmail, recordWithdrawal } from '../services/walletEmails';
 import { intakeManagerStatement, isManagerStatementPdf, managerForSender } from '../services/managerStatementEmail';
 
-const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string }>;
+import pdfParse from '../lib/pdfParse';
 
 // How far back a newly connected mailbox is read, and how many documents
 // Claude reads per run. Kept small: every document is a paid read, and a

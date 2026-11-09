@@ -12,7 +12,7 @@ import { askClaude, jsonIn, needsJson } from '../ai/models';
 import { withAiContext, checkBudget } from '../ai/meter';
 import { fileBlockForClaude } from './pdfImportService';
 
-const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string }>;
+import pdfParse from '../lib/pdfParse';
 
 export type UploadKind = 'bill' | 'tax' | 'manager' | 'loan-sheet';
 

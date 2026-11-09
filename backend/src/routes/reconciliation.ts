@@ -7,7 +7,7 @@ import { uploadDocument, getSignedDocumentUrl, detectContentType } from '../serv
 import { readManagerStatement } from '../services/managerStatement';
 import { applyManagerStatement, lineItemsFrom, learnLineRules } from '../services/managerStatementApply';
 import { fetchManagerStatements } from '../services/managerStatementFetch';
-import { undoManagerStatement, redoManagerStatements } from '../services/managerStatementRedo';
+import { undoManagerStatement, redoManagerStatements, deleteManagerStatement, startOverManager } from '../services/managerStatementRedo';
 
 const router = Router();
 router.use(attachDbUser);
@@ -180,6 +180,16 @@ router.post('/profiles/:id/redo', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// POST /profiles/:id/start-over — delete every statement from this manager with what it recorded,
+// then fetch them from email again and record each afresh (services/managerStatementRedo.ts).
+router.post('/profiles/:id/start-over', async (req, res, next) => {
+  try {
+    const p = await db.reconciliationProfile.findFirst({ where: { id: req.params.id, userId: req.dbUserId! }, select: { id: true } });
+    if (!p) return res.status(404).json({ error: 'Manager not found' });
+    res.json(await startOverManager(req.dbUserId!, p.id));
+  } catch (err) { next(err); }
+});
+
 // POST /profiles/:id/merge { intoId } — two managers that are one (a person and the company their statements are
 // headed with): statements, remembered choices and sending addresses move to intoId, which keeps both names, and
 // its emailed statements are recorded again so nothing is counted twice.
@@ -341,16 +351,10 @@ router.get('/statements/:id/document', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// DELETE /statements/:id — the statement and what it recorded (an emailed one can be fetched again).
 router.delete('/statements/:id', async (req, res, next) => {
-  try {
-    const statement = await db.reconciliationStatement.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
-    if (!statement) return res.status(404).json({ error: 'Statement not found' });
-    if (statement.status === 'APPLIED') {
-      return res.status(400).json({ error: 'Cannot delete an applied statement — it has real payment records tied to it.' });
-    }
-    await db.reconciliationStatement.delete({ where: { id: req.params.id } });
-    res.status(204).send();
-  } catch (err) { next(err); }
+  try { await deleteManagerStatement(req.dbUserId!, req.params.id); res.status(204).send(); }
+  catch (err: any) { if (err?.status) return res.status(err.status).json({ error: err.message }); next(err); }
 });
 
 export default router;

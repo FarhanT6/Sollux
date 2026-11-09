@@ -14,7 +14,7 @@
  *  4. Search → get to account/bills page
  *  5. Parse all bills and download PDFs
  */
-import pdfParse from 'pdf-parse';
+import pdfParse from '../../lib/pdfParse';
 import { BaseScraperProvider, ScraperCredentials, ScrapedStatement, ScrapedPayment } from '../base';
 import * as path from 'path';
 

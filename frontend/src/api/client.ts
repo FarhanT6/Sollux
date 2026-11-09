@@ -348,7 +348,7 @@ export const updateReconciliationProfile = (id: string, data: Partial<Reconcilia
   api.patch<ReconciliationProfile>(`/reconciliation/profiles/${id}`, data).then(r => r.data);
 /** Remove what a manager statement recorded; it stays listed as Undone. */
 export const undoReconciliationStatement = (id: string) => api.post(`/reconciliation/statements/${id}/undo`).then(r => r.data);
-export interface ManagerRedoSummary { statements: number; notStatements: number; rent: number; loanPayments: number; expenses: number; needsLook: number }
+export interface ManagerRedoSummary { statements: number; notStatements: number; rent: number; loanPayments: number; expenses: number; needsLook: number; failed?: string[] }
 /** Record every emailed statement from this manager again, oldest first, with what has been chosen since. */
 export const redoManagerStatements = (profileId: string) => api.post<ManagerRedoSummary>(`/reconciliation/profiles/${profileId}/redo`, {}, { timeout: 300_000 }).then(r => r.data);
 /** Two managers that are one: everything moves to intoId, and its emailed statements are recorded again. */
@@ -358,6 +358,9 @@ export const reviewEmailedStatement = (id: string, lines: ManagerDraftLine[]) =>
 /** Look through the connected Gmail for manager statements now and record the new ones. */
 export const fetchManagerStatementsFromEmail = (days = 180) =>
   api.post<{ mailboxes: number; looked: number; found: number; recorded: number; already: number; details: string[]; errors: string[] }>('/reconciliation/fetch-email', { days }, { timeout: 600_000 }).then(r => r.data);
+/** Start over for one manager: every statement deleted with what it recorded, then fetched from email and recorded afresh. */
+export const startOverManager = (profileId: string) =>
+  api.post<{ deleted: number; fetched: { mailboxes: number; looked: number; found: number; recorded: number; already: number; details: string[]; errors: string[] } }>(`/reconciliation/profiles/${profileId}/start-over`, {}, { timeout: 900_000 }).then(r => r.data);
 export const deleteReconciliationProfile = (id: string) =>
   api.delete(`/reconciliation/profiles/${id}`);
 export const getReconciliationStatements = (profileId?: string) =>

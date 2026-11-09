@@ -13,7 +13,7 @@ import { oauthFor, walk, decode } from '../ai/inboxAgent';
 import { withAiContext } from '../ai/meter';
 import { intakeManagerStatement, isManagerStatementPdf, managerForSender } from './managerStatementEmail';
 
-const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string }>;
+import pdfParse from '../lib/pdfParse';
 
 export interface FetchSummary { mailboxes: number; looked: number; found: number; recorded: number; already: number; details: string[]; errors: string[] }
 

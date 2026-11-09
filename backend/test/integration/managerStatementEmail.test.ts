@@ -164,3 +164,35 @@ test('one manager filed under two names is merged and each line counted once; a 
   assert.equal(may.length - before, 2);
   assert.deepEqual(may.map(p => [p.loanId, Number(p.amount)]), [[ids.alpha, 1000], [ids.beta, 500]]);
 });
+
+test('a statement is deleted with what it recorded; start over deletes all of a manager\'s and fetches them again', { skip }, async () => {
+  const { db } = api;
+  const { startOverManager } = await import('../../src/services/managerStatementRedo');
+  const monty = (await db.reconciliationProfile.findFirst({ where: { userId: ids.user } }))!;
+  type Ids = { rentPaymentIds?: string[]; loanPaymentIds?: string[]; expenseIds?: string[] };
+  const exists = async (c: Ids) => (await db.rentPayment.count({ where: { id: { in: c.rentPaymentIds ?? [] } } }))
+    + (await db.loanPayment.count({ where: { id: { in: c.loanPaymentIds ?? [] } } })) + (await db.expense.count({ where: { id: { in: c.expenseIds ?? [] } } }));
+
+  // An applied statement deletes (it used to be refused), taking what it recorded with it.
+  const one = (await db.reconciliationStatement.findFirst({ where: { userId: ids.user, profileId: monty.id, status: 'APPLIED', source: 'email', NOT: { createdRecordIds: { equals: null as any } } }, orderBy: { receivedAt: 'desc' } }))!;
+  const oneIds = one.createdRecordIds as Ids;
+  assert.ok(await exists(oneIds) > 0, 'it recorded something');
+  const r = await send('DELETE', `/reconciliation/statements/${one.id}`);
+  assert.equal(r.status, 204);
+  assert.equal(await db.reconciliationStatement.count({ where: { id: one.id } }), 0);
+  assert.equal(await exists(oneIds), 0);
+
+  // Start over: everything from the manager goes (letters set aside stay), then the email fetch runs far enough back.
+  const all = await db.reconciliationStatement.findMany({ where: { userId: ids.user, profileId: monty.id } });
+  const letters = all.filter(s => s.status === 'NOT_A_STATEMENT').length;
+  const recorded = all.map(s => (s.createdRecordIds ?? {}) as Ids);
+  let asked = 0;
+  const out = await startOverManager(ids.user, monty.id, { fetch: async (_u, days) => { asked = days; return { mailboxes: 1, looked: 0, found: 0, recorded: 0, already: 0, details: [], errors: [] }; } });
+  assert.equal(out.deleted, all.length - letters);
+  assert.equal(await db.reconciliationStatement.count({ where: { userId: ids.user, profileId: monty.id, status: { not: 'NOT_A_STATEMENT' } } }), 0);
+  assert.equal(await db.reconciliationStatement.count({ where: { userId: ids.user, profileId: monty.id, status: 'NOT_A_STATEMENT' } }), letters);
+  for (const c of recorded) assert.equal(await exists(c), 0);
+  assert.ok(asked >= 180, 'at least six months back');
+  // The manager's remembered choices stay for the fresh read.
+  assert.ok((await db.reconciliationProfile.findUnique({ where: { id: monty.id } }))!.lineRules);
+});

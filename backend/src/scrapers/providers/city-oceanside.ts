@@ -22,7 +22,7 @@
  *  5. For each row: goto(viewBill href), look for PDF download link
  *  6. Fall back to page.pdf() if no real PDF link found
  */
-import pdfParse from 'pdf-parse';
+import pdfParse from '../../lib/pdfParse';
 import { BaseScraperProvider, ScraperCredentials, ScrapedStatement, ScrapedPayment } from '../base';
 import * as path from 'path';
 

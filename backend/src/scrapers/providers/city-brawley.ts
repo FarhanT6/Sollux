@@ -10,7 +10,7 @@
  *  5. Parse all rows: Bill entries = statements, Payment entries = payments
  *  6. For each Bill row, click the bill link → download PDF → parse with pdf-parse
  */
-import pdfParse from 'pdf-parse';
+import pdfParse from '../../lib/pdfParse';
 import { BaseScraperProvider, ScraperCredentials, ScrapedStatement, ScrapedPayment } from '../base';
 import * as path from 'path';
 
