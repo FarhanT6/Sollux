@@ -1625,14 +1625,21 @@ export interface WalletEntryT {
   id: string; date: string; amount: number; kind: 'RENT' | 'CHECK_DEPOSIT' | WalletMovementType; description: string; bankAccountId?: string | null; bankAccountName?: string | null; source?: string | null; movementId?: string | null;
   /** A rent check: its payment, number, and when and where it was deposited. */
   rentPaymentId?: string | null; checkNumber?: string | null; method?: string | null; deposited?: { date: string; bankAccountName: string | null } | null;
+  /** What money in or spending was for (WalletCategoryT ids), and the property spending was for. */
+  category?: string | null; categoryLabel?: string | null; propertyId?: string | null; propertyName?: string | null;
 }
+/** A kind of money in or spending; an income kind with otherIncome makes an other-income record, a spending kind with expense a property expense. */
+export interface WalletCategoryT { id: string; label: string; otherIncome?: string; expense?: string }
 /** A check or money order received and not deposited yet. */
 export interface CheckOnHandT { rentPaymentId: string | null; movementId: string | null; date: string; amount: number; checkNumber: string | null; description: string; manual: boolean }
 export interface WalletT { id: string; kind: WalletKind; label: string; startedAt: string; openingBalance: number; rentIn: number; movedIn: number; movedOut: number; balance: number; entries: WalletEntryT[]; onHand?: CheckOnHandT[] }
-export interface WalletsT { wallets: WalletT[]; total: number }
+export interface WalletsT { wallets: WalletT[]; total: number; categories: { income: WalletCategoryT[]; spending: WalletCategoryT[] } }
 export const getWallets = () => api.get<WalletsT>('/wallets').then(r => r.data);
 export const updateWallet = (id: string, data: { openingBalance?: number; startedAt?: string }) => api.patch<WalletsT>(`/wallets/${id}`, data).then(r => r.data);
-export const addWalletMovement = (id: string, data: { date: string; amount: number; type: WalletMovementType; bankAccountId?: string | null; toWalletId?: string | null; description?: string | null }) =>
+/** Correct an entry: what it was for, the property, the wording, date or amount. */
+export const updateWalletMovement = (mid: string, data: { category?: string | null; propertyId?: string | null; description?: string | null; date?: string; amount?: number }) =>
+  api.patch<WalletsT>(`/wallets/movements/${mid}`, data).then(r => r.data);
+export const addWalletMovement = (id: string, data: { date: string; amount: number; type: WalletMovementType; bankAccountId?: string | null; toWalletId?: string | null; description?: string | null; category?: string | null; propertyId?: string | null }) =>
   api.post<WalletsT>(`/wallets/${id}/movements`, data).then(r => r.data);
 export const deleteWalletMovement = (mid: string) => api.delete<WalletsT>(`/wallets/movements/${mid}`).then(r => r.data);
 /** Checks taken to the bank: marked deposited into the account on the date (one deposit slip). */

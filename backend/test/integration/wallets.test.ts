@@ -124,3 +124,36 @@ test('pending money: a deposit slip is pending at the bank until it posts; a che
   assert.equal((await send('DELETE', `/rent-payments/${pay.id}`)).status, 204);
   assert.equal(await db.pendingOutflow.count({ where: { sourceRef: `rent:${pay.id}` } }), 0);
 });
+
+test('money in and spending have categories: income makes other income, property spending a property expense', { skip }, async () => {
+  const { db } = api;
+  const today = new Date().toISOString().slice(0, 10);
+  let r = await (await send('GET', '/wallets')).json() as any;
+  assert.ok(r.categories.income.some((c: any) => c.id === 'HANDYMAN_SERVICE'));
+  const checks = r.wallets.find((w: any) => w.kind === 'CHECK'), cash = r.wallets.find((w: any) => w.kind === 'CASH');
+  // A check from the appliance business: other income, method Checks.
+  r = await (await send('POST', `/wallets/${checks.id}/movements`, { date: today, amount: 350, type: 'OTHER_IN', category: 'APPLIANCE_SERVICE', description: 'Dryer repair — Sample Customer' })).json();
+  let m = await db.walletMovement.findFirst({ where: { category: 'APPLIANCE_SERVICE' } });
+  let inc = await db.otherIncome.findUnique({ where: { id: m!.otherIncomeId! } });
+  assert.deepEqual([inc!.category, Number(inc!.amount), inc!.method], ['APPLIANCE_SERVICE', 350, 'Checks']);
+  // Changed to money that is not income: the other income goes.
+  await send('PATCH', `/wallets/movements/${m!.id}`, { category: 'CARRIED_OVER' });
+  assert.equal(await db.otherIncome.count({ where: { id: inc!.id } }), 0);
+  // Spending on a property: that property's expense, under the category's expense kind.
+  const prop = await db.property.findFirst({ where: { userId: ids.user } });
+  r = await (await send('POST', `/wallets/${cash.id}/movements`, { date: today, amount: 1600, type: 'SPENT', category: 'HANDYMAN', propertyId: prop!.id, description: 'Paid Sample Handyman' })).json();
+  m = await db.walletMovement.findFirst({ where: { category: 'HANDYMAN' } });
+  const exp = await db.expense.findUnique({ where: { id: m!.expenseId! } });
+  assert.deepEqual([exp!.category, Number(exp!.amount), exp!.propertyId], ['HANDYMAN', 1600, prop!.id]);
+  const entry = r.wallets.find((w: any) => w.kind === 'CASH').entries.find((e: any) => e.movementId === m!.id);
+  assert.deepEqual([entry.categoryLabel, entry.propertyName], ['Handyman / labor', '1200 Elm Grove Ln']);
+  // No property any more: the expense goes; deleting the entry removes what it made.
+  await send('PATCH', `/wallets/movements/${m!.id}`, { propertyId: null });
+  assert.equal(await db.expense.count({ where: { id: exp!.id } }), 0);
+  await send('PATCH', `/wallets/movements/${m!.id}`, { propertyId: prop!.id });
+  const again = await db.walletMovement.findUnique({ where: { id: m!.id } });
+  await send('DELETE', `/wallets/movements/${m!.id}`);
+  assert.equal(await db.expense.count({ where: { id: again!.expenseId! } }), 0);
+  // A spending category on money in is refused.
+  assert.equal((await send('POST', `/wallets/${cash.id}/movements`, { date: today, amount: 5, type: 'OTHER_IN', category: 'HANDYMAN' })).status, 400);
+});

@@ -7,7 +7,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
-import { walletReport, addMovement, deleteMovement, depositChecks, undoCheckDeposit, MOVEMENT_TYPES } from '../services/wallets';
+import { walletReport, addMovement, updateMovement, deleteMovement, depositChecks, undoCheckDeposit, MOVEMENT_TYPES } from '../services/wallets';
 
 const router = Router();
 router.use(attachDbUser);
@@ -31,6 +31,7 @@ router.post('/:id/movements', async (req, res, next) => {
     const d = z.object({
       date: day, amount: z.number().refine(n => n !== 0), type: z.enum(MOVEMENT_TYPES),
       bankAccountId: z.string().nullable().optional(), toWalletId: z.string().nullable().optional(), description: z.string().max(300).nullable().optional(),
+      category: z.string().max(40).nullable().optional(), propertyId: z.string().nullable().optional(),
     }).parse(req.body);
     await addMovement(req.dbUserId!, req.params.id, d);
     res.status(201).json(await walletReport(req.dbUserId!));
@@ -50,6 +51,18 @@ router.post('/checks/deposit', async (req, res, next) => {
 // POST /checks/:rentPaymentId/undeposit — the check is on hand again.
 router.post('/checks/:rentPaymentId/undeposit', async (req, res, next) => {
   try { await undoCheckDeposit(req.dbUserId!, req.params.rentPaymentId); res.json(await walletReport(req.dbUserId!)); } catch (err) { fail(res, next)(err); }
+});
+
+// PATCH /movements/:mid — what an entry was for (category, property), its wording, date or amount.
+router.patch('/movements/:mid', async (req, res, next) => {
+  try {
+    const d = z.object({
+      category: z.string().max(40).nullable().optional(), propertyId: z.string().nullable().optional(), description: z.string().max(300).nullable().optional(),
+      date: day.optional(), amount: z.number().refine(n => n !== 0).optional(),
+    }).parse(req.body);
+    await updateMovement(req.dbUserId!, req.params.mid, d);
+    res.json(await walletReport(req.dbUserId!));
+  } catch (err) { fail(res, next)(err); }
 });
 
 router.delete('/movements/:mid', async (req, res, next) => {
