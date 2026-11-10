@@ -88,7 +88,7 @@ function WalletDetail({ w, all, banks, onChange }: { w: WalletT; all: WalletT[];
             <option value="TO_BANK">{w.kind === 'CASH' || w.kind === 'CHECK' ? 'Deposited into a bank account' : 'Transferred to a bank account'}</option>
             <option value="SPENT">Spent (paid for something)</option>
             <option value="TO_WALLET">Moved to another app / cash</option>
-            <option value="OTHER_IN">Other money in</option>
+            <option value="OTHER_IN">{w.kind === 'CHECK' ? 'A check received (not logged as rent)' : 'Other money in'}</option>
             <option value="ADJUSTMENT">Correction (+ or −)</option>
           </select>
         </div>
@@ -113,9 +113,9 @@ function WalletDetail({ w, all, banks, onChange }: { w: WalletT; all: WalletT[];
           {w.entries.map(e => (
             <tr key={e.id}>
               <td className="pl-0 text-gray-400 whitespace-nowrap">{fmtDate(e.date, 'MMM d, yyyy')}</td>
-              <td className="text-gray-300">{e.kind === 'RENT' && e.method === 'MONEY_ORDER' ? 'Money order received' : e.kind === 'RENT' && w.kind === 'CHECK' ? 'Check received' : TYPE_LABEL[e.kind] ?? e.kind}{e.source === 'email' && <span className="block text-xs text-gray-600">from the app's email</span>}</td>
+              <td className="text-gray-300">{e.kind === 'RENT' && e.method === 'MONEY_ORDER' ? 'Money order received' : e.kind === 'RENT' && w.kind === 'CHECK' ? 'Check received' : e.kind === 'OTHER_IN' && w.kind === 'CHECK' ? 'Check received (by hand)' : TYPE_LABEL[e.kind] ?? e.kind}{e.source === 'email' && <span className="block text-xs text-gray-600">from the app's email</span>}</td>
               <td className="text-gray-400 text-xs">{(e.kind === 'TO_BANK' || e.kind === 'CHECK_DEPOSIT') && e.bankAccountName ? `${e.kind === 'CHECK_DEPOSIT' ? `${e.description} → ` : ''}${e.bankAccountName}` : `${e.checkNumber ? `#${e.checkNumber} · ` : ''}${e.description}`}
-                {e.kind === 'RENT' && w.kind === 'CHECK' && <span className={`block ${e.deposited ? 'text-gray-600' : 'text-amber-400'}`}>{e.deposited ? `Deposited ${fmtDate(e.deposited.date, 'MMM d')}${e.deposited.bankAccountName ? ` into ${e.deposited.bankAccountName}` : ''}` : 'On hand — not deposited yet'}</span>}</td>
+                {(e.kind === 'RENT' || e.kind === 'OTHER_IN') && w.kind === 'CHECK' && <span className={`block ${e.deposited ? 'text-gray-600' : 'text-amber-400'}`}>{e.deposited ? `Deposited ${fmtDate(e.deposited.date, 'MMM d')}${e.deposited.bankAccountName ? ` into ${e.deposited.bankAccountName}` : ''}` : 'On hand — not deposited yet'}</span>}</td>
               <td className={`text-right tabular-nums ${e.amount < 0 ? 'text-red-300' : 'text-emerald-400'}`}>{e.amount < 0 ? '−' : '+'}{fmtMoney(Math.abs(e.amount))}</td>
               <td className="text-right">{e.movementId && <button onClick={async () => { if (confirm('Remove this entry?')) onChange(await deleteWalletMovement(e.movementId!)); }} className="text-xs text-gray-600 hover:text-red-400">✕</button>}
                 {e.kind === 'CHECK_DEPOSIT' && e.rentPaymentId && <button onClick={async () => { if (confirm('Not deposited after all? The check goes back on hand.')) onChange(await undoCheckDeposit(e.rentPaymentId!)); }} className="text-xs text-gray-600 hover:text-amber-400" title="Undo the deposit">Undo</button>}</td>
@@ -131,17 +131,25 @@ function WalletDetail({ w, all, banks, onChange }: { w: WalletT; all: WalletT[];
 /** The checks not deposited yet: tick the ones going to the bank together, choose the account, Deposit. */
 function ChecksOnHand({ w, banks, onChange }: { w: WalletT; banks: BankAccount[]; onChange: (d: WalletsT) => void }) {
   const onHand = w.onHand ?? [];
+  // Rent checks by their payment, checks recorded here by their entry.
+  const keyOf = (c: { rentPaymentId: string | null; movementId: string | null }) => c.rentPaymentId ? `r:${c.rentPaymentId}` : `m:${c.movementId}`;
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [bankAccountId, setBankAccountId] = useState('');
   const [date, setDate] = useState(todayISO());
   const [err, setErr] = useState('');
-  const total = onHand.filter(c => picked.has(c.rentPaymentId)).reduce((t, c) => t + c.amount, 0);
+  const total = onHand.filter(c => picked.has(keyOf(c))).reduce((t, c) => t + c.amount, 0);
+  const [done, setDone] = useState('');
   const toggle = (id: string) => setPicked(p => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   async function deposit() {
     if (!picked.size) { setErr('Tick the checks you deposited.'); return; }
     if (!bankAccountId) { setErr('Choose the bank account.'); return; }
     setErr('');
-    try { onChange(await depositChecks([...picked], bankAccountId, date)); setPicked(new Set()); }
+    try {
+      const keys = [...picked];
+      onChange(await depositChecks(keys.filter(k => k.startsWith('r:')).map(k => k.slice(2)), bankAccountId, date, keys.filter(k => k.startsWith('m:')).map(k => k.slice(2))));
+      setDone(`Deposited ${fmtMoney(total)}. It shows as pending on that account (Settings → Banking) until the bank has it.`);
+      setPicked(new Set());
+    }
     catch (e) { setErr(describeApiError(e, 'Not saved.')); }
   }
   return (
@@ -150,14 +158,14 @@ function ChecksOnHand({ w, banks, onChange }: { w: WalletT; banks: BankAccount[]
       {!onHand.length ? <p className="text-xs text-gray-500">None — every check logged since {fmtDate(w.startedAt, 'MMM d, yyyy')} has been deposited. Log a check or money order as rent and it waits here until it's deposited.</p> : (
         <>
           <table className="table-base">
-            <thead><tr><th className="pl-0 w-8"><input type="checkbox" checked={picked.size === onHand.length} onChange={e => setPicked(e.target.checked ? new Set(onHand.map(c => c.rentPaymentId)) : new Set())} /></th><th>Received</th><th>Check</th><th>From</th><th className="text-right">Amount</th></tr></thead>
+            <thead><tr><th className="pl-0 w-8"><input type="checkbox" checked={picked.size === onHand.length} onChange={e => setPicked(e.target.checked ? new Set(onHand.map(keyOf)) : new Set())} /></th><th>Received</th><th>Check</th><th>From</th><th className="text-right">Amount</th></tr></thead>
             <tbody>
               {onHand.map(c => (
-                <tr key={c.rentPaymentId} className="cursor-pointer" onClick={() => toggle(c.rentPaymentId)}>
-                  <td className="pl-0"><input type="checkbox" checked={picked.has(c.rentPaymentId)} onChange={() => toggle(c.rentPaymentId)} onClick={e => e.stopPropagation()} /></td>
+                <tr key={keyOf(c)} className="cursor-pointer" onClick={() => toggle(keyOf(c))}>
+                  <td className="pl-0"><input type="checkbox" checked={picked.has(keyOf(c))} onChange={() => toggle(keyOf(c))} onClick={e => e.stopPropagation()} /></td>
                   <td className="text-gray-400 whitespace-nowrap">{fmtDate(c.date, 'MMM d, yyyy')}</td>
                   <td className="text-gray-300">{c.checkNumber ? `#${c.checkNumber}` : '—'}</td>
-                  <td className="text-gray-400 text-xs">{c.description}</td>
+                  <td className="text-gray-400 text-xs">{c.description}{c.manual && <span className="block text-gray-600" title="Recorded here, not as a rent payment — log it as rent on the tenant to count toward their rent">recorded here, not as rent</span>}</td>
                   <td className="text-right tabular-nums text-white">{fmtMoney(c.amount)}</td>
                 </tr>
               ))}
@@ -176,6 +184,7 @@ function ChecksOnHand({ w, banks, onChange }: { w: WalletT; banks: BankAccount[]
           {err && <p className="text-xs text-red-400">{err}</p>}
         </>
       )}
+      {done && <p className="text-xs text-emerald-400">{done}</p>}
     </div>
   );
 }

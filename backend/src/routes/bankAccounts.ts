@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { pendingByAccount } from '../services/pendingMoney';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { Decimal } from '@prisma/client/runtime/library';
@@ -42,6 +43,9 @@ function serializePending(p: any) {
     amount: toNum(p.amount),
     description: p.description,
     kind: p.kind,
+    direction: p.direction ?? 'OUT',
+    sourceRef: p.sourceRef ?? null,
+    clearedBy: p.clearedBy ?? null,
     expectedDate: p.expectedDate ?? null,
     loanId: p.loanId ?? null,
     loan: p.loan ? { id: p.loan.id, lender: p.loan.lender } : undefined,
@@ -78,7 +82,7 @@ router.post('/:id/pending', async (req, res, next) => {
   try {
     const acct = await db.bankAccount.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
     if (!acct) return res.status(404).json({ error: 'Not found' });
-    const { amount, description, kind, expectedDate, loanId, notes } = req.body;
+    const { amount, description, kind, expectedDate, loanId, notes, direction } = req.body;
     const amt = Number(amount);
     if (!Number.isFinite(amt) || amt <= 0) return res.status(400).json({ error: 'Amount must be a positive number' });
     if (!description || !String(description).trim()) return res.status(400).json({ error: 'Description is required' });
@@ -93,6 +97,7 @@ router.post('/:id/pending', async (req, res, next) => {
         amount: amt,
         description: String(description).trim(),
         kind: PENDING_KINDS.includes(kind) ? kind : 'OTHER',
+        direction: direction === 'IN' ? 'IN' : 'OUT',
         expectedDate: expectedDate ? new Date(expectedDate) : null,
         loanId: loanId || null,
         notes: notes || null,
@@ -122,7 +127,7 @@ router.patch('/pending/:pid', async (req, res, next) => {
         ...(expectedDate !== undefined ? { expectedDate: expectedDate ? new Date(expectedDate) : null } : {}),
         ...(notes !== undefined ? { notes: notes || null } : {}),
         ...(bankAccountId ? { bankAccountId } : {}),
-        ...(cleared !== undefined ? { cleared: !!cleared, clearedAt: cleared ? new Date() : null } : {}),
+        ...(cleared !== undefined ? { cleared: !!cleared, clearedAt: cleared ? new Date() : null, clearedBy: cleared ? 'manual' : null } : {}),
       },
       include: { loan: { select: { id: true, lender: true } } },
     });
@@ -153,7 +158,15 @@ router.get('/', async (req, res, next) => {
       },
       orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
     });
-    res.json(accounts.map(serialize));
+    // Money on its way out or in that the bank's balance doesn't show yet, and the balance once it has.
+    const pending = await pendingByAccount(req.dbUserId!);
+    res.json(accounts.map(a => {
+      const s = serialize(a);
+      const p = pending.get(a.id);
+      if (!p) return s;
+      const base = s.available ?? s.balance ?? 0;
+      return { ...s, pendingOut: Math.round(p.out * 100) / 100, pendingIn: Math.round(p.in * 100) / 100, afterPending: Math.round((base - p.out + p.in) * 100) / 100 };
+    }));
   } catch (err) { next(err); }
 });
 

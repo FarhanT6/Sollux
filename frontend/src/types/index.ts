@@ -1257,6 +1257,12 @@ export interface PendingOutflow {
   amount: number;
   description: string;
   kind: PendingOutflowKind;
+  /** OUT: going out (a check written, a payment scheduled). IN: coming in (checks deposited). */
+  direction?: 'IN' | 'OUT';
+  /** What made it: rent:<id> or slip:… (checks deposited in Sollux); null when entered by hand. */
+  sourceRef?: string | null;
+  /** plaid:<transaction> when the bank's transaction cleared it, manual when marked by hand. */
+  clearedBy?: string | null;
   expectedDate?: string | null;
   loanId?: string | null;
   loan?: { id: string; lender: string };

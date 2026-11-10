@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { pendingForRentCheck, dropFromPendingDeposit } from '../services/pendingMoney';
 import { z } from 'zod';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
@@ -108,6 +109,8 @@ router.post('/', async (req, res, next) => {
       appliedToArrears: data.appliedToArrears,
       applyTo: data.applyTo ?? null,
     });
+    // A check logged as deposited: money on its way into that account until the bank has it.
+    if (payment.status === 'RECEIVED') await pendingForRentCheck(req.dbUserId!, { id: payment.id, method: payment.method, bankAccountId: payment.bankAccountId, paidDate: payment.paidDate, amount: Number(payment.amount) }).catch(() => null);
     res.status(201).json(payment);
   } catch (err) { next(err); }
 });
@@ -163,6 +166,11 @@ router.patch('/:id', async (req, res, next) => {
       },
       include: { bankAccount: { select: { id: true, name: true, bank: true, last4: true, accountType: true, ownerLabel: true, cardNetwork: true } } },
     });
+    // A check's pending deposit follows the payment: its account, amount or method changed, it is made again.
+    if (data.bankAccountId !== undefined || data.method !== undefined || data.amount !== undefined) {
+      await db.pendingOutflow.deleteMany({ where: { userId: req.dbUserId!, cleared: false, sourceRef: `rent:${existing.id}` } });
+      if (payment.status === 'RECEIVED') await pendingForRentCheck(req.dbUserId!, { id: payment.id, method: payment.method, bankAccountId: payment.bankAccountId, paidDate: payment.paidDate, depositedAt: payment.depositedAt, amount: Number(payment.amount) }).catch(() => null);
+    }
     // The expense recorded with a credit follows its amount and date.
     if (existing.expenseId && (amount !== Number(existing.amount) || data.paidDate)) {
       await db.expense.updateMany({ where: { id: existing.expenseId, userId: req.dbUserId! }, data: { amount, ...(data.paidDate ? { date: data.paidDate } : {}) } });
@@ -178,6 +186,8 @@ router.delete('/:id', async (req, res, next) => {
     });
     if (!existing) return res.status(404).json({ error: 'Payment not found' });
     await db.rentPayment.delete({ where: { id: req.params.id } });
+    // A check still on its way into the bank is no longer pending.
+    await dropFromPendingDeposit(req.dbUserId!, `r:${existing.id}`, Number(existing.amount)).catch(() => {});
     // A credit's property expense goes with it.
     if (existing.expenseId) await db.expense.deleteMany({ where: { id: existing.expenseId, userId: req.dbUserId! } });
     // Put back whatever this payment knocked off the balance, or deleting a

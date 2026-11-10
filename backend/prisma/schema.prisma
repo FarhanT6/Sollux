@@ -1950,6 +1950,14 @@ model PendingOutflow {
   amount        Decimal     @db.Decimal(12, 2)
   description   String
   kind          String      @default("OTHER") // CHECK | SCHEDULED | TRANSFER | CARD | OTHER
+  /// OUT: money leaving the account (a check written, a payment scheduled). IN: money on its way in
+  /// (checks deposited). The bank balance shows neither until it posts; after them is what's really there.
+  direction     String      @default("OUT")
+  /// What made it: "rent:<rentPaymentId>" (a check logged as deposited) or "slip:r:<id>,m:<id>"
+  /// (checks deposited together from Cash, checks & apps); null when entered by hand.
+  sourceRef     String?
+  /// What cleared it: "plaid:<transaction id>" when the bank's transaction matched, "manual" when marked by hand.
+  clearedBy     String?
   expectedDate  DateTime?
   // When this is a loan payment already sent, the planner treats that loan
   // as handled for the month instead of asking for it again.
@@ -1962,6 +1970,7 @@ model PendingOutflow {
 
   @@index([userId, cleared])
   @@index([bankAccountId])
+  @@index([sourceRef])
   @@map("pending_outflows")
 }
 

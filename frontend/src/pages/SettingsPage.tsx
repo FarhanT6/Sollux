@@ -32,6 +32,7 @@ import api, {
   deletePlaidItem,
   syncPlaidBalances,
   getBankAccounts,
+  getPendingMoney,
   createBankAccount,
   updateBankAccount,
   deleteBankAccount,
@@ -42,7 +43,8 @@ import api, {
 } from '../api/client';
 import { CARD_NETWORKS } from '../types';
 import type { PlaidItem } from '../api/client';
-import type { BankAccount, BankAccountType, IndexRate } from '../types';
+import type { BankAccount, BankAccountType, IndexRate, PendingOutflow } from '../types';
+import PendingMoney, { afterPending } from '../components/banking/PendingMoney';
 import { format } from 'date-fns';
 import { fmtDate as fmtDateSafe, todayISO } from '../lib/date';
 import { getAccount, setAlertPhone, inviteAccountMember, cancelAccountInvite, removeAccountMember,
@@ -476,13 +478,15 @@ const MANUAL_PRESETS = [
 
 // ── Sortable Plaid institution card ──────────────────────────────────────────
 function SortablePlaidCard({
-  item, balVisible, disp, onDisconnect, onToggleWatch,
+  item, balVisible, disp, onDisconnect, onToggleWatch, pending,
 }: {
   item: PlaidItem;
   balVisible: boolean;
   disp: (n: number | null | undefined) => string;
   onDisconnect: (id: string, name: string) => void;
   onToggleWatch: () => void;
+  /** Checks written and deposited that the bank hasn't shown yet, every account's. */
+  pending: PendingOutflow[];
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.id });
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 };
@@ -523,7 +527,8 @@ function SortablePlaidCard({
             ? Number(bal?.balance ?? 0)
             : Number(bal?.available ?? bal?.balance ?? 0);
           return (
-            <div key={acct.id} className="flex items-center justify-between py-2 border-t border-white/5">
+            <div key={acct.id} className="py-2 border-t border-white/5">
+            <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-100">
                   {acct.name}
@@ -569,6 +574,10 @@ function SortablePlaidCard({
                   <p className="text-xs text-gray-500">{money(Number(bal.balance))} ledger</p>
                 )}
               </div>
+            </div>
+            {acct.accountType !== 'CREDIT_CARD' && (
+              <PendingMoney accountId={acct.id} balance={displayBal} items={pending.filter(p => p.bankAccountId === acct.id)} visible={balVisible} onChanged={onToggleWatch} />
+            )}
             </div>
           );
         })}
@@ -730,6 +739,7 @@ function BankingTab() {
     try { return JSON.parse(localStorage.getItem('sollux_plaid_order') || '[]'); } catch { return []; }
   });
   const [manualAccounts, setManualAccounts] = useState<BankAccount[]>([]);
+  const [pending, setPending] = useState<PendingOutflow[]>([]);
   const [loading, setLoading]     = useState(true);
   const [syncing, setSyncing]     = useState(false);
   const [syncMsg, setSyncMsg]     = useState('');
@@ -748,8 +758,9 @@ function BankingTab() {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
   const loadAll = useCallback(async () => {
-    const [plaidItems, allAccounts] = await Promise.all([getPlaidItems(), getBankAccounts()]);
+    const [plaidItems, allAccounts, pend] = await Promise.all([getPlaidItems(), getBankAccounts(), getPendingMoney().catch(() => [] as PendingOutflow[])]);
     setItems(plaidItems);
+    setPending(pend);
     // accounts with a plaidAccountId are Plaid-managed; everything else is manual
     setManualAccounts((allAccounts as any[]).filter((a: any) => !a.plaidAccountId));
   }, []);
@@ -814,6 +825,9 @@ function BankingTab() {
   const thirdPartyTotal = thirdPartyAccts.reduce((s, a) => s + Number((a as any).balances?.[0]?.balance ?? 0), 0);
   const cashOnHandTotal = cashAccts.reduce((s, a) => s + Number((a as any).balances?.[0]?.balance ?? 0), 0);
   const grandTotal      = bankTotal + thirdPartyTotal + cashOnHandTotal;
+  // Money in flight on the bank accounts: what the total is once it clears.
+  const depositIds = new Set(plaidDeposit.map(a => a.id));
+  const flight = afterPending(0, pending.filter(p => depositIds.has(p.bankAccountId)));
 
   const buckets = [
     { label: 'Banks', total: bankTotal, count: plaidDeposit.length, sub: 'connected accounts' },
@@ -847,6 +861,12 @@ function BankingTab() {
             <div>
               <p className="text-xs text-gray-400 mb-0.5">Total available</p>
               <p className="text-2xl font-semibold text-white">{balVisible ? money(grandTotal) : '••••••'}</p>
+              {(flight.out > 0 || flight.in > 0) && (
+                <p className="text-xs text-amber-300 mt-0.5">
+                  {balVisible ? money(grandTotal + flight.after) : '••••'} after pending
+                  <span className="text-gray-500"> ({flight.out ? `−${balVisible ? money(flight.out) : '••••'} going out` : ''}{flight.out && flight.in ? ', ' : ''}{flight.in ? `+${balVisible ? money(flight.in) : '••••'} coming in` : ''})</span>
+                </p>
+              )}
               {plaidCredit.length > 0 && (
                 <p className="text-xs text-gray-500 mt-0.5">
                   {balVisible ? money(plaidCredit.reduce((s, a) => s + Number(a.balances[0]?.balance ?? 0), 0)) : '••••'} credit outstanding
@@ -892,7 +912,7 @@ function BankingTab() {
               <SortableContext items={sortedItems.map(i => i.id)} strategy={verticalListSortingStrategy}>
                 <div className="space-y-3 mb-4">
                   {sortedItems.map(item => (
-                    <SortablePlaidCard key={item.id} item={item} balVisible={balVisible} disp={disp} onDisconnect={handleDisconnect} onToggleWatch={loadAll} />
+                    <SortablePlaidCard key={item.id} item={item} balVisible={balVisible} disp={disp} onDisconnect={handleDisconnect} onToggleWatch={loadAll} pending={pending} />
                   ))}
                 </div>
               </SortableContext>
