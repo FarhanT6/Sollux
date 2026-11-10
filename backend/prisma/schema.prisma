@@ -2004,6 +2004,7 @@ enum OtherIncomeCategory {
   SECURITY_DEPOSIT // deposit collected from new tenant
   DEPOSIT_REFUND_IN // deposit returned that you previously paid
   LAUNDRY // laundry machine income
+  HANDYMAN_SERVICE // handyman work done for other people
   OTHER
 }
 
@@ -2930,6 +2931,13 @@ model WalletMovement {
   /// 'email' (read from the app's transfer email) or 'manual'; the email's Message-ID.
   source        String?
   sourceRef     String?
+  /// What money in or spending was for (lib/walletCategories.ts): APPLIANCE_SERVICE, HANDYMAN_SERVICE, HANDYMAN…
+  category      String?
+  /// Spending for a property: recorded as that property's expense (expenseId).
+  propertyId    String?
+  /// The records made from it: other income for income categories, a property expense for property spending.
+  otherIncomeId String?
+  expenseId     String?
   createdAt     DateTime @default(now())
 
   @@index([walletId, date])

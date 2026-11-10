@@ -14,6 +14,7 @@
  */
 import { db } from '../config/db';
 import { addPendingDeposit, dropFromPendingDeposit } from './pendingMoney';
+import { walletCategory, fits, INCOME_CATEGORIES, SPEND_CATEGORIES } from '../lib/walletCategories';
 
 export const WALLET_KINDS = ['CASH', 'CHECK', 'VENMO', 'CASH_APP', 'PAYPAL', 'APPLE_CASH'] as const;
 export type WalletKind = typeof WALLET_KINDS[number];
@@ -47,15 +48,19 @@ export interface WalletEntry {
   /** A rent check: its payment, number, and whether (and when, where) it was deposited. */
   rentPaymentId?: string | null; checkNumber?: string | null; method?: string | null;
   deposited?: { date: string; bankAccountName: string | null } | null;
+  /** What money in or spending was for, and the property spending was for. */
+  category?: string | null; categoryLabel?: string | null; propertyId?: string | null; propertyName?: string | null;
 }
 
 /** Each wallet's balance and what went in and out of it. */
 export async function walletReport(userId: string) {
   const wallets = await ensureWallets(userId);
-  const [movements, banks] = await Promise.all([
+  const [movements, banks, properties] = await Promise.all([
     db.walletMovement.findMany({ where: { walletId: { in: wallets.map(w => w.id) } }, orderBy: { date: 'desc' } }),
     db.bankAccount.findMany({ where: { userId }, select: { id: true, name: true, bank: true, last4: true } }),
+    db.property.findMany({ where: { userId }, select: { id: true, nickname: true, address: true } }),
   ]);
+  const propertyName = (id: string | null) => { const p = properties.find(x => x.id === id); return p ? p.nickname || p.address : null; };
   const bankName = (id: string | null) => {
     const b = banks.find(x => x.id === id);
     return b ? `${b.name}${b.last4 ? ` ••${b.last4}` : ''}` : null;
@@ -92,6 +97,7 @@ export async function walletReport(userId: string) {
         return {
           id: m.id, movementId: m.id, date: m.date.toISOString().slice(0, 10), amount: Number(m.amount), kind: isCheck && m.source === 'check-deposit' ? 'CHECK_DEPOSIT' : m.type,
           description: m.description ?? '', bankAccountId: m.bankAccountId, bankAccountName: bankName(m.bankAccountId), source: m.source,
+          category: m.category, categoryLabel: walletCategory(m.category)?.label ?? null, propertyId: m.propertyId, propertyName: propertyName(m.propertyId),
           ...(isCheck && m.type === 'OTHER_IN' ? { deposited: dep ? { date: dep.date.toISOString().slice(0, 10), bankAccountName: bankName(dep.bankAccountId) } : null } : {}),
         };
       }),
@@ -113,16 +119,18 @@ export async function walletReport(userId: string) {
       ].sort((a, b) => a.date.localeCompare(b.date)) } : {}),
     });
   }
-  return { wallets: out, total: r2(out.reduce((t, w) => t + w.balance, 0)) };
+  return { wallets: out, total: r2(out.reduce((t, w) => t + w.balance, 0)), categories: { income: INCOME_CATEGORIES, spending: SPEND_CATEGORIES } };
 }
 
 /** Record money into or out of a wallet. Moving to another wallet records both sides. */
 export async function addMovement(userId: string, walletId: string, m: {
   date: Date; amount: number; type: typeof MOVEMENT_TYPES[number]; bankAccountId?: string | null; toWalletId?: string | null; description?: string | null;
-  source?: string | null; sourceRef?: string | null;
+  source?: string | null; sourceRef?: string | null; category?: string | null; propertyId?: string | null;
 }) {
   const w = await db.wallet.findFirst({ where: { id: walletId, userId } });
   if (!w) throw Object.assign(new Error('Wallet not found'), { status: 404 });
+  if (!fits(m.type, m.category)) throw Object.assign(new Error('That category is not for this kind of entry'), { status: 400 });
+  if (m.propertyId && !(await db.property.findFirst({ where: { id: m.propertyId, userId }, select: { id: true } }))) throw Object.assign(new Error('Property not found'), { status: 404 });
   if (m.bankAccountId && !(await db.bankAccount.findFirst({ where: { id: m.bankAccountId, userId }, select: { id: true } }))) throw Object.assign(new Error('Bank account not found'), { status: 404 });
   // Out-going kinds take money out whatever sign was typed; a correction keeps its sign.
   const outgoing = m.type === 'TO_BANK' || m.type === 'SPENT' || m.type === 'TO_WALLET';
@@ -136,9 +144,65 @@ export async function addMovement(userId: string, walletId: string, m: {
       return tx.walletMovement.update({ where: { id: a.id }, data: { pairId: b.id } });
     });
   }
-  return db.walletMovement.create({
-    data: { walletId: w.id, date: m.date, amount, type: m.type, bankAccountId: m.bankAccountId ?? null, description: m.description ?? null, source: m.source ?? 'manual', sourceRef: m.sourceRef ?? null },
+  const created = await db.walletMovement.create({
+    data: {
+      walletId: w.id, date: m.date, amount, type: m.type, bankAccountId: m.bankAccountId ?? null, description: m.description ?? null, source: m.source ?? 'manual', sourceRef: m.sourceRef ?? null,
+      ...(m.type === 'OTHER_IN' || m.type === 'SPENT' ? { category: m.category ?? null, propertyId: m.type === 'SPENT' ? m.propertyId ?? null : null } : {}),
+    },
   });
+  await syncLinked(userId, created.id);
+  return created;
+}
+
+/**
+ * The records an entry makes, kept in step with it: other income for an income category, a property
+ * expense for spending on a property. A category changed to one that makes none removes what it made.
+ */
+async function syncLinked(userId: string, id: string) {
+  const m = await db.walletMovement.findUnique({ where: { id }, include: { wallet: { select: { kind: true } } } });
+  if (!m) return;
+  const cat = walletCategory(m.category);
+  const amount = Math.abs(Number(m.amount));
+  const what = m.description?.trim() || cat?.label || 'Other';
+  let { otherIncomeId, expenseId } = m;
+  if (m.type === 'OTHER_IN' && cat?.otherIncome) {
+    const data = { category: cat.otherIncome as any, description: what.slice(0, 300), amount, receivedDate: m.date, method: WALLET_LABEL[m.wallet.kind as WalletKind] ?? m.wallet.kind, notes: 'Recorded in Cash, checks & apps' };
+    const had = otherIncomeId ? await db.otherIncome.findFirst({ where: { id: otherIncomeId, userId }, select: { id: true } }) : null;
+    otherIncomeId = had ? (await db.otherIncome.update({ where: { id: had.id }, data })).id : (await db.otherIncome.create({ data: { userId, ...data } })).id;
+  } else if (otherIncomeId) {
+    await db.otherIncome.deleteMany({ where: { id: otherIncomeId, userId } });
+    otherIncomeId = null;
+  }
+  if (m.type === 'SPENT' && m.propertyId && cat?.expense) {
+    const data = { propertyId: m.propertyId, category: cat.expense as any, amount, date: m.date, description: what.slice(0, 300) };
+    const had = expenseId ? await db.expense.findFirst({ where: { id: expenseId, userId }, select: { id: true } }) : null;
+    expenseId = had ? (await db.expense.update({ where: { id: had.id }, data })).id : (await db.expense.create({ data: { userId, ...data } })).id;
+  } else if (expenseId) {
+    await db.expense.deleteMany({ where: { id: expenseId, userId } });
+    expenseId = null;
+  }
+  if (otherIncomeId !== m.otherIncomeId || expenseId !== m.expenseId) await db.walletMovement.update({ where: { id: m.id }, data: { otherIncomeId, expenseId } });
+}
+
+/** An entry corrected: what it was for, the property, the wording, the date or amount (its direction stays). */
+export async function updateMovement(userId: string, id: string, patch: { category?: string | null; propertyId?: string | null; description?: string | null; date?: Date; amount?: number }) {
+  const m = await db.walletMovement.findFirst({ where: { id, wallet: { userId } } });
+  if (!m) throw Object.assign(new Error('Not found'), { status: 404 });
+  if (patch.category !== undefined && !fits(m.type, patch.category)) throw Object.assign(new Error('That category is not for this kind of entry'), { status: 400 });
+  if (patch.propertyId && !(await db.property.findFirst({ where: { id: patch.propertyId, userId }, select: { id: true } }))) throw Object.assign(new Error('Property not found'), { status: 404 });
+  const sign = Number(m.amount) < 0 ? -1 : 1;
+  await db.walletMovement.update({
+    where: { id: m.id },
+    data: {
+      ...(patch.category !== undefined ? { category: patch.category } : {}),
+      ...(patch.propertyId !== undefined && m.type === 'SPENT' ? { propertyId: patch.propertyId } : {}),
+      ...(patch.description !== undefined ? { description: patch.description } : {}),
+      ...(patch.date ? { date: patch.date } : {}),
+      // A paired move between wallets keeps both sides equal: its amount is not edited here.
+      ...(patch.amount != null && !m.pairId && m.type !== 'ADJUSTMENT' ? { amount: sign * Math.abs(patch.amount) } : {}),
+    },
+  });
+  await syncLinked(userId, m.id);
 }
 
 export async function deleteMovement(userId: string, id: string) {
@@ -147,6 +211,9 @@ export async function deleteMovement(userId: string, id: string) {
   // A check recorded by hand goes with its deposit; a deposit removed puts the check back on hand.
   const deposit = m.type === 'OTHER_IN' ? await db.walletMovement.findFirst({ where: { walletId: m.walletId, source: 'check-deposit', sourceRef: m.id } }) : null;
   await db.walletMovement.deleteMany({ where: { id: { in: [m.id, ...(m.pairId ? [m.pairId] : []), ...(deposit ? [deposit.id] : [])] } } });
+  // What it recorded elsewhere goes with it.
+  if (m.otherIncomeId) await db.otherIncome.deleteMany({ where: { id: m.otherIncomeId, userId } });
+  if (m.expenseId) await db.expense.deleteMany({ where: { id: m.expenseId, userId } });
   const checkId = m.source === 'check-deposit' ? m.sourceRef : deposit ? m.id : null;
   if (checkId) await dropFromPendingDeposit(userId, `m:${checkId}`, Math.abs(Number(m.amount))).catch(() => {});
 }
