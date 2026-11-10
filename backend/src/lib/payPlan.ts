@@ -118,7 +118,8 @@ export async function buildPayPlan(userId: string, opts: { horizonDays?: number;
       include: { balances: { orderBy: { asOfDate: 'desc' }, take: 1 } },
       orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
     }),
-    db.pendingOutflow.findMany({ where: { userId, cleared: false }, orderBy: { createdAt: 'asc' } }),
+    // Only money going out: a deposit on its way in is not spendable until the bank has it.
+    db.pendingOutflow.findMany({ where: { userId, cleared: false, direction: 'OUT' }, orderBy: { createdAt: 'asc' } }),
     db.loan.findMany({
       where: { userId, isActive: true },
       include: {

@@ -1087,7 +1087,9 @@ export const recordBankBalance = (id: string, data: { balance: number; creditLim
   api.post(`/bank-accounts/${id}/balance`, data).then(r => r.data);
 
 // Pending outflows and the pay planner
-export const addPendingOutflow = (bankAccountId: string, data: { amount: number; description: string; kind?: PendingOutflowKind; expectedDate?: string | null; loanId?: string | null; notes?: string | null }) =>
+/** Every uncleared pending item, both ways (cleared=true adds the recently cleared). */
+export const getPendingMoney = (cleared = false) => api.get<PendingOutflow[]>('/bank-accounts/pending', { params: cleared ? { cleared: '1' } : {} }).then(r => r.data);
+export const addPendingOutflow = (bankAccountId: string, data: { amount: number; description: string; kind?: PendingOutflowKind; direction?: 'IN' | 'OUT'; expectedDate?: string | null; loanId?: string | null; notes?: string | null }) =>
   api.post<PendingOutflow>(`/bank-accounts/${bankAccountId}/pending`, data).then(r => r.data);
 export const updatePendingOutflow = (id: string, data: Partial<Pick<PendingOutflow, 'amount' | 'description' | 'kind' | 'expectedDate' | 'cleared' | 'notes' | 'bankAccountId'>>) =>
   api.patch<PendingOutflow>(`/bank-accounts/pending/${id}`, data).then(r => r.data);
@@ -1625,7 +1627,7 @@ export interface WalletEntryT {
   rentPaymentId?: string | null; checkNumber?: string | null; method?: string | null; deposited?: { date: string; bankAccountName: string | null } | null;
 }
 /** A check or money order received and not deposited yet. */
-export interface CheckOnHandT { rentPaymentId: string; date: string; amount: number; checkNumber: string | null; description: string }
+export interface CheckOnHandT { rentPaymentId: string | null; movementId: string | null; date: string; amount: number; checkNumber: string | null; description: string; manual: boolean }
 export interface WalletT { id: string; kind: WalletKind; label: string; startedAt: string; openingBalance: number; rentIn: number; movedIn: number; movedOut: number; balance: number; entries: WalletEntryT[]; onHand?: CheckOnHandT[] }
 export interface WalletsT { wallets: WalletT[]; total: number }
 export const getWallets = () => api.get<WalletsT>('/wallets').then(r => r.data);
@@ -1634,7 +1636,7 @@ export const addWalletMovement = (id: string, data: { date: string; amount: numb
   api.post<WalletsT>(`/wallets/${id}/movements`, data).then(r => r.data);
 export const deleteWalletMovement = (mid: string) => api.delete<WalletsT>(`/wallets/movements/${mid}`).then(r => r.data);
 /** Checks taken to the bank: marked deposited into the account on the date (one deposit slip). */
-export const depositChecks = (rentPaymentIds: string[], bankAccountId: string, date: string) => api.post<WalletsT>('/wallets/checks/deposit', { rentPaymentIds, bankAccountId, date }).then(r => r.data);
+export const depositChecks = (rentPaymentIds: string[], bankAccountId: string, date: string, movementIds: string[] = []) => api.post<WalletsT>('/wallets/checks/deposit', { rentPaymentIds, movementIds, bankAccountId, date }).then(r => r.data);
 export const undoCheckDeposit = (rentPaymentId: string) => api.post<WalletsT>(`/wallets/checks/${rentPaymentId}/undeposit`).then(r => r.data);
 
 /** Cards that look like one account filed more than once (backend lib/cardDuplicates). */

@@ -18,6 +18,7 @@
  */
 import { plaidClient } from '../config/plaid';
 import { db } from '../config/db';
+import { clearPendingByTransaction } from './pendingMoney';
 import { decrypt } from '../crypto/encrypt';
 import { recordRentPayment } from './rentPaymentService';
 import { findTwin, findLoggedPayment, sureOfSender, descriptorMemo } from './p2pPaymentEmails';
@@ -310,12 +311,16 @@ async function detectExpenseMatch(name: string, amount: number, userId: string):
 export async function syncTransactionsForItem(plaidItemId: string) {
   const plaidItem = await db.plaidItem.findUnique({
     where: { id: plaidItemId },
-    // Accounts a loan is paid from are read too, so an autopay shows up in the loan tracker.
-    include: { accounts: { where: { isActive: true, OR: [{ watchForRentPayments: true }, { watchForExpenses: true }, { loansPaidFrom: { some: { isActive: true } } }] }, include: { _count: { select: { loansPaidFrom: true } } } } },
+    // Accounts a loan is paid from are read too, so an autopay shows up in the loan tracker;
+    // and accounts with money pending (a check written, checks deposited), so it clears when the bank has it.
+    include: { accounts: { where: { isActive: true, OR: [{ watchForRentPayments: true }, { watchForExpenses: true }, { loansPaidFrom: { some: { isActive: true } } }, { pendingOutflows: { some: { cleared: false } } }] }, include: { _count: { select: { loansPaidFrom: true } } } } },
   });
   if (!plaidItem || plaidItem.accounts.length === 0) return { added: 0 };
 
   const bankAccountByPlaidId = new Map(plaidItem.accounts.map(a => [a.plaidAccountId, a]));
+  // The accounts with money pending, re-read as items clear.
+  const pendingIn = async () => new Set((await db.pendingOutflow.findMany({ where: { bankAccountId: { in: plaidItem.accounts.map(a => a.id) }, cleared: false }, select: { bankAccountId: true }, distinct: ['bankAccountId'] })).map(p => p.bankAccountId));
+  let withPending = await pendingIn();
 
   const accessToken = decrypt(plaidItem.accessTokenEnc);
   let cursor = plaidItem.plaidTxCursor ?? undefined;
@@ -339,7 +344,14 @@ export async function syncTransactionsForItem(plaidItemId: string) {
     for (const tx of resp.data.added) {
       const bankAccount = bankAccountByPlaidId.get(tx.account_id);
       if (!bankAccount) continue;
+      // A check written or deposited and waiting: the bank has it now (pending or posted), so it is no longer pending here.
+      if (withPending.has(bankAccount.id)) {
+        const cleared = await clearPendingByTransaction(bankAccount.id, { id: tx.transaction_id, amount: tx.amount, date: tx.date, name: tx.name || tx.merchant_name || '', pendingOf: tx.pending_transaction_id }).catch(() => null);
+        if (cleared) withPending = await pendingIn();
+      }
       if (tx.pending) continue;
+      // Read only for its pending money: nothing else is matched on it.
+      if (!bankAccount.watchForRentPayments && !bankAccount.watchForExpenses && bankAccount._count.loansPaidFrom === 0) continue;
       if (tx.pending_transaction_id) {
         const fromPending = await db.incomingTransaction.findUnique({ where: { plaidTransactionId: tx.pending_transaction_id }, select: { id: true } });
         if (fromPending) { await db.incomingTransaction.update({ where: { id: fromPending.id }, data: { plaidTransactionId: tx.transaction_id } }); continue; }
@@ -476,7 +488,7 @@ export async function syncAllWatchedAccounts(userId: string) {
   const items = await db.plaidItem.findMany({
     where: {
       userId, isActive: true,
-      accounts: { some: { isActive: true, OR: [{ watchForRentPayments: true }, { watchForExpenses: true }, { loansPaidFrom: { some: { isActive: true } } }] } },
+      accounts: { some: { isActive: true, OR: [{ watchForRentPayments: true }, { watchForExpenses: true }, { loansPaidFrom: { some: { isActive: true } } }, { pendingOutflows: { some: { cleared: false } } }] } },
     },
   });
   let totalAdded = 0;

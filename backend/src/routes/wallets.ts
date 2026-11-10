@@ -40,8 +40,9 @@ router.post('/:id/movements', async (req, res, next) => {
 // POST /checks/deposit { rentPaymentIds, bankAccountId, date } — checks taken to the bank (one deposit slip).
 router.post('/checks/deposit', async (req, res, next) => {
   try {
-    const d = z.object({ rentPaymentIds: z.array(z.string()).min(1).max(200), bankAccountId: z.string(), date: day }).parse(req.body);
-    await depositChecks(req.dbUserId!, d.rentPaymentIds, d.bankAccountId, d.date);
+    const d = z.object({ rentPaymentIds: z.array(z.string()).max(200).default([]), movementIds: z.array(z.string()).max(200).default([]), bankAccountId: z.string(), date: day })
+      .refine(x => x.rentPaymentIds.length + x.movementIds.length > 0).parse(req.body);
+    await depositChecks(req.dbUserId!, d.rentPaymentIds, d.bankAccountId, d.date, d.movementIds);
     res.json(await walletReport(req.dbUserId!));
   } catch (err) { fail(res, next)(err); }
 });

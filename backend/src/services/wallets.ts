@@ -13,14 +13,18 @@
  * by that method this month counts in.
  */
 import { db } from '../config/db';
+import { addPendingDeposit, dropFromPendingDeposit } from './pendingMoney';
 
 export const WALLET_KINDS = ['CASH', 'CHECK', 'VENMO', 'CASH_APP', 'PAYPAL', 'APPLE_CASH'] as const;
 export type WalletKind = typeof WALLET_KINDS[number];
 export const WALLET_LABEL: Record<WalletKind, string> = { CASH: 'Cash', CHECK: 'Checks', VENMO: 'Venmo', CASH_APP: 'Cash App', PAYPAL: 'PayPal', APPLE_CASH: 'Apple Cash' };
 /** The rent payment methods each wallet holds: a money order is kept with the checks. */
 const METHODS: Record<WalletKind, string[]> = { CASH: ['CASH'], CHECK: ['CHECK', 'MONEY_ORDER'], VENMO: ['VENMO'], CASH_APP: ['CASH_APP'], PAYPAL: ['PAYPAL'], APPLE_CASH: ['APPLE_CASH'] };
-/** The check or money order number, as Log rent payment notes it ("Ref 1234 · …"). */
-export const checkNumber = (notes: string | null | undefined) => String(notes ?? '').match(/\bRef\s+([\w-]+)/i)?.[1] ?? null;
+/** The check or money order number: as Log rent payment notes it ("Ref 1234 · …"), or as typed ("Check #2210", "check 2210"). */
+export const checkNumber = (notes: string | null | undefined) => {
+  const t = String(notes ?? '');
+  return t.match(/\bRef\s+([\w-]+)/i)?.[1] ?? t.match(/#\s*(\d{2,10})\b/)?.[1] ?? t.match(/\b(?:check|chk|ck|money order)\s+(\d{3,10})\b/i)?.[1] ?? null;
+};
 export const MOVEMENT_TYPES = ['TO_BANK', 'SPENT', 'TO_WALLET', 'FROM_WALLET', 'ADJUSTMENT', 'OTHER_IN'] as const;
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -82,10 +86,15 @@ export async function walletReport(userId: string) {
         id: `dep-${r.id}`, date: depositOf(r)!.toISOString().slice(0, 10), amount: -Number(r.amount), kind: 'CHECK_DEPOSIT',
         description: `${checkNumber(r.notes) ? `#${checkNumber(r.notes)} · ` : ''}${what(r)}`, bankAccountId: r.bankAccountId, bankAccountName: bankName(r.bankAccountId), rentPaymentId: r.id,
       })),
-      ...mine.map(m => ({
-        id: m.id, movementId: m.id, date: m.date.toISOString().slice(0, 10), amount: Number(m.amount), kind: m.type,
-        description: m.description ?? '', bankAccountId: m.bankAccountId, bankAccountName: bankName(m.bankAccountId), source: m.source,
-      })),
+      ...mine.map(m => {
+        // A check recorded by hand: deposited by the movement that names it.
+        const dep = isCheck && m.type === 'OTHER_IN' ? mine.find(d => d.source === 'check-deposit' && d.sourceRef === m.id) : undefined;
+        return {
+          id: m.id, movementId: m.id, date: m.date.toISOString().slice(0, 10), amount: Number(m.amount), kind: isCheck && m.source === 'check-deposit' ? 'CHECK_DEPOSIT' : m.type,
+          description: m.description ?? '', bankAccountId: m.bankAccountId, bankAccountName: bankName(m.bankAccountId), source: m.source,
+          ...(isCheck && m.type === 'OTHER_IN' ? { deposited: dep ? { date: dep.date.toISOString().slice(0, 10), bankAccountName: bankName(dep.bankAccountId) } : null } : {}),
+        };
+      }),
     ].sort((a, b) => b.date.localeCompare(a.date));
     const rentIn = r2(rent.reduce((t, r) => t + Number(r.amount), 0));
     const deposited = r2(rent.filter(r => depositOf(r)).reduce((t, r) => t + Number(r.amount), 0));
@@ -96,7 +105,12 @@ export async function walletReport(userId: string) {
       movedOut: r2(deposited - mine.filter(m => Number(m.amount) < 0).reduce((t, m) => t + Number(m.amount), 0)),
       balance: r2(Number(w.openingBalance) + rentIn - deposited + moved), entries,
       // Checks not deposited yet, oldest first: what to take to the bank.
-      ...(isCheck ? { onHand: rent.filter(r => !depositOf(r)).reverse().map(r => ({ rentPaymentId: r.id, date: r.paidDate.toISOString().slice(0, 10), amount: Number(r.amount), checkNumber: checkNumber(r.notes), description: what(r) })) } : {}),
+      ...(isCheck ? { onHand: [
+        ...rent.filter(r => !depositOf(r)).reverse().map(r => ({ rentPaymentId: r.id, movementId: null, date: r.paidDate.toISOString().slice(0, 10), amount: Number(r.amount), checkNumber: checkNumber(r.notes), description: what(r), manual: false })),
+        // Checks recorded here by hand (not logged as rent), not deposited yet.
+        ...mine.filter(m => m.type === 'OTHER_IN' && !mine.some(d => d.source === 'check-deposit' && d.sourceRef === m.id)).reverse()
+          .map(m => ({ rentPaymentId: null, movementId: m.id, date: m.date.toISOString().slice(0, 10), amount: Number(m.amount), checkNumber: checkNumber(m.description), description: m.description || 'Check', manual: true })),
+      ].sort((a, b) => a.date.localeCompare(b.date)) } : {}),
     });
   }
   return { wallets: out, total: r2(out.reduce((t, w) => t + w.balance, 0)) };
@@ -130,28 +144,45 @@ export async function addMovement(userId: string, walletId: string, m: {
 export async function deleteMovement(userId: string, id: string) {
   const m = await db.walletMovement.findFirst({ where: { id, wallet: { userId } } });
   if (!m) throw Object.assign(new Error('Not found'), { status: 404 });
-  await db.walletMovement.deleteMany({ where: { id: { in: [m.id, ...(m.pairId ? [m.pairId] : [])] } } });
+  // A check recorded by hand goes with its deposit; a deposit removed puts the check back on hand.
+  const deposit = m.type === 'OTHER_IN' ? await db.walletMovement.findFirst({ where: { walletId: m.walletId, source: 'check-deposit', sourceRef: m.id } }) : null;
+  await db.walletMovement.deleteMany({ where: { id: { in: [m.id, ...(m.pairId ? [m.pairId] : []), ...(deposit ? [deposit.id] : [])] } } });
+  const checkId = m.source === 'check-deposit' ? m.sourceRef : deposit ? m.id : null;
+  if (checkId) await dropFromPendingDeposit(userId, `m:${checkId}`, Math.abs(Number(m.amount))).catch(() => {});
 }
 
 /**
  * Checks taken to the bank: each rent check (or money order) is marked deposited into the account on the
- * date, which takes it off what is on hand. Several at once are one deposit slip.
+ * date, and each check recorded here by hand gets a deposit movement — which takes them off what is on
+ * hand. Several at once are one deposit slip, pending at the bank (Settings → Banking) until it posts.
  */
-export async function depositChecks(userId: string, rentPaymentIds: string[], bankAccountId: string, date: Date) {
+export async function depositChecks(userId: string, rentPaymentIds: string[], bankAccountId: string, date: Date, movementIds: string[] = []) {
   if (!(await db.bankAccount.findFirst({ where: { id: bankAccountId, userId }, select: { id: true } }))) throw Object.assign(new Error('Bank account not found'), { status: 404 });
-  const r = await db.rentPayment.updateMany({
+  const rents = await db.rentPayment.findMany({
     where: { id: { in: rentPaymentIds }, method: { in: ['CHECK', 'MONEY_ORDER'] }, lease: { unit: { property: { userId } } } },
-    data: { bankAccountId, depositedAt: date },
+    select: { id: true, amount: true, lease: { select: { leaseTenants: { select: { tenant: { select: { fullName: true } } }, take: 1 } } } },
   });
-  if (!r.count) throw Object.assign(new Error('No checks found to deposit'), { status: 404 });
-  return r.count;
+  const manual = movementIds.length ? await db.walletMovement.findMany({ where: { id: { in: movementIds }, type: 'OTHER_IN', wallet: { userId, kind: 'CHECK' } } }) : [];
+  if (!rents.length && !manual.length) throw Object.assign(new Error('No checks found to deposit'), { status: 404 });
+  if (rents.length) await db.rentPayment.updateMany({ where: { id: { in: rents.map(r => r.id) } }, data: { bankAccountId, depositedAt: date } });
+  for (const m of manual) {
+    if (await db.walletMovement.findFirst({ where: { walletId: m.walletId, source: 'check-deposit', sourceRef: m.id }, select: { id: true } })) continue;
+    await db.walletMovement.create({ data: { walletId: m.walletId, date, amount: -Math.abs(Number(m.amount)), type: 'TO_BANK', bankAccountId, description: m.description ?? 'Check', source: 'check-deposit', sourceRef: m.id } });
+  }
+  // A check logged as deposited earlier had its own pending deposit; this slip replaces it.
+  await db.pendingOutflow.deleteMany({ where: { userId, cleared: false, sourceRef: { in: rents.map(r => `rent:${r.id}`) } } });
+  const total = r2(rents.reduce((t, r) => t + Number(r.amount), 0) + manual.reduce((t, m) => t + Math.abs(Number(m.amount)), 0));
+  const n = rents.length + manual.length;
+  const who = n === 1 ? rents[0]?.lease.leaseTenants[0]?.tenant.fullName ?? manual[0]?.description ?? null : null;
+  await addPendingDeposit(userId, bankAccountId, total, date, n === 1 ? `Check deposited${who ? ` — ${who}` : ''}` : `${n} checks deposited`,
+    `slip:${[...rents.map(r => `r:${r.id}`), ...manual.map(m => `m:${m.id}`)].join(',')}`);
+  return n;
 }
 
 /** A deposit put back: the check is on hand again. */
 export async function undoCheckDeposit(userId: string, rentPaymentId: string) {
-  const r = await db.rentPayment.updateMany({
-    where: { id: rentPaymentId, method: { in: ['CHECK', 'MONEY_ORDER'] }, lease: { unit: { property: { userId } } } },
-    data: { bankAccountId: null, depositedAt: null },
-  });
-  if (!r.count) throw Object.assign(new Error('Check not found'), { status: 404 });
+  const p = await db.rentPayment.findFirst({ where: { id: rentPaymentId, method: { in: ['CHECK', 'MONEY_ORDER'] }, lease: { unit: { property: { userId } } } }, select: { id: true, amount: true } });
+  if (!p) throw Object.assign(new Error('Check not found'), { status: 404 });
+  await db.rentPayment.update({ where: { id: p.id }, data: { bankAccountId: null, depositedAt: null } });
+  await dropFromPendingDeposit(userId, `r:${p.id}`, Number(p.amount));
 }

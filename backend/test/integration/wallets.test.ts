@@ -75,3 +75,52 @@ test('checks: on hand until deposited (one deposit slip for several), and a depo
   const venmoRent = await api.db.rentPayment.findFirst({ where: { method: 'VENMO' } });
   assert.equal((await send('POST', `/wallets/checks/${venmoRent!.id}/undeposit`)).status, 404);
 });
+
+test('pending money: a deposit slip is pending at the bank until it posts; a check written clears when cashed', { skip }, async () => {
+  const { db } = api;
+  const checks = (r: any) => r.wallets.find((w: any) => w.kind === 'CHECK');
+  const today = new Date().toISOString().slice(0, 10);
+  // A check recorded by hand on Checks (not logged as rent) is on hand too, and can be deposited.
+  let r = await (await send('GET', '/wallets')).json() as any;
+  r = await (await send('POST', `/wallets/${checks(r).id}/movements`, { date: today, amount: 980, type: 'OTHER_IN', description: 'Check #2210 — November rent' })).json();
+  const manual = checks(r).onHand.find((c: any) => c.manual);
+  assert.ok(manual && manual.movementId && manual.amount === 980 && manual.checkNumber === '2210');
+  const before = checks(r).balance;
+  r = await (await send('POST', '/wallets/checks/deposit', { rentPaymentIds: [ids.check2], movementIds: [manual.movementId], bankAccountId: ids.bank, date: today })).json();
+  assert.equal(checks(r).balance, before - 980 - 250);
+  assert.ok(!checks(r).onHand.some((c: any) => c.movementId === manual.movementId));
+  // One pending deposit for the slip.
+  let slip = await db.pendingOutflow.findFirst({ where: { userId: ids.user, direction: 'IN', sourceRef: { startsWith: 'slip:' }, cleared: false }, orderBy: { createdAt: 'desc' } });
+  assert.equal(Number(slip!.amount), 1230);
+  // The bank list shows it with the $500 check deposited earlier (still pending): after pending = available 4,800 + 1,730.
+  await db.bankBalance.create({ data: { bankAccountId: ids.bank, balance: 5000, available: 4800, asOfDate: new Date(`${today}T00:00:00Z`), source: 'plaid' } as any });
+  const acct = ((await (await send('GET', '/bank-accounts')).json()) as any[]).find(a => a.id === ids.bank);
+  assert.deepEqual([acct.pendingIn, acct.afterPending], [1730, 6530]);
+  // The manual check's deposit removed: it is on hand again and off the slip.
+  const dep = await db.walletMovement.findFirst({ where: { source: 'check-deposit', sourceRef: manual.movementId } });
+  r = await (await send('DELETE', `/wallets/movements/${dep!.id}`)).json();
+  assert.ok(checks(r).onHand.some((c: any) => c.movementId === manual.movementId));
+  slip = await db.pendingOutflow.findUnique({ where: { id: slip!.id } });
+  assert.equal(Number(slip!.amount), 250);
+
+  // The bank sync clears what it sees: the deposit by its amount, a check written by amount and number.
+  const { clearPendingByTransaction } = await import('../../src/services/pendingMoney');
+  assert.equal(await clearPendingByTransaction(ids.bank, { id: 'tx-dep', amount: -250, date: today, name: 'DEPOSIT' }), slip!.id);
+  const out = await send('POST', `/bank-accounts/${ids.bank}/pending`, { amount: 1100, description: 'Check #1205 to Example Trust', kind: 'CHECK' });
+  const other = await send('POST', `/bank-accounts/${ids.bank}/pending`, { amount: 1100, description: 'Check #1206 to Sample HOA', kind: 'CHECK' });
+  const [a, b] = [await out.json() as any, await other.json() as any];
+  assert.equal(a.direction, 'OUT');
+  assert.equal(await clearPendingByTransaction(ids.bank, { id: 'tx-1206p', amount: 1100, date: today, name: 'CHECK # 1206' }), b.id);
+  // Its posted copy is the same transaction: it does not clear the other check of the same amount.
+  assert.equal(await clearPendingByTransaction(ids.bank, { id: 'tx-1206', amount: 1100, date: today, name: 'CHECK # 1206', pendingOf: 'tx-1206p' }), b.id);
+  assert.equal((await db.pendingOutflow.findUnique({ where: { id: a.id } }))!.cleared, false);
+
+  // Rent logged as a check deposited into the account: pending until the bank has it; deleting the payment removes it.
+  const lease = await db.lease.findFirst({ where: { unit: { property: { userId: ids.user } } } });
+  const res = await send('POST', '/rent-payments', { leaseId: lease!.id, periodDate: today, amount: 640, paidDate: today, method: 'CHECK', bankAccountId: ids.bank });
+  assert.equal(res.status, 201);
+  const pay = await res.json() as any;
+  assert.equal(Number((await db.pendingOutflow.findFirst({ where: { sourceRef: `rent:${pay.id}` } }))!.amount), 640);
+  assert.equal((await send('DELETE', `/rent-payments/${pay.id}`)).status, 204);
+  assert.equal(await db.pendingOutflow.count({ where: { sourceRef: `rent:${pay.id}` } }), 0);
+});

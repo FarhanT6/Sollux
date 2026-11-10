@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { syncAllWatchedAccounts } from '../services/transactionMatchService';
 import type { Request, Response } from 'express';
 import {
   Products,
@@ -204,6 +205,8 @@ router.post('/sync', async (req: Request, res: Response, next) => {
       items.map(item => syncBalancesForItem(item.id, decrypt(item.accessTokenEnc)))
     );
     const failed = results.filter(r => r.status === 'rejected').length;
+    // The transactions too: a check written or deposited clears once the bank has it.
+    await syncAllWatchedAccounts(req.dbUserId!).catch(err => console.warn('[Plaid] transaction sync:', err instanceof Error ? err.message : err));
     res.json({ synced: items.length - failed, failed });
   } catch (err) { next(err); }
 });
