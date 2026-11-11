@@ -3,28 +3,49 @@ import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { syncAllWatchedAccounts, findUtilityCandidates } from '../services/transactionMatchService';
 import { findLoanCandidates, logLoanPaymentFromTransaction } from '../services/loanPaymentMatcher';
+import { emailMemoMonth } from '../services/outgoingP2PEmails';
 
 const router = Router();
 router.use(attachDbUser);
 
 // GET / — list outgoing (expense) transactions, optionally filtered by status
+// (one, or several comma-separated), by match type, and to the last `days` days.
 router.get('/', async (req, res, next) => {
   try {
-    const { status } = req.query;
+    const { status, matchType, days } = req.query as { status?: string; matchType?: string; days?: string };
+    const statuses = status ? status.split(',').filter(Boolean) : [];
+    const since = Number(days) > 0 ? new Date(Date.now() - Number(days) * 86_400_000) : null;
     const transactions = await db.outgoingTransaction.findMany({
-      where: { userId: req.dbUserId!, ...(status ? { status: status as string } : {}) },
+      where: {
+        userId: req.dbUserId!,
+        ...(statuses.length ? { status: { in: statuses } } : {}),
+        ...(matchType ? { matchType } : {}),
+        ...(since ? { date: { gte: since } } : {}),
+      },
       include: {
-        bankAccount: { select: { id: true, name: true, bank: true } },
+        bankAccount: { select: { id: true, name: true, bank: true, last4: true } },
         property: { select: { id: true, address: true, nickname: true } },
         utilityAccount: { select: { id: true, providerName: true } },
       },
       orderBy: { date: 'desc' },
     });
-    // Loan matches carry the lender's name for the list.
+    // Loan matches carry the lender's name for the list, and an applied one the month it was logged for.
     const loanIds = [...new Set(transactions.map(t => t.loanId).filter((x): x is string => !!x))];
-    const loans = loanIds.length ? await db.loan.findMany({ where: { id: { in: loanIds }, userId: req.dbUserId! }, select: { id: true, lender: true } }) : [];
-    const lender = new Map(loans.map(l => [l.id, l.lender]));
-    res.json(transactions.map(t => ({ ...t, loan: t.loanId ? { id: t.loanId, lender: lender.get(t.loanId) ?? 'Loan' } : null })));
+    const loans = loanIds.length ? await db.loan.findMany({ where: { id: { in: loanIds }, userId: req.dbUserId! }, select: { id: true, lender: true, monthlyPayment: true, escrowAmount: true } }) : [];
+    const loanOf = new Map(loans.map(l => [l.id, l]));
+    const paymentIds = transactions.filter(t => t.appliedType === 'LOAN_PAYMENT' && t.appliedId).map(t => t.appliedId!);
+    const payments = paymentIds.length ? await db.loanPayment.findMany({ where: { id: { in: paymentIds }, loan: { userId: req.dbUserId! } }, select: { id: true, periodDate: true } }) : [];
+    const periodOf = new Map(payments.map(p => [p.id, p.periodDate ? p.periodDate.toISOString().slice(0, 7) : null]));
+    res.json(transactions.map(({ plaidTransactionId, ...t }) => {
+      const loan = t.loanId ? loanOf.get(t.loanId) : null;
+      return {
+        ...t,
+        // Read from a "you sent money" email (until the bank's line for it arrives), else from the bank feed.
+        source: plaidTransactionId.startsWith('email:') ? 'email' : 'bank',
+        loan: t.loanId ? { id: t.loanId, lender: loan?.lender ?? 'Loan', expected: loan ? Number(loan.monthlyPayment ?? 0) + Number(loan.escrowAmount ?? 0) : null } : null,
+        loggedFor: t.appliedType === 'LOAN_PAYMENT' && t.appliedId ? periodOf.get(t.appliedId) ?? null : null,
+      };
+    }));
   } catch (err) { next(err); }
 });
 
@@ -55,11 +76,17 @@ router.get('/:id/loan-candidates', async (req, res, next) => {
     if (!tx) return res.status(404).json({ error: 'Transaction not found' });
     const named = await findLoanCandidates(tx.name, Number(tx.amount), req.dbUserId!, tx.bankAccountId);
     // Always offer every active loan after the likely ones, so any debit can be assigned.
-    const all = await db.loan.findMany({ where: { userId: req.dbUserId!, isActive: true }, select: { id: true, lender: true, monthlyPayment: true, escrowAmount: true }, orderBy: { lender: 'asc' } });
+    const all = await db.loan.findMany({
+      where: { userId: req.dbUserId!, isActive: true },
+      select: { id: true, lender: true, monthlyPayment: true, escrowAmount: true, property: { select: { address: true, nickname: true } } },
+      orderBy: { lender: 'asc' },
+    });
+    // The property tells two loans from one lender apart.
+    const place = new Map(all.map(l => [l.id, l.property ? l.property.nickname || l.property.address : null]));
     const seen = new Set(named.map(c => c.loanId));
     res.json([
-      ...named.map(c => ({ loanId: c.loanId, lender: c.lender, expected: c.expected, likely: true })),
-      ...all.filter(l => !seen.has(l.id)).map(l => ({ loanId: l.id, lender: l.lender, expected: Number(l.monthlyPayment ?? 0) + Number(l.escrowAmount ?? 0), likely: false })),
+      ...named.map(c => ({ loanId: c.loanId, lender: c.lender, property: place.get(c.loanId) ?? null, expected: c.expected, likely: true })),
+      ...all.filter(l => !seen.has(l.id)).map(l => ({ loanId: l.id, lender: l.lender, property: place.get(l.id) ?? null, expected: Number(l.monthlyPayment ?? 0) + Number(l.escrowAmount ?? 0), likely: false })),
     ]);
   } catch (err) { next(err); }
 });
@@ -117,7 +144,10 @@ router.post('/:id/apply', async (req, res, next) => {
     if (tx.status === 'APPLIED') return res.status(400).json({ error: 'Already applied' });
     // A loan payment goes to the loan tracker; a personal loan has no property.
     if (tx.matchType === 'LOAN' && tx.loanId) {
-      const paymentId = await logLoanPaymentFromTransaction(tx, tx.loanId, req.dbUserId!);
+      const { periodMonth } = (req.body ?? {}) as { periodMonth?: string | null };
+      const paymentId = await logLoanPaymentFromTransaction(tx, tx.loanId, req.dbUserId!, {
+        periodMonth: periodMonth && /^\d{4}-\d{2}$/.test(periodMonth) ? periodMonth : emailMemoMonth(tx.name, tx.date),
+      });
       const updated = await db.outgoingTransaction.update({ where: { id: tx.id }, data: { status: 'APPLIED', appliedType: 'LOAN_PAYMENT', appliedId: paymentId } });
       return res.json(updated);
     }
@@ -189,6 +219,17 @@ router.post('/:id/ignore', async (req, res, next) => {
     if (!tx) return res.status(404).json({ error: 'Transaction not found' });
     if (tx.status === 'APPLIED') return res.status(400).json({ error: 'Already applied' });
     const updated = await db.outgoingTransaction.update({ where: { id: tx.id }, data: { status: 'IGNORED' } });
+    res.json(updated);
+  } catch (err) { next(err); }
+});
+
+// POST /:id/restore — an ignored one back to the list.
+router.post('/:id/restore', async (req, res, next) => {
+  try {
+    const tx = await db.outgoingTransaction.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
+    if (!tx) return res.status(404).json({ error: 'Transaction not found' });
+    if (tx.status !== 'IGNORED') return res.status(400).json({ error: 'Not ignored' });
+    const updated = await db.outgoingTransaction.update({ where: { id: tx.id }, data: { status: tx.loanId || tx.propertyId ? 'SUGGESTED' : 'UNMATCHED' } });
     res.json(updated);
   } catch (err) { next(err); }
 });

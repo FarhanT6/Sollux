@@ -8,6 +8,7 @@ import IncomingPaymentsPage from './IncomingPaymentsPage';
 import ManagerStatementsPage from './ManagerStatementsPage';
 import WalletsPage from './WalletsPage';
 import LoanPaymentTracker from '../components/loans/LoanPaymentTracker';
+import LoanPaymentReview from '../components/loans/LoanPaymentReview';
 
 export type Tab = 'overview' | 'costs' | 'loans' | 'income';
 
@@ -38,12 +39,14 @@ export const FINANCE_SECTIONS: { key: Tab; label: string; subtitle: string; view
     ],
   },
   {
-    key: 'loans', label: 'Loans', subtitle: 'Every loan, this month\'s payment on each, and every payment by month',
+    key: 'loans', label: 'Loans', subtitle: 'Every loan, this month\'s payment on each, payments to check, and every payment by month',
     views: [{
-      key: 'loans', label: 'Loans', subtitle: 'Every loan, this month\'s payment on each, and every payment by month',
+      key: 'loans', label: 'Loans', subtitle: 'Every loan, this month\'s payment on each, payments to check, and every payment by month',
       render: () => (
         <>
           <LoansPage embedded />
+          {/* Payments read from the bank or a "you sent money" email that Sollux was not sure of, and what it logged on its own. */}
+          <LoanPaymentReview />
           <h2 className="text-sm font-semibold text-white mt-8 mb-3">Payments by month</h2>
           <LoanPaymentTracker />
         </>

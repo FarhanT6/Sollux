@@ -565,6 +565,7 @@ const OUTCOME_STYLE: Record<string, { label: string; cls: string }> = {
   online: { label: 'Bill online only', cls: 'text-amber-300' },
   manager: { label: 'Manager statement', cls: 'text-blue-400' },
   wallet: { label: 'Transfer to bank', cls: 'text-blue-400' },
+  applied: { label: 'Payment logged', cls: 'text-emerald-400' },
 };
 
 const OUTCOME_WHY: Record<string, string> = {
@@ -918,7 +919,7 @@ function InboxPanel({ onStreamStart, onBillStreamed }: {
                           {m.detail ?? 'No reason saved: read before reasons were recorded. Backfill retries it once and shows why.'}
                         </span>
                       )}
-                      {(m.outcome === 'skipped' || m.outcome === 'online') && m.detail && <span className="text-gray-500 block truncate" title={m.detail}>{m.detail}</span>}
+                      {(m.outcome === 'skipped' || m.outcome === 'online' || m.outcome === 'applied' || (m.outcome === 'review' && !m.importJobId)) && m.detail && <span className="text-gray-500 block truncate" title={m.detail}>{m.detail}</span>}
                     </span>
                     <span className="text-gray-600 truncate ml-auto shrink-0 max-w-[40%]">{m.fromAddress}</span>
                   </div>

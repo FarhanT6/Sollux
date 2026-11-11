@@ -1156,21 +1156,26 @@ export const unignoreIncomingTransaction = (id: string) =>
   api.post<IncomingTransaction>(`/transactions/${id}/unignore`).then(r => r.data);
 
 // Outgoing transactions (hardware-store expenses, utility bill payments)
-export const getOutgoingTransactions = (status?: IncomingTransactionStatus) =>
-  api.get<OutgoingTransaction[]>('/expense-transactions', { params: status ? { status } : undefined }).then(r => r.data);
+export const getOutgoingTransactions = (opts: { status?: IncomingTransactionStatus | IncomingTransactionStatus[]; matchType?: string; days?: number } = {}) =>
+  api.get<OutgoingTransaction[]>('/expense-transactions', {
+    params: { ...(opts.status ? { status: ([] as string[]).concat(opts.status).join(',') } : {}), ...(opts.matchType ? { matchType: opts.matchType } : {}), ...(opts.days ? { days: opts.days } : {}) },
+  }).then(r => r.data);
 export const syncOutgoingTransactions = () =>
   api.post<{ itemsSynced: number; added: number; errors: string[] }>('/expense-transactions/sync').then(r => r.data);
 export const matchOutgoingTransaction = (id: string, data: {
   propertyId?: string | null; category?: string | null; utilityAccountId?: string | null; statementId?: string | null; loanId?: string | null;
 }) => api.patch<OutgoingTransaction>(`/expense-transactions/${id}`, data).then(r => r.data);
 export const getLoanCandidates = (id: string) =>
-  api.get<{ loanId: string; lender: string; expected: number; likely: boolean }[]>(`/expense-transactions/${id}/loan-candidates`).then(r => r.data);
+  api.get<{ loanId: string; lender: string; property?: string | null; expected: number; likely: boolean }[]>(`/expense-transactions/${id}/loan-candidates`).then(r => r.data);
 export const getUtilityCandidates = (id: string) =>
   api.get<UtilityCandidate[]>(`/expense-transactions/${id}/utility-candidates`).then(r => r.data);
-export const applyOutgoingTransaction = (id: string) =>
-  api.post<OutgoingTransaction>(`/expense-transactions/${id}/apply`).then(r => r.data);
+/** A loan payment is logged for `periodMonth` (YYYY-MM) when given, else the month its memo names or its due date. */
+export const applyOutgoingTransaction = (id: string, periodMonth?: string) =>
+  api.post<OutgoingTransaction>(`/expense-transactions/${id}/apply`, periodMonth ? { periodMonth } : {}).then(r => r.data);
 export const ignoreOutgoingTransaction = (id: string) =>
   api.post<OutgoingTransaction>(`/expense-transactions/${id}/ignore`).then(r => r.data);
+export const restoreOutgoingTransaction = (id: string) =>
+  api.post<OutgoingTransaction>(`/expense-transactions/${id}/restore`).then(r => r.data);
 
 export interface PlaidItem {
   id: string;
