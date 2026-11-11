@@ -74,7 +74,9 @@ export function methodFor(name: string, loanMethods: string[]): string {
  * payment's id. If one was already logged by hand (same loan, within a dollar,
  * within five days), that one is returned and nothing is added.
  */
-export async function logLoanPaymentFromTransaction(tx: { id: string; name: string; amount: unknown; date: Date }, loanId: string, userId: string): Promise<string> {
+export async function logLoanPaymentFromTransaction(tx: { id: string; name: string; amount: unknown; date: Date }, loanId: string, userId: string,
+  /** The month it pays when the payment says so (a memo's "November 2026"), and its note. */
+  opts: { periodMonth?: string | null; notes?: string | null } = {}): Promise<string> {
   const loan = await db.loan.findFirst({ where: { id: loanId, userId }, select: { id: true, dueDay: true, paymentMethods: true, monthlyPayment: true, escrowAmount: true } });
   if (!loan) throw new Error('Loan not found');
   const amount = Number(tx.amount);
@@ -83,13 +85,13 @@ export async function logLoanPaymentFromTransaction(tx: { id: string; name: stri
     select: { id: true },
   });
   if (near) return near.id;
-  const period = periodFor(tx.date, loan.dueDay);
+  const period = opts.periodMonth && /^\d{4}-\d{2}$/.test(opts.periodMonth) ? opts.periodMonth : periodFor(tx.date, loan.dueDay);
   const expected = Number(loan.monthlyPayment ?? 0) + Number(loan.escrowAmount ?? 0);
   const p = await db.loanPayment.create({
     data: {
       loanId, date: tx.date, amount, billAmount: expected > 0 ? expected : null, status: 'PAID',
       periodDate: new Date(`${period}-01T00:00:00.000Z`), method: methodFor(tx.name, loan.paymentMethods),
-      notes: `From the bank: "${tx.name}"`,
+      notes: opts.notes ?? `From the bank: "${tx.name}"`,
     },
   });
   return p.id;
