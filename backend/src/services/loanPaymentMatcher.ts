@@ -6,7 +6,7 @@
  *
  * Confident matches (the lender's name in the descriptor and the amount
  * within a dollar of the monthly payment, one loan only) are logged on their
- * own; anything less waits in Expense Payments for a click. A payment already
+ * own; anything less waits under Finances → Loans → Payments to check. A payment already
  * logged by hand for that loan within five days is linked, not doubled.
  */
 import { db } from '../config/db';

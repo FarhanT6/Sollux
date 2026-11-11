@@ -10,8 +10,10 @@
  * name is not the one on file. A sure match — one loan, the amount within a
  * dollar of its payment — is logged as that month's payment (the memo's month,
  * else the due date it lands nearest), once: a payment already on the loan
- * within five days is linked, not doubled. A likelier-than-not match waits in
- * Expense Payments; anything else is only noted in the inbox log. When the
+ * within five days is linked, not doubled. A likelier-than-not match waits
+ * under Finances → Loans → Payments to check (LoanPaymentReview); when the
+ * account it left is not in Sollux it is noted in the inbox log for the owner
+ * to log by hand. Anything else is only noted in the inbox log (as skipped). When the
  * bank later shows the same debit, it takes over the email's row instead of
  * adding a second (transactionMatchService, emailTwin).
  */
@@ -123,8 +125,21 @@ export async function recordOutgoingP2P(userId: string, p: OutgoingP2P, ref: str
   }
   if (paymentId) return { outcome: 'loan', detail: `${money2} ${sentTo} logged on the ${pick.lender} loan${month ? ` for ${month.toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' })}` : ''}${p.confirmation ? ` (conf ${p.confirmation})` : ''}` };
   return bankAccountId
-    ? { outcome: 'review', detail: `${money2} ${sentTo} — maybe the ${pick.lender} loan (${pick.expected ? `its payment is $${pick.expected.toFixed(2)}` : 'no payment amount on file'}); waiting in Expense Payments` }
-    : { outcome: 'skipped', detail: `${money2} ${sentTo} — maybe the ${pick.lender} loan, but not sure${p.fromLast4 ? ` and account ··${p.fromLast4} is not in Sollux` : ''}: log it on the loan if it was` };
+    ? { outcome: 'review', detail: `${money2} ${sentTo} — maybe the ${pick.lender} loan (${pick.expected ? `its payment is $${pick.expected.toFixed(2)}` : 'no payment amount on file'}); waiting under Finances → Loans → Payments to check` }
+    : { outcome: 'review', detail: `${money2} ${sentTo} — maybe the ${pick.lender} loan, but not sure${p.fromLast4 ? `, and account ··${p.fromLast4} is not in Sollux` : ''}: if it was, log it on the loan under Finances → Loans` };
+}
+
+/**
+ * The month a payment read from a "you sent money" email names in its memo
+ * ("Zelle to Sam Example · conf EXCT12 · 1200 Elm Grove Ln November 2026 Payment"):
+ * only the memo part is read, so a payee called May is not May.
+ */
+export function emailMemoMonth(name: string, date: Date): string | null {
+  const parts = name.split(' · ');
+  if (parts.length < 2) return null;
+  const memo = parts.slice(1).filter(p => !/^conf\s/i.test(p)).join(' ');
+  const m = memoMonth(date, memo);
+  return m ? m.toISOString().slice(0, 7) : null;
 }
 
 /**

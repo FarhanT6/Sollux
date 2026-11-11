@@ -470,11 +470,11 @@ export interface IncomingTransaction {
     invoices: { id: string; label: string; total: number; paid: number; outstanding: number; status: string }[];
   } | null;
   bankAccountId: string | null;
-  bankAccount?: { id: string; name: string; bank?: string | null } | null;
+  bankAccount?: { id: string; name: string; bank?: string | null; last4?: string | null } | null;
   amount: number;
   date: string;
   name: string;
-  /** bank = the bank feed; email = read from a Zelle / Venmo / Cash App email */
+  /** bank = the bank feed; email = read from a "you sent money" Zelle / Venmo / Cash App / PayPal email */
   source?: 'bank' | 'email';
   confirmation?: string | null;
   memo?: string | null;
@@ -508,11 +508,11 @@ export interface UtilityCandidate {
 export interface OutgoingTransaction {
   id: string;
   bankAccountId: string | null;
-  bankAccount?: { id: string; name: string; bank?: string | null } | null;
+  bankAccount?: { id: string; name: string; bank?: string | null; last4?: string | null } | null;
   amount: number;
   date: string;
   name: string;
-  /** bank = the bank feed; email = read from a Zelle / Venmo / Cash App email */
+  /** bank = the bank feed; email = read from a "you sent money" Zelle / Venmo / Cash App / PayPal email */
   source?: 'bank' | 'email';
   confirmation?: string | null;
   memo?: string | null;
@@ -525,7 +525,9 @@ export interface OutgoingTransaction {
   category?: ExpenseCategory | null;
   statementId?: string | null;
   loanId?: string | null;
-  loan?: { id: string; lender: string } | null;
+  loan?: { id: string; lender: string; expected?: number | null } | null;
+  /** An applied loan payment: the month (YYYY-MM) it was logged for. */
+  loggedFor?: string | null;
   status: IncomingTransactionStatus;
   appliedType?: string | null;
   appliedId?: string | null;

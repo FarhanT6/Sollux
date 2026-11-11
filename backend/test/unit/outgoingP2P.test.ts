@@ -1,7 +1,7 @@
 /** "You sent money" emails: the payment the owner made, read without Claude. Made-up names, amounts and numbers. */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseOutgoingP2P } from '../../src/services/outgoingP2PEmails';
+import { parseOutgoingP2P, emailMemoMonth } from '../../src/services/outgoingP2PEmails';
 import { parseP2PEmail } from '../../src/services/p2pPaymentEmails';
 
 const at = new Date('2026-11-11T06:46:00Z');
@@ -33,4 +33,13 @@ test('Venmo, Cash App and PayPal sends; requests, scheduled and money received a
   assert.equal(parseOutgoingP2P(bank, 'Your Zelle request to Sam Example', 'You requested $50.00 from Sam Example', at), null);
   assert.equal(parseOutgoingP2P(bank, 'Your Zelle payment is scheduled', 'You sent $50.00 to Sam Example on 11/20/2026', at), null);
   assert.equal(parseOutgoingP2P(bank, 'Sam Example sent you money with Zelle', 'SAM EXAMPLE sent you $50.00', at), null);
+});
+
+test('the month a payment email\'s memo names, read from the memo part only', () => {
+  const d = new Date('2026-11-03T00:00:00Z');
+  assert.equal(emailMemoMonth('Zelle to Sam Example · conf EXCT12AB34CD · 1200 Elm Grove Ln October 2026 Payment', d), '2026-10');
+  assert.equal(emailMemoMonth('Zelle to Sam Example · 12 Pine Ct Nov payment', d), '2026-11');
+  // A payee called May is not May; no memo, no month.
+  assert.equal(emailMemoMonth('Zelle to May Example · conf EXCT12AB34CD', d), null);
+  assert.equal(emailMemoMonth('ZELLE TO MAY EXAMPLE ON 11/03', d), null);
 });
