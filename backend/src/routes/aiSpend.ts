@@ -329,6 +329,24 @@ router.post('/test/portal/fill-lookup', async (req: Request, res: Response) => {
   }
 });
 
+// GET /fetch-month?month=YYYY-MM — every account's statement for the month: on file, or why not and when Sollux tries next.
+router.get('/fetch-month', async (req: Request, res: Response, next) => {
+  try {
+    const { fetchMonth } = await import('../services/fetchMonth');
+    const data = await fetchMonth(req.dbUserId!, typeof req.query.month === 'string' ? req.query.month : null);
+    res.json({ ...data, workers: await workerStatus() });
+  } catch (err) { next(err); }
+});
+
+// POST /fetch-month/fetch — Fetch now for the given accounts, else every one due or late this month.
+router.post('/fetch-month/fetch', async (req: Request, res: Response, next) => {
+  try {
+    const { fetchMissing } = await import('../services/fetchMonth');
+    const ids = Array.isArray(req.body?.ids) ? (req.body.ids as unknown[]).filter((x): x is string => typeof x === 'string').slice(0, 200) : null;
+    res.json(await fetchMissing(req.dbUserId!, ids));
+  } catch (err) { next(err); }
+});
+
 router.get('/test/portal', async (req: Request, res: Response) => {
   const accounts = await db.utilityAccount.findMany({
     where: { property: { userId: req.dbUserId! } },

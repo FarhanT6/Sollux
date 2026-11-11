@@ -2,7 +2,7 @@ import { Worker, Job } from 'bullmq';
 import { jobStarted, jobEnded } from './heartbeat';
 import { withAiContext } from '../ai/meter';
 import { overdueAfterDays, billCycleDays } from '../lib/billCadence';
-import { nextBillExpected } from '../services/nextFetch';
+import { scheduledWait } from '../services/nextFetch';
 import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';
@@ -12,7 +12,7 @@ import { cardFetchSkip } from '../lib/cardFetchSchedule';
 import { uploadDocument, buildStatementKey } from '../services/s3Service';
 import { guardWorker } from './redisGuard';
 import { insightQueue, scrapeQueue, createWorkerConnection, workerTuning } from './queues';
-import { websiteFor, isLookupPage } from '../lib/providerDirectory';
+import { websiteFor, isLookupPage, isLookupAccount } from '../lib/providerDirectory';
 
 interface ScrapeJobData {
   utilityAccountId: string;
@@ -140,36 +140,15 @@ async function lookupStart(accountId: string): Promise<string | undefined> {
   return /^\d{5,8}\s*-\s*\d{5,8}$/.test(full) ? OCEANSIDE_LOOKUP : undefined;
 }
 
-const DAY = 86400000;
 /**
  * Why a fetch nobody asked for (the schedule, or a "your bill is ready"
- * email) should not run now, or null when it should. Each run is a browser,
- * Claude calls and often a texted code, so:
- * - not before the next bill is due by the account's cycle; a bill-ready
- *   email is believed from 10 days before that, not right after a bill was
- *   filed (Mohela and Blue Shield send reminders saying "view your statement
- *   online" every few days, and each one started a fetch);
- * - never twice in a day;
- * - and once due, runs that found nothing back off: 1, 2, 4, then every 7
- *   days, until a new statement comes in. A provider that stopped billing,
- *   or a portal the agent cannot get statements from, was fetched nightly
- *   for ever.
+ * email) should not run now, or null when it should — the rule is
+ * lib/fetchPlan.ts fetchWait: not before the next bill is due by the
+ * account's own cycle, never twice in a day, and backing off while runs find
+ * nothing. Each run is a browser, Claude calls and often a texted code.
  */
-async function scheduledSkip(accountId: string, cadence: string | null, lastRun: Date | null, billPosted: boolean): Promise<string | null> {
-  // The next bill is due when this account's bills usually come out, learned from its own history.
-  const { on, last } = await nextBillExpected(accountId, cadence);
-  const lead = billPosted ? 10 * DAY : 0;
-  if (on && Date.now() < on.getTime() - lead) return `the ${last!.statementDate.toISOString().slice(0, 10)} statement is the latest; the next is expected about ${on.toISOString().slice(0, 10)}`;
-  const sinceRun = lastRun ? Date.now() - lastRun.getTime() : Infinity;
-  if (sinceRun < 20 * 3600000) return 'already ran today';
-  // Runs since the newest statement came in that brought nothing.
-  const misses = await db.syncJob.count({
-    where: { utilityAccountId: accountId, completedAt: { not: null, gt: last?.createdAt ?? new Date(Date.now() - 60 * DAY) }, statementsFound: 0 },
-  });
-  if (billPosted && misses < 2) return null;
-  const wait = misses === 0 ? 0 : Math.min(2 ** (misses - 1), 7) * DAY;
-  if (sinceRun < wait) return `${misses} run${misses === 1 ? '' : 's'} since the last statement found nothing; next try in ${Math.ceil((wait - sinceRun) / DAY)} day(s)`;
-  return null;
+async function scheduledSkip(account: { id: string; billingCadence: string | null; termMonths: number | null; lastAgentRunAt: Date | null }, billPosted: boolean): Promise<string | null> {
+  return (await scheduledWait(account, billPosted)).skip;
 }
 
 export async function agentJob(job: Job<ScrapeJobData>, account: { id: string; providerName: string; property: { id: string } }): Promise<void> {
@@ -368,10 +347,12 @@ const worker = new Worker<ScrapeJobData>(
     const fullNumber = (() => { try { return account.accountNumberEnc ? decrypt(account.accountNumberEnc).trim() : ''; } catch { return ''; } })();
     const invoiceCloud = /oceanside/i.test(account.providerName) && /^\d{5,8}\s*-\s*\d{5,8}$/.test(fullNumber);
     const slug = invoiceCloud ? 'city-oceanside-ic' : account.providerSlug;
-    if (job.data.forceAgent || !getScraperProvider(slug) || (slug === 'gmail-fallback' && account.usernameEnc)) {
+    // A Gmail-read account with a login, or with a bill lookup page (no login: the name or
+    // customer number on the bill), is fetched by the agent; the Gmail stub found nothing.
+    if (job.data.forceAgent || !getScraperProvider(slug) || (slug === 'gmail-fallback' && (account.usernameEnc || isLookupAccount(account)))) {
       // forceAgent: a built-in scraper's run for the whole login failed just now, so it is due.
       if (!job.data.manual && !job.data.forceAgent) {
-        const skip = await scheduledSkip(utilityAccountId, account.billingCadence, account.lastAgentRunAt, job.data.trigger === 'bill_posted');
+        const skip = await scheduledSkip(account, job.data.trigger === 'bill_posted');
         if (skip) { console.log(`[ScrapeWorker] ${account.providerName}: not fetching — ${skip}`); return; }
       }
       await agentJob(job, account);

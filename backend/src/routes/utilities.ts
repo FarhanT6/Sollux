@@ -417,7 +417,7 @@ router.get('/:id', async (req, res, next) => {
     // The provider's website: the address the owner saved or a bill printed,
     // else the provider directory's.
     // When the schedule fetches next: the day its bills usually come out (services/nextFetch.ts).
-    const next = await nextBillExpected(account.id, account.billingCadence).catch(() => null);
+    const next = await nextBillExpected(account.id, account.billingCadence, account.termMonths).catch(() => null);
     const nextFetch = next?.on ? { on: next.on.toISOString().slice(0, 10), cycleDays: next.cycleDays, learned: next.learned } : null;
     res.json({ ...rest, payments, hasCredentials: !!usernameEnc, website: websiteFor(account), ...lookupInfo({ ...account, usernameEnc }), nextFetch });
   } catch (err) { next(err); }

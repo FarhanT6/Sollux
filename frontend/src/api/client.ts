@@ -1503,6 +1503,23 @@ export const getAiTest = () => api.get<AiTestState>('/ai-spend/test').then(r => 
 export const startAiTest = (only?: string) => api.post('/ai-spend/test', only ? { only } : {}).then(r => r.data);
 export interface QueueSnapshot { waiting: number; active: { account: string; since: string | null; kind: string }[] }
 export interface WorkerStatus { state: 'ok' | 'busy' | 'paused' | 'stopped' | 'never'; name: string | null; lastSeen: string | null; active: number; message: string }
+/** Where an account's statement stands for a month (Settings → AI usage → This month's statements). */
+export type FetchMonthState = 'got' | 'coming' | 'due' | 'late' | 'not-this-month' | 'no-history';
+export interface FetchMonthAccount {
+  id: string; providerName: string; last4: string | null; place: string; propertyId: string; category: string; personal: boolean;
+  state: FetchMonthState; expectedOn: string | null;
+  got: { statementId: string; statementDate: string; amountDue: number | null; via: 'portal' | 'email' | 'upload' | 'typed'; addedAt: string } | null;
+  fetchable: boolean; syncEnabled: boolean; running: boolean; waitingForCode: boolean;
+  lastTry: { at: string; ok: boolean; found: number; error: string | null } | null;
+  triesSinceDue: number; nextTry: string | null; why: string;
+}
+export interface FetchMonth {
+  month: string; months: string[]; schedule: { lastRunAt: string | null; everyHours: number };
+  counts: Record<FetchMonthState, number>; accounts: FetchMonthAccount[]; workers: WorkerStatus;
+}
+export const getFetchMonth = (month?: string) => api.get<FetchMonth>('/ai-spend/fetch-month', { params: month ? { month } : {} }).then(r => r.data);
+/** Fetch now for these accounts, else every one due or late this month; one run per login. */
+export const fetchMonthMissing = (ids?: string[]) => api.post<{ queued: number; accounts: number }>('/ai-spend/fetch-month/fetch', ids ? { ids } : {}).then(r => r.data);
 export const getPortalTests = () => api.get<{ lookupFill?: { total: number; done: number; filled: number } | null; accounts: PortalTestAccount[]; sharedRecipes: { host: string; successes: number; failures: number }[]; monthCalls: number; monthCost: number; workers: WorkerStatus; queue: QueueSnapshot | null }>('/ai-spend/test/portal').then(r => r.data);
 /** Fill the customer number, name on the bill and pay-online address from the bills already on file. */
 export const fillLookupFromBills = () => api.post<{ started: boolean; count: number | null }>('/ai-spend/test/portal/fill-lookup').then(r => r.data);
