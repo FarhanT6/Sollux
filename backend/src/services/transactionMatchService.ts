@@ -19,6 +19,7 @@
 import { plaidClient } from '../config/plaid';
 import { db } from '../config/db';
 import { clearPendingByTransaction } from './pendingMoney';
+import { emailTwin } from './outgoingP2PEmails';
 import { decrypt } from '../crypto/encrypt';
 import { recordRentPayment } from './rentPaymentService';
 import { findTwin, findLoggedPayment, sureOfSender, descriptorMemo } from './p2pPaymentEmails';
@@ -430,6 +431,17 @@ export async function syncTransactionsForItem(plaidItemId: string) {
       // it goes to the loan tracker, logged on its own when the match is sure.
       if ((bankAccount.watchForExpenses || bankAccount._count.loansPaidFrom > 0) && tx.amount > 0) {
         const cands = await findLoanCandidates(name, tx.amount, plaidItem.userId, bankAccount.id);
+        // Already read from its "you sent" email: that row becomes the bank's, applied now if it waited and this match is sure.
+        const twin = await emailTwin(plaidItem.userId, bankAccount.id, tx.amount, new Date(tx.date));
+        if (twin) {
+          const sureNow = cands.length ? confidentLoan(cands) : null;
+          await db.outgoingTransaction.update({ where: { id: twin.id }, data: { plaidTransactionId: tx.transaction_id } });
+          if (twin.status !== 'APPLIED' && sureNow) {
+            const paymentId = await logLoanPaymentFromTransaction({ ...twin, plaidTransactionId: tx.transaction_id } as any, sureNow.loanId, plaidItem.userId);
+            await db.outgoingTransaction.update({ where: { id: twin.id }, data: { status: 'APPLIED', appliedType: 'LOAN_PAYMENT', appliedId: paymentId, loanId: sureNow.loanId } });
+          }
+          continue;
+        }
         if (cands.length) {
           const seen = await db.outgoingTransaction.findUnique({ where: { plaidTransactionId: tx.transaction_id }, select: { id: true } });
           if (seen) continue;

@@ -71,7 +71,7 @@ export function sureOfTenant(
   return true;
 }
 
-function channelOf(from: string, subject: string, body: string): P2PChannel | null {
+export function channelOf(from: string, subject: string, body: string): P2PChannel | null {
   const f = from.toLowerCase();
   if (/venmo\.com/.test(f)) return 'VENMO';
   if (/cash\.app|square(up)?\.com/.test(f)) return 'CASH_APP';
@@ -87,7 +87,7 @@ function channelOf(from: string, subject: string, body: string): P2PChannel | nu
 const money = (s: string) => Number(s.replace(/[,\s]/g, ''));
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 
-function dateFrom(text: string): Date | null {
+export function dateFrom(text: string): Date | null {
   // "Date 10/04/2026", "Sent on Oct 4, 2026", "Transfer Date and Amount: Oct 9, 2026".
   const labelled = /(?:date|sent on|received on|deposited on|\bon)\b[^\n\d$]{0,25}?((?:\d{1,2}\/\d{1,2}\/\d{2,4})|(?:[A-Za-z]{3,9}\.? \d{1,2},? \d{4}))/i.exec(text);
   const raw = labelled?.[1];
@@ -105,7 +105,7 @@ function dateFrom(text: string): Date | null {
   return new Date(Date.UTC(y, m, d));
 }
 
-function cleanName(raw: string): string | null {
+export function cleanName(raw: string): string | null {
   const words = raw.replace(/[^A-Za-z0-9.'&\- ]/g, ' ').split(/\s+/).filter(Boolean);
   while (words.length && NOT_NAME.has(words[0].toLowerCase())) words.shift();
   while (words.length && NOT_NAME.has(words[words.length - 1].toLowerCase())) words.pop();

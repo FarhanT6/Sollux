@@ -25,6 +25,7 @@ import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
 import { intakeBill, type ReviewItem } from '../services/documentIntake';
 import { parseP2PEmail, recordP2PEmail } from '../services/p2pPaymentEmails';
+import { parseOutgoingP2P, recordOutgoingP2P } from '../services/outgoingP2PEmails';
 import { parseWithdrawalEmail, recordWithdrawal } from '../services/walletEmails';
 import { intakeManagerStatement, isManagerStatementPdf, managerForSender } from '../services/managerStatementEmail';
 
@@ -56,7 +57,7 @@ const MONEY = /\$\s?\d[\d,]*\.\d{2}/;
 const SERVICE_NOTICE = /service (interruption|suspension|disconnection|termination)|interrupt(ion)? (of )?service|disconnect|shut[\s-]?off|suspen(d|sion)|past[\s-]?due|delinquen|final notice|termination notice|collection(s)? (activity|notice)|cancell?ation notice|notice of (cancell?ation|non-?renewal)/i;
 const SERVICE_NOTICE_BODY = /service (interruption|suspension|disconnection|termination)|(will be|has been|may have already been) (interrupted|disconnected|shut off|suspended)|shut[\s-]?off notice|disconnection notice|final notice/i;
 // Money received through Zelle, Venmo, Cash App, PayPal or Apple Cash: rent, read without Claude.
-const P2P_HINT = /zelle|venmo|cash ?app|paypal|apple cash|sent you|paid you|received money|got money|been paid/i;
+const P2P_HINT = /zelle|venmo|cash ?app|paypal|apple cash|sent you|paid you|received money|got money|been paid|you sent|you paid/i;
 const P2P_SENDER = /@(\w+\.)*(venmo\.com|cash\.app|square\.com|squareup\.com)\b/i;
 // Money leaving a payment app for a bank: recorded as a transfer out of that wallet (services/walletEmails).
 const WITHDRAW_HINT = /transfer|withdr[ae]w|cash(ed)? out|deposit(ed)? to your bank/i;
@@ -193,7 +194,7 @@ const paymentHistoryKey = (tokenId: string) => `p2p-history:${tokenId}`;
 async function readPaymentHistory(userId: string, token: { id: string }, gmail: gmail_v1.Gmail, sum: InboxRunSummary) {
   if (await db.appSetting.findUnique({ where: { key: paymentHistoryKey(token.id) } })) return;
   const since = Math.floor((Date.now() - PAYMENT_HISTORY_DAYS * 86400000) / 1000);
-  const q = `after:${since} -category:promotions -category:social (subject:(zelle OR venmo OR "cash app" OR "apple cash" OR "sent you" OR "paid you" OR "received money" OR "got money" OR "been paid") OR from:(venmo.com OR cash.app OR square.com))`;
+  const q = `after:${since} -category:promotions -category:social (subject:(zelle OR venmo OR "cash app" OR "apple cash" OR "sent you" OR "paid you" OR "received money" OR "got money" OR "been paid" OR "you sent" OR "you paid") OR from:(venmo.com OR cash.app OR square.com))`;
   const ids: string[] = [];
   let pageToken: string | undefined;
   do {
@@ -224,14 +225,17 @@ async function readPaymentHistory(userId: string, token: { id: string }, gmail: 
         return out.join('\n');
       };
       const html = await textOf('text/html');
-      const p2p = parseP2PEmail(from, subject, html ? htmlToText(html) : await textOf('text/plain'), receivedAt);
-      if (!p2p) continue;
-      const r = await recordP2PEmail(userId, p2p, rfcMessageId ?? messageId);
+      const bodyText = html ? htmlToText(html) : await textOf('text/plain');
+      const p2p = parseP2PEmail(from, subject, bodyText, receivedAt);
+      // Money the owner sent (a private lender paid by Zelle): a loan payment when it surely is one.
+      const sent = p2p ? null : parseOutgoingP2P(from, subject, bodyText, receivedAt);
+      if (!p2p && !sent) continue;
+      const r = p2p ? await recordP2PEmail(userId, p2p, rfcMessageId ?? messageId) : await recordOutgoingP2P(userId, sent!, rfcMessageId ?? messageId);
       sum.applied++;
       await db.inboxMessage.upsert({
         where: { gmailTokenId_messageId: { gmailTokenId: token.id, messageId } },
-        create: { userId, gmailTokenId: token.id, messageId, rfcMessageId, fromAddress: from.slice(0, 300), subject: subject.slice(0, 300), receivedAt, outcome: r.outcome, detail: r.detail.slice(0, 500) },
-        update: { outcome: r.outcome, rfcMessageId, detail: r.detail.slice(0, 500), createdAt: new Date() },
+        create: { userId, gmailTokenId: token.id, messageId, rfcMessageId, fromAddress: from.slice(0, 300), subject: subject.slice(0, 300), receivedAt, outcome: r.outcome === 'loan' ? 'applied' : r.outcome, detail: r.detail.slice(0, 500) },
+        update: { outcome: r.outcome === 'loan' ? 'applied' : r.outcome, rfcMessageId, detail: r.detail.slice(0, 500), createdAt: new Date() },
       }).catch(() => {});
     } catch (err) {
       sum.errors.push(`payment email ${messageId}: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);
@@ -264,7 +268,7 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
         await readPaymentHistory(userId, token, gmail, sum).catch(err => sum.errors.push(`${token.email}: payment history: ${err instanceof Error ? err.message : String(err)}`));
         const since = token.backfillFrom
           ?? (token.lastScanAt ? new Date(token.lastScanAt.getTime() - 24 * 3600 * 1000) : new Date(Date.now() - FIRST_RUN_DAYS * 24 * 3600 * 1000));
-        const q = `after:${Math.floor(since.getTime() / 1000)} -category:promotions -category:social (has:attachment OR subject:(bill OR statement OR invoice OR due OR notice OR premium OR renewal OR tax OR cancellation OR disconnection) OR subject:(zelle OR venmo OR "cash app" OR "apple cash" OR "sent you" OR "paid you" OR "received money" OR "got money" OR "been paid") OR from:(venmo.com OR cash.app OR square.com) OR (from:(paypal.com OR apple.com) subject:(transfer OR withdraw OR withdrawn OR "cash out" OR "apple cash")))`;
+        const q = `after:${Math.floor(since.getTime() / 1000)} -category:promotions -category:social (has:attachment OR subject:(bill OR statement OR invoice OR due OR notice OR premium OR renewal OR tax OR cancellation OR disconnection) OR subject:(zelle OR venmo OR "cash app" OR "apple cash" OR "sent you" OR "paid you" OR "received money" OR "got money" OR "been paid" OR "you sent" OR "you paid") OR from:(venmo.com OR cash.app OR square.com) OR (from:(paypal.com OR apple.com) subject:(transfer OR withdraw OR withdrawn OR "cash out" OR "apple cash")))`;
 
         const ids: string[] = [];
         let pageToken: string | undefined;
@@ -340,6 +344,14 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
                 const r = await recordP2PEmail(userId, p2p, rfcMessageId ?? messageId);
                 sum.applied++;
                 await record(r.outcome, r.detail);
+                continue;
+              }
+              // "You sent $8,333.33 to …": money the owner sent — a loan payment when it surely is one.
+              const sent = parseOutgoingP2P(from, subject, text, receivedAt);
+              if (sent) {
+                const r = await recordOutgoingP2P(userId, sent, rfcMessageId ?? messageId);
+                if (r.outcome !== 'skipped') sum.applied++; else sum.skipped++;
+                await record(r.outcome === 'loan' ? 'applied' : r.outcome, r.detail);
                 continue;
               }
               // Money moved from Venmo / Cash App / PayPal / Apple Cash to a bank.
