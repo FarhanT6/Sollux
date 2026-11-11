@@ -12,7 +12,6 @@ import { runNoticeReminders, importEarlierNotices } from '../services/noticeTrac
 import { detachEmailPrintouts, detachCardEmailPrintouts } from '../services/emailPrintouts';
 import { backfillCardPayments } from '../services/cardPayments';
 import { redoUncheckedManagerStatements } from '../services/managerStatementRedo';
-import { decrypt } from '../crypto/encrypt';
 import { runDailyBalanceSnapshot } from './balanceSnapshotWorker';
 import { syncAllWatchedAccounts } from '../services/transactionMatchService';
 import { applyDueRentIncreases, rolloverExpiredLeases, accrueOverdueRent } from './rentIncreaseWorker';
@@ -41,47 +40,13 @@ void import('../services/planApplication').then(m => m.reapplyLoanPaymentsLessFe
   .catch(err => console.warn('[Workers] loan fee re-apply failed:', err instanceof Error ? err.message : err));
 
 // ── Scheduled Jobs ────────────────────────────────────────
-// Run all scrapes every 6 hours.
-// Accounts that share the same provider + login are grouped — only ONE job is
-// queued per credential group. The worker logs in once and handles all of them.
-async function scheduleAllScrapes() {
-  const accounts = await db.utilityAccount.findMany({
-    // A Gmail-read account is synced only once it has a portal login (the
-    // portal agent fetches its statements); without one it ran the empty
-    // fallback scraper and "succeeded" with nothing, forever (#191).
-    where: { syncEnabled: true, OR: [{ providerSlug: { not: 'gmail-fallback' } }, { usernameEnc: { not: null } }] },
-    include: { property: { select: { userId: true } } },
-  });
-
-  // Build credential groups: key = userId:providerSlug:username
-  const seen = new Set<string>();
-  const toQueue: string[] = [];
-
-  for (const acct of accounts) {
-    let username = '';
-    try { username = acct.usernameEnc ? decrypt(acct.usernameEnc) : ''; } catch { /* skip */ }
-    const groupKey = `${acct.property.userId}:${acct.providerSlug}:${username}`;
-    if (!seen.has(groupKey)) {
-      seen.add(groupKey);
-      toQueue.push(acct.id); // one representative per credential group
-    }
-  }
-
-  console.log(`[Scheduler] Queuing ${toQueue.length} scrape job(s) (${accounts.length} accounts, deduped by login)`);
-
-  for (const accountId of toQueue) {
-    await scrapeQueue.add(
-      'scrape',
-      { utilityAccountId: accountId },
-      {
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 120000 },
-        removeOnComplete: { count: 100 },
-        removeOnFail: { count: 50 },
-      }
-    );
-  }
-}
+// Statements: a tick every 15 minutes runs the schedule when its last run is
+// 6 hours old (services/fetchScheduler.ts). A plain 6-hour setInterval
+// restarted with every deploy and on busy days never ran at all.
+const fetchTick = () => void import('../services/fetchScheduler').then(m => m.scheduleTick())
+  .catch(err => console.warn('[Scheduler] statement fetches:', err instanceof Error ? err.message : err));
+setTimeout(fetchTick, 3 * 60_000);
+setInterval(fetchTick, 15 * 60_000);
 
 // Run all insight generations nightly
 async function scheduleAllInsights() {
@@ -96,9 +61,6 @@ async function scheduleAllInsights() {
     );
   }
 }
-
-// Run scrapes every 6 hours
-setInterval(scheduleAllScrapes, 6 * 60 * 60 * 1000);
 
 // Cards with a website login: looked at every 6 hours; the worker fetches only
 // once a new statement can be out (lib/cardFetchSchedule.ts), so most of these end at once.
@@ -245,8 +207,8 @@ setTimeout(() => {
   setTimeout(() => { run(); setInterval(run, 24 * 60 * 60 * 1000); }, first.getTime() - Date.now());
 })();
 
-// NOTE: Removed startup auto-scrape. Scrapes run every 6 hours via setInterval above,
-// or on demand via the Sync button / POST /api/utilities/:id/sync.
+// Statements are fetched by the 15-minute tick above (every 6 hours at most per
+// account, and only when its next bill is due), or on demand via Fetch now.
 
 // ── Startup cleanup: fetches left "running" by a worker that died ──
 // If the worker process is killed mid-job (OOM, crash), its sync job stays

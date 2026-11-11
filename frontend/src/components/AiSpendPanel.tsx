@@ -5,6 +5,7 @@ import { fmtMoney } from '../lib/money';
 import { fmtDate, fmtMoment } from '../lib/date';
 import PortalCodeBanner from './utility/PortalCodeBanner';
 import ConnectorCard from './ConnectorCard';
+import FetchMonthCard from './FetchMonthCard';
 import { toast } from '../lib/toast';
 
 /** A Claude call often costs a fraction of a cent; fmtMoney would show $0.00. */
@@ -20,8 +21,9 @@ const STATUS: Record<string, { label: string; color: string }> = {
 
 /**
  * AI usage: what Claude has cost this month, by feature, against the budget;
- * a test run of every feature that calls Claude, on the owner's own data;
- * and statement fetching tested account by account.
+ * every account's statement for the month (FetchMonthCard); a test run of
+ * every feature that calls Claude, on the owner's own data; and statement
+ * fetching tested account by account.
  */
 export default function AiSpendPanel() {
   const [spend, setSpend] = useState<AiSpend | null>(null);
@@ -100,6 +102,9 @@ export default function AiSpendPanel() {
         </p>
         {spend.scope === 'app' && <BudgetEditor current={spend.budget} onSaved={b => setSpend(s => (s ? { ...s, budget: b } : s))} />}
       </div>
+
+      {/* Every account's statement for the month: on file, or why not and when Sollux tries next. */}
+      <FetchMonthCard />
 
       <div className="card p-5">
         <h2 className="text-sm font-semibold text-white mb-3">Where it went</h2>

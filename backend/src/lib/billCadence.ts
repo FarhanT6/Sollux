@@ -9,7 +9,9 @@ export function overdueAfterDays(cadence: string | null | undefined): number | n
 }
 
 /** Days between bills: when the next one is expected. Unknown or once-a-term cadences fall back to monthly checks. */
-export function billCycleDays(cadence: string | null | undefined): number {
+export function billCycleDays(cadence: string | null | undefined, termMonths?: number | null): number {
+  // A policy billed once a term (6 or 12 months) was checked monthly.
+  if (cadence === 'TERM' && termMonths && termMonths > 0) return Math.round(termMonths * 30.44);
   return cadence === 'BIMONTHLY' ? 60 : cadence === 'QUARTERLY' ? 91 : cadence === 'SEMI_ANNUAL' ? 182 : cadence === 'ANNUAL' ? 365 : 30;
 }
 
@@ -23,8 +25,8 @@ export function billCycleDays(cadence: string | null | undefined): number {
  * aside, and of the rest the longest is used — on that day the bill is out
  * whichever way this cycle ran. Too little history: the cadence's cycle.
  */
-export function learnedCycleDays(statementDates: Date[], cadence: string | null | undefined): { days: number; learned: boolean } {
-  const fallback = billCycleDays(cadence);
+export function learnedCycleDays(statementDates: Date[], cadence: string | null | undefined, termMonths?: number | null): { days: number; learned: boolean } {
+  const fallback = billCycleDays(cadence, termMonths);
   const days = [...statementDates].map(d => d.getTime()).sort((a, b) => b - a).slice(0, 7);
   const gaps: number[] = [];
   for (let i = 0; i + 1 < days.length; i++) {
