@@ -122,6 +122,9 @@ app.use((req, res, next) => {
   }
   // The worker collecting a connector session's downloads signs with the session, not Clerk.
   if (req.path.startsWith('/api/connector/files/')) return next();
+  // The keep-alive ping (an uptime service, every few minutes) and Render's own check: no sign-in to
+  // look at, and with a test key Clerk could answer it with a redirect the monitor reads as down.
+  if (req.path === '/health') return next();
   return clerkMw(req, res, next);
 });
 app.use(helmet());
@@ -197,7 +200,10 @@ const STARTED_AT = new Date().toISOString();
 // now a fix has looked broken when the truth was that a deploy failed and
 // production was still serving older code; guessing at that from the outside
 // costs far more than one field does.
-app.get('/health', (_, res) => res.json({
+// Also the target of the keep-alive ping that stops Render's free instance from sleeping: it answers
+// without touching the database, so the ping does not keep Neon's compute awake too (a free Neon project
+// has 100 CU-hours a month; an always-on compute uses about 186).
+app.get('/health', (_, res) => res.set('Cache-Control', 'no-store').json({
   status: 'ok',
   commit: process.env.RENDER_GIT_COMMIT ?? 'unknown',
   branch: process.env.RENDER_GIT_BRANCH ?? 'unknown',
