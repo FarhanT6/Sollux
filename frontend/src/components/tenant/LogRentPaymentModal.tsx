@@ -41,15 +41,16 @@ function monthOptions(center: string) {
   return out;
 }
 
-export default function LogRentPaymentModal({ target, period, onClose, onSaved }: {
-  target: LogRentTarget; period?: string; onClose: () => void; onSaved: () => void;
+export default function LogRentPaymentModal({ target, period, method: initialMethod, onClose, onSaved }: {
+  /** method: how it was paid, when it is already known (opened from a wallet in Cash, checks & apps). */
+  target: LogRentTarget; period?: string; method?: RentPaymentMethod; onClose: () => void; onSaved: () => void;
 }) {
   const thisMonth = thisMonthISO();
   const owedNow = target.remainingThisMonth ?? target.rent;
   const [amount, setAmount] = useState(String(owedNow > 0 ? owedNow : target.rent));
   const [forMonth, setForMonth] = useState(period || thisMonth);
   const [paidDate, setPaidDate] = useState(() => todayISO());
-  const [method, setMethod] = useState<RentPaymentMethod>('ZELLE');
+  const [method, setMethod] = useState<RentPaymentMethod>(initialMethod ?? 'ZELLE');
   const [pending, setPending] = useState(false);
   const [allToArrears, setAllToArrears] = useState(false);
   // A past payment logged only for the record: back rent is left as the owner has it.

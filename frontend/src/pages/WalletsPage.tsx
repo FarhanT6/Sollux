@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import DepositRead from '../components/income/DepositRead';
-import { getWallets, updateWallet, addWalletMovement, updateWalletMovement, deleteWalletMovement, getBankAccounts, getProperties, depositChecks, undoCheckDeposit, type WalletsT, type WalletT, type WalletEntryT, type WalletMovementType } from '../api/client';
-import type { BankAccount, Property } from '../types';
+import LogRentPaymentModal from '../components/tenant/LogRentPaymentModal';
+import { getWallets, getLeases, updateWallet, addWalletMovement, updateWalletMovement, deleteWalletMovement, getBankAccounts, getProperties, depositChecks, undoCheckDeposit, type WalletsT, type WalletT, type WalletEntryT, type WalletMovementType, type WalletKind } from '../api/client';
+import type { BankAccount, Lease, Property, RentPaymentMethod } from '../types';
 import { fmtMoney } from '../lib/money';
 import { fmtDate, todayISO } from '../lib/date';
 import { describeApiError } from '../lib/apiError';
@@ -57,6 +58,13 @@ export default function WalletsPage() {
 }
 
 type Cats = WalletsT['categories'];
+/** The rent payment method each wallet holds (a money order is chosen in the dialog for Checks). */
+const RENT_METHOD: Record<WalletKind, RentPaymentMethod> = { CASH: 'CASH', CHECK: 'CHECK', VENMO: 'VENMO', CASH_APP: 'CASH_APP', PAYPAL: 'PAYPAL', APPLE_CASH: 'APPLE_CASH' };
+const leaseLabel = (l: Lease) => {
+  const who = l.leaseTenants?.map(lt => lt.tenant.fullName).join(', ') || 'Tenant';
+  const where = `${l.unit?.property?.nickname || l.unit?.property?.address || ''}${l.unit?.unitLabel ? ` ${l.unit.unitLabel}` : ''}`;
+  return where ? `${who} · ${where}` : who;
+};
 /** The categories that fit an entry: income kinds for money in, spending kinds for spending. */
 const catsFor = (cats: Cats, kind: string) => (kind === 'OTHER_IN' ? cats.income : kind === 'SPENT' ? cats.spending : []);
 
@@ -162,7 +170,17 @@ function OtherMoney({ data, properties, onChange }: { data: WalletsT; properties
 }
 
 function WalletDetail({ w, all, banks, properties, cats, onChange }: { w: WalletT; all: WalletT[]; banks: BankAccount[]; properties: Property[]; cats: Cats; onChange: (d: WalletsT) => void }) {
-  const [form, setForm] = useState({ date: todayISO(), amount: '', type: (w.kind === 'CASH' ? 'TO_BANK' : 'TO_BANK') as WalletMovementType, bankAccountId: '', toWalletId: '', description: '', category: '', propertyId: '' });
+  // RENT is not an entry of the wallet's own: it is logged on the tenant as rent paid this way, and shows here from there.
+  const [form, setForm] = useState({ date: todayISO(), amount: '', type: 'TO_BANK' as WalletMovementType | 'RENT', bankAccountId: '', toWalletId: '', description: '', category: '', propertyId: '' });
+  const [leases, setLeases] = useState<Lease[] | null>(null);
+  const [leaseId, setLeaseId] = useState('');
+  const [logging, setLogging] = useState<Lease | null>(null);
+  useEffect(() => {
+    if (form.type !== 'RENT' || leases) return;
+    getLeases({ status: 'ACTIVE', view: 'rent' })
+      .then(ls => setLeases([...ls].sort((a, b) => leaseLabel(a).localeCompare(leaseLabel(b)))))
+      .catch(e => { setLeases([]); setErr(describeApiError(e, 'Could not load tenants.')); });
+  }, [form.type, leases]);
   const [opening, setOpening] = useState(String(w.openingBalance || ''));
   const [startedAt, setStartedAt] = useState(w.startedAt);
   const [err, setErr] = useState('');
@@ -170,6 +188,11 @@ function WalletDetail({ w, all, banks, properties, cats, onChange }: { w: Wallet
   const label = 'block text-xs text-gray-500 mb-1';
 
   async function add() {
+    if (form.type === 'RENT') {
+      const l = leases?.find(x => x.id === leaseId);
+      if (!l) { setErr('Choose the tenant.'); return; }
+      setErr(''); setLogging(l); return;
+    }
     const amount = Number(form.amount);
     if (!amount) { setErr('Enter the amount.'); return; }
     if (form.type === 'TO_WALLET' && !form.toWalletId) { setErr('Choose where it went.'); return; }
@@ -197,7 +220,8 @@ function WalletDetail({ w, all, banks, properties, cats, onChange }: { w: Wallet
 
       <div className="grid grid-cols-2 md:grid-cols-6 gap-3 items-end">
         <div className="md:col-span-2"><span className={label}>Where it went (or came from)</span>
-          <select className={input} value={form.type} onChange={e => setForm({ ...form, type: e.target.value as WalletMovementType })}>
+          <select className={input} value={form.type} onChange={e => { setErr(''); setForm({ ...form, type: e.target.value as WalletMovementType | 'RENT' }); }}>
+            <option value="RENT">{w.kind === 'CHECK' ? 'Rent check or money order received' : 'Rent received from a tenant'}</option>
             <option value="TO_BANK">{w.kind === 'CASH' || w.kind === 'CHECK' ? 'Deposited into a bank account' : 'Transferred to a bank account'}</option>
             <option value="SPENT">Spent (paid for something)</option>
             <option value="TO_WALLET">Moved to another app / cash</option>
@@ -205,6 +229,11 @@ function WalletDetail({ w, all, banks, properties, cats, onChange }: { w: Wallet
             <option value="ADJUSTMENT">Correction (+ or −)</option>
           </select>
         </div>
+        {form.type === 'RENT' && <div className="md:col-span-3"><span className={label}>Tenant</span>
+          <select className={input} value={leaseId} onChange={e => setLeaseId(e.target.value)}>
+            <option value="">{leases ? (leases.length ? 'Choose…' : 'No active leases') : 'Loading…'}</option>
+            {leases?.map(l => <option key={l.id} value={l.id}>{leaseLabel(l)}</option>)}
+          </select></div>}
         {form.type === 'TO_BANK' && <div className="md:col-span-2"><span className={label}>Bank account</span>
           <select className={input} value={form.bankAccountId} onChange={e => setForm({ ...form, bankAccountId: e.target.value })}>
             <option value="">— Not recorded —</option>{banks.map(b => <option key={b.id} value={b.id}>{bankAccountLabel(b)}</option>)}
@@ -222,11 +251,22 @@ function WalletDetail({ w, all, banks, properties, cats, onChange }: { w: Wallet
             <option value="">No property</option>{properties.map(p => <option key={p.id} value={p.id}>{p.nickname || p.address}</option>)}
           </select></div>}
         {(form.type === 'SPENT' || form.type === 'OTHER_IN' || form.type === 'ADJUSTMENT') && <div className="md:col-span-2"><span className={label}>{form.type === 'OTHER_IN' ? 'From / for' : 'What for'}</span><input className={input} value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder={form.type === 'SPENT' ? 'e.g. Paid Santiago — fence repair' : form.type === 'OTHER_IN' ? 'e.g. Dryer repair — Sample Customer, check #2210' : ''} /></div>}
-        <div><span className={label}>Amount</span><input type="number" step="0.01" className={input} value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} /></div>
-        <div><span className={label}>Date</span><input type="date" className={input} value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} /></div>
-        <button className="btn btn-primary text-xs" onClick={() => void add()}>Record</button>
+        {form.type !== 'RENT' && <>
+          <div><span className={label}>Amount</span><input type="number" step="0.01" className={input} value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} /></div>
+          <div><span className={label}>Date</span><input type="date" className={input} value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} /></div>
+        </>}
+        <button className="btn btn-primary text-xs" onClick={() => void add()}>{form.type === 'RENT' ? 'Log rent…' : 'Record'}</button>
       </div>
+      {form.type === 'RENT' && <p className="text-xs text-gray-500">Logged on the tenant as rent paid by {w.kind === 'CHECK' ? 'check or money order' : w.label}: it counts toward their rent{w.kind === 'CHECK' ? ' and waits under Checks on hand until it’s deposited' : ` and adds to ${w.label} here`}.</p>}
       {err && <p className="text-xs text-red-400">{err}</p>}
+      {logging && (
+        <LogRentPaymentModal
+          target={{ leaseId: logging.id, tenant: logging.leaseTenants?.map(lt => lt.tenant.fullName).join(', ') || 'Tenant', unit: logging.unit?.unitLabel ?? '', property: logging.unit?.property?.nickname || logging.unit?.property?.address || '', rent: Number(logging.rentAmount), arrears: Number(logging.arrearsBalance) }}
+          method={RENT_METHOD[w.kind]}
+          onClose={() => setLogging(null)}
+          onSaved={async () => { setLogging(null); setLeaseId(''); try { onChange(await getWallets()); } catch { /* the entry shows on the next load */ } }}
+        />
+      )}
 
       <table className="table-base">
         <thead><tr><th className="pl-0">Date</th><th>What</th><th>Details</th><th className="text-right">Amount</th><th /></tr></thead>
