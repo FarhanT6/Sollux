@@ -10,61 +10,41 @@ router.get('/summary', async (req, res, next) => {
   try {
     const userId = req.dbUserId!;
 
-    const properties = await db.property.findMany({
-      where: { userId },
-      include: {
-        utilityAccounts: {
-          include: {
-            statements: { orderBy: { statementDate: 'desc' }, take: 1 },
-          },
-        },
-        _count: { select: { insights: { where: { isRead: false, isDismissed: false } } } },
-      },
-    });
-
-    const totalProperties = properties.length;
-    const totalUtilityAccounts = properties.reduce((s, p) => s + p.utilityAccounts.length, 0);
-
-    // Sum latest statement amounts for "monthly total"
-    const monthlyTotal = properties.reduce((sum, prop) =>
-      sum + prop.utilityAccounts.reduce((s, acc) => {
-        const latest = acc.statements[0];
-        return s + Number(latest?.amountDue ?? 0);
-      }, 0), 0);
-
-    const unreadInsights = await db.aIInsight.count({
-      where: {
-        property: { userId },
-        isRead: false,
-        isDismissed: false,
-      },
-    });
-
-    const alertInsights = await db.aIInsight.count({
-      where: {
-        property: { userId },
-        isRead: false,
-        isDismissed: false,
-        severity: 'ALERT',
-      },
-    });
-
-    // Bills due within 7 days
+    // In parallel, and without loading every statement: the newest bill on each account is
+    // summed by the database (DISTINCT ON), where every statement used to come back to be read here.
     const sevenDaysFromNow = new Date();
     sevenDaysFromNow.setDate(sevenDaysFromNow.getDate() + 7);
+    const [totalProperties, totalUtilityAccounts, latest, unreadInsights, alertInsights, dueSoon] = await Promise.all([
+      db.property.count({ where: { userId } }),
+      db.utilityAccount.count({ where: { property: { userId } } }),
+      // Sum of the latest statement amounts: the "monthly total".
+      db.$queryRaw<{ total: number | null }[]>`
+        SELECT COALESCE(SUM(t."amountDue"), 0)::float8 AS total FROM (
+          SELECT DISTINCT ON (s."utilityAccountId") s."amountDue"
+          FROM statements s
+          JOIN utility_accounts ua ON ua.id = s."utilityAccountId"
+          JOIN properties p ON p.id = ua."propertyId"
+          WHERE p."userId" = ${userId}
+          ORDER BY s."utilityAccountId", s."statementDate" DESC
+        ) t`,
+      db.aIInsight.count({ where: { property: { userId }, isRead: false, isDismissed: false } }),
+      db.aIInsight.count({ where: { property: { userId }, isRead: false, isDismissed: false, severity: 'ALERT' } }),
+      // Bills due within 7 days
+      db.statement.findMany({
+        where: {
+          utilityAccount: { property: { userId } },
+          dueDate: { gte: new Date(), lte: sevenDaysFromNow },
+          amountPaid: null,
+        },
+        select: {
+          id: true, dueDate: true, amountDue: true, pastDueCarried: true, billingPeriodEnd: true, statementDate: true,
+          utilityAccount: { select: { id: true, providerName: true, category: true, property: { select: { id: true, address: true, nickname: true } } } },
+        },
+        orderBy: { dueDate: 'asc' },
+      }),
+    ]);
+    const monthlyTotal = Number(latest[0]?.total ?? 0);
 
-    const dueSoon = await db.statement.findMany({
-      where: {
-        utilityAccount: { property: { userId } },
-        dueDate: { gte: new Date(), lte: sevenDaysFromNow },
-        amountPaid: null,
-      },
-      select: {
-        id: true, dueDate: true, amountDue: true, pastDueCarried: true, billingPeriodEnd: true, statementDate: true,
-        utilityAccount: { select: { id: true, providerName: true, category: true, property: { select: { id: true, address: true, nickname: true } } } },
-      },
-      orderBy: { dueDate: 'asc' },
-    });
     const billsDueSoon = dueSoon.length;
     // The count alone sends the reader hunting; each bill named, with where it
     // lives, lets them go straight to it.
@@ -100,30 +80,37 @@ router.get('/recent-activity', async (req, res, next) => {
   try {
     const userId = req.dbUserId!;
 
-    const recentPayments = await db.payment.findMany({
-      where: { utilityAccount: { property: { userId } } },
-      orderBy: { paymentDate: 'desc' },
-      take: 10,
-      include: {
-        utilityAccount: {
-          select: { providerName: true, category: true, property: { select: { address: true, nickname: true } } },
+    // Both at once, with only the fields the Overview shows (whole statement rows, raw bill data included, came back).
+    const [recentPayments, accountsWithBills] = await Promise.all([
+      db.payment.findMany({
+        where: { utilityAccount: { property: { userId } } },
+        orderBy: { paymentDate: 'desc' },
+        take: 10,
+        include: {
+          utilityAccount: {
+            select: { providerName: true, category: true, property: { select: { address: true, nickname: true } } },
+          },
         },
-      },
-    });
-
-    // One upcoming bill per utility account — latest unpaid statement per account
-    const accountsWithBills = await db.utilityAccount.findMany({
-      where: { property: { userId }, syncEnabled: true },
-      include: {
-        property: { select: { id: true, address: true, nickname: true } },
-        statements: {
-          // Not paid: by the owner's mark, else nothing printed as paid on it.
-          where: { dueDate: { gte: new Date() }, OR: [{ paidOverride: 'UNPAID' }, { paidOverride: null, amountPaid: null }] },
-          orderBy: { statementDate: 'desc' },
-          take: 1,
+      }),
+      // One upcoming bill per utility account — latest unpaid statement per account
+      db.utilityAccount.findMany({
+        where: { property: { userId }, syncEnabled: true },
+        select: {
+          id: true, providerName: true, category: true,
+          property: { select: { id: true, address: true, nickname: true } },
+          statements: {
+            // Not paid: by the owner's mark, else nothing printed as paid on it.
+            where: { dueDate: { gte: new Date() }, OR: [{ paidOverride: 'UNPAID' }, { paidOverride: null, amountPaid: null }] },
+            orderBy: { statementDate: 'desc' },
+            take: 1,
+            select: {
+              id: true, utilityAccountId: true, statementDate: true, dueDate: true, billingPeriodStart: true, billingPeriodEnd: true,
+              amountDue: true, amountPaid: true, pastDueCarried: true, paidOverride: true, isScheduled: true, usageValue: true, usageUnit: true,
+            },
+          },
         },
-      },
-    });
+      }),
+    ]);
 
     const upcomingBills = accountsWithBills
       .filter(a => a.statements.length > 0)

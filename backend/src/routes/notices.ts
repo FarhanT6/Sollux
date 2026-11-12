@@ -15,9 +15,9 @@ router.get('/', async (req, res, next) => {
     const notices = await db.rentNotice.findMany({
       where: {
         lease: {
-          unit: { property: { userId: req.dbUserId! } },
+          // The property filter goes inside the owner check: spread beside it, it replaced it.
+          unit: { property: { userId: req.dbUserId! }, ...(propertyId ? { propertyId: propertyId as string } : {}) },
           ...(leaseId ? { id: leaseId as string } : {}),
-          ...(propertyId ? { unit: { propertyId: propertyId as string } } : {}),
         },
       },
       include: { lease: { include: { unit: { include: { property: { select: { id: true, address: true, nickname: true } } } }, leaseTenants: { include: { tenant: true } } } } },

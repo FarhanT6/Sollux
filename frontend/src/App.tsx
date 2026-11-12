@@ -1,51 +1,59 @@
+import { Suspense } from 'react';
 import NotFoundPage from './pages/NotFoundPage';
+import { lazyPage, PageLoading } from './lib/lazyPage';
 import Toaster from './components/Toaster';
 import Logo from './components/brand/Logo';
-import { PrivacyPage, TermsPage } from './pages/PolicyPage';
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useParams } from 'react-router-dom';
-import LandingPage from './pages/LandingPage';
 import { useAuth } from '@clerk/clerk-react';
 import { SignIn, SignUp } from '@clerk/clerk-react';
 import { isNative } from './lib/native';
-import MoreScreen from './pages/phone/MoreScreen';
 import OverviewScreen from './pages/phone/OverviewScreen';
-import UtilitiesScreen from './pages/phone/UtilitiesScreen';
-import FinancesScreen from './pages/phone/FinancesScreen';
-import PaymentsScreen from './pages/phone/PaymentsScreen';
 import { Responsive } from './ios';
 import AppLayout from './components/layout/AppLayout';
 import Section from './components/layout/Section';
 import DashboardPage from './pages/DashboardPage';
-import UtilityDetailPage from './pages/UtilityDetailPage';
-import InsightsPage from './pages/InsightsPage';
-import PaymentPrioritiesPage from './pages/PaymentPrioritiesPage';
-import SettingsPage from './pages/SettingsPage';
-import FinancesPage from './pages/FinancesPage';
-import OperatingExpensesPage from './pages/OperatingExpensesPage';
-import TenantsHubPage from './pages/TenantsHubPage';
-import PortfolioPage from './pages/PortfolioPage';
-import PropertyHubPage from './pages/PropertyHubPage';
-import LegalPage from './pages/LegalPage';
-import ImportPage from './pages/ImportPage';
-import ScanPage from './pages/ScanPage';
-// Still used for deep-link detail pages
-import LoanDetailPage from './pages/LoanDetailPage';
-import NoticeDetailPage from './pages/NoticeDetailPage';
-import { TenantRoute } from './pages/TenantDetailPage';
-import ReimbursementInvoicePage from './pages/ReimbursementInvoicePage';
-import ProjectsPage from './pages/ProjectsPage';
-import TaxesPage from './pages/TaxesPage';
-import InsurancePage from './pages/InsurancePage';
-import BillsPage from './pages/BillsPage';
-import VaultPage from './pages/VaultPage';
-import PersonalPage from './pages/PersonalPage';
-import CreditCardPage from './pages/CreditCardPage';
-import RepairsPage, { RepairDetailPage } from './pages/RepairsPage';
-import PortalLayout from './pages/portal/PortalLayout';
-import PortalJoinPage from './pages/portal/PortalJoinPage';
-import PortalHomePage from './pages/portal/PortalHomePage';
-import PortalRepairsPage, { PortalRepairPage } from './pages/portal/PortalRepairsPage';
-import PortalPaymentsPage from './pages/portal/PortalPaymentsPage';
+
+// Pages load when first opened (lib/lazyPage.ts): the app was one 2.3 MB file
+// holding every page, downloaded in full before anything showed — and again
+// after every deploy. The first screens (Overview) stay in the main file.
+const PrivacyPage = lazyPage(() => import('./pages/PolicyPage').then(m => ({ default: m.PrivacyPage })));
+const TermsPage = lazyPage(() => import('./pages/PolicyPage').then(m => ({ default: m.TermsPage })));
+const LandingPage = lazyPage(() => import('./pages/LandingPage'));
+const MoreScreen = lazyPage(() => import('./pages/phone/MoreScreen'), { prefetch: true });
+const UtilitiesScreen = lazyPage(() => import('./pages/phone/UtilitiesScreen'), { prefetch: true });
+const FinancesScreen = lazyPage(() => import('./pages/phone/FinancesScreen'), { prefetch: true });
+const PaymentsScreen = lazyPage(() => import('./pages/phone/PaymentsScreen'), { prefetch: true });
+const UtilityDetailPage = lazyPage(() => import('./pages/UtilityDetailPage'), { prefetch: true });
+const InsightsPage = lazyPage(() => import('./pages/InsightsPage'), { prefetch: true });
+const PaymentPrioritiesPage = lazyPage(() => import('./pages/PaymentPrioritiesPage'));
+const SettingsPage = lazyPage(() => import('./pages/SettingsPage'), { prefetch: true });
+const FinancesPage = lazyPage(() => import('./pages/FinancesPage'), { prefetch: true });
+const OperatingExpensesPage = lazyPage(() => import('./pages/OperatingExpensesPage'));
+const TenantsHubPage = lazyPage(() => import('./pages/TenantsHubPage'), { prefetch: true });
+const PortfolioPage = lazyPage(() => import('./pages/PortfolioPage'), { prefetch: true });
+const PropertyHubPage = lazyPage(() => import('./pages/PropertyHubPage'), { prefetch: true });
+const LegalPage = lazyPage(() => import('./pages/LegalPage'));
+const ImportPage = lazyPage(() => import('./pages/ImportPage'), { prefetch: true });
+const ScanPage = lazyPage(() => import('./pages/ScanPage'));
+const LoanDetailPage = lazyPage(() => import('./pages/LoanDetailPage'));
+const NoticeDetailPage = lazyPage(() => import('./pages/NoticeDetailPage'));
+const TenantRoute = lazyPage(() => import('./pages/TenantDetailPage').then(m => ({ default: m.TenantRoute })));
+const ReimbursementInvoicePage = lazyPage(() => import('./pages/ReimbursementInvoicePage'));
+const ProjectsPage = lazyPage(() => import('./pages/ProjectsPage'));
+const TaxesPage = lazyPage(() => import('./pages/TaxesPage'));
+const InsurancePage = lazyPage(() => import('./pages/InsurancePage'));
+const BillsPage = lazyPage(() => import('./pages/BillsPage'), { prefetch: true });
+const VaultPage = lazyPage(() => import('./pages/VaultPage'));
+const PersonalPage = lazyPage(() => import('./pages/PersonalPage'), { prefetch: true });
+const CreditCardPage = lazyPage(() => import('./pages/CreditCardPage'));
+const RepairsPage = lazyPage(() => import('./pages/RepairsPage'));
+const RepairDetailPage = lazyPage(() => import('./pages/RepairsPage').then(m => ({ default: m.RepairDetailPage })));
+const PortalLayout = lazyPage(() => import('./pages/portal/PortalLayout'));
+const PortalJoinPage = lazyPage(() => import('./pages/portal/PortalJoinPage'));
+const PortalHomePage = lazyPage(() => import('./pages/portal/PortalHomePage'));
+const PortalRepairsPage = lazyPage(() => import('./pages/portal/PortalRepairsPage'));
+const PortalRepairPage = lazyPage(() => import('./pages/portal/PortalRepairsPage').then(m => ({ default: m.PortalRepairPage })));
+const PortalPaymentsPage = lazyPage(() => import('./pages/portal/PortalPaymentsPage'));
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isSignedIn, isLoaded } = useAuth();
@@ -79,6 +87,7 @@ function NativeSignInNote() {
 export default function App() {
   return (
     <BrowserRouter>
+      <Suspense fallback={<PageLoading />}>
       <Routes>
         {/* Public: Google's OAuth consent screen links to these. */}
         <Route path="/privacy" element={<PrivacyPage />} />
@@ -180,6 +189,7 @@ export default function App() {
 
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
+      </Suspense>
       <Toaster />
     </BrowserRouter>
   );

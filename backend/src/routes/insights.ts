@@ -11,7 +11,7 @@ router.use(attachDbUser);
 // GET /api/insights
 router.get('/', async (req, res, next) => {
   try {
-    const { propertyId, severity, type, unread } = req.query;
+    const { propertyId, severity, type, unread, limit } = req.query;
 
     const userProperties = await db.property.findMany({
       where: { userId: req.dbUserId! },
@@ -19,6 +19,8 @@ router.get('/', async (req, res, next) => {
     });
     const propertyIds = userProperties.map(p => p.id);
 
+    // A property asked for by id must be one of this account's: the id alone read another account's insights.
+    if (propertyId && !propertyIds.includes(String(propertyId))) return res.json([]);
     const where: any = {
       propertyId: propertyId ? String(propertyId) : { in: propertyIds },
       isDismissed: false,
@@ -30,7 +32,8 @@ router.get('/', async (req, res, next) => {
     const insights = await db.aIInsight.findMany({
       where,
       orderBy: [{ severity: 'desc' }, { createdAt: 'desc' }],
-      take: 300,
+      // The Overview shows four; the Insights page up to 300.
+      take: Math.min(300, Math.max(1, Number(limit) || 300)),
       include: {
         property: { select: { address: true, nickname: true, city: true } },
         utilityAccount: { select: { providerName: true, category: true } },
