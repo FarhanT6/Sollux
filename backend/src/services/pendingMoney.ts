@@ -83,6 +83,64 @@ export async function clearPendingByTransaction(bankAccountId: string, tx: { id:
   return pick.id;
 }
 
+/**
+ * Days after its date by which the bank has surely taken money that is not a
+ * check: a payment scheduled on a lender's site, a transfer or a card payment
+ * goes out on its date. A check can sit uncashed for weeks, so it waits for
+ * the bank's line or the owner.
+ */
+const SETTLED_AFTER_DAYS: Record<string, number> = { SCHEDULED: 5, TRANSFER: 5, CARD: 5, OTHER: 14 };
+
+/**
+ * Pending items the bank has surely taken by now, cleared — the bank's own line
+ * cannot always clear them: a payment the planner split across accounts posts
+ * as one debit, and anything that posted before the bank sync matched pending
+ * items (or while an account was not synced) is never seen again. So:
+ * - a payment toward a loan (not a check) clears once its date has come and a
+ *   payment for that month is on the loan ("auto:loan");
+ * - a payment, transfer or card payment clears SETTLED_AFTER_DAYS after its
+ *   date, and a deposit PENDING_DEPOSIT_DAYS after it ("auto:date");
+ * - a check written waits: for the bank's line, or Mark cleared;
+ * - one the owner put back as still pending (clearedBy "kept") waits too.
+ * Run before pending items are shown or counted.
+ */
+export async function settlePending(userId: string, now = new Date()): Promise<number> {
+  const open = await db.pendingOutflow.findMany({
+    // "kept": the owner put it back as still pending — only the bank or the owner clears it now.
+    where: { userId, cleared: false, OR: [{ clearedBy: null }, { clearedBy: { not: 'kept' } }] },
+    select: { id: true, kind: true, direction: true, expectedDate: true, createdAt: true, loanId: true },
+  });
+  if (!open.length) return 0;
+  const loanIds = [...new Set(open.filter(p => p.loanId && p.kind !== 'CHECK' && p.direction !== 'IN').map(p => p.loanId!))];
+  const paid = loanIds.length ? await db.loanPayment.findMany({
+    where: { loanId: { in: loanIds }, status: { not: 'UNPAID' }, OR: [{ date: { gte: new Date(now.getTime() - 400 * DAY) } }, { periodDate: { gte: new Date(now.getTime() - 400 * DAY) } }] },
+    select: { loanId: true, date: true, periodDate: true },
+  }) : [];
+  const monthOf = (d: Date) => d.toISOString().slice(0, 7);
+  let n = 0;
+  for (const p of open) {
+    const when = p.expectedDate ?? p.createdAt;
+    const age = (now.getTime() - when.getTime()) / DAY;
+    let by: string | null = null, at = now;
+    if (p.direction === 'IN') {
+      if (age > PENDING_DEPOSIT_DAYS) { by = 'auto:date'; at = new Date(when.getTime() + PENDING_DEPOSIT_DAYS * DAY); }
+    } else if (p.kind !== 'CHECK') {
+      // The payment for the month it was sent toward: by the month it says it pays, else paid within days of it.
+      if (p.loanId && age >= 0 && paid.some(lp => lp.loanId === p.loanId && (lp.periodDate
+        ? monthOf(lp.periodDate) === monthOf(when)
+        : lp.date.getTime() >= when.getTime() - 10 * DAY && lp.date.getTime() <= when.getTime() + 20 * DAY))) by = 'auto:loan';
+      else {
+        const days = SETTLED_AFTER_DAYS[p.kind] ?? 14;
+        if (age > days) { by = 'auto:date'; at = new Date(when.getTime() + days * DAY); }
+      }
+    }
+    if (!by) continue;
+    await db.pendingOutflow.update({ where: { id: p.id }, data: { cleared: true, clearedAt: at, clearedBy: by } });
+    n++;
+  }
+  return n;
+}
+
 /** Each account's pending money: out, in, and what the balance is once they clear. */
 export async function pendingByAccount(userId: string) {
   const rows = await db.pendingOutflow.findMany({ where: { userId, cleared: false }, select: { bankAccountId: true, amount: true, direction: true } });

@@ -141,7 +141,40 @@ export default function LoanPaymentTracker({ month: fixedMonth }: { month?: stri
           </div>
           <div className="h-2 rounded-full bg-white/5 overflow-hidden mb-3"><div className="h-full bg-emerald-500" style={{ width: `${pct}%` }} /></div>
 
-          <div className="overflow-x-auto">
+          {/* Phones: one card per loan, so whether it is paid shows (the table's Paid and Status columns ran off the screen). */}
+          <div className="md:hidden space-y-2">
+            {rows.map(r => (
+              <div key={r.loanId} className="rounded-xl px-3 py-2.5" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
+                <button className="w-full text-left" onClick={() => setOpen(o => (o === r.loanId ? null : r.loanId))}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-sm text-white font-medium">{r.lender} <span className="text-gray-600 text-xs">{open === r.loanId ? '▴' : '▾'}</span></p>
+                      {r.property && <p className="text-xs text-gray-500">{r.property}</p>}
+                    </div>
+                    <span className={`text-xs px-2 py-0.5 rounded-full whitespace-nowrap shrink-0 ${STATUS_CLS[r.status]}`}>{STATUS_LABEL[r.status]}</span>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-2 mt-1.5 text-xs">
+                    <span className="text-gray-400">Due {fmtDate(r.dueDate, 'MMM d')}{r.gracePeriodDays ? <span className="text-gray-600"> · late after {fmtDate(r.graceEnds, 'MMM d')}</span> : null}</span>
+                    <span className="tabular-nums text-right">
+                      {r.remaining <= 0 && r.paid > 0 ? <span className="text-emerald-500">{fmtMoney(r.paid)} paid</span>
+                        : r.paid > 0 ? <><span className="text-emerald-500">{fmtMoney(r.paid)}</span><span className="text-gray-500"> paid · </span><span className="text-amber-500">{fmtMoney(r.remaining)} left</span></>
+                        : <span className="text-gray-200">{fmtMoney(r.expected)}</span>}
+                    </span>
+                  </div>
+                </button>
+                {r.status !== 'paid' && r.status !== 'none' && <button onClick={() => setLogRow(r)} className="text-xs text-amber-400 hover:text-amber-300 mt-1.5">Log payment</button>}
+                {open === r.loanId && <div className="mt-2 pt-2 border-t border-white/5"><RowDetails r={r} month={month} /></div>}
+              </div>
+            ))}
+            {rows.length > 0 && (
+              <p className="text-xs text-gray-400 pt-1">
+                {rows.length} loan{rows.length === 1 ? '' : 's'} · owed {fmtMoney(t.expected)} · <span className="text-emerald-500">paid {fmtMoney(t.paid)}</span>{t.remaining > 0 ? <> · <span className="text-amber-500">{fmtMoney(t.remaining)} to pay</span></> : ' ✓'}
+              </p>
+            )}
+            {rows.length === 0 && <p className="text-center text-gray-500 py-8">No loans match the current filters.</p>}
+          </div>
+
+          <div className="overflow-x-auto hidden md:block">
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-gray-500 text-xs uppercase tracking-wider border-b border-white/5">
@@ -182,27 +215,7 @@ export default function LoanPaymentTracker({ month: fixedMonth }: { month?: stri
                     {open === r.loanId && (
                       <tr className="border-b border-white/5">
                         <td colSpan={9} className="py-3 px-3" style={{ background: 'rgba(255,255,255,0.03)' }}>
-                          <div className="grid md:grid-cols-2 gap-4 text-xs">
-                            <div>
-                              <p className="text-gray-500 mb-1">Paid toward {fmtDate(`${month}-01`, 'MMMM yyyy')}</p>
-                              {r.payments.length ? r.payments.map(p => (
-                                <div key={p.id} className="flex gap-3 py-0.5">
-                                  <span className="text-gray-400 w-20">{fmtDate(p.date, 'MMM d')}</span>
-                                  <span className="text-emerald-500 w-24 text-right">{fmtMoney(p.amount)}</span>
-                                  <span className="text-gray-500">{[p.method ? PAYMENT_METHOD_LABELS[p.method as LoanPaymentMethod] ?? p.method : null, p.lateFee ? `incl. ${fmtMoney(p.lateFee)} late fee` : null, p.confirmationNumber ? `#${p.confirmationNumber}` : null, p.notes].filter(Boolean).join(' · ')}</span>
-                                </div>
-                              )) : <p className="text-gray-500">Nothing logged for this month.</p>}
-                              {r.lastPayment && <p className="text-gray-600 mt-2">Last payment on record: {fmtMoney(r.lastPayment.amount)} on {fmtDate(r.lastPayment.date)}</p>}
-                            </div>
-                            <div className="space-y-1">
-                              {r.paymentMethods.length > 0 && <p><span className="text-gray-500">How: </span><span className="text-gray-300">{r.paymentMethods.map(m => PAYMENT_METHOD_LABELS[m as LoanPaymentMethod] ?? m).join(', ')}</span></p>}
-                              {r.paymentInstructions && <p className="text-gray-300">{r.paymentInstructions}</p>}
-                              {r.payFrom && <p><span className="text-gray-500">From: </span><span className="text-gray-300">{r.payFrom}</span></p>}
-                              {r.mailingAddress && <p><span className="text-gray-500">Mail to: </span><span className="text-gray-300">{r.mailingAddress}</span></p>}
-                              {r.paymentUrl && <p><a href={r.paymentUrl} target="_blank" rel="noreferrer" className="text-amber-400 hover:underline">Open payment site ↗</a></p>}
-                              <p><Link to={`/loans/${r.loanId}`} className="text-amber-400 hover:underline">Loan details →</Link></p>
-                            </div>
-                          </div>
+                          <RowDetails r={r} month={month} />
                         </td>
                       </tr>
                     )}
@@ -332,6 +345,33 @@ function LogLoanPaymentModal({ row, month, onClose, onSaved }: { row: LoanTracke
           <button onClick={onClose} className="btn text-xs">Cancel</button>
           <button onClick={save} disabled={saving} className="btn btn-primary text-xs disabled:opacity-50">{saving ? 'Saving…' : 'Log payment'}</button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** What a loan's month came to and how it is paid: the payments toward the month, how and where to pay. */
+function RowDetails({ r, month }: { r: LoanTrackerRow; month: string }) {
+  return (
+    <div className="grid md:grid-cols-2 gap-4 text-xs">
+      <div>
+        <p className="text-gray-500 mb-1">Paid toward {fmtDate(`${month}-01`, 'MMMM yyyy')}</p>
+        {r.payments.length ? r.payments.map(p => (
+          <div key={p.id} className="flex gap-3 py-0.5">
+            <span className="text-gray-400 w-20">{fmtDate(p.date, 'MMM d')}</span>
+            <span className="text-emerald-500 w-24 text-right">{fmtMoney(p.amount)}</span>
+            <span className="text-gray-500">{[p.method ? PAYMENT_METHOD_LABELS[p.method as LoanPaymentMethod] ?? p.method : null, p.lateFee ? `incl. ${fmtMoney(p.lateFee)} late fee` : null, p.confirmationNumber ? `#${p.confirmationNumber}` : null, p.notes].filter(Boolean).join(' · ')}</span>
+          </div>
+        )) : <p className="text-gray-500">Nothing logged for this month.</p>}
+        {r.lastPayment && <p className="text-gray-600 mt-2">Last payment on record: {fmtMoney(r.lastPayment.amount)} on {fmtDate(r.lastPayment.date)}</p>}
+      </div>
+      <div className="space-y-1">
+        {r.paymentMethods.length > 0 && <p><span className="text-gray-500">How: </span><span className="text-gray-300">{r.paymentMethods.map(m => PAYMENT_METHOD_LABELS[m as LoanPaymentMethod] ?? m).join(', ')}</span></p>}
+        {r.paymentInstructions && <p className="text-gray-300">{r.paymentInstructions}</p>}
+        {r.payFrom && <p><span className="text-gray-500">From: </span><span className="text-gray-300">{r.payFrom}</span></p>}
+        {r.mailingAddress && <p><span className="text-gray-500">Mail to: </span><span className="text-gray-300">{r.mailingAddress}</span></p>}
+        {r.paymentUrl && <p><a href={r.paymentUrl} target="_blank" rel="noreferrer" className="text-amber-400 hover:underline">Open payment site ↗</a></p>}
+        <p><Link to={`/loans/${r.loanId}`} className="text-amber-400 hover:underline">Loan details →</Link></p>
       </div>
     </div>
   );

@@ -159,8 +159,13 @@ export async function buildPayPlan(userId: string, opts: { horizonDays?: number;
 
   // ── Obligations: loans ──────────────────────────────────────────────────
   const obligations: PlanObligation[] = [];
+  // Sent toward a loan, by the month it pays: September's payment still in flight is not October's.
   const sentByLoan = new Map<string, number>();
-  for (const p of pending) if (p.loanId) sentByLoan.set(p.loanId, (sentByLoan.get(p.loanId) ?? 0) + Number(p.amount));
+  const sentKey = (loanId: string, d: Date) => `${loanId}:${d.toISOString().slice(0, 7)}`;
+  for (const p of pending) if (p.loanId) {
+    const k = sentKey(p.loanId, p.expectedDate ?? p.createdAt);
+    sentByLoan.set(k, (sentByLoan.get(k) ?? 0) + Number(p.amount));
+  }
 
   for (const loan of loans) {
     const amount = r2(Number(loan.monthlyPayment ?? 0) + Number(loan.escrowAmount ?? 0));
@@ -186,7 +191,7 @@ export async function buildPayPlan(userId: string, opts: { horizonDays?: number;
     });
     if (!due) continue;
     const daysUntil = Math.round((due.getTime() - today.getTime()) / DAY);
-    const sent = sentByLoan.get(loan.id) ?? 0;
+    const sent = sentByLoan.get(sentKey(loan.id, due)) ?? 0;
     const property = loan.property ? (loan.property.nickname || loan.property.address) : null;
     obligations.push({
       key: `loan:${loan.id}`, kind: 'LOAN', id: loan.id,

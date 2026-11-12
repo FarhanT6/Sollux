@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { attachDbUser } from '../middleware/requireAuth';
 import { buildPayPlan } from '../lib/payPlan';
+import { settlePending } from '../services/pendingMoney';
 
 const router = Router();
 router.use(attachDbUser);
@@ -11,6 +12,8 @@ router.get('/', async (req, res, next) => {
     const days = req.query.days != null ? Number(req.query.days) : undefined;
     const cushion = req.query.cushion != null ? Number(req.query.cushion) : undefined;
     const utilities = req.query.utilities == null ? true : req.query.utilities !== '0';
+    // Payments the bank has surely taken by now are not held out of the balances.
+    await settlePending(req.dbUserId!);
     const plan = await buildPayPlan(req.dbUserId!, {
       horizonDays: Number.isFinite(days) ? days : undefined,
       cushion: Number.isFinite(cushion) ? cushion : undefined,

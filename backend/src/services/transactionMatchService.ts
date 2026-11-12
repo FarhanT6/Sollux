@@ -18,7 +18,7 @@
  */
 import { plaidClient } from '../config/plaid';
 import { db } from '../config/db';
-import { clearPendingByTransaction } from './pendingMoney';
+import { clearPendingByTransaction, settlePending } from './pendingMoney';
 import { emailTwin } from './outgoingP2PEmails';
 import { decrypt } from '../crypto/encrypt';
 import { recordRentPayment } from './rentPaymentService';
@@ -497,6 +497,8 @@ export async function syncTransactionsForItem(plaidItemId: string) {
 }
 
 export async function syncAllWatchedAccounts(userId: string) {
+  // Pending items the bank has surely taken by now (a split payment posts as one debit; older ones were never matched).
+  await settlePending(userId).catch(() => 0);
   const items = await db.plaidItem.findMany({
     where: {
       userId, isActive: true,

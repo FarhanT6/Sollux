@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { pendingByAccount } from '../services/pendingMoney';
+import { pendingByAccount, settlePending } from '../services/pendingMoney';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { Decimal } from '@prisma/client/runtime/library';
@@ -67,6 +67,7 @@ const PENDING_KINDS = ['CHECK', 'SCHEDULED', 'TRANSFER', 'CARD', 'OTHER'] as con
 router.get('/pending', async (req, res, next) => {
   try {
     const includeCleared = req.query.cleared === '1';
+    await settlePending(req.dbUserId!);
     const rows = await db.pendingOutflow.findMany({
       where: { userId: req.dbUserId!, ...(includeCleared ? {} : { cleared: false }) },
       include: { loan: { select: { id: true, lender: true } } },
@@ -127,7 +128,8 @@ router.patch('/pending/:pid', async (req, res, next) => {
         ...(expectedDate !== undefined ? { expectedDate: expectedDate ? new Date(expectedDate) : null } : {}),
         ...(notes !== undefined ? { notes: notes || null } : {}),
         ...(bankAccountId ? { bankAccountId } : {}),
-        ...(cleared !== undefined ? { cleared: !!cleared, clearedAt: cleared ? new Date() : null, clearedBy: cleared ? 'manual' : null } : {}),
+        // Put back as still pending by hand: "kept", so it is not cleared on its own again (settlePending).
+        ...(cleared !== undefined ? { cleared: !!cleared, clearedAt: cleared ? new Date() : null, clearedBy: cleared ? 'manual' : existing.cleared ? 'kept' : existing.clearedBy } : {}),
       },
       include: { loan: { select: { id: true, lender: true } } },
     });
@@ -159,6 +161,7 @@ router.get('/', async (req, res, next) => {
       orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
     });
     // Money on its way out or in that the bank's balance doesn't show yet, and the balance once it has.
+    await settlePending(req.dbUserId!);
     const pending = await pendingByAccount(req.dbUserId!);
     res.json(accounts.map(a => {
       const s = serialize(a);
