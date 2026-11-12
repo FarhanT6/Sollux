@@ -1319,6 +1319,10 @@ export interface PayPlan {
   cushion: number;
   accounts: PayPlanAccount[];
   obligations: PayPlanObligation[];
+  /** Cash, checks on hand, app balances (Cash, checks & apps): deposited before they can pay a lender. */
+  funds?: { label: string; amount: number; detail: string | null; asOf: string | null }[];
+  /** Where to put that money, and why there. */
+  deposits?: { from: string; amount: number; intoAccountId: string; into: string; why: string }[];
   totals: { due: number; sent: number; spendable: number; afterPlan: number; short: number };
   warnings: string[];
 }

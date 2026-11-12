@@ -58,12 +58,21 @@ export interface PlanObligation {
   payUrl: string | null;
 }
 
+/** Money that is not in a bank account yet: cash, checks on hand, payment-app balances (Cash, checks & apps). */
+export interface PlanFund { label: string; amount: number; detail: string | null; asOf: string | null }
+/** Moving that money into an account: what, how much, where, and why there. */
+export interface PlanDeposit { from: string; amount: number; intoAccountId: string; into: string; why: string }
+
 export interface PayPlan {
   asOf: string;
   horizonDays: number;
   cushion: number;
   accounts: PlanAccount[];
   obligations: PlanObligation[];
+  /** Cash, checks on hand and app balances — paid into an account before they can pay a lender. */
+  funds: PlanFund[];
+  /** Where to put that money: into the accounts a payment is short in, else the one left lowest. */
+  deposits: PlanDeposit[];
   totals: {
     due: number;                // everything still to pay in the window
     sent: number;               // already committed (pending outflows tied to a loan)
@@ -74,7 +83,36 @@ export interface PayPlan {
   warnings: string[];
 }
 
-const SPENDABLE_TYPES = new Set(['CHECKING', 'SAVINGS', 'CASH_POOL']);
+// Accounts a payment is drawn from. Cash and app balances (CASH_POOL, and the wallets on Cash, checks &
+// apps) are not: a lender takes a check, a transfer or a card, so they are money to deposit first (funds).
+const SPENDABLE_TYPES = new Set(['CHECKING', 'SAVINGS']);
+const WALLET_WORDS: [RegExp, string][] = [[/apple/i, 'APPLE_CASH'], [/cash\s*app/i, 'CASH_APP'], [/venmo/i, 'VENMO'], [/paypal/i, 'PAYPAL'], [/cash/i, 'CASH']];
+
+/**
+ * A choice the owner made for this plan ("Citadel and UWM from x4093"): the payment by lender,
+ * provider, property or id; the account by its last 4 digits, name or id.
+ */
+export interface PlanChoice { payment: string; account: string }
+const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+export function matchesPayment(o: { id: string; key: string; label: string; detail: string | null }, q: string): boolean {
+  const t = norm(q);
+  if (!t) return false;
+  if (q === o.id || q === o.key) return true;
+  const hay = norm(`${o.label} ${o.detail ?? ''}`);
+  return hay.includes(t) || t.split(' ').filter(w => w.length > 2).every(w => hay.includes(w));
+}
+export function findAccount<T extends { id: string; name: string; last4: string | null }>(accounts: T[], q: string): T | null {
+  const byId = accounts.find(a => a.id === q);
+  if (byId) return byId;
+  const digits = (q.match(/\d{4}/g) ?? []).pop();
+  if (digits) {
+    const hits = accounts.filter(a => a.last4 === digits || a.name.includes(digits));
+    if (hits.length === 1) return hits[0];
+  }
+  const t = norm(q);
+  const named = accounts.filter(a => norm(a.name).includes(t));
+  return named.length === 1 ? named[0] : null;
+}
 
 function nextDue(dueDay: number, from: Date): Date {
   // The next occurrence of the due day on or after `from`, in UTC.
@@ -99,7 +137,13 @@ export function howToPay(l: { paymentMethods?: string[]; paymentInstructions?: s
   return parts.length ? parts.join(' · ') : null;
 }
 
-export async function buildPayPlan(userId: string, opts: { horizonDays?: number; cushion?: number; includeUtilities?: boolean } = {}): Promise<PayPlan> {
+export async function buildPayPlan(userId: string, opts: {
+  horizonDays?: number; cushion?: number; includeUtilities?: boolean;
+  /** Only these payments (lender, provider, property or id), e.g. this month's mortgages. */
+  only?: string[];
+  /** The owner's choice of account for a payment; it is followed even when it leaves the account short. */
+  choices?: PlanChoice[];
+} = {}): Promise<PayPlan> {
   const horizonDays = Math.max(1, Math.min(90, opts.horizonDays ?? 14));
   const cushion = Math.max(0, opts.cushion ?? 0);
   const includeUtilities = opts.includeUtilities ?? true;
@@ -155,6 +199,35 @@ export async function buildPayPlan(userId: string, opts: { horizonDays?: number;
   for (const a of accounts) {
     if (!a.asOfDate) warnings.push(`${a.name} has no balance on file — record one before trusting this plan.`);
     else if (a.stale) warnings.push(`${a.name}'s balance is from ${a.asOfDate.slice(0, 10)}; update it if anything has moved since.`);
+  }
+
+  // ── Funds: cash, checks on hand, app balances ──────────────────────────
+  // From Cash, checks & apps (kept current as rent comes in and money moves); a
+  // manual cash or app account (CASH_POOL) only where no wallet of its kind has a balance.
+  const funds: PlanFund[] = [];
+  const walletKinds = new Set<string>();
+  try {
+    const { walletReport } = await import('../services/wallets');
+    const rep = await walletReport(userId);
+    for (const w of rep.wallets as any[]) {
+      if (w.kind === 'CHECK') {
+        const onHand = (w.onHand ?? []) as { amount: number; from?: string | null; payer?: string | null }[];
+        const total = r2(onHand.reduce((t, c) => t + Number(c.amount), 0));
+        if (total > 0.005) { funds.push({ label: 'Checks on hand', amount: total, detail: `${onHand.length} check${onHand.length === 1 ? '' : 's'} not deposited yet`, asOf: today.toISOString() }); walletKinds.add('CHECK'); }
+        continue;
+      }
+      if (Math.abs(Number(w.balance)) > 0.005 || (w.entries ?? []).length) walletKinds.add(w.kind);
+      if (Number(w.balance) > 0.005) funds.push({ label: w.label, amount: r2(Number(w.balance)), detail: null, asOf: today.toISOString() });
+    }
+  } catch { /* wallets not set up */ }
+  for (const a of rawAccounts.filter(x => x.accountType === 'CASH_POOL')) {
+    const kind = WALLET_WORDS.find(([re]) => re.test(a.name))?.[1] ?? null;
+    const snap = a.balances[0];
+    if (kind && walletKinds.has(kind)) {
+      warnings.push(`${a.name} (a balance entered by hand${snap ? ` on ${snap.asOfDate.toISOString().slice(0, 10)}` : ''}) is left out: Cash, checks & apps keeps the current figure.`);
+      continue;
+    }
+    if (snap && Number(snap.balance) > 0.005) funds.push({ label: a.name, amount: r2(Number(snap.balance)), detail: 'entered by hand', asOf: snap.asOfDate.toISOString() });
   }
 
   // ── Obligations: loans ──────────────────────────────────────────────────
@@ -241,6 +314,23 @@ export async function buildPayPlan(userId: string, opts: { horizonDays?: number;
     }
   }
 
+  // Only the payments asked about (the rest are left out of the plan entirely).
+  const only = (opts.only ?? []).map(q => q.trim()).filter(Boolean);
+  if (only.length) {
+    const keep = obligations.filter(o => only.some(q => matchesPayment(o, q)));
+    for (const q of only) if (!obligations.some(o => matchesPayment(o, q))) warnings.push(`Nothing due in the next ${horizonDays} days matches "${q}".`);
+    obligations.splice(0, obligations.length, ...keep);
+  }
+  // The owner's choices: that account, whatever it leaves.
+  const chosen = new Map<string, string>();
+  for (const c of opts.choices ?? []) {
+    const acct = findAccount(accounts, c.account);
+    if (!acct) { warnings.push(`No one checking or savings account matches "${c.account}".`); continue; }
+    const hits = obligations.filter(o => matchesPayment(o, c.payment));
+    if (!hits.length) warnings.push(`No payment in the plan matches "${c.payment}".`);
+    for (const o of hits) chosen.set(o.key, acct.id);
+  }
+
   // ── Allocation ──────────────────────────────────────────────────────────
   // Soonest first, then largest, so the payment with the least slack gets
   // first pick of the money. Each payment goes to its usual account when
@@ -253,8 +343,18 @@ export async function buildPayPlan(userId: string, opts: { horizonDays?: number;
   const acctName = (id: string) => byId.get(id)?.name ?? 'account';
   let short = 0;
 
+  // The owner's choices first, so the rest is planned around them.
   for (const o of obligations) {
-    if (o.status === 'SENT') continue;
+    const id = chosen.get(o.key);
+    if (o.status === 'SENT' || !id) continue;
+    const a = byId.get(id)!;
+    a.assigned = r2(a.assigned + o.amount); a.remaining = r2(a.remaining - o.amount);
+    o.payFrom = [{ accountId: a.id, amount: o.amount }];
+    o.reason = a.remaining >= 0 ? `Your choice · ${money(a.remaining)} left after` : `Your choice — leaves ${a.name} ${money(-a.remaining)} short`;
+    if (a.remaining < 0) warnings.push(`${a.name} goes ${money(-a.remaining)} below what it can spare with your choices — deposit into it first.`);
+  }
+  for (const o of obligations) {
+    if (o.status === 'SENT' || chosen.has(o.key)) continue;
     const pref = o.preferredAccountId ? byId.get(o.preferredAccountId) : undefined;
     if (pref && pref.remaining >= o.amount) {
       pref.assigned = r2(pref.assigned + o.amount); pref.remaining = r2(pref.remaining - o.amount);
@@ -298,12 +398,48 @@ export async function buildPayPlan(userId: string, opts: { horizonDays?: number;
   const due = r2(obligations.filter(o => o.status !== 'SENT').reduce((s, o) => s + o.amount, 0));
   const sent = r2(obligations.filter(o => o.status === 'SENT').reduce((s, o) => s + o.amount, 0));
   const spendable = r2(accounts.reduce((s, a) => s + a.spendable, 0));
-  if (accounts.length === 0) warnings.push('No checking, savings or cash accounts are set up. Add them under Settings → Banking.');
+  if (accounts.length === 0) warnings.push('No checking or savings accounts are set up. Add them under Settings → Banking.');
+
+  // ── Deposits: cash, checks and app balances into the accounts that need them ──
+  // Into an account left below zero (an owner's choice, or a split that ran short) or a short
+  // payment's usual account first, checks before cash before app balances; what is left over
+  // goes to the account left lowest, so no account sits near empty while money sits in a drawer.
+  const deposits: PlanDeposit[] = [];
+  const order = (l: string) => (l === 'Checks on hand' ? 0 : /^cash$/i.test(l) ? 1 : 2);
+  const pool = funds.map(f => ({ ...f, left: f.amount })).sort((a, b) => order(a.label) - order(b.label));
+  const draw = (need: number, into: PlanAccount, why: string, from = pool) => {
+    for (const f of from) {
+      if (need <= 0.005) break;
+      if (f.left <= 0.005) continue;
+      const take = r2(Math.min(f.left, need));
+      f.left = r2(f.left - take); need = r2(need - take);
+      into.remaining = r2(into.remaining + take);
+      deposits.push({ from: f.label, amount: take, intoAccountId: into.id, into: into.name, why });
+    }
+    return need;
+  };
+  for (const a of accounts.filter(x => x.remaining < -0.005)) draw(-a.remaining, a, `${a.name} is short for what is planned from it`);
+  for (const o of obligations.filter(x => x.status === 'SHORT')) {
+    const into = (o.preferredAccountId && byId.get(o.preferredAccountId)) || o.payFrom[0] && byId.get(o.payFrom[0].accountId) || [...accounts].sort((x, y) => y.remaining - x.remaining)[0];
+    if (!into) break;
+    const shortBy = r2(o.amount - o.payFrom.reduce((t, p) => t + p.amount, 0));
+    const left = draw(shortBy, into, `covers ${o.label}${o.detail ? ` (${o.detail})` : ''}, ${money(shortBy)} short`);
+    if (left < shortBy - 0.005) {
+      const covered = r2(shortBy - left);
+      o.payFrom.push({ accountId: into.id, amount: covered });
+      short = r2(short - covered);
+      if (left <= 0.005) { o.status = 'DUE'; o.reason = `${o.reason} — covered once the deposit into ${into.name} posts`; }
+    }
+  }
+  const lowest = [...accounts].sort((x, y) => x.remaining - y.remaining)[0];
+  const checks = pool.find(f => f.label === 'Checks on hand' && f.left > 0.005);
+  // Checks are deposited anyway: into the account left lowest. Cash and app balances are only suggested where needed.
+  if (lowest && checks) draw(checks.left, lowest, `checks on hand — ${lowest.name} is left lowest after these payments`, [checks]);
 
   return {
     asOf: now.toISOString(),
     horizonDays, cushion,
-    accounts, obligations,
+    accounts, obligations, funds, deposits,
     totals: { due, sent, spendable, afterPlan: r2(spendable - due), short },
     warnings,
   };
