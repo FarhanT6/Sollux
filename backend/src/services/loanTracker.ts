@@ -80,6 +80,7 @@ function base(l: Loan) {
     dueDay: l.dueDay, gracePeriodDays: l.gracePeriodDays,
     paymentMethods: l.paymentMethods, paymentInstructions: l.paymentInstructions, mailingAddress: l.mailingAddress, paymentUrl: l.paymentUrl,
     payFrom: l.payFromBankAccount ? [l.payFromBankAccount.name, l.payFromBankAccount.last4 ? `••${l.payFromBankAccount.last4}` : null].filter(Boolean).join(' ') : null,
+    payFromBankAccountId: l.payFromBankAccount?.id ?? null,
   };
 }
 
