@@ -7,14 +7,14 @@ const at = (s: string) => new Date(`${s}T00:00:00Z`).getTime();
 const credit = (id: string, amount: number, date: string) => ({ id, amount: -amount, date });
 
 test('a deposit the bank posted as one credit, days later', () => {
-  const hit = linesForItem({ amount: 4052, direction: 'IN', made: at('2026-11-09'), checks: [1200, 1000, 952, 900] },
-    [credit('a', 1850, '2026-11-08'), credit('b', 4052, '2026-11-10')]);
+  const hit = linesForItem({ amount: 4075, direction: 'IN', made: at('2026-11-09'), checks: [1200, 1000, 975, 900] },
+    [credit('a', 1850, '2026-11-08'), credit('b', 4075, '2026-11-10')]);
   assert.deepEqual(hit?.map(l => l.id), ['b']);
 });
 
 test('a deposit of four checks the bank posted check by check', () => {
-  const lines = [credit('x', 1000, '2026-11-10'), credit('y', 1200, '2026-11-10'), credit('z', 900, '2026-11-12'), credit('w', 952, '2026-11-10'), credit('v', 75, '2026-11-11')];
-  const hit = linesForItem({ amount: 4052, direction: 'IN', made: at('2026-11-09'), checks: [1200, 1000, 952, 900] }, lines);
+  const lines = [credit('x', 1000, '2026-11-10'), credit('y', 1200, '2026-11-10'), credit('z', 900, '2026-11-12'), credit('w', 975, '2026-11-10'), credit('v', 75, '2026-11-11')];
+  const hit = linesForItem({ amount: 4075, direction: 'IN', made: at('2026-11-09'), checks: [1200, 1000, 975, 900] }, lines);
   assert.deepEqual(hit?.map(l => l.id).sort(), ['w', 'x', 'y', 'z']);
 });
 

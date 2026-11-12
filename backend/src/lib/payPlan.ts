@@ -99,7 +99,7 @@ const SPENDABLE_TYPES = new Set(['CHECKING', 'SAVINGS']);
 const WALLET_WORDS: [RegExp, string][] = [[/apple/i, 'APPLE_CASH'], [/cash\s*app/i, 'CASH_APP'], [/venmo/i, 'VENMO'], [/paypal/i, 'PAYPAL'], [/cash/i, 'CASH']];
 
 /**
- * A choice the owner made for this plan ("Citadel and UWM from x4093"): the payment by lender,
+ * A choice the owner made for this plan ("Sample Servicing and Example Mortgage from x1111"): the payment by lender,
  * provider, property or id; the account by its last 4 digits, name or id.
  */
 export interface PlanChoice { payment: string; account: string }

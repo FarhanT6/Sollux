@@ -29,21 +29,21 @@ before(async () => {
     }
     return l.id;
   };
-  ids.a = await lease('A', 'Jordan Sample', 1200, 110.79);
-  ids.b = await lease('B', 'Riley Example', 629.1, null);
-  ids.c = await lease('C', 'Casey Placeholder', 700, 33.68);
-  ids.bank = (await db.bankAccount.create({ data: { userId: me.id, name: 'Business Checking', bank: 'Example Bank', last4: '9173', accountType: 'CHECKING' } as any })).id;
+  ids.a = await lease('A', 'Jordan Sample', 1200, 85.40);
+  ids.b = await lease('B', 'Riley Example', 615.25, null);
+  ids.c = await lease('C', 'Casey Placeholder', 700, 42.15);
+  ids.bank = (await db.bankAccount.create({ data: { userId: me.id, name: 'Business Checking', bank: 'Example Bank', last4: '2222', accountType: 'CHECKING' } as any })).id;
   // The bank's line for the deposit, left for review (it matched no one's rent).
-  ids.line = (await db.incomingTransaction.create({ data: { userId: me.id, bankAccountId: ids.bank, plaidTransactionId: 'tx-deposit', amount: 2673.57, date: new Date('2026-11-10T00:00:00Z'), name: 'MOBILE DEPOSIT', channel: 'DEPOSIT', status: 'UNMATCHED' } as any })).id;
+  ids.line = (await db.incomingTransaction.create({ data: { userId: me.id, bankAccountId: ids.bank, plaidTransactionId: 'tx-deposit', amount: 2642.80, date: new Date('2026-11-10T00:00:00Z'), name: 'MOBILE DEPOSIT', channel: 'DEPOSIT', status: 'UNMATCHED' } as any })).id;
 });
 after(async () => { if (!skip) await api.stop(); });
 
 const read = {
-  bank: 'Example Bank', accountLast4: '9173', postDate: '2026-11-10', total: 2673.57, checkCount: 3,
+  bank: 'Example Bank', accountLast4: '2222', postDate: '2026-11-10', total: 2642.80, checkCount: 3,
   checks: [
-    { index: 1, amount: 1310.79, payer: 'JORDAN SAMPLE', payTo: null, checkNumber: '1042', memo: 'November', checkDate: '2026-11-08' },
-    { index: 2, amount: 629.1, payer: 'Riley Example', payTo: null, checkNumber: null, memo: null, checkDate: null },
-    { index: 3, amount: 733.68, payer: null, payTo: null, checkNumber: '88', memo: null, checkDate: null },
+    { index: 1, amount: 1285.40, payer: 'JORDAN SAMPLE', payTo: null, checkNumber: '1042', memo: 'November', checkDate: '2026-11-08' },
+    { index: 2, amount: 615.25, payer: 'Riley Example', payTo: null, checkNumber: null, memo: null, checkDate: null },
+    { index: 3, amount: 742.15, payer: null, payTo: null, checkNumber: '88', memo: null, checkDate: null },
   ],
 };
 
@@ -53,10 +53,10 @@ test('each check matched to its tenant and split into rent and the open utility 
   assert.equal(d.bankAccountId, ids.bank);
   assert.deepEqual(d.problems, []);
   const [a, b, c] = d.checks;
-  assert.deepEqual([a.leaseId, a.matchedBy, a.month, a.rent, a.utilities], [ids.a, 'name', '2026-11', 1200, 110.79]);
-  assert.deepEqual([b.leaseId, b.rent, b.utilities], [ids.b, 629.1, 0]);
+  assert.deepEqual([a.leaseId, a.matchedBy, a.month, a.rent, a.utilities], [ids.a, 'name', '2026-11', 1200, 85.40]);
+  assert.deepEqual([b.leaseId, b.rent, b.utilities], [ids.b, 615.25, 0]);
   // No name on it: the one tenant who owes exactly this (rent plus their open invoice).
-  assert.deepEqual([c.leaseId, c.matchedBy, c.rent, c.utilities], [ids.c, 'amount', 700, 33.68]);
+  assert.deepEqual([c.leaseId, c.matchedBy, c.rent, c.utilities], [ids.c, 'amount', 700, 42.15]);
   assert.ok(d.checks.every(x => x.include));
 });
 
@@ -68,14 +68,14 @@ test('recorded: rent as checks deposited into the account, utilities on the invo
   const res = await send('/record', body);
   assert.equal(res.status, 200);
   const r = await res.json() as any;
-  assert.deepEqual([r.rent, r.utilities, r.checks], [2529.1, 144.47, 3]);
+  assert.deepEqual([r.rent, r.utilities, r.checks], [2515.25, 127.55, 3]);
   const { db } = api;
   const rents = await db.rentPayment.findMany({ where: { leaseId: { in: [ids.a, ids.b, ids.c] } }, orderBy: { amount: 'asc' } });
-  assert.deepEqual(rents.map(p => Number(p.amount)), [629.1, 700, 1200]);
+  assert.deepEqual(rents.map(p => Number(p.amount)), [615.25, 700, 1200]);
   assert.ok(rents.every(p => p.method === 'CHECK' && p.bankAccountId === ids.bank && p.depositedAt?.toISOString().startsWith('2026-11-10')));
   assert.match(rents[2].notes ?? '', /Check #1042 from JORDAN SAMPLE/);
-  assert.equal(Number((await db.reimbursementInvoice.findUnique({ where: { id: ids.inv_A } }))!.paidAmount), 110.79);
-  assert.equal(Number((await db.reimbursementInvoice.findUnique({ where: { id: ids.inv_C } }))!.paidAmount), 33.68);
+  assert.equal(Number((await db.reimbursementInvoice.findUnique({ where: { id: ids.inv_A } }))!.paidAmount), 85.40);
+  assert.equal(Number((await db.reimbursementInvoice.findUnique({ where: { id: ids.inv_C } }))!.paidAmount), 42.15);
   assert.equal((await db.incomingTransaction.findUnique({ where: { id: ids.line } }))!.status, 'APPLIED');
   // The same deposit again: refused; and the read says it is recorded.
   assert.equal((await send('/record', body)).status, 409);
