@@ -39,6 +39,31 @@ export async function pendingForRentCheck(userId: string, p: { id: string; metho
   return row;
 }
 
+const CHECKS = new Set(['CHECK', 'MONEY_ORDER', 'CASHIERS_CHECK']);
+
+/**
+ * A loan payment logged before it has come out of the account (a check in the mail, a payment
+ * scheduled for later): pending on that account until the bank shows it — a check waits for it
+ * to be cashed, anything else also clears a few days after its date (settlePending). The loan
+ * shows the month paid at once. Removed with the payment.
+ */
+export async function pendingForLoanPayment(userId: string, bankAccountId: string, p: { id: string; amount: number; date: Date; method: string | null; confirmationNumber?: string | null }, lender: string) {
+  if (!(await db.bankAccount.findFirst({ where: { id: bankAccountId, userId }, select: { id: true } }))) return null;
+  if (await db.pendingOutflow.findFirst({ where: { userId, sourceRef: `loanpay:${p.id}` }, select: { id: true } })) return null;
+  const check = !!p.method && CHECKS.has(p.method);
+  const loan = await db.loanPayment.findUnique({ where: { id: p.id }, select: { loanId: true } });
+  const row = await db.pendingOutflow.create({
+    data: {
+      userId, bankAccountId, amount: r2(p.amount), direction: 'OUT', kind: check ? 'CHECK' : 'SCHEDULED',
+      description: `${check ? `Check${p.confirmationNumber ? ` #${p.confirmationNumber}` : ''} to ` : ''}${lender}`.slice(0, 300),
+      expectedDate: p.date, loanId: loan?.loanId ?? null, sourceRef: `loanpay:${p.id}`,
+    },
+  });
+  // Already out by the time it was logged: cleared from the bank's lines, in the background.
+  void checkPendingWithBank(userId).catch(() => 0);
+  return row;
+}
+
 /**
  * One check taken back out of what is pending: its own deposit ("rent:<id>") goes, and on a deposit
  * of several ("slip:r:<id>,m:<id>") its amount comes off. token is "r:<rentPaymentId>" or "m:<movementId>".
@@ -77,8 +102,9 @@ export async function clearPendingByTransaction(bankAccountId: string, tx: { id:
     where: { bankAccountId, cleared: false, direction, amount: { gte: amt - 0.005, lte: amt + 0.005 } },
     orderBy: { createdAt: 'asc' },
   });
-  // Made before the bank saw it (three days' slack for a date entered late).
-  const made = (p: (typeof items)[number]) => Math.min(p.createdAt.getTime(), p.expectedDate && direction === 'IN' ? p.expectedDate.getTime() : Infinity);
+  // Made before the bank saw it (three days' slack for a date entered late): when it was entered, or the
+  // date it was sent or deposited if earlier — a payment logged days after the check went out.
+  const made = (p: (typeof items)[number]) => Math.min(p.createdAt.getTime(), p.expectedDate ? p.expectedDate.getTime() : Infinity);
   const cands = items.filter(p => day >= made(p) - 3 * DAY);
   if (!cands.length) return null;
   const no = checkNo(tx.name);
@@ -158,7 +184,7 @@ export async function checkPendingWithBank(userId: string, now = new Date()): Pr
   if (!open.length) return 0;
   const { plaidClient } = await import('../config/plaid');
   const { decrypt } = await import('../crypto/encrypt');
-  const made = (p: (typeof open)[number]) => Math.min(p.createdAt.getTime(), p.expectedDate && p.direction === 'IN' ? p.expectedDate.getTime() : Infinity);
+  const made = (p: (typeof open)[number]) => Math.min(p.createdAt.getTime(), p.expectedDate ? p.expectedDate.getTime() : Infinity);
   const byItem = new Map<string, typeof open>();
   for (const p of open) byItem.set(p.bankAccount.plaidItemId!, [...(byItem.get(p.bankAccount.plaidItemId!) ?? []), p]);
   let n = 0;
@@ -222,7 +248,7 @@ export async function settlePending(userId: string, now = new Date()): Promise<n
   const open = await db.pendingOutflow.findMany({
     // "kept": the owner put it back as still pending — only the bank or the owner clears it now.
     where: { userId, cleared: false, OR: [{ clearedBy: null }, { clearedBy: { not: 'kept' } }] },
-    select: { id: true, kind: true, direction: true, expectedDate: true, createdAt: true, loanId: true },
+    select: { id: true, kind: true, direction: true, expectedDate: true, createdAt: true, loanId: true, sourceRef: true },
   });
   if (!open.length) return 0;
   const loanIds = [...new Set(open.filter(p => p.loanId && p.kind !== 'CHECK' && p.direction !== 'IN').map(p => p.loanId!))];
@@ -240,7 +266,8 @@ export async function settlePending(userId: string, now = new Date()): Promise<n
       if (age > PENDING_DEPOSIT_DAYS) { by = 'auto:date'; at = new Date(when.getTime() + PENDING_DEPOSIT_DAYS * DAY); }
     } else if (p.kind !== 'CHECK') {
       // The payment for the month it was sent toward: by the month it says it pays, else paid within days of it.
-      if (p.loanId && age >= 0 && paid.some(lp => lp.loanId === p.loanId && (lp.periodDate
+      // Not one made by logging the payment itself ("loanpay:<id>"): that one waits for the bank, or its date.
+      if (p.loanId && !p.sourceRef?.startsWith('loanpay:') && age >= 0 && paid.some(lp => lp.loanId === p.loanId && (lp.periodDate
         ? monthOf(lp.periodDate) === monthOf(when)
         : lp.date.getTime() >= when.getTime() - 10 * DAY && lp.date.getTime() <= when.getTime() + 20 * DAY))) by = 'auto:loan';
       else {

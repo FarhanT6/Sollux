@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  getLoanTrackerMonth, getLoanTrackerYear, createLoanPayment,
+  getLoanTrackerMonth, getLoanTrackerYear, createLoanPayment, getBankAccounts,
   type LoanTrackerMonth, type LoanTrackerYear, type LoanTrackerRow, type LoanTrackerStatus,
 } from '../../api/client';
 import type { LoanPaymentMethod } from '../../types';
@@ -296,6 +296,19 @@ function LogLoanPaymentModal({ row, month, onClose, onSaved }: { row: LoanTracke
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Where it is paid from, and whether it has come out of that account yet.
+  const [accounts, setAccounts] = useState<{ id: string; label: string }[]>([]);
+  const [fromAcct, setFromAcct] = useState(row.payFromBankAccountId ?? '');
+  const [holdTouched, setHoldTouched] = useState(false);
+  const [holdChoice, setHoldChoice] = useState(false);
+  useEffect(() => {
+    getBankAccounts().then(list => setAccounts((list as any[])
+      .filter(a => a.accountType !== 'CREDIT_CARD')
+      .map(a => { const name = a.nickname || a.name; return { id: a.id, label: `${name}${a.last4 && !String(name).includes(a.last4) ? ` ··${a.last4}` : ''}` }; }))).catch(() => setAccounts([]));
+  }, []);
+  // Unless the owner says otherwise: a check, or a payment from the last few days, has likely not come out yet.
+  const recent = Date.now() - new Date(`${date}T12:00:00`).getTime() < 4 * 86_400_000;
+  const hold = holdTouched ? holdChoice : !!fromAcct && (['CHECK', 'MONEY_ORDER', 'CASHIERS_CHECK'].includes(method) || recent);
 
   async function save() {
     const amt = parseFloat(amount);
@@ -305,6 +318,7 @@ function LogLoanPaymentModal({ row, month, onClose, onSaved }: { row: LoanTracke
       await createLoanPayment(row.loanId, {
         date, amount: amt, billAmount: row.expected || undefined, status: 'PAID', periodMonth: period, method: method || null,
         lateFee: lateFee ? parseFloat(lateFee) : undefined, confirmationNumber: confirmation || undefined, notes: notes || undefined,
+        pendingFrom: hold && fromAcct ? fromAcct : null,
       });
       onSaved();
     } catch (e) { setErr(describeApiError(e, 'Could not log the payment.')); }
@@ -315,7 +329,7 @@ function LogLoanPaymentModal({ row, month, onClose, onSaved }: { row: LoanTracke
   const label = 'block text-xs text-gray-500 mb-1';
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.6)' }} onClick={onClose}>
-      <div className="card p-5 w-full max-w-md space-y-3" onClick={e => e.stopPropagation()}>
+      <div className="card p-5 w-full max-w-md space-y-3 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div>
           <p className="text-sm font-semibold text-white">Log payment — {row.lender}</p>
           <p className="text-xs text-gray-500">{row.property} · {fmtMoney(row.expected)} due {fmtDate(row.dueDate)}</p>
@@ -339,6 +353,24 @@ function LogLoanPaymentModal({ row, month, onClose, onSaved }: { row: LoanTracke
           <div><span className={label}>Late fee included</span><input type="number" step="0.01" className={input} value={lateFee} onChange={e => setLateFee(e.target.value)} placeholder="0.00" /></div>
           <div><span className={label}>Check # / confirmation</span><input className={input} value={confirmation} onChange={e => setConfirmation(e.target.value)} /></div>
           <div className="col-span-2"><span className={label}>Notes</span><input className={input} value={notes} onChange={e => setNotes(e.target.value)} /></div>
+          <div className="col-span-2">
+            <span className={label}>Paid from</span>
+            <select className={input} value={fromAcct} onChange={e => setFromAcct(e.target.value)}>
+              <option value="">—</option>
+              {accounts.map(a => <option key={a.id} value={a.id}>{a.label}</option>)}
+            </select>
+          </div>
+          {fromAcct && (
+            <label className="col-span-2 flex items-start gap-2 text-xs text-gray-300 cursor-pointer">
+              <input type="checkbox" className="mt-0.5" checked={hold} onChange={e => { setHoldTouched(true); setHoldChoice(e.target.checked); }} />
+              <span>
+                It hasn&rsquo;t come out of the account yet — show it as pending there
+                <span className="block text-gray-500 mt-0.5">
+                  It clears when the bank shows a {fmtMoney(parseFloat(amount) || 0)} payment out of that account{['CHECK', 'MONEY_ORDER', 'CASHIERS_CHECK'].includes(method) ? ' (the check number helps). A check waits until it is cashed.' : ', or a few days after the date.'} If the bank already shows it, it clears right away.
+                </span>
+              </span>
+            </label>
+          )}
         </div>
         {err && <p className="text-xs text-red-400">{err}</p>}
         <div className="flex justify-end gap-2">

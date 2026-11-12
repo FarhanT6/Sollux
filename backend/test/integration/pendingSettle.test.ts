@@ -110,3 +110,30 @@ test('checked against the bank\'s own lines: a deposit recorded after the bank h
   await db.pendingOutflow.create({ data: { userId: ids.user, bankAccountId: acct.id, amount: 1200, description: 'Check deposited', kind: 'CHECK', direction: 'IN', expectedDate: new Date(`${day}T00:00:00Z`) } as any });
   assert.equal(await checkPendingWithBank(ids.user), 0);
 });
+
+test('a loan payment logged before it comes out: pending on its account until the bank shows it, gone with the payment', { skip }, async () => {
+  const { db } = api;
+  const month = ymd(ago(3)).slice(0, 7);
+  const res = await send('POST', `/loans/${ids.loan}/payments`, { date: ymd(ago(3)), amount: 1500, status: 'PAID', method: 'CHECK', confirmationNumber: '1207', periodMonth: month, pendingFrom: ids.bank, allowDuplicate: true });
+  assert.equal(res.status, 201);
+  const pay = await res.json() as any;
+  const item = await db.pendingOutflow.findFirst({ where: { sourceRef: `loanpay:${pay.id}` } });
+  assert.ok(item);
+  assert.deepEqual([item!.kind, Number(item!.amount), item!.loanId, item!.direction], ['CHECK', 1500, ids.loan, 'OUT']);
+  assert.match(item!.description, /Check #1207 to Example Mortgage Co/);
+  // The loan shows it paid, and the payment on record does not clear its own pending item.
+  const open = await (await send('GET', '/bank-accounts/pending')).json() as any[];
+  assert.ok(open.some(p => p.id === item!.id));
+  // The bank shows the check cashed: cleared.
+  const { clearPendingByTransaction } = await import('../../src/services/pendingMoney');
+  assert.equal(await clearPendingByTransaction(ids.bank, { id: 'tx-1207', amount: 1500, date: ymd(new Date()), name: 'CHECK 1207' }), item!.id);
+  // Another, by Zelle, deleted before it came out: its pending item goes with it.
+  const res2 = await send('POST', `/loans/${ids.loan}/payments`, { date: ymd(new Date()), amount: 333.33, status: 'PAID', method: 'ZELLE', pendingFrom: ids.bank, allowDuplicate: true });
+  const pay2 = await res2.json() as any;
+  assert.equal((await db.pendingOutflow.findFirst({ where: { sourceRef: `loanpay:${pay2.id}` } }))!.kind, 'SCHEDULED');
+  assert.equal((await send('DELETE', `/loans/${ids.loan}/payments/${pay2.id}`)).status, 204);
+  assert.equal(await db.pendingOutflow.count({ where: { sourceRef: `loanpay:${pay2.id}` } }), 0);
+  // Without "not out yet", nothing is pending.
+  const res3 = await send('POST', `/loans/${ids.loan}/payments`, { date: ymd(new Date()), amount: 222.22, status: 'PAID', method: 'ZELLE', allowDuplicate: true });
+  assert.equal(await db.pendingOutflow.count({ where: { sourceRef: `loanpay:${(await res3.json() as any).id}` } }), 0);
+});

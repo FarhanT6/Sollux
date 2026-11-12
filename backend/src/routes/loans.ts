@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { pendingForLoanPayment } from '../services/pendingMoney';
 import { memberFilter, memberOk } from './household';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
@@ -574,6 +575,12 @@ router.post('/:id/payments', async (req, res, next) => {
     const payment = await db.loanPayment.create({
       data: { ...data, loanId: req.params.id, ...(periodMonth ? { periodDate: new Date(`${periodMonth}-01T00:00:00.000Z`) } : {}) },
     });
+    // Not out of the account yet: pending there until the bank shows it (services/pendingMoney.ts).
+    const pendingFrom = typeof req.body?.pendingFrom === 'string' ? req.body.pendingFrom : null;
+    if (pendingFrom) {
+      await pendingForLoanPayment(req.dbUserId!, pendingFrom, { id: payment.id, amount: Number(payment.amount), date: payment.date, method: payment.method, confirmationNumber: payment.confirmationNumber }, loan.lender)
+        .catch(err => console.warn('[Loans] pending payment:', err instanceof Error ? err.message : err));
+    }
     res.status(201).json(serializeLoanPayment(payment));
   } catch (err) { next(err); }
 });
@@ -585,6 +592,8 @@ router.delete('/:id/payments/:paymentId', async (req, res, next) => {
     // Only a payment on this loan (which is the owner's): an id from another loan or customer deletes nothing.
     const r = await db.loanPayment.deleteMany({ where: { id: req.params.paymentId, loanId: loan.id } });
     if (!r.count) return res.status(404).json({ error: 'Payment not found' });
+    // Its pending item on the bank account goes with it (if the bank has not taken it yet).
+    await db.pendingOutflow.deleteMany({ where: { userId: req.dbUserId!, cleared: false, sourceRef: `loanpay:${req.params.paymentId}` } });
     res.status(204).send();
   } catch (err) { next(err); }
 });

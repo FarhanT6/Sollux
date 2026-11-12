@@ -308,7 +308,8 @@ export const deleteLoan = (id: string) =>
 export const getLoanPayments = (loanId: string) =>
   api.get<LoanPayment[]>(`/loans/${loanId}/payments`).then(r => r.data);
 /** A payment matching one already logged (same amount within three days) is confirmed before it is logged again. */
-export const createLoanPayment = (loanId: string, data: Partial<LoanPayment> & { periodMonth?: string | null }) =>
+/** pendingFrom: a bank account it has not come out of yet — pending there until the bank shows it. */
+export const createLoanPayment = (loanId: string, data: Partial<LoanPayment> & { periodMonth?: string | null; pendingFrom?: string | null }) =>
   api.post<LoanPayment>(`/loans/${loanId}/payments`, data).then(r => r.data).catch(async (e: any) => {
     if (e?.response?.status === 409 && e.response.data?.duplicate) {
       if (!window.confirm(`${e.response.data.error} Log another one anyway?`)) throw Object.assign(new Error('Not logged: it is already on record.'), { response: { data: { error: 'Not logged: that payment is already on record.' } } });
@@ -325,7 +326,7 @@ interface LoanTrackerBase {
   expected: number; dueDay: number | null; gracePeriodDays: number | null;
   /** Set when the loan is billed like a utility: its bills are that account's. */
   utilityAccountId?: string | null;
-  paymentMethods: string[]; paymentInstructions: string | null; mailingAddress: string | null; paymentUrl: string | null; payFrom: string | null;
+  paymentMethods: string[]; paymentInstructions: string | null; mailingAddress: string | null; paymentUrl: string | null; payFrom: string | null; payFromBankAccountId?: string | null;
 }
 export interface LoanTrackerPayment { id: string; loanId: string; date: string; month: string; amount: number; lateFee: number | null; method: string | null; confirmationNumber: string | null; notes: string | null }
 export interface LoanTrackerRow extends LoanTrackerBase {
