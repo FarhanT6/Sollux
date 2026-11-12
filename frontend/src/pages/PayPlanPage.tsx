@@ -236,13 +236,14 @@ export default function PayPlanPage({ embedded }: { embedded?: boolean } = {}) {
 
             {/* ── Accounts ─────────────────────────────────────── */}
             <div className="xl:col-span-2">
+              <MoneyToMove plan={plan} />
               <p className="text-sm font-medium text-white mb-2">Accounts</p>
               {plan.accounts.length === 0 ? (
                 <p className="text-xs text-gray-500">No checking, savings or cash accounts. <Link to="/settings?tab=banking" className="text-[#F5A623] hover:underline">Add one</Link>.</p>
               ) : (
                 <div className="space-y-2">
                   {plan.accounts.map(a => (
-                    <AccountCard key={a.id} a={a} busy={busy}
+                    <AccountCard key={a.id} a={a} busy={busy} movedIn={(plan.deposits ?? []).filter(d => d.intoAccountId === a.id)} movedOut={(plan.deposits ?? []).filter(d => d.fromAccountId === a.id)}
                       adding={addingTo === a.id} onToggleAdd={() => setAddingTo(addingTo === a.id ? null : a.id)}
                       settingBalance={balanceFor === a.id} onToggleBalance={() => setBalanceFor(balanceFor === a.id ? null : a.id)}
                       onClear={clear} onRemove={remove}
@@ -262,8 +263,41 @@ export default function PayPlanPage({ embedded }: { embedded?: boolean } = {}) {
   );
 }
 
-function AccountCard({ a, busy, adding, onToggleAdd, settingBalance, onToggleBalance, onClear, onRemove, onSaved }: {
-  a: PayPlanAccount; busy: string | null;
+type PlanMove = NonNullable<PayPlan['deposits']>[number];
+const moveTitle = (d: PlanMove) => d.kind === 'TRANSFER' ? `Transfer from ${d.from}` : d.from === 'Checks on hand' ? 'Deposit checks on hand' : /cash/i.test(d.from) && !/app/i.test(d.from) ? 'Deposit cash' : `Move from ${d.from}`;
+
+/**
+ * What to move before paying: each account that comes up short, made up by depositing checks on
+ * hand, cash and app balances first, and by a transfer between accounts only for what those can't
+ * cover — then the rest of the checks on hand. Each payment itself comes from one account.
+ */
+function MoneyToMove({ plan }: { plan: PayPlan }) {
+  const moves = plan.deposits ?? [];
+  const funds = plan.funds ?? [];
+  if (!moves.length && !funds.length) return null;
+  return (
+    <div className="rounded-xl px-4 py-3 mb-4" style={{ background: '#161616', border: '1px solid rgba(245,166,35,0.25)' }}>
+      <p className="text-sm font-medium text-white">Money to move first</p>
+      {funds.length > 0 && <p className="text-xs text-gray-500 mt-0.5">Not in a bank yet: {funds.map(f => `${f.label} ${money(f.amount)}`).join(' · ')}</p>}
+      {moves.length === 0 ? <p className="text-xs text-gray-500 mt-1.5">Nothing needs moving: every payment fits in one account as it is.</p> : (
+        <div className="mt-2 space-y-1.5">
+          {moves.map((d, i) => (
+            <div key={i} className="text-xs">
+              <div className="flex justify-between gap-3">
+                <span className={d.kind === 'TRANSFER' ? 'text-amber-300' : 'text-gray-200'}>{moveTitle(d)} → <span className="text-white">{d.into}</span></span>
+                <span className="text-emerald-400 whitespace-nowrap">+{money(d.amount)}</span>
+              </div>
+              <p className="text-gray-500">{d.why}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AccountCard({ a, busy, movedIn, movedOut, adding, onToggleAdd, settingBalance, onToggleBalance, onClear, onRemove, onSaved }: {
+  a: PayPlanAccount; busy: string | null; movedIn: PlanMove[]; movedOut: PlanMove[];
   adding: boolean; onToggleAdd: () => void;
   settingBalance: boolean; onToggleBalance: () => void;
   onClear: (id: string) => void; onRemove: (id: string) => void; onSaved: () => Promise<void>;
@@ -316,6 +350,10 @@ function AccountCard({ a, busy, adding, onToggleAdd, settingBalance, onToggleBal
         {a.cushion > 0 && <div className="flex justify-between"><span>Cushion</span><span className="text-gray-500">−{money(a.cushion)}</span></div>}
         <div className="flex justify-between"><span>Free to pay from</span><span className="text-gray-200 font-medium">{money(a.spendable)}</span></div>
         {a.assigned > 0 && <div className="flex justify-between"><span>This plan uses</span><span className="text-[#F5A623]">−{money(a.assigned)}</span></div>}
+        {(a.shortBy ?? 0) > 0 && <div className="flex justify-between"><span className="text-red-300">Short by</span><span className="text-red-300">{money(a.shortBy!)}</span></div>}
+        {movedIn.map((d, i) => <div key={i} className="flex justify-between"><span>{moveTitle(d)}</span><span className="text-emerald-400">+{money(d.amount)}</span></div>)}
+        {movedOut.map((d, i) => <div key={`o${i}`} className="flex justify-between"><span>Transfer to {d.into}</span><span className="text-amber-300">−{money(d.amount)}</span></div>)}
+        {(a.stillShort ?? 0) > 0 && <div className="flex justify-between"><span className="text-red-400">Still short</span><span className="text-red-400">{money(a.stillShort!)}</span></div>}
       </div>
 
       {a.pending.length > 0 && (

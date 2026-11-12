@@ -1293,6 +1293,10 @@ export interface PayPlanAccount {
   spendable: number;
   assigned: number;
   remaining: number;
+  /** How far the payments planned from it go past what it can spare, what deposits and transfers make up, what is still short. */
+  shortBy?: number;
+  madeUp?: number;
+  stillShort?: number;
 }
 export interface PayPlanObligation {
   key: string;
@@ -1321,8 +1325,8 @@ export interface PayPlan {
   obligations: PayPlanObligation[];
   /** Cash, checks on hand, app balances (Cash, checks & apps): deposited before they can pay a lender. */
   funds?: { label: string; amount: number; detail: string | null; asOf: string | null }[];
-  /** Where to put that money, and why there. */
-  deposits?: { from: string; amount: number; intoAccountId: string; into: string; why: string }[];
+  /** Making up an account that is short — deposits first, a transfer (kind TRANSFER) only for the rest — and checks on hand to deposit. */
+  deposits?: { kind?: 'DEPOSIT' | 'TRANSFER'; from: string; fromAccountId?: string | null; amount: number; intoAccountId: string; into: string; why: string; makeUp?: boolean }[];
   totals: { due: number; sent: number; spendable: number; afterPlan: number; short: number };
   warnings: string[];
 }

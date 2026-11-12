@@ -35,7 +35,10 @@ export interface PlanAccount {
   cushion: number;
   spendable: number;            // what the planner may draw on
   assigned: number;             // what the plan draws from it
-  remaining: number;            // spendable − assigned
+  remaining: number;            // spendable − assigned + what is moved into it
+  shortBy: number;              // how far the payments planned from it go past what it can spare
+  madeUp: number;               // what deposits and transfers bring in toward that
+  stillShort: number;           // what nothing could make up
 }
 
 export interface PlanObligation {
@@ -60,8 +63,15 @@ export interface PlanObligation {
 
 /** Money that is not in a bank account yet: cash, checks on hand, payment-app balances (Cash, checks & apps). */
 export interface PlanFund { label: string; amount: number; detail: string | null; asOf: string | null }
-/** Moving that money into an account: what, how much, where, and why there. */
-export interface PlanDeposit { from: string; amount: number; intoAccountId: string; into: string; why: string }
+/**
+ * Money moved into an account: a DEPOSIT of cash, checks on hand or an app balance, or — only for what
+ * those cannot cover — a TRANSFER from another account (fromAccountId) that has it to spare.
+ */
+export interface PlanDeposit {
+  kind: 'DEPOSIT' | 'TRANSFER'; from: string; fromAccountId: string | null; amount: number; intoAccountId: string; into: string; why: string;
+  /** Making up an account that is short (false: the rest of the checks on hand, deposited anyway). */
+  makeUp: boolean;
+}
 
 export interface PayPlan {
   asOf: string;
@@ -71,7 +81,7 @@ export interface PayPlan {
   obligations: PlanObligation[];
   /** Cash, checks on hand and app balances — paid into an account before they can pay a lender. */
   funds: PlanFund[];
-  /** Where to put that money: into the accounts a payment is short in, else the one left lowest. */
+  /** Making up an account that is short (deposits first, a transfer only for the rest), and checks on hand to deposit. */
   deposits: PlanDeposit[];
   totals: {
     due: number;                // everything still to pay in the window
@@ -193,7 +203,7 @@ export async function buildPayPlan(userId: string, opts: {
         balance: r2(balance), available, asOfDate: asOf?.toISOString() ?? null, stale,
         pending: mine, pendingTotal, cushion,
         spendable: r2(base - pendingTotal - cushion),
-        assigned: 0, remaining: r2(base - pendingTotal - cushion),
+        assigned: 0, remaining: r2(base - pendingTotal - cushion), shortBy: 0, madeUp: 0, stillShort: 0,
       };
     });
   for (const a of accounts) {
@@ -332,109 +342,94 @@ export async function buildPayPlan(userId: string, opts: {
   }
 
   // ── Allocation ──────────────────────────────────────────────────────────
-  // Soonest first, then largest, so the payment with the least slack gets
-  // first pick of the money. Each payment goes to its usual account when
-  // that account can carry it; otherwise to the account with the most room
-  // left, so no single account is run down while another sits full. A
-  // payment nothing can cover alone is split across accounts; one the
-  // accounts cannot cover together is marked short.
+  // Each payment comes out of one account, never split across accounts. The owner's choices
+  // are fixed; the rest are placed by placeOneEach to leave the least to make up.
   obligations.sort((a, b) => a.dueDate.localeCompare(b.dueDate) || b.amount - a.amount);
   const byId = new Map(accounts.map(a => [a.id, a]));
-  const acctName = (id: string) => byId.get(id)?.name ?? 'account';
-  let short = 0;
-
-  // The owner's choices first, so the rest is planned around them.
-  for (const o of obligations) {
-    const id = chosen.get(o.key);
-    if (o.status === 'SENT' || !id) continue;
-    const a = byId.get(id)!;
+  const open = obligations.filter(o => o.status !== 'SENT');
+  const put = (o: PlanObligation, a: PlanAccount) => {
     a.assigned = r2(a.assigned + o.amount); a.remaining = r2(a.remaining - o.amount);
     o.payFrom = [{ accountId: a.id, amount: o.amount }];
-    o.reason = a.remaining >= 0 ? `Your choice · ${money(a.remaining)} left after` : `Your choice — leaves ${a.name} ${money(-a.remaining)} short`;
-    if (a.remaining < 0) warnings.push(`${a.name} goes ${money(-a.remaining)} below what it can spare with your choices — deposit into it first.`);
+  };
+  for (const o of open) { const id = chosen.get(o.key); if (id) put(o, byId.get(id)!); }
+  const free = open.filter(o => !chosen.has(o.key)).sort((a, b) => b.amount - a.amount || a.dueDate.localeCompare(b.dueDate));
+  if (accounts.length) {
+    const idx = new Map(accounts.map((a, i) => [a.id, i]));
+    const pick = placeOneEach(free.map(o => ({ amount: o.amount, usual: o.preferredAccountId ? idx.get(o.preferredAccountId) ?? -1 : -1 })), accounts.map(a => a.remaining));
+    free.forEach((o, i) => put(o, accounts[pick[i]]));
   }
-  for (const o of obligations) {
-    if (o.status === 'SENT' || chosen.has(o.key)) continue;
-    const pref = o.preferredAccountId ? byId.get(o.preferredAccountId) : undefined;
-    if (pref && pref.remaining >= o.amount) {
-      pref.assigned = r2(pref.assigned + o.amount); pref.remaining = r2(pref.remaining - o.amount);
-      o.payFrom = [{ accountId: pref.id, amount: o.amount }];
-      o.reason = o.kind === 'LOAN' ? `Usual account · ${money(pref.remaining)} left after` : `Paid from here last time · ${money(pref.remaining)} left after`;
-      continue;
-    }
-    const fits = accounts.filter(a => a.remaining >= o.amount).sort((a, b) => b.remaining - a.remaining);
-    if (fits.length > 0) {
-      const a = fits[0];
-      a.assigned = r2(a.assigned + o.amount); a.remaining = r2(a.remaining - o.amount);
-      o.payFrom = [{ accountId: a.id, amount: o.amount }];
-      o.reason = pref
-        ? `${pref.name} only has ${money(pref.remaining)} free — ${a.name} has the most room (${money(a.remaining)} left after)`
-        : `Most room of any account · ${money(a.remaining)} left after`;
-      continue;
-    }
-    // Split across whatever is left, biggest first.
-    let need = o.amount;
-    const parts: { accountId: string; amount: number }[] = [];
-    for (const a of [...accounts].sort((x, y) => y.remaining - x.remaining)) {
-      if (need <= 0.005) break;
-      if (a.remaining <= 0.005) continue;
-      const take = r2(Math.min(a.remaining, need));
-      a.assigned = r2(a.assigned + take); a.remaining = r2(a.remaining - take);
-      parts.push({ accountId: a.id, amount: take });
-      need = r2(need - take);
-    }
-    o.payFrom = parts;
-    if (need > 0.005) {
-      o.status = 'SHORT';
-      short = r2(short + need);
-      o.reason = parts.length > 0
-        ? `No account can cover it alone; ${parts.map(p => `${money(p.amount)} from ${acctName(p.accountId)}`).join(' + ')} still leaves ${money(need)} short`
-        : `Nothing free in any account — ${money(need)} short`;
-    } else {
-      o.reason = `No account can cover it alone — split ${parts.map(p => `${money(p.amount)} from ${acctName(p.accountId)}`).join(' + ')}`;
-    }
-  }
-
-  const due = r2(obligations.filter(o => o.status !== 'SENT').reduce((s, o) => s + o.amount, 0));
+  const due = r2(open.reduce((s, o) => s + o.amount, 0));
   const sent = r2(obligations.filter(o => o.status === 'SENT').reduce((s, o) => s + o.amount, 0));
   const spendable = r2(accounts.reduce((s, a) => s + a.spendable, 0));
   if (accounts.length === 0) warnings.push('No checking or savings accounts are set up. Add them under Settings → Banking.');
 
-  // ── Deposits: cash, checks and app balances into the accounts that need them ──
-  // Into an account left below zero (an owner's choice, or a split that ran short) or a short
-  // payment's usual account first, checks before cash before app balances; what is left over
-  // goes to the account left lowest, so no account sits near empty while money sits in a drawer.
+  // ── Making up an account that is short ───────────────────────────────────
+  // What its payments go past what it can spare: cash, checks on hand and app balances are
+  // deposited into it first (checks, then cash, then apps); a transfer from another account
+  // only for what those cannot cover — from the one with the most to spare after its own
+  // payments, in one transfer when one account can cover it.
   const deposits: PlanDeposit[] = [];
   const order = (l: string) => (l === 'Checks on hand' ? 0 : /^cash$/i.test(l) ? 1 : 2);
   const pool = funds.map(f => ({ ...f, left: f.amount })).sort((a, b) => order(a.label) - order(b.label));
-  const draw = (need: number, into: PlanAccount, why: string, from = pool) => {
+  const draw = (need: number, into: PlanAccount, why: string, from = pool, makeUp = true) => {
     for (const f of from) {
       if (need <= 0.005) break;
       if (f.left <= 0.005) continue;
       const take = r2(Math.min(f.left, need));
       f.left = r2(f.left - take); need = r2(need - take);
       into.remaining = r2(into.remaining + take);
-      deposits.push({ from: f.label, amount: take, intoAccountId: into.id, into: into.name, why });
+      deposits.push({ kind: 'DEPOSIT', from: f.label, fromAccountId: null, amount: take, intoAccountId: into.id, into: into.name, why, makeUp });
     }
     return need;
   };
-  for (const a of accounts.filter(x => x.remaining < -0.005)) draw(-a.remaining, a, `${a.name} is short for what is planned from it`);
-  for (const o of obligations.filter(x => x.status === 'SHORT')) {
-    const into = (o.preferredAccountId && byId.get(o.preferredAccountId)) || o.payFrom[0] && byId.get(o.payFrom[0].accountId) || [...accounts].sort((x, y) => y.remaining - x.remaining)[0];
-    if (!into) break;
-    const shortBy = r2(o.amount - o.payFrom.reduce((t, p) => t + p.amount, 0));
-    const left = draw(shortBy, into, `covers ${o.label}${o.detail ? ` (${o.detail})` : ''}, ${money(shortBy)} short`);
-    if (left < shortBy - 0.005) {
-      const covered = r2(shortBy - left);
-      o.payFrom.push({ accountId: into.id, amount: covered });
-      short = r2(short - covered);
-      if (left <= 0.005) { o.status = 'DUE'; o.reason = `${o.reason} — covered once the deposit into ${into.name} posts`; }
+  const paysFrom = (a: PlanAccount) => open.filter(o => o.payFrom[0]?.accountId === a.id);
+  const firstDue = (a: PlanAccount) => paysFrom(a)[0]?.dueDate ?? '';
+  let short = 0;
+  for (const a of accounts.filter(x => x.remaining < -0.005).sort((x, y) => firstDue(x).localeCompare(firstDue(y)))) {
+    a.shortBy = r2(-a.remaining);
+    const what = paysFrom(a).map(o => o.label).join(', ');
+    const why = `${a.name} is ${money2(a.shortBy)} short for ${what}`;
+    let need = draw(a.shortBy, a, why);
+    if (need > 0.005) {
+      const donors = accounts.filter(d => d !== a && d.remaining > 0.005).sort((x, y) => y.remaining - x.remaining);
+      for (const d of donors) {
+        if (need <= 0.005) break;
+        const take = r2(Math.min(d.remaining, need));
+        d.remaining = r2(d.remaining - take); a.remaining = r2(a.remaining + take); need = r2(need - take);
+        deposits.push({ kind: 'TRANSFER', from: d.name, fromAccountId: d.id, amount: take, intoAccountId: a.id, into: a.name, why: `${why}; deposits don't cover it — ${d.name} has ${money2(d.remaining)} to spare after this`, makeUp: true });
+      }
     }
+    a.madeUp = r2(a.shortBy - need);
+    if (need > 0.005) {
+      a.stillShort = need; short = r2(short + need);
+      // The payments that run past what the account has, latest due first.
+      let room = r2(a.spendable + a.madeUp);
+      for (const o of paysFrom(a)) { room = r2(room - o.amount); if (room < -0.005) o.status = 'SHORT'; }
+    }
+  }
+  // ── Why each payment comes from where it does ────────────────────────────
+  const moves = (a: PlanAccount) => deposits.filter(d => d.intoAccountId === a.id && d.makeUp)
+    .map(d => moveWords(d));
+  for (const o of open) {
+    const a = o.payFrom[0] ? byId.get(o.payFrom[0].accountId) : undefined;
+    if (!a) { o.status = 'SHORT'; short = r2(short + o.amount); o.reason = 'No checking or savings account to pay it from'; continue; }
+    const pref = o.preferredAccountId ? byId.get(o.preferredAccountId) : undefined;
+    const base = chosen.has(o.key) ? 'Your choice'
+      : pref?.id === a.id ? (o.kind === 'LOAN' ? 'Usual account' : 'Paid from here last time')
+      : pref ? `${pref.name}, the usual account, would come up short with the rest planned from it`
+      : 'Fits best with everything else due';
+    if (!a.shortBy) { o.reason = `${base} · ${money(a.remaining)} left in ${a.name} after`; continue; }
+    const fix = moves(a);
+    o.reason = `${base} — ${a.name} is ${money2(a.shortBy)} short for its payments${fix.length ? `: ${fix.join(', then ')}` : ''}${a.stillShort ? `; still ${money2(a.stillShort)} short with nothing left to move` : ''}`;
+  }
+  for (const a of accounts.filter(x => x.shortBy)) {
+    const fix = moves(a);
+    warnings.push(`${a.name} is ${money2(a.shortBy)} short for what is planned from it${fix.length ? ` — ${fix.join(', then ')}` : ''}${a.stillShort ? `; still ${money2(a.stillShort)} short` : ''}.`);
   }
   const lowest = [...accounts].sort((x, y) => x.remaining - y.remaining)[0];
   const checks = pool.find(f => f.label === 'Checks on hand' && f.left > 0.005);
   // Checks are deposited anyway: into the account left lowest. Cash and app balances are only suggested where needed.
-  if (lowest && checks) draw(checks.left, lowest, `checks on hand — ${lowest.name} is left lowest after these payments`, [checks]);
+  if (lowest && checks) draw(checks.left, lowest, `checks on hand — ${lowest.name} is left lowest after these payments`, [checks], false);
 
   return {
     asOf: now.toISOString(),
@@ -443,6 +438,67 @@ export async function buildPayPlan(userId: string, opts: {
     totals: { due, sent, spendable, afterPlan: r2(spendable - due), short },
     warnings,
   };
+}
+
+/**
+ * Which account pays each payment, one account each (no splitting): `items` are the payments
+ * (amount, and the index of their usual account or -1), `room` what each account can still spare.
+ * Returns an account index per payment. Best is, in order: the least in total to make up (what
+ * accounts go past what they can spare), in the fewest accounts, the most payments on their usual
+ * account, and the most left in the account left lowest. It searches every placement (the first
+ * tried is the plain one — usual account when it fits, else the most room) and gives up improving
+ * after `budget` steps on a very large plan.
+ */
+export function placeOneEach(items: { amount: number; usual: number }[], room: number[], budget = 200_000): number[] {
+  const n = items.length;
+  const rem = room.map(r2);
+  const pick = new Array<number>(n).fill(0);
+  let best: number[] | null = null;
+  let bestScore: number[] | null = null;
+  let steps = 0;
+  const over = (r: number) => (r < -0.005 ? -r : 0);
+  const score = (): number[] => {
+    let total = 0, places = 0, lowest = Infinity;
+    for (const r of rem) { total += over(r); if (r < -0.005) places++; lowest = Math.min(lowest, r); }
+    let offUsual = 0;
+    for (let i = 0; i < n; i++) if (items[i].usual >= 0 && pick[i] !== items[i].usual) offUsual++;
+    return [Math.round(total * 100), places, offUsual, -Math.round(lowest * 100)];
+  };
+  const better = (s: number[], t: number[]) => { for (let i = 0; i < s.length; i++) if (s[i] !== t[i]) return s[i] < t[i]; return false; };
+  const walk = (i: number, total: number) => {
+    if (best && steps >= budget) return;
+    steps++;
+    if (i === n) {
+      const s = score();
+      if (!bestScore || better(s, bestScore)) { bestScore = s; best = [...pick]; }
+      return;
+    }
+    const it = items[i];
+    const tryOrder = [...rem.keys()].sort((a, b) => rem[b] - rem[a]);
+    if (it.usual >= 0 && it.usual < rem.length && rem[it.usual] >= it.amount - 0.005) tryOrder.unshift(...tryOrder.splice(tryOrder.indexOf(it.usual), 1));
+    for (const a of tryOrder) {
+      const before = rem[a], after = r2(before - it.amount);
+      const t = total + over(after) - over(before);
+      if (bestScore && Math.round(t * 100) > bestScore[0]) continue;   // already more to make up than the best found
+      rem[a] = after; pick[i] = a;
+      walk(i + 1, t);
+      rem[a] = before;
+    }
+  };
+  walk(0, rem.reduce((t, r) => t + over(r), 0));
+  return best ?? pick;
+}
+
+/** "deposit $500.00 of checks on hand", "deposit $200.00 cash", "move $80.00 from Venmo", "transfer $300.00 from …". */
+export function moveWords(d: Pick<PlanDeposit, 'kind' | 'from' | 'amount'>): string {
+  if (d.kind === 'TRANSFER') return `transfer ${money2(d.amount)} from ${d.from}`;
+  if (d.from === 'Checks on hand') return `deposit ${money2(d.amount)} of checks on hand`;
+  if (/cash/i.test(d.from) && !/app/i.test(d.from)) return `deposit ${money2(d.amount)} cash`;
+  return `move ${money2(d.amount)} from ${d.from}`;
+}
+
+function money2(n: number): string {
+  return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function money(n: number): string {
