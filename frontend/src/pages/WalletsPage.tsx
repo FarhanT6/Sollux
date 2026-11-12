@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import DepositRead from '../components/income/DepositRead';
 import { getWallets, updateWallet, addWalletMovement, updateWalletMovement, deleteWalletMovement, getBankAccounts, getProperties, depositChecks, undoCheckDeposit, type WalletsT, type WalletT, type WalletEntryT, type WalletMovementType } from '../api/client';
 import type { BankAccount, Property } from '../types';
 import { fmtMoney } from '../lib/money';
@@ -250,6 +251,7 @@ function WalletDetail({ w, all, banks, properties, cats, onChange }: { w: Wallet
 
 /** The checks not deposited yet: tick the ones going to the bank together, choose the account, Deposit. */
 function ChecksOnHand({ w, banks, onChange }: { w: WalletT; banks: BankAccount[]; onChange: (d: WalletsT) => void }) {
+  const [readingDeposit, setReadingDeposit] = useState(false);
   const onHand = w.onHand ?? [];
   // Rent checks by their payment, checks recorded here by their entry.
   const keyOf = (c: { rentPaymentId: string | null; movementId: string | null }) => c.rentPaymentId ? `r:${c.rentPaymentId}` : `m:${c.movementId}`;
@@ -274,7 +276,11 @@ function ChecksOnHand({ w, banks, onChange }: { w: WalletT; banks: BankAccount[]
   }
   return (
     <div className="space-y-2">
-      <p className="text-sm font-semibold text-white">Checks on hand {onHand.length > 0 && <span className="text-gray-500 font-normal">· {onHand.length} · {fmtMoney(onHand.reduce((t, c) => t + c.amount, 0))}</span>}</p>
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className="text-sm font-semibold text-white">Checks on hand {onHand.length > 0 && <span className="text-gray-500 font-normal">· {onHand.length} · {fmtMoney(onHand.reduce((t, c) => t + c.amount, 0))}</span>}</p>
+        <button className="text-xs text-amber-400 hover:text-amber-300" onClick={() => setReadingDeposit(true)}>Deposited checks you didn&rsquo;t log? Read the bank&rsquo;s deposit…</button>
+      </div>
+      {readingDeposit && <DepositRead onClose={() => setReadingDeposit(false)} />}
       {!onHand.length ? <p className="text-xs text-gray-500">None — every check logged since {fmtDate(w.startedAt, 'MMM d, yyyy')} has been deposited. Log a check or money order as rent and it waits here until it's deposited.</p> : (
         <>
           <table className="table-base">

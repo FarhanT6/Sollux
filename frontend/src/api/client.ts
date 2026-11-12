@@ -88,6 +88,22 @@ import type {
 // Dashboard
 // The menu's badges and the Overview ask for the summary at the same moment on start-up: one request serves both.
 let summaryInFlight: { at: number; p: Promise<DashboardSummary> } | null = null;
+// ─── A bank deposit of several checks, read from the bank's deposit details page (routes/deposits.ts) ──
+export interface DepositDraftCheck {
+  index: number; amount: number; payer: string | null; payTo: string | null; checkNumber: string | null; memo: string | null; checkDate: string | null;
+  leaseId: string | null; tenant: string | null; place: string | null; matchedBy: 'name' | 'amount' | null;
+  month: string | null; rentDue: number; utilitiesOwed: number; rent: number; utilities: number; alreadyLogged: string | null; include: boolean;
+}
+export interface DepositDraft {
+  bank: string | null; accountLast4: string | null; postDate: string | null; total: number | null; checkCount: number | null;
+  bankAccountId: string | null; checksSum: number; problems: string[]; recorded: { at: string; key: string } | null; checks: DepositDraftCheck[];
+}
+export const readDeposit = (files: { fileData: string; filename: string }[]) =>
+  api.post<DepositDraft>('/deposits/read', { files }, { timeout: 180_000 }).then(r => r.data);
+export const recordDeposit = (body: { bankAccountId: string; postDate: string; total: number; checks: { leaseId: string; amount: number; month: string; rent: number; utilities: number; payer?: string | null; checkNumber?: string | null; memo?: string | null }[] }) =>
+  api.post<{ key: string; rent: number; utilities: number; checks: number }>('/deposits/record', body, { timeout: 120_000 }).then(r => r.data);
+export const undoDeposit = (key: string) => api.post<{ removed: number }>('/deposits/undo', { key }).then(r => r.data);
+
 /** Settings → Account → Speed check (routes/speed.ts). The database's region shows to the person who runs Sollux only. */
 export interface SpeedCheckResult {
   server: { startedAt: string; upSeconds: number; commit: string | null };
