@@ -33,7 +33,10 @@ export async function pendingForRentCheck(userId: string, p: { id: string; metho
   const when = p.depositedAt ?? p.paidDate;
   if (Date.now() - when.getTime() > PENDING_DEPOSIT_DAYS * DAY) return null;
   if (await db.pendingOutflow.findFirst({ where: { userId, sourceRef: `rent:${p.id}` }, select: { id: true } })) return null;
-  return addPendingDeposit(userId, p.bankAccountId, p.amount, when, `${p.method === 'MONEY_ORDER' ? 'Money order' : 'Check'} deposited${p.payer ? ` — from ${p.payer}` : ''}`, `rent:${p.id}`);
+  const row = await addPendingDeposit(userId, p.bankAccountId, p.amount, when, `${p.method === 'MONEY_ORDER' ? 'Money order' : 'Check'} deposited${p.payer ? ` — from ${p.payer}` : ''}`, `rent:${p.id}`);
+  // Logged after the bank already shows it: cleared in the background.
+  if (row) void checkPendingWithBank(userId).catch(() => 0);
+  return row;
 }
 
 /**
@@ -61,11 +64,12 @@ const checkNo = (s: string | null | undefined) => String(s ?? '').match(/(?:chec
  */
 export async function clearPendingByTransaction(bankAccountId: string, tx: { id: string; amount: number; date: string; name: string; pendingOf?: string | null }) {
   // The posted copy of a transaction already seen while pending: the item it cleared then is the one (not a second of the same amount).
+  // clearedBy is "plaid:<id>", or "plaid:<id>+<id>…" when several of the bank's lines made up one item.
   if (tx.pendingOf) {
-    const before = await db.pendingOutflow.findFirst({ where: { bankAccountId, clearedBy: `plaid:${tx.pendingOf}` }, select: { id: true } });
-    if (before) { await db.pendingOutflow.update({ where: { id: before.id }, data: { clearedBy: `plaid:${tx.id}` } }); return before.id; }
+    const before = await db.pendingOutflow.findFirst({ where: { bankAccountId, clearedBy: { startsWith: 'plaid:', contains: tx.pendingOf } }, select: { id: true, clearedBy: true } });
+    if (before) { await db.pendingOutflow.update({ where: { id: before.id }, data: { clearedBy: before.clearedBy!.replace(tx.pendingOf, tx.id) } }); return before.id; }
   }
-  if (await db.pendingOutflow.findFirst({ where: { bankAccountId, clearedBy: `plaid:${tx.id}` }, select: { id: true } })) return null;   // replayed
+  if (await db.pendingOutflow.findFirst({ where: { bankAccountId, clearedBy: { startsWith: 'plaid:', contains: tx.id } }, select: { id: true } })) return null;   // replayed
   const direction = tx.amount > 0 ? 'OUT' : 'IN';
   const amt = Math.abs(tx.amount);
   const day = new Date(`${tx.date.slice(0, 10)}T00:00:00.000Z`).getTime();
@@ -81,6 +85,116 @@ export async function clearPendingByTransaction(bankAccountId: string, tx: { id:
   const pick = (no && cands.find(p => checkNo(p.description) === no || checkNo(p.notes) === no)) || cands[0];
   await db.pendingOutflow.update({ where: { id: pick.id }, data: { cleared: true, clearedAt: new Date(day), clearedBy: `plaid:${tx.id}` } });
   return pick.id;
+}
+
+/** The bank's transaction ids an item was cleared by ("plaid:a" or "plaid:a+b"). */
+const clearedIds = (by: string | null) => (by?.startsWith('plaid:') ? by.slice(6).split('+').filter(Boolean) : []);
+
+/** The checks on a deposit slip, by amount: "slip:r:<rent payment>,m:<movement>" (or "rent:<id>"). */
+async function slipAmounts(sourceRef: string | null): Promise<number[]> {
+  if (!sourceRef) return [];
+  const tokens = sourceRef.startsWith('rent:') ? [`r:${sourceRef.slice(5)}`] : sourceRef.startsWith('slip:') ? sourceRef.slice(5).split(',') : [];
+  const rentIds = tokens.filter(t => t.startsWith('r:')).map(t => t.slice(2));
+  const moveIds = tokens.filter(t => t.startsWith('m:')).map(t => t.slice(2));
+  const [rents, moves] = await Promise.all([
+    rentIds.length ? db.rentPayment.findMany({ where: { id: { in: rentIds } }, select: { amount: true } }) : [],
+    moveIds.length ? db.walletMovement.findMany({ where: { id: { in: moveIds } }, select: { amount: true } }) : [],
+  ]);
+  return [...rents.map(r => Math.abs(Number(r.amount))), ...moves.map(m => Math.abs(Number(m.amount)))];
+}
+
+type BankLine = { id: string; amount: number; date: string };   // Plaid: positive is money out
+
+/**
+ * Which of the bank's lines are this pending item: one line of its amount; for a deposit
+ * of several checks, a line for each check, or any few credits that add up to it (a bank
+ * may post each check of a deposit on its own).
+ */
+export function linesForItem(item: { amount: number; direction: string; made: number; checks: number[] }, lines: BankLine[]): BankLine[] | null {
+  const cents = (n: number) => Math.round(n * 100);
+  const want = cents(item.amount);
+  const sameWay = lines
+    .filter(l => (item.direction === 'IN' ? l.amount < 0 : l.amount > 0))
+    .filter(l => new Date(`${l.date.slice(0, 10)}T00:00:00Z`).getTime() >= item.made - 3 * DAY)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const one = sameWay.find(l => cents(Math.abs(l.amount)) === want);
+  if (one) return [one];
+  if (item.direction !== 'IN') return null;
+  // Each check of the slip as its own credit.
+  if (item.checks.length > 1) {
+    const left = [...sameWay];
+    const found: BankLine[] = [];
+    for (const c of item.checks) {
+      const i = left.findIndex(l => cents(Math.abs(l.amount)) === cents(c));
+      if (i < 0) { found.length = 0; break; }
+      found.push(left.splice(i, 1)[0]);
+    }
+    if (found.length === item.checks.length) return found;
+  }
+  // Any few credits within ten days of the deposit that add up to it.
+  const near = sameWay.filter(l => new Date(`${l.date.slice(0, 10)}T00:00:00Z`).getTime() <= item.made + 10 * DAY).slice(0, 14);
+  for (let mask = 1; mask < 1 << near.length; mask++) {
+    let sum = 0;
+    const pick: BankLine[] = [];
+    for (let i = 0; i < near.length; i++) if (mask & (1 << i)) { sum += cents(Math.abs(near[i].amount)); pick.push(near[i]); }
+    if (pick.length > 1 && sum === want) return pick;
+  }
+  return null;
+}
+
+/**
+ * Pending items checked against the bank's own lines for their account (Plaid
+ * transactions/get), not only the new ones each sync brings: a deposit recorded
+ * after the bank had already shown it, or one the bank posted check by check,
+ * stayed pending although the balance already had it. Run after each bank sync
+ * and when a pending item is added.
+ */
+export async function checkPendingWithBank(userId: string, now = new Date()): Promise<number> {
+  const open = await db.pendingOutflow.findMany({
+    where: { userId, cleared: false, bankAccount: { plaidAccountId: { not: null }, plaidItemId: { not: null } } },
+    select: { id: true, amount: true, direction: true, expectedDate: true, createdAt: true, sourceRef: true, bankAccountId: true, bankAccount: { select: { plaidAccountId: true, plaidItemId: true } } },
+    orderBy: { createdAt: 'asc' },
+  });
+  if (!open.length) return 0;
+  const { plaidClient } = await import('../config/plaid');
+  const { decrypt } = await import('../crypto/encrypt');
+  const made = (p: (typeof open)[number]) => Math.min(p.createdAt.getTime(), p.expectedDate && p.direction === 'IN' ? p.expectedDate.getTime() : Infinity);
+  const byItem = new Map<string, typeof open>();
+  for (const p of open) byItem.set(p.bankAccount.plaidItemId!, [...(byItem.get(p.bankAccount.plaidItemId!) ?? []), p]);
+  let n = 0;
+  for (const [itemId, items] of byItem) {
+    const plaidItem = await db.plaidItem.findFirst({ where: { id: itemId, userId, isActive: true }, select: { accessTokenEnc: true } });
+    if (!plaidItem) continue;
+    const from = new Date(Math.max(Math.min(...items.map(made)) - 5 * DAY, now.getTime() - 90 * DAY));
+    const accountIds = [...new Set(items.map(p => p.bankAccount.plaidAccountId!))];
+    let lines: (BankLine & { account: string })[] = [];
+    try {
+      const resp = await plaidClient.transactionsGet({
+        access_token: decrypt(plaidItem.accessTokenEnc),
+        start_date: from.toISOString().slice(0, 10), end_date: now.toISOString().slice(0, 10),
+        options: { account_ids: accountIds, count: 500 },
+      });
+      lines = resp.data.transactions.map(t => ({ id: t.transaction_id, amount: t.amount, date: t.date, account: t.account_id }));
+    } catch (err) {
+      console.warn('[Pending] bank lines:', err instanceof Error ? err.message : err);
+      continue;
+    }
+    // Lines that already cleared an item are not used again.
+    const used = new Set((await db.pendingOutflow.findMany({
+      where: { bankAccountId: { in: items.map(p => p.bankAccountId) }, clearedBy: { startsWith: 'plaid:' } }, select: { clearedBy: true },
+    })).flatMap(r => clearedIds(r.clearedBy)));
+    for (const p of items) {
+      const free = lines.filter(l => l.account === p.bankAccount.plaidAccountId && !used.has(l.id));
+      const checks = p.direction === 'IN' ? await slipAmounts(p.sourceRef) : [];
+      const hit = linesForItem({ amount: Number(p.amount), direction: p.direction, made: made(p), checks }, free);
+      if (!hit) continue;
+      hit.forEach(l => used.add(l.id));
+      const last = hit.map(l => l.date).sort().pop()!;
+      await db.pendingOutflow.update({ where: { id: p.id }, data: { cleared: true, clearedAt: new Date(`${last.slice(0, 10)}T00:00:00Z`), clearedBy: `plaid:${hit.map(l => l.id).join('+')}` } });
+      n++;
+    }
+  }
+  return n;
 }
 
 /**

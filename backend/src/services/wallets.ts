@@ -13,7 +13,7 @@
  * by that method this month counts in.
  */
 import { db } from '../config/db';
-import { addPendingDeposit, dropFromPendingDeposit } from './pendingMoney';
+import { addPendingDeposit, dropFromPendingDeposit, checkPendingWithBank } from './pendingMoney';
 import { walletCategory, fits, INCOME_CATEGORIES, SPEND_CATEGORIES } from '../lib/walletCategories';
 
 export const WALLET_KINDS = ['CASH', 'CHECK', 'VENMO', 'CASH_APP', 'PAYPAL', 'APPLE_CASH'] as const;
@@ -243,6 +243,8 @@ export async function depositChecks(userId: string, rentPaymentIds: string[], ba
   const who = n === 1 ? rents[0]?.lease.leaseTenants[0]?.tenant.fullName ?? manual[0]?.description ?? null : null;
   await addPendingDeposit(userId, bankAccountId, total, date, n === 1 ? `Check deposited${who ? ` — ${who}` : ''}` : `${n} checks deposited`,
     `slip:${[...rents.map(r => `r:${r.id}`), ...manual.map(m => `m:${m.id}`)].join(',')}`);
+  // Recorded after the bank already shows it: cleared now, not left pending (in the background).
+  void checkPendingWithBank(userId).catch(() => 0);
   return n;
 }
 

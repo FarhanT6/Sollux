@@ -18,7 +18,7 @@
  */
 import { plaidClient } from '../config/plaid';
 import { db } from '../config/db';
-import { clearPendingByTransaction, settlePending } from './pendingMoney';
+import { clearPendingByTransaction, settlePending, checkPendingWithBank } from './pendingMoney';
 import { emailTwin } from './outgoingP2PEmails';
 import { decrypt } from '../crypto/encrypt';
 import { recordRentPayment } from './rentPaymentService';
@@ -515,5 +515,7 @@ export async function syncAllWatchedAccounts(userId: string) {
       errors.push(`${item.institutionName}: ${err instanceof Error ? err.message : 'sync failed'}`);
     }
   }
+  // Pending items against the bank's recent lines too: one recorded after the bank showed it, or posted check by check.
+  await checkPendingWithBank(userId).catch(err => console.warn('[Pending] check with bank:', err instanceof Error ? err.message : err));
   return { itemsSynced: items.length - errors.length, added: totalAdded, errors };
 }
