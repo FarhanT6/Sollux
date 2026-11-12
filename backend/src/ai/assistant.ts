@@ -52,7 +52,11 @@ const TOOLS: Anthropic.Tool[] = [
   { name: 'expenses', description: 'Expenses logged (repairs, landscaping, management, supplies…), optionally for one property and a date range.', input_schema: { type: 'object', properties: { propertyId: { type: 'string' }, from: { type: 'string' }, to: { type: 'string' } } } },
   { name: 'loan_tracker', description: "Every active loan for a month (YYYY-MM): owed, paid, due date, status (paid/partial/upcoming/due/late), how it's paid.", input_schema: { type: 'object', properties: { month: { type: 'string' } } } },
   { name: 'rent_status', description: "This month's rent: who is late past grace, how much, how many days; plus each lease's back rent.", input_schema: { type: 'object', properties: {} } },
-  { name: 'pay_plan', description: 'What to pay in the next N days (default 14), which account has room for each, and how to pay.', input_schema: { type: 'object', properties: { days: { type: 'number' } } } },
+  { name: 'pay_plan', description: "Balances and where to pay from. Every checking and savings account: its balance (and the day the bank last reported it), money already pending out of it, what it can spare, the payments planned from it and what is left after. The payments due in the next N days (default 14): amount, due date, the account each comes from (split if no one account can carry it) and why, how to pay. Cash, checks on hand and Venmo / Cash App / PayPal / Apple Cash balances (the Cash, checks & apps page — money to deposit before it can pay a lender), and where to deposit them. Pass only to plan just some payments (lender, provider or property names — e.g. the mortgages the owner listed), and choices for the owner's picks ({payment: 'Citadel', account: '4093'}) — followed even if they leave an account short, and the rest planned around them. Use it for any question about balances, cash, which account pays what, or where to deposit.", input_schema: { type: 'object', properties: {
+    days: { type: 'number' }, cushion: { type: 'number', description: 'Dollars to leave untouched in each account' },
+    only: { type: 'array', items: { type: 'string' } },
+    choices: { type: 'array', items: { type: 'object', properties: { payment: { type: 'string' }, account: { type: 'string', description: 'last 4 digits, name or id' } }, required: ['payment', 'account'] } },
+  } } },
   { name: 'credit_cards', description: "The owner's and household's credit cards: each card's balance, limit, utilization, APR, minimum and due date, its payment history (each statement paid on time, late by how many days, past due, 30/60/90-day reporting), late fees, other fees and interest paid by month and in the last 12 months (refunds netted), returned payments, deferred-interest promotions; the credit snapshot (utilization, on-time payments) and money-saving insights with what to say when calling the issuer. Pass cardId for one card's statements and their lines.", input_schema: { type: 'object', properties: { cardId: { type: 'string' } } } },
   { name: 'alerts', description: 'Open alerts and reminders (overdue bills, balloons, leaks, deadlines).', input_schema: { type: 'object', properties: {} } },
   { name: 'log_rent_payment', description: 'Propose logging a rent payment. The owner must confirm before it is recorded.', input_schema: { type: 'object', properties: { leaseId: { type: 'string' }, amount: { type: 'number' }, month: { type: 'string', description: 'YYYY-MM the rent is for' }, paidDate: { type: 'string', description: 'YYYY-MM-DD received' }, method: { type: 'string', enum: ['ZELLE', 'CHECK', 'CASH', 'ACH', 'BANK_DEPOSIT', 'SECTION_8', 'RENTAL_ASSISTANCE', 'VENMO', 'CASH_APP', 'PAYPAL', 'APPLE_CASH', 'MONEY_ORDER', 'CARD', 'OTHER'] }, notes: { type: 'string' } }, required: ['leaseId', 'amount', 'month', 'paidDate'] } },
@@ -230,9 +234,34 @@ export async function runReadTool(userId: string, name: string, input: any, toda
       return late.map(l => ({ leaseId: l.leaseId, tenant: l.tenant, unit: l.unit, property: l.property, rent: l.rent, paidThisMonth: l.paid, owed: l.owed, daysLate: l.daysLate, backRent: l.arrears }));
     }
     case 'pay_plan': {
-      const plan = await buildPayPlan(userId, { horizonDays: Math.min(60, Math.max(1, Number(input.days) || 14)) });
-      const acct = new Map(plan.accounts.map(a => [a.id, a.name]));
-      return { totals: plan.totals, payments: plan.obligations.map(o => ({ what: o.label, detail: o.detail, amount: o.amount, due: o.dueDate.slice(0, 10), status: o.status, from: o.payFrom.map(p => acct.get(p.accountId)), howToPay: o.howToPay })), warnings: plan.warnings };
+      const strs = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && !!x.trim()) : []);
+      const plan = await buildPayPlan(userId, {
+        horizonDays: Math.min(60, Math.max(1, Number(input.days) || 14)),
+        cushion: Number(input.cushion) > 0 ? Number(input.cushion) : undefined,
+        only: strs(input.only),
+        choices: (Array.isArray(input.choices) ? input.choices : []).filter((c: any) => c && typeof c.payment === 'string' && typeof c.account === 'string').map((c: any) => ({ payment: c.payment, account: c.account })),
+      });
+      const label = (a: { name: string; last4: string | null; ownerLabel: string | null }) => `${a.name}${a.last4 && !a.name.includes(a.last4) ? ` ··${a.last4}` : ''}${a.ownerLabel ? ` (${a.ownerLabel})` : ''}`;
+      const acct = new Map(plan.accounts.map(a => [a.id, label(a)]));
+      return {
+        asOf: plan.asOf.slice(0, 10), days: plan.horizonDays,
+        accounts: plan.accounts.map(a => ({
+          account: label(a), type: a.accountType,
+          balance: a.available ?? a.balance, ledgerBalance: a.balance, balanceAsOf: a.asOfDate?.slice(0, 10) ?? null, stale: a.stale,
+          pendingOut: a.pendingTotal, pendingItems: a.pending.map(p => ({ what: p.description, amount: p.amount, date: p.expectedDate?.slice(0, 10) ?? null })),
+          canSpare: a.spendable,
+          plannedFromHere: plan.obligations.flatMap(o => o.payFrom.filter(p => p.accountId === a.id).map(p => ({ what: `${o.label}${o.detail ? ` — ${o.detail}` : ''}`, amount: p.amount }))),
+          deposited: plan.deposits.filter(d => d.intoAccountId === a.id).map(d => ({ from: d.from, amount: d.amount })),
+          leftAfter: a.remaining,
+        })),
+        payments: plan.obligations.map(o => ({
+          what: o.label, detail: o.detail, amount: o.amount, due: o.dueDate.slice(0, 10), status: o.status,
+          from: o.payFrom.map(p => ({ account: acct.get(p.accountId), amount: p.amount })), why: o.reason,
+          usualAccount: o.preferredAccountId ? acct.get(o.preferredAccountId) ?? null : null, howToPay: o.howToPay,
+        })),
+        moneyNotInTheBank: plan.funds, depositsToMake: plan.deposits.map(({ intoAccountId: _i, ...d }) => d),
+        totals: plan.totals, warnings: plan.warnings,
+      };
     }
     case 'credit_cards': {
       if (input.cardId) {
@@ -316,7 +345,9 @@ async function create(client: Anthropic, base: { system: string; messages: Anthr
  */
 export async function assistantTurn(userId: string, history: ChatTurn[], today: string): Promise<{ answer: string; actions: PendingAction[] }> {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const system = `You are Sollux, the assistant inside a real-estate owner's property-management app (rentals, utilities, loans, taxes). Today is ${today}. You can see everything the owner has in Sollux except the vault and saved passwords: every bill and its PDF (open_file reads the document itself — usage, line items, true-up, notices), payments, payment plans, loans, credit cards (credit_cards: payment history, late fees, interest, utilization, money-saving moves), rent, taxes, insurance, documents and expenses. Answer from the tools — never guess amounts, dates or ids, and never say you cannot see a bill: open it. Look things up before answering; use find to get ids. Match the question: a quick lookup gets a short answer; "why is this bill so high" or "what changed" gets a real analysis — open every relevant statement PDF (several months), compare usage (kWh, therms, gallons) and its time-of-use split, rates, credits and their balances (an SDG&E bill's net-metering summary page lists each month's net usage and the NEM credit left), charges by provider (delivery vs a CCA's generation), and fees; say what changed and when, separate what the bills prove from what they cannot show (a net-metered bill shows net grid usage, not solar production), and end with the next checks to make. Read any file or screenshot the owner attached (usage graphs, a solar app, a letter) as evidence. Search the web when outside facts help (a tariff, an installer, a program), and say where a fact came from. Ask one focused question when an answer depends on something only the owner knows.
+  const system = `You are Sollux, the assistant inside a real-estate owner's property-management app (rentals, utilities, loans, taxes). Today is ${today}. You can see everything the owner has in Sollux except the vault and saved passwords: every bill and its PDF (open_file reads the document itself — usage, line items, true-up, notices), payments, payment plans, loans, credit cards (credit_cards: payment history, late fees, interest, utilization, money-saving moves), rent, taxes, insurance, documents and expenses. Answer from the tools — never guess amounts, dates or ids, and never say you cannot see a bill: open it. Look things up before answering; use find to get ids. Match the question: a quick lookup gets a short answer; "why is this bill so high" or "what changed" gets a real analysis — open every relevant statement PDF (several months), compare usage (kWh, therms, gallons) and its time-of-use split, rates, credits and their balances (an SDG&E bill's net-metering summary page lists each month's net usage and the NEM credit left), charges by provider (delivery vs a CCA's generation), and fees; say what changed and when, separate what the bills prove from what they cannot show (a net-metered bill shows net grid usage, not solar production), and end with the next checks to make. Read any file or screenshot the owner attached (usage graphs, a solar app, a letter) as evidence.
+Money on hand and where to pay from: pay_plan has every account's balance, what is pending out of it, cash, checks on hand and app balances — never say you cannot see balances. When the owner says which account pays what ("Citadel and UWM from x4093"), pass it as choices; pass only to plan just the payments they named. Answer with one table per account (balance → each payment from it → left after) and a list of deposits to make (checks on hand, cash, app balances: how much into which account, and why). Cash and app balances cannot pay a mortgage servicer: they are deposited first. "Keep the most money left" means no account is overdrawn or left too low for what else is due from it, and money sits where the coming payments need it — the total left is the same whichever account pays, so say so if asked. Don't research how a lender takes payments unless asked.
+Links to Sollux pages (the app's own address, /finances, /settings?tab=banking, Cash, checks & apps) are this app: answer from the tool that reads the same data (pay_plan for balances, cash, checks and app wallets) — never say you cannot open them. Search the web when outside facts help (a tariff, an installer, a program), and say where a fact came from. Ask one focused question when an answer depends on something only the owner knows.
 Format with Markdown: **bold**, bullet and numbered lists, ### headings for a long answer, and tables (| a | b |). To show a chart, add a fenced block in this exact form — the app draws it:
 \`\`\`chart
 {"type":"bar","title":"Net grid usage by bill","unit":"kWh","labels":["May","Jun","Jul"],"series":[{"name":"Net kWh","values":[-1010,-990,-901]}]}

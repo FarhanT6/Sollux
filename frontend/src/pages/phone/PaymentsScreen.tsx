@@ -80,6 +80,18 @@ export default function PaymentsScreen() {
         </Section>
       )}
 
+      {/* Cash, checks and app balances can't pay a lender until they are in an account: where to put them. */}
+      {plan && (plan.funds?.length ?? 0) > 0 && (
+        <Section header="Cash, checks & apps" footer="Deposit these before they can pay a lender.">
+          {plan.funds!.map(f => <Row key={f.label} title={f.label} subtitle={f.detail ?? undefined} value={<span className="strong">{fmtMoney(f.amount)}</span>} chevron={false} />)}
+        </Section>
+      )}
+      {plan && (plan.deposits?.length ?? 0) > 0 && (
+        <Section header="Deposits to make">
+          {plan.deposits!.map((d, i) => <Row key={i} title={`${fmtMoney(d.amount)} ${d.from.toLowerCase()} → ${d.into}`} subtitle={d.why} wrap chevron={false} />)}
+        </Section>
+      )}
+
       <Sheet open={!!open} onClose={() => setOpen(null)} title={open?.label} left={null}
         right={{ label: 'Done', onClick: () => setOpen(null) }}>
         {open && (
