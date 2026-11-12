@@ -74,7 +74,7 @@ export default function PaymentsScreen() {
         <Section header="Accounts" footer="Free = balance, less what is pending and the cushion you keep.">
           {plan.accounts.map(a => (
             <Row key={a.id} title={`${a.name}${a.last4 ? ` ••${a.last4}` : ''}`}
-              subtitle={a.stale ? <span className="ios-tint">Balance not up to date</span> : `${fmtMoney(a.balance)} balance${a.pendingTotal ? ` · ${fmtMoney(a.pendingTotal)} pending` : ''}`}
+              subtitle={a.stale ? <span className="ios-tint">Balance not up to date</span> : <>{fmtMoney(a.balance)} balance{a.pendingTotal ? ` · ${fmtMoney(a.pendingTotal)} pending` : ''}{(a.shortBy ?? 0) > 0 && <span className="ios-red"> · {fmtMoney(a.shortBy!)} short{a.stillShort ? `, ${fmtMoney(a.stillShort)} not made up` : ', made up below'}</span>}</>}
               value={<span className="strong">{fmtMoney(a.spendable)}</span>} chevron={false} />
           ))}
         </Section>
@@ -87,8 +87,8 @@ export default function PaymentsScreen() {
         </Section>
       )}
       {plan && (plan.deposits?.length ?? 0) > 0 && (
-        <Section header="Deposits to make">
-          {plan.deposits!.map((d, i) => <Row key={i} title={`${fmtMoney(d.amount)} ${d.from.toLowerCase()} → ${d.into}`} subtitle={d.why} wrap chevron={false} />)}
+        <Section header="Money to move">
+          {plan.deposits!.map((d, i) => <Row key={i} title={`${d.kind === 'TRANSFER' ? 'Transfer' : 'Deposit'} ${fmtMoney(d.amount)} ${d.kind === 'TRANSFER' ? `from ${d.from}` : d.from.toLowerCase()} → ${d.into}`} subtitle={d.why} wrap chevron={false} />)}
         </Section>
       )}
 

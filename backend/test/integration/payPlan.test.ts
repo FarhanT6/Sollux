@@ -69,10 +69,32 @@ test('the owner\'s picks are followed, the rest planned around them, and cash an
   assert.equal(into1111[0].amount, 500);
   assert.equal(Math.round(into1111.reduce((t, d) => t + d.amount, 0) * 100) / 100, 1500);
   assert.ok(!plan.deposits.some(d => d.from === 'Cash'), 'cash is only suggested where it is needed');
-  assert.ok(plan.warnings.some(w => /1111 goes \$500 below/.test(w)));
+  assert.ok(plan.warnings.some(w => /1111 is \$500\.00 short for what is planned from it — deposit \$500\.00 of checks on hand/.test(w)), plan.warnings.join(' | '));
+  assert.ok(!plan.deposits.some(d => d.kind === 'TRANSFER'), 'deposits cover it: no transfer');
+  assert.ok(plan.obligations.every(o => o.payFrom.length === 1), 'every payment from one account');
+  assert.equal(plan.accounts.find(a => a.id === ids.a1111)!.shortBy, 500);
 });
 
-test('nothing named: every payment due is planned, each from the account with the most room', { skip }, async () => {
+test('what deposits cannot cover is made up by one transfer from the account with the most to spare, never by splitting the payment', { skip }, async () => {
+  const { buildPayPlan } = await import('../../src/lib/payPlan');
+  const plan = await buildPayPlan(ids.user, {
+    only: ['Sample Servicing', 'Example Wholesale', 'Placeholder Servicing'],
+    choices: [{ payment: 'Placeholder Servicing', account: '1111' }, { payment: 'Sample Servicing', account: '1111' }],
+  });
+  assert.ok(plan.obligations.every(o => o.payFrom.length === 1), 'every payment from one account');
+  // ··1111: 9,000 − 10,250 − 5,600 = 6,850 short. Checks on hand 1,500 and cash 2,000 go in first, then 3,350 by transfer.
+  const a = plan.accounts.find(x => x.id === ids.a1111)!;
+  assert.equal(a.shortBy, 6850);
+  assert.equal(a.stillShort, 0);
+  const into = plan.deposits.filter(d => d.intoAccountId === ids.a1111);
+  assert.deepEqual(into.map(d => [d.kind, d.from, d.amount]), [['DEPOSIT', 'Checks on hand', 1500], ['DEPOSIT', 'Cash', 2000], ['TRANSFER', 'BUSINESS CHECKING ...2222', 3350]]);
+  // The 3,900 the owner did not place went to ··2222, which still has the most to spare.
+  assert.deepEqual(plan.obligations.find(o => o.id === ids.picked2)!.payFrom.map(p => p.accountId), [ids.a2222]);
+  assert.equal(plan.totals.short, 0);
+  assert.ok(plan.obligations.every(o => o.status !== 'SHORT'));
+});
+
+test('nothing named: every payment due is planned, each from one account, and deposits make up the rest', { skip }, async () => {
   const { buildPayPlan } = await import('../../src/lib/payPlan');
   const plan = await buildPayPlan(ids.user, {});
   assert.equal(plan.obligations.filter(o => o.kind === 'LOAN').length, 3);

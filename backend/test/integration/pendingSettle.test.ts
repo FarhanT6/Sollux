@@ -92,13 +92,13 @@ test('checked against the bank\'s own lines: a deposit recorded after the bank h
   const { encrypt } = await import('../../src/crypto/encrypt');
   const { db } = api;
   const item = await db.plaidItem.create({ data: { userId: ids.user, plaidItemId: 'item-test', accessTokenEnc: encrypt('access-test'), institutionId: 'ins_test', institutionName: 'Example Bank' } as any });
-  const acct = await db.bankAccount.create({ data: { userId: ids.user, name: 'Business Checking', bank: 'Example Bank', last4: '9173', accountType: 'CHECKING', plaidItemId: item.id, plaidAccountId: 'acct-test' } as any });
+  const acct = await db.bankAccount.create({ data: { userId: ids.user, name: 'Business Checking', bank: 'Example Bank', last4: '2222', accountType: 'CHECKING', plaidItemId: item.id, plaidAccountId: 'acct-test' } as any });
   const day = ymd(ago(3));
-  const slip = await db.pendingOutflow.create({ data: { userId: ids.user, bankAccountId: acct.id, amount: 4052, description: '4 checks deposited', kind: 'CHECK', direction: 'IN', expectedDate: new Date(`${day}T00:00:00Z`) } as any });
+  const slip = await db.pendingOutflow.create({ data: { userId: ids.user, bankAccountId: acct.id, amount: 4075, description: '4 checks deposited', kind: 'CHECK', direction: 'IN', expectedDate: new Date(`${day}T00:00:00Z`) } as any });
   const check = await db.pendingOutflow.create({ data: { userId: ids.user, bankAccountId: acct.id, amount: 1100, description: 'Check #1205 to Example Trust', kind: 'CHECK', direction: 'OUT', expectedDate: ago(2) } as any });
   // The bank's lines (Plaid: negative is money in): the four checks one by one, and nothing for the check written.
   const { plaidClient } = await import('../../src/config/plaid');
-  const lines = [[1200, 'c1'], [1000, 'c2'], [952, 'c3'], [900, 'c4']].map(([a, id]) => ({ transaction_id: id, amount: -(a as number), date: day, account_id: 'acct-test' }));
+  const lines = [[1200, 'c1'], [1000, 'c2'], [975, 'c3'], [900, 'c4']].map(([a, id]) => ({ transaction_id: id, amount: -(a as number), date: day, account_id: 'acct-test' }));
   (plaidClient as any).transactionsGet = async () => ({ data: { transactions: [...lines, { transaction_id: 'x', amount: 64.12, date: day, account_id: 'acct-test' }] } });
   const { checkPendingWithBank } = await import('../../src/services/pendingMoney');
   assert.equal(await checkPendingWithBank(ids.user), 1);

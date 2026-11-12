@@ -674,12 +674,12 @@ function AddManualAccountModal({ existing, onClose, onSaved }: { existing?: Bank
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-xs text-gray-400 block mb-1">Last 4 digits</label>
-              <input value={last4} onChange={e => setLast4(e.target.value)} placeholder="4093" maxLength={4} inputMode="numeric"
+              <input value={last4} onChange={e => setLast4(e.target.value)} placeholder="1234" maxLength={4} inputMode="numeric"
                 className="w-full px-3 py-2 text-sm rounded-lg bg-white/5 border border-white/10 text-white placeholder-gray-600 focus:border-amber-500/40 outline-none" />
             </div>
             <div>
               <label className="text-xs text-gray-400 block mb-1">Owned by</label>
-              <input value={ownerLabel} onChange={e => setOwnerLabel(e.target.value)} placeholder="e.g. Farhan, Dad, Trust"
+              <input value={ownerLabel} onChange={e => setOwnerLabel(e.target.value)} placeholder="e.g. Me, Dad, Trust"
                 className="w-full px-3 py-2 text-sm rounded-lg bg-white/5 border border-white/10 text-white placeholder-gray-600 focus:border-amber-500/40 outline-none" />
             </div>
           </div>

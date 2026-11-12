@@ -1,8 +1,8 @@
 import type { BankAccount } from '../types';
 
 /**
- * One line that says which account or card this is and whose: "Chase
- * Sapphire · Visa ••4093 · Farhan". The same string wherever a payment
+ * One line that says which account or card this is and whose: "Example
+ * Rewards · Visa ••1234 · Alex". The same string wherever a payment
  * source is picked or shown, so a card is never mistaken for a checking
  * account with the same last four.
  */

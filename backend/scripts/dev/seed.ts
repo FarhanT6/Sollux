@@ -95,7 +95,7 @@ async function main() {
   // ── Money ─────────────────────────────────────────────────
   await db.bankAccount.createMany({ data: [
     { userId, name: 'Wells Fargo Checking', bank: 'Wells Fargo', last4: '0705', accountType: 'CHECKING', watchForRentPayments: true },
-    { userId, name: 'Chase Business', bank: 'Chase', last4: '0935', accountType: 'CHECKING' },
+    { userId, name: 'Chase Business', bank: 'Chase', last4: '3333', accountType: 'CHECKING' },
   ] });
   await db.loan.create({ data: { userId, propertyId: linden.id, loanType: 'MORTGAGE', lender: 'Rocket Mortgage', originalAmount: 960000, currentBalance: 842310, interestRate: 3.25, monthlyPayment: 4890, isActive: true } }).catch(e => console.warn('loan skipped:', e.message.split('\n').slice(-1)[0]));
 

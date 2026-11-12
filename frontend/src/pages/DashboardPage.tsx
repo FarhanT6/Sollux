@@ -331,7 +331,7 @@ function CashPositionCard({ items, manualAccounts }: { items: PlaidItem[]; manua
               : Number(bal?.available ?? bal?.balance ?? 0);
             return (
               <div key={acct.id} className="rounded-lg p-2.5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}>
-                {/* "x0935 · Personal" rather than the bank's long product name; the full name on hover, a click names it. */}
+                {/* "x1234 · Personal" rather than the bank's long product name; the full name on hover, a click names it. */}
                 {(() => {
                   const nick = named[acct.id] !== undefined ? named[acct.id] : acct.nickname;
                   return (
