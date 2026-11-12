@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { pendingByAccount, settlePending } from '../services/pendingMoney';
+import { pendingByAccount, settlePending, checkPendingWithBank } from '../services/pendingMoney';
 import { db } from '../config/db';
 import { attachDbUser } from '../middleware/requireAuth';
 import { Decimal } from '@prisma/client/runtime/library';
@@ -105,6 +105,8 @@ router.post('/:id/pending', async (req, res, next) => {
       },
       include: { loan: { select: { id: true, lender: true } } },
     });
+    // Entered after the bank already shows it: cleared in the background.
+    void checkPendingWithBank(req.dbUserId!).catch(() => 0);
     res.status(201).json(serializePending(row));
   } catch (err) { next(err); }
 });
