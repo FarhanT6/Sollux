@@ -308,6 +308,10 @@ export const deleteLoan = (id: string) =>
 export const getLoanPayments = (loanId: string) =>
   api.get<LoanPayment[]>(`/loans/${loanId}/payments`).then(r => r.data);
 /** A payment matching one already logged (same amount within three days) is confirmed before it is logged again. */
+/** Change a logged payment; pendingFrom: an account (still pending there), null (it has come out), or left out (as it is). */
+export const updateLoanPayment = (loanId: string, paymentId: string, data: Omit<Partial<LoanPayment>, 'lateFee' | 'confirmationNumber' | 'notes'> & { lateFee?: number | null; confirmationNumber?: string | null; notes?: string | null; periodMonth?: string | null; pendingFrom?: string | null }) =>
+  api.patch<LoanPayment>(`/loans/${loanId}/payments/${paymentId}`, data).then(r => r.data);
+export const deleteLoanPayment = (loanId: string, paymentId: string) => api.delete(`/loans/${loanId}/payments/${paymentId}`);
 /** pendingFrom: a bank account it has not come out of yet — pending there until the bank shows it. */
 export const createLoanPayment = (loanId: string, data: Partial<LoanPayment> & { periodMonth?: string | null; pendingFrom?: string | null }) =>
   api.post<LoanPayment>(`/loans/${loanId}/payments`, data).then(r => r.data).catch(async (e: any) => {
@@ -328,7 +332,11 @@ interface LoanTrackerBase {
   utilityAccountId?: string | null;
   paymentMethods: string[]; paymentInstructions: string | null; mailingAddress: string | null; paymentUrl: string | null; payFrom: string | null; payFromBankAccountId?: string | null;
 }
-export interface LoanTrackerPayment { id: string; loanId: string; date: string; month: string; amount: number; lateFee: number | null; method: string | null; confirmationNumber: string | null; notes: string | null }
+export interface LoanTrackerPayment {
+  id: string; loanId: string; date: string; month: string; amount: number; lateFee: number | null; method: string | null; confirmationNumber: string | null; notes: string | null;
+  /** Logged before it came out of the account: its pending item there (cleared once the bank took it). */
+  pending?: { bankAccountId: string; cleared: boolean } | null;
+}
 export interface LoanTrackerRow extends LoanTrackerBase {
   dueDate: string; graceEnds: string; paid: number; remaining: number; lateFees: number; status: LoanTrackerStatus;
   payments: LoanTrackerPayment[]; lastPayment: { date: string; amount: number } | null;

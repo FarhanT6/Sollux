@@ -137,3 +137,28 @@ test('a loan payment logged before it comes out: pending on its account until th
   const res3 = await send('POST', `/loans/${ids.loan}/payments`, { date: ymd(new Date()), amount: 222.22, status: 'PAID', method: 'ZELLE', allowDuplicate: true });
   assert.equal(await db.pendingOutflow.count({ where: { sourceRef: `loanpay:${(await res3.json() as any).id}` } }), 0);
 });
+
+test('a logged loan payment can be changed: its date and amount, and whether it is still pending on the bank', { skip }, async () => {
+  const { db } = api;
+  const res = await send('POST', `/loans/${ids.loan}/payments`, { date: ymd(ago(1)), amount: 4552.08, status: 'PAID', method: 'CHECK', periodMonth: ymd(ago(1)).slice(0, 7), allowDuplicate: true });
+  const pay = await res.json() as any;
+  assert.equal(await db.pendingOutflow.count({ where: { sourceRef: `loanpay:${pay.id}` } }), 0);
+  // Changed to the day the check was dropped off, and not out of the account yet.
+  const patched = await send('PATCH', `/loans/${ids.loan}/payments/${pay.id}`, { date: ymd(ago(3)), method: 'CHECK_DROPPED', confirmationNumber: '1311', pendingFrom: ids.bank });
+  assert.equal(patched.status, 200);
+  const row = await db.loanPayment.findUnique({ where: { id: pay.id } });
+  assert.equal(ymd(row!.date), ymd(ago(3)));
+  assert.equal(row!.method, 'CHECK_DROPPED');
+  let item = await db.pendingOutflow.findFirst({ where: { sourceRef: `loanpay:${pay.id}` } });
+  assert.deepEqual([item!.kind, Number(item!.amount), ymd(item!.expectedDate!)], ['CHECK', 4552.08, ymd(ago(3))]);
+  assert.match(item!.description, /Check #1311/);
+  // The amount corrected: the pending item follows.
+  await send('PATCH', `/loans/${ids.loan}/payments/${pay.id}`, { amount: 4500 });
+  item = await db.pendingOutflow.findFirst({ where: { sourceRef: `loanpay:${pay.id}` } });
+  assert.equal(Number(item!.amount), 4500);
+  // It has come out after all: no longer pending.
+  await send('PATCH', `/loans/${ids.loan}/payments/${pay.id}`, { pendingFrom: null });
+  assert.equal(await db.pendingOutflow.count({ where: { sourceRef: `loanpay:${pay.id}` } }), 0);
+  // Another account's payment id is not found.
+  assert.equal((await send('PATCH', `/loans/${ids.loan}/payments/not-a-payment`, { amount: 1 })).status, 404);
+});

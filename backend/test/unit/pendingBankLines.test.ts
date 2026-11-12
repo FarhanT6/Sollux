@@ -30,3 +30,10 @@ test('nothing from before the deposit, nothing the wrong way, no sums for money 
   assert.equal(linesForItem({ amount: 500, direction: 'OUT', made: at('2026-11-09'), checks: [] }, [{ id: 'a', amount: 300, date: '2026-11-10' }, { id: 'b', amount: 200, date: '2026-11-10' }]), null);
   assert.deepEqual(linesForItem({ amount: 1100, direction: 'OUT', made: at('2026-11-09'), checks: [] }, [{ id: 'chk', amount: 1100, date: '2026-11-20' }])?.map(l => l.id), ['chk']);
 });
+
+test('a loan sheet that says the check is dropped off reads as a check handed over, not mailed', async () => {
+  const { methodsFrom } = await import('../../src/services/loanPaymentDetails');
+  assert.deepEqual(methodsFrom('Drop off check at the office'), ['CHECK_DROPPED']);
+  assert.deepEqual(methodsFrom('Mail check to PO Box 100'), ['CHECK']);
+  assert.deepEqual(methodsFrom('Zelle or check in person'), ['CHECK_DROPPED', 'ZELLE']);
+});
