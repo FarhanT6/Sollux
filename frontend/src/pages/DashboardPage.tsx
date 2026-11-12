@@ -1,4 +1,5 @@
 import UrgentNotices from '../components/UrgentNotices';
+import { markLoad } from '../lib/loadTiming';
 import { monthRentDue } from '../lib/rentDue';
 import { useEffect, useState } from 'react';
 import { CategoryGlyph } from '../ios';
@@ -37,7 +38,7 @@ export default function DashboardPage() {
   const [loadingInsights, setLoadingInsights] = useState(true);
   const [loadingRent, setLoadingRent] = useState(true);
   useEffect(() => {
-    getDashboardSummary().then(setSummary).catch(() => {}).finally(() => setLoading(false));
+    getDashboardSummary().then(s => { setSummary(s); markLoad('shown'); }).catch(() => {}).finally(() => setLoading(false));
     getRecentActivity().then(setActivity).catch(() => {}).finally(() => setLoadingActivity(false));
     getInsights({ unread: true, limit: 4 }).then(i => setInsights(i.slice(0, 4))).catch(() => {}).finally(() => setLoadingInsights(false));
     // This month's rent only: the whole payment history was most of what the page downloaded.

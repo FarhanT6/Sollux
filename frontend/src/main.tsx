@@ -11,6 +11,10 @@ import { installErrorReporting } from './lib/telemetry';
 import { initTheme } from './lib/theme';
 import { installFullText } from './lib/fullText';
 import { installDragSafeClicks } from './lib/dragSafeClicks';
+import { markLoad } from './lib/loadTiming';
+
+// The app's code is in and running: how long loading it took (the Speed check).
+markLoad('app');
 
 const CLERK_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
 

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { markLoad } from '../../lib/loadTiming';
 import { useUser } from '@clerk/clerk-react';
 import { Screen, Section, Row, Sheet, BarButton, categoryIcon } from '../../ios';
 import {
@@ -28,7 +29,7 @@ export default function OverviewScreen() {
   const [askOpen, setAskOpen] = useState(false);
 
   const load = useCallback(() => Promise.all([
-    getDashboardSummary().then(setSummary).catch(() => {}),
+    getDashboardSummary().then(s => { setSummary(s); markLoad('shown'); }).catch(() => {}),
     getServiceNotices().then(setNotices).catch(() => setNotices([])),
     getInsights({ unread: true, limit: 4 }).then(setInsights).catch(() => setInsights([])),
     getLeases({ status: 'ACTIVE', view: 'rent' }).then(setLeases).catch(() => setLeases([])),

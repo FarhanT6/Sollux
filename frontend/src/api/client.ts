@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { toast } from '../lib/toast';
+import { markLoad, markFirstAsked } from '../lib/loadTiming';
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || '/api',
@@ -21,6 +22,8 @@ api.interceptors.request.use(async (config) => {
     const token = await clerk?.session?.getToken();
     if (token) config.headers.Authorization = `Bearer ${token}`;
   } catch { /* no-op */ }
+  // How long opening the app took, step by step (lib/loadTiming.ts, the Speed check).
+  markLoad('signedIn'); markFirstAsked();
   return config;
 });
 
@@ -28,7 +31,7 @@ api.interceptors.request.use(async (config) => {
 // background: get a fresh one and try once more. Only when there is no
 // session at all does the owner need to sign in again.
 api.interceptors.response.use(
-  res => res,
+  res => { markLoad('firstAnswer'); return res; },
   async err => {
     const cfg = err.config as (typeof err.config & { _retried?: boolean }) | undefined;
     if (err.response?.status === 401 && cfg && !cfg._retried) {
