@@ -83,3 +83,9 @@ test("filtering by another customer's property id returns none of their rent, no
   const sum = await (await get('/dashboard/summary')).json() as any;
   assert.equal(sum.monthlyTotal, 0);
 });
+
+test('the speed check measures without naming the database to a customer', { skip }, async () => {
+  const r = await (await get('/speed')).json() as any;
+  assert.ok(r.server.upSeconds >= 0 && r.database.tripMs >= 0 && r.summaryMs >= 0);
+  assert.equal(r.database.region, undefined);
+});

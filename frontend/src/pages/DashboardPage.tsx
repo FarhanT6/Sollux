@@ -42,7 +42,7 @@ export default function DashboardPage() {
     getInsights({ unread: true, limit: 4 }).then(i => setInsights(i.slice(0, 4))).catch(() => {}).finally(() => setLoadingInsights(false));
     // This month's rent only: the whole payment history was most of what the page downloaded.
     const monthStart = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-01`;
-    Promise.all([getLeases({ status: 'ACTIVE' }).catch(() => []), getRentPayments({ since: monthStart }).catch(() => [])])
+    Promise.all([getLeases({ status: 'ACTIVE', view: 'rent' }).catch(() => []), getRentPayments({ since: monthStart }).catch(() => [])])
       .then(([ls, rp]) => { setLeases(ls as Lease[]); setRentPayments(rp as RentPayment[]); })
       .finally(() => setLoadingRent(false));
     Promise.all([getPlaidItems().catch(() => []), getBankAccounts().catch(() => [])]).then(([p, ba]) => {

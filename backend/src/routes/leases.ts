@@ -71,7 +71,24 @@ const RentChangeSchema = z.object({
 
 router.get('/', async (req, res, next) => {
   try {
-    const { propertyId, status } = req.query;
+    const { propertyId, status, view } = req.query;
+    // view=rent: what the Overview's "rent this month" reads — the lease, its unit and tenants, and its
+    // recent charges. The full list fetches ten kinds of related records, one database trip each.
+    if (view === 'rent') {
+      const leases = await db.lease.findMany({
+        where: {
+          unit: { property: { userId: req.dbUserId! }, ...(propertyId ? { propertyId: propertyId as string } : {}) },
+          ...(status ? { status: status as any } : {}),
+        },
+        include: {
+          unit: { include: { property: { select: { id: true, address: true, nickname: true } } } },
+          leaseTenants: { include: { tenant: { select: { id: true, fullName: true, email: true, phone: true } } } },
+          rentCharges: { orderBy: { periodDate: 'desc' }, take: 12 },
+        },
+        orderBy: { startDate: 'desc' },
+      });
+      return res.json(leases);
+    }
     const leases = await db.lease.findMany({
       where: {
         unit: {

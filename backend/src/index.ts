@@ -15,6 +15,7 @@ import insightsRouter from './routes/insights';
 import documentsRouter from './routes/documents';
 import accountRouter from './routes/account';
 import dashboardRouter from './routes/dashboard';
+import speedRouter from './routes/speed';
 import gmailRouter from './routes/gmail';
 import driveRouter from './routes/drive';
 import clickupRouter from './routes/clickup';
@@ -98,6 +99,8 @@ if (process.env.RUN_WORKERS_IN_API === 'true') {
 }
 
 const app = express();
+// When each request arrived, for the speed check's sign-in timing (routes/speed.ts).
+app.use((req, _res, next) => { (req as unknown as { receivedAt: number }).receivedAt = performance.now(); next(); });
 const PORT = process.env.PORT || 3001;
 
 // Render sits in front of this app behind its own reverse proxy, so every
@@ -229,6 +232,7 @@ app.use('/api', (req, res, next) => {
   return requireAuth(req, res, next);
 });
 app.use('/api/dashboard', dashboardRouter);
+app.use('/api/speed', speedRouter);
 app.use('/api/admin/audit-requests', adminAuditRouter);
 app.use('/api/properties', propertiesRouter);
 app.use('/api/utilities', utilitiesRouter);
