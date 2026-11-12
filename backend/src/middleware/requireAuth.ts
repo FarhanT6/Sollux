@@ -81,6 +81,19 @@ async function linkPendingInvite(user: { id: string; email: string; phone: strin
   return updated;
 }
 
+/**
+ * Who a sign-in is, kept for a short while: every request looked the user up
+ * and then read every pending invite — two trips to the database before any
+ * work, and the Overview makes seven requests at once. A page load (GET) uses
+ * the kept row for up to 30 seconds; a change (POST, PUT, PATCH, DELETE)
+ * always reads it fresh, because plan limits are checked on changes, and any
+ * change drops everything kept, so a removed member or a new plan is seen at
+ * once. Invites are looked for when the row is read fresh.
+ */
+const USER_TTL = 30_000;
+const userCache = new Map<string, { user: NonNullable<Awaited<ReturnType<typeof db.user.findUnique>>>; at: number }>();
+export function forgetSignIns(): void { userCache.clear(); }
+
 // Middleware to attach the database User record to the request
 export async function attachDbUser(req: Request, res: Response, next: NextFunction) {
   try {
@@ -89,7 +102,11 @@ export async function attachDbUser(req: Request, res: Response, next: NextFuncti
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    let user = await db.user.findUnique({ where: { clerkUserId } });
+    const write = WRITE.has(req.method);
+    if (write) userCache.clear();
+    const kept = !write ? userCache.get(clerkUserId) : undefined;
+    const fromCache = !!kept && Date.now() - kept.at < USER_TTL;
+    let user = fromCache ? kept!.user : await db.user.findUnique({ where: { clerkUserId } });
 
     // A tenant's sign-in is for the tenant portal only: it never becomes an
     // owner account of its own (and so never starts a trial or sees owner pages).
@@ -160,10 +177,11 @@ export async function attachDbUser(req: Request, res: Response, next: NextFuncti
 
     // Shared access: if this person was invited to someone's account and
     // hasn't been linked yet, link them now (matched by email or phone).
-    if (!user.ownerUserId) {
+    if (!fromCache && !user.ownerUserId) {
       const linked = await linkPendingInvite(user);
       if (linked) user = linked;
     }
+    if (!fromCache) userCache.set(clerkUserId, { user, at: Date.now() });
 
     req.actingUserId = user.id;
     req.isAccountOwner = !user.ownerUserId;

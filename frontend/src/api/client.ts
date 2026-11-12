@@ -85,6 +85,13 @@ import type {
 // Dashboard
 // The menu's badges and the Overview ask for the summary at the same moment on start-up: one request serves both.
 let summaryInFlight: { at: number; p: Promise<DashboardSummary> } | null = null;
+/** Settings → Account → Speed check (routes/speed.ts). The database's region shows to the person who runs Sollux only. */
+export interface SpeedCheckResult {
+  server: { startedAt: string; upSeconds: number; commit: string | null };
+  database: { tripMs: number; bestMs: number; firstTripMs: number; region?: string | null; pooled?: boolean; provider?: string | null };
+  signInMs: number; summaryMs: number; serverMs: number;
+}
+export const getSpeedCheck = () => api.get<SpeedCheckResult>('/speed').then(r => r.data);
 export const getDashboardSummary = () => {
   if (summaryInFlight && Date.now() - summaryInFlight.at < 5000) return summaryInFlight.p;
   const p = api.get<DashboardSummary>('/dashboard/summary').then(r => r.data);
@@ -142,7 +149,8 @@ export const deleteTenant = (id: string) =>
   api.delete(`/tenants/${id}`);
 
 // Leases
-export const getLeases = (params?: { propertyId?: string; status?: string }) =>
+/** view 'rent': the lease with its unit, tenants and recent charges only (the Overview's rent card). */
+export const getLeases = (params?: { propertyId?: string; status?: string; view?: 'rent' }) =>
   api.get<Lease[]>('/leases', { params }).then(r => r.data);
 export const getLease = (id: string) =>
   api.get<Lease>(`/leases/${id}`).then(r => r.data);

@@ -31,7 +31,7 @@ export default function OverviewScreen() {
     getDashboardSummary().then(setSummary).catch(() => {}),
     getServiceNotices().then(setNotices).catch(() => setNotices([])),
     getInsights({ unread: true, limit: 4 }).then(setInsights).catch(() => setInsights([])),
-    getLeases({ status: 'ACTIVE' }).then(setLeases).catch(() => setLeases([])),
+    getLeases({ status: 'ACTIVE', view: 'rent' }).then(setLeases).catch(() => setLeases([])),
     // This month's rent only (the whole history was most of what this screen downloaded).
     getRentPayments({ since: `${localMonthKey(new Date())}-01` }).then(setPayments).catch(() => setPayments([])),
   ]), []);

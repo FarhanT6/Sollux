@@ -79,7 +79,10 @@ Conventions the code follows: dark UI (`#1e1e1e` cards, amber `#F5A623` accent),
 2. Add route to `frontend/src/App.tsx`, loaded on demand: `const NamePage = lazyPage(() => import('./pages/NamePage'))`
    (`lib/lazyPage.ts`; `{ prefetch: true }` for a page in the menu). Only the first screen (Overview) is in the
    main bundle — the app was one 2.3 MB file before. The Overview loads each part on its own and asks for no more
-   than it shows (`/rent-payments?since=`, `/insights?limit=`)
+   than it shows (`/rent-payments?since=`, `/insights?limit=`, `/leases?view=rent`). `attachDbUser` keeps a sign-in's user
+   row 30 s for GETs (any write reads fresh and clears it). Settings → Account → Speed check (`routes/speed.ts`) measures
+   the server's uptime (a sleeping server), one database trip (region distance; its region shown to the platform admin
+   only) and the browser's trip, and says which is slow
 3. Add nav link to `frontend/src/components/layout/AppLayout.tsx`
 
 ## Database changes
