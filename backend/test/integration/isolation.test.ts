@@ -25,6 +25,12 @@ before(async () => {
   const pay = await db.payment.create({ data: { utilityAccountId: a.id, statementId: s.id, amount: 120, paymentDate: new Date('2026-10-10') } });
   const t = await db.tenant.create({ data: { userId: o.id, fullName: 'Other Tenant' } });
   await db.aiUsage.create({ data: { feature: 'portal-agent', model: 'claude-sonnet-5', userId: o.id, costUsd: 4.5, inputTokens: 1000, outputTokens: 100 } });
+  // Their lease, rent, a notice and an insight: asked for by their property's id, none of it comes back.
+  const u = await db.unit.create({ data: { propertyId: p.id, unitLabel: 'A' } });
+  const lease = await db.lease.create({ data: { unitId: u.id, rentAmount: 1500, status: 'ACTIVE', leaseType: 'MONTH_TO_MONTH', startDate: new Date('2026-01-01') } as any });
+  await db.rentPayment.create({ data: { leaseId: lease.id, amount: 1500, periodDate: new Date('2026-10-01'), paidDate: new Date('2026-10-01'), method: 'ZELLE' } as any });
+  await db.rentNotice.create({ data: { leaseId: lease.id, noticeDate: new Date('2026-10-05'), lineItems: [{ amount: 1500, dueDate: '2026-10-01' }], totalDue: 1500, signedByName: 'Other Customer' } });
+  await db.aIInsight.create({ data: { propertyId: p.id, insightType: 'ANOMALY', severity: 'INFO', title: 'Their insight', body: 'Not yours.' } as any });
   Object.assign(other, { property: p.id, account: a.id, statement: s.id, payment: pay.id, tenant: t.id });
 });
 after(async () => { if (!skip) await api.stop(); });
@@ -65,4 +71,15 @@ test("another customer's utility account cannot be moved to personal", { skip },
   assert.equal(r.moved, 0);
   const a = await api.db.utilityAccount.findUnique({ where: { id: other.account } });
   assert.equal(a?.isPersonal, false);
+});
+
+test("filtering by another customer's property id returns none of their rent, notices or insights", { skip }, async () => {
+  assert.deepEqual(await (await get(`/rent-payments?propertyId=${other.property}`)).json(), []);
+  assert.deepEqual(await (await get(`/notices?propertyId=${other.property}`)).json(), []);
+  assert.deepEqual(await (await get(`/insights?propertyId=${other.property}`)).json(), []);
+  // And the Overview's narrower asks still only see my own.
+  assert.deepEqual(await (await get('/rent-payments?since=2026-01-01')).json(), []);
+  assert.deepEqual(await (await get('/insights?unread=true&limit=4')).json(), []);
+  const sum = await (await get('/dashboard/summary')).json() as any;
+  assert.equal(sum.monthlyTotal, 0);
 });

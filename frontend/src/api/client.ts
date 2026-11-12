@@ -83,8 +83,15 @@ import type {
 } from '../types';
 
 // Dashboard
-export const getDashboardSummary = () =>
-  api.get<DashboardSummary>('/dashboard/summary').then(r => r.data);
+// The menu's badges and the Overview ask for the summary at the same moment on start-up: one request serves both.
+let summaryInFlight: { at: number; p: Promise<DashboardSummary> } | null = null;
+export const getDashboardSummary = () => {
+  if (summaryInFlight && Date.now() - summaryInFlight.at < 5000) return summaryInFlight.p;
+  const p = api.get<DashboardSummary>('/dashboard/summary').then(r => r.data);
+  summaryInFlight = { at: Date.now(), p };
+  p.catch(() => { summaryInFlight = null; });
+  return p;
+};
 export const getRecentActivity = () =>
   api.get('/dashboard/recent-activity').then(r => r.data);
 
@@ -242,7 +249,8 @@ export const deleteLeaseUtilityCharge = (leaseId: string, chargeId: string) =>
   api.delete(`/leases/${leaseId}/utility-charges/${chargeId}`);
 
 // Rent payments
-export const getRentPayments = (params?: { leaseId?: string; propertyId?: string }) =>
+/** since: only payments for that month (YYYY-MM-DD, by the month they pay) and later — the whole history is large. */
+export const getRentPayments = (params?: { leaseId?: string; propertyId?: string; since?: string }) =>
   api.get<RentPayment[]>('/rent-payments', { params }).then(r => r.data);
 export const createRentPayment = (data: any) =>
   api.post<RentPayment>('/rent-payments', data).then(r => r.data);
@@ -983,7 +991,7 @@ export const startSavingsResearch = () => api.post<{ started: boolean; research:
 // Run the nightly bookkeeper now; findings land as insights.
 export const runBookkeeper = () =>
   api.post<{ raised: number; refreshed: number; cleared: number; count: number }>('/insights/bookkeeper/run').then(r => r.data);
-export const getInsights = (params?: { propertyId?: string; severity?: string; type?: string; unread?: boolean }) =>
+export const getInsights = (params?: { propertyId?: string; severity?: string; type?: string; unread?: boolean; limit?: number }) =>
   api.get<AIInsight[]>('/insights', { params }).then(r => r.data);
 export const markInsightRead = (id: string) =>
   api.patch<AIInsight>(`/insights/${id}/read`).then(r => r.data);

@@ -30,9 +30,10 @@ export default function OverviewScreen() {
   const load = useCallback(() => Promise.all([
     getDashboardSummary().then(setSummary).catch(() => {}),
     getServiceNotices().then(setNotices).catch(() => setNotices([])),
-    getInsights({ unread: true }).then(setInsights).catch(() => setInsights([])),
+    getInsights({ unread: true, limit: 4 }).then(setInsights).catch(() => setInsights([])),
     getLeases({ status: 'ACTIVE' }).then(setLeases).catch(() => setLeases([])),
-    getRentPayments().then(setPayments).catch(() => setPayments([])),
+    // This month's rent only (the whole history was most of what this screen downloaded).
+    getRentPayments({ since: `${localMonthKey(new Date())}-01` }).then(setPayments).catch(() => setPayments([])),
   ]), []);
   useEffect(() => { void load(); }, [load]);
 

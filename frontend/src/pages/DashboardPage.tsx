@@ -32,25 +32,24 @@ export default function DashboardPage() {
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
 
+  // Each part shows as soon as its own data is in; they used to wait for the slowest of seven.
+  const [loadingActivity, setLoadingActivity] = useState(true);
+  const [loadingInsights, setLoadingInsights] = useState(true);
+  const [loadingRent, setLoadingRent] = useState(true);
   useEffect(() => {
-    Promise.all([
-      getDashboardSummary(),
-      getRecentActivity(),
-      getInsights({ unread: true }),
-      getPlaidItems().catch(() => []),
-      getBankAccounts().catch(() => []),
-      getLeases({ status: 'ACTIVE' }).catch(() => []),
-      getRentPayments().catch(() => []),
-    ]).then(([s, a, i, p, ba, ls, rp]) => {
-      setSummary(s);
-      setLeases(ls as Lease[]);
-      setRentPayments(rp as RentPayment[]);
-      setActivity(a);
-      setInsights(i.slice(0, 4));
+    getDashboardSummary().then(setSummary).catch(() => {}).finally(() => setLoading(false));
+    getRecentActivity().then(setActivity).catch(() => {}).finally(() => setLoadingActivity(false));
+    getInsights({ unread: true, limit: 4 }).then(i => setInsights(i.slice(0, 4))).catch(() => {}).finally(() => setLoadingInsights(false));
+    // This month's rent only: the whole payment history was most of what the page downloaded.
+    const monthStart = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-01`;
+    Promise.all([getLeases({ status: 'ACTIVE' }).catch(() => []), getRentPayments({ since: monthStart }).catch(() => [])])
+      .then(([ls, rp]) => { setLeases(ls as Lease[]); setRentPayments(rp as RentPayment[]); })
+      .finally(() => setLoadingRent(false));
+    Promise.all([getPlaidItems().catch(() => []), getBankAccounts().catch(() => [])]).then(([p, ba]) => {
       setPlaidItems(p as PlaidItem[]);
       const plaidIds = new Set((p as PlaidItem[]).flatMap((pi: PlaidItem) => pi.accounts.map((ac: any) => ac.id)));
       setManualAccounts((ba as any[]).filter((ac: any) => !ac.plaidAccountId && !plaidIds.has(ac.id)));
-    }).finally(() => setLoading(false));
+    });
   }, []);
 
   return (
@@ -144,7 +143,7 @@ export default function DashboardPage() {
         {(plaidItems.length > 0 || manualAccounts.length > 0) && <CashPositionCard items={plaidItems} manualAccounts={manualAccounts} />}
 
         {/* Rent */}
-        {!loading && leases.length > 0 && <RentSummaryCard leases={leases} payments={rentPayments} />}
+        {!loadingRent && leases.length > 0 && <RentSummaryCard leases={leases} payments={rentPayments} />}
 
         {/* Ask Sollux */}
         <div className="mb-10"><AskSollux /></div>
@@ -157,7 +156,7 @@ export default function DashboardPage() {
               <p className="section-label">My properties</p>
               <Link to="/properties" className="text-[13px] text-gray-400 hover:text-white transition-colors">View all →</Link>
             </div>
-            {loading ? (
+            {loadingActivity ? (
               <div className="space-y-2">{Array(4).fill(0).map((_, i) => <Skeleton key={i} className="h-16" />)}</div>
             ) : activity?.upcomingBills?.length === 0 ? (
               <EmptyState title="No properties yet" body="Add your first property to get started." />
@@ -197,7 +196,7 @@ export default function DashboardPage() {
               <p className="section-label">AI insights</p>
               <Link to="/insights" className="text-[13px] text-gray-400 hover:text-white transition-colors">View all →</Link>
             </div>
-            {loading ? (
+            {loadingInsights ? (
               <div className="space-y-2">{Array(3).fill(0).map((_, i) => <Skeleton key={i} className="h-24" />)}</div>
             ) : insights.length === 0 ? (
               <EmptyState title="All clear" body="No new alerts. Sollux is monitoring your accounts." />

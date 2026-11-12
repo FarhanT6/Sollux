@@ -42,14 +42,18 @@ const RentPaymentSchema = z.object({
 
 router.get('/', async (req, res, next) => {
   try {
-    const { leaseId, propertyId } = req.query;
+    const { leaseId, propertyId, since } = req.query;
+    // since=YYYY-MM-DD: payments for that month and later (by the month they pay), for the Overview's
+    // "rent this month" — the whole history with its leases was most of what the Overview downloaded.
+    const from = typeof since === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(since) ? new Date(`${since}T00:00:00.000Z`) : null;
     const payments = await db.rentPayment.findMany({
       where: {
         lease: {
-          unit: { property: { userId: req.dbUserId! } },
+          // The property filter goes inside the owner check: spread beside it, it replaced it (any property id read its rent).
+          unit: { property: { userId: req.dbUserId! }, ...(propertyId ? { propertyId: propertyId as string } : {}) },
           ...(leaseId ? { id: leaseId as string } : {}),
-          ...(propertyId ? { unit: { propertyId: propertyId as string } } : {}),
         },
+        ...(from ? { periodDate: { gte: from } } : {}),
       },
       include: {
         lease: { include: { unit: { include: { property: { select: { id: true, address: true, nickname: true } } } } } },
