@@ -4,6 +4,7 @@ export const PAYMENT_METHOD_LABELS: Record<LoanPaymentMethod, string> = {
   AUTOPAY: 'Autopay (taken out of your account)',
   ONLINE: 'Pay online',
   CHECK: 'Check by mail',
+  CHECK_DROPPED: 'Check dropped off in person',
   ZELLE: 'Zelle',
   BANK_DEPOSIT: "Deposit into the lender's account",
   CASH: 'Cash',

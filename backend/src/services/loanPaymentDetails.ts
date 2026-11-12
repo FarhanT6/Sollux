@@ -10,7 +10,8 @@
 import { db } from '../config/db';
 import { encryptOptional } from '../crypto/encrypt';
 
-export const PAYMENT_METHODS = ['AUTOPAY', 'ONLINE', 'CHECK', 'ZELLE', 'BANK_DEPOSIT', 'CASH', 'WIRE', 'DEDUCTED', 'OTHER'] as const;
+// CHECK is mailed; CHECK_DROPPED is a check handed over or dropped off in person.
+export const PAYMENT_METHODS = ['AUTOPAY', 'ONLINE', 'CHECK', 'CHECK_DROPPED', 'ZELLE', 'BANK_DEPOSIT', 'CASH', 'WIRE', 'DEDUCTED', 'OTHER'] as const;
 
 export interface SheetRow {
   lender: string;
@@ -43,7 +44,9 @@ export function methodsFrom(text: string | null): string[] {
   const out: string[] = [];
   if (/auto-?pay/.test(t)) out.push('AUTOPAY');
   if (/online|https?:/.test(t)) out.push('ONLINE');
-  if (/check|cheque/.test(t)) out.push('CHECK');
+  // A check handed over: "drop off check at the office", "check in person", "hand-deliver".
+  const dropped = /drop(?:ped)?[\s-]*off|in[\s-]*person|hand[\s-]*deliver|hand[\s-]*it/.test(t);
+  if (/check|cheque/.test(t)) out.push(dropped ? 'CHECK_DROPPED' : 'CHECK');
   if (/zelle/.test(t)) out.push('ZELLE');
   if (/deposit/.test(t)) out.push('BANK_DEPOSIT');
   if (/\bcash\b/.test(t)) out.push('CASH');

@@ -39,7 +39,7 @@ export async function pendingForRentCheck(userId: string, p: { id: string; metho
   return row;
 }
 
-const CHECKS = new Set(['CHECK', 'MONEY_ORDER', 'CASHIERS_CHECK']);
+const CHECKS = new Set(['CHECK', 'CHECK_DROPPED', 'MONEY_ORDER', 'CASHIERS_CHECK']);
 
 /**
  * A loan payment logged before it has come out of the account (a check in the mail, a payment
@@ -62,6 +62,35 @@ export async function pendingForLoanPayment(userId: string, bankAccountId: strin
   // Already out by the time it was logged: cleared from the bank's lines, in the background.
   void checkPendingWithBank(userId).catch(() => 0);
   return row;
+}
+
+/**
+ * A logged loan payment changed: its pending item follows — moved to another account, its amount
+ * and date, made when "not out yet" is ticked now, removed when it is unticked (pendingFrom null).
+ * An item the bank already cleared is left as it is. pendingFrom undefined: only amount and date follow.
+ */
+export async function syncLoanPaymentPending(userId: string, p: { id: string; amount: number; date: Date; method: string | null; confirmationNumber?: string | null }, lender: string, pendingFrom: string | null | undefined) {
+  const item = await db.pendingOutflow.findFirst({ where: { userId, sourceRef: `loanpay:${p.id}` } });
+  if (pendingFrom === null) {
+    if (item && !item.cleared) await db.pendingOutflow.delete({ where: { id: item.id } });
+    return;
+  }
+  if (!item) {
+    if (pendingFrom) await pendingForLoanPayment(userId, pendingFrom, p, lender);
+    return;
+  }
+  if (item.cleared) return;
+  if (pendingFrom && !(await db.bankAccount.findFirst({ where: { id: pendingFrom, userId }, select: { id: true } }))) return;
+  const check = !!p.method && CHECKS.has(p.method);
+  await db.pendingOutflow.update({
+    where: { id: item.id },
+    data: {
+      amount: r2(p.amount), expectedDate: p.date, kind: check ? 'CHECK' : 'SCHEDULED',
+      description: `${check ? `Check${p.confirmationNumber ? ` #${p.confirmationNumber}` : ''} to ` : ''}${lender}`.slice(0, 300),
+      ...(pendingFrom ? { bankAccountId: pendingFrom } : {}),
+    },
+  });
+  void checkPendingWithBank(userId).catch(() => 0);
 }
 
 /**

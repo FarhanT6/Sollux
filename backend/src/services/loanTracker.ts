@@ -62,9 +62,15 @@ async function paymentsBetween(loanIds: string[], from: string, to: string) {
     where: { loanId: { in: loanIds }, OR: [{ periodDate: { gte: start, lt: end } }, { periodDate: null, date: { gte: start, lt: end } }] },
     orderBy: { date: 'asc' },
   });
+  // A payment logged before it came out of the account: its pending item there (services/pendingMoney.ts).
+  const held = rows.length ? await db.pendingOutflow.findMany({
+    where: { sourceRef: { in: rows.map(p => `loanpay:${p.id}`) } }, select: { sourceRef: true, bankAccountId: true, cleared: true },
+  }) : [];
+  const heldBy = new Map(held.map(h => [h.sourceRef!.slice(8), { bankAccountId: h.bankAccountId, cleared: h.cleared }]));
   return rows.map(p => ({
     id: p.id, loanId: p.loanId, date: p.date.toISOString().slice(0, 10), month: monthOf(p),
     amount: n(p.amount), lateFee: p.lateFee != null ? n(p.lateFee) : null, method: p.method, confirmationNumber: p.confirmationNumber, notes: p.notes,
+    pending: heldBy.get(p.id) ?? null,
   }));
 }
 

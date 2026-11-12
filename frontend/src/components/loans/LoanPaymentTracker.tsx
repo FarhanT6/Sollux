@@ -1,8 +1,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  getLoanTrackerMonth, getLoanTrackerYear, createLoanPayment, getBankAccounts,
-  type LoanTrackerMonth, type LoanTrackerYear, type LoanTrackerRow, type LoanTrackerStatus,
+  getLoanTrackerMonth, getLoanTrackerYear, createLoanPayment, updateLoanPayment, deleteLoanPayment, getBankAccounts,
+  type LoanTrackerMonth, type LoanTrackerYear, type LoanTrackerRow, type LoanTrackerStatus, type LoanTrackerPayment,
 } from '../../api/client';
 import type { LoanPaymentMethod } from '../../types';
 import { fmtMoney } from '../../lib/money';
@@ -11,6 +11,8 @@ import { PAYMENT_METHOD_LABELS, PAYMENT_METHODS, methodsShort } from '../../lib/
 import { describeApiError } from '../../lib/apiError';
 import { onLoansTab } from '../../lib/loanGroups';
 
+/** Ways of paying by check: it stays pending until it is cashed. */
+const CHECK_METHODS = ['CHECK', 'CHECK_DROPPED'];
 const MORTGAGE_TYPES = ['MORTGAGE', 'HELOC', 'SELLER_FINANCING', 'DSCR', 'COMMERCIAL', 'HARD_MONEY'];
 const STATUSES: (LoanTrackerStatus | 'all')[] = ['all', 'late', 'due', 'upcoming', 'partial', 'paid'];
 const STATUS_LABEL: Record<LoanTrackerStatus, string> = { paid: 'paid', partial: 'partial', upcoming: 'not due yet', due: 'in grace', late: 'late', none: '—', closing: 'paid at closing' };
@@ -44,8 +46,18 @@ export default function LoanPaymentTracker({ month: fixedMonth }: { month?: stri
   const [group, setGroup] = useState<'all' | 'mortgages' | 'other'>('all');
   const [propertyFilter, setPropertyFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState<LoanTrackerStatus | 'all'>('all');
+  // Ordered, and optionally cut off, by the due date or by the day it turns late (due date + grace period).
+  const [dateBasis, setDateBasis] = useState<'due' | 'grace'>('due');
+  const [through, setThrough] = useState('');
   const [open, setOpen] = useState<string | null>(null);
   const [logRow, setLogRow] = useState<LoanTrackerRow | null>(null);
+  // A logged payment being changed (the same form, filled in).
+  const [editing, setEditing] = useState<{ row: LoanTrackerRow; payment: LoanTrackerPayment } | null>(null);
+  const removePayment = async (r: LoanTrackerRow, p: LoanTrackerPayment) => {
+    if (!window.confirm(`Delete the ${fmtMoney(p.amount)} payment of ${fmtDate(p.date)} to ${r.lender}? The month shows unpaid again${p.pending && !p.pending.cleared ? ', and it is no longer pending on the bank account' : ''}.`)) return;
+    try { await deleteLoanPayment(r.loanId, p.id); load(); } catch (e) { setErr(describeApiError(e, 'Could not delete the payment.')); }
+  };
+  const details = (r: LoanTrackerRow) => <RowDetails r={r} month={month} onEdit={p => setEditing({ row: r, payment: p })} onDelete={p => void removePayment(r, p)} />;
 
   useEffect(() => { if (fixedMonth) setMonth(fixedMonth); }, [fixedMonth]);
   const year = Number(month.slice(0, 4));
@@ -72,9 +84,10 @@ export default function LoanPaymentTracker({ month: fixedMonth }: { month?: stri
     .filter(inGroup)
     .filter(r => propertyFilter === 'all' || (r.propertyId ?? r.property) === propertyFilter)
     .filter(r => statusFilter === 'all' || r.status === statusFilter)
-    .sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.lender.localeCompare(b.lender)),
+    .filter(r => !through || (dateBasis === 'due' ? r.dueDate : r.graceEnds) <= through)
+    .sort((a, b) => (dateBasis === 'due' ? a.dueDate.localeCompare(b.dueDate) : a.graceEnds.localeCompare(b.graceEnds)) || a.lender.localeCompare(b.lender)),
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  [data, group, propertyFilter, statusFilter]);
+  [data, group, propertyFilter, statusFilter, dateBasis, through]);
 
   const t = rows.reduce((s, r) => ({ expected: s.expected + r.expected, paid: s.paid + r.paid, remaining: s.remaining + r.remaining, late: s.late + (r.status === 'late' ? r.remaining : 0) }), { expected: 0, paid: 0, remaining: 0, late: 0 });
   const counts = (data?.rows ?? []).filter(inGroup).reduce((m, r) => m.set(r.status, (m.get(r.status) ?? 0) + 1), new Map<string, number>());
@@ -115,6 +128,17 @@ export default function LoanPaymentTracker({ month: fixedMonth }: { month?: stri
           <option value="all">All properties</option>
           {properties.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
+        {view === 'month' && (
+          <div className="flex items-center gap-1">
+            <select value={dateBasis} onChange={e => setDateBasis(e.target.value as 'due' | 'grace')} className="input-dark text-xs" title="Order by, and show through a date by, the due date or the day each turns late (due date plus its grace period)">
+              <option value="due">By due date</option>
+              <option value="grace">By late date (with grace)</option>
+            </select>
+            <span className="text-xs text-gray-500">through</span>
+            <input type="date" value={through} onChange={e => setThrough(e.target.value)} className="input-dark text-xs" aria-label={dateBasis === 'due' ? 'Due on or before' : 'Late on or before'} />
+            {through && <button onClick={() => setThrough('')} className="text-xs text-gray-500 hover:text-gray-300" aria-label="Clear the date">✕</button>}
+          </div>
+        )}
         {view === 'month' && (
           <div className="flex gap-1 flex-wrap">
             {STATUSES.map(s => (
@@ -163,7 +187,7 @@ export default function LoanPaymentTracker({ month: fixedMonth }: { month?: stri
                   </div>
                 </button>
                 {r.status !== 'paid' && r.status !== 'none' && <button onClick={() => setLogRow(r)} className="text-xs text-amber-400 hover:text-amber-300 mt-1.5">Log payment</button>}
-                {open === r.loanId && <div className="mt-2 pt-2 border-t border-white/5"><RowDetails r={r} month={month} /></div>}
+                {open === r.loanId && <div className="mt-2 pt-2 border-t border-white/5">{details(r)}</div>}
               </div>
             ))}
             {rows.length > 0 && (
@@ -215,7 +239,7 @@ export default function LoanPaymentTracker({ month: fixedMonth }: { month?: stri
                     {open === r.loanId && (
                       <tr className="border-b border-white/5">
                         <td colSpan={9} className="py-3 px-3" style={{ background: 'rgba(255,255,255,0.03)' }}>
-                          <RowDetails r={r} month={month} />
+                          {details(r)}
                         </td>
                       </tr>
                     )}
@@ -281,26 +305,32 @@ export default function LoanPaymentTracker({ month: fixedMonth }: { month?: stri
       {logRow && (
         <LogLoanPaymentModal row={logRow} month={month} onClose={() => setLogRow(null)} onSaved={() => { setLogRow(null); load(); }} />
       )}
+      {editing && (
+        <LogLoanPaymentModal row={editing.row} month={month} payment={editing.payment} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />
+      )}
     </div>
   );
 }
 
-function LogLoanPaymentModal({ row, month, onClose, onSaved }: { row: LoanTrackerRow; month: string; onClose: () => void; onSaved: () => void }) {
+/** Log a payment, or — with `payment` — change one already logged (the same form, filled in). */
+function LogLoanPaymentModal({ row, month, payment, onClose, onSaved }: { row: LoanTrackerRow; month: string; payment?: LoanTrackerPayment; onClose: () => void; onSaved: () => void }) {
   const firstMethod = (row.paymentMethods.find(m => m !== 'AUTOPAY') ?? row.paymentMethods[0] ?? '') as LoanPaymentMethod | '';
-  const [amount, setAmount] = useState(String(row.remaining || row.expected || ''));
-  const [date, setDate] = useState(todayISO());
-  const [period, setPeriod] = useState(month);
-  const [method, setMethod] = useState<LoanPaymentMethod | ''>(row.paymentMethods.includes('AUTOPAY') ? 'AUTOPAY' : firstMethod);
-  const [lateFee, setLateFee] = useState('');
-  const [confirmation, setConfirmation] = useState('');
-  const [notes, setNotes] = useState('');
+  const [amount, setAmount] = useState(payment ? String(payment.amount) : String(row.remaining || row.expected || ''));
+  const [date, setDate] = useState(payment?.date ?? todayISO());
+  const [period, setPeriod] = useState(payment?.month ?? month);
+  const [method, setMethod] = useState<LoanPaymentMethod | ''>(payment ? (payment.method ?? '') as LoanPaymentMethod | '' : row.paymentMethods.includes('AUTOPAY') ? 'AUTOPAY' : firstMethod);
+  const [lateFee, setLateFee] = useState(payment?.lateFee ? String(payment.lateFee) : '');
+  const [confirmation, setConfirmation] = useState(payment?.confirmationNumber ?? '');
+  const [notes, setNotes] = useState(payment?.notes ?? '');
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // Where it is paid from, and whether it has come out of that account yet.
   const [accounts, setAccounts] = useState<{ id: string; label: string }[]>([]);
-  const [fromAcct, setFromAcct] = useState(row.payFromBankAccountId ?? '');
-  const [holdTouched, setHoldTouched] = useState(false);
-  const [holdChoice, setHoldChoice] = useState(false);
+  const [fromAcct, setFromAcct] = useState(payment?.pending?.bankAccountId ?? row.payFromBankAccountId ?? '');
+  // Changing one: it is pending as it was; the bank having taken it is not undone here.
+  const [holdTouched, setHoldTouched] = useState(!!payment);
+  const [holdChoice, setHoldChoice] = useState(!!payment?.pending && !payment.pending.cleared);
+  const clearedByBank = !!payment?.pending?.cleared;
   useEffect(() => {
     getBankAccounts().then(list => setAccounts((list as any[])
       .filter(a => a.accountType !== 'CREDIT_CARD')
@@ -308,18 +338,26 @@ function LogLoanPaymentModal({ row, month, onClose, onSaved }: { row: LoanTracke
   }, []);
   // Unless the owner says otherwise: a check, or a payment from the last few days, has likely not come out yet.
   const recent = Date.now() - new Date(`${date}T12:00:00`).getTime() < 4 * 86_400_000;
-  const hold = holdTouched ? holdChoice : !!fromAcct && (['CHECK', 'MONEY_ORDER', 'CASHIERS_CHECK'].includes(method) || recent);
+  const hold = holdTouched ? holdChoice : !!fromAcct && (CHECK_METHODS.includes(method) || recent);
 
   async function save() {
     const amt = parseFloat(amount);
     if (!(amt > 0)) { setErr('Enter the amount paid.'); return; }
     setSaving(true); setErr(null);
     try {
-      await createLoanPayment(row.loanId, {
-        date, amount: amt, billAmount: row.expected || undefined, status: 'PAID', periodMonth: period, method: method || null,
-        lateFee: lateFee ? parseFloat(lateFee) : undefined, confirmationNumber: confirmation || undefined, notes: notes || undefined,
-        pendingFrom: hold && fromAcct ? fromAcct : null,
-      });
+      if (payment) {
+        await updateLoanPayment(row.loanId, payment.id, {
+          date, amount: amt, periodMonth: period, method: method || null,
+          lateFee: lateFee ? parseFloat(lateFee) : null, confirmationNumber: confirmation || null, notes: notes || null,
+          ...(clearedByBank ? {} : { pendingFrom: hold && fromAcct ? fromAcct : null }),
+        });
+      } else {
+        await createLoanPayment(row.loanId, {
+          date, amount: amt, billAmount: row.expected || undefined, status: 'PAID', periodMonth: period, method: method || null,
+          lateFee: lateFee ? parseFloat(lateFee) : undefined, confirmationNumber: confirmation || undefined, notes: notes || undefined,
+          pendingFrom: hold && fromAcct ? fromAcct : null,
+        });
+      }
       onSaved();
     } catch (e) { setErr(describeApiError(e, 'Could not log the payment.')); }
     finally { setSaving(false); }
@@ -331,7 +369,7 @@ function LogLoanPaymentModal({ row, month, onClose, onSaved }: { row: LoanTracke
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.6)' }} onClick={onClose}>
       <div className="card p-5 w-full max-w-md space-y-3 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div>
-          <p className="text-sm font-semibold text-white">Log payment — {row.lender}</p>
+          <p className="text-sm font-semibold text-white">{payment ? 'Edit payment' : 'Log payment'} — {row.lender}</p>
           <p className="text-xs text-gray-500">{row.property} · {fmtMoney(row.expected)} due {fmtDate(row.dueDate)}</p>
         </div>
         {(row.paymentInstructions || row.mailingAddress) && (
@@ -360,13 +398,14 @@ function LogLoanPaymentModal({ row, month, onClose, onSaved }: { row: LoanTracke
               {accounts.map(a => <option key={a.id} value={a.id}>{a.label}</option>)}
             </select>
           </div>
-          {fromAcct && (
+          {clearedByBank && <p className="col-span-2 text-xs text-gray-500">The bank has already taken this one out of the account.</p>}
+          {fromAcct && !clearedByBank && (
             <label className="col-span-2 flex items-start gap-2 text-xs text-gray-300 cursor-pointer">
               <input type="checkbox" className="mt-0.5" checked={hold} onChange={e => { setHoldTouched(true); setHoldChoice(e.target.checked); }} />
               <span>
                 It hasn&rsquo;t come out of the account yet — show it as pending there
                 <span className="block text-gray-500 mt-0.5">
-                  It clears when the bank shows a {fmtMoney(parseFloat(amount) || 0)} payment out of that account{['CHECK', 'MONEY_ORDER', 'CASHIERS_CHECK'].includes(method) ? ' (the check number helps). A check waits until it is cashed.' : ', or a few days after the date.'} If the bank already shows it, it clears right away.
+                  It clears when the bank shows a {fmtMoney(parseFloat(amount) || 0)} payment out of that account{CHECK_METHODS.includes(method) ? ' (the check number helps). A check waits until it is cashed.' : ', or a few days after the date.'} If the bank already shows it, it clears right away.
                 </span>
               </span>
             </label>
@@ -375,7 +414,7 @@ function LogLoanPaymentModal({ row, month, onClose, onSaved }: { row: LoanTracke
         {err && <p className="text-xs text-red-400">{err}</p>}
         <div className="flex justify-end gap-2">
           <button onClick={onClose} className="btn text-xs">Cancel</button>
-          <button onClick={save} disabled={saving} className="btn btn-primary text-xs disabled:opacity-50">{saving ? 'Saving…' : 'Log payment'}</button>
+          <button onClick={save} disabled={saving} className="btn btn-primary text-xs disabled:opacity-50">{saving ? 'Saving…' : payment ? 'Save' : 'Log payment'}</button>
         </div>
       </div>
     </div>
@@ -383,16 +422,23 @@ function LogLoanPaymentModal({ row, month, onClose, onSaved }: { row: LoanTracke
 }
 
 /** What a loan's month came to and how it is paid: the payments toward the month, how and where to pay. */
-function RowDetails({ r, month }: { r: LoanTrackerRow; month: string }) {
+function RowDetails({ r, month, onEdit, onDelete }: { r: LoanTrackerRow; month: string; onEdit: (p: LoanTrackerPayment) => void; onDelete: (p: LoanTrackerPayment) => void }) {
   return (
     <div className="grid md:grid-cols-2 gap-4 text-xs">
       <div>
         <p className="text-gray-500 mb-1">Paid toward {fmtDate(`${month}-01`, 'MMMM yyyy')}</p>
         {r.payments.length ? r.payments.map(p => (
-          <div key={p.id} className="flex gap-3 py-0.5">
+          <div key={p.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 py-0.5">
             <span className="text-gray-400 w-20">{fmtDate(p.date, 'MMM d')}</span>
             <span className="text-emerald-500 w-24 text-right">{fmtMoney(p.amount)}</span>
-            <span className="text-gray-500">{[p.method ? PAYMENT_METHOD_LABELS[p.method as LoanPaymentMethod] ?? p.method : null, p.lateFee ? `incl. ${fmtMoney(p.lateFee)} late fee` : null, p.confirmationNumber ? `#${p.confirmationNumber}` : null, p.notes].filter(Boolean).join(' · ')}</span>
+            <span className="text-gray-500 min-w-0 flex-1">
+              {[p.method ? PAYMENT_METHOD_LABELS[p.method as LoanPaymentMethod] ?? p.method : null, p.lateFee ? `incl. ${fmtMoney(p.lateFee)} late fee` : null, p.confirmationNumber ? `#${p.confirmationNumber}` : null, p.notes].filter(Boolean).join(' · ')}
+              {p.pending && !p.pending.cleared && <span className="text-amber-400/90"> · not out of the account yet</span>}
+            </span>
+            <span className="flex gap-3 shrink-0">
+              <button onClick={() => onEdit(p)} className="text-amber-400 hover:text-amber-300">Edit</button>
+              <button onClick={() => onDelete(p)} className="text-gray-500 hover:text-red-400">Delete</button>
+            </span>
           </div>
         )) : <p className="text-gray-500">Nothing logged for this month.</p>}
         {r.lastPayment && <p className="text-gray-600 mt-2">Last payment on record: {fmtMoney(r.lastPayment.amount)} on {fmtDate(r.lastPayment.date)}</p>}

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { pendingForLoanPayment } from '../services/pendingMoney';
+import { pendingForLoanPayment, syncLoanPaymentPending } from '../services/pendingMoney';
 import { memberFilter, memberOk } from './household';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
@@ -582,6 +582,30 @@ router.post('/:id/payments', async (req, res, next) => {
         .catch(err => console.warn('[Loans] pending payment:', err instanceof Error ? err.message : err));
     }
     res.status(201).json(serializeLoanPayment(payment));
+  } catch (err) { next(err); }
+});
+
+// PATCH /:id/payments/:paymentId — change a logged payment (its date, amount, month, how, late fee,
+// confirmation, notes), and whether it is still pending on a bank account (pendingFrom: an account id,
+// null for "it has come out", left out to keep it as it is).
+router.patch('/:id/payments/:paymentId', async (req, res, next) => {
+  try {
+    const loan = await db.loan.findFirst({ where: { id: req.params.id, userId: req.dbUserId! } });
+    if (!loan) return res.status(404).json({ error: 'Loan not found' });
+    const existing = await db.loanPayment.findFirst({ where: { id: req.params.paymentId, loanId: loan.id } });
+    if (!existing) return res.status(404).json({ error: 'Payment not found' });
+    const { periodMonth, ...data } = LoanPaymentSchema.partial().parse(req.body);
+    const payment = await db.loanPayment.update({
+      where: { id: existing.id },
+      data: {
+        ...data,
+        ...(periodMonth !== undefined ? { periodDate: periodMonth ? new Date(`${periodMonth}-01T00:00:00.000Z`) : null } : {}),
+      },
+    });
+    const pendingFrom = req.body?.pendingFrom === null ? null : typeof req.body?.pendingFrom === 'string' ? req.body.pendingFrom : undefined;
+    await syncLoanPaymentPending(req.dbUserId!, { id: payment.id, amount: Number(payment.amount), date: payment.date, method: payment.method, confirmationNumber: payment.confirmationNumber }, loan.lender, pendingFrom)
+      .catch(err => console.warn('[Loans] pending payment:', err instanceof Error ? err.message : err));
+    res.json(serializeLoanPayment(payment));
   } catch (err) { next(err); }
 });
 
