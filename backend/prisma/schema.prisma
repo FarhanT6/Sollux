@@ -1956,7 +1956,7 @@ model PendingOutflow {
   /// What made it: "rent:<rentPaymentId>" (a check logged as deposited) or "slip:r:<id>,m:<id>"
   /// (checks deposited together from Cash, checks & apps); null when entered by hand.
   sourceRef     String?
-  /// What cleared it: "plaid:<transaction id>" when the bank's transaction matched, "manual" when marked by hand.
+  /// What cleared it: "plaid:<transaction id>" when the bank's transaction matched, "manual" when marked by hand, "auto:loan" / "auto:date" when settlePending cleared it; "kept" on an uncleared item the owner put back as still pending.
   clearedBy     String?
   expectedDate  DateTime?
   // When this is a loan payment already sent, the planner treats that loan

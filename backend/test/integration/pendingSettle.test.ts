@@ -1,0 +1,88 @@
+/**
+ * Pending money the bank has surely taken clears itself: a payment (not a check)
+ * a few days after its date or once its loan payment is on record, a deposit
+ * after ten days; a check waits; one the owner puts back as still pending stays.
+ * The pay planner counts what was sent toward a loan only for the month it pays.
+ * Made-up lender, amounts and dates.
+ */
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { startApi, skip, OWNER, TEST_DB, type TestApi } from './server';
+
+let api: TestApi;
+const ids: Record<string, string> = {};
+const DAY = 86_400_000;
+const ago = (n: number) => new Date(Date.now() - n * DAY);
+const ymd = (d: Date) => d.toISOString().slice(0, 10);
+
+before(async () => {
+  if (skip) return;
+  api = await startApi();
+  process.env.DATABASE_URL = TEST_DB;
+  const { db } = api;
+  const me = await db.user.create({ data: { ...OWNER, trialEndsAt: new Date(Date.now() + 10 * DAY) } });
+  ids.user = me.id;
+  const p = await db.property.create({ data: { userId: me.id, address: '1200 Elm Grove Ln', city: 'Riverside', state: 'CA', zip: '92501', type: 'RESIDENTIAL_SINGLE' } });
+  ids.loan = (await db.loan.create({ data: { userId: me.id, propertyId: p.id, lender: 'Example Mortgage Co', loanType: 'MORTGAGE', isActive: true, monthlyPayment: 1500, dueDay: 1 } as any })).id;
+  ids.bank = (await db.bankAccount.create({ data: { userId: me.id, name: 'Checking', bank: 'Example Bank', last4: '1234', accountType: 'CHECKING' } as any })).id;
+  await db.bankBalance.create({ data: { bankAccountId: ids.bank, balance: 9000, available: 9000, asOfDate: new Date(`${ymd(new Date())}T00:00:00Z`), source: 'plaid' } as any });
+  const item = (key: string, data: Record<string, unknown>) => db.pendingOutflow.create({ data: { userId: me.id, bankAccountId: ids.bank, amount: 100, description: key, kind: 'SCHEDULED', direction: 'OUT', ...data } as any }).then(r => { ids[key] = r.id; });
+  // Split across accounts by the planner weeks ago: the bank took it as one debit, never matched.
+  await item('oldSplit', { amount: 209.35, loanId: ids.loan, expectedDate: ago(41) });
+  // Due two days ago, and the loan payment for that month is on record.
+  await item('loanPaid', { amount: 1500, loanId: ids.loan, expectedDate: ago(2) });
+  await db.loanPayment.create({ data: { loanId: ids.loan, date: ago(2), amount: 1500, status: 'PAID', periodDate: new Date(`${ymd(ago(2)).slice(0, 7)}-01T00:00:00Z`) } as any });
+  // Due two days ago, nothing else known: still in flight.
+  await item('recent', { amount: 75, expectedDate: ago(2) });
+  // A check written two months ago: waits for the bank or the owner.
+  await item('oldCheck', { amount: 640, kind: 'CHECK', expectedDate: ago(60) });
+  // A deposit fifteen days ago: credited by now.
+  await item('oldDeposit', { amount: 300, kind: 'CHECK', direction: 'IN', expectedDate: ago(15) });
+  // A payment a month ago the owner will say is still pending.
+  await item('kept', { amount: 55, kind: 'TRANSFER', expectedDate: ago(30) });
+});
+after(async () => { if (!skip) await api.stop(); });
+
+const send = (method: string, path: string, body?: unknown) =>
+  fetch(`${api.url}/api${path}`, { method, headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+
+test('the bank has surely taken it: cleared on its own; a check waits', { skip }, async () => {
+  const open = await (await send('GET', '/bank-accounts/pending')).json() as any[];
+  assert.deepEqual(open.map(p => p.description).sort(), ['oldCheck', 'recent']);
+  const row = async (k: string) => (await api.db.pendingOutflow.findUnique({ where: { id: ids[k] } }))!;
+  assert.equal((await row('oldSplit')).clearedBy, 'auto:date');
+  assert.equal((await row('loanPaid')).clearedBy, 'auto:loan');
+  assert.equal((await row('oldDeposit')).clearedBy, 'auto:date');
+  // The balance after pending holds out only what is still in flight.
+  const acct = ((await (await send('GET', '/bank-accounts')).json()) as any[]).find(a => a.id === ids.bank);
+  assert.equal(acct.pendingOut, 715);
+  assert.equal(acct.afterPending, 9000 - 715);
+});
+
+test('put back as still pending by the owner: it stays until the bank or the owner clears it', { skip }, async () => {
+  assert.equal((await send('PATCH', `/bank-accounts/pending/${ids.kept}`, { cleared: false })).status, 200);
+  const open = await (await send('GET', '/bank-accounts/pending')).json() as any[];
+  assert.ok(open.some(p => p.id === ids.kept));
+  assert.equal((await api.db.pendingOutflow.findUnique({ where: { id: ids.kept } }))!.clearedBy, 'kept');
+  // The bank's line still clears it.
+  const { clearPendingByTransaction } = await import('../../src/services/pendingMoney');
+  assert.equal(await clearPendingByTransaction(ids.bank, { id: 'tx-kept', amount: 55, date: ymd(new Date()), name: 'TRANSFER' }), ids.kept);
+});
+
+test('the pay planner: last month\'s payment in flight is not this month\'s', { skip }, async () => {
+  const { buildPayPlan } = await import('../../src/lib/payPlan');
+  const { db } = api;
+  // This month's payment is not on record; a check toward last month's is still in flight.
+  await db.loanPayment.deleteMany({ where: { loanId: ids.loan } });
+  const now = new Date();
+  const lastMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+  await db.pendingOutflow.create({ data: { userId: ids.user, bankAccountId: ids.bank, amount: 1500, description: 'Check to Example Mortgage Co', kind: 'CHECK', direction: 'OUT', loanId: ids.loan, expectedDate: lastMonth } as any });
+  let plan = await buildPayPlan(ids.user, { horizonDays: 45 });
+  const ob = () => plan.obligations.find(o => o.kind === 'LOAN' && o.id === ids.loan);
+  assert.ok(ob(), 'the loan is in the plan');
+  assert.equal(ob()!.status, 'DUE');
+  // Sent toward the month the plan shows: it is sent.
+  await db.pendingOutflow.create({ data: { userId: ids.user, bankAccountId: ids.bank, amount: 1500, description: 'Check to Example Mortgage Co', kind: 'CHECK', direction: 'OUT', loanId: ids.loan, expectedDate: new Date(ob()!.dueDate) } as any });
+  plan = await buildPayPlan(ids.user, { horizonDays: 45 });
+  assert.equal(ob()!.status, 'SENT');
+});
