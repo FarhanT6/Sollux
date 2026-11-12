@@ -37,6 +37,7 @@ const monthStart = () => { const d = new Date(); return new Date(Date.UTC(d.getU
 const FEATURES: Record<string, string> = {
   'bill-read': 'Reading a bill PDF',
   'bill-read-image': 'Reading a bill photo',
+  'deposit-read': 'Reading a bank deposit (checks)',
   'bill-transcribe-scan': 'Transcribing a scanned bill',
   'portal-agent': 'Fetching statements from portals',
   'lease-extract': 'Reading a lease',

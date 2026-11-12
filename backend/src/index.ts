@@ -16,6 +16,7 @@ import documentsRouter from './routes/documents';
 import accountRouter from './routes/account';
 import dashboardRouter from './routes/dashboard';
 import speedRouter from './routes/speed';
+import depositsRouter from './routes/deposits';
 import gmailRouter from './routes/gmail';
 import driveRouter from './routes/drive';
 import clickupRouter from './routes/clickup';
@@ -158,6 +159,8 @@ app.use('/api/', limiter);
 app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }));
 app.use('/api/import', express.json({ limit: '100mb' }));
 app.use('/api/reconciliation/read', express.json({ limit: '40mb' }));
+// Screenshots of a bank deposit's checks (routes/deposits.ts).
+app.use('/api/deposits/read', express.json({ limit: '30mb' }));
 // Document uploads (lease agreements, applications, insurance/tax/maintenance
 // scans) can be large multi-page PDFs — allow well above the default cap.
 app.use('/api/leases', express.json({ limit: '50mb' }));
@@ -233,6 +236,7 @@ app.use('/api', (req, res, next) => {
 });
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api/speed', speedRouter);
+app.use('/api/deposits', depositsRouter);
 app.use('/api/admin/audit-requests', adminAuditRouter);
 app.use('/api/properties', propertiesRouter);
 app.use('/api/utilities', utilitiesRouter);

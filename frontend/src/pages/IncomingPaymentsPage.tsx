@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import DepositRead from '../components/income/DepositRead';
 import SearchSelect from '../components/ui/SearchSelect';
 import { format } from 'date-fns';
 import {
@@ -29,6 +30,7 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
   const [filter, setFilter] = useState<IncomingTransactionStatus | 'ALL'>('SUGGESTED');
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [readingDeposit, setReadingDeposit] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
 
   const load = async () => {
@@ -144,10 +146,15 @@ export default function IncomingPaymentsPage({ embedded }: { embedded?: boolean 
             </button>
           ))}
         </div>
-        <button onClick={handleSync} disabled={syncing} className="btn-primary text-xs px-3 py-1.5 disabled:opacity-50">
-          {syncing ? 'Syncing…' : 'Sync now'}
-        </button>
+        <div className="flex gap-2">
+          {/* The bank sends a deposit of several checks as one total: read the checks from its deposit details. */}
+          <button onClick={() => setReadingDeposit(true)} className="btn text-xs px-3 py-1.5">Read a bank deposit…</button>
+          <button onClick={handleSync} disabled={syncing} className="btn-primary text-xs px-3 py-1.5 disabled:opacity-50">
+            {syncing ? 'Syncing…' : 'Sync now'}
+          </button>
+        </div>
       </div>
+      {readingDeposit && <DepositRead onClose={() => setReadingDeposit(false)} />}
 
       {syncMsg && <p className="text-xs text-gray-500 mb-3">{syncMsg}</p>}
       <p className="text-xs text-gray-600 mb-3">Choosing the tenant saves the sender's name on their lease; from then on their payments are logged as rent automatically when the amount is no more than they owe and the memo doesn't say it's for something else. Anything else waits here.</p>
