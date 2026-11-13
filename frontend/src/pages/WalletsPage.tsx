@@ -7,6 +7,8 @@ import { fmtMoney } from '../lib/money';
 import { fmtDate, todayISO } from '../lib/date';
 import { describeApiError } from '../lib/apiError';
 import { bankAccountLabel } from '../lib/bankAccountLabel';
+import { Link } from 'react-router-dom';
+import { moneyPicture, BANKING_PAGE } from '../lib/moneyPicture';
 
 /**
  * Cash, checks & apps: what's sitting in cash, checks not yet deposited, Venmo,
@@ -25,20 +27,32 @@ const TYPE_LABEL: Record<string, string> = {
 export default function WalletsPage() {
   const [data, setData] = useState<WalletsT | null>(null);
   const [banks, setBanks] = useState<BankAccount[]>([]);
+  const [allAccounts, setAllAccounts] = useState<BankAccount[] | null>(null);
   const [properties, setProperties] = useState<Property[]>([]);
   const [open, setOpen] = useState<string | null>(null);
   const [err, setErr] = useState('');
   useEffect(() => {
     void getWallets().then(setData).catch(e => setErr(describeApiError(e, 'Could not load balances.')));
-    void getBankAccounts().then(b => setBanks(b.filter(x => x.accountType !== 'CREDIT_CARD'))).catch(() => {});
+    void getBankAccounts().then(b => { setAllAccounts(b); setBanks(b.filter(x => x.accountType !== 'CREDIT_CARD')); }).catch(() => {});
     void getProperties().then(setProperties).catch(() => {});
   }, []);
   if (!data) return err ? <p className="text-sm text-red-400">{err}</p> : <p className="text-sm text-gray-500">Loading…</p>;
+  // The bank accounts beside this: one total, the same as Settings → Banking and the Overview.
+  const picture = allAccounts ? moneyPicture(allAccounts as any[], data) : null;
+  const bankAfter = picture ? picture.banks.accounts.reduce((t, a: any) => t + Number(a.afterPending ?? a.available ?? a.balance ?? 0), 0) : 0;
 
   return (
     <div className="space-y-4">
       <div className="rounded-xl p-4" style={{ background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.06)' }}>
         <p className="text-sm font-semibold text-white">Cash, checks and payment apps: {fmtMoney(data.total)}</p>
+        {picture && picture.banks.accounts.length > 0 && (
+          <p className="text-xs text-gray-400 mt-1">
+            With your bank accounts — <Link to={BANKING_PAGE} className="text-[#F5A623] hover:underline">{fmtMoney(picture.banks.total)} in {picture.banks.accounts.length} account{picture.banks.accounts.length === 1 ? '' : 's'}</Link>
+            {Math.abs(bankAfter - picture.banks.total) > 0.5 && <span className="text-gray-500"> ({fmtMoney(bankAfter)} after pending)</span>}
+            {picture.handTyped.total ? <span className="text-gray-500"> and {fmtMoney(picture.handTyped.total)} entered by hand</span> : null}
+            : <span className="text-white font-medium">{fmtMoney(picture.total)}</span> in all.
+          </p>
+        )}
         <p className="text-xs text-gray-500 mt-0.5">Rent you log as cash, a check or money order, Venmo, Cash App, PayPal or Apple Cash adds to that balance. A check stays under Checks until you mark it deposited (or pick the bank account when you log it). When an app emails you that money was transferred to your bank, it's taken out to that account on its own. Record the rest yourself: cash deposited or spent, money moved between apps, a correction.</p>
       </div>
       {err && <p className="text-sm text-red-400">{err}</p>}

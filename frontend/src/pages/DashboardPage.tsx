@@ -5,7 +5,8 @@ import { useEffect, useState } from 'react';
 import { CategoryGlyph } from '../ios';
 import { Link } from 'react-router-dom';
 import { useUser } from '@clerk/clerk-react';
-import { getDashboardSummary, getRecentActivity, getInsights, getPlaidItems, getBankAccounts, getLeases, getRentPayments, updateBankAccount } from '../api/client';
+import { getDashboardSummary, getRecentActivity, getInsights, getPlaidItems, getBankAccounts, getLeases, getRentPayments, updateBankAccount, getWallets, type WalletsT } from '../api/client';
+import { moneyPicture, moneyTiles, balanceOf } from '../lib/moneyPicture';
 import type { DashboardSummary, AIInsight, BankAccount, Lease, RentPayment } from '../types';
 import type { PlaidItem } from '../api/client';
 import { StatCard, InsightCard, Skeleton, EmptyState } from '../components/ui';
@@ -236,12 +237,6 @@ function EyeIcon({ hidden }: { hidden: boolean }) {
   );
 }
 
-const THIRD_PARTY_KEYWORDS = ['venmo', 'apple', 'cash app', 'paypal'];
-function isThirdParty(a: any) {
-  const text = ((a.name || '') + ' ' + (a.bank || '')).toLowerCase();
-  return THIRD_PARTY_KEYWORDS.some(k => text.includes(k));
-}
-
 function CashPositionCard({ items, manualAccounts }: { items: PlaidItem[]; manualAccounts: any[] }) {
   const [hidden, setHidden] = useState(() => sessionStorage.getItem('sollux_bal_vis') !== '1');
   // Names set here show at once, before the next load.
@@ -254,28 +249,21 @@ function CashPositionCard({ items, manualAccounts }: { items: PlaidItem[]; manua
     setNamed(m => ({ ...m, [acct.id]: value }));
     try { await updateBankAccount(acct.id, { nickname: value }); } catch { setNamed(m => ({ ...m, [acct.id]: current ?? null })); }
   }
-  const plaidAccounts = items.flatMap(i => i.accounts).filter(a => a.isActive);
-  const bankAccounts  = plaidAccounts.filter(a => a.accountType !== 'CREDIT_CARD');
-  const creditAccounts = plaidAccounts.filter(a => a.accountType === 'CREDIT_CARD');
-  const thirdPartyAccounts = manualAccounts.filter(a => a.isActive && isThirdParty(a));
-  const cashAccounts = manualAccounts.filter(a => a.isActive && !isThirdParty(a) && a.accountType !== 'CREDIT_CARD');
-
-  const bankTotal       = bankAccounts.reduce((s, a) => s + Number(a.balances[0]?.available ?? a.balances[0]?.balance ?? 0), 0);
-  const thirdPartyTotal = thirdPartyAccounts.reduce((s, a) => s + Number((a as any).balances?.[0]?.balance ?? 0), 0);
-  const cashTotal       = cashAccounts.reduce((s, a) => s + Number((a as any).balances?.[0]?.balance ?? 0), 0);
-  const grandTotal      = bankTotal + thirdPartyTotal + cashTotal;
-  const creditTotal     = creditAccounts.reduce((s, a) => s + Number(a.balances[0]?.balance ?? 0), 0);
+  // Cash, checks on hand and app balances count toward the total (loaded on their own, after the first screen).
+  const [wallets, setWallets] = useState<WalletsT | null>(null);
+  useEffect(() => { void getWallets().then(setWallets).catch(() => {}); }, []);
+  // Banks + cash, checks & apps: the same total as Settings → Banking and Cash, checks & apps.
+  const picture = moneyPicture([...items.flatMap(i => i.accounts), ...manualAccounts] as any[], wallets);
+  const grandTotal  = picture.total;
+  const creditAccounts = picture.credit.accounts;
+  const creditTotal = picture.credit.total;
 
   const lastSync = items.map(i => i.lastSyncedAt).filter(Boolean).sort().at(-1);
   const mask = '••••';
 
-  const buckets = [
-    { label: 'Banks', total: bankTotal, count: bankAccounts.length, unit: 'accounts' },
-    { label: '3rd party', total: thirdPartyTotal, count: thirdPartyAccounts.length, unit: 'services' },
-    { label: 'Cash', total: cashTotal, count: cashAccounts.length, unit: 'accounts' },
-  ].filter(b => b.count > 0);
+  const buckets = moneyTiles(picture).map(t => ({ label: t.label, total: t.total, sub: t.sub, to: t.to }));
 
-  const allDisplayAccounts = [...bankAccounts, ...thirdPartyAccounts, ...cashAccounts, ...creditAccounts];
+  const allDisplayAccounts = [...picture.banks.accounts, ...picture.handTyped.accounts, ...creditAccounts];
 
   return (
     <div className="mb-10">
@@ -313,11 +301,11 @@ function CashPositionCard({ items, manualAccounts }: { items: PlaidItem[]; manua
         {buckets.length > 1 && (
           <div className="grid gap-2 mb-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))' }}>
             {buckets.map(b => (
-              <div key={b.label} className="rounded-lg p-2.5" style={{ background: 'rgba(255,255,255,0.04)' }}>
+              <Link key={b.label} to={b.to} className="rounded-lg p-2.5 hover:bg-white/[0.06] transition-colors" style={{ background: 'rgba(255,255,255,0.04)' }}>
                 <p className="text-xs text-gray-500 mb-1">{b.label}</p>
                 <p className="text-sm font-semibold text-white">{hidden ? mask : money(b.total)}</p>
-                <p className="text-xs text-gray-600 mt-0.5">{b.count} {b.unit}</p>
-              </div>
+                <p className="text-xs text-gray-600 mt-0.5 truncate" title={b.sub}>{b.sub}</p>
+              </Link>
             ))}
           </div>
         )}
@@ -325,10 +313,7 @@ function CashPositionCard({ items, manualAccounts }: { items: PlaidItem[]; manua
         {/* Individual account chips */}
         <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
           {allDisplayAccounts.slice(0, 8).map((acct: any) => {
-            const bal = acct.balances?.[0];
-            const displayBal = acct.accountType === 'CREDIT_CARD'
-              ? Number(bal?.balance ?? 0)
-              : Number(bal?.available ?? bal?.balance ?? 0);
+            const displayBal = balanceOf(acct, acct.accountType === 'CREDIT_CARD' ? 'ledger' : 'available');
             return (
               <div key={acct.id} className="rounded-lg p-2.5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}>
                 {/* "x1234 · Personal" rather than the bank's long product name; the full name on hover, a click names it. */}
