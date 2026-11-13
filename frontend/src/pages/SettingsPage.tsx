@@ -12,7 +12,7 @@ import BillingPanel from '../components/BillingPanel';
 import AiSpendPanel from '../components/AiSpendPanel';
 import RentCollectionPanel from '../components/RentCollectionPanel';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { usePlaidLink } from 'react-plaid-link';
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
@@ -34,6 +34,7 @@ import api, {
   syncPlaidBalances,
   getBankAccounts,
   getPendingMoney,
+  getWallets,
   createBankAccount,
   updateBankAccount,
   deleteBankAccount,
@@ -50,7 +51,8 @@ import { format } from 'date-fns';
 import { fmtDate as fmtDateSafe, todayISO } from '../lib/date';
 import { getAccount, setAlertPhone, inviteAccountMember, cancelAccountInvite, removeAccountMember,
   getNotificationPreferences, updateNotificationPreferences } from '../api/client';
-import type { AccountInfo } from '../api/client';
+import type { AccountInfo, WalletsT } from '../api/client';
+import { moneyPicture, moneyTiles, balanceOf, WALLET_PAGE } from '../lib/moneyPicture';
 
 type SettingsTab = 'account' | 'billing' | 'rent' | 'ai' | 'notifications' | 'banking' | 'rates' | 'audits';
 
@@ -471,14 +473,6 @@ const ACCOUNT_TYPE_LABELS: Record<string, string> = {
   DEBIT_CARD: 'Debit card',
 };
 
-const MANUAL_PRESETS = [
-  { name: 'Venmo',        bank: 'Venmo',    accountType: 'CASH_POOL' as const },
-  { name: 'Apple Cash',   bank: 'Apple',    accountType: 'CASH_POOL' as const },
-  { name: 'Cash App',     bank: 'Cash App', accountType: 'CASH_POOL' as const },
-  { name: 'PayPal',       bank: 'PayPal',   accountType: 'CASH_POOL' as const },
-  { name: 'Cash on Hand', bank: '',         accountType: 'CASH_POOL' as const },
-];
-
 // ── Sortable Plaid institution card ──────────────────────────────────────────
 function SortablePlaidCard({
   item, balVisible, disp, onDisconnect, onToggleWatch, pending,
@@ -593,7 +587,7 @@ function SortablePlaidCard({
 function AddManualAccountModal({ existing, onClose, onSaved }: { existing?: BankAccount | null; onClose: () => void; onSaved: () => void }) {
   const [name, setName] = useState(existing?.name ?? '');
   const [bank, setBank] = useState(existing?.bank ?? '');
-  const [accountType, setAccountType] = useState<BankAccountType>(existing?.accountType ?? 'CASH_POOL');
+  const [accountType, setAccountType] = useState<BankAccountType>(existing?.accountType ?? 'CHECKING');
   const [last4, setLast4] = useState(existing?.last4 ?? '');
   const [ownerLabel, setOwnerLabel] = useState(existing?.ownerLabel ?? '');
   const [cardNetwork, setCardNetwork] = useState(existing?.cardNetwork ?? '');
@@ -603,9 +597,6 @@ function AddManualAccountModal({ existing, onClose, onSaved }: { existing?: Bank
   const [saving, setSaving] = useState(false);
   const isCard = accountType === 'CREDIT_CARD' || accountType === 'DEBIT_CARD';
 
-  function applyPreset(p: typeof MANUAL_PRESETS[number]) {
-    setName(p.name); setBank(p.bank); setAccountType(p.accountType);
-  }
 
   async function handleSave() {
     if (!name.trim()) return;
@@ -638,16 +629,13 @@ function AddManualAccountModal({ existing, onClose, onSaved }: { existing?: Bank
       <div className="w-full max-w-md rounded-2xl p-6" style={{ background: '#1a1a1a', border: '1px solid rgba(255,255,255,0.1)' }} onClick={e => e.stopPropagation()}>
         <h2 className="text-base font-semibold text-white mb-4">{existing ? 'Edit account' : 'Add account or card'}</h2>
 
-        {/* Quick presets */}
-        {!existing && <p className="text-xs text-gray-500 mb-2">Quick add</p>}
-        <div className="flex flex-wrap gap-1.5 mb-4" hidden={!!existing}>
-          {MANUAL_PRESETS.map(p => (
-            <button key={p.name} onClick={() => applyPreset(p)}
-              className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${name === p.name ? 'bg-amber-500/15 border-amber-500/40 text-amber-400' : 'border-white/10 text-gray-400 hover:border-white/20'}`}>
-              {p.name}
-            </button>
-          ))}
-        </div>
+        {/* Cash and the payment apps live in Cash, checks & apps, where rent logged that way adds to them. */}
+        {!existing && (
+          <p className="text-xs text-gray-500 mb-4">
+            For a bank account or card Plaid can't connect. Cash, checks on hand, Venmo, Cash App, PayPal and Apple Cash are kept in{' '}
+            <Link to={WALLET_PAGE} onClick={onClose} className="text-[#F5A623] hover:underline">Cash, checks &amp; apps</Link>, where rent you log that way adds to them.
+          </p>
+        )}
 
         <div className="space-y-3">
           <div>
@@ -743,6 +731,8 @@ function BankingTab() {
   });
   const [manualAccounts, setManualAccounts] = useState<BankAccount[]>([]);
   const [pending, setPending] = useState<PendingOutflow[]>([]);
+  // Cash, checks on hand and app balances (Finances → Income → Cash, checks & apps): part of the same total.
+  const [wallets, setWallets] = useState<WalletsT | null>(null);
   const [loading, setLoading]     = useState(true);
   const [syncing, setSyncing]     = useState(false);
   const [syncMsg, setSyncMsg]     = useState('');
@@ -761,9 +751,10 @@ function BankingTab() {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
   const loadAll = useCallback(async () => {
-    const [plaidItems, allAccounts, pend] = await Promise.all([getPlaidItems(), getBankAccounts(), getPendingMoney().catch(() => [] as PendingOutflow[])]);
+    const [plaidItems, allAccounts, pend, w] = await Promise.all([getPlaidItems(), getBankAccounts(), getPendingMoney().catch(() => [] as PendingOutflow[]), getWallets().catch(() => null)]);
     setItems(plaidItems);
     setPending(pend);
+    setWallets(w);
     // accounts with a plaidAccountId are Plaid-managed; everything else is manual
     setManualAccounts((allAccounts as any[]).filter((a: any) => !a.plaidAccountId));
   }, []);
@@ -812,31 +803,17 @@ function BankingTab() {
     } catch { } finally { setSavingBal(false); }
   }
 
-  const THIRD_PARTY_KW = ['venmo', 'apple', 'cash app', 'paypal'];
-  const isTP = (a: any) => {
-    const t = ((a.name || '') + ' ' + (a.bank || '')).toLowerCase();
-    return THIRD_PARTY_KW.some(k => t.includes(k));
-  };
-
   const allPlaidAccounts  = items.flatMap(i => i.accounts);
-  const plaidDeposit      = allPlaidAccounts.filter(a => a.accountType !== 'CREDIT_CARD' && a.isActive);
   const plaidCredit       = allPlaidAccounts.filter(a => a.accountType === 'CREDIT_CARD' && a.isActive);
-  const thirdPartyAccts   = manualAccounts.filter(a => a.isActive && isTP(a));
-  const cashAccts         = manualAccounts.filter(a => a.isActive && !isTP(a) && a.accountType !== 'CREDIT_CARD');
-
-  const bankTotal       = plaidDeposit.reduce((s, a) => s + Number(a.balances[0]?.available ?? a.balances[0]?.balance ?? 0), 0);
-  const thirdPartyTotal = thirdPartyAccts.reduce((s, a) => s + Number((a as any).balances?.[0]?.balance ?? 0), 0);
-  const cashOnHandTotal = cashAccts.reduce((s, a) => s + Number((a as any).balances?.[0]?.balance ?? 0), 0);
-  const grandTotal      = bankTotal + thirdPartyTotal + cashOnHandTotal;
+  // Banks + cash, checks on hand and app balances, the same total as the Overview and Cash, checks & apps.
+  const picture         = moneyPicture([...allPlaidAccounts, ...manualAccounts] as any[], wallets);
+  const replacedIds     = new Set(picture.replaced.map(a => a.id));
+  const grandTotal      = picture.total;
   // Money in flight on the bank accounts: what the total is once it clears.
-  const depositIds = new Set(plaidDeposit.map(a => a.id));
+  const depositIds = new Set(picture.banks.accounts.map(a => a.id));
   const flight = afterPending(0, pending.filter(p => depositIds.has(p.bankAccountId)));
 
-  const buckets = [
-    { label: 'Banks', total: bankTotal, count: plaidDeposit.length, sub: 'connected accounts' },
-    { label: '3rd party', total: thirdPartyTotal, count: thirdPartyAccts.length, sub: 'payment services' },
-    { label: 'Cash', total: cashOnHandTotal, count: cashAccts.length, sub: 'on hand' },
-  ].filter(b => b.count > 0);
+  const buckets = moneyTiles(picture);
 
   const EyeBtn = () => (
     <button onClick={toggleBal} title={balVisible ? 'Hide balances' : 'Show balances'}
@@ -862,7 +839,7 @@ function BankingTab() {
           {/* Grand total */}
           <div className="card p-4 mb-3 flex items-center justify-between">
             <div>
-              <p className="text-xs text-gray-400 mb-0.5">Total available</p>
+              <p className="text-xs text-gray-400 mb-0.5">Total available <span className="text-gray-600">· banks{picture.wallets && picture.wallets.total ? ', cash, checks & apps' : ''}</span></p>
               <p className="text-2xl font-semibold text-white">{balVisible ? money(grandTotal) : '••••••'}</p>
               {(flight.out > 0 || flight.in > 0) && (
                 <p className="text-xs text-amber-300 mt-0.5">
@@ -888,13 +865,18 @@ function BankingTab() {
           {/* 3 buckets */}
           {buckets.length > 0 && (
             <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
-              {buckets.map(b => (
-                <div key={b.label} className="card p-3">
-                  <p className="text-xs text-gray-500 mb-1">{b.label}</p>
-                  <p className="text-base font-semibold text-white">{balVisible ? money(b.total) : '••••'}</p>
-                  <p className="text-xs text-gray-600 mt-0.5">{b.count} {b.sub}</p>
-                </div>
-              ))}
+              {buckets.map(b => {
+                const body = (
+                  <>
+                    <p className="text-xs text-gray-500 mb-1">{b.label}{b.to === WALLET_PAGE && <span className="text-gray-600"> →</span>}</p>
+                    <p className="text-base font-semibold text-white">{balVisible ? money(b.total) : '••••'}</p>
+                    <p className="text-xs text-gray-600 mt-0.5 truncate" title={b.sub}>{b.sub}</p>
+                  </>
+                );
+                return b.to === WALLET_PAGE
+                  ? <Link key={b.label} to={b.to} className="card p-3 hover:border-amber-400/40 transition-colors" title="Cash, checks & apps">{body}</Link>
+                  : <div key={b.label} className="card p-3">{body}</div>;
+              })}
             </div>
           )}
         </div>
@@ -922,15 +904,34 @@ function BankingTab() {
             </DndContext>
           )}
 
-          {/* Manual / cash accounts */}
+          {/* Cash, checks & apps: kept on its own page as rent is logged and money moves; counted here. */}
+          {picture.wallets && picture.wallets.lines.length > 0 && (
+            <div className="card p-4 mb-4">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-medium text-gray-400">Cash, checks &amp; apps</p>
+                <Link to={WALLET_PAGE} className="text-xs text-[#F5A623] hover:underline">Log rent, deposits and moves →</Link>
+              </div>
+              <div className="space-y-0">
+                {picture.wallets.lines.map(l => (
+                  <Link key={l.id} to={WALLET_PAGE} className="flex items-center justify-between py-2 border-t border-white/5 hover:bg-white/[0.02]">
+                    <span className="text-sm text-gray-100">{l.label}{l.detail && <span className="text-xs text-gray-500"> · {l.detail}</span>}</span>
+                    <span className="text-sm font-semibold text-white">{balVisible ? money(l.balance) : '••••'}</span>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Accounts entered by hand */}
           {manualAccounts.length > 0 && (
             <div className="card p-4 mb-4">
-              <p className="text-xs font-medium text-gray-400 mb-3">Cash &amp; digital wallets</p>
+              <p className="text-xs font-medium text-gray-400 mb-3">Entered by hand</p>
               <div className="space-y-2">
                 {manualAccounts.map(acct => (
                   <div key={acct.id} className="flex items-center justify-between py-2 border-t border-white/5">
                     <div>
                       <p className="text-sm text-gray-100">{acct.name}</p>
+                      {replacedIds.has(acct.id) && <p className="text-xs text-amber-400/90">Not counted: Cash, checks &amp; apps keeps this balance now. Remove this one (✕) once it matches.</p>}
                       <span className="text-xs text-gray-500">
                         {ACCOUNT_TYPE_LABELS[acct.accountType] ?? acct.accountType}
                         {acct.cardNetwork ? ` · ${acct.cardNetwork}` : ''}{acct.last4 ? ` ••${acct.last4}` : ''}{acct.bank ? ` · ${acct.bank}` : ''}{acct.ownerLabel ? ` · ${acct.ownerLabel}` : ''}{acct.cardExpiry ? ` · exp ${acct.cardExpiry}` : ''}
@@ -953,9 +954,9 @@ function BankingTab() {
                         </>
                       ) : (
                         <>
-                          <button onClick={() => { setEditingBal(acct.id); setEditingBalVal(String((acct as any).balances?.[0]?.balance ?? '')); }}
-                            className="text-sm font-semibold text-white hover:text-amber-400 transition-colors">
-                            {balVisible ? money((acct as any).balances?.[0]?.balance ?? null) : '••••'}
+                          <button onClick={() => { setEditingBal(acct.id); setEditingBalVal(String(balanceOf(acct as any, 'ledger') || '')); }}
+                            className={`text-sm font-semibold hover:text-amber-400 transition-colors ${replacedIds.has(acct.id) ? 'text-gray-500 line-through' : 'text-white'}`}>
+                            {balVisible ? money(balanceOf(acct as any, 'ledger')) : '••••'}
                           </button>
                           <button onClick={() => handleDeleteManual(acct.id)} className="text-xs text-gray-600 hover:text-red-400 transition-colors ml-1">✕</button>
                         </>
@@ -971,7 +972,8 @@ function BankingTab() {
 
       <div className="flex gap-2 mb-4">
         <PlaidConnectButton onSuccess={() => loadAll()} />
-        <button onClick={() => setShowAddManual(true)} className="btn text-xs">+ Add cash / wallet</button>
+        <button onClick={() => setShowAddManual(true)} className="btn text-xs" title="A bank or card Plaid can't connect, entered by hand">+ Add an account by hand</button>
+        <Link to={WALLET_PAGE} className="btn text-xs">Cash, checks &amp; apps →</Link>
       </div>
 
       <div className="mt-2 rounded-xl px-4 py-3" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
