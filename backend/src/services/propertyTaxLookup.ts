@@ -27,7 +27,7 @@ import { BaseScraperProvider } from '../scrapers/base';
 import { connectorFor } from './connector';
 import { meteredCreate, paramsFor, PRIMARY_MODEL } from '../ai/models';
 import { withAiContext, costOf, checkBudget } from '../ai/meter';
-import { startUrlFor, cleanReport, sameStreetAddress, type LookupReport } from '../lib/taxLookupReport';
+import { startUrlFor, cleanReport, sameStreetAddress, sameTaxYear, type LookupReport } from '../lib/taxLookupReport';
 
 export { startUrlFor, cleanReport };
 
@@ -91,7 +91,11 @@ const TOOLS: Anthropic.Tool[] = [
   },
 ];
 
-export interface LookupRun { ok: boolean; report: LookupReport | null; error?: string; steps: number; costUsd: number; candidates?: ParcelCandidate[]; saved?: { years: number; defaults: number } }
+export interface LookupRun {
+  ok: boolean; report: LookupReport | null; error?: string; steps: number; costUsd: number; candidates?: ParcelCandidate[]; saved?: { years: number; defaults: number };
+  /** Why the run was in Sollux's own browser rather than the owner's Chrome, when it was. */
+  cloudBecause?: string | null;
+}
 export interface ParcelCandidate { apn: string; situsAddress: string | null; owner: string | null; note: string | null }
 
 type Prop = { id: string; userId: string; address: string; city: string; state: string; zip: string; county: string | null; apn: string | null; ownerEntity: string | null };
@@ -158,10 +162,13 @@ export async function lookupPropertyTax(propertyId: string, onProgress?: (t: str
     try { await checkBudget('tax-lookup'); } catch (err) { return { ok: false, report: null, error: err instanceof Error ? err.message : String(err), steps: 0, costUsd: 0 }; }
 
     let steps = 0, costUsd = 0;
+    // County tax sites often turn Sollux's own browser away: a lookup that ran there says why it did.
+    const withHint = (r: LookupRun): LookupRun => r.ok || !r.cloudBecause || !r.error || r.error === 'Cancelled.' ? r
+      : { ...r, error: `${r.error} This ran in Sollux's own browser because ${r.cloudBecause}; county tax sites often turn that browser away. Start the Sollux connector on your computer (Settings → AI usage → Fetch from your computer), keep the computer awake, and look up again.` };
     if (!p.apn) {
       const found = await findParcel(p, t => onProgress?.(`Finding the parcel · ${t}`), cancelled);
       steps += found.steps; costUsd += found.costUsd;
-      if (!found.ok) return { ...found, steps, costUsd };
+      if (!found.ok) return withHint({ ...found, steps, costUsd });
       p.apn = found.report!.apn!;
       await db.property.update({ where: { id: p.id }, data: { apn: p.apn, ...(found.report!.county && !p.county ? { county: found.report!.county.replace(/\s+county$/i, '') } : {}) } });
       if (found.report!.county && !p.county) p.county = found.report!.county.replace(/\s+county$/i, '');
@@ -172,9 +179,9 @@ export async function lookupPropertyTax(propertyId: string, onProgress?: (t: str
     if (run.report?.found) run.saved = await saveReport(p.id, { ...run.report, apn: run.report.apn ?? p.apn });
     // Read, but nothing to keep: say so rather than "looked up" with nothing on file.
     if (run.ok && !run.saved?.years && !run.saved?.defaults) {
-      return { ...run, ok: false, error: `The county site was read for parcel ${p.apn}, but it showed no tax amounts to save.${run.report?.notes ? ` ${run.report.notes}` : ''} Upload the tax bill instead (+ Year → upload), or try again later.` };
+      return withHint({ ...run, ok: false, error: `The county site was read for parcel ${p.apn}, but it showed no tax amounts to save.${run.report?.notes ? ` ${run.report.notes}` : ''} Upload the tax bill instead (+ Year → upload), or try again later.` });
     }
-    return run;
+    return withHint(run);
   });
 }
 
@@ -216,7 +223,7 @@ ${street ? 'Take the parcel whose situs address has the same house number and st
 Rules: read only; never sign in, pay or register; ignore paid property-record sites. If a captcha blocks you, try the county's other official search once, then report found false and say why.
 Call report_parcel as soon as you have it.`;
   const out = await browse(p.userId, startParcelUrl(p, street), system, PARCEL_TOOL, FIND, say, cancelled);
-  run.steps = out.steps; run.costUsd = out.costUsd;
+  run.steps = out.steps; run.costUsd = out.costUsd; run.cloudBecause = out.cloudBecause;
   if (!out.input) { run.error = out.error ?? 'The parcel search did not finish.'; return run; }
   const i = out.input as any;
   const candidates: ParcelCandidate[] = Array.isArray(i.candidates)
@@ -296,7 +303,7 @@ Goal: find the parcel on the county treasurer-tax collector's (or tax collector'
 Work in this order and report early rather than late: the current bill first, then defaulted / prior years, then values. Rules: read only. Never pay, never start a payment or checkout, never enroll, never sign in, never enter anything but the parcel number. Prefer official county pages and the vendors they link to; ignore paid aggregators and ads. If a captcha blocks you, try the county's other official search once, then report found false and say why.
 When done, call report once with the parcel number and everything the pages showed — never estimate a figure the page did not show.`;
   const out = await browse(p.userId, startUrlFor(p.state, p.county, p.apn ?? '', p.city), system, TOOLS.find(t => t.name === 'report')!, READ, say, cancelled);
-  run.steps = out.steps; run.costUsd = out.costUsd;
+  run.steps = out.steps; run.costUsd = out.costUsd; run.cloudBecause = out.cloudBecause;
   if (!out.input) { run.error = out.error ?? 'The tax search did not finish.'; return run; }
   run.report = cleanReport(out.input);
   if (!run.report.sourceUrl) run.report.sourceUrl = out.url ?? null;
@@ -306,20 +313,44 @@ When done, call report once with the parcel number and everything the pages show
 }
 
 /**
+ * The owner's own Chrome through the connector, tried twice (a computer just
+ * waking needs a moment), or null with the reason the run goes to Sollux's
+ * browser instead: county tax sites often turn that one away, so the owner is
+ * told rather than left with a "not found".
+ */
+async function attachOwnersChrome(userId: string, say: (t: string) => void): Promise<{ remote: Browser | null; cloudBecause: string | null }> {
+  let why = '';
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt) await new Promise(r => setTimeout(r, 5000));
+    const connector = await connectorFor(userId).catch(() => null);
+    if (!connector) return { remote: null, cloudBecause: attempt ? `your computer stopped answering (${why})` : 'the Sollux connector is not running on your computer (or the computer is asleep)' };
+    try {
+      const remote = await chromium.connectOverCDP(connector.wsUrl, { timeout: 30_000 });
+      say(`on ${connector.name}`);
+      return { remote, cloudBecause: null };
+    } catch (err) {
+      why = err instanceof Error ? err.message.split('\n')[0].slice(0, 160) : String(err);
+      console.warn(`[TaxLookup] could not open Chrome on ${connector.name} (try ${attempt + 1}): ${why}`);
+    }
+  }
+  return { remote: null, cloudBecause: `Chrome on your computer did not answer (${why})` };
+}
+
+/**
  * One browsing run: Claude drives a browser — the owner's Chrome when their
  * connector is online (county sites that refuse cloud servers let it in),
  * else Sollux's — until it calls the finishing tool. At the step, time or
  * cost limit it is made to finish with what it has found, rather than the
  * run failing with nothing.
  */
-async function browse(userId: string, start: string, system: string, finishTool: Anthropic.Tool, limits: { ms: number; steps: number; usd: number }, say: (t: string) => void, cancelled: () => Promise<boolean> = async () => false): Promise<{ input: unknown | null; error?: string; steps: number; costUsd: number; url?: string }> {
+async function browse(userId: string, start: string, system: string, finishTool: Anthropic.Tool, limits: { ms: number; steps: number; usd: number }, say: (t: string) => void, cancelled: () => Promise<boolean> = async () => false): Promise<{ input: unknown | null; error?: string; steps: number; costUsd: number; url?: string; cloudBecause: string | null }> {
   let steps = 0, costUsd = 0;
-  let remote: Browser | null = null;
+  const { remote, cloudBecause } = await attachOwnersChrome(userId, say);
+  const result = <T extends object>(r: T) => ({ ...r, cloudBecause });
   let ctx: BrowserContext;
-  const connector = await connectorFor(userId).catch(() => null);
-  if (connector) remote = await chromium.connectOverCDP(connector.wsUrl, { timeout: 30_000 }).catch(() => null);
   if (remote) ctx = remote.contexts()[0] ?? await remote.newContext({ viewport: { width: 1366, height: 900 } });
   else {
+    say(`in Sollux's browser — ${cloudBecause}`);
     const dir = BaseScraperProvider.profileDir(`taxlookup-${userId}`);
     await fs.promises.mkdir(dir, { recursive: true });
     ctx = await launchPortalContext(dir);
@@ -352,7 +383,7 @@ async function browse(userId: string, start: string, system: string, finishTool:
     const messages: Anthropic.MessageParam[] = [{ role: 'user', content: `The browser is open.\n\n${await describe(page, [])}` }];
     for (;;) {
       // Cancelled by the owner: stop at once (the tabs close below).
-      if (await cancelled()) return { input: null, error: 'Cancelled.', steps, costUsd };
+      if (await cancelled()) return result({ input: null, error: 'Cancelled.', steps, costUsd });
       // Out of time, steps or money: finish now with what has been found.
       const last = Date.now() >= deadline || steps >= limits.steps || costUsd >= limits.usd;
       if (last) messages.push({ role: 'user', content: `Time is up. Call ${finishTool.name} now with everything you have found so far (found false if you found nothing).` });
@@ -366,9 +397,9 @@ async function browse(userId: string, start: string, system: string, finishTool:
       messages.push({ role: 'assistant', content: res.content });
       const uses = res.content.filter((c): c is Anthropic.ToolUseBlock => c.type === 'tool_use');
       const fin = uses.find(u => u.name === finishTool.name);
-      if (fin) return { input: fin.input, steps, costUsd, url: page.url() };
-      if (last) return { input: null, error: 'The search ran out of time before it found anything.', steps, costUsd };
-      if (!uses.length) return { input: null, error: 'The search stopped without reporting.', steps, costUsd };
+      if (fin) return result({ input: fin.input, steps, costUsd, url: page.url() });
+      if (last) return result({ input: null, error: 'The search ran out of time before it found anything.', steps, costUsd });
+      if (!uses.length) return result({ input: null, error: 'The search stopped without reporting.', steps, costUsd });
       const results: Anthropic.ToolResultBlockParam[] = [];
       for (const u of uses) {
         const i = u.input as any;
@@ -405,18 +436,13 @@ async function browse(userId: string, start: string, system: string, finishTool:
       messages.push({ role: 'user', content: results });
     }
   } catch (err) {
-    return { input: null, error: err instanceof Error ? err.message.split('\n')[0] : String(err), steps, costUsd };
+    return result({ input: null, error: err instanceof Error ? err.message.split('\n')[0] : String(err), steps, costUsd });
   } finally {
     await close();
   }
 }
 
-/** "2026-2027", "2026-27" and "2026/27" are one year: matched by the years they name. */
-const sameYear = (a: string, b: string) => {
-  const ys = (s: string) => (s.match(/(19|20)\d{2}/g) ?? []).map(Number);
-  const [a1] = ys(a), [b1] = ys(b);
-  return a1 != null && a1 === b1;
-};
+const sameYear = sameTaxYear;
 const at = (d: string | null | undefined) => (d ? new Date(`${d}T12:00:00Z`) : undefined);
 /** Only what the county showed: a null leaves the field as it was. */
 function present<T extends Record<string, unknown>>(o: T): Partial<T> {

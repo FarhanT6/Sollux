@@ -29,8 +29,21 @@ export const newDeviceToken = () => `sxc_${crypto.randomBytes(24).toString('base
 
 const sign = (s: string) => crypto.createHmac('sha256', process.env.ENCRYPTION_KEY || 'dev').update(`connector:${s}`).digest('hex').slice(0, 32);
 
-/** Online: the API saw the helper in the last 90 seconds. */
+/** Online: the API heard from the helper in the last 90 seconds. */
 const ONLINE_MS = 90_000;
+/**
+ * The helper pings every 25 seconds. Silent this long, the computer is gone
+ * (asleep, lid closed, Wi-Fi dropped) even though its connection was never
+ * closed: it is cut off and shown offline. Before this, the API kept marking
+ * it online on its own timer, every fetch and tax lookup waited 30 seconds
+ * for a Chrome that could not answer ("connectOverCDP: Timeout 30000ms
+ * exceeded") and then ran in the cloud browser the sites turn away.
+ */
+const SILENT_MS = Number(process.env.CONNECTOR_SILENT_MS) || 70_000;
+/** A browser session asked for of a helper not heard in this long (two pings) fails at once. */
+const STALE_MS = Number(process.env.CONNECTOR_STALE_MS) || 45_000;
+/** A browser session asked for: the helper has this long to say Chrome is open (a cold Chrome start takes up to 20 s). */
+const OPEN_MS = Number(process.env.CONNECTOR_OPEN_MS) || 25_000;
 
 /** The owner's connector, if one is online: where the worker connects for a browser there. */
 export async function connectorFor(userId: string): Promise<{ wsUrl: string; name: string } | null> {
@@ -43,11 +56,11 @@ export async function connectorFor(userId: string): Promise<{ wsUrl: string; nam
   return { wsUrl: `${d.relayUrl}/api/connector/cdp/${session}.${sign(session)}`, name: d.name };
 }
 
-interface Helper { ws: WebSocket; deviceId: string; userId: string }
+interface Helper { ws: WebSocket; deviceId: string; userId: string; /** When the helper last said anything (a ping, Chrome's traffic). */ heard: number }
 interface Session { id: string; worker: WebSocket; helper: Helper; queue: string[]; open: boolean }
 
 /** The connector version this API expects; an older helper is shown as out of date. */
-export const CONNECTOR_VERSION = 2;
+export const CONNECTOR_VERSION = 3;
 
 // Why each owner's last browser session ended, for the fetch's error message:
 // a "stopped answering" with no reason could not be told apart from a computer asleep.
@@ -115,7 +128,10 @@ function onHelper(ws: WebSocket, req: IncomingMessage): void {
   const proto = String(req.headers['x-forwarded-proto'] ?? '').split(',')[0] || 'http';
   const relayUrl = `${proto === 'https' ? 'wss' : 'ws'}://${req.headers['x-forwarded-host'] ?? req.headers.host}`;
 
+  // Anything from the computer, a pong to the API's own ping included, shows it is there.
+  ws.on('pong', () => { if (helper) helper.heard = Date.now(); });
   ws.on('message', async raw => {
+    if (helper) helper.heard = Date.now();
     let m: any;
     try { m = JSON.parse(text(raw)); } catch { return; }
     // Shutting down for an update: not here — the helper keeps trying until the new process answers.
@@ -125,10 +141,19 @@ function onHelper(ws: WebSocket, req: IncomingMessage): void {
       const device = await db.connectorDevice.findUnique({ where: { tokenHash: hashToken(m.token) } }).catch(() => null);
       clearTimeout(hello);
       if (!device) { send(ws, { type: 'denied', message: 'This connection code is not valid any more — create a new one in Sollux (Settings → AI usage → Fetch from your computer).' }); return void ws.close(4401, 'denied'); }
-      helper = { ws, deviceId: device.id, userId: device.userId };
+      helper = { ws, deviceId: device.id, userId: device.userId, heard: Date.now() };
       helpers.get(device.userId)?.ws.close(4000, 'replaced');
       helpers.set(device.userId, helper);
-      const touch = () => db.connectorDevice.update({ where: { id: device.id }, data: { lastSeenAt: new Date(), relayUrl } }).catch(() => {});
+      // Online only while the computer answers: a silent one is cut off (and shown offline by the close below).
+      const touch = () => {
+        if (!helper) return;
+        if (Date.now() - helper.heard > SILENT_MS) {
+          dropped(helper.userId, 'the computer stopped answering (asleep, closed or offline)');
+          return void ws.terminate();
+        }
+        try { ws.ping(); } catch { /* closing */ }
+        return db.connectorDevice.update({ where: { id: device.id }, data: { lastSeenAt: new Date(), relayUrl } }).catch(() => {});
+      };
       await db.connectorDevice.update({ where: { id: device.id }, data: { lastSeenAt: new Date(), relayUrl, agent: typeof m.agent === 'string' ? m.agent.slice(0, 120) : null } }).catch(() => {});
       beat = setInterval(touch, 30_000);
       send(ws, { type: 'welcome', name: device.name });
@@ -171,14 +196,27 @@ function onHelper(ws: WebSocket, req: IncomingMessage): void {
 function onWorker(ws: WebSocket, userId: string, id: string): void {
   const helper = helpers.get(userId);
   if (!helper) return void ws.close(4404, 'connector offline');
+  // Not heard from in two pings: asleep or gone. Say so now rather than leave the worker waiting 30 seconds.
+  if (Date.now() - helper.heard > STALE_MS) {
+    dropped(userId, 'the computer stopped answering (asleep, closed or offline)');
+    helper.ws.terminate();
+    return void ws.close(4404, 'the computer is not answering');
+  }
   const s: Session = { id, worker: ws, helper, queue: [], open: false };
   sessions.set(id, s);
   send(helper.ws, { type: 'open', id });
+  const opening = setTimeout(() => {
+    if (s.open || ws.readyState !== WebSocket.OPEN) return;
+    dropped(userId, 'Chrome on the computer did not open in time');
+    ws.close(4408, 'Chrome on the computer did not open in time');
+  }, OPEN_MS);
+  opening.unref();
   ws.on('message', raw => {
     const d = text(raw);
     if (s.open) send(helper.ws, { type: 'data', id, d }); else s.queue.push(d);
   });
   ws.on('close', (code: number) => {
+    clearTimeout(opening);
     // 1009: a message bigger than the relay takes (a huge screenshot or PDF).
     if (code === 1009) dropped(userId, 'a message from the browser was too large for the connection');
     sessions.delete(id); send(helper.ws, { type: 'close', id });

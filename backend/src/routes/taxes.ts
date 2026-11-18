@@ -5,6 +5,7 @@ import { attachDbUser } from '../middleware/requireAuth';
 import { uploadDocument, getSignedDocumentUrl } from '../services/s3Service';
 import { readDocument } from '../services/documentReader';
 import { calendarFor, defaultTimeline, redemptionEstimate, installmentStatus, isCommercial } from '../lib/propertyTaxRules';
+import { sameTaxYear } from '../lib/taxLookupReport';
 import { Prisma } from '@prisma/client';
 
 const router = Router();
@@ -117,7 +118,16 @@ router.post('/', async (req, res, next) => {
     if (!(await checkLoan(data.escrowLoanId, req.dbUserId!))) return res.status(404).json({ error: 'Loan not found' });
     const documentS3Key = await storeBill(req.dbUserId!, data.propertyId, file);
     // One record per property and tax year: a second bill for the same year
-    // (a supplemental, a corrected bill, a re-import) updates it.
+    // (a supplemental, a corrected bill, a re-import) updates it — also when
+    // the year is written another way ("2026-2027" on the bill, "2026-27" from a lookup).
+    const onFile = await db.taxAssessment.findMany({ where: { propertyId: data.propertyId }, select: { id: true, taxYear: true } });
+    const sameYearOnFile = onFile.some(t => t.taxYear === data.taxYear) ? undefined : onFile.find(t => sameTaxYear(t.taxYear, data.taxYear));
+    if (sameYearOnFile) {
+      const { taxYear: _spelling, ...rest } = data;
+      const tax = await db.taxAssessment.update({ where: { id: sameYearOnFile.id }, data: { ...toRow(rest), ...(documentS3Key ? { documentS3Key } : {}) } as any });
+      if (data.apn) await db.property.updateMany({ where: { id: data.propertyId, apn: null }, data: { apn: data.apn } });
+      return res.status(201).json(tax);
+    }
     const tax = await db.taxAssessment.upsert({
       where: { propertyId_taxYear: { propertyId: data.propertyId, taxYear: data.taxYear } },
       create: { ...toRow(data), ...(documentS3Key ? { documentS3Key } : {}) } as any,

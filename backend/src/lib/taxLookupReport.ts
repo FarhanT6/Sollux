@@ -25,6 +25,17 @@ export function startUrlFor(state: string | null | undefined, county: string | n
   return `https://duckduckgo.com/html/?q=${encodeURIComponent(q)}`;
 }
 
+/**
+ * "2026-2027", "2026-27", "2026/27" and "FY 2026-27" are one tax year: matched by the first year
+ * they name. A county lookup writes "2026-27" and a bill reads "2026-2027"; kept apart, the year
+ * showed twice and counted twice.
+ */
+export function sameTaxYear(a: string, b: string): boolean {
+  const first = (s: string) => (s.match(/(19|20)\d{2}/) ?? [])[0];
+  const x = first(a), y = first(b);
+  return x != null && x === y;
+}
+
 export interface LookupYear {
   taxYear: string; annualTaxAmount?: number | null; status?: 'UNPAID' | 'PAID' | 'PARTIALLY_PAID' | 'DELINQUENT' | null;
   installment1Amount?: number | null; installment1Due?: string | null; installment1Delinquent?: string | null; installment1Paid?: string | null;

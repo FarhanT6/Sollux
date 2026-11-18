@@ -29,7 +29,7 @@ const PROFILE = path.join(HOME, 'chrome-profile');
 const DOWNLOADS = path.join(HOME, 'downloads');
 const LOG = path.join(HOME, 'connector.log');
 // Sollux shows an older copy as out of date (Settings → AI usage).
-const VERSION = 2;
+const VERSION = 3;
 
 if (typeof WebSocket === 'undefined') {
   console.error('The Sollux connector needs Node.js 22 or newer — this is ' + process.version + '. Install it from https://nodejs.org and run this again.');
@@ -203,6 +203,10 @@ function connect() {
   server = ws;
   let ping = null;
   let welcomed = false;
+  // After the computer sleeps, this connection can look open but lead nowhere:
+  // nothing comes back from Sollux. Given up on, it is replaced by a new one.
+  let heardAt = Date.now();
+  let abandoned = false;
   // An attempt that neither opens nor fails, or opens and is never welcomed: try again.
   const watchdog = setTimeout(() => { if (!welcomed) { note('no answer from Sollux in 20s; trying again'); try { ws.close(); } catch { /* gone */ } retryIn(backoff); backoff = Math.min(backoff * 2, 60_000); } }, 20_000);
   const send = m => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m)); };
@@ -210,11 +214,25 @@ function connect() {
   ws.addEventListener('open', () => {
     // Say hello at once (Sollux waits 10 seconds for it), then get Chrome ready.
     send({ type: 'hello', token, version: VERSION, agent: `${os.type()} ${os.release()}${chrome ? ` · ${chrome.version}` : ''} · connector v${VERSION}` });
-    ping = setInterval(() => send({ type: 'ping' }), 25_000);
+    ping = setInterval(() => {
+      if (Date.now() - heardAt > 70_000) {
+        abandoned = true;
+        clearInterval(ping);
+        note('no answer from Sollux in 70s (the computer slept, or the network changed); reconnecting');
+        console.log('Lost touch with Sollux — reconnecting');
+        for (const s of sessions.values()) s.close();
+        sessions.clear();
+        try { ws.close(); } catch { /* gone */ }
+        retryIn(1000);
+        return;
+      }
+      send({ type: 'ping' });
+    }, 25_000);
     startChrome().catch(e => console.error(String(e.message ?? e)));
   });
 
   ws.addEventListener('message', async ev => {
+    heardAt = Date.now();
     let m;
     try { m = JSON.parse(typeof ev.data === 'string' ? ev.data : Buffer.from(ev.data).toString('utf8')); } catch { return; }
     if (m.type === 'welcome') { welcomed = true; clearTimeout(watchdog); backoff = 1000; note(`connected as "${m.name}"`); console.log(`Connected to Sollux as "${m.name}". Leave this running; press Ctrl+C to stop.`); }
@@ -250,6 +268,16 @@ function connect() {
   ws.addEventListener('close', ev => {
     clearTimeout(watchdog);
     if (ping) clearInterval(ping);
+    if (abandoned) return;   // already replaced by a new connection
+    // 4000: another copy of the connector for this account connected (here or on another computer).
+    // Reconnecting would push it off in turn, and the two would keep cutting each other's fetches.
+    if (ev.code === 4000) {
+      note('another Sollux connector for this account took over; this one stopped');
+      console.log('Another Sollux connector for this account connected (on this computer or another one), so this one stopped. Only one runs at a time.');
+      for (const s of sessions.values()) s.close();
+      chrome?.proc?.kill();
+      process.exit(0);
+    }
     for (const s of sessions.values()) s.close();
     sessions.clear();
     // 1012: Sollux restarting for an update — back on the new server in a moment.

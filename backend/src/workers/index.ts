@@ -81,7 +81,8 @@ const refreshTaxes = () => import('../services/taxLookupJobs').then(m => m.refre
   .then(n => { if (n) console.log(`[TaxLookup] Queued ${n} monthly refresh(es)`); })
   .catch(err => console.warn('[TaxLookup] refresh failed:', err instanceof Error ? err.message : err));
 setTimeout(refreshTaxes, 2 * 60_000);
-setInterval(refreshTaxes, 24 * 60 * 60 * 1000);
+// Hourly: a refresh waits for the owner's computer to be on (refreshTaxLookups).
+setInterval(refreshTaxes, 60 * 60 * 1000);
 
 // Apply any due scheduled rent increases — on startup, then once a day.
 async function runLeaseMaintenance() {
