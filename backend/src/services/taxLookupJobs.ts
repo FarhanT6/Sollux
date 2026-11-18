@@ -8,6 +8,7 @@ import { db } from '../config/db';
 import { insightQueue } from '../workers/queues';
 import { lookupPropertyTax, type LookupRun } from './propertyTaxLookup';
 import { withAiContext, checkBudget } from '../ai/meter';
+import { connectorFor } from './connector';
 
 type Status = { status: 'queued' | 'running' | 'done' | 'failed' | 'choose' | 'cancelled'; at: string; note?: string | null; progress?: string | null; years?: number; defaults?: number;
   /** Parcels that could be this property, for the owner to pick from. */
@@ -70,13 +71,23 @@ async function runOne(propertyId: string): Promise<void> {
  * after 30 days, so a payment posting, a new bill or a default shows
  * without anyone asking. A property never looked up is left for its owner
  * to start (each lookup spends their AI allowance).
+ *
+ * Only while the owner's connector is online: county tax sites turn Sollux's
+ * own browser away, and a refresh run there (the computer asleep) failed and
+ * was never tried again. Checked every hour, so it runs when the computer is on.
  */
 export async function refreshTaxLookups(): Promise<number> {
-  const props = await db.property.findMany({ where: { apn: { not: null }, status: 'ACTIVE' }, select: { id: true, taxLookupJson: true } });
-  const due = props.filter(p => {
+  const props = await db.property.findMany({ where: { apn: { not: null }, status: 'ACTIVE' }, select: { id: true, userId: true, taxLookupJson: true } });
+  const online = new Map<string, boolean>();
+  const connected = async (userId: string) => {
+    if (!online.has(userId)) online.set(userId, !!(await connectorFor(userId).catch(() => null)));
+    return online.get(userId)!;
+  };
+  const due: { id: string; taxLookupJson: unknown }[] = [];
+  for (const p of props) {
     const s = p.taxLookupJson as Status | null;
-    return s?.status === 'done' && Date.now() - new Date(s.at).getTime() > 30 * 24 * 3600_000;
-  });
+    if (s?.status === 'done' && Date.now() - new Date(s.at).getTime() > 30 * 24 * 3600_000 && await connected(p.userId)) due.push(p);
+  }
   // Lookups the AI budget stopped before they began are run once it allows:
   // the owner asked for them, so nobody has to press the button again.
   const stopped = await db.property.findMany({ where: { status: 'ACTIVE' }, select: { id: true, userId: true, taxLookupJson: true } });
