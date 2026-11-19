@@ -633,9 +633,20 @@ export const saveTaxDefault = (data: Record<string, any>) =>
 export const updateTaxDefault = (id: string, data: Record<string, any>) =>
   api.patch<TaxDefault>(`/taxes/defaults/${id}`, data).then(r => r.data);
 export const deleteTaxDefault = (id: string) => api.delete(`/taxes/defaults/${id}`);
-export interface TaxLookupStatus { status: 'queued' | 'running' | 'done' | 'failed' | 'choose' | 'cancelled'; at: string; note?: string | null; progress?: string | null; years?: number; defaults?: number; candidates?: { apn: string; situsAddress: string | null; owner: string | null; note: string | null }[] }
-export const startTaxLookup = (propertyId: string) => api.post('/taxes/lookup', { propertyId }).then(r => r.data);
-export const startTaxLookupAll = () => api.post<{ queued: number; skipped: number }>('/taxes/lookup-all').then(r => r.data);
+export interface TaxLookupStatus { status: 'queued' | 'running' | 'done' | 'failed' | 'choose' | 'cancelled' | 'waiting'; at: string; note?: string | null; progress?: string | null; years?: number; defaults?: number;
+  /** Years new to Sollux (the rest of `years` were updated); what the lookup spent on AI; waiting: the property that goes first. */
+  added?: number; costUsd?: number; firstId?: string; candidates?: { apn: string; situsAddress: string | null; owner: string | null; note: string | null }[] }
+/** anyway: run in Sollux's own browser although the owner's connector is offline (refused with needsConnector otherwise). */
+export const startTaxLookup = (propertyId: string, anyway = false) => api.post('/taxes/lookup', { propertyId, ...(anyway ? { anyway } : {}) }).then(r => r.data);
+/** One property goes first; the rest wait and start only if it works. */
+export const startTaxLookupAll = (anyway = false) => api.post<{ queued: number; skipped: number; first: string | null; waiting: number }>('/taxes/lookup-all', anyway ? { anyway } : {}).then(r => r.data);
+/** The lookup was refused because the owner's computer is not connected. */
+export const lookupNeedsConnector = (e: unknown): string | null => {
+  const r = (e as { response?: { status?: number; data?: { needsConnector?: boolean; error?: string } } })?.response;
+  return r?.status === 409 && r.data?.needsConnector ? r.data.error ?? 'Your computer is not connected.' : null;
+};
+/** Most AI one property's lookup can spend: finding its parcel and reading its taxes, each capped (services/propertyTaxLookup.ts). */
+export const TAX_LOOKUP_MAX_USD = 1.65;
 export const cancelTaxLookup = (propertyId?: string) => api.post<{ cancelled: number }>('/taxes/lookup/cancel', propertyId ? { propertyId } : {}).then(r => r.data);
 export const getTaxLookupStatus = () => api.get<Record<string, TaxLookupStatus | null>>('/taxes/lookup-status').then(r => r.data);
 export const getTaxRules = (state: string, taxYear: string) =>

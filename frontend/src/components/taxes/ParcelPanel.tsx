@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { saveTaxDefault, updateTaxDefault, deleteTaxDefault, updateProperty, startTaxLookup, getTaxLookupStatus, cancelTaxLookup, type TaxLookupStatus } from '../../api/client';
+import { saveTaxDefault, updateTaxDefault, deleteTaxDefault, updateProperty, startTaxLookup, getTaxLookupStatus, cancelTaxLookup, lookupNeedsConnector, type TaxLookupStatus } from '../../api/client';
 import type { Property, TaxAssessment, TaxDefault, TaxDefaultStatus } from '../../types';
 import { fmtDate, todayISO } from '../../lib/date';
 import { fmtMoney } from '../../lib/money';
@@ -100,22 +100,33 @@ export default function ParcelPanel({ property, taxes, defaults, onChanged, onEd
   }, [property.id]);
 
   // A parcel picked from the candidates: saved, then its taxes looked up.
+  /** Start it; with the owner's computer offline, only if they choose to run it in Sollux's browser anyway. */
+  async function start(): Promise<boolean> {
+    try { await startTaxLookup(property.id); }
+    catch (e) {
+      const offline = lookupNeedsConnector(e);
+      if (!offline) throw e;
+      if (!confirm(`${offline}\n\nRun it in Sollux's browser anyway?`)) { setLookupError(offline); return false; }
+      await startTaxLookup(property.id, true);
+    }
+    setLookup({ status: 'queued', at: new Date().toISOString() });
+    if (!timer.current) timer.current = setInterval(() => void pollRef.current(), 4000);
+    return true;
+  }
   async function runLookupWith(chosen: string) {
     setLookupError(null);
-    try { await startTaxLookup(property.id); setLookup({ status: 'queued', at: new Date().toISOString() }); if (!timer.current) timer.current = setInterval(() => void pollRef.current(), 4000); await onChanged(); }
+    try { if (await start()) await onChanged(); }
     catch (e) { setLookupError(describeApiError(e, `Saved parcel ${chosen}, but could not start the lookup.`)); }
   }
   async function runLookup() {
     setLookupError(null);
     // No parcel number: the lookup finds it by the street address.
     if (apn.trim() && apn.trim() !== (property.apn ?? '')) await updateProperty(property.id, { apn: apn.trim() } as any);
-    try {
-      await startTaxLookup(property.id);
-      setLookup({ status: 'queued', at: new Date().toISOString() });
-      if (!timer.current) timer.current = setInterval(() => void pollRef.current(), 4000);
-    } catch (e) { setLookupError(describeApiError(e, 'Could not start the lookup.')); }
+    try { await start(); }
+    catch (e) { setLookupError(describeApiError(e, 'Could not start the lookup.')); }
   }
   const busy = lookup?.status === 'queued' || lookup?.status === 'running';
+  const spent = lookup?.costUsd != null ? ` · ${fmtMoney(lookup.costUsd)} of AI` : '';
 
   const years = [...taxes].sort((a, b) => yearKey(b.taxYear) - yearKey(a.taxYear));
   const current = years[0];
@@ -197,9 +208,10 @@ export default function ParcelPanel({ property, taxes, defaults, onChanged, onEd
             <button onClick={() => void runLookup()} disabled={busy} className="btn btn-primary text-xs disabled:opacity-50">{busy ? 'Looking up…' : apn.trim() ? 'Look up on the county site' : 'Find the parcel & look up taxes'}</button>
             <span className="text-xs text-gray-500">
               {busy ? (lookup?.progress ?? (lookup?.status === 'queued' ? 'Waiting for a browser…' : 'Starting…'))
-                : lookup?.status === 'done' ? `Looked up ${fmtDate(lookup.at)} · ${lookup.years ?? 0} year${lookup.years === 1 ? '' : 's'}${lookup.defaults ? `, ${lookup.defaults} unpaid` : ''} · refreshed monthly`
-                : lookup?.status === 'cancelled' ? 'Lookup cancelled.'
-                : lookup?.status === 'failed' ? <span className="text-red-400">Lookup failed: {lookup.note}</span>
+                : lookup?.status === 'done' ? `Looked up ${fmtDate(lookup.at)} · ${lookup.years ?? 0} year${lookup.years === 1 ? '' : 's'}${lookup.added ? ` (${lookup.added} new)` : ''}${lookup.defaults ? `, ${lookup.defaults} unpaid` : ''}${spent} · refreshed monthly`
+                : lookup?.status === 'waiting' ? 'Waiting: another property is being looked up first, and this one starts if it works.'
+                : lookup?.status === 'cancelled' ? (lookup.note ?? 'Lookup cancelled.')
+                : lookup?.status === 'failed' ? <span className="text-red-400">Lookup failed: {lookup.note}{spent}</span>
                 : apn.trim() ? 'Reads the bill, values, special assessments and any unpaid years from the county.' : 'No parcel number needed: Sollux finds it on the county site by the address, then reads the bill.'}
             </span>
           </div>

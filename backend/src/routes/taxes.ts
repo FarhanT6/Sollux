@@ -290,16 +290,29 @@ router.delete('/defaults/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /lookup { propertyId } — look the parcel up on the county's tax site (in the background).
+/**
+ * County tax sites turn Sollux's own browser away, so a lookup runs in the
+ * owner's Chrome through the connector. With it offline the lookup would most
+ * likely fail and still spend AI: it is not started unless the owner says to
+ * run it in Sollux's browser anyway.
+ */
+const CONNECTOR_NEEDED = "Your computer's Sollux connector isn't running (or the computer is asleep), so this would run in Sollux's own browser — which county tax sites usually turn away, and the AI would still be spent. Start the connector (Settings → AI usage → Fetch from your computer), keep the computer awake, and try again.";
+async function connectorOnline(userId: string): Promise<boolean> {
+  const { connectorFor } = await import('../services/connector');
+  return !!(await connectorFor(userId).catch(() => null));
+}
+
+// POST /lookup { propertyId, anyway? } — look the parcel up on the county's tax site (in the background).
 router.post('/lookup', async (req, res, next) => {
   try {
-    const { propertyId } = z.object({ propertyId: z.string() }).parse(req.body);
+    const { propertyId, anyway } = z.object({ propertyId: z.string(), anyway: z.boolean().optional() }).parse(req.body);
     const p = await db.property.findFirst({ where: { id: propertyId, userId: req.dbUserId! }, select: { id: true, apn: true, state: true, county: true, taxLookupJson: true } });
     if (!p) return res.status(404).json({ error: 'Property not found' });
     if (!p.state) return res.status(400).json({ error: 'Add the property\'s state (and county) first.' });
     const s = p.taxLookupJson as { status?: string; at?: string } | null;
     // One at a time; a run stuck for over 20 minutes may be started again.
     if ((s?.status === 'queued' || s?.status === 'running') && s.at && Date.now() - new Date(s.at).getTime() < 20 * 60_000) return res.status(409).json({ error: 'A lookup is already running for this property.' });
+    if (!anyway && !(await connectorOnline(req.dbUserId!))) return res.status(409).json({ error: CONNECTOR_NEEDED, needsConnector: true });
     const { checkBudget, withAiContext } = await import('../ai/meter');
     try { await withAiContext({ userId: req.dbUserId! }, () => checkBudget('tax-lookup')); }
     catch (err) { return res.status(402).json({ error: err instanceof Error ? err.message : String(err) }); }
@@ -309,28 +322,31 @@ router.post('/lookup', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /lookup-all — every active property not looked up in the last week
+// POST /lookup-all { anyway? } — every active property not looked up in the last week
 // (and not already in progress): parcel numbers are found by address where
-// none is on file.
+// none is on file. One goes first; the rest start only if it works.
 router.post('/lookup-all', async (req, res, next) => {
   try {
+    const { anyway } = z.object({ anyway: z.boolean().optional() }).parse(req.body ?? {});
+    if (!anyway && !(await connectorOnline(req.dbUserId!))) return res.status(409).json({ error: CONNECTOR_NEEDED, needsConnector: true });
     // Nothing is queued that the AI budget would stop at once.
     const { checkBudget, withAiContext } = await import('../ai/meter');
     try { await withAiContext({ userId: req.dbUserId! }, () => checkBudget('tax-lookup')); }
     catch (err) { return res.status(402).json({ error: err instanceof Error ? err.message : String(err) }); }
     const props = await db.property.findMany({ where: { userId: req.dbUserId!, status: 'ACTIVE' }, select: { id: true, state: true, address: true, taxLookupJson: true } });
-    const { queueTaxLookup } = await import('../services/taxLookupJobs');
-    let queued = 0, skipped = 0;
+    const { queueLookupBatch } = await import('../services/taxLookupJobs');
+    const ids: string[] = [];
+    let skipped = 0;
     for (const p of props) {
       const s = p.taxLookupJson as { status?: string; at?: string } | null;
       const age = s?.at ? Date.now() - new Date(s.at).getTime() : Infinity;
-      const busy = (s?.status === 'queued' || s?.status === 'running') && age < 20 * 60_000;
+      const busy = (s?.status === 'queued' || s?.status === 'running' || s?.status === 'waiting') && age < 20 * 60_000;
       const fresh = s?.status === 'done' && age < 7 * 24 * 3600_000;
       if (!p.state || !p.address || busy || fresh) { skipped++; continue; }
-      await queueTaxLookup(p.id);
-      queued++;
+      ids.push(p.id);
     }
-    res.json({ queued, skipped });
+    const batch = await queueLookupBatch(ids);
+    res.json({ queued: ids.length, skipped, first: batch.first, waiting: batch.waiting });
   } catch (err) { next(err); }
 });
 

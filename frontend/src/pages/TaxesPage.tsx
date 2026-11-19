@@ -4,7 +4,7 @@ import IncomeTaxTab from '../components/taxes/IncomeTaxTab';
 import ScheduleETab from '../components/taxes/ScheduleETab';
 import ContractorsTab from '../components/taxes/ContractorsTab';
 import {
-  getTaxAssessments, readTaxBill, saveTaxAssessment, updateTaxAssessment, deleteTaxAssessment, taxBillUrl, getProperties, getLoans, getTaxDefaults, saveTaxDefault, startTaxLookupAll, getTaxLookupStatus, cancelTaxLookup, type FilePayload, type TaxLookupStatus,
+  getTaxAssessments, readTaxBill, saveTaxAssessment, updateTaxAssessment, deleteTaxAssessment, taxBillUrl, getProperties, getLoans, getTaxDefaults, saveTaxDefault, startTaxLookupAll, getTaxLookupStatus, cancelTaxLookup, lookupNeedsConnector, TAX_LOOKUP_MAX_USD, type FilePayload, type TaxLookupStatus,
 } from '../api/client';
 import type { Property, TaxAssessment, TaxDefault, TaxStatus, SpecialAssessment } from '../types';
 import ParcelPanel from '../components/taxes/ParcelPanel';
@@ -229,7 +229,7 @@ function PropertyTaxTab() {
   // Where each property's county lookup stands, polled while any is under way.
   const [lookups, setLookups] = useState<Record<string, TaxLookupStatus | null>>({});
   const stalled = (st: TaxLookupStatus | null | undefined) => !!st && (st.status === 'queued' || st.status === 'running') && Date.now() - new Date(st.at).getTime() > 20 * 60_000;
-  const busyIds = Object.entries(lookups).filter(([, st]) => st && (st.status === 'queued' || st.status === 'running') && !stalled(st)).map(([id]) => id);
+  const busyIds = Object.entries(lookups).filter(([, st]) => st && (st.status === 'queued' || st.status === 'running' || st.status === 'waiting') && !stalled(st)).map(([id]) => id);
   useEffect(() => { void getTaxLookupStatus().then(setLookups).catch(() => {}); }, []);
   useEffect(() => {
     if (!busyIds.length) return;
@@ -248,19 +248,34 @@ function PropertyTaxTab() {
     if (!st) return null;
     if (stalled(st)) return <span className="block text-xs text-amber-400">Lookup stalled — start it again</span>;
     if (st.status === 'queued') return <span className="block text-xs text-gray-500">Lookup queued — one property at a time</span>;
+    if (st.status === 'waiting') return <span className="block text-xs text-gray-500">Waits for the first lookup ({st.firstId ? propName(st.firstId) : 'another property'}) to work</span>;
     if (st.status === 'running') return <span className="block text-xs text-amber-300">Looking up… {st.progress ?? ''}</span>;
-    if (st.status === 'cancelled') return <span className="block text-xs text-gray-500">Lookup cancelled</span>;
+    if (st.status === 'cancelled') return <span className="block text-xs text-gray-500 whitespace-normal max-w-md">{st.note ?? 'Lookup cancelled'}</span>;
     if (st.status === 'choose') return <span className="block text-xs text-amber-300">Several possible parcels — open Parcel to pick one</span>;
-    if (st.status === 'failed') return <span className="block text-xs text-red-400 whitespace-normal max-w-md">Lookup failed: {st.note}</span>;
-    return <span className="block text-xs text-emerald-500">Looked up {fmtDate(st.at)}</span>;
+    const spent = st.costUsd != null ? ` · ${fmtMoney(st.costUsd)} of AI` : '';
+    if (st.status === 'failed') return <span className="block text-xs text-red-400 whitespace-normal max-w-md">Lookup failed: {st.note}{spent}</span>;
+    return <span className="block text-xs text-emerald-500">Looked up {fmtDate(st.at)}{st.added ? ` · ${st.added} new year${st.added === 1 ? '' : 's'}` : ''}{spent}</span>;
   };
-  async function lookupAll() {
+  async function lookupAll(anyway = false) {
+    if (!anyway && !confirm(`Look up taxes for your properties on the county sites?\n\nOne property goes first (at most about ${fmtMoney(TAX_LOOKUP_MAX_USD)} of AI). The others start only if it works — at most about ${fmtMoney(TAX_LOOKUP_MAX_USD)} each — and skip the years already in Sollux.`)) return;
     setLookupNote('Starting…');
     try {
-      const r = await startTaxLookupAll();
+      const r = await startTaxLookupAll(anyway);
       void getTaxLookupStatus().then(setLookups).catch(() => {});
-      setLookupNote(r.queued ? `Looking up ${r.queued} propert${r.queued === 1 ? 'y' : 'ies'} on the county sites — parcel numbers are found by address. A few minutes each; open Parcel to watch.${r.skipped ? ` ${r.skipped} skipped (looked up this week, running, or no address / state).` : ''}` : `Nothing to look up: every property was looked up this week, is running, or has no address / state.`);
-    } catch (e) { setLookupNote(describeApiError(e, 'Could not start the lookups.')); }
+      setLookupNote(r.queued
+        ? r.waiting
+          ? `Trying ${r.first ? propName(r.first) : 'one property'} first. The other ${r.waiting} start only if it works — if it doesn't, nothing more is spent.${r.skipped ? ` ${r.skipped} skipped (looked up this week, running, or no address / state).` : ''}`
+          : `Looking up ${r.first ? propName(r.first) : 'the property'} on its county site — a few minutes.${r.skipped ? ` ${r.skipped} skipped (looked up this week, running, or no address / state).` : ''}`
+        : `Nothing to look up: every property was looked up this week, is running, or has no address / state.`);
+    } catch (e) {
+      const offline = lookupNeedsConnector(e);
+      if (offline) {
+        setLookupNote(offline);
+        if (confirm(`${offline}\n\nRun in Sollux's browser anyway? (Still one property first.)`)) await lookupAll(true);
+        return;
+      }
+      setLookupNote(describeApiError(e, 'Could not start the lookups.'));
+    }
   }
   const propName = (id: string) => { const p = properties.find(x => x.id === id); return p ? (p.nickname || p.address) : '—'; };
   const removeRecord = async () => { if (form?.id && confirm('Delete this tax record?')) { await deleteTaxAssessment(form.id); setForm(null); await load(); } };

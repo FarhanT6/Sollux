@@ -92,7 +92,9 @@ const TOOLS: Anthropic.Tool[] = [
 ];
 
 export interface LookupRun {
-  ok: boolean; report: LookupReport | null; error?: string; steps: number; costUsd: number; candidates?: ParcelCandidate[]; saved?: { years: number; defaults: number };
+  ok: boolean; report: LookupReport | null; error?: string; steps: number; costUsd: number; candidates?: ParcelCandidate[];
+  /** years: saved (new or updated); added: of those, new to Sollux; defaults: unpaid years saved. */
+  saved?: { years: number; defaults: number; added: number };
   /** Why the run was in Sollux's own browser rather than the owner's Chrome, when it was. */
   cloudBecause?: string | null;
 }
@@ -289,19 +291,52 @@ function startParcelUrl(p: Prop, street: boolean): string {
   return `https://duckduckgo.com/html/?q=${encodeURIComponent(q)}`;
 }
 
+/**
+ * What Sollux already has for the parcel, for the agent: years paid in full are
+ * not opened or read again (each page costs a step); years on file but not paid
+ * are only checked for payment; earlier years not on file are read.
+ */
+export async function onFileForLookup(propertyId: string): Promise<{ complete: string[]; open: string[]; redeemed: string[]; openDefaults: string[] }> {
+  const [years, defaults] = await Promise.all([
+    db.taxAssessment.findMany({ where: { propertyId }, select: { taxYear: true, status: true, installment1Paid: true, installment2Paid: true, installment2Amount: true, annualTaxAmount: true } }),
+    db.taxDefault.findMany({ where: { propertyId }, select: { taxYear: true, status: true } }),
+  ]);
+  const paidInFull = (y: (typeof years)[number]) => y.status === 'PAID' || (!!y.installment1Paid && (!!y.installment2Paid || y.installment2Amount == null || Number(y.installment2Amount) === 0));
+  const byYear = (a: string, b: string) => b.localeCompare(a);
+  return {
+    complete: years.filter(y => paidInFull(y) && Number(y.annualTaxAmount) > 0).map(y => y.taxYear).sort(byYear),
+    open: years.filter(y => !(paidInFull(y) && Number(y.annualTaxAmount) > 0)).map(y => y.taxYear).sort(byYear),
+    redeemed: defaults.filter(d => d.status === 'REDEEMED').map(d => d.taxYear).sort(byYear),
+    openDefaults: defaults.filter(d => d.status !== 'REDEEMED').map(d => d.taxYear).sort(byYear),
+  };
+}
+
+/** The lines of the agent's instructions that say what is on file already. */
+export function onFileLines(f: { complete: string[]; open: string[]; redeemed: string[]; openDefaults: string[] }): string {
+  const lines: string[] = [];
+  if (f.complete.length) lines.push(`Already in Sollux and paid in full — do NOT open, read or report these years again: ${f.complete.join(', ')}.`);
+  if (f.open.length) lines.push(`In Sollux but not paid in full — check only whether each has been paid since (installment paid dates, balance): ${f.open.join(', ')}.`);
+  if (f.redeemed.length) lines.push(`Unpaid years already redeemed in Sollux — skip: ${f.redeemed.join(', ')}.`);
+  if (f.openDefaults.length) lines.push(`Unpaid (defaulted) years on file — update their amount to redeem and status: ${f.openDefaults.join(', ')}.`);
+  return lines.length ? lines.join('\n') : 'Nothing is on file for this parcel yet: read every year the site shows.';
+}
+
 /** Step two: the taxes of a known parcel. */
 async function readTaxes(p: Prop, say: (t: string) => void, cancelled: () => Promise<boolean>): Promise<LookupRun> {
   const run: LookupRun = { ok: false, report: null, steps: 0, costUsd: 0 };
+  const onFile = onFileLines(await onFileForLookup(p.id));
   const system = `You operate a web browser to look up a property's taxes on its county's official tax website, for the property's owner.
 Property: ${p.address}, ${p.city}, ${p.state} ${p.zip}${p.county ? ` — ${p.county} County` : ''}. Parcel number (APN / parcel ID / folio / account): ${p.apn}. Search the tax collector's site BY THIS PARCEL NUMBER.
 Goal: find the parcel on the county treasurer-tax collector's (or tax collector's) own site — or the vendor site it links to for its tax search (Grant Street / county-taxes.com, MPTS, publicaccessnow, Tyler and the like) — and read:
 1. the current tax year's bill: each installment's amount, due date, the date it becomes delinquent, whether and when it was paid, penalties and balance owed, the bill number;
 2. the values on the roll: land, improvements, market (just) value, exemptions and which, net taxable value, the base year if shown, the tax rate;
 3. every direct charge and special assessment on the bill (Mello-Roos / CFD, CDD, lighting, vector control …) with its amount and phone number if shown;
-4. earlier years the site lists — paid or not;
+4. every earlier year the site lists, back to the earliest it shows — open its prior years / tax history / previous bills view and read each one, paid or not — except the years already in Sollux as paid in full (below);
 5. anything left unpaid: on California sites the "defaulted" / "prior year" / "redemption" tab (default number like DEF230000268, default date, amount to redeem and the date it is good through, any five-year installment plan of redemption, the power-to-sell date if shown); on Florida sites the tax certificates (number, holder, interest rate, issue date, redemption amount, any tax deed application).
 Work in this order and report early rather than late: the current bill first, then defaulted / prior years, then values. Rules: read only. Never pay, never start a payment or checkout, never enroll, never sign in, never enter anything but the parcel number. Prefer official county pages and the vendors they link to; ignore paid aggregators and ads. If a captcha blocks you, try the county's other official search once, then report found false and say why.
-When done, call report once with the parcel number and everything the pages showed — never estimate a figure the page did not show.`;
+When done, call report once with the parcel number and everything the pages showed — never estimate a figure the page did not show.
+What Sollux already has for this parcel:
+${onFile}`;
   const out = await browse(p.userId, startUrlFor(p.state, p.county, p.apn ?? '', p.city), system, TOOLS.find(t => t.name === 'report')!, READ, say, cancelled);
   run.steps = out.steps; run.costUsd = out.costUsd; run.cloudBecause = out.cloudBecause;
   if (!out.input) { run.error = out.error ?? 'The tax search did not finish.'; return run; }
@@ -449,14 +484,14 @@ function present<T extends Record<string, unknown>>(o: T): Partial<T> {
   return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== null && v !== undefined)) as Partial<T>;
 }
 
-export async function saveReport(propertyId: string, r: LookupReport): Promise<{ years: number; defaults: number }> {
+export async function saveReport(propertyId: string, r: LookupReport): Promise<{ years: number; defaults: number; added: number }> {
   const now = new Date();
   const prop = await db.property.findUnique({ where: { id: propertyId }, select: { apn: true, county: true, state: true } });
   // The parcel number (and county) the county site showed fill what is missing.
   const fill = { ...(r.apn && !prop?.apn ? { apn: r.apn } : {}), ...(r.county && !prop?.county ? { county: r.county.replace(/\s+county$/i, '') } : {}) };
   if (Object.keys(fill).length) await db.property.update({ where: { id: propertyId }, data: fill });
   const existing = await db.taxAssessment.findMany({ where: { propertyId }, select: { id: true, taxYear: true } });
-  let years = 0;
+  let years = 0, added = 0;
   for (const y of r.years ?? []) {
     // The year's total: as shown, or both installments' sum; one installment alone is not the year.
     const total = y.annualTaxAmount ?? (y.installment1Amount != null && y.installment2Amount != null ? Number((y.installment1Amount + y.installment2Amount).toFixed(2)) : null);
@@ -480,7 +515,7 @@ export async function saveReport(propertyId: string, r: LookupReport): Promise<{
       const note = total == null ? 'Annual total taken as twice the installment shown (California installments are equal halves).' : undefined;
       const created = await db.taxAssessment.create({ data: { propertyId, taxYear: y.taxYear, ...(data as any), annualTaxAmount: (total ?? estimate)!, ...(note ? { notes: note } : {}) } });
       existing.push({ id: created.id, taxYear: created.taxYear });
-      years++;
+      years++; added++;
     }
   }
   const knownDefaults = await db.taxDefault.findMany({ where: { propertyId }, select: { id: true, taxYear: true } });
@@ -498,5 +533,5 @@ export async function saveReport(propertyId: string, r: LookupReport): Promise<{
     else { const c = await db.taxDefault.create({ data: { propertyId, taxYear: d.taxYear, ...(data as any) } }); knownDefaults.push({ id: c.id, taxYear: c.taxYear }); }
     defaults++;
   }
-  return { years, defaults };
+  return { years, defaults, added };
 }
