@@ -293,7 +293,9 @@ export interface RentPayment {
   status: RentPaymentStatus;
   expectedDate?: string | null;
   bankAccountId?: string | null;
-  bankAccount?: Pick<BankAccount, 'id' | 'name' | 'bank' | 'last4'> | null;
+  bankAccount?: Pick<BankAccount, 'id' | 'name' | 'bank' | 'last4' | 'accountType' | 'ownerLabel' | 'cardNetwork'> | null;
+  /** A check or money order deposited later (Cash, checks & apps): the day it went in. */
+  depositedAt?: string | null;
   notes?: string;
   /** Where the owner sent this payment first; null = the tenant's setting. */
   applyTo?: PaymentApplyTo | null;

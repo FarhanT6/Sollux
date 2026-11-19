@@ -100,7 +100,7 @@ router.get('/', async (req, res, next) => {
       include: {
         unit: { include: { property: { select: { id: true, address: true, nickname: true } } } },
         leaseTenants: { include: { tenant: true } },
-        rentPayments: { orderBy: { paidDate: 'desc' }, take: 6 },
+        rentPayments: { orderBy: { paidDate: 'desc' }, take: 6, include: { bankAccount: { select: { id: true, name: true, bank: true, last4: true, accountType: true, ownerLabel: true, cardNetwork: true } } } },
         deposits: { orderBy: { paidDate: 'desc' }, include: { bankAccount: { select: { id: true, name: true, bank: true, last4: true, accountType: true, ownerLabel: true, cardNetwork: true } } } },
         rentChanges: { orderBy: { effectiveDate: 'desc' } },
         scheduledIncreases: { where: { applied: false }, orderBy: { effectiveDate: 'asc' } },
@@ -121,7 +121,7 @@ router.get('/:id', async (req, res, next) => {
       include: {
         unit: { include: { property: true } },
         leaseTenants: { include: { tenant: true } },
-        rentPayments: { orderBy: { paidDate: 'desc' } },
+        rentPayments: { orderBy: { paidDate: 'desc' }, include: { bankAccount: { select: { id: true, name: true, bank: true, last4: true, accountType: true, ownerLabel: true, cardNetwork: true } } } },
         deposits: { orderBy: { paidDate: 'desc' }, include: { bankAccount: { select: { id: true, name: true, bank: true, last4: true, accountType: true, ownerLabel: true, cardNetwork: true } } } },
         rentNotices: { orderBy: { noticeDate: 'desc' } },
         rentChanges: { orderBy: { effectiveDate: 'desc' } },
