@@ -173,6 +173,12 @@ router.patch('/:id', async (req, res, next) => {
     // A check's pending deposit follows the payment: its account, amount or method changed, it is made again.
     if (data.bankAccountId !== undefined || data.method !== undefined || data.amount !== undefined) {
       await db.pendingOutflow.deleteMany({ where: { userId: req.dbUserId!, cleared: false, sourceRef: `rent:${existing.id}` } });
+      // Deposited from Cash, checks & apps with other checks (a slip): moved to another account, or back on hand, it leaves that slip.
+      if (data.bankAccountId !== undefined && data.bankAccountId !== existing.bankAccountId) {
+        await dropFromPendingDeposit(req.dbUserId!, `r:${existing.id}`, Number(existing.amount)).catch(() => {});
+        // Back on hand: not deposited any more. Moved to another account: same deposit day.
+        if (!data.bankAccountId && existing.depositedAt) await db.rentPayment.update({ where: { id: existing.id }, data: { depositedAt: null } });
+      }
       if (payment.status === 'RECEIVED') await pendingForRentCheck(req.dbUserId!, { id: payment.id, method: payment.method, bankAccountId: payment.bankAccountId, paidDate: payment.paidDate, depositedAt: payment.depositedAt, amount: Number(payment.amount) }).catch(() => null);
     }
     // The expense recorded with a credit follows its amount and date.
