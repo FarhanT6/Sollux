@@ -10,7 +10,13 @@ import { lookupPropertyTax, type LookupRun } from './propertyTaxLookup';
 import { withAiContext, checkBudget } from '../ai/meter';
 import { connectorFor } from './connector';
 
-type Status = { status: 'queued' | 'running' | 'done' | 'failed' | 'choose' | 'cancelled'; at: string; note?: string | null; progress?: string | null; years?: number; defaults?: number;
+type Status = { status: 'queued' | 'running' | 'done' | 'failed' | 'choose' | 'cancelled' | 'waiting'; at: string; note?: string | null; progress?: string | null; years?: number; defaults?: number;
+  /** Years the lookup added that were not on file before (the rest were updated). */
+  added?: number;
+  /** What the lookup spent on AI. */
+  costUsd?: number;
+  /** waiting: the property whose lookup has to work first. */
+  firstId?: string;
   /** Parcels that could be this property, for the owner to pick from. */
   candidates?: { apn: string; situsAddress: string | null; owner: string | null; note: string | null }[] };
 
@@ -35,12 +41,43 @@ export function runQueuedTaxLookup(propertyId: string): Promise<void> {
 const statusOf = async (propertyId: string) =>
   ((await db.property.findUnique({ where: { id: propertyId }, select: { taxLookupJson: true } }))?.taxLookupJson ?? null) as Status | null;
 
-/** Stop a property's lookup: a queued one is skipped, a running one stops at its next step. */
+/** Stop a property's lookup: a queued or waiting one is skipped, a running one stops at its next step. */
 export async function cancelTaxLookup(propertyId: string): Promise<boolean> {
   const s = await statusOf(propertyId);
-  if (s?.status !== 'queued' && s?.status !== 'running') return false;
+  if (s?.status !== 'queued' && s?.status !== 'running' && s?.status !== 'waiting') return false;
   await setStatus(propertyId, { status: 'cancelled', at: new Date().toISOString() });
   return true;
+}
+
+/**
+ * Look up several properties, one first: the rest wait ('waiting') and start
+ * only when that one works, so a lookup that fails for a reason all of them
+ * share (the computer asleep, a site change) costs one lookup, not all of them.
+ * The first is the one most likely to work: a parcel number on file (no
+ * search for it), in a county whose tax site Sollux knows.
+ */
+export async function queueLookupBatch(propertyIds: string[]): Promise<{ first: string | null; waiting: number }> {
+  if (!propertyIds.length) return { first: null, waiting: 0 };
+  const props = await db.property.findMany({ where: { id: { in: propertyIds } }, select: { id: true, apn: true, state: true, county: true } });
+  const { startUrlFor } = await import('../lib/taxLookupReport');
+  const score = (p: (typeof props)[number]) => (p.apn ? 2 : 0) + (p.state && !startUrlFor(p.state, p.county, '').includes('duckduckgo') ? 1 : 0);
+  const first = [...props].sort((a, b) => score(b) - score(a))[0];
+  const at = new Date().toISOString();
+  for (const p of props) if (p.id !== first.id) await setStatus(p.id, { status: 'waiting', at, firstId: first.id });
+  await queueTaxLookup(first.id);
+  return { first: first.id, waiting: props.length - 1 };
+}
+
+/** The first of a batch finished: the others start if it worked, and are told why not if it did not. */
+export async function releaseWaiting(firstId: string, worked: boolean, why: string | null): Promise<void> {
+  const first = await db.property.findUnique({ where: { id: firstId }, select: { userId: true, nickname: true, address: true } });
+  if (!first) return;
+  const rows = await db.property.findMany({ where: { userId: first.userId }, select: { id: true, taxLookupJson: true } });
+  const waiting = rows.filter(r => { const s = r.taxLookupJson as Status | null; return s?.status === 'waiting' && s.firstId === firstId; });
+  for (const r of waiting) {
+    if (worked) await queueTaxLookup(r.id);
+    else await setStatus(r.id, { status: 'cancelled', at: new Date().toISOString(), note: `Not started: the first lookup (${first.nickname || first.address}) did not work${why ? ` — ${why.slice(0, 200)}` : ''}. Nothing was spent on this one.` });
+  }
 }
 
 async function runOne(propertyId: string): Promise<void> {
@@ -57,12 +94,19 @@ async function runOne(propertyId: string): Promise<void> {
   }, async () => (await statusOf(propertyId))?.status === 'cancelled').catch((err): LookupRun => ({ ok: false, report: null, error: err instanceof Error ? err.message : String(err), steps: 0, costUsd: 0 }));
   // What was saved, not what the page listed: a year with no amount is not kept.
   const years = r.saved?.years ?? 0, defaults = r.saved?.defaults ?? 0;
-  if ((await statusOf(propertyId))?.status === 'cancelled') { console.log(`[TaxLookup] ${propertyId}: cancelled · ${r.steps} steps · $${r.costUsd.toFixed(3)}`); return; }
+  const costUsd = Math.round(r.costUsd * 100) / 100;
+  if ((await statusOf(propertyId))?.status === 'cancelled') {
+    console.log(`[TaxLookup] ${propertyId}: cancelled · ${r.steps} steps · $${r.costUsd.toFixed(3)}`);
+    await releaseWaiting(propertyId, false, 'it was cancelled');
+    return;
+  }
   await setStatus(propertyId, r.ok
-    ? { status: 'done', at: new Date().toISOString(), note: r.report?.notes ?? null, years, defaults }
+    ? { status: 'done', at: new Date().toISOString(), note: r.report?.notes ?? null, years, defaults, added: r.saved?.added ?? 0, costUsd }
     : r.candidates?.length
-      ? { status: 'choose', at: new Date().toISOString(), note: r.error ?? null, candidates: r.candidates }
-      : { status: 'failed', at: new Date().toISOString(), note: r.error ?? 'The lookup did not finish.' });
+      ? { status: 'choose', at: new Date().toISOString(), note: r.error ?? null, candidates: r.candidates, costUsd }
+      : { status: 'failed', at: new Date().toISOString(), note: r.error ?? 'The lookup did not finish.', costUsd });
+  // Several possible parcels is the search working; the owner picks one, and the others go ahead.
+  await releaseWaiting(propertyId, r.ok || !!r.candidates?.length, r.error ?? null);
   console.log(`[TaxLookup] ${propertyId}: ${r.ok ? `${years} year(s), ${defaults} unpaid` : r.error} · ${r.steps} steps · $${r.costUsd.toFixed(3)}`);
 }
 
