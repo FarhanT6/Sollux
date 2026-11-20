@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   getLoanTrackerMonth, getLoanTrackerYear, createLoanPayment, updateLoanPayment, deleteLoanPayment, getBankAccounts,
@@ -318,6 +318,35 @@ function LogLoanPaymentModal({ row, month, payment, onClose, onSaved }: { row: L
   const [amount, setAmount] = useState(payment ? String(payment.amount) : String(row.remaining || row.expected || ''));
   const [date, setDate] = useState(payment?.date ?? todayISO());
   const [period, setPeriod] = useState(payment?.month ?? month);
+  // The month picked: its payment on this loan, so the amount (and the "due" line) follow the month.
+  // A payment being changed keeps the amount it was: moving it to another month does not change what was paid.
+  const [monthRow, setMonthRow] = useState<LoanTrackerRow>(row);
+  const [monthNote, setMonthNote] = useState<string | null>(null);
+  const asked = useRef('');
+  const timer = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const pickMonth = (m: string) => {
+    setPeriod(m);
+    setMonthNote(null);
+    if (payment || !/^\d{4}-\d{2}$/.test(m) || +m.slice(0, 4) < 2000) return;
+    asked.current = m;
+    clearTimeout(timer.current);
+    if (m === month) { setMonthRow(row); setAmount(String(row.remaining || row.expected || '')); return; }
+    // A moment's wait: typing a year into the box changes it on every digit.
+    timer.current = setTimeout(() => {
+      getLoanTrackerMonth(m, todayISO())
+        .then(t => {
+          if (asked.current !== m) return;
+          const r = t.rows.find(x => x.loanId === row.loanId);
+          if (!r) { setMonthNote('No payment is scheduled on this loan for that month.'); return; }
+          setMonthRow(r);
+          setAmount(String(r.remaining || r.expected || ''));
+          if (r.paid > 0.005 && r.remaining < 0.005) setMonthNote(`${fmtMoney(r.paid)} is already logged for that month — it is paid.`);
+          else if (r.paid > 0.005) setMonthNote(`${fmtMoney(r.paid)} of ${fmtMoney(r.expected)} is already logged for that month; the rest is filled in.`);
+        })
+        .catch(() => { if (asked.current === m) setMonthNote('Could not look up that month — enter the amount.'); });
+    }, 250);
+  };
   const [method, setMethod] = useState<LoanPaymentMethod | ''>(payment ? (payment.method ?? '') as LoanPaymentMethod | '' : row.paymentMethods.includes('AUTOPAY') ? 'AUTOPAY' : firstMethod);
   const [lateFee, setLateFee] = useState(payment?.lateFee ? String(payment.lateFee) : '');
   const [confirmation, setConfirmation] = useState(payment?.confirmationNumber ?? '');
@@ -353,7 +382,7 @@ function LogLoanPaymentModal({ row, month, payment, onClose, onSaved }: { row: L
         });
       } else {
         await createLoanPayment(row.loanId, {
-          date, amount: amt, billAmount: row.expected || undefined, status: 'PAID', periodMonth: period, method: method || null,
+          date, amount: amt, billAmount: monthRow.expected || undefined, status: 'PAID', periodMonth: period, method: method || null,
           lateFee: lateFee ? parseFloat(lateFee) : undefined, confirmationNumber: confirmation || undefined, notes: notes || undefined,
           pendingFrom: hold && fromAcct ? fromAcct : null,
         });
@@ -370,7 +399,7 @@ function LogLoanPaymentModal({ row, month, payment, onClose, onSaved }: { row: L
       <div className="card p-5 w-full max-w-md space-y-3 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div>
           <p className="text-sm font-semibold text-white">{payment ? 'Edit payment' : 'Log payment'} — {row.lender}</p>
-          <p className="text-xs text-gray-500">{row.property} · {fmtMoney(row.expected)} due {fmtDate(row.dueDate)}</p>
+          <p className="text-xs text-gray-500">{row.property} · {fmtMoney(monthRow.expected)} due {fmtDate(monthRow.dueDate)}</p>
         </div>
         {(row.paymentInstructions || row.mailingAddress) && (
           <p className="text-xs text-gray-400 rounded-lg p-2" style={{ background: 'rgba(255,255,255,0.04)' }}>
@@ -380,7 +409,10 @@ function LogLoanPaymentModal({ row, month, payment, onClose, onSaved }: { row: L
         <div className="grid grid-cols-2 gap-3">
           <div><span className={label}>Amount paid</span><input type="number" step="0.01" className={input} value={amount} onChange={e => setAmount(e.target.value)} /></div>
           <div><span className={label}>Date paid</span><input type="date" className={input} value={date} onChange={e => setDate(e.target.value)} /></div>
-          <div><span className={label}>Month it covers</span><input type="month" className={input} value={period} onChange={e => setPeriod(e.target.value)} /></div>
+          <div>
+            <span className={label}>Month it covers</span><input type="month" className={input} value={period} onChange={e => pickMonth(e.target.value)} />
+            {monthNote && <p className="text-[11px] text-amber-300/90 mt-1">{monthNote}</p>}
+          </div>
           <div>
             <span className={label}>How</span>
             <select className={input} value={method} onChange={e => setMethod(e.target.value as LoanPaymentMethod | '')}>

@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
-import { createRentPayment, addLeaseDeposit, getBankAccounts, getReimbursableItems, payUtilityInvoice, createReimbursementPayment, type OpenInvoice } from '../../api/client';
-import type { BankAccount, RentPaymentMethod } from '../../types';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createRentPayment, addLeaseDeposit, getLease, getBankAccounts, getReimbursableItems, payUtilityInvoice, createReimbursementPayment, type OpenInvoice } from '../../api/client';
+import type { BankAccount, Lease, RentPaymentMethod } from '../../types';
 import { RENT_PAYMENT_METHODS, RENT_PAYMENT_METHOD_LABELS, BANK_LINKED_METHODS, CREDIT_REASONS, type CreditReason } from '../../types';
 import { todayISO, thisMonthISO } from '../../lib/date';
 import { fmtMoney } from '../../lib/money';
 import { bankAccountLabel } from '../../lib/bankAccountLabel';
 import { describeApiError } from '../../lib/apiError';
+import { monthRentDue } from '../../lib/rentDue';
 
 /**
  * Logging a rent payment, the same form wherever it is opened (rent roll,
@@ -31,6 +32,28 @@ const monthLabel = (ym: string) => {
   const [y, m] = ym.split('-').map(Number);
   return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 };
+/** The rent in effect in a month: the last change on or before it, else the rent before the first change, else today's (backend lib/rentCatchUp.ts rentInMonth). */
+function rentInMonth(lease: Lease, month: string): number {
+  const changes = [...(lease.rentChanges ?? [])].sort((a, b) => a.effectiveDate.localeCompare(b.effectiveDate));
+  const before = changes.filter(c => c.effectiveDate.slice(0, 7) <= month);
+  if (before.length) return Number(before[before.length - 1].newAmount);
+  if (changes.length && changes[0].previousAmount != null) return Number(changes[0].previousAmount);
+  return Number(lease.rentAmount);
+}
+
+/** Each month's rent, and what is still owed on it: less what is logged toward it (back rent paid with it left out). */
+function owedByMonth(lease: Lease, months: string[]): Map<string, { rent: number; owed: number }> {
+  const logged = new Map<string, number>();
+  for (const p of lease.rentPayments ?? []) {
+    const m = p.periodDate.slice(0, 7);
+    logged.set(m, (logged.get(m) ?? 0) + Number(p.amount) - Number(p.appliedToArrears || 0));
+  }
+  return new Map(months.map(m => {
+    const rent = monthRentDue({ ...lease, rentAmount: rentInMonth(lease, m) }, m);
+    return [m, { rent, owed: Math.max(0, Math.round((rent - (logged.get(m) ?? 0)) * 100) / 100) }];
+  }));
+}
+
 function monthOptions(center: string) {
   const [y, m] = center.split('-').map(Number);
   const out: string[] = [];
@@ -88,6 +111,35 @@ export default function LogRentPaymentModal({ target, period, method: initialMet
 
   useEffect(() => { getBankAccounts().then(a => setAccounts(a.filter(x => x.accountType !== 'CREDIT_CARD'))).catch(() => {}); }, []);
   const months = useMemo(() => monthOptions(thisMonth), [thisMonth]);
+  // What each month still owes, so the amount follows the month picked (September picked: September's rent, less what is logged for it).
+  const [owed, setOwed] = useState<Map<string, { rent: number; owed: number }> | null>(null);
+  const typed = useRef(false);
+  useEffect(() => {
+    getLease(target.leaseId).then(l => setOwed(owedByMonth(l, months))).catch(() => setOwed(new Map()));
+  }, [target.leaseId, months]);
+  const monthFacts = (m: string): { rent: number; owed: number } | null =>
+    m === thisMonth && target.remainingThisMonth != null ? { rent: target.rent, owed: target.remainingThisMonth } : owed?.get(m) ?? null;
+  const owedFor = (m: string) => monthFacts(m)?.owed ?? null;
+  // A month paid in full still offers its full rent (a second payment logged on purpose), as this month always has.
+  const rentFor = (m: string) => { const f = monthFacts(m); return f && f.owed > 0.005 ? f.owed : f && f.rent > 0.005 ? f.rent : target.rent; };
+  // Opened on another month (a month picked where it was opened): its amount, once known, unless one was typed.
+  useEffect(() => {
+    if (owed && !typed.current && forMonth !== thisMonth && kind === 'rent') setAmount(String(rentFor(forMonth)));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [owed]);
+  const pickMonth = (m: string) => {
+    setForMonth(m);
+    if (kind === 'rent' && !allToArrears) setAmount(String(rentFor(m)));
+    else if (kind === 'deposit') setAmount(String(rentFor(m) + (parseFloat(deposit) || 0)));
+  };
+  const owedNote = (() => {
+    if (kind !== 'rent' && kind !== 'deposit') return null;
+    const f = monthFacts(forMonth);
+    if (!f) return null;
+    if (f.rent <= 0.005) return `The lease had not started in ${monthLabel(forMonth)}.`;
+    if (f.owed <= 0.005) return `${monthLabel(forMonth)} is already paid in full.`;
+    return f.owed < f.rent - 0.005 ? `${fmtMoney(f.rent - f.owed)} already logged for ${monthLabel(forMonth)}; ${fmtMoney(f.owed)} still owed.` : null;
+  })();
   const amt = parseFloat(amount);
   const extra = (kind === 'rent' || kind === 'credit') && !allToArrears && !recordOnly && amt > target.rent ? amt - target.rent : 0;
 
@@ -178,9 +230,9 @@ export default function LogRentPaymentModal({ target, period, method: initialMet
           {(['rent', 'deposit', 'utilities', 'credit'] as const).map(k => (
             <button key={k} type="button" onClick={() => {
               setKind(k); setAllToArrears(false);
-              if (k === 'rent') setAmount(String(owedNow > 0 ? owedNow : target.rent));
+              if (k === 'rent') setAmount(String(rentFor(forMonth)));
               else if (k === 'credit') setAmount('');
-              else if (k === 'deposit') { const r = owedNow > 0 ? owedNow : target.rent; setDeposit(String(target.rent)); setAmount(String(r + target.rent)); }
+              else if (k === 'deposit') { setDeposit(String(target.rent)); setAmount(String(rentFor(forMonth) + target.rent)); }
               else if (invoices?.[0]) { setInvoiceId(invoices[0].id); setAmount(invoices[0].outstanding.toFixed(2)); }
             }}
               className={`text-xs px-3 py-1 rounded-md ${kind === k ? 'bg-white/10 text-white' : 'text-gray-500 hover:text-gray-300'}`}>
@@ -191,7 +243,7 @@ export default function LogRentPaymentModal({ target, period, method: initialMet
 
         <div>
           <span className={label}>{kind === 'credit' ? 'Amount credited toward rent' : 'Amount received'}</span>
-          <input type="number" step="0.01" inputMode="decimal" className={input} value={amount} onChange={e => setAmount(e.target.value)} autoFocus />
+          <input type="number" step="0.01" inputMode="decimal" className={input} value={amount} onChange={e => { typed.current = true; setAmount(e.target.value); }} autoFocus />
           {kind === 'rent' && <div className="flex flex-wrap gap-1.5 mt-1.5">
             {quick('Full rent', target.rent)}
             {target.remainingThisMonth != null && target.remainingThisMonth > 0 && target.remainingThisMonth < target.rent ? quick('Rest of this month', target.remainingThisMonth) : null}
@@ -256,9 +308,10 @@ export default function LogRentPaymentModal({ target, period, method: initialMet
         <div className="grid grid-cols-2 gap-3">
           <div>
             <span className={label}>Rent for (which month it pays)</span>
-            <select className={input} value={forMonth} onChange={e => setForMonth(e.target.value)} disabled={allToArrears}>
+            <select className={input} value={forMonth} onChange={e => pickMonth(e.target.value)} disabled={allToArrears}>
               {months.map(m => <option key={m} value={m}>{monthLabel(m)}{m === thisMonth ? ' (this month)' : ''}</option>)}
             </select>
+            {owedNote && <p className="text-[11px] text-amber-300/90 mt-1">{owedNote}</p>}
           </div>
           <div>
             <span className={label}>{kind === 'credit' ? 'Date of the credit' : 'Date received'}</span>
