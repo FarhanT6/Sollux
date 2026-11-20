@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { syncAllWatchedAccounts } from '../services/transactionMatchService';
+import { syncAllWatchedAccounts, syncTransactionsForItem } from '../services/transactionMatchService';
 import type { Request, Response } from 'express';
 import {
   Products,
@@ -14,9 +14,26 @@ import { attachDbUser } from '../middleware/requireAuth';
 
 const router = Router();
 
+// New transactions at a bank: synced at once rather than at the nightly sync, so a Venmo cash-out,
+// an ATM withdrawal or rent received shows within minutes. At most once every two minutes per
+// bank, and only for banks on file: the webhook carries no secret, and all it can do is sync.
+const lastSync = new Map<string, number>();
+const SYNC_CODES = new Set(['SYNC_UPDATES_AVAILABLE', 'DEFAULT_UPDATE', 'INITIAL_UPDATE', 'HISTORICAL_UPDATE']);
+function syncSoon(plaidItemId: string) {
+  if (Date.now() - (lastSync.get(plaidItemId) ?? 0) < 2 * 60_000) return;
+  lastSync.set(plaidItemId, Date.now());
+  void (async () => {
+    const item = await db.plaidItem.findFirst({ where: { plaidItemId, isActive: true }, select: { id: true } });
+    if (!item) return;
+    const r = await syncTransactionsForItem(item.id);
+    console.log(`[Plaid] webhook sync: ${r.added} new matched transaction(s)`);
+  })().catch(err => console.warn('[Plaid] webhook sync failed:', err instanceof Error ? err.message : err));
+}
+
 // Webhook endpoint has no auth — must come before attachDbUser
 router.post('/webhook', async (req: Request, res: Response) => {
   const { webhook_type, webhook_code, item_id, error } = req.body;
+  if (webhook_type === 'TRANSACTIONS' && SYNC_CODES.has(webhook_code) && typeof item_id === 'string') syncSoon(item_id);
   if (webhook_type === 'ITEM' && (webhook_code === 'ERROR' || webhook_code === 'PENDING_EXPIRATION')) {
     await db.plaidItem.updateMany({
       where: { plaidItemId: item_id },

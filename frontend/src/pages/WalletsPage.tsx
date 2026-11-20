@@ -19,8 +19,13 @@ import { moneyPicture, BANKING_PAGE } from '../lib/moneyPicture';
  * spent, money moved between apps, a correction.
  */
 
+/** Where an entry came from, when Sollux recorded it on its own. */
+const SOURCE_NOTE: Record<string, string> = {
+  email: "from the app's email", bank: "from the bank's feed", 'email+bank': "from the app's email and the bank's feed",
+  'bank+email': "from the bank's feed and the app's email", 'manual+bank': "matched to the bank's feed", 'manual+email': "matched to the app's email",
+};
 const TYPE_LABEL: Record<string, string> = {
-  RENT: 'Rent received', CHECK_DEPOSIT: 'Deposited', TO_BANK: 'To a bank account', SPENT: 'Spent', TO_WALLET: 'Moved to another app / cash',
+  RENT: 'Rent received', CHECK_DEPOSIT: 'Deposited', TO_BANK: 'To a bank account', FROM_BANK: 'From a bank account', SPENT: 'Spent', TO_WALLET: 'Moved to another app / cash',
   FROM_WALLET: 'Moved in from another app / cash', ADJUSTMENT: 'Correction', OTHER_IN: 'Other money in',
 };
 
@@ -53,7 +58,7 @@ export default function WalletsPage() {
             : <span className="text-white font-medium">{fmtMoney(picture.total)}</span> in all.
           </p>
         )}
-        <p className="text-xs text-gray-500 mt-0.5">Rent you log as cash, a check or money order, Venmo, Cash App, PayPal or Apple Cash adds to that balance. A check stays under Checks until you mark it deposited (or pick the bank account when you log it). When an app emails you that money was transferred to your bank, it's taken out to that account on its own. Record the rest yourself: cash deposited or spent, money moved between apps, a correction.</p>
+        <p className="text-xs text-gray-500 mt-0.5">Rent you log as cash, a check or money order, Venmo, Cash App, PayPal or Apple Cash adds to that balance. A check stays under Checks until you mark it deposited (or pick the bank account when you log it). Sollux watches your connected banks and the apps' emails and records on its own: an app's transfer to your bank, money added to an app from your bank, ATM and cash withdrawals (into Cash) and cash deposits (out of Cash) — the same move seen in both is recorded once. Record the rest yourself: cash spent, money moved between apps, a correction.</p>
       </div>
       {err && <p className="text-sm text-red-400">{err}</p>}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
@@ -214,7 +219,7 @@ function WalletDetail({ w, all, banks, properties, cats, onChange }: { w: Wallet
     try {
       const categorized = form.type === 'OTHER_IN' || form.type === 'SPENT';
       onChange(await addWalletMovement(w.id, {
-        date: form.date, amount, type: form.type, bankAccountId: form.type === 'TO_BANK' ? form.bankAccountId || null : null, toWalletId: form.type === 'TO_WALLET' ? form.toWalletId : null, description: form.description || null,
+        date: form.date, amount, type: form.type, bankAccountId: form.type === 'TO_BANK' || form.type === 'FROM_BANK' ? form.bankAccountId || null : null, toWalletId: form.type === 'TO_WALLET' ? form.toWalletId : null, description: form.description || null,
         category: categorized ? form.category || null : null, propertyId: form.type === 'SPENT' ? form.propertyId || null : null,
       }));
       setForm(f => ({ ...f, amount: '', description: '' }));
@@ -237,6 +242,7 @@ function WalletDetail({ w, all, banks, properties, cats, onChange }: { w: Wallet
           <select className={input} value={form.type} onChange={e => { setErr(''); setForm({ ...form, type: e.target.value as WalletMovementType | 'RENT' }); }}>
             <option value="RENT">{w.kind === 'CHECK' ? 'Rent check or money order received' : 'Rent received from a tenant'}</option>
             <option value="TO_BANK">{w.kind === 'CASH' || w.kind === 'CHECK' ? 'Deposited into a bank account' : 'Transferred to a bank account'}</option>
+            {w.kind !== 'CHECK' && <option value="FROM_BANK">{w.kind === 'CASH' ? 'Withdrawn from a bank account (ATM, teller)' : 'Added from a bank account'}</option>}
             <option value="SPENT">Spent (paid for something)</option>
             <option value="TO_WALLET">Moved to another app / cash</option>
             <option value="OTHER_IN">{w.kind === 'CHECK' ? 'A check received (not logged as rent)' : 'Other money in'}</option>
@@ -248,7 +254,7 @@ function WalletDetail({ w, all, banks, properties, cats, onChange }: { w: Wallet
             <option value="">{leases ? (leases.length ? 'Choose…' : 'No active leases') : 'Loading…'}</option>
             {leases?.map(l => <option key={l.id} value={l.id}>{leaseLabel(l)}</option>)}
           </select></div>}
-        {form.type === 'TO_BANK' && <div className="md:col-span-2"><span className={label}>Bank account</span>
+        {(form.type === 'TO_BANK' || form.type === 'FROM_BANK') && <div className="md:col-span-2"><span className={label}>Bank account</span>
           <select className={input} value={form.bankAccountId} onChange={e => setForm({ ...form, bankAccountId: e.target.value })}>
             <option value="">— Not recorded —</option>{banks.map(b => <option key={b.id} value={b.id}>{bankAccountLabel(b)}</option>)}
           </select></div>}
@@ -288,8 +294,8 @@ function WalletDetail({ w, all, banks, properties, cats, onChange }: { w: Wallet
           {w.entries.map(e => (
             <tr key={e.id}>
               <td className="pl-0 text-gray-400 whitespace-nowrap">{fmtDate(e.date, 'MMM d, yyyy')}</td>
-              <td className="text-gray-300">{e.kind === 'RENT' && e.method === 'MONEY_ORDER' ? 'Money order received' : e.kind === 'RENT' && w.kind === 'CHECK' ? 'Check received' : e.kind === 'OTHER_IN' && w.kind === 'CHECK' ? 'Check received (by hand)' : TYPE_LABEL[e.kind] ?? e.kind}{e.source === 'email' && <span className="block text-xs text-gray-600">from the app's email</span>}</td>
-              <td className="text-gray-400 text-xs"><CategoryTag e={e} cats={cats} properties={properties} onChange={onChange} />{(e.kind === 'TO_BANK' || e.kind === 'CHECK_DEPOSIT') && e.bankAccountName ? `${e.kind === 'CHECK_DEPOSIT' ? `${e.description} → ` : ''}${e.bankAccountName}` : `${e.checkNumber ? `#${e.checkNumber} · ` : ''}${e.description}`}
+              <td className="text-gray-300">{e.kind === 'RENT' && e.method === 'MONEY_ORDER' ? 'Money order received' : e.kind === 'RENT' && w.kind === 'CHECK' ? 'Check received' : e.kind === 'OTHER_IN' && w.kind === 'CHECK' ? 'Check received (by hand)' : e.kind === 'FROM_BANK' && w.kind === 'CASH' ? 'Withdrawn from a bank' : e.kind === 'FROM_BANK' ? 'Added from a bank' : TYPE_LABEL[e.kind] ?? e.kind}{e.source && SOURCE_NOTE[e.source] && <span className="block text-xs text-gray-600">{SOURCE_NOTE[e.source]}</span>}</td>
+              <td className="text-gray-400 text-xs"><CategoryTag e={e} cats={cats} properties={properties} onChange={onChange} />{(e.kind === 'TO_BANK' || e.kind === 'FROM_BANK' || e.kind === 'CHECK_DEPOSIT') && e.bankAccountName ? `${e.kind === 'CHECK_DEPOSIT' ? `${e.description} → ` : ''}${e.bankAccountName}` : `${e.checkNumber ? `#${e.checkNumber} · ` : ''}${e.description}`}
                 {(e.kind === 'RENT' || e.kind === 'OTHER_IN') && w.kind === 'CHECK' && <span className={`block ${e.deposited ? 'text-gray-600' : 'text-amber-400'}`}>{e.deposited ? `Deposited ${fmtDate(e.deposited.date, 'MMM d')}${e.deposited.bankAccountName ? ` into ${e.deposited.bankAccountName}` : ''}` : 'On hand — not deposited yet'}</span>}</td>
               <td className={`text-right tabular-nums ${e.amount < 0 ? 'text-red-300' : 'text-emerald-400'}`}>{e.amount < 0 ? '−' : '+'}{fmtMoney(Math.abs(e.amount))}</td>
               <td className="text-right">{e.movementId && <button onClick={async () => { if (confirm('Remove this entry?')) onChange(await deleteWalletMovement(e.movementId!)); }} className="text-xs text-gray-600 hover:text-red-400">✕</button>}
