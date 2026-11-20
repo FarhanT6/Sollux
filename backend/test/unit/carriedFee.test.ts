@@ -71,3 +71,36 @@ test('a "previous balance / payment received / total current charges" box is rea
   applyPreviousBalanceBoxFromText('PREVIOUS BALANCE  $480.00\nPAYMENT RECEIVED  $0.00\nTOTAL CURRENT CHARGES  $500.00\nTOTAL AMOUNT DUE  $ 999.00', odd);
   assert.equal(odd.amountDue, 100);
 });
+
+test('an IID bill is read from its own lines (made-up account and figures)', async () => {
+  const { applyIidFromText } = await import('../../src/services/pdfImportService');
+  const text = [
+    'www.iid.com',
+    'EXAMPLE  CUSTOMER  Invoice  Date:  06/30/2026',
+    'Contract  Account:  12345678  Business  Partner:  1111111  Page:  1  of  1',
+    'Meter  Number  Service  Dates  Days  Usage',
+    'IID-0000-000000  05/29/2026  06/26/2026  29  35.10',
+    'Previous  Balance  $60.00',
+    'Payments  Received  by  06/29/2026  ,  Thank  You.  60.00CR',
+    'Balance  0.00',
+    'Total  Current  Charges  Due  by  07/20/2026  30.00',
+    'Account  Balance  $30.00',
+  ].join('\n');
+  const ex = { providerName: 'IID-0000-000000 05/29/2026', accountNumber: 'Service  Dates  Days  Usage', amountDue: 60, dueDate: '2026-05-29' } as unknown as ExtractedBillData;
+  applyIidFromText(text, ex);
+  assert.equal(ex.providerName, 'IID');
+  assert.equal(ex.accountNumber, '12345678');
+  assert.equal(ex.statementDate, '2026-06-30');
+  assert.equal(ex.billingPeriodStart, '2026-05-29');
+  assert.equal(ex.billingPeriodEnd, '2026-06-26');
+  assert.equal(ex.dueDate, '2026-07-20');
+  assert.equal(ex.amountDue, 30);
+  assert.equal(ex.previousBalance, null);
+  assert.equal(ex.paymentsReceived, 60);
+  assert.equal(ex.statedTotalDue, 30);
+  // Unpaid: the last bill carried in.
+  const carried = { amountDue: 1 } as unknown as ExtractedBillData;
+  applyIidFromText(text.replace('60.00CR', '0.00').replace('Account  Balance  $30.00', 'Account  Balance  $90.00'), carried);
+  assert.equal(carried.previousBalance, 60);
+  assert.equal(carried.statedTotalDue, 90);
+});

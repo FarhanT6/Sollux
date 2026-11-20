@@ -2230,6 +2230,46 @@ export function applyPreviousBalanceBoxFromText(text: string, ex: ExtractedBillD
   }
 }
 
+/**
+ * IID (Imperial Irrigation District) electric bills: "Invoice Date", "Contract Account", the meter
+ * line's service dates, "Previous Balance / Payments Received by …, Thank You. 60.00CR / Total
+ * Current Charges Due by 07/20/2026 30.00 / Account Balance $30.00" and the stub's PB / CUR / DUE.
+ * The text reader took "Service Dates Days Usage" for the account number, the service start for
+ * the due date and the previous balance for the charge, so a folder of IID bills read free matched
+ * no account. Read from those lines, only when previous balance − payments + current charges is the
+ * account balance the bill prints.
+ */
+export function applyIidFromText(text: string, ex: ExtractedBillData): void {
+  if (!/iid\.com|Imperial\s+Irrigation/i.test(text)) return;
+  const acct = /Contract\s+Account:?\s+(\d{6,12})/i.exec(text);
+  const due = /Total\s+Current\s+Charges\s+Due\s+by\s+(\d{2})\/(\d{2})\/(\d{4})\s+\$?([\d,]+\.\d{2})/i.exec(text);
+  if (!acct || !due) return;
+  const num = (s: string) => Number(s.replace(/,/g, ''));
+  const signed = (m: RegExpExecArray | null, i = 1) => (m ? (m[i + 1] ? -num(m[i]) : num(m[i])) : null);
+  const prev = signed(/Previous\s+Balance\s+\$?(-?[\d,]+\.\d{2})(CR)?/i.exec(text));
+  const paidM = /Payments\s+Received\s+by\s+[\d/]+\s*,?\s*Thank\s+You\.?\s+([\d,]+\.\d{2})(CR)?/i.exec(text);
+  const paid = paidM ? num(paidM[1]) : 0;
+  const balance = signed(/Account\s+Balance\s+\$?(-?[\d,]+\.\d{2})(CR)?/i.exec(text));
+  const current = num(due[4]);
+  if (prev == null || balance == null) return;
+  const carried = Number((prev - paid).toFixed(2));
+  if (Math.abs(carried + current - balance) > 0.01) return;
+  const iso = (m: string, d: string, y: string) => `${y}-${m}-${d}`;
+  ex.accountNumber = acct[1];
+  const inv = /Invoice\s+Date:?\s+(\d{2})\/(\d{2})\/(\d{4})/i.exec(text);
+  if (inv) ex.statementDate = iso(inv[1], inv[2], inv[3]);
+  const svc = /(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2})\/(\d{2})\/(\d{4})\s+\d{1,3}\s+-?[\d,]+(?:\.\d+)?/.exec(text.slice(Math.max(0, text.search(/Service\s+Dates/i))));
+  if (svc) { ex.billingPeriodStart = iso(svc[1], svc[2], svc[3]); ex.billingPeriodEnd = iso(svc[4], svc[5], svc[6]); }
+  ex.dueDate = iso(due[1], due[2], due[3]);
+  ex.currentCharges = current;
+  ex.amountDue = current;
+  ex.previousBalance = Math.abs(carried) < 0.005 ? null : carried;
+  ex.paymentsReceived = paid;
+  ex.statedTotalDue = balance;
+  // The text reader's "provider" was the meter line ("IID-1B4B-… 05/29/2026 …").
+  if (!/^\s*(IID|Imperial\s+Irrigation\s+District)\s*$/i.test(ex.providerName ?? '')) ex.providerName = 'IID';
+}
+
 export function applyBalanceForwardFromText(text: string, ex: ExtractedBillData): void {
   // Every printed occurrence of each label, and the amounts around it: the text layer puts an
   // amount before its label as often as after it ("$741.13BALANCE FORWARD", "TOTAL CURRENT
@@ -3725,6 +3765,55 @@ export async function applyPastDueNotice(utilityAccountId: string, ex: Extracted
  * notes makes re-imports update the same record rather than log the payment
  * twice.
  */
+/**
+ * What of a bill's printed "payments received" is not in Sollux yet: the printed figure less every
+ * payment logged from the bill before (`cycleStart`) up to this bill — by hand, by a bank or card
+ * match, or a statement's own ledger lines — but not other bills' lump confirmations, which stand
+ * for their own cycles.
+ */
+export async function unloggedOfConfirmation(utilityAccountId: string, statementId: string, confirmedOn: Date, amount: number, cycleStart: Date | null): Promise<number> {
+  // At most 35 days back: with a bill missing in between (one never fetched) the bill before is two
+  // cycles back, and the earlier cycle's payment is not this bill's.
+  const floor = confirmedOn.getTime() - 35 * 24 * 60 * 60 * 1000;
+  const from = new Date(Math.max(cycleStart?.getTime() ?? floor, floor));
+  const inWindow = await db.payment.findMany({
+    where: { utilityAccountId, status: { in: ['PAID', 'PARTIAL'] }, paymentDate: { gte: from, lte: confirmedOn } },
+    select: { amount: true, notes: true },
+  });
+  const logged = inWindow
+    .filter(p => !/\[from-statement:[^\]#]+\]/.test(p.notes ?? ''))
+    .reduce((t, p) => t + Number(p.amount), 0);
+  return Number(Math.max(0, amount - logged).toFixed(2));
+}
+
+/**
+ * Once, over every account: confirmations recorded before the window was counted (services/
+ * pdfImportService.ts recordConfirmedPayment) that repeat money already logged are taken off, or cut
+ * to what was not logged.
+ */
+export async function dedupeConfirmedPayments(): Promise<{ removed: number; reduced: number }> {
+  const lumps = await db.payment.findMany({
+    where: { notes: { contains: '[from-statement:' } },
+    select: { id: true, utilityAccountId: true, amount: true, notes: true },
+  });
+  let removed = 0, reduced = 0;
+  for (const p of lumps) {
+    const m = /\[from-statement:([^\]#]+)\]/.exec(p.notes ?? '');
+    if (!m) continue;
+    const bill = await db.statement.findUnique({ where: { id: m[1] }, select: { statementDate: true, rawDataJson: true } });
+    if (!bill) continue;
+    const printed = Math.abs(Number(((bill.rawDataJson ?? {}) as Record<string, unknown>).paymentsReceived ?? p.amount));
+    const before = await db.statement.findFirst({
+      where: { utilityAccountId: p.utilityAccountId, statementDate: { lt: bill.statementDate }, isDownPayment: false },
+      orderBy: { statementDate: 'desc' }, select: { statementDate: true },
+    });
+    const left = await unloggedOfConfirmation(p.utilityAccountId, m[1], bill.statementDate, printed || Number(p.amount), before?.statementDate ?? null);
+    if (left <= 0.01) { await db.payment.delete({ where: { id: p.id } }); removed++; }
+    else if (left < Number(p.amount) - 0.01) { await db.payment.update({ where: { id: p.id }, data: { amount: left } }); reduced++; }
+  }
+  return { removed, reduced };
+}
+
 export async function recordConfirmedPayment(
   utilityAccountId: string,
   statementId: string,
@@ -3766,31 +3855,25 @@ export async function recordConfirmedPayment(
     where: { utilityAccountId, notes: { contains: marker } },
   });
 
-  // The owner may already have logged this payment by hand on the day they
-  // made it. Recording it again from the bill would count the same money
-  // twice in Total Paid — so a hand-logged payment of the same amount, made
-  // between the prior bill and this one, is taken as the record and the
-  // bill's confirmation is not duplicated.
-  if (!existing) {
-    const priorDate = prior?.statementDate ?? null;
-    const handLogged = await db.payment.findFirst({
-      where: {
-        utilityAccountId,
-        amount: { gte: amount - 0.01, lte: amount + 0.01 },
-        paymentDate: { ...(priorDate ? { gte: priorDate } : {}), lte: confirmedOn },
-        // A hand-logged payment often has no notes: NOT on its own would leave those out.
-        OR: [{ notes: null }, { NOT: { notes: { contains: '[from-statement:' } } }],
-      },
-    });
-    if (handLogged) return;
+  // The owner may already have logged the money by hand — often split across
+  // bills (one $70 card payment logged as $30 + $40). The bill's
+  // "payments received" is everything received since the bill before, so what
+  // is logged in that window counts toward it, however it was split; only what
+  // is still missing is recorded. A single-payment match let a split payment
+  // through: the confirmation recorded it again, the extra read as a credit and
+  // paid the next bill, which showed Paid with nothing paid toward it.
+  const remainder = await unloggedOfConfirmation(utilityAccountId, statementId, confirmedOn, amount, priors[0]?.statementDate ?? null);
+  if (remainder <= 0.01) {
+    if (existing) await db.payment.delete({ where: { id: existing.id } });
+    return;
   }
 
   const data = {
-    amount,
+    amount: remainder,
     paymentDate,
     status: 'PAID' as const,
     statementId: prior?.id ?? null,
-    notes: `Confirmed by the ${ex.statementDate ?? 'imported'} statement ("Payments Received"). ${marker}`,
+    notes: `Confirmed by the ${ex.statementDate ?? 'imported'} statement ("Payments Received")${remainder < amount - 0.01 ? ` — $${remainder.toFixed(2)} of $${amount.toFixed(2)}; the rest is logged already` : ''}. ${marker}`,
   };
 
   if (existing) {
@@ -4261,6 +4344,7 @@ export async function parseBill(
         applyAdjustmentChargesFromText(extracted, rowsText);
         // Label and amount side by side: only the page-ordered text keeps them on one line.
         applyPreviousBalanceBoxFromText(rowsText, extracted);
+        applyIidFromText(rowsText, extracted);
       } catch { /* the table stays as Claude read it */ }
     }
     if (!isCard) {

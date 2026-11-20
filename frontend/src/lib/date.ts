@@ -9,14 +9,17 @@ import { format } from 'date-fns';
 // YYYY-MM-DD portion and rebuild a local Date from those parts, so the
 // calendar date the user entered is what shows — no shift.
 /**
- * The month a bill is filed under: the later of the month it was issued and
- * the month it covers. A bill sent after its service month (CR&R's Sep 1
- * bill for August) files under the issue month; one sent ahead of it
- * (Blueshield's Aug 17 bill for Sep 1–30) files under the month it covers.
- * Either way a bill sits in the latest month it touches.
+ * The month a bill is filed under: the month it is due — the Bills page's
+ * column and the month its cost counts in. IID sends some bills a few days
+ * early: the one out Apr 30 is May's (due May 20), and by the month it was
+ * issued it sat beside the Apr 1 bill as a second "Apr 2026" while May had
+ * none. Without a due date: the later of the month it was issued and the
+ * month it covers (CR&R's Sep 1 bill for August files under September;
+ * Blueshield's Aug 17 bill for Sep 1–30 under September).
  */
-export function billMonthLabel(s: { statementDate?: string | null; billingPeriodEnd?: string | null } | null | undefined): string {
+export function billMonthLabel(s: { statementDate?: string | null; billingPeriodEnd?: string | null; dueDate?: string | null } | null | undefined): string {
   if (!s) return '—';
+  if (s.dueDate) return fmtDate(s.dueDate, 'MMM yyyy');
   const key = (d?: string | null) => (d ? d.slice(0, 7) : '');
   const issued = key(s.statementDate);
   const covers = key(s.billingPeriodEnd);
