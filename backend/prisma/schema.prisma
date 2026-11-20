@@ -233,7 +233,7 @@ model UtilityAccount {
   lastAgentRunAt   DateTime?
   category         UtilityCategory
   // Which unit this meter serves. A multi-unit property can carry several
-  // meters for one utility — "IID ****8110" and "IID ****5855" are
+  // meters for one utility — "IID ****1111" and "IID ****2222" are
   // indistinguishable without this. Null means it does not serve a single
   // unit; serviceLabel then says what it does serve.
   unitId           String?

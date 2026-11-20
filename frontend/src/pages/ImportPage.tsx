@@ -1196,7 +1196,7 @@ function AddAccountForm({
             style={inputStyle}
             value={acctForm.accountNumber}
             onChange={e => onChangeAcct({ ...acctForm, accountNumber: e.target.value })}
-            placeholder="e.g. 50849413"
+            placeholder="e.g. 12345678"
           />
         </div>
       </div>
