@@ -45,9 +45,26 @@ function readableError(message: string): string {
 }
 
 /** Every downloaded statement accounted for: filed, waiting for review, applied to a notice or policy, or unreadable. */
-function downloadSummary(r: { downloads: number; filed: number; review: number; applied: number }): string {
+type Filed = { accountId: string; statementDate?: string; amount?: number | null; was?: 'new' | 'updated' | 'on-file' };
+const shortDay = (ymd: string) => new Date(`${ymd}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+
+/** The statements a run filed to one account, said so the owner knows which: "the Nov 13, 2026 statement ($35.54, new)". */
+export function filedWords(list: Filed[] | undefined, accountId: string): string {
+  return (list ?? []).filter(f => f.accountId === accountId).map(f => {
+    const what = [f.amount != null ? `$${Number(f.amount).toFixed(2)}` : null, f.was === 'on-file' ? 'already on file' : f.was === 'updated' ? 'updated' : f.was === 'new' ? 'new' : null].filter(Boolean).join(', ');
+    return `the ${f.statementDate ? shortDay(f.statementDate) : 'undated'} statement${what ? ` (${what})` : ''}`;
+  }).join('; ');
+}
+
+/** Statements a run brought that were new to Sollux (or changed one) for an account: one already on file in full is not "found". */
+function newFor(r: { filedFor?: Record<string, number>; filedList?: Filed[] }, accountId: string): number {
+  return r.filedList ? r.filedList.filter(f => f.accountId === accountId && f.was !== 'on-file').length : r.filedFor?.[accountId] ?? 0;
+}
+
+function downloadSummary(r: { downloads: number; filed: number; review: number; applied: number; filedList?: Filed[] }, accountId?: string): string {
   const unread = Math.max(0, r.downloads - r.filed - r.review - r.applied);
-  const parts = [r.filed && `${r.filed} filed`, r.review && `${r.review} to review in Import`, r.applied && `${r.applied} applied`, unread && `${unread} could not be read`].filter(Boolean);
+  const which = accountId ? filedWords(r.filedList, accountId) : '';
+  const parts = [r.filed && (which ? `filed ${which}` : `${r.filed} filed`), r.review && `${r.review} to review in Import`, r.applied && `${r.applied} applied`, unread && `${unread} could not be read`].filter(Boolean);
   return `Downloaded ${r.downloads} statement${r.downloads === 1 ? '' : 's'}: ${parts.join(', ')}`;
 }
 
@@ -110,13 +127,16 @@ const REJECTED = /rejected the username or password|login failed|invalid (email|
  * its own bills, then the others' (Blue Shield Dental read "Downloaded 5
  * statements" — two were its own, three were Primary's).
  */
-function groupSummary(r: { downloads: number; filed: number; review: number; filedFor?: Record<string, number> }, mine: string, also: { id: string; label: string }[]): string {
-  const own = r.filedFor?.[mine] ?? 0;
-  const theirs = also.map(o => ({ label: o.label, n: r.filedFor?.[o.id] ?? 0 })).filter(o => o.n > 0);
-  const parts = [`${own} statement${own === 1 ? '' : 's'} filed here`, ...theirs.map(o => `${o.n} for ${o.label}`)];
+function groupSummary(r: { downloads: number; filed: number; review: number; filedFor?: Record<string, number>; filedList?: Filed[]; accountResults?: Record<string, string> }, mine: string, myLast4: string, also: { id: string; label: string }[]): string {
+  // Which statement went where, and for this account what the run said when it brought none
+  // ("Downloaded 1 in one sign-in: 0 statements filed here, 1 for ··1234" told nothing of either).
+  const ownWords = filedWords(r.filedList, mine) || (r.filedFor?.[mine] ? `${r.filedFor[mine]} statement(s)` : '');
+  const said = myLast4 ? r.accountResults?.[myLast4] : undefined;
+  const own = ownWords ? `here: ${ownWords}`
+    : `nothing for this account${said === 'nothing_new' ? ' (nothing new on the website)' : said === 'not_listed' ? ' (not listed under this login)' : said ? '' : ' (the run did not report opening it — press Fetch now)'}`;
+  const theirs = also.map(o => { const w = filedWords(r.filedList, o.id) || (r.filedFor?.[o.id] ? `${r.filedFor[o.id]} statement(s)` : ''); return w ? `${o.label}: ${w}` : null; }).filter(Boolean);
   const unfiled = r.downloads - r.filed;
-  if (unfiled > 0) parts.push(`${unfiled} to review in Import`);
-  return `Downloaded ${r.downloads} in one sign-in: ${parts.join(', ')}`;
+  return `Downloaded ${r.downloads} in one sign-in — ${[own, ...theirs, unfiled > 0 ? `${unfiled} to review in Import` : null].filter(Boolean).join(' · ')}`;
 }
 
 /**
@@ -197,7 +217,9 @@ export async function agentJob(job: Job<ScrapeJobData>, account: { id: string; p
       where: { id: utilityAccountId },
       data: r.ok ? { lastSyncedAt: new Date(), lastSyncStatus: 'SUCCESS', lastSyncError: null } : { lastSyncStatus: 'FAILED', lastSyncError: failure },
     });
-    await db.syncJob.update({ where: { id: syncJob.id }, data: { status: r.ok ? 'SUCCESS' : 'FAILED', completedAt: new Date(), statementsFound: r.filed + r.review, costUsd: r.costUsd ?? 0, error: r.ok ? null : failure, progress: r.ok ? (r.downloads ? (also.length ? groupSummary(r, utilityAccountId, also) : downloadSummary(r)) : (r.summary || 'Nothing new on the portal')).slice(0, 300) : null } });
+    const myLast4 = String(me?.accountNumber ?? '').replace(/\D/g, '').slice(-4);
+    // Found: new to Sollux for this account (a statement already on file in full is not; a run that found nothing is a miss for the schedule).
+    await db.syncJob.update({ where: { id: syncJob.id }, data: { status: r.ok ? 'SUCCESS' : 'FAILED', completedAt: new Date(), statementsFound: (r.filedList ? newFor(r, utilityAccountId) : r.filed) + r.review, costUsd: r.costUsd ?? 0, error: r.ok ? null : failure, progress: r.ok ? (r.downloads ? (also.length ? groupSummary(r, utilityAccountId, myLast4, also) : downloadSummary(r, utilityAccountId)) : (r.summary || 'Nothing new on the portal')).slice(0, 300) : null } });
     // The accounts that rode along: what this sign-in found for each.
     // Only what the agent says it did for each account counts: SDG&E ··70 3
     // was marked "nothing new" though its Oct 2 bill was on the portal — the
@@ -207,13 +229,13 @@ export async function agentJob(job: Job<ScrapeJobData>, account: { id: string; p
       const said = o.last4 ? r.accountResults?.[o.last4] : undefined;
       const ok = r.ok && (filed > 0 || said === 'nothing_new' || said === 'downloaded');
       const note = !r.ok ? `Fetched with ${myLabel} (same login): ${failure}`
-        : filed ? `Downloaded ${filed} statement${filed === 1 ? '' : 's'} (signed in once with ${myLabel})`
+        : filed ? `Filed ${filedWords(r.filedList, o.id) || `${filed} statement${filed === 1 ? '' : 's'}`} (signed in once with ${myLabel})`
         : said === 'downloaded' ? `Downloaded in the same sign-in as ${myLabel} — not filed to this account yet; see Import`
         : said === 'nothing_new' ? `Nothing new (checked in the same sign-in as ${myLabel})`
         : said === 'not_listed' ? `The portal does not list this account under the login it shares with ${myLabel} — check the login on this account`
         : `Not reached in the same sign-in as ${myLabel} — press Fetch now on it`;
       await db.utilityAccount.update({ where: { id: o.id }, data: ok ? { lastSyncedAt: new Date(), lastAgentRunAt: new Date(), lastSyncStatus: 'SUCCESS', lastSyncError: null } : { lastSyncStatus: 'FAILED', lastSyncError: note.slice(0, 1000), ...(r.ok ? {} : { lastAgentRunAt: new Date() }) } }).catch(() => {});
-      await db.syncJob.updateMany({ where: { id: { in: alsoJobs }, utilityAccountId: o.id }, data: { status: ok ? 'SUCCESS' : 'FAILED', completedAt: new Date(), statementsFound: filed, error: ok ? null : note.slice(0, 1000), progress: ok ? note : null } }).catch(() => {});
+      await db.syncJob.updateMany({ where: { id: { in: alsoJobs }, utilityAccountId: o.id }, data: { status: ok ? 'SUCCESS' : 'FAILED', completedAt: new Date(), statementsFound: newFor(r, o.id), error: ok ? null : note.slice(0, 1000), progress: ok ? note.slice(0, 300) : null } }).catch(() => {});
     }
     const filedProps = new Set([...(r.filed ? [account.property.id] : [])]);
     const filedAlso = also.filter(o => (r.filedFor?.[o.id] ?? 0) > 0).map(o => o.id);

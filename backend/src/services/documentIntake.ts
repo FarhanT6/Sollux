@@ -32,7 +32,8 @@ export function sanitizeFilename(name: string): string {
 
 export type ReviewItem = { filename: string; s3Key: string; extracted: Awaited<ReturnType<typeof parseBill>>['extracted']; match: Awaited<ReturnType<typeof parseBill>>['match'] };
 export type IntakeResult =
-  | { outcome: 'filed'; utilityAccountId: string }
+  /** filed: the statement it was (date, amount owed), and whether it was new, an update, or one already on file in full. */
+  | { outcome: 'filed'; utilityAccountId: string; statementDate?: string; amount?: number | null; was?: 'new' | 'updated' | 'on-file' }
   | { outcome: 'notice' }
   | { outcome: 'policy' }
   | { outcome: 'review'; reviewItem: ReviewItem }
@@ -205,6 +206,10 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
 
     const parsedDate = ex.statementDate ? new Date(ex.statementDate) : new Date();
     const statementDate = isNaN(parsedDate.getTime()) ? new Date() : parsedDate;
+    const filed = (was: 'new' | 'updated' | 'on-file') => ({
+      outcome: 'filed' as const, utilityAccountId: acct.id, was,
+      statementDate: statementDate.toISOString().slice(0, 10), amount: ex.statedTotalDue ?? ex.amountDue ?? null,
+    });
 
     // A bill is its billing period, not its issue month — a drifting
     // cycle puts two bills in one month, and the month lookup this
@@ -227,7 +232,7 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
     if (existing && !opts.statementId && thinnerThan(ex, existing)) {
       // It confirms a bill already on file in full; nothing to replace.
       await recordConfirmedPayment(acct.id, existing.id, ex);
-      return { outcome: 'filed', utilityAccountId: acct.id };
+      return filed('on-file');
     }
 
     // The owner entered this period by hand: a different amount waits for
@@ -253,7 +258,7 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
       await syncInsurancePolicyFromBill(acct.id, ex);
       await learnProviderWebsite(acct.id, ex);
       await syncLoanComponentsFromBill(acct.id, ex);
-      return { outcome: 'filed', utilityAccountId: acct.id };
+      return filed('on-file');
     }
     // amountDue = this period's charges (with an installment billed inside
     // them); balance = full amount owed. Same rule as routes/import.ts.
@@ -337,7 +342,7 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
     await syncTrueUpFromBill(acct.id, ex);
   }
 
-    return { outcome: 'filed', utilityAccountId: acct.id };
+    return filed(existing ? 'updated' : 'new');
   } else {
     // Ambiguous — stage the PDF and hand it to the normal Import Bills review flow.
     const pendingKey = `pending-review/${userId}/${batchId}/${sanitizeFilename(filename)}`;

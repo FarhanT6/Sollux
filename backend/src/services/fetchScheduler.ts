@@ -11,6 +11,10 @@
  * used to be the first one found; when that one's next bill was not due the
  * run was skipped, and the login's other accounts — billed on other days —
  * waited for it. Now the job goes for the account on the login that is due.
+ *
+ * A login with nothing due now but an account due before the next pass (midnight after its
+ * statement day, lib/fetchPlan.ts) gets a job held until that minute, so the fetch runs then and
+ * not at whichever 6-hour pass comes after it.
  */
 import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';
@@ -62,21 +66,35 @@ export async function scheduleAllScrapes(now = new Date()): Promise<{ queued: nu
     groups.set(k, [...(groups.get(k) ?? []), a]);
   }
   const slot = Math.floor(now.getTime() / (SCHEDULE_EVERY_HOURS * HOUR));
-  let queued = 0, notDue = 0;
+  let queued = 0, notDue = 0, timed = 0;
+  const horizon = now.getTime() + SCHEDULE_EVERY_HOURS * HOUR + 15 * 60_000;
   for (const members of groups.values()) {
     let lead: (typeof accounts)[number] | null = null;
+    let soonest: { m: (typeof accounts)[number]; at: Date } | null = null;
     for (const m of members) {
       const w = await scheduledWait(m, false, now).catch(() => null);
       if (w && !w.skip) { lead = m; break; }
+      if (w && (!soonest || w.nextAt < soonest.at)) soonest = { m, at: w.nextAt };
     }
-    if (!lead) { notDue += members.length; continue; }
+    if (!lead) {
+      notDue += members.length;
+      // Due before the next pass: held until that minute (one job per account and minute, however many passes see it).
+      if (soonest && soonest.at.getTime() > now.getTime() && soonest.at.getTime() <= horizon) {
+        await scrapeQueue.add('scrape', { utilityAccountId: soonest.m.id }, {
+          jobId: `sched-${soonest.m.id}-at-${soonest.at.getTime()}`, delay: soonest.at.getTime() - now.getTime(),
+          attempts: 1, removeOnComplete: { count: 200 }, removeOnFail: { count: 100 },
+        }).catch(() => {});
+        timed++;
+      }
+      continue;
+    }
     // One job per login per schedule slot: a second worker running during a deploy does not queue it again.
     await scrapeQueue.add('scrape', { utilityAccountId: lead.id }, {
       jobId: `sched-${lead.id}-${slot}`, attempts: 1, removeOnComplete: { count: 200 }, removeOnFail: { count: 100 },
     });
     queued++;
   }
-  console.log(`[Scheduler] ${queued} fetch(es) queued for ${accounts.length} fetchable account(s); ${notDue} not due yet`);
+  console.log(`[Scheduler] ${queued} fetch(es) queued for ${accounts.length} fetchable account(s); ${notDue} not due yet, ${timed} login(s) set for the minute they are due`);
   return { queued, accounts: accounts.length, notDue };
 }
 

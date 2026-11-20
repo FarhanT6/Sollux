@@ -1,35 +1,43 @@
 import { db } from '../config/db';
 import { learnedCycleDays } from '../lib/billCadence';
-import { fetchWait } from '../lib/fetchPlan';
+import { fetchWait, midnightAfter, nextStatementAfter } from '../lib/fetchPlan';
 
 const DAY = 86400000;
 
 /**
- * When an account's next statement should be out: its newest statement
- * date plus the gap its bills usually come apart by (learnedCycleDays).
- * The schedule fetches from that day on; null with no statement yet.
+ * When an account's next statement should be out: for a monthly bill, the day
+ * of the month its statements usually come out on; else its newest statement
+ * date plus the gap its bills come apart by (learnedCycleDays). The schedule
+ * looks for it at midnight after that day (fetchAt); null with no statement yet.
  */
-export async function nextBillExpected(utilityAccountId: string, cadence: string | null, termMonths?: number | null): Promise<{ on: Date | null; cycleDays: number; learned: boolean; last: { statementDate: Date; createdAt: Date } | null }> {
+export async function nextBillExpected(utilityAccountId: string, cadence: string | null, termMonths?: number | null): Promise<{ on: Date | null; fetchAt: Date | null; cycleDays: number; learned: boolean; last: { statementDate: Date; createdAt: Date } | null }> {
   const rows = await db.statement.findMany({
     where: { utilityAccountId, isScheduled: false, isDownPayment: false },
     orderBy: { statementDate: 'desc' }, take: 8,
     select: { statementDate: true, createdAt: true },
   });
-  const { days, learned } = learnedCycleDays(rows.map(r => r.statementDate), cadence, termMonths);
+  const dates = rows.map(r => r.statementDate);
+  const { days, learned } = learnedCycleDays(dates, cadence, termMonths);
   const last = rows[0] ?? null;
-  return { on: last ? new Date(last.statementDate.getTime() + days * DAY) : null, cycleDays: days, learned, last };
+  const on = last ? nextStatementAfter(last.statementDate, dates, days) : null;
+  return { on, fetchAt: on ? midnightAfter(on) : null, cycleDays: days, learned, last };
 }
 
-/** Runs since the newest statement came in (or the last 60 days, with none) that brought nothing. */
-export async function missesSince(utilityAccountId: string, lastCreatedAt: Date | null): Promise<number> {
+/**
+ * Runs that brought nothing since `after` — the newest statement came in, and the next was due
+ * (runs before it was due, such as another account's on the same login, could not have found it);
+ * the last 60 days with no statement.
+ */
+export async function missesSince(utilityAccountId: string, after: Date | null): Promise<number> {
   return db.syncJob.count({
-    where: { utilityAccountId, completedAt: { not: null, gt: lastCreatedAt ?? new Date(Date.now() - 60 * DAY) }, statementsFound: 0 },
+    where: { utilityAccountId, completedAt: { not: null, gt: after ?? new Date(Date.now() - 60 * DAY) }, statementsFound: 0 },
   });
 }
 
 /** Why a scheduled fetch of this account should not run now (null: it should), and when it next may. */
 export async function scheduledWait(a: { id: string; billingCadence: string | null; termMonths?: number | null; lastAgentRunAt: Date | null }, billPosted = false, now = new Date()) {
-  const { on, last } = await nextBillExpected(a.id, a.billingCadence, a.termMonths);
-  const misses = await missesSince(a.id, last?.createdAt ?? null);
-  return fetchWait({ now, nextOn: on, lastStatementDate: last?.statementDate ?? null, lastRun: a.lastAgentRunAt, misses, billPosted });
+  const { on, fetchAt, last } = await nextBillExpected(a.id, a.billingCadence, a.termMonths);
+  const since = [last?.createdAt, fetchAt && !billPosted ? fetchAt : null].filter((d): d is Date => !!d).sort((x, y) => y.getTime() - x.getTime())[0] ?? null;
+  const misses = await missesSince(a.id, since);
+  return fetchWait({ now, nextOn: on, fetchAt, lastStatementDate: last?.statementDate ?? null, lastRun: a.lastAgentRunAt, misses, billPosted });
 }

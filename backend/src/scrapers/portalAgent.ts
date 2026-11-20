@@ -71,6 +71,8 @@ export interface PortalRun {
   aiSteps?: number; costUsd?: number; replayed?: number;
   /** Statements filed, by the account each one was filed to (several accounts on one login). */
   filedFor?: Record<string, number>;
+  /** Each statement filed: to which account, its date and amount, and whether it was new to Sollux. */
+  filedList?: { accountId: string; statementDate?: string; amount?: number | null; was?: 'new' | 'updated' | 'on-file' }[];
   /** What the agent reported for each account, by the last 4 of its number (several accounts on one login). */
   accountResults?: Record<string, string>;
 }
@@ -759,7 +761,7 @@ async function runAgent(target: { kind: 'utility' | 'card'; id: string }, opts: 
       pdfsSeen.set(hash, `late download ${pdfsSeen.size + 1}`);
       run.downloads++; n++;
       const r = await fileOne(pdf, `${account.providerName.replace(/[^\w]+/g, '_')}_statement_${run.downloads}.pdf`).catch(err => ({ outcome: 'error' as const, error: String(err) }));
-      if (r.outcome === 'filed') { run.filed++; run.filedFor![r.utilityAccountId] = (run.filedFor![r.utilityAccountId] ?? 0) + 1; }
+      if (r.outcome === 'filed') { run.filed++; run.filedFor![r.utilityAccountId] = (run.filedFor![r.utilityAccountId] ?? 0) + 1; (run.filedList ??= []).push({ accountId: r.utilityAccountId, statementDate: r.statementDate, amount: r.amount, was: r.was }); }
       else if (r.outcome === 'card') { run.filed++; run.filedFor![r.cardId] = (run.filedFor![r.cardId] ?? 0) + 1; }
       else if (r.outcome === 'review') { run.review++; review.push(r.reviewItem); }
       else if (r.outcome !== 'error') run.applied++;
@@ -1126,7 +1128,7 @@ Always end with the finish tool, never with a message. If the page seems gone or
               // match (an Eternal Hills contract page) is filed to it instead of going to review.
               const designated = whose;
               const r = await fileOne(pdf, name, designated);
-              if (r.outcome === 'filed') { run.filed++; run.filedFor![r.utilityAccountId] = (run.filedFor![r.utilityAccountId] ?? 0) + 1; }
+              if (r.outcome === 'filed') { run.filed++; run.filedFor![r.utilityAccountId] = (run.filedFor![r.utilityAccountId] ?? 0) + 1; (run.filedList ??= []).push({ accountId: r.utilityAccountId, statementDate: r.statementDate, amount: r.amount, was: r.was }); }
               else if (r.outcome === 'card') { run.filed++; run.filedFor![r.cardId] = (run.filedFor![r.cardId] ?? 0) + 1; }
               else if (r.outcome === 'review') { run.review++; review.push(r.reviewItem); if (designated) reviewedFor.add(designated); }
               else if (r.outcome === 'error') content = `Saved, but: ${r.error}`;

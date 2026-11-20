@@ -8,7 +8,7 @@
 import { db } from '../config/db';
 import { learnedCycleDays } from '../lib/billCadence';
 import {
-  fetchWait, monthBounds, monthState, nextScheduleRun, statementVia, type MonthState,
+  fetchWait, midnightAfter, monthBounds, monthState, nextScheduleRun, nextStatementAfter, statementVia, type MonthState,
 } from '../lib/fetchPlan';
 import { canFetch, lastScheduleRun, loginKey } from './fetchScheduler';
 import { scrapeQueue } from '../workers/queues';
@@ -79,7 +79,8 @@ export async function fetchMonth(userId: string, month: string | null, now = new
   const out: MonthAccount[] = accounts.map(a => {
     const stmts = a.statements;
     const { days: cycle } = learnedCycleDays(stmts.map(s => s.statementDate), a.billingCadence, a.termMonths);
-    const ms = monthState(stmts, cycle, bounds, now);
+    const history = stmts.map(s => s.statementDate);
+    const ms = monthState(stmts, cycle, bounds, now, prior => nextStatementAfter(prior, history, cycle));
     const fetchable = canFetch(a);
     const mine = jobsOf.get(a.id) ?? [];
     const running = mine.some(j => j.status === 'PENDING' && !j.completedAt && now.getTime() - j.createdAt.getTime() < 15 * 60_000);
@@ -94,9 +95,13 @@ export async function fetchMonth(userId: string, month: string | null, now = new
     let nextTry: Date | null = null;
     if (fetchable && a.syncEnabled && ms.state !== 'got') {
       const newest = stmts[0] ?? null;
-      const misses = done.filter(j => j.completedAt! > (newest?.createdAt ?? new Date(now.getTime() - 60 * DAY)) && j.statementsFound === 0).length;
-      const w = fetchWait({ now, nextOn: newest ? new Date(newest.statementDate.getTime() + cycle * DAY) : null, lastStatementDate: newest?.statementDate ?? null, lastRun: a.lastAgentRunAt, misses });
-      nextTry = nextScheduleRun(w.nextAt, lastRun, now);
+      const nextOn = newest ? nextStatementAfter(newest.statementDate, history, cycle) : null;
+      const fetchAt = nextOn ? midnightAfter(nextOn) : null;
+      const since = Math.max(newest?.createdAt.getTime() ?? now.getTime() - 60 * DAY, fetchAt?.getTime() ?? 0);
+      const misses = done.filter(j => j.completedAt!.getTime() > since && j.statementsFound === 0).length;
+      const w = fetchWait({ now, nextOn, fetchAt, lastStatementDate: newest?.statementDate ?? null, lastRun: a.lastAgentRunAt, misses });
+      // A time still to come is kept to the minute (services/fetchScheduler.ts holds a job for it); one passed, the next pass.
+      nextTry = w.nextAt.getTime() > now.getTime() ? w.nextAt : nextScheduleRun(now, lastRun, now);
     }
 
     const got = ms.state === 'got' ? stmts[ms.gotIndex] : null;
@@ -109,7 +114,7 @@ export async function fetchMonth(userId: string, month: string | null, now = new
       if (running) return 'Fetching now.';
       if (waitingForCode) return 'Waiting for the code the provider sent — enter it where Fetch was pressed.';
       if (ms.state === 'no-history') return 'No statement on file yet, so Sollux does not know when it comes out. Fetch now gets the first one.';
-      if (ms.state === 'coming') return `Not out yet: expected about ${exp}. Sollux looks for it from then.`;
+      if (ms.state === 'coming') return `Not out yet: expected about ${exp}, the day its statements usually come out. Sollux fetches it at midnight after that day; if it is not there yet, again the next night, then less often until it comes.`;
       const tried = last && expectedOn && last.completedAt! >= expectedOn;
       if (tried && last!.status !== 'SUCCESS') return `Expected about ${exp}. The last try (${short(last!.completedAt!)}) failed: ${(last!.error ?? 'no reason saved').slice(0, 200)}`;
       if (tried) return `Expected about ${exp}. Tried ${triesSinceDue} time${triesSinceDue === 1 ? '' : 's'} since; it was not on the website yet.`;

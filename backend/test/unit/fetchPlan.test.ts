@@ -1,7 +1,7 @@
 /** When Sollux fetches on its own, and where each account stands for a month. Made-up dates. */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fetchWait, monthState, monthBounds, nextScheduleRun, statementVia } from '../../src/lib/fetchPlan';
+import { fetchWait, monthState, monthBounds, nextScheduleRun, statementVia, usualStatementDay, nextStatementAfter, midnightAfter } from '../../src/lib/fetchPlan';
 import { billCycleDays, learnedCycleDays } from '../../src/lib/billCadence';
 
 const d = (s: string) => new Date(`${s}T00:00:00Z`);
@@ -64,4 +64,44 @@ test('a policy billed once a term is not checked monthly', () => {
   assert.equal(billCycleDays('TERM', 6), 183);
   assert.equal(billCycleDays('TERM', null), 30);
   assert.equal(learnedCycleDays([d('2026-06-01')], 'TERM', 12).days, 365);
+});
+
+test('a monthly bill is expected on the day of the month its statements usually come out', () => {
+  // Mailed the 14th, 12th, 15th, 13th, 13th: the 13th. The longest gap (33 days) put it on the 16th.
+  const hist = ['2026-10-14', '2026-09-12', '2026-08-15', '2026-07-13', '2026-06-13'].map(d);
+  assert.equal(usualStatementDay(hist), 13);
+  assert.equal(nextStatementAfter(d('2026-10-14'), hist, 33).toISOString().slice(0, 10), '2026-11-13');
+  // The day is kept in a short month: the 31st usual, February's last day.
+  const late = ['2026-01-31', '2025-12-31', '2025-11-30', '2025-10-31'].map(d);
+  assert.equal(nextStatementAfter(d('2026-01-31'), late, 31).toISOString().slice(0, 10), '2026-02-28');
+  // Either side of a month's turn (the 30th, then the 2nd) is no day pattern: the cycle.
+  const turn = ['2026-10-02', '2026-08-30', '2026-08-01', '2026-06-29'].map(d);
+  assert.equal(usualStatementDay(turn), null);
+  assert.equal(nextStatementAfter(d('2026-10-02'), turn, 32).toISOString().slice(0, 10), '2026-11-03');
+  // Every two months: the cycle.
+  const bimonthly = ['2026-09-10', '2026-07-11', '2026-05-09'].map(d);
+  assert.equal(usualStatementDay(bimonthly), null);
+  // Too little on file: the cycle.
+  assert.equal(usualStatementDay([d('2026-10-14'), d('2026-09-13')]), null);
+});
+
+test('fetched at midnight Pacific after the statement day', () => {
+  assert.equal(midnightAfter(d('2026-11-13'), 'America/Los_Angeles').toISOString(), '2026-11-14T08:00:00.000Z');   // PST
+  assert.equal(midnightAfter(d('2026-07-13'), 'America/Los_Angeles').toISOString(), '2026-07-14T07:00:00.000Z');   // PDT
+  assert.equal(midnightAfter(d('2026-12-31'), 'UTC').toISOString(), '2027-01-01T00:00:00.000Z');
+});
+
+test('a statement expected the 13th is fetched at midnight after it, and a run before then does not count', () => {
+  const nextOn = d('2026-11-13'), fetchAt = midnightAfter(nextOn, 'America/Los_Angeles');
+  const base = { nextOn, fetchAt, lastStatementDate: d('2026-10-14'), misses: 0 };
+  // The 13th, mid-afternoon: not yet; held for midnight.
+  const before = fetchWait({ ...base, now: at('2026-11-13T22:00:00Z'), lastRun: null });
+  assert.match(before.skip ?? '', /next is expected about 2026-11-13/);
+  assert.equal(before.nextAt.toISOString(), '2026-11-14T08:00:00.000Z');
+  // Midnight: runs, though another account on the login ran three hours before.
+  assert.equal(fetchWait({ ...base, now: at('2026-11-14T08:00:00Z'), lastRun: at('2026-11-14T05:00:00Z') }).skip, null);
+  // Not out at midnight: the next night.
+  const missed = fetchWait({ ...base, now: at('2026-11-14T12:00:00Z'), lastRun: at('2026-11-14T08:05:00Z'), misses: 1 });
+  assert.equal(missed.skip, 'already ran today');
+  assert.equal(fetchWait({ ...base, now: at('2026-11-15T08:05:00Z'), lastRun: at('2026-11-14T08:05:00Z'), misses: 1 }).skip, null);
 });
