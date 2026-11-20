@@ -26,7 +26,7 @@ export const checkNumber = (notes: string | null | undefined) => {
   const t = String(notes ?? '');
   return t.match(/\bRef\s+([\w-]+)/i)?.[1] ?? t.match(/#\s*(\d{2,10})\b/)?.[1] ?? t.match(/\b(?:check|chk|ck|money order)\s+(\d{3,10})\b/i)?.[1] ?? null;
 };
-export const MOVEMENT_TYPES = ['TO_BANK', 'SPENT', 'TO_WALLET', 'FROM_WALLET', 'ADJUSTMENT', 'OTHER_IN'] as const;
+export const MOVEMENT_TYPES = ['TO_BANK', 'FROM_BANK', 'SPENT', 'TO_WALLET', 'FROM_WALLET', 'ADJUSTMENT', 'OTHER_IN'] as const;
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const monthStart = (d = new Date()) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));

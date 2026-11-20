@@ -2922,15 +2922,18 @@ model WalletMovement {
   date          DateTime
   /// Positive in, negative out.
   amount        Decimal  @db.Decimal(12, 2)
-  /// TO_BANK | SPENT | TO_WALLET | FROM_WALLET | ADJUSTMENT | OTHER_IN
+  /// TO_BANK | FROM_BANK | SPENT | TO_WALLET | FROM_WALLET | ADJUSTMENT | OTHER_IN
   type          String
   bankAccountId String?
   /// The paired movement in the other wallet, for TO_WALLET / FROM_WALLET.
   pairId        String?
   description   String?
-  /// 'email' (read from the app's transfer email) or 'manual'; the email's Message-ID.
+  /// 'email' (read from the app's transfer email), 'bank' (a bank line, services/walletBankLines) or 'manual';
+  /// "+bank" / "+email" when the other one saw the same move too. sourceRef: the email's Message-ID, or plaid:<transaction id>.
   source        String?
   sourceRef     String?
+  /// The other references that saw this move (the bank line of an emailed transfer, and so on), so neither records it twice.
+  seenRefs      String[] @default([])
   /// What money in or spending was for (lib/walletCategories.ts): APPLIANCE_SERVICE, HANDYMAN_SERVICE, HANDYMAN…
   category      String?
   /// Spending for a property: recorded as that property's expense (expenseId).

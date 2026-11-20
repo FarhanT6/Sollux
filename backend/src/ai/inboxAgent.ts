@@ -26,7 +26,7 @@ import { db } from '../config/db';
 import { intakeBill, type ReviewItem } from '../services/documentIntake';
 import { parseP2PEmail, recordP2PEmail } from '../services/p2pPaymentEmails';
 import { parseOutgoingP2P, recordOutgoingP2P } from '../services/outgoingP2PEmails';
-import { parseWithdrawalEmail, recordWithdrawal } from '../services/walletEmails';
+import { parseWithdrawalEmail, recordWithdrawal, parseTopUpEmail, recordTopUp } from '../services/walletEmails';
 import { intakeManagerStatement, isManagerStatementPdf, managerForSender } from '../services/managerStatementEmail';
 
 import pdfParse from '../lib/pdfParse';
@@ -60,7 +60,7 @@ const SERVICE_NOTICE_BODY = /service (interruption|suspension|disconnection|term
 const P2P_HINT = /zelle|venmo|cash ?app|paypal|apple cash|sent you|paid you|received money|got money|been paid|you sent|you paid/i;
 const P2P_SENDER = /@(\w+\.)*(venmo\.com|cash\.app|square\.com|squareup\.com)\b/i;
 // Money leaving a payment app for a bank: recorded as a transfer out of that wallet (services/walletEmails).
-const WITHDRAW_HINT = /transfer|withdr[ae]w|cash(ed)? out|deposit(ed)? to your bank/i;
+const WITHDRAW_HINT = /transfer|withdr[ae]w|cash(ed)? out|deposit(ed)? to your bank|\badded\b|add (cash|money|funds)|top ?up/i;
 const WALLET_SENDER = /@(\w+\.)*(venmo\.com|cash\.app|square\.com|squareup\.com|paypal\.com|apple\.com)\b/i;
 
 export interface InboxRunSummary {
@@ -268,7 +268,7 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
         await readPaymentHistory(userId, token, gmail, sum).catch(err => sum.errors.push(`${token.email}: payment history: ${err instanceof Error ? err.message : String(err)}`));
         const since = token.backfillFrom
           ?? (token.lastScanAt ? new Date(token.lastScanAt.getTime() - 24 * 3600 * 1000) : new Date(Date.now() - FIRST_RUN_DAYS * 24 * 3600 * 1000));
-        const q = `after:${Math.floor(since.getTime() / 1000)} -category:promotions -category:social (has:attachment OR subject:(bill OR statement OR invoice OR due OR notice OR premium OR renewal OR tax OR cancellation OR disconnection) OR subject:(zelle OR venmo OR "cash app" OR "apple cash" OR "sent you" OR "paid you" OR "received money" OR "got money" OR "been paid" OR "you sent" OR "you paid") OR from:(venmo.com OR cash.app OR square.com) OR (from:(paypal.com OR apple.com) subject:(transfer OR withdraw OR withdrawn OR "cash out" OR "apple cash")))`;
+        const q = `after:${Math.floor(since.getTime() / 1000)} -category:promotions -category:social (has:attachment OR subject:(bill OR statement OR invoice OR due OR notice OR premium OR renewal OR tax OR cancellation OR disconnection) OR subject:(zelle OR venmo OR "cash app" OR "apple cash" OR "sent you" OR "paid you" OR "received money" OR "got money" OR "been paid" OR "you sent" OR "you paid") OR from:(venmo.com OR cash.app OR square.com) OR (from:(paypal.com OR apple.com) subject:(transfer OR withdraw OR withdrawn OR "cash out" OR "apple cash" OR added OR "add money" OR "add cash")))`;
 
         const ids: string[] = [];
         let pageToken: string | undefined;
@@ -358,6 +358,14 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
               const out = parseWithdrawalEmail(from, subject, text, receivedAt);
               if (out) {
                 const r = await recordWithdrawal(userId, out, rfcMessageId ?? messageId);
+                sum.applied++;
+                await record(r.outcome, r.detail);
+                continue;
+              }
+              // Money added to an app's balance from a bank.
+              const top = parseTopUpEmail(from, subject, text, receivedAt);
+              if (top) {
+                const r = await recordTopUp(userId, top, rfcMessageId ?? messageId);
                 sum.applied++;
                 await record(r.outcome, r.detail);
                 continue;
@@ -505,6 +513,72 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
 }
 
 /** Every owner with a connected mailbox — the nightly run. */
+/**
+ * What a money email says, recorded at once without Claude: rent received through Zelle / Venmo /
+ * Cash App / PayPal / Apple Cash, money the owner sent (a loan payment), an app's transfer to the
+ * bank, money added to an app. null when it is none of these.
+ */
+async function applyMoneyEmail(userId: string, from: string, subject: string, text: string, receivedAt: Date | null, ref: string): Promise<{ outcome: string; detail: string } | null> {
+  const p2p = parseP2PEmail(from, subject, text, receivedAt);
+  if (p2p) return recordP2PEmail(userId, p2p, ref);
+  const sent = parseOutgoingP2P(from, subject, text, receivedAt);
+  if (sent) { const r = await recordOutgoingP2P(userId, sent, ref); return { outcome: r.outcome === 'loan' ? 'applied' : r.outcome, detail: r.detail }; }
+  const out = parseWithdrawalEmail(from, subject, text, receivedAt);
+  if (out) return recordWithdrawal(userId, out, ref);
+  const top = parseTopUpEmail(from, subject, text, receivedAt);
+  if (top) return recordTopUp(userId, top, ref);
+  return null;
+}
+
+// Messages the quick check looked at and found nothing in, by mailbox: not fetched again (the nightly read still reads them).
+const quickChecked = new Map<string, Set<string>>();
+
+/**
+ * Every few minutes (workers/index.ts), each mailbox's money emails from the last two days: a
+ * Venmo cash-out, money added to Cash App, rent received, a payment sent — recorded within minutes
+ * instead of at the nightly read. Patterns only, no Claude, so it costs nothing to run often.
+ */
+export async function checkMoneyEmailsNow(): Promise<number> {
+  if (!process.env.GMAIL_CLIENT_ID) return 0;
+  const tokens = await db.gmailToken.findMany({ orderBy: { createdAt: 'asc' } });
+  let applied = 0;
+  for (const token of tokens) {
+    try {
+      const gmail = google.gmail({ version: 'v1', auth: oauthFor(token) });
+      const q = `newer_than:2d -category:promotions (from:(venmo.com OR cash.app OR square.com OR squareup.com OR paypal.com OR apple.com) OR subject:(zelle OR "sent you" OR "paid you" OR "you sent" OR "you paid" OR "received money" OR "got money"))`;
+      const ids = ((await gmail.users.messages.list({ userId: 'me', q, maxResults: 50 })).data.messages ?? []).map(m => m.id).filter((id): id is string => !!id);
+      if (!ids.length) continue;
+      const checked = quickChecked.get(token.id) ?? new Set<string>();
+      quickChecked.set(token.id, checked);
+      const done = new Set((await db.inboxMessage.findMany({ where: { gmailTokenId: token.id, messageId: { in: ids } }, select: { messageId: true } })).map(m => m.messageId));
+      for (const messageId of ids.reverse()) {
+        if (done.has(messageId) || checked.has(messageId)) continue;
+        checked.add(messageId);
+        const msg = (await gmail.users.messages.get({ userId: 'me', id: messageId, format: 'full' })).data;
+        const subject = header(msg, 'Subject'), from = header(msg, 'From');
+        const rfcMessageId = header(msg, 'Message-ID').slice(0, 300) || null;
+        const receivedAt = msg.internalDate ? new Date(Number(msg.internalDate)) : null;
+        const parts = walk(msg.payload);
+        const textOf = (mime: string) => parts.filter(x => x.mimeType === mime && x.body?.data).map(x => decode(x.body!.data).toString('utf8')).join('\n');
+        const html = textOf('text/html');
+        const text = html ? htmlToText(html) : textOf('text/plain');
+        const r = await applyMoneyEmail(token.userId, from, subject, text, receivedAt, rfcMessageId ?? messageId);
+        if (!r) continue;
+        applied++;
+        await db.inboxMessage.upsert({
+          where: { gmailTokenId_messageId: { gmailTokenId: token.id, messageId } },
+          create: { userId: token.userId, gmailTokenId: token.id, messageId, rfcMessageId, fromAddress: from.slice(0, 300), subject: subject.slice(0, 300), receivedAt, outcome: r.outcome, detail: r.detail.slice(0, 500) },
+          update: { outcome: r.outcome, rfcMessageId, detail: r.detail.slice(0, 500), createdAt: new Date() },
+        }).catch(() => {});
+      }
+      if (checked.size > 2000) quickChecked.set(token.id, new Set([...checked].slice(-500)));
+    } catch (err) {
+      console.warn(`[MoneyMail] ${token.email}:`, err instanceof Error ? err.message.split('\n')[0] : err);
+    }
+  }
+  return applied;
+}
+
 export async function runInboxAgentForEveryone(): Promise<void> {
   const owners = await db.gmailToken.findMany({ distinct: ['userId'], select: { userId: true } });
   for (const { userId } of owners) {

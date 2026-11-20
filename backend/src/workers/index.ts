@@ -76,6 +76,18 @@ const cardFetches = () => void scheduleCardFetches().catch(err => console.warn('
 setTimeout(cardFetches, 5 * 60_000);
 setInterval(cardFetches, 6 * 60 * 60 * 1000);
 
+// Money emails (rent received, an app's transfer to the bank, money added to an app) every 10 minutes,
+// without Claude, so Cash, checks & apps and Incoming payments are current within minutes; and each
+// bank pointed at the "new transactions" webhook once, so its lines sync as they post.
+const moneyMail = () => void import('../ai/inboxAgent').then(m => m.checkMoneyEmailsNow())
+  .then(n => { if (n) console.log(`[MoneyMail] recorded ${n} money email(s)`); })
+  .catch(err => console.warn('[MoneyMail] check failed:', err instanceof Error ? err.message : err));
+setTimeout(moneyMail, 90_000);
+setInterval(moneyMail, 10 * 60_000);
+setTimeout(() => void import('../services/transactionMatchService').then(m => m.ensurePlaidWebhooks())
+  .then(n => { if (n) console.log(`[Plaid] ${n} bank(s) now send new-transaction webhooks`); })
+  .catch(err => console.warn('[Plaid] webhooks not set:', err instanceof Error ? err.message : err)), 3 * 60_000);
+
 // Property-tax lookups older than 30 days run again (services/taxLookupJobs.ts).
 const refreshTaxes = () => import('../services/taxLookupJobs').then(m => m.refreshTaxLookups())
   .then(n => { if (n) console.log(`[TaxLookup] Queued ${n} monthly refresh(es)`); })

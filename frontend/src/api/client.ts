@@ -1697,7 +1697,7 @@ export const getCardHealth = (id: string) => api.get<CardHealthT>(`/credit-cards
 
 // ── Cash & payment-app balances (backend services/wallets.ts) ──
 export type WalletKind = 'CASH' | 'CHECK' | 'VENMO' | 'CASH_APP' | 'PAYPAL' | 'APPLE_CASH';
-export type WalletMovementType = 'TO_BANK' | 'SPENT' | 'TO_WALLET' | 'FROM_WALLET' | 'ADJUSTMENT' | 'OTHER_IN';
+export type WalletMovementType = 'TO_BANK' | 'FROM_BANK' | 'SPENT' | 'TO_WALLET' | 'FROM_WALLET' | 'ADJUSTMENT' | 'OTHER_IN';
 export interface WalletEntryT {
   id: string; date: string; amount: number; kind: 'RENT' | 'CHECK_DEPOSIT' | WalletMovementType; description: string; bankAccountId?: string | null; bankAccountName?: string | null; source?: string | null; movementId?: string | null;
   /** A rent check: its payment, number, and when and where it was deposited. */

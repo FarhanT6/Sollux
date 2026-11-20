@@ -16,6 +16,8 @@
  * account has, rather than running separate passes that would each
  * advance (and partially consume) the same shared cursor.
  */
+import { walletLineOf } from '../lib/walletLines';
+import { recordWalletLine } from './walletBankLines';
 import { plaidClient } from '../config/plaid';
 import { db } from '../config/db';
 import { clearPendingByTransaction, settlePending, checkPendingWithBank } from './pendingMoney';
@@ -313,8 +315,9 @@ export async function syncTransactionsForItem(plaidItemId: string) {
   const plaidItem = await db.plaidItem.findUnique({
     where: { id: plaidItemId },
     // Accounts a loan is paid from are read too, so an autopay shows up in the loan tracker;
-    // and accounts with money pending (a check written, checks deposited), so it clears when the bank has it.
-    include: { accounts: { where: { isActive: true, OR: [{ watchForRentPayments: true }, { watchForExpenses: true }, { loansPaidFrom: { some: { isActive: true } } }, { pendingOutflows: { some: { cleared: false } } }] }, include: { _count: { select: { loansPaidFrom: true } } } } },
+    // accounts with money pending (a check written, checks deposited), so it clears when the bank has it;
+    // and every checking and savings account, for money moving to and from the wallets (a Venmo cash-out, an ATM withdrawal).
+    include: { accounts: { where: { isActive: true, OR: [{ watchForRentPayments: true }, { watchForExpenses: true }, { loansPaidFrom: { some: { isActive: true } } }, { pendingOutflows: { some: { cleared: false } } }, { accountType: { not: 'CREDIT_CARD' } }] }, include: { _count: { select: { loansPaidFrom: true } } } } },
   });
   if (!plaidItem || plaidItem.accounts.length === 0) return { added: 0 };
 
@@ -351,7 +354,17 @@ export async function syncTransactionsForItem(plaidItemId: string) {
         if (cleared) withPending = await pendingIn();
       }
       if (tx.pending) continue;
-      // Read only for its pending money: nothing else is matched on it.
+      // Money to or from a wallet on Cash, checks & apps — the owner's own money moving, so never rent or a bill:
+      // a "VENMO CASHOUT" read as a Venmo rent payment before.
+      const line = bankAccount.accountType !== 'CREDIT_CARD'
+        ? walletLineOf({ name: `${tx.name ?? ''} ${tx.merchant_name ?? ''}`.trim(), amount: tx.amount, category: tx.personal_finance_category?.detailed ?? null })
+        : null;
+      if (line) {
+        await recordWalletLine(plaidItem.userId, bankAccount, { id: tx.transaction_id, amount: tx.amount, date: new Date(tx.date), name: tx.name || tx.merchant_name || '' }, line)
+          .catch(err => console.warn('[Wallets] bank line not recorded:', err instanceof Error ? err.message : err));
+        continue;
+      }
+      // Read only for its pending money (or its wallet moves): nothing else is matched on it.
       if (!bankAccount.watchForRentPayments && !bankAccount.watchForExpenses && bankAccount._count.loansPaidFrom === 0) continue;
       if (tx.pending_transaction_id) {
         const fromPending = await db.incomingTransaction.findUnique({ where: { plaidTransactionId: tx.pending_transaction_id }, select: { id: true } });
@@ -496,13 +509,35 @@ export async function syncTransactionsForItem(plaidItemId: string) {
   return { added };
 }
 
+/**
+ * Banks linked before PLAID_WEBHOOK_URL was set send no "new transactions" webhook: point each at
+ * it once (kept in app_settings per bank and address), so its transactions sync within minutes.
+ */
+export async function ensurePlaidWebhooks(): Promise<number> {
+  const url = process.env.PLAID_WEBHOOK_URL?.trim();
+  if (!url) return 0;
+  const items = await db.plaidItem.findMany({ where: { isActive: true }, select: { id: true, accessTokenEnc: true } });
+  let set = 0;
+  for (const item of items) {
+    const key = `plaid-webhook:${item.id}`;
+    const had = await db.appSetting.findUnique({ where: { key } });
+    if (had?.value === url) continue;
+    try {
+      await plaidClient.itemWebhookUpdate({ access_token: decrypt(item.accessTokenEnc), webhook: url });
+      await db.appSetting.upsert({ where: { key }, create: { key, value: url }, update: { value: url } });
+      set++;
+    } catch (err) { console.warn('[Plaid] webhook not set for a bank:', err instanceof Error ? err.message : err); }
+  }
+  return set;
+}
+
 export async function syncAllWatchedAccounts(userId: string) {
   // Pending items the bank has surely taken by now (a split payment posts as one debit; older ones were never matched).
   await settlePending(userId).catch(() => 0);
   const items = await db.plaidItem.findMany({
     where: {
       userId, isActive: true,
-      accounts: { some: { isActive: true, OR: [{ watchForRentPayments: true }, { watchForExpenses: true }, { loansPaidFrom: { some: { isActive: true } } }, { pendingOutflows: { some: { cleared: false } } }] } },
+      accounts: { some: { isActive: true, OR: [{ watchForRentPayments: true }, { watchForExpenses: true }, { loansPaidFrom: { some: { isActive: true } } }, { pendingOutflows: { some: { cleared: false } } }, { accountType: { not: 'CREDIT_CARD' } }] } },
     },
   });
   let totalAdded = 0;
