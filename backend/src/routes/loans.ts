@@ -10,6 +10,7 @@ import { encryptOptional, decryptOptional } from '../crypto/encrypt';
 import { syncLoanFromComponents, serializeLoanComponent } from '../services/loanComponents';
 import { readDocument } from '../services/documentReader';
 import { trackerMonth, trackerYear } from '../services/loanTracker';
+import { linkBilledLoansSoon } from '../services/billedLoans';
 import { rowsFromCsv, matchRows, loansForMatch, applyRow, cleanRow, PAYMENT_METHODS, type SheetRow } from '../services/loanPaymentDetails';
 
 const router = Router();
@@ -229,6 +230,8 @@ router.get('/tracker', async (req, res, next) => {
       today: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     }).parse(req.query);
     const today = q.today ?? new Date().toISOString().slice(0, 10);
+    // A loan that is an account's bills (premium financing) is linked to it first: one row, not two.
+    await linkBilledLoansSoon(req.dbUserId!);
     if (q.year) return res.json(await trackerYear(req.dbUserId!, q.year, today));
     res.json(await trackerMonth(req.dbUserId!, q.month ?? today.slice(0, 7), today));
   } catch (err) { next(err); }
