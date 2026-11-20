@@ -4,6 +4,8 @@ import { withAiContext } from '../ai/meter';
 import { overdueAfterDays, billCycleDays } from '../lib/billCadence';
 import { scheduledWait } from '../services/nextFetch';
 import { Prisma } from '@prisma/client';
+import { loggedLines, restoreLateFees } from '../services/lateFees';
+import { settleCarriedFees } from '../services/carriedFees';
 import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';
 import { getScraperProvider } from '../scrapers/registry';
@@ -610,11 +612,18 @@ const worker = new Worker<ScrapeJobData>(
             const isStubUpgrade = !!pdfS3Key && !existing.pdfS3Key;
 
             if ((isPaid && wasUnpaid) || rawChanged || isStubUpgrade) {
+              // Fees that are not on the provider's figures (logged with a payment, or carried into the
+              // next bill): kept on the rewritten charge list, and back on the charge when it is rewritten.
+              const kept = loggedLines(((existing.rawDataJson as Record<string, unknown> | null)?.chargeBreakdown ?? null) as Record<string, number> | null);
+              const freshRaw = stmt.rawData && typeof stmt.rawData === 'object' && !Array.isArray(stmt.rawData) ? { ...(stmt.rawData as Record<string, unknown>) } : stmt.rawData;
+              if (!stmt.amountDue && Object.keys(kept).length && freshRaw && typeof freshRaw === 'object') {
+                (freshRaw as Record<string, unknown>).chargeBreakdown = { ...(((freshRaw as Record<string, unknown>).chargeBreakdown as Record<string, number> | null) ?? {}), ...kept };
+              }
               await db.statement.update({
                 where: { id: existing.id },
                 data: {
                   ...(isPaid && wasUnpaid ? { amountPaid } : {}),
-                  rawDataJson: stmt.rawData as Prisma.InputJsonValue,
+                  rawDataJson: freshRaw as Prisma.InputJsonValue,
                   // Update rich fields when upgrading from a stub or when scraper got better data
                   ...(stmt.dueDate ? { dueDate: stmt.dueDate } : {}),
                   ...(stmt.amountDue ? { amountDue: stmt.amountDue } : {}),
@@ -628,6 +637,8 @@ const worker = new Worker<ScrapeJobData>(
                   ...(isStubUpgrade ? { pdfS3Key } : {}),
                 },
               });
+              // The charge was written afresh: the fees not on the provider's figures go back on it.
+              if (stmt.amountDue) await restoreLateFees(existing.id);
               if (isStubUpgrade) {
                 console.log(`[ScrapeWorker] Upgraded stub → real PDF for statement ${existing.id} (${stmt.statementDate.toISOString().slice(0, 10)})`);
                 statementsInserted++;
@@ -636,6 +647,9 @@ const worker = new Worker<ScrapeJobData>(
             }
           }
         }
+
+        // A late fee hidden in a bill's previous balance (services/carriedFees.ts), on the bill paid late.
+        await settleCarriedFees(acct.id).catch(() => {});
 
         // Payments routing:
         //  - If the scraped payment carries an accountNumber, route it to THAT account

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { settleCarriedFees } from '../services/carriedFees';
 import { learnProviderWebsite } from '../services/providerWebsite';
 import { findExistingBill } from '../services/billMatch';
 import { google, drive_v3 } from 'googleapis';
@@ -442,6 +443,7 @@ router.post('/stream', attachDbUser, async (req, res) => {
               await learnProviderWebsite(acct.id, ex);
               await syncLoanComponentsFromBill(acct.id, ex);
               await markEscrowedStatements(acct.id);
+              await settleCarriedFees(acct.id).catch(() => {});
               if (nem) await db.utilityAccount.update({ where: { id: acct.id }, data: { hasTrueUp: true, ...(nem.trueUpDate ? { trueUpDate: new Date(nem.trueUpDate) } : {}) } });
             } else {
               const created = await db.statement.create({ data: {
@@ -466,6 +468,7 @@ router.post('/stream', attachDbUser, async (req, res) => {
               await learnProviderWebsite(acct.id, ex);
               await syncLoanComponentsFromBill(acct.id, ex);
               await markEscrowedStatements(acct.id);
+              await settleCarriedFees(acct.id).catch(() => {});
               if (nem) await db.utilityAccount.update({ where: { id: acct.id }, data: { hasTrueUp: true, ...(nem.trueUpDate ? { trueUpDate: new Date(nem.trueUpDate) } : {}) } });
             }
             autoImported++;

@@ -3,6 +3,7 @@ import { format } from 'date-fns';
 import { getStatementsSummary, getProperties } from '../api/client';
 import type { StatementSummaryRow, Property } from '../types';
 import { PageHeader, Modal } from '../components/ui';
+import CarriedFeesPanel from '../components/fees/CarriedFeesPanel';
 import { fmtDate, todayISO } from '../lib/date';
 
 const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
@@ -247,6 +248,7 @@ export default function FeesSummaryPage({ embedded }: { embedded?: boolean } = {
             </div>
           </>
         )}
+        <CarriedFeesPanel propertyName={propertyId ? (properties.find(p => p.id === propertyId)?.nickname || properties.find(p => p.id === propertyId)?.address) : undefined} />
       </div>
 
       {drillDown && (

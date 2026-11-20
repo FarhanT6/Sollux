@@ -7,6 +7,7 @@ import { getSignedDocumentUrl } from '../services/s3Service';
 import { findDuplicates, mergeStatements } from '../services/statementDuplicates';
 import { rereadAccountStatements } from '../services/rereadStatements';
 import { fixStatement, lastAudit, startStatementAudit } from '../services/statementAudit';
+import { carriedFeeReport, settleAllCarriedFees } from '../services/carriedFees';
 
 const router = Router();
 router.use(attachDbUser);
@@ -221,6 +222,16 @@ router.post('/audit/fix', async (req, res, next) => {
     if (err instanceof z.ZodError) return res.status(400).json({ error: 'Choose a statement.' });
     next(err);
   }
+});
+
+// Late fees a provider added after a bill and carried into the next bill's previous balance
+// (services/carriedFees.ts): each one found, on the bill paid late, and differences too large to call a fee.
+router.get('/carried-fees', async (req, res, next) => {
+  try { res.json(await carriedFeeReport(req.dbUserId!)); } catch (err) { next(err); }
+});
+// Every bill of the owner's checked again (after bills were fixed by hand, say).
+router.post('/carried-fees/scan', async (req, res, next) => {
+  try { res.json(await settleAllCarriedFees(req.dbUserId!)); } catch (err) { next(err); }
 });
 
 // POST /api/statements — manual entry (no PDF required)

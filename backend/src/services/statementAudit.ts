@@ -16,6 +16,7 @@ import { db } from '../config/db';
 import { withAiContext } from '../ai/meter';
 import { downloadDocument } from './s3Service';
 import { parseBill, periodChargeOf, type ExtractedBillData } from './pdfImportService';
+import { loggedLines } from './lateFees';
 import { intakeBill } from './documentIntake';
 
 export type AuditField = 'charge' | 'pastDue' | 'total' | 'dueDate' | 'payments' | 'unreadable';
@@ -92,7 +93,10 @@ export function compareStatement(s: StoredStatement, ex: ExtractedBillData, logg
   const base = { statementId: s.id, statementDate: day(s.statementDate)!, ownerEdited };
   const out: Omit<AuditFinding, 'accountId' | 'propertyId' | 'provider' | 'property' | 'last4'>[] = [];
 
-  const storedCharge = money(s.amountDue);
+  // Fees that are not on the PDF — logged with a payment, or a late fee the next bill carried in
+  // (services/carriedFees.ts) — are on the stored charge; they are not a misread.
+  const offPdf = Object.values(loggedLines((raw.chargeBreakdown ?? null) as Record<string, number> | null)).reduce((t, v) => t + Number(v || 0), 0);
+  const storedCharge = s.amountDue == null ? null : money(Number(s.amountDue) - offPdf);
   const readCharge = money(periodChargeOf(ex));
   const storedPast = money(s.pastDueCarried) ?? 0;
   // What a re-read stores as carried: the previous balance when the bill

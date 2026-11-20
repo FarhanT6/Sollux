@@ -14,6 +14,7 @@
  */
 import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
+import { CARRIED_FEE_LINE } from '../lib/carriedFee';
 
 export const LATE_FEE_LINE = 'Late fee (paid late)';
 
@@ -85,6 +86,9 @@ export async function applyFees(statementId: string | null | undefined, fees: Lo
       rawDataJson: withLines(s.rawDataJson, fees, sign),
     },
   });
+  // A late fee logged here may be the one the next bill carried in (services/carriedFees.ts): not counted twice.
+  const acct = await db.statement.findUnique({ where: { id: statementId }, select: { utilityAccountId: true } });
+  if (acct) await import('./carriedFees').then(m => m.settleCarriedFees(acct.utilityAccountId)).catch(() => {});
 }
 
 /** Puts a late fee of `amount` on the bill (negative takes it off). */
@@ -93,10 +97,10 @@ export async function applyLateFee(statementId: string | null | undefined, amoun
   await applyFees(statementId, [{ kind: 'late', amount: Math.abs(amount) }], amount > 0 ? 1 : -1);
 }
 
-/** The logged-fee lines of a charge list, to carry onto a rewritten one. */
+/** The logged-fee lines of a charge list (and a late fee carried into the next bill, services/carriedFees.ts), to carry onto a rewritten one. */
 export function loggedLines(breakdown: Record<string, number> | null | undefined): Record<string, number> {
   const out: Record<string, number> = {};
-  for (const [k, v] of Object.entries(breakdown ?? {})) if (LOGGED_LINES.has(k)) out[k] = v;
+  for (const [k, v] of Object.entries(breakdown ?? {})) if (LOGGED_LINES.has(k) || k === CARRIED_FEE_LINE) out[k] = v;
   return out;
 }
 
@@ -111,17 +115,21 @@ export async function restoreLateFees(statementId: string, billFee?: number | nu
   const payments = await db.payment.findMany({ where: { statementId, lateFeeAdded: { gt: 0 } }, select: { feesAddedJson: true, lateFeeAdded: true } });
   const fees = mergeFees(payments.flatMap(feesOf));
   const logged = feesTotal(fees);
-  if (!logged) return;
-  const s = await db.statement.findUnique({ where: { id: statementId }, select: { amountDue: true, penaltiesFees: true, rawDataJson: true } });
+  const s = await db.statement.findUnique({ where: { id: statementId }, select: { amountDue: true, penaltiesFees: true, rawDataJson: true, carriedFee: true } });
   if (!s) return;
+  // A late fee the next bill carried in (services/carriedFees.ts): not on this bill's PDF either.
+  const carried = round(Number(s.carriedFee ?? 0));
+  if (!logged && !carried) return;
   // The re-import wrote a fresh charge list; the logged fees go back on it.
   const fresh = { ...(((s.rawDataJson as any)?.chargeBreakdown ?? {}) as Record<string, number>) };
   for (const line of LOGGED_LINES) delete fresh[line];
+  delete fresh[CARRIED_FEE_LINE];
+  if (carried) fresh[CARRIED_FEE_LINE] = carried;
   await db.statement.update({
     where: { id: statementId },
     data: {
-      amountDue: round(Number(s.amountDue ?? 0) + logged),
-      ...(billFee !== undefined ? { penaltiesFees: round(Number(billFee ?? 0) + logged) } : {}),
+      amountDue: round(Number(s.amountDue ?? 0) + logged + carried),
+      ...(billFee !== undefined ? { penaltiesFees: round(Number(billFee ?? 0) + logged + carried) } : {}),
       rawDataJson: withLines({ ...((s.rawDataJson as object) ?? {}), chargeBreakdown: fresh }, fees, 1),
     },
   });
