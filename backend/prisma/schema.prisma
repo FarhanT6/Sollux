@@ -385,6 +385,10 @@ model Statement {
   // it is held separately and left out of operating cost by default.
   paymentPlanAmount    Decimal?        @db.Decimal(10, 2)
   pastDueCarried       Decimal?        @db.Decimal(10, 2)
+  /// A late fee the provider added after this bill went out and carried into the next bill's
+  /// previous balance (services/carriedFees.ts); included in amountDue and penaltiesFees, kept here
+  /// so a re-read of the PDF puts it back.
+  carriedFee           Decimal?        @db.Decimal(10, 2)
   notes                String?
   usageValue           Decimal?        @db.Decimal(10, 3)
   usageUnit            String?

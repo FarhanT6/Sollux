@@ -1,0 +1,1 @@
+ALTER TABLE "statements" ADD COLUMN IF NOT EXISTS "carriedFee" DECIMAL(10,2);

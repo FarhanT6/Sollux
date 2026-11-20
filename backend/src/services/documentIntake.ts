@@ -6,6 +6,7 @@
  * in the Import Bills flow. Moved out of the Drive worker so the inbox agent
  * files email the same way, with the same duplicate rules.
  */
+import { settleCarriedFees } from './carriedFees';
 import { withAiContext } from '../ai/meter';
 import { Prisma } from '@prisma/client';
 import { learnProviderWebsite } from './providerWebsite';
@@ -309,6 +310,7 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
       await learnProviderWebsite(acct.id, ex);
       await syncLoanComponentsFromBill(acct.id, ex);
       await markEscrowedStatements(acct.id);
+      await settleCarriedFees(acct.id).catch(() => {});
       await syncTrueUpFromBill(acct.id, ex);
     } else {
       const created = await db.statement.create({
@@ -339,6 +341,7 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
     await learnProviderWebsite(acct.id, ex);
     await syncLoanComponentsFromBill(acct.id, ex);
     await markEscrowedStatements(acct.id);
+    await settleCarriedFees(acct.id).catch(() => {});
     await syncTrueUpFromBill(acct.id, ex);
   }
 

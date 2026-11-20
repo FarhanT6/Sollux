@@ -88,6 +88,17 @@ setTimeout(() => void import('../services/transactionMatchService').then(m => m.
   .then(n => { if (n) console.log(`[Plaid] ${n} bank(s) now send new-transaction webhooks`); })
   .catch(err => console.warn('[Plaid] webhooks not set:', err instanceof Error ? err.message : err)), 3 * 60_000);
 
+// Late fees hidden in the next bill's previous balance (services/carriedFees.ts): every account's
+// whole history, once; after that each bill filed settles its own account.
+setTimeout(() => void (async () => {
+  const { db } = await import('../config/db');
+  const KEY = 'carried-fees:history-v1';
+  if (await db.appSetting.findUnique({ where: { key: KEY } }).catch(() => null)) return;
+  const r = await (await import('../services/carriedFees')).settleAllCarriedFees();
+  await db.appSetting.upsert({ where: { key: KEY }, create: { key: KEY, value: JSON.stringify({ ...r, at: new Date().toISOString() }) }, update: { value: JSON.stringify({ ...r, at: new Date().toISOString() }) } });
+  console.log(`[CarriedFees] ${r.fees} late fee(s) found in carried balances ($${r.total.toFixed(2)}) across ${r.accounts} account(s); ${r.unexplained} difference(s) too large to call a fee`);
+})().catch(err => console.warn('[CarriedFees] history not settled:', err instanceof Error ? err.message : err)), 4 * 60_000);
+
 // Property-tax lookups older than 30 days run again (services/taxLookupJobs.ts).
 const refreshTaxes = () => import('../services/taxLookupJobs').then(m => m.refreshTaxLookups())
   .then(n => { if (n) console.log(`[TaxLookup] Queued ${n} monthly refresh(es)`); })

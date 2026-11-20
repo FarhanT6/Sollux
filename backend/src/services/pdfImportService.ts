@@ -2190,6 +2190,46 @@ export function applyStudentLoanFromText(text: string, ex: ExtractedBillData): v
   }
 }
 
+/**
+ * A summary box of "PREVIOUS BALANCE / PAYMENT RECEIVED / TOTAL CURRENT CHARGES / TOTAL AMOUNT DUE"
+ * with "DUE BY" (City of Imperial). The text reader took the water line alone for the charge, the
+ * whole total for a two-month bill's charge with nothing carried, and the shut-off day ("TURN OFF
+ * DAY FOR CURRENT SERVICES IS 11/18/26") for the due date. Read from the box, and only when it adds
+ * up: previous balance − payment received + current charges is a total the bill prints. The carried
+ * balance is what is left of the previous balance after the payment, as everywhere else.
+ */
+export function applyPreviousBalanceBoxFromText(text: string, ex: ExtractedBillData): void {
+  if (!/PREVIOUS\s+BALANCE/i.test(text) || !/PAYMENT\s+RECEIVED/i.test(text) || !/TOTAL\s+CURRENT\s+CHARGES/i.test(text)) return;
+  const AMT = /(\(?)\$\s*(-?[\d,]+\.\d{2})\)?/;
+  const after = (label: RegExp): number | null => {
+    const m = label.exec(text);
+    if (!m) return null;
+    const a = AMT.exec(text.slice((m.index ?? 0) + m[0].length, (m.index ?? 0) + m[0].length + 60));
+    if (!a) return null;
+    const v = Number(a[2].replace(/,/g, ''));
+    return a[1] ? -Math.abs(v) : v;
+  };
+  const prev = after(/PREVIOUS\s+BALANCE/i);
+  const paidRaw = after(/PAYMENT\s+RECEIVED/i);
+  const current = after(/TOTAL\s+CURRENT\s+CHARGES/i);
+  if (prev == null || paidRaw == null || current == null) return;
+  const paid = Math.abs(paidRaw);
+  const total = Number((prev - paid + current).toFixed(2));
+  const printed = new Set([...text.matchAll(/\$\s*(-?[\d,]+\.\d{2})/g)].map(n => Number(n[1].replace(/,/g, '')).toFixed(2)));
+  if (!printed.has(total.toFixed(2))) return;
+  const carried = Number((prev - paid).toFixed(2));
+  ex.previousBalance = Math.abs(carried) < 0.005 ? null : carried;
+  ex.paymentsReceived = paid;
+  ex.currentCharges = current;
+  ex.amountDue = current;
+  ex.statedTotalDue = total;
+  const due = /DUE\s+BY\s*[-:]?\s*(\d{1,2})\/(\d{1,2})\/(\d{2,4})/i.exec(text);
+  if (due) {
+    const y = due[3].length === 2 ? `20${due[3]}` : due[3];
+    ex.dueDate = `${y}-${due[1].padStart(2, '0')}-${due[2].padStart(2, '0')}`;
+  }
+}
+
 export function applyBalanceForwardFromText(text: string, ex: ExtractedBillData): void {
   // Every printed occurrence of each label, and the amounts around it: the text layer puts an
   // amount before its label as often as after it ("$741.13BALANCE FORWARD", "TOTAL CURRENT
@@ -4219,6 +4259,8 @@ export async function parseBill(
         const rowsText = scanned || flattened ? text : await layoutText(buffer);
         applyTransactionsFromText(extracted, rowsText);
         applyAdjustmentChargesFromText(extracted, rowsText);
+        // Label and amount side by side: only the page-ordered text keeps them on one line.
+        applyPreviousBalanceBoxFromText(rowsText, extracted);
       } catch { /* the table stays as Claude read it */ }
     }
     if (!isCard) {

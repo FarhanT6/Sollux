@@ -934,6 +934,16 @@ export const createStatement = (data: {
   amountDue?: number | null; amountPaid?: number | null; chargesExcludingFees?: number | null;
   penaltiesFees?: number | null; pastDueCarried?: number | null; notes?: string | null;
 }) => api.post<Statement>('/statements', data).then(r => r.data);
+/** Late fees a provider added after a bill and carried into the next bill's previous balance (services/carriedFees.ts). */
+export interface CarriedFeeRow {
+  accountId: string; propertyId: string; provider: string; last4: string | null; property: string;
+  statementId: string; statementDate: string; billTotal: number | null;
+  nextStatementDate: string; nextCarried: number | null; nextPaymentsShown: number | null;
+  /** The fee recorded on the bill; null for a difference too large to call a fee. */
+  fee: number | null; unexplained: number | null;
+}
+export const getCarriedFees = () => api.get<{ rows: CarriedFeeRow[]; total: number }>('/statements/carried-fees').then(r => r.data);
+export const scanCarriedFees = () => api.post<{ accounts: number; changed: number; fees: number; total: number; unexplained: number }>('/statements/carried-fees/scan').then(r => r.data);
 export const getStatementsSummary = (params?: { propertyId?: string; utilityAccountId?: string }) =>
   api.get<StatementSummaryRow[]>('/statements/summary', { params }).then(r => r.data);
 
