@@ -103,3 +103,34 @@ test('fetch the late ones: one run per login, none for an account with nothing t
   const { scrapeQueue } = await import('../../src/workers/queues');
   await scrapeQueue.obliterate({ force: true }).catch(() => {});
 });
+
+test('a statement due tonight is fetched at midnight after its day, held to that minute', { skip }, async () => {
+  const { scheduleAllScrapes } = await import('../../src/services/fetchScheduler');
+  const { scrapeQueue } = await import('../../src/workers/queues');
+  const { encrypt } = await import('../../src/crypto/encrypt');
+  const { db } = api;
+  const prop = await db.property.findFirstOrThrow({ where: { userId: ids.user } });
+  // Mailed about the 11th each month (the longest gap, 32 days, put it on the 13th).
+  const a = await db.utilityAccount.create({ data: {
+    propertyId: prop.id, category: 'GAS', billingCadence: 'MONTHLY', providerName: 'Example Gas', providerSlug: 'example-gas',
+    loginUrl: 'https://www.example-gas.com', accountNumber: '5555', usernameEnc: encrypt('gas@example.com'), passwordEnc: encrypt('not-a-real-password'),
+  } as any });
+  for (const s of ['2026-10-11', '2026-09-09', '2026-08-11', '2026-07-11']) await db.statement.create({ data: { utilityAccountId: a.id, statementDate: d(s), amountDue: 40, rawDataJson: { source: 'portal' } } as any });
+  try {
+    // 7 pm Pacific on the 11th: not out for sure until the day ends; held for midnight (08:00 UTC).
+    const now = new Date('2026-11-12T03:00:00Z');
+    await scheduleAllScrapes(now);
+    const at = new Date('2026-11-12T08:00:00Z').getTime();
+    const job = await scrapeQueue.getJob(`sched-${a.id}-at-${at}`);
+    assert.ok(job, 'a job held until midnight after the statement day');
+    assert.equal(job!.opts.delay, at - now.getTime());
+    // The next pass sees the same minute: no second job.
+    await scheduleAllScrapes(new Date('2026-11-12T03:15:00Z'));
+    const held = (await scrapeQueue.getDelayed()).filter(j => j.data.utilityAccountId === a.id);
+    assert.equal(held.length, 1);
+    await job!.remove().catch(() => {});
+  } finally {
+    await db.statement.deleteMany({ where: { utilityAccountId: a.id } });
+    await db.utilityAccount.delete({ where: { id: a.id } });
+  }
+});
