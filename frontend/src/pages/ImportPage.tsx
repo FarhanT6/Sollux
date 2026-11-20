@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { useCallback, useState, useRef, useEffect } from 'react';
 import { openOAuth } from '../lib/native';
-import { loadGooglePicker, downloadDriveFiles } from '../lib/drivePicker';
+import { loadGooglePicker, downloadDriveFiles, dropTexts, driveIdsIn, filesFromDriveIds, DriveNotConnected } from '../lib/drivePicker';
 import { DrivePreview } from '../components/DriveButton';
 import { format } from 'date-fns';
 import { fmtDate } from '../lib/date';
@@ -214,11 +214,40 @@ function Dropzone({ onFiles }: { onFiles: (files: File[]) => void }) {
     // A loan sheet: sorted to the loan importer.
     || /\.csv$/i.test(f.name) || f.type === 'text/csv';
 
+  // A file dragged out of another tab (Google Drive's) arrives as a link, not a file: fetched through the connected Drive.
+  const [fetching, setFetching] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDragging(false);
-    const pdfs = Array.from(e.dataTransfer.files).filter(f => isImportable(f));
-    if (pdfs.length) onFiles(pdfs);
+    setNote(null);
+    const dropped = Array.from(e.dataTransfer.files);
+    const pdfs = dropped.filter(f => isImportable(f));
+    if (pdfs.length) { onFiles(pdfs); return; }
+    if (dropped.length) { setNote(`Sollux reads PDFs, photos (PNG, JPG, WebP) and CSV loan sheets — ${dropped.length === 1 ? `"${dropped[0].name}" is not one` : 'none of those are'}.`); return; }
+
+    const texts = dropTexts(e.dataTransfer);   // read now: the browser empties it after the event
+    const ids = driveIdsIn(texts);
+    if (!ids.length) {
+      setNote(texts.length
+        ? 'That came over as a link, not a file. Sollux can open links to Google Drive files; for anything else, download it first and drop the downloaded file.'
+        : 'Nothing came with that drop. Download the file first, then drop it here.');
+      return;
+    }
+    setFetching(ids.length === 1 ? 'Getting the file from Google Drive…' : `Getting ${ids.length} files from Google Drive…`);
+    filesFromDriveIds(ids)
+      .then(files => {
+        const ok = files.filter(f => isImportable(f));
+        const left = files.length - ok.length;
+        if (left) setNote(`${left} file${left === 1 ? '' : 's'} from Drive left out — Sollux reads PDFs, photos and CSV loan sheets.`);
+        else if (!files.length) setNote('No PDFs in that Drive folder.');
+        if (ok.length) onFiles(ok);
+      })
+      .catch(err => setNote(err instanceof DriveNotConnected
+        ? 'To drop files straight from Google Drive, connect Drive first (Import from Google Drive, just above). Or download the file and drop the downloaded copy.'
+        : err?.message || 'Could not get the file from Google Drive.'))
+      .finally(() => setFetching(null));
   }, [onFiles]);
 
   return (
@@ -226,7 +255,7 @@ function Dropzone({ onFiles }: { onFiles: (files: File[]) => void }) {
       onDragOver={e => { e.preventDefault(); setDragging(true); }}
       onDragLeave={() => setDragging(false)}
       onDrop={handleDrop}
-      onClick={() => inputRef.current?.click()}
+      onClick={() => { if (!fetching) inputRef.current?.click(); }}
       className="rounded-xl border-2 border-dashed cursor-pointer transition-colors flex flex-col items-center justify-center gap-3 py-16"
       style={{
         borderColor: dragging ? '#F5A623' : 'rgba(255,255,255,0.12)',
@@ -254,6 +283,13 @@ function Dropzone({ onFiles }: { onFiles: (files: File[]) => void }) {
       <div className="text-center px-6">
         <p className="text-sm font-medium text-gray-200">Drop any file here</p>
         <p className="text-xs text-gray-500 mt-1">Bills, card statements, policies, property tax bills, manager statements, loan sheets — Sollux sorts each to the right place · PDF, photo or CSV · up to 50 at once</p>
+        <p className="text-xs text-gray-600 mt-1">Files can come straight from a Google Drive tab too: drag one onto the Sollux tab, wait for it to open, and drop it here.</p>
+        {fetching && (
+          <p className="text-xs text-amber-400 mt-2 flex items-center justify-center gap-2">
+            <span className="inline-block w-3 h-3 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />{fetching}
+          </p>
+        )}
+        {note && !fetching && <p className="text-xs text-amber-300 mt-2" onClick={e => e.stopPropagation()}>{note}</p>}
       </div>
     </div>
   );
