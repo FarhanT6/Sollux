@@ -1073,7 +1073,12 @@ Always end with the finish tool, never with a message. If the page seems gone or
               // Already on file for that date: nothing to click for. A saved
               // page is always read again — its fees change after the bill.
               const day = u.name === 'download_statement' && /^\d{4}-\d{2}-\d{2}$/.test(String(i.statementDate ?? '')) ? new Date(`${i.statementDate}T12:00:00Z`) : null;
-              const onFile = day && !isCard ? await db.statement.findMany({ where: { utilityAccountId: { in: [account.id, ...others.map(o => o.id)] }, isScheduled: false, statementDate: { gte: new Date(day.getTime() - 36e5 * 36), lte: new Date(day.getTime() + 36e5 * 36) } }, select: { utilityAccountId: true, pdfS3Key: true, statementDate: true } }) : [];
+              // Only the account this statement is for: on a login with several, another
+              // account's bill a day apart is not this one (IID ··9413's 10/28 statement
+              // passed for ··2917's 10/29 one, and ··2917's was never downloaded).
+              const forWhom = String(i.account ?? '').replace(/\D/g, '').slice(-4);
+              const whose = forWhom ? forAccounts.find(a => a.last4 === forWhom)?.id : forAccounts.length === 1 ? forAccounts[0].id : undefined;
+              const onFile = day && !isCard ? await db.statement.findMany({ where: { utilityAccountId: { in: whose ? [whose] : forAccounts.map(a => a.id) }, isScheduled: false, statementDate: { gte: new Date(day.getTime() - 36e5 * 36), lte: new Date(day.getTime() + 36e5 * 36) } }, select: { utilityAccountId: true, pdfS3Key: true, statementDate: true } }) : [];
               // On file with its PDF, or an older month on file without one (only the newest may still need its PDF).
               const settled = await Promise.all(onFile.map(async r => !!r.pdfS3Key || !!(await db.statement.findFirst({ where: { utilityAccountId: r.utilityAccountId, isScheduled: false, statementDate: { gt: new Date(r.statementDate.getTime() + 36e5 * 36), lte: new Date() } }, select: { id: true } }))));
               // A card's statement for that closing date (a few days either way), saved with its PDF.
@@ -1082,6 +1087,12 @@ Always end with the finish tool, never with a message. If the page seems gone or
                 settled.push(near.some(s => !s.fromEmail && Array.isArray(s.documents) && s.documents.length > 0));
               }
               if (day && settled.some(Boolean)) {
+                if (!whose) {
+                  // Several accounts and none named: the date alone cannot say whose it is.
+                  const holders = [...new Set(onFile.filter((_, k) => settled[k]).map(r => forAccounts.find(a => a.id === r.utilityAccountId)?.last4 || '?'))];
+                  content = `A statement dated about ${i.statementDate} is on file for account ending ${holders.join(' / ')}. If this one is that account's, move on; if it is another account's, call download_statement again with account set to its last 4. Downloaded this run: ${got}.`;
+                  break;
+                }
                 content = `The ${i.statementDate} statement is already on file — not downloaded. Downloaded this run: ${got}. Move to an older or newer one, or finish.`;
                 break;
               }
@@ -1113,8 +1124,7 @@ Always end with the finish tool, never with a message. If the page seems gone or
               const name = `${account.providerName.replace(/[^\w]+/g, '_')}_${String(i.statementDate ?? run.downloads).replace(/[^\w-]+/g, '_')}.pdf`;
               // The account the agent had open: a document that prints no number Sollux can
               // match (an Eternal Hills contract page) is filed to it instead of going to review.
-              const said = String(i.account ?? '').replace(/\D/g, '').slice(-4);
-              const designated = said ? forAccounts.find(a => a.last4 === said)?.id : forAccounts.length === 1 ? forAccounts[0].id : undefined;
+              const designated = whose;
               const r = await fileOne(pdf, name, designated);
               if (r.outcome === 'filed') { run.filed++; run.filedFor![r.utilityAccountId] = (run.filedFor![r.utilityAccountId] ?? 0) + 1; }
               else if (r.outcome === 'card') { run.filed++; run.filedFor![r.cardId] = (run.filedFor![r.cardId] ?? 0) + 1; }
