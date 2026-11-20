@@ -22,8 +22,10 @@ export function whoLabel(h: Pick<HouseholdT, 'members' | 'ownerName' | 'viewerMe
  * "Belongs to" on a card, personal loan or personal bill: whose it is in the
  * household. Shown only once there are people besides the owner.
  */
-export default function BelongsTo({ kind, id, memberId, onChanged, className }: {
+export default function BelongsTo({ kind, id, memberId, onChanged, className, compact }: {
   kind: 'card' | 'loan' | 'expense' | 'bill'; id: string; memberId?: string | null; onChanged?: () => void; className?: string;
+  /** In a narrow column (the Bills table): kept to its width, the name cut short rather than spilling over the next column. */
+  compact?: boolean;
 }) {
   const [h, setH] = useState<HouseholdT | null>(null);
   const members: HouseholdMemberT[] = h?.members ?? [];
@@ -33,9 +35,9 @@ export default function BelongsTo({ kind, id, memberId, onChanged, className }: 
   useEffect(() => { setValue(memberId ?? ''); }, [memberId]);
   if (!members.length) return null;
   return (
-    <label className={`inline-flex items-center gap-1.5 text-xs text-gray-500 ${className ?? ''}`}>
+    <label className={`${compact ? 'flex min-w-0 max-w-full whitespace-nowrap' : 'inline-flex'} items-center gap-1.5 text-xs text-gray-500 ${className ?? ''}`}>
       Belongs to
-      <select value={value} disabled={saving} className="input-dark text-xs py-0.5"
+      <select value={value} disabled={saving} title={whoLabel(h, value || null)} className={`input-dark text-xs py-0.5${compact ? ' min-w-0 flex-1 truncate' : ''}`}
         onChange={async e => {
           const v = e.target.value; setValue(v); setSaving(true);
           try { await assignToMember(kind, id, v || null); onChanged?.(); } finally { setSaving(false); }
