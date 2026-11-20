@@ -1074,8 +1074,8 @@ Always end with the finish tool, never with a message. If the page seems gone or
               // page is always read again — its fees change after the bill.
               const day = u.name === 'download_statement' && /^\d{4}-\d{2}-\d{2}$/.test(String(i.statementDate ?? '')) ? new Date(`${i.statementDate}T12:00:00Z`) : null;
               // Only the account this statement is for: on a login with several, another
-              // account's bill a day apart is not this one (IID ··9413's 10/28 statement
-              // passed for ··2917's 10/29 one, and ··2917's was never downloaded).
+              // account's bill a day apart is not this one (one IID account's statement
+              // passed for the other's, dated a day later, which was never downloaded).
               const forWhom = String(i.account ?? '').replace(/\D/g, '').slice(-4);
               const whose = forWhom ? forAccounts.find(a => a.last4 === forWhom)?.id : forAccounts.length === 1 ? forAccounts[0].id : undefined;
               const onFile = day && !isCard ? await db.statement.findMany({ where: { utilityAccountId: { in: whose ? [whose] : forAccounts.map(a => a.id) }, isScheduled: false, statementDate: { gte: new Date(day.getTime() - 36e5 * 36), lte: new Date(day.getTime() + 36e5 * 36) } }, select: { utilityAccountId: true, pdfS3Key: true, statementDate: true } }) : [];
