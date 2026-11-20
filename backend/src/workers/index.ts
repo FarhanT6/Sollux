@@ -88,6 +88,17 @@ setTimeout(() => void import('../services/transactionMatchService').then(m => m.
   .then(n => { if (n) console.log(`[Plaid] ${n} bank(s) now send new-transaction webhooks`); })
   .catch(err => console.warn('[Plaid] webhooks not set:', err instanceof Error ? err.message : err)), 3 * 60_000);
 
+// A bill's printed "payments received" recorded again although the owner had logged it split
+// across bills (pdfImportService.ts unloggedOfConfirmation): those repeats come off, once.
+setTimeout(() => void (async () => {
+  const { db } = await import('../config/db');
+  const KEY = 'confirmed-payments:dedupe-v1';
+  if (await db.appSetting.findUnique({ where: { key: KEY } }).catch(() => null)) return;
+  const r = await (await import('../services/pdfImportService')).dedupeConfirmedPayments();
+  await db.appSetting.upsert({ where: { key: KEY }, create: { key: KEY, value: JSON.stringify({ ...r, at: new Date().toISOString() }) }, update: { value: JSON.stringify({ ...r, at: new Date().toISOString() }) } });
+  console.log(`[Payments] ${r.removed} repeated statement confirmation(s) removed, ${r.reduced} cut to what was not logged`);
+})().catch(err => console.warn('[Payments] confirmations not checked:', err instanceof Error ? err.message : err)), 3 * 60_000 + 30_000);
+
 // Late fees hidden in the next bill's previous balance (services/carriedFees.ts): every account's
 // whole history, once; after that each bill filed settles its own account.
 setTimeout(() => void (async () => {
