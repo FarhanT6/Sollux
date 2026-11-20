@@ -94,17 +94,103 @@ export async function pickFromDrive(opts: { mimeTypes?: string; multiple?: boole
   return downloadDriveFiles(picked.filter(d => !seen.has(d.id) && !!seen.add(d.id)), accessToken);
 }
 
+/** Google's own files have no bytes to download: they come down as one of these. A Sheet as CSV (what the importer reads as a loan sheet). */
+const EXPORT_AS: Record<string, { mime: string; ext: string }> = {
+  [GOOGLE_DOC]: { mime: 'application/pdf', ext: 'pdf' },
+  'application/vnd.google-apps.presentation': { mime: 'application/pdf', ext: 'pdf' },
+  'application/vnd.google-apps.drawing': { mime: 'application/pdf', ext: 'pdf' },
+  'application/vnd.google-apps.spreadsheet': { mime: 'text/csv', ext: 'csv' },
+};
+
 /** Picked Drive files fetched into the browser (a Google Doc as a PDF). */
 export function downloadDriveFiles(docs: { id: string; name: string; mimeType: string }[], accessToken: string): Promise<File[]> {
   return Promise.all(docs.map(async d => {
-    const isDoc = d.mimeType === GOOGLE_DOC;
-    const url = isDoc
-      ? `https://www.googleapis.com/drive/v3/files/${d.id}/export?mimeType=application/pdf`
+    const as = EXPORT_AS[d.mimeType];
+    const url = as
+      ? `https://www.googleapis.com/drive/v3/files/${d.id}/export?mimeType=${encodeURIComponent(as.mime)}`
       : `https://www.googleapis.com/drive/v3/files/${d.id}?alt=media&supportsAllDrives=true`;
     const r = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
     if (!r.ok) throw new Error(`Could not download "${d.name}" from Drive (${r.status}).`);
     const blob = await r.blob();
-    const name = isDoc && !/\.pdf$/i.test(d.name) ? `${d.name}.pdf` : d.name;
-    return new File([blob], name, { type: isDoc ? 'application/pdf' : (blob.type || d.mimeType) });
+    const name = as && !new RegExp(`\\.${as.ext}$`, 'i').test(d.name) ? `${d.name}.${as.ext}` : d.name;
+    return new File([blob], name, { type: as ? as.mime : (blob.type || d.mimeType) });
   }));
+}
+
+// ── Files dragged in from Google Drive's own tab ─────────────────────────────
+// Chrome does not hand a web page the file when it is dragged out of drive.google.com: the drop
+// carries a link to it (a plain link, a page snippet, or a "DownloadURL"). The file's id is in that
+// link, and the Drive account connected in Add can fetch it.
+
+const ID = '([A-Za-z0-9_-]{20,})';
+const DRIVE_LINKS: RegExp[] = [
+  // drive.google.com/file/d/<id>/view, docs.google.com/document/d/<id>/edit, …/spreadsheets/d/, /presentation/d/
+  new RegExp(`(?:drive|docs)\\.google\\.com/(?:a/[^/\\s]+/)?(?:file|document|spreadsheets|presentation|drawings)/(?:u/\\d+/)?d/(?:e/)?${ID}`, 'g'),
+  // drive.google.com/drive/folders/<id>, …/drive/u/0/folders/<id>
+  new RegExp(`drive\\.google\\.com/(?:a/[^/\\s]+/)?drive/(?:u/\\d+/)?(?:mobile/)?folders/${ID}`, 'g'),
+  // drive.google.com/open?id=<id>, /uc?id=<id>&export=download, drive.usercontent.google.com/download?id=<id>
+  new RegExp(`(?:drive|docs|drive\\.usercontent)\\.google\\.com/[^\\s"'<>]*?(?:[?&]|&amp;)id=${ID}`, 'g'),
+];
+
+/** The Drive file and folder ids in what a drop carried, first seen first, each once. */
+export function driveIdsIn(texts: string[]): string[] {
+  const ids: string[] = [];
+  for (const raw of texts) {
+    let decoded = raw;
+    try { decoded = decodeURIComponent(raw); } catch { /* not encoded */ }
+    for (const text of decoded === raw ? [raw] : [raw, decoded]) {
+      for (const re of DRIVE_LINKS) {
+        for (const m of text.matchAll(re)) if (!ids.includes(m[1])) ids.push(m[1]);
+      }
+    }
+  }
+  return ids;
+}
+
+/** Everything a drop carried as text (links, page snippets, a DownloadURL). Read it inside the drop event: the browser empties it after. */
+export function dropTexts(dt: DataTransfer): string[] {
+  const out: string[] = [];
+  for (const type of Array.from(dt.types ?? [])) {
+    if (type === 'Files') continue;
+    try { const v = dt.getData(type); if (v) out.push(v); } catch { /* a type the browser will not read out */ }
+  }
+  return out;
+}
+
+export class DriveFileUnreachable extends Error {}
+
+/**
+ * The files behind dropped Drive links, downloaded through the connected Drive account(s) — the first
+ * one that can open each (a file shared with only one of them). A folder brings its PDFs.
+ * Throws DriveNotConnected with no account, DriveFileUnreachable when none of them can open a link.
+ */
+export async function filesFromDriveIds(ids: string[]): Promise<File[]> {
+  const status = await getDriveStatus();
+  if (!status.accounts.length) throw new DriveNotConnected('Connect a Google Drive account first.');
+  const tokens = new Map<string, string>();
+  const tokenFor = async (accountId: string) => {
+    if (!tokens.has(accountId)) tokens.set(accountId, (await getDriveAccessToken(accountId)).accessToken);
+    return tokens.get(accountId)!;
+  };
+
+  const files: File[] = [];
+  const unreachable: string[] = [];
+  for (const id of ids) {
+    let found: { meta: { id: string; name: string; mimeType: string }; token: string } | null = null;
+    for (const account of status.accounts) {
+      const token = await tokenFor(account.id);
+      const r = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?fields=id,name,mimeType&supportsAllDrives=true`,
+        { headers: { Authorization: `Bearer ${token}` } });
+      if (r.ok) { found = { meta: await r.json(), token }; break; }
+      if (r.status !== 404 && r.status !== 403) throw new Error(`Google Drive did not answer (${r.status}). Try again in a moment.`);
+    }
+    if (!found) { unreachable.push(id); continue; }
+    const docs = found.meta.mimeType === FOLDER ? await pdfsInFolder(found.meta.id, found.token) : [found.meta];
+    files.push(...await downloadDriveFiles(docs, found.token));
+  }
+  if (!files.length && unreachable.length) {
+    const who = status.accounts.map(a => a.email).join(' or ');
+    throw new DriveFileUnreachable(`${unreachable.length === 1 ? 'That file is' : 'Those files are'} not in the Drive Sollux is connected to (${who}). Connect the Google account that has ${unreachable.length === 1 ? 'it' : 'them'} under Import from Google Drive, or download ${unreachable.length === 1 ? 'it' : 'them'} and drop the downloaded file.`);
+  }
+  return files;
 }

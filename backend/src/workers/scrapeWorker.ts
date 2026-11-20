@@ -55,7 +55,7 @@ function downloadSummary(r: { downloads: number; filed: number; review: number; 
  * A rejected login explained: another account on the same site saved with
  * the same username but a different password. A site has one password per
  * username, so one of the two is out of date — and each failed try with it
- * counts against the other's login too (IID ··9413 failing took ··2917 down
+ * counts against the other's login too (one IID account failing took the other down
  * with it).
  */
 export async function loginClash(accountId: string): Promise<string> {

@@ -159,7 +159,7 @@ export default function AddUtilityModal({ propertyId, onClose, onSuccess }: Prop
   const [termMonths, setTermMonths] = useState('12');
   const [expectedAmount, setExpectedAmount] = useState('');
   // Which unit this meter serves. A multi-unit property can carry several
-  // meters for one utility, and "IID ****8110" vs "IID ****5855" says nothing
+  // meters for one utility, and "IID ****1111" vs "IID ****2222" says nothing
   // about which is which.
   const [units, setUnits] = useState<Unit[]>([]);
   const [servesUnitId, setServesUnitId] = useState('');
