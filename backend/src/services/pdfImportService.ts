@@ -4077,10 +4077,19 @@ export function applyLedgerFromText(text: string, ex: ExtractedBillData): void {
   // Two shapes: Seabreeze / CINC open with BALANCE FORWARD and a CREDITS
   // column; Prescott (River Ranch) opens with "Opening Balance" and an
   // unsigned PAYMENTS column, its header saying "As Of Date".
-  if (!text || !/balance\s+forward|opening\s+balance/i.test(text) || !/credits?|payments/i.test(text) || !/balance/i.test(text)) return;
-  const amountDue = findDollarNear(text, [/amount\s+due/i, /pay\s+this\s+amount/i]);
-  const billingDate = findDateNear(text, [/billing\s+date/i, /as\s+of\s+date/i]);
-  const dueDate = findDateNear(text, [/due\s+date/i]);
+  // pdf-parse runs Seabreeze's words together ("08/01/2026BALANCEFORWARD$3,822.35"), so no space is required.
+  if (!text || !/balance\s*forward|opening\s*balance/i.test(text) || !/credits?|payments/i.test(text) || !/balance/i.test(text)) return;
+  // Seabreeze's header box prints its labels apart from the values, which come on one run-together
+  // line under the As of Date: "September20, 2026" / "123456654321Oct 1, 2026$2,830.00" (account
+  // number, Billing Date, Amount Due). The Billing Date is the day the assessment is due.
+  const MONTH_DATE = '(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\\.?\\s*\\d{1,2},?\\s*\\d{4}';
+  const box = text.match(new RegExp(`(?:^|\\n)\\s*(${MONTH_DATE})\\s*\\n\\s*\\d{6,}\\s*(${MONTH_DATE})\\s*\\$?\\s*([\\d,]+\\.\\d{2})\\s*(?:\\n|$)`, 'i'));
+  const spaced = (s: string) => s.replace(/([A-Za-z])(\d)/, '$1 $2').replace(/,(\d)/, ', $1');
+  const boxAsOf = box ? parseDate(spaced(box[1]!)) : null;
+  const boxBilling = box ? parseDate(spaced(box[2]!)) : null;
+  const amountDue = box && boxAsOf && boxBilling ? parseFloat(box[3]!.replace(/,/g, '')) : findDollarNear(text, [/amount\s+due/i, /pay\s+this\s+amount/i]);
+  const billingDate = boxAsOf && boxBilling ? boxAsOf : findDateNear(text, [/billing\s+date/i, /as\s+of\s+date/i]);
+  const dueDate = boxAsOf && boxBilling ? boxBilling : findDateNear(text, [/due\s+date/i]);
   if (amountDue == null || !billingDate) return;
 
   const money = /\(?-?\$?\s*[\d,]+\.\d{2}\)?/g;
@@ -4102,7 +4111,7 @@ export function applyLedgerFromText(text: string, ex: ExtractedBillData): void {
     // Prescott repeats the date at the head of each description ("10-01-2026 HOA Assessment").
     const desc = rest.slice(0, rest.indexOf(first)).trim().replace(/^\d{1,2}-\d{1,2}-\d{2,4}\s*/, '').replace(/([a-z])([A-Z])/g, '$1 · $2');
     const balance = num(tokens[tokens.length - 1]!);
-    if (/balance\s+forward|opening\s+balance/i.test(desc) && forward == null) { forward = balance; continue; }
+    if (/balance\s*forward|opening\s*balance/i.test(desc) && forward == null) { forward = balance; continue; }
     if (tokens.length < 2) continue;
     const amt = num(first);
     // Signed (parentheses, minus) when the statement signs it; otherwise the
@@ -4134,6 +4143,7 @@ export function applyLedgerFromText(text: string, ex: ExtractedBillData): void {
   const credits = rows.filter(r => r.credit > 0);
 
   ex.statementDate = billingDate;
+  if (box && dueDate) ex.dueDate = dueDate;
   ex.billingPeriodStart = `${billMonth}-01`;
   ex.billingPeriodEnd = new Date(Date.UTC(Number(billMonth.slice(0, 4)), Number(billMonth.slice(5, 7)), 0)).toISOString().slice(0, 10);
   ex.currentCharges = currentTotal;

@@ -30,6 +30,12 @@ export interface BillFacts {
   carried: number | null;
   /** Payments the bill shows as received since the bill before; null when it shows none. */
   paymentsShown: number | null;
+  /**
+   * A running ledger's payments, each on its own date (Seabreeze / CINC HOA statements). A ledger
+   * reprints the months before it, so its CREDITS column holds payments the bill before already
+   * showed: only those dated after that bill are payments since it. Null on an ordinary bill.
+   */
+  ledger?: { date: string; amount: number }[] | null;
   /** A late fee the bill itself lists (its own, from the document). */
   ownFee: number;
   /** A payment plan, solar true-up or figures from an email: the balance moves for other reasons. */
@@ -52,6 +58,14 @@ export function carriedFeeBetween(a: BillFacts, b: BillFacts, loggedOnA = 0, pai
   if (a.unsure || b.unsure) return { kind: 'none', why: 'payment plan, true-up or emailed figures' };
   if (a.total == null || b.carried == null) return { kind: 'none', why: 'figures missing' };
   let paid = b.paymentsShown;
+  // A ledger's payments since the bill before: the credits dated after it. Counting them all took
+  // the payment the bill before already showed twice, and an HOA's monthly eCheck read as a late
+  // fee of the same amount on every bill.
+  if (b.ledger) {
+    const after = a.statementDate.toISOString().slice(0, 10);
+    const since = b.ledger.filter(l => l.date > after);
+    paid = since.length ? r2(since.reduce((t, l) => t + l.amount, 0)) : null;
+  }
   if (paid == null) {
     if (paidBetween > 0.005) return { kind: 'none', why: 'the next bill does not show the payments made' };
     paid = 0;

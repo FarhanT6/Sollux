@@ -17,6 +17,7 @@ import { db } from '../config/db';
 import { recordRentPayment, periodStartOf, chargesFor, creditedTo } from './rentPaymentService';
 import { monthRentDue } from '../lib/rentDue';
 import { autoLogIncoming } from './incomingRent';
+import { paysUtilitiesWithRent } from './utilityPayers';
 import { matchPayer, matchLeaseByAmount, CHANNEL_TO_METHOD } from './transactionMatchService';
 
 export type P2PChannel = 'ZELLE' | 'VENMO' | 'PAYPAL' | 'CASH_APP' | 'APPLE_CASH';
@@ -231,6 +232,10 @@ export async function rentMonthFor(leaseId: string, date: Date, memo: string | n
   let period = periodFor(date, null);
   const lease = await db.lease.findUnique({ where: { id: leaseId }, select: { rentAmount: true, startDate: true, firstMonthRent: true } });
   if (!lease) return period;
+  // A tenant who pays the utilities back with the rent sends more in a month than the rent: the
+  // second payment is the utilities (incomingRent), not next month's rent. Moved on to the next
+  // month, a $1,250 rent-and-utilities transfer read as next month paid and the month after started.
+  if (await paysUtilitiesWithRent(leaseId, date)) return period;
   for (let i = 0; i < 2; i++) {
     const due = monthRentDue(lease as any, period) + await chargesFor(leaseId, period);
     if (due <= 0 || await creditedTo(leaseId, period) < due - 0.5) break;

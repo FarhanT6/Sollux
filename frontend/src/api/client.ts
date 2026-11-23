@@ -285,6 +285,9 @@ export const updateRentPayment = (id: string, data: any) =>
   api.patch<RentPayment>(`/rent-payments/${id}`, data).then(r => r.data);
 export const deleteRentPayment = (id: string) =>
   api.delete(`/rent-payments/${id}`);
+// The payment was the tenant paying utilities back: off the rent, onto the lease's utility payments.
+export const rentPaymentToUtilities = (id: string) =>
+  api.post<{ note: string }>(`/rent-payments/${id}/utilities`).then(r => r.data);
 
 // Notices
 export const getNotices = (params?: { leaseId?: string; propertyId?: string }) =>

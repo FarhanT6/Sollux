@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { carriedFeeBetween, type BillFacts } from '../../src/lib/carriedFee';
-import { applyPreviousBalanceBoxFromText, type ExtractedBillData } from '../../src/services/pdfImportService';
+import { applyPreviousBalanceBoxFromText, applyLedgerFromText, type ExtractedBillData } from '../../src/services/pdfImportService';
 
 const d = (s: string) => new Date(`${s}T00:00:00Z`);
 const bill = (date: string, f: Partial<BillFacts>): BillFacts => ({ statementDate: d(date), total: null, carried: null, paymentsShown: null, ownFee: 0, unsure: false, ...f });
@@ -103,4 +103,38 @@ test('an IID bill is read from its own lines (made-up account and figures)', asy
   applyIidFromText(text.replace('60.00CR', '0.00').replace('Account  Balance  $30.00', 'Account  Balance  $90.00'), carried);
   assert.equal(carried.previousBalance, 60);
   assert.equal(carried.statedTotalDue, 90);
+});
+
+test('a running ledger reprints the payment the bill before showed: it is not a payment since, nor a fee', () => {
+  // An HOA ledger: the Aug 19 statement lists Jul 15's and Aug 16's eChecks; the Sep 20 one lists
+  // Aug 16's again with Sep 14's. Only Sep 14's came after Aug 19. A fee charged in between is a fee.
+  const aug = bill('2026-08-19', { total: 3_000, carried: 2_000, paymentsShown: 2_400, ledger: [{ date: '2026-07-15', amount: 1_200 }, { date: '2026-08-16', amount: 1_200 }] });
+  const sep = bill('2026-09-20', { total: 2_800, carried: 1_800, paymentsShown: 2_400, ledger: [{ date: '2026-08-16', amount: 1_200 }, { date: '2026-09-14', amount: 1_200 }] });
+  assert.equal(carriedFeeBetween(aug, sep).kind, 'none');
+  const withFee = bill('2026-09-20', { total: 2_830, carried: 1_830, paymentsShown: 2_400, ledger: sep.ledger });
+  assert.deepEqual(carriedFeeBetween(aug, withFee), { kind: 'fee', fee: 30, difference: 30 });
+});
+
+test("a ledger whose text runs words together and prints its header box's values apart is read (made-up account and figures)", () => {
+  // As pdf-parse reads a Seabreeze / CINC statement: labels on top, values on a run-together line.
+  const text = [
+    'Account NumberBilling Date', 'Amount Due', 'DATEDESCRIPTIONCHARGESCREDITSBALANCE', 'Property AddressAs of Date',
+    '1200 ELM GROVE LN# 4', 'September20, 2026', '123456654321Oct 1, 2026$2,830.00', 'MAKECHECKPAYABLETO:',
+    '08/01/2026BALANCEFORWARD$1,800.00',
+    'CURRENTCHARGES',
+    '08/01/2026MonthlyAssessment-Unit4 2026$1,000.00$2,800.00',
+    '08/11/2026monitoringfee 2026$30.00$2,830.00',
+    '08/16/2026eCheck($1,200.00)$1,630.00',
+    '09/01/2026MonthlyAssessment-Unit4 2026$1,000.00$2,630.00',
+    '09/14/2026eCheck($800.00)$1,830.00',
+    '10/01/2026MonthlyAssessment-Unit4 2026$1,000.00$2,830.00',
+  ].join('\n');
+  const ex = {} as ExtractedBillData;
+  applyLedgerFromText(text, ex);
+  assert.equal(ex.statementDate, '2026-09-20');
+  assert.equal(ex.dueDate, '2026-10-01');
+  assert.equal(ex.amountDue, 1_000);
+  assert.equal(ex.statedTotalDue, 2_830);
+  assert.equal(ex.previousBalance, 1_830);
+  assert.deepEqual(ex.ledgerPayments?.map(l => [l.date, l.amount]), [['2026-08-16', 1_200], ['2026-09-14', 800]]);
 });
