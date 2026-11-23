@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { Link } from 'react-router-dom';
 import {
   getLoanTrackerMonth, getLoanTrackerYear, createLoanPayment, updateLoanPayment, deleteLoanPayment, getBankAccounts,
+  markLoanPaymentReturned, undoLoanPaymentReturned, RETURN_REASON_LABELS, type ReturnReason, type LoanReturnedPayment,
   type LoanTrackerMonth, type LoanTrackerYear, type LoanTrackerRow, type LoanTrackerStatus, type LoanTrackerPayment,
 } from '../../api/client';
 import type { LoanPaymentMethod } from '../../types';
@@ -57,7 +58,13 @@ export default function LoanPaymentTracker({ month: fixedMonth }: { month?: stri
     if (!window.confirm(`Delete the ${fmtMoney(p.amount)} payment of ${fmtDate(p.date)} to ${r.lender}? The month shows unpaid again${p.pending && !p.pending.cleared ? ', and it is no longer pending on the bank account' : ''}.`)) return;
     try { await deleteLoanPayment(r.loanId, p.id); load(); } catch (e) { setErr(describeApiError(e, 'Could not delete the payment.')); }
   };
-  const details = (r: LoanTrackerRow) => <RowDetails r={r} month={month} onEdit={p => setEditing({ row: r, payment: p })} onDelete={p => void removePayment(r, p)} />;
+  // A payment that came back (a bounced check): marked here, undone from the same place.
+  const [returning, setReturning] = useState<{ row: LoanTrackerRow; payment: LoanTrackerPayment } | null>(null);
+  const undoReturned = async (r: LoanTrackerRow, x: LoanReturnedPayment) => {
+    if (!window.confirm(`Put the ${fmtMoney(x.amount)} payment of ${fmtDate(x.sentOn)} back as paid? ${x.bankFee ? `The ${fmtMoney(x.bankFee)} bank fee recorded for it is removed. ` : ''}`)) return;
+    try { await undoLoanPaymentReturned(r.loanId, x.id); load(); } catch (e) { setErr(describeApiError(e, 'Could not undo it.')); }
+  };
+  const details = (r: LoanTrackerRow) => <RowDetails r={r} month={month} onEdit={p => setEditing({ row: r, payment: p })} onDelete={p => void removePayment(r, p)} onReturned={p => setReturning({ row: r, payment: p })} onUndoReturned={x => void undoReturned(r, x)} />;
 
   useEffect(() => { if (fixedMonth) setMonth(fixedMonth); }, [fixedMonth]);
   const year = Number(month.slice(0, 4));
@@ -231,7 +238,7 @@ export default function LoanPaymentTracker({ month: fixedMonth }: { month?: stri
                       <td className="py-2 text-right text-emerald-500">{r.paid > 0 ? fmtMoney(r.paid) : '—'}</td>
                       <td className="py-2 text-right text-amber-500">{r.remaining > 0 ? fmtMoney(r.remaining) : '—'}</td>
                       <td className="py-2 pl-3 text-xs text-gray-400">{methodsShort(r.paymentMethods) || '—'}</td>
-                      <td className="py-2 pl-3"><span className={`text-xs px-2 py-0.5 rounded-full whitespace-nowrap ${STATUS_CLS[r.status]}`}>{STATUS_LABEL[r.status]}</span></td>
+                      <td className="py-2 pl-3"><span className={`text-xs px-2 py-0.5 rounded-full whitespace-nowrap ${STATUS_CLS[r.status]}`}>{STATUS_LABEL[r.status]}</span>{r.returned?.length ? <span className="block text-[11px] text-red-300 mt-0.5 whitespace-nowrap">a payment came back</span> : null}</td>
                       <td className="py-2 text-right">
                         {r.status !== 'paid' && r.status !== 'none' && <button onClick={() => setLogRow(r)} className="text-xs text-amber-400 hover:text-amber-300 whitespace-nowrap">Log payment</button>}
                       </td>
@@ -307,6 +314,9 @@ export default function LoanPaymentTracker({ month: fixedMonth }: { month?: stri
       )}
       {editing && (
         <LogLoanPaymentModal row={editing.row} month={month} payment={editing.payment} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />
+      )}
+      {returning && (
+        <ReturnedModal row={returning.row} payment={returning.payment} onClose={() => setReturning(null)} onSaved={() => { setReturning(null); load(); }} />
       )}
     </div>
   );
@@ -454,7 +464,7 @@ function LogLoanPaymentModal({ row, month, payment, onClose, onSaved }: { row: L
 }
 
 /** What a loan's month came to and how it is paid: the payments toward the month, how and where to pay. */
-function RowDetails({ r, month, onEdit, onDelete }: { r: LoanTrackerRow; month: string; onEdit: (p: LoanTrackerPayment) => void; onDelete: (p: LoanTrackerPayment) => void }) {
+function RowDetails({ r, month, onEdit, onDelete, onReturned, onUndoReturned }: { r: LoanTrackerRow; month: string; onEdit: (p: LoanTrackerPayment) => void; onDelete: (p: LoanTrackerPayment) => void; onReturned: (p: LoanTrackerPayment) => void; onUndoReturned: (x: LoanReturnedPayment) => void }) {
   return (
     <div className="grid md:grid-cols-2 gap-4 text-xs">
       <div>
@@ -469,10 +479,25 @@ function RowDetails({ r, month, onEdit, onDelete }: { r: LoanTrackerRow; month: 
             </span>
             <span className="flex gap-3 shrink-0">
               <button onClick={() => onEdit(p)} className="text-amber-400 hover:text-amber-300">Edit</button>
+              <button onClick={() => onReturned(p)} className="text-gray-400 hover:text-red-300" title="The check bounced or the payment was returned: it no longer counts as paid">Came back</button>
               <button onClick={() => onDelete(p)} className="text-gray-500 hover:text-red-400">Delete</button>
             </span>
           </div>
         )) : <p className="text-gray-500">Nothing logged for this month.</p>}
+        {(r.returned ?? []).map(x => (
+          <div key={x.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 py-0.5">
+            <span className="text-gray-400 w-20">{fmtDate(x.sentOn, 'MMM d')}</span>
+            <span className="text-red-400 w-24 text-right line-through decoration-red-400/60">{fmtMoney(x.amount)}</span>
+            <span className="text-gray-500 min-w-0 flex-1">
+              <span className="text-red-300">Came back {fmtDate(x.returnedOn, 'MMM d')}</span>
+              {' · '}{RETURN_REASON_LABELS[x.reason] ?? 'Returned'}
+              {x.confirmationNumber ? ` · #${x.confirmationNumber}` : ''}
+              {x.bankFee ? ` · bank fee ${fmtMoney(x.bankFee)} (in expenses)` : ''}
+              {x.lenderFee ? ` · lender's fee ${fmtMoney(x.lenderFee)} (owed with this month)` : ''}
+            </span>
+            <button onClick={() => onUndoReturned(x)} className="text-gray-500 hover:text-amber-300 shrink-0" title="It did not come back after all: count it as paid again">Undo</button>
+          </div>
+        ))}
         {r.lastPayment && <p className="text-gray-600 mt-2">Last payment on record: {fmtMoney(r.lastPayment.amount)} on {fmtDate(r.lastPayment.date)}</p>}
       </div>
       <div className="space-y-1">
@@ -482,6 +507,62 @@ function RowDetails({ r, month, onEdit, onDelete }: { r: LoanTrackerRow; month: 
         {r.mailingAddress && <p><span className="text-gray-500">Mail to: </span><span className="text-gray-300">{r.mailingAddress}</span></p>}
         {r.paymentUrl && <p><a href={r.paymentUrl} target="_blank" rel="noreferrer" className="text-amber-400 hover:underline">Open payment site ↗</a></p>}
         <p><Link to={`/loans/${r.loanId}`} className="text-amber-400 hover:underline">Loan details →</Link></p>
+      </div>
+    </div>
+  );
+}
+
+/** A payment that came back: when, why, and the fees it cost. It then no longer counts as paid. */
+function ReturnedModal({ row, payment, onClose, onSaved }: { row: LoanTrackerRow; payment: LoanTrackerPayment; onClose: () => void; onSaved: () => void }) {
+  const isCheck = payment.method === 'CHECK' || payment.method === 'CHECK_DROPPED';
+  const [returnedOn, setReturnedOn] = useState(todayISO());
+  const [reason, setReason] = useState<ReturnReason>('NSF');
+  const [bankFee, setBankFee] = useState('');
+  const [lenderFee, setLenderFee] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const save = async () => {
+    setSaving(true); setErr(null);
+    try {
+      await markLoanPaymentReturned(row.loanId, payment.id, { returnedOn, reason, bankFee: bankFee ? parseFloat(bankFee) : null, lenderFee: lenderFee ? parseFloat(lenderFee) : null });
+      onSaved();
+    } catch (e) { setErr(describeApiError(e, 'Could not mark it.')); }
+    finally { setSaving(false); }
+  };
+  const input = 'input-dark w-full text-sm';
+  const label = 'block text-xs text-gray-500 mb-1';
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.6)' }} onClick={onClose}>
+      <div className="card p-5 w-full max-w-md space-y-3" onClick={e => e.stopPropagation()}>
+        <div>
+          <p className="text-sm font-semibold text-white">{isCheck ? 'Check bounced' : 'Payment came back'} — {row.lender}</p>
+          <p className="text-xs text-gray-500">{fmtMoney(payment.amount)} sent {fmtDate(payment.date)}{payment.confirmationNumber ? ` · #${payment.confirmationNumber}` : ''}</p>
+        </div>
+        <p className="text-xs text-gray-400">It stops counting as paid, so the month is owed again{payment.pending && !payment.pending.cleared ? ' and it is no longer pending on the bank account' : ''}. It stays on record here, and Undo puts it back.</p>
+        <div className="grid grid-cols-2 gap-3">
+          <div><span className={label}>Came back on</span><input type="date" className={input} value={returnedOn} onChange={e => setReturnedOn(e.target.value)} /></div>
+          <div>
+            <span className={label}>Why</span>
+            <select className={input} value={reason} onChange={e => setReason(e.target.value as ReturnReason)}>
+              {(Object.keys(RETURN_REASON_LABELS) as ReturnReason[]).map(k => <option key={k} value={k}>{RETURN_REASON_LABELS[k]}</option>)}
+            </select>
+          </div>
+          <div>
+            <span className={label}>Your bank's fee</span>
+            <input type="number" step="0.01" className={input} value={bankFee} onChange={e => setBankFee(e.target.value)} placeholder="0.00" />
+            <p className="text-[11px] text-gray-600 mt-1">Recorded as an expense</p>
+          </div>
+          <div>
+            <span className={label}>Lender's fee</span>
+            <input type="number" step="0.01" className={input} value={lenderFee} onChange={e => setLenderFee(e.target.value)} placeholder="0.00" />
+            <p className="text-[11px] text-gray-600 mt-1">Owed with this month</p>
+          </div>
+        </div>
+        {err && <p className="text-xs text-red-400">{err}</p>}
+        <div className="flex justify-end gap-2 pt-1">
+          <button onClick={onClose} className="btn text-xs">Cancel</button>
+          <button onClick={() => void save()} disabled={saving || !/^\d{4}-\d{2}-\d{2}$/.test(returnedOn)} className="btn btn-primary text-xs disabled:opacity-50">{saving ? 'Saving…' : isCheck ? 'Mark bounced' : 'Mark returned'}</button>
+        </div>
       </div>
     </div>
   );

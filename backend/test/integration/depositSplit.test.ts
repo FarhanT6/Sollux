@@ -12,8 +12,9 @@ before(async () => {
   const { db } = api;
   const me = await db.user.create({ data: { ...OWNER, trialEndsAt: new Date(Date.now() + 10 * 86_400_000) } });
   const p = await db.property.create({ data: { userId: me.id, address: '1200 Elm Grove Ln', city: 'Riverside', state: 'CA', zip: '92501', type: 'RESIDENTIAL_SINGLE' } });
+  // Moved in on the 1st of last month: a whole first month, so no proration moves the deposit (20 days back fell mid-month).
   const u = await db.unit.create({ data: { propertyId: p.id, unitLabel: 'Space 9' } });
-  const l = await db.lease.create({ data: { unitId: u.id, rentAmount: 750, status: 'ACTIVE', leaseType: 'MONTH_TO_MONTH', startDate: new Date(Date.now() - 20 * 86_400_000), arrearsBalance: 0 } });
+  const l = await db.lease.create({ data: { unitId: u.id, rentAmount: 750, status: 'ACTIVE', leaseType: 'MONTH_TO_MONTH', startDate: new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() - 1, 1)), arrearsBalance: 0 } });
   const tx = await db.incomingTransaction.create({ data: { userId: me.id, plaidTransactionId: 'bank:dep1', amount: 1500, date: new Date(), name: 'ZELLE FROM SAMPLE PAYER', source: 'bank', channel: 'ZELLE', status: 'SUGGESTED', matchedLeaseId: l.id } });
   Object.assign(ids, { lease: l.id, tx: tx.id });
 });

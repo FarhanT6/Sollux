@@ -1201,6 +1201,7 @@ model Loan {
   updatedAt                 DateTime        @updatedAt
 
   loanPayments    LoanPayment[]
+  returnedPayments ReturnedPayment[]
   loanExtensions  LoanExtension[]
   pendingOutflows PendingOutflow[]
   // The individual loans a servicer bills together under one account
@@ -1220,6 +1221,41 @@ model Loan {
 // with one payment; each has its own principal, rate and disbursement
 // date. The parent Loan carries the account-level totals, recomputed
 // from these whenever one changes (see services/loanComponents.ts).
+/// A loan payment that came back: a check that bounced (not enough money, a stop payment, a closed
+/// account) or a transfer returned. Kept apart from loan_payments, so nothing that totals payments
+/// counts it as paid; the month is owed again (plus any fee the lender charges for it), and the
+/// owner's bank's returned-item fee is an expense. Undone by putting the payment back.
+model ReturnedPayment {
+  id                   String    @id @default(cuid())
+  userId               String
+  loanId               String
+  loan                 Loan      @relation(fields: [loanId], references: [id], onDelete: Cascade)
+  /// The payment as it was logged.
+  amount               Decimal   @db.Decimal(12, 2)
+  sentOn               DateTime
+  periodDate           DateTime?
+  method               String?
+  confirmationNumber   String?
+  billAmount           Decimal?  @db.Decimal(10, 2)
+  lateFee              Decimal?  @db.Decimal(10, 2)
+  notes                String?
+  /// It was not out of the account yet: the account it was pending on, to put back on undo.
+  pendingBankAccountId String?
+  /// When it came back, and why (NSF, STOP_PAYMENT, ACCOUNT_CLOSED, OTHER).
+  returnedOn           DateTime
+  reason               String?
+  /// The owner's bank's fee for the returned item (recorded as an expense, bankFeeExpenseId).
+  bankFee              Decimal?  @db.Decimal(10, 2)
+  bankFeeExpenseId     String?
+  /// The lender's fee for the returned payment: owed with that month.
+  lenderFee            Decimal?  @db.Decimal(10, 2)
+  createdAt            DateTime  @default(now())
+
+  @@index([loanId])
+  @@index([userId])
+  @@map("returned_payments")
+}
+
 model LoanComponent {
   id              String    @id @default(cuid())
   loanId          String

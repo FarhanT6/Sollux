@@ -356,7 +356,19 @@ export interface LoanTrackerPayment {
 export interface LoanTrackerRow extends LoanTrackerBase {
   dueDate: string; graceEnds: string; paid: number; remaining: number; lateFees: number; status: LoanTrackerStatus;
   payments: LoanTrackerPayment[]; lastPayment: { date: string; amount: number } | null;
+  /** Payments for the month that came back (a bounced check): not paid; a lender's fee for one is in `expected`. */
+  returned?: LoanReturnedPayment[];
 }
+export type ReturnReason = 'NSF' | 'STOP_PAYMENT' | 'ACCOUNT_CLOSED' | 'OTHER';
+export const RETURN_REASON_LABELS: Record<ReturnReason, string> = { NSF: 'Not enough money (NSF)', STOP_PAYMENT: 'Stop payment', ACCOUNT_CLOSED: 'Account closed', OTHER: 'Other' };
+export interface LoanReturnedPayment {
+  id: string; loanId: string; month: string; amount: number; sentOn: string; returnedOn: string; reason: ReturnReason;
+  method: string | null; confirmationNumber: string | null; bankFee: number | null; lenderFee: number | null;
+}
+/** A payment that came back: moved out of the payments (the month is owed again), with the bank's and the lender's fees. */
+export const markLoanPaymentReturned = (loanId: string, paymentId: string, body: { returnedOn: string; reason?: ReturnReason; bankFee?: number | null; lenderFee?: number | null }) =>
+  api.post<{ id: string }>(`/loans/${loanId}/payments/${paymentId}/returned`, body).then(r => r.data);
+export const undoLoanPaymentReturned = (loanId: string, returnedId: string) => api.post(`/loans/${loanId}/returned/${returnedId}/undo`).then(r => r.data);
 export interface LoanTrackerMonth { month: string; rows: LoanTrackerRow[]; totals: { expected: number; paid: number; remaining: number; late: number } }
 export interface LoanTrackerYear {
   year: number; months: string[];
