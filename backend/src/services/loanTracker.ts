@@ -10,6 +10,7 @@
  */
 import { db } from '../config/db';
 import { dueBy } from '../lib/loanStart';
+import { returnedBetween } from './returnedPayments';
 
 /** `closing`: the month the loan funded — its first month is paid at closing (prepaid interest, escrow), nothing owed. */
 export type TrackerStatus = 'paid' | 'partial' | 'upcoming' | 'due' | 'late' | 'none' | 'closing';
@@ -96,6 +97,8 @@ const startedBy = (l: Loan, month: string) => dueBy(l, month);
 export async function trackerMonth(userId: string, month: string, today: string) {
   const loans = (await activeLoans(userId)).filter(l => startedBy(l, month));
   const payments = await paymentsBetween(loans.map(l => l.id), month, month);
+  // Payments that came back (a bounced check): not paid; any fee the lender charged for it is owed with the month.
+  const returned = await returnedBetween(loans.map(l => l.id), month, month);
   // The last payment on record, whatever month it covered.
   const last = await db.loanPayment.findMany({
     where: { loanId: { in: loans.map(l => l.id) } }, orderBy: { date: 'desc' }, distinct: ['loanId'],
@@ -104,7 +107,9 @@ export async function trackerMonth(userId: string, month: string, today: string)
   const lastBy = new Map(last.map(p => [p.loanId, { date: p.date.toISOString().slice(0, 10), amount: n(p.amount) }]));
 
   const rows = loans.map(l => {
-    const b = base(l);
+    const b0 = base(l);
+    const back = returned.filter(x => x.loanId === l.id && x.month === month);
+    const b = { ...b0, expected: Number((b0.expected + back.reduce((t, x) => t + (x.lenderFee ?? 0), 0)).toFixed(2)) };
     const mine = payments.filter(p => p.loanId === l.id && p.month === month);
     const paid = Number(mine.reduce((s, p) => s + p.amount, 0).toFixed(2));
     const dueDate = dueDateFor(month, l.dueDay);
@@ -114,7 +119,7 @@ export async function trackerMonth(userId: string, month: string, today: string)
       remaining: Math.max(0, Number((b.expected - paid).toFixed(2))),
       lateFees: Number(mine.reduce((s, p) => s + (p.lateFee ?? 0), 0).toFixed(2)),
       status: statusFor(b.expected, paid, dueDate, graceEnds, today),
-      payments: mine, lastPayment: lastBy.get(l.id) ?? null,
+      payments: mine, returned: back, lastPayment: lastBy.get(l.id) ?? null,
     };
   });
   const sum = (f: (r: typeof rows[number]) => number) => Number(rows.reduce((s, r) => s + f(r), 0).toFixed(2));
@@ -129,9 +134,12 @@ export async function trackerYear(userId: string, year: number, today: string) {
   const loans = await activeLoans(userId);
   const months = Array.from({ length: 12 }, (_, i) => `${year}-${pad(i + 1)}`);
   const payments = await paymentsBetween(loans.map(l => l.id), months[0], months[11]);
+  const returned = await returnedBetween(loans.map(l => l.id), months[0], months[11]);
   const rows = loans.map(l => {
     const b = base(l);
     const cells = months.map(month => {
+      const back = returned.filter(x => x.loanId === l.id && x.month === month);
+      const owedFee = back.reduce((t, x) => t + (x.lenderFee ?? 0), 0);
       const paid = Number(payments.filter(p => p.loanId === l.id && p.month === month).reduce((s, p) => s + p.amount, 0).toFixed(2));
       if (!startedBy(l, month)) {
         // Before the first payment nothing is owed. The funding month reads as paid at closing; anything logged still shows.
@@ -139,7 +147,8 @@ export async function trackerYear(userId: string, year: number, today: string) {
         return { month, expected: 0, paid, status: (funding ? 'closing' : paid > 0 ? 'paid' : 'none') as TrackerStatus };
       }
       const dueDate = dueDateFor(month, l.dueDay);
-      return { month, expected: b.expected, paid, status: statusFor(b.expected, paid, dueDate, addDays(dueDate, l.gracePeriodDays ?? 0), today) };
+      const expected = Number((b.expected + owedFee).toFixed(2));
+      return { month, expected, paid, status: statusFor(expected, paid, dueDate, addDays(dueDate, l.gracePeriodDays ?? 0), today), ...(back.length ? { returned: back.length } : {}) };
     });
     return { ...b, cells, paidYear: Number(cells.reduce((s, c) => s + c.paid, 0).toFixed(2)), lateMonths: cells.filter(c => c.status === 'late').length };
   });

@@ -11,6 +11,7 @@ import { syncLoanFromComponents, serializeLoanComponent } from '../services/loan
 import { readDocument } from '../services/documentReader';
 import { trackerMonth, trackerYear } from '../services/loanTracker';
 import { linkBilledLoansSoon } from '../services/billedLoans';
+import { markPaymentReturned, undoPaymentReturned, RETURN_REASONS } from '../services/returnedPayments';
 import { rowsFromCsv, matchRows, loansForMatch, applyRow, cleanRow, PAYMENT_METHODS, type SheetRow } from '../services/loanPaymentDetails';
 
 const router = Router();
@@ -609,6 +610,33 @@ router.patch('/:id/payments/:paymentId', async (req, res, next) => {
     await syncLoanPaymentPending(req.dbUserId!, { id: payment.id, amount: Number(payment.amount), date: payment.date, method: payment.method, confirmationNumber: payment.confirmationNumber }, loan.lender, pendingFrom)
       .catch(err => console.warn('[Loans] pending payment:', err instanceof Error ? err.message : err));
     res.json(serializeLoanPayment(payment));
+  } catch (err) { next(err); }
+});
+
+// A payment that came back (a bounced check, a returned transfer): moved out of the payments, so
+// the month is owed again; the bank's fee for it is an expense, the lender's is owed with the month.
+router.post('/:id/payments/:paymentId/returned', async (req, res, next) => {
+  try {
+    const body = z.object({
+      returnedOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      reason: z.enum(Object.keys(RETURN_REASONS) as [keyof typeof RETURN_REASONS, ...(keyof typeof RETURN_REASONS)[]]).optional().nullable(),
+      bankFee: z.number().min(0).max(1000).optional().nullable(),
+      lenderFee: z.number().min(0).max(10000).optional().nullable(),
+    }).parse(req.body ?? {});
+    const r = await markPaymentReturned(req.dbUserId!, req.params.id, req.params.paymentId, body);
+    if (!r) return res.status(404).json({ error: 'Payment not found' });
+    res.status(201).json({ id: r.id });
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ error: 'Give the day it came back (and any fees as amounts).' });
+    next(err);
+  }
+});
+// Not returned after all: the payment goes back as it was.
+router.post('/:id/returned/:returnedId/undo', async (req, res, next) => {
+  try {
+    const p = await undoPaymentReturned(req.dbUserId!, req.params.id, req.params.returnedId);
+    if (!p) return res.status(404).json({ error: 'Not found' });
+    res.json(serializeLoanPayment(p));
   } catch (err) { next(err); }
 });
 
