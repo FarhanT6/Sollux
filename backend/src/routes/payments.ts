@@ -149,8 +149,13 @@ async function ownAccount(userId: string, utilityAccountId: string) {
 // as one row per bill (so each bill's paid state, plan and loan application
 // keep working per statement), all sharing a splitGroupId so the parts read
 // as one payment. The allocations must add up to the amount.
+// A part may be the account's payment arrangement instead of a bill (towardPlan, no statement): a
+// payment that is this month's bill plus the arrangement's installment, logged as one.
 const SplitPaymentSchema = PaymentSchema.omit({ statementId: true }).extend({
-  allocations: z.array(z.object({ statementId: z.string(), amount: z.number().positive() })).min(2),
+  allocations: z.array(z.object({ statementId: z.string().optional().nullable(), amount: z.number().positive(), towardPlan: z.boolean().optional() }))
+    .min(2)
+    .refine(a => a.every(x => !!x.statementId || !!x.towardPlan), 'Each part is a bill or the payment arrangement.')
+    .refine(a => a.filter(x => x.towardPlan).length <= 1, 'The payment arrangement can be one part.'),
 });
 
 router.post('/split', async (req, res, next) => {
@@ -163,7 +168,7 @@ router.post('/split', async (req, res, next) => {
     if (Math.abs(allocated - data.amount) > 0.01) {
       return res.status(400).json({ error: `The amounts per bill add up to ${allocated.toFixed(2)}, not the ${data.amount.toFixed(2)} paid.` });
     }
-    const ids = data.allocations.map(a => a.statementId);
+    const ids = data.allocations.map(a => a.statementId).filter((x): x is string => !!x);
     if (new Set(ids).size !== ids.length) return res.status(400).json({ error: 'Each bill can appear once.' });
     const stmts = await db.statement.findMany({ where: { id: { in: ids }, utilityAccountId: data.utilityAccountId }, select: { id: true } });
     if (stmts.length !== ids.length) return res.status(404).json({ error: 'Statement not found on this account' });
@@ -176,23 +181,25 @@ router.post('/split', async (req, res, next) => {
     const fees = requestedFees(data);
     const splitGroupId = `split_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     const created: any[] = [];
+    // A late fee goes on the first bill paid (not the arrangement part, which has none).
+    const feeAt = Math.max(0, allocations.findIndex(a => !!a.statementId));
     for (const [i, alloc] of allocations.entries()) {
       const payment = await db.payment.create({
         data: {
           ...shared,
-          statementId: alloc.statementId,
+          statementId: alloc.statementId ?? null,
+          towardPlan: !!alloc.towardPlan,
           amount: alloc.amount,
           // The fee was paid once; it sits on the first part so totals stay right.
           feeAmount: i === 0 ? feeAmount ?? null : null,
-          // So is a late fee: it goes on the first bill paid.
-          lateFeeAdded: i === 0 && fees.length ? feesTotal(fees) : null,
-          feesAddedJson: i === 0 && fees.length ? (fees as any) : undefined,
+          lateFeeAdded: i === feeAt && fees.length ? feesTotal(fees) : null,
+          feesAddedJson: i === feeAt && fees.length ? (fees as any) : undefined,
           splitGroupId,
           paymentDate: new Date(shared.paymentDate),
         },
         include: { bankAccount: { select: { id: true, name: true, bank: true, last4: true, accountType: true, ownerLabel: true, cardNetwork: true } } },
       });
-      if (i === 0 && fees.length) await applyFees(alloc.statementId, fees);
+      if (i === feeAt && fees.length && alloc.statementId) await applyFees(alloc.statementId, fees);
       await syncStatementPaid(alloc.statementId);
       const planApplied = await applyPaymentToPlan(payment.id);
       const loanApplied = await applyPaymentToLoan(payment.id);

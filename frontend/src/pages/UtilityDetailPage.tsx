@@ -1188,7 +1188,7 @@ export default function UtilityDetailPage() {
               <BillPicker className="sm:col-span-2" statements={statements} payments={payments}
                 amount={parseFloat(payForm.amount) || 0} value={bill} onChange={setBill}
                 onLateFee={amt => setFeeRows(rows => [...rows.filter(r => !(r.kind === 'late' && !(parseFloat(r.amount) > 0))), { kind: 'late', amount: amt.toFixed(2) }])}
-                plan={plan && plan.status === 'ACTIVE' && Number(plan.remainingBalance) > 0 ? { installment: Number(plan.monthlyAmount), agreement: String(plan.description ?? '').match(/Agreement (\d+)/)?.[1] ?? null } : null} />
+                plan={plan && plan.status === 'ACTIVE' && Number(plan.remainingBalance) > 0 ? { installment: Number(plan.monthlyAmount), fee: plan.installmentFee != null ? Number(plan.installmentFee) : null, agreement: String(plan.description ?? '').match(/Agreement (\d+)/)?.[1] ?? null } : null} />
               <PaymentSourcePicker accounts={bankAccounts} paymentMethod={payForm.paymentMethod}
                 value={payForm.bankAccountId} onChange={id => setPayForm(f => ({ ...f, bankAccountId: id }))}
                 card={newCard} onCardChange={setNewCard} />
@@ -2127,7 +2127,8 @@ export default function UtilityDetailPage() {
                           {(p as any).splitGroupId && (() => {
                             const parts = payments.filter((q: any) => q.splitGroupId === (p as any).splitGroupId);
                             const whole = parts.reduce((a: number, q: any) => a + Number(q.amount), 0);
-                            return parts.length > 1 ? <span className="text-gray-600"> · part of a {fmtMoney(whole)} payment split across {parts.length} bills</span> : null;
+                            const withPlan = parts.some((q: any) => !q.statementId);
+                            return parts.length > 1 ? <span className="text-gray-600"> · part of a {fmtMoney(whole)} payment split across {withPlan ? `${parts.length - 1 === 1 ? 'this bill' : `${parts.length - 1} bills`} and the payment arrangement` : `${parts.length} bills`}</span> : null;
                           })()}
                         </p>
                       )}

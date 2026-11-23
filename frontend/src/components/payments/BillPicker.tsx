@@ -80,7 +80,10 @@ export function owedOf(st: any, statements: any[], payments: any[] = []): number
  * Money beyond what the bills owe is not quietly put on the last one: it is
  * left over (`extra`) for the owner to say what it is.
  */
-export function allocateAcrossBills(statements: any[], total: number, ids: string[], payments: any[] = []): Record<string, string> {
+/** The payment arrangement as a part of a split (its installment and fee), keyed in `alloc`. */
+export const PLAN_PART = '__plan__';
+
+export function allocateAcrossBills(statements: any[], total: number, ids: string[], payments: any[] = [], planDue = 0): Record<string, string> {
   const chosen = statements.filter(s => ids.includes(s.id)).slice()
     .sort((a, b) => (a.statementDate ?? '').localeCompare(b.statementDate ?? ''));
   let left = Number((total || 0).toFixed(2));
@@ -90,6 +93,12 @@ export function allocateAcrossBills(statements: any[], total: number, ids: strin
     next[s.id] = take.toFixed(2);
     left = Number((left - take).toFixed(2));
   });
+  // The arrangement's installment (and its fee) after the bills: this month's bill plus the installment, paid as one.
+  if (ids.includes(PLAN_PART)) {
+    const take = Math.min(planDue > 0 ? planDue : left, left);
+    next[PLAN_PART] = take.toFixed(2);
+    left = Number((left - take).toFixed(2));
+  }
   return next;
 }
 
@@ -98,11 +107,13 @@ const newestOf = (statements: any[], ids: string[]) =>
   statements.filter(s => ids.includes(s.id)).sort((a, b) => (b.statementDate ?? '').localeCompare(a.statementDate ?? ''))[0];
 
 /** The allocations to send, or a message saying why they cannot be. */
-export function splitAllocations(value: BillPickerValue, total: number): { allocations: { statementId: string; amount: number }[] } | { error: string } {
-  const allocations = Object.entries(value.alloc).map(([statementId, v]) => ({ statementId, amount: parseFloat(v) })).filter(a => a.amount > 0);
+export function splitAllocations(value: BillPickerValue, total: number): { allocations: { statementId: string | null; amount: number; towardPlan?: boolean }[] } | { error: string } {
+  const allocations = Object.entries(value.alloc)
+    .map(([key, v]) => (key === PLAN_PART ? { statementId: null, towardPlan: true, amount: parseFloat(v) } : { statementId: key as string | null, amount: parseFloat(v) }))
+    .filter(a => a.amount > 0);
   // A late fee goes on the bill it was charged with: the split's fees sit on its first part.
   if (value.feeOn) allocations.sort((a, b) => (a.statementId === value.feeOn ? -1 : b.statementId === value.feeOn ? 1 : 0));
-  if (allocations.length < 2) return { error: 'Pick at least two bills to split this payment across, or turn the split off.' };
+  if (allocations.length < 2) return { error: 'Pick at least two parts (bills, or a bill and the payment arrangement) to split this payment across, or turn the split off.' };
   const assigned = Number(allocations.reduce((a, x) => a + x.amount, 0).toFixed(2));
   if (Math.abs(assigned - total) > 0.01) return { error: `The amounts per bill add up to ${money(assigned)}, not the ${money(total)} paid. Adjust them or use Auto-fill.` };
   return { allocations };
@@ -115,8 +126,8 @@ export default function BillPicker({ statements, payments, amount, value, onChan
   value: BillPickerValue;
   onChange: (v: BillPickerValue) => void;
   className?: string;
-  /** An active payment arrangement on the account: offered as its own choice. */
-  plan?: { installment: number; agreement?: string | null } | null;
+  /** An active payment arrangement on the account: offered as its own choice (fee: charged with each installment). */
+  plan?: { installment: number; fee?: number | null; agreement?: string | null } | null;
   /** The owner said the extra is a late fee not billed yet: the form adds it as a late fee. */
   onLateFee?: (amount: number) => void;
 }) {
@@ -132,10 +143,11 @@ export default function BillPicker({ statements, payments, amount, value, onChan
   const running = owedByBillWithMarks(sorted, payments);
   const describe = (st: any, open = false) => {
     const own = ownShareOf(st, sorted, payments);
-    // On a running balance the same Owed now the statement list shows.
+    // Listed: what the bill itself billed, as the statement list's "Bill:" — not what it carried in.
+    // In a split: what it still owes (on a running balance, the statement list's Owed now).
     const figure = open
       ? running?.has(st.id) ? money(running.get(st.id)!) : `${money(own.share)}${own.fee > 0 ? ` (${money(own.charge)} + ${money(own.fee)} fee)` : ''}`
-      : money(own.charge + own.fee);
+      : money(own.charge);
     const inst = Number(st.paymentPlanAmount ?? 0);
     return `${billMonthLabel(st)} — ${figure}${inst > 0 ? ` (incl. ${money(inst)} arrangement installment)` : ''} · billed ${fmtDate(st.statementDate, 'MMM d')}${!open && st.dueDate ? ` · due ${fmtDate(st.dueDate, 'MMM d')}` : ''}${paidMap.get(st.id) ? ' · already paid' : ' · open'}`;
   };
@@ -144,6 +156,10 @@ export default function BillPicker({ statements, payments, amount, value, onChan
   // bill, and the whole payment comes off the plan.
   const planBill = sorted.find(st => Number(st.paymentPlanAmount ?? 0) > 0 && !paidMap.get(st.id));
   const PLAN = '__plan__';
+  // The arrangement as its own part of a split: when no bill bills the installment inside it (SDG&E's does: pay that bill).
+  const planDue = plan ? Number((plan.installment + Number(plan.fee ?? 0)).toFixed(2)) : 0;
+  const planPart = !!plan && !planBill;
+  const planWords = plan ? `${money(plan.installment)} installment${Number(plan.fee ?? 0) > 0 ? ` + ${money(Number(plan.fee))} fee` : ''}` : '';
 
   if (!value.split) {
     return (
@@ -166,6 +182,14 @@ export default function BillPicker({ statements, payments, amount, value, onChan
           if (!st || value.towardPlan) return null;
           const over = Number((amount - owedOf(st, sorted, payments)).toFixed(2));
           if (over <= 0.01) return null;
+          // With an arrangement, money beyond the bill goes to it on its own (less its fee): say so, not "late fee or credit".
+          if (planPart) return (
+            <p className="text-xs mt-1 text-sky-400">
+              The other {money(over)} goes to the payment arrangement{Math.abs(over - planDue) <= 0.01 ? ` (this month's ${planWords})` : ''}.{' '}
+              {sorted.length > 1 && <button type="button" className="text-amber-400 hover:text-amber-300 underline"
+                onClick={() => onChange({ statementId: '', split: true, alloc: allocateAcrossBills(sorted, amount, [st.id, PLAN_PART], payments, planDue) })}>Show it as a split</button>}
+            </p>
+          );
           return (
             <div className="text-xs mt-1 rounded-md px-2 py-1.5" style={{ background: 'rgba(245,166,35,0.08)' }}>
               <span className="text-amber-300">{money(over)} more than {billMonthLabel(st)} still owes. </span>
@@ -181,8 +205,8 @@ export default function BillPicker({ statements, payments, amount, value, onChan
         })()}
         {sorted.length > 1 && (
           <button type="button" className="text-xs text-amber-400 hover:text-amber-300 mt-1"
-            onClick={() => onChange({ statementId: '', split: true, alloc: allocateAcrossBills(sorted, amount, value.statementId ? [value.statementId] : [], payments) })}>
-            Split across several bills
+            onClick={() => onChange({ statementId: '', split: true, alloc: allocateAcrossBills(sorted, amount, [...(value.statementId && !value.towardPlan ? [value.statementId] : []), ...(value.towardPlan && planPart ? [PLAN_PART] : [])], payments, planDue) })}>
+            {planPart ? 'Split across bills and the arrangement' : 'Split across several bills'}
           </button>
         )}
       </div>
@@ -197,11 +221,25 @@ export default function BillPicker({ statements, payments, amount, value, onChan
       <div className="flex items-center justify-between mb-1.5">
         <p className="text-xs text-gray-400">Split across these bills</p>
         <div className="flex gap-3 text-xs">
-          <button type="button" className="text-amber-400 hover:text-amber-300" onClick={() => onChange({ ...value, alloc: allocateAcrossBills(sorted, amount, ids, payments) })}>Auto-fill</button>
+          <button type="button" className="text-amber-400 hover:text-amber-300" onClick={() => onChange({ ...value, alloc: allocateAcrossBills(sorted, amount, ids, payments, planDue) })}>Auto-fill</button>
           <button type="button" className="text-gray-500 hover:text-gray-300" onClick={() => onChange({ statementId: '', split: false, alloc: {} })}>One bill instead</button>
         </div>
       </div>
       <div className="max-h-44 overflow-y-auto space-y-1">
+        {planPart && (
+          <label className="flex items-center gap-2 text-xs">
+            <input type="checkbox" checked={PLAN_PART in value.alloc} className="accent-amber-500"
+              onChange={e => {
+                const next = e.target.checked ? [...ids, PLAN_PART] : ids.filter(id => id !== PLAN_PART);
+                onChange({ ...value, alloc: allocateAcrossBills(sorted, amount, next, payments, planDue) });
+              }} />
+            <span className="flex-1 text-sky-300">Payment arrangement{plan?.agreement ? ` ${plan.agreement}` : ''} — {planWords} ({money(planDue)})</span>
+            {PLAN_PART in value.alloc && (
+              <input type="number" step="0.01" value={value.alloc[PLAN_PART] ?? ''} className="input-dark text-xs w-24 py-0.5"
+                onChange={e => onChange({ ...value, alloc: { ...value.alloc, [PLAN_PART]: e.target.value } })} />
+            )}
+          </label>
+        )}
         {sorted.map(st => {
           const checked = st.id in value.alloc;
           return (
@@ -209,7 +247,7 @@ export default function BillPicker({ statements, payments, amount, value, onChan
               <input type="checkbox" checked={checked} className="accent-amber-500"
                 onChange={e => {
                   const next = e.target.checked ? [...ids, st.id] : ids.filter(id => id !== st.id);
-                  onChange({ ...value, alloc: allocateAcrossBills(sorted, amount, next, payments) });
+                  onChange({ ...value, alloc: allocateAcrossBills(sorted, amount, next, payments, planDue) });
                 }} />
               <span className={`flex-1 ${paidMap.get(st.id) ? 'text-gray-500' : 'text-gray-300'}`}>{describe(st, true)}</span>
               {checked && (
@@ -225,7 +263,7 @@ export default function BillPicker({ statements, payments, amount, value, onChan
       </p>
       {(() => {
         // Paid more than the chosen bills owe: the owner says what the extra is.
-        const owedAll = Number(sorted.filter(s => ids.includes(s.id)).reduce((t, s) => t + owedOf(s, sorted, payments), 0).toFixed(2));
+        const owedAll = Number((sorted.filter(s => ids.includes(s.id)).reduce((t, s) => t + owedOf(s, sorted, payments), 0) + (ids.includes(PLAN_PART) ? planDue : 0)).toFixed(2));
         const extra = Number((amount - owedAll).toFixed(2));
         const newest = newestOf(sorted, ids);
         if (extra <= 0.01 || !newest || !(diff > 0.01)) return null;
