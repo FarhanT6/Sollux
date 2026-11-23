@@ -47,9 +47,16 @@ export function ownShareOf(st: any, statements: any[], payments: any[] = []): { 
     const from = new Date(prev.statementDate ?? 0).getTime(), to = new Date(st.statementDate ?? 0).getTime();
     const paidBetween = payments.filter(p => live(p) && new Date(p.paymentDate).getTime() > from && new Date(p.paymentDate).getTime() <= to)
       .reduce((t, p) => t + Number(p.amount ?? 0), 0);
-    const prevUnpaid = Math.max(0, Number(openBalanceOf(prev) ?? prev.amountDue ?? 0) - paidBetween);
-    fee = Math.max(0, Number((carried - prevUnpaid).toFixed(2)));
-    if (fee > carried) fee = carried;
+    // Only when nothing was paid in between: a payment's date does not say what it paid. Cox's
+    // $372 marked paid toward April, dated between August's bill and September's, made August
+    // look paid, so the $144.75 September carried in read as a fee and October as $269.50.
+    // With payments in between, a fee folded into the carried balance is found from the bills'
+    // own printed figures (services/carriedFees.ts) and is already in the bill paid late.
+    if (paidBetween <= 0.005) {
+      const prevUnpaid = Math.max(0, Number(openBalanceOf(prev) ?? prev.amountDue ?? 0));
+      fee = Math.max(0, Number((carried - prevUnpaid).toFixed(2)));
+      if (fee > carried) fee = carried;
+    }
   }
   const paid = payments.filter(p => live(p) && p.statementId === st.id).reduce((t, p) => t + Number(p.amount ?? 0), 0);
   const share = Math.max(0, Number((charge + fee - paid).toFixed(2)));
