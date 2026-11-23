@@ -63,7 +63,7 @@ export default function LoanPaymentReview() {
         {waiting.length > 0 && <span className="text-xs px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-400">{waiting.length}</span>}
       </div>
       <p className="text-xs text-gray-500 mb-3">
-        Loan payments Sollux found in your bank accounts and in &ldquo;You sent money&rdquo; Zelle, Venmo, Cash App and PayPal emails.
+        Loan payments Sollux found in your bank accounts, in &ldquo;You sent money&rdquo; Zelle, Venmo, Cash App and PayPal emails, and in lenders&rsquo; &ldquo;Thank you for your payment&rdquo; emails for loans paid on their websites.
         When it is sure (the lender&rsquo;s name and the payment amount, one loan), it logs them on its own; these it was not sure of.
       </p>
       {error && <p className="text-xs text-red-400 mb-2">{error}</p>}
