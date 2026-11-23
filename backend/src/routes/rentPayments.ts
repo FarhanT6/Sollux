@@ -189,6 +189,17 @@ router.patch('/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// POST /:id/utilities — the payment was the tenant paying utilities back, not rent: it comes off
+// the rent and is recorded as a utility payment on the lease (rentPaymentToUtilities).
+router.post('/:id/utilities', async (req, res, next) => {
+  try {
+    const { rentPaymentToUtilities } = await import('../services/incomingRent');
+    const r = await rentPaymentToUtilities(req.dbUserId!, req.params.id);
+    if (!r) return res.status(404).json({ error: 'Payment not found (a credit toward rent cannot be moved)' });
+    res.json(r);
+  } catch (err) { next(err); }
+});
+
 router.delete('/:id', async (req, res, next) => {
   try {
     const existing = await db.rentPayment.findFirst({

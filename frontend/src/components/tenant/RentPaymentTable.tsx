@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { updateRentPayment, deleteRentPayment, getBankAccounts } from '../../api/client';
+import { updateRentPayment, deleteRentPayment, rentPaymentToUtilities, getBankAccounts } from '../../api/client';
 import type { BankAccount, RentPayment, RentPaymentMethod } from '../../types';
 import { RENT_PAYMENT_METHOD_LABELS, BANK_LINKED_METHODS, creditLabel } from '../../types';
 import { fmtDate } from '../../lib/date';
@@ -134,6 +134,13 @@ function PaymentEditRow({ payment: p, onCancel, onSaved }: { payment: RentPaymen
     catch (e: any) { setErr(e?.response?.data?.error ?? 'Could not delete that payment.'); setBusy(false); }
   }
 
+  async function toUtilities() {
+    if (!confirm(`Was this ${money(Number(p.amount))} the tenant paying utilities back? It comes off the rent and is recorded as a utility payment.`)) return;
+    setBusy(true); setErr(null);
+    try { await rentPaymentToUtilities(p.id); onSaved(); }
+    catch (e: any) { setErr(e?.response?.data?.error ?? 'Could not move that payment.'); setBusy(false); }
+  }
+
   const tint = { background: 'rgba(245,166,35,0.04)' };
   return (
     <>
@@ -176,6 +183,9 @@ function PaymentEditRow({ payment: p, onCancel, onSaved }: { payment: RentPaymen
       <td colSpan={9} className="pb-2 pt-0.5 whitespace-nowrap">
         <button onClick={save} disabled={busy} className="text-amber-400 hover:text-amber-300 disabled:opacity-50">{busy ? 'Saving…' : 'Save'}</button>
         <button onClick={onCancel} disabled={busy} className="text-gray-500 hover:text-gray-300 ml-3">Cancel</button>
+        {p.method !== 'CREDIT' && (
+          <button onClick={toUtilities} disabled={busy} className="text-sky-400 hover:text-sky-300 ml-3" title="The tenant paid utilities back with this, not rent">It was utilities</button>
+        )}
         <button onClick={remove} disabled={busy} className="text-red-400 hover:text-red-300 ml-3">Delete</button>
         {err && <span className="text-red-400 ml-3 whitespace-normal">{err}</span>}
       </td>

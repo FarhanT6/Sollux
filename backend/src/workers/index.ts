@@ -103,12 +103,25 @@ setTimeout(() => void (async () => {
 // whole history, once; after that each bill filed settles its own account.
 setTimeout(() => void (async () => {
   const { db } = await import('../config/db');
-  const KEY = 'carried-fees:history-v1';
+  // v2: a running ledger's reprinted payments were counted as payments since the bill before, so
+  // an HOA ledger's eCheck read as a late fee on every bill; settling again takes those off.
+  const KEY = 'carried-fees:history-v2';
   if (await db.appSetting.findUnique({ where: { key: KEY } }).catch(() => null)) return;
   const r = await (await import('../services/carriedFees')).settleAllCarriedFees();
   await db.appSetting.upsert({ where: { key: KEY }, create: { key: KEY, value: JSON.stringify({ ...r, at: new Date().toISOString() }) }, update: { value: JSON.stringify({ ...r, at: new Date().toISOString() }) } });
   console.log(`[CarriedFees] ${r.fees} late fee(s) found in carried balances ($${r.total.toFixed(2)}) across ${r.accounts} account(s); ${r.unexplained} difference(s) too large to call a fee`);
 })().catch(err => console.warn('[CarriedFees] history not settled:', err instanceof Error ? err.message : err)), 4 * 60_000);
+
+// Once: the extra over the rent that was put on a coming month's rent ("paid ahead") for tenants who
+// pay the utilities back with the rent goes to utilities (services/incomingRent.ts).
+setTimeout(() => void (async () => {
+  const { db } = await import('../config/db');
+  const KEY = 'rent-paid-ahead-to-utilities:v1';
+  if (await db.appSetting.findUnique({ where: { key: KEY } }).catch(() => null)) return;
+  const moved = await (await import('../services/incomingRent')).movePaidAheadToUtilities();
+  await db.appSetting.upsert({ where: { key: KEY }, create: { key: KEY, value: JSON.stringify({ moved, at: new Date().toISOString() }) }, update: { value: JSON.stringify({ moved, at: new Date().toISOString() }) } });
+  if (moved) console.log(`[Rent] ${moved} paid-ahead extra(s) moved to utilities`);
+})().catch(err => console.warn('[Rent] paid-ahead cleanup failed:', err instanceof Error ? err.message : err)), 5 * 60_000);
 
 // Property-tax lookups older than 30 days run again (services/taxLookupJobs.ts).
 const refreshTaxes = () => import('../services/taxLookupJobs').then(m => m.refreshTaxLookups())

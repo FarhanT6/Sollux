@@ -16,6 +16,8 @@ import { recordRentPayment, chargesFor, creditedTo } from './rentPaymentService'
 import { rentMonthFor } from './p2pPaymentEmails';
 import { monthRentDue } from '../lib/rentDue';
 import { reimbursableItems, recordReimbursementPayment } from './reimbursement';
+import { paysUtilitiesWithRent } from './utilityPayers';
+export { paysUtilitiesWithRent };
 
 export type ExtraChoice = 'next' | 'arrears' | 'utilities';
 
@@ -27,8 +29,8 @@ export interface PaymentPlan {
   utilitiesOwed: number;      // open utility invoices
   openInvoiceId: string | null;
   nextMonth: string;
-  /** null: no extra; 'next': the extra goes to next month on its own; 'ask': the owner chooses. */
-  extraGoes: null | 'next' | 'ask';
+  /** null: no extra; 'next': the extra goes to next month on its own; 'utilities': to the tenant's utilities on its own; 'ask': the owner chooses. */
+  extraGoes: null | 'next' | 'utilities' | 'ask';
   note: string | null;
 }
 
@@ -38,7 +40,7 @@ const addMonth = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMont
 const monthName = (m: string) => new Date(`${m}-01T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 const usd = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export async function planPayment(leaseId: string, userId: string, amount: number, period: Date): Promise<PaymentPlan> {
+export async function planPayment(leaseId: string, userId: string, amount: number, period: Date, paidOn?: Date): Promise<PaymentPlan> {
   const lease = await db.lease.findUnique({ where: { id: leaseId }, select: { rentAmount: true, startDate: true, firstMonthRent: true, arrearsBalance: true } });
   const rent = Number(lease?.rentAmount ?? 0);
   const due = lease ? Math.max(0, r2(monthRentDue(lease as any, period) + await chargesFor(leaseId, period) - await creditedTo(leaseId, period))) : 0;
@@ -57,6 +59,11 @@ export async function planPayment(leaseId: string, userId: string, amount: numbe
   } catch { /* no utility billing on this lease */ }
 
   const over = `${usd(extra)} more than ${monthName(month)}'s rent`;
+  // Less than a month's rent over, from a tenant who pays the utilities back with the rent: utilities.
+  // With back rent owed it could be either, so the owner says.
+  if (arrears <= 0.5 && rent > 0 && extra < rent - 0.5 && await paysUtilitiesWithRent(leaseId, paidOn ?? new Date())) {
+    return { ...base, utilitiesOwed, openInvoiceId, extraGoes: 'utilities', note: `${over} — recorded as utilities (they pay the utilities back with the rent).` };
+  }
   if (arrears > 0.5 || utilitiesOwed > 0.5) {
     const owes = [arrears > 0.5 && `${usd(arrears)} back rent`, utilitiesOwed > 0.5 && `${usd(utilitiesOwed)} in utilities`].filter(Boolean).join(' and ');
     return { ...base, utilitiesOwed, openInvoiceId, extraGoes: 'ask', note: `${over}. They also owe ${owes} — choose where the extra goes.` };
@@ -84,8 +91,9 @@ export interface IncomingToLog {
  */
 export async function logIncomingRent(t: IncomingToLog): Promise<{ applied: boolean; plan: PaymentPlan; rentPaymentId: string | null }> {
   const period = t.forMonth ? new Date(`${t.forMonth}-01T00:00:00.000Z`) : await rentMonthFor(t.leaseId, t.date, t.memo);
-  const plan = await planPayment(t.leaseId, t.userId, t.amount, period);
-  const choice: ExtraChoice | null = plan.extraGoes === null ? null : t.choice ?? (plan.extraGoes === 'next' ? 'next' : null);
+  const plan = await planPayment(t.leaseId, t.userId, t.amount, period, t.date);
+  const choice: ExtraChoice | null = plan.extraGoes === null ? null
+    : t.choice ?? (plan.extraGoes === 'next' ? 'next' : plan.extraGoes === 'utilities' ? 'utilities' : null);
 
   if (plan.extraGoes !== null && !choice) {
     await db.incomingTransaction.update({ where: { id: t.txId }, data: { status: 'SUGGESTED', matchedLeaseId: t.leaseId, reviewNote: plan.note } });
@@ -118,7 +126,8 @@ export async function logIncomingRent(t: IncomingToLog): Promise<{ applied: bool
   await db.incomingTransaction.update({ where: { id: t.txId }, data: { status: 'APPLIED', matchedLeaseId: t.leaseId, rentPaymentId: first?.id ?? null, reviewNote: note } });
 
   // Extra logged on its own: say so where the owner looks.
-  if (note && !t.choice) {
+  // Utilities from a tenant who always pays them with the rent is no news.
+  if (note && !t.choice && plan.extraGoes !== 'utilities') {
     const lease = await db.lease.findUnique({ where: { id: t.leaseId }, select: { unit: { select: { propertyId: true } }, leaseTenants: { select: { tenant: { select: { fullName: true } } } } } });
     const who = lease?.leaseTenants.map(lt => lt.tenant.fullName).join(', ') || 'A tenant';
     if (lease?.unit.propertyId) {
@@ -229,6 +238,54 @@ export async function autoLogIncoming(t: Omit<IncomingToLog, 'forMonth' | 'choic
   if (!sureSender) return 'waiting';
   const r = await logIncomingRent(t);
   return r.applied ? 'rent' : 'waiting';
+}
+
+/**
+ * A logged rent payment that was the tenant paying utilities back: it comes off the rent (what it
+ * took off back rent goes back on, as when deleted) and is recorded as a utility payment on the
+ * lease, on its open invoice when there is one, with the same date, method and account. For the
+ * extra Sollux once put on next month's rent ("paid ahead"), and for the owner's "It was utilities".
+ */
+export async function rentPaymentToUtilities(userId: string, rentPaymentId: string): Promise<{ note: string } | null> {
+  const p = await db.rentPayment.findFirst({
+    where: { id: rentPaymentId, lease: { unit: { property: { userId } } } },
+    select: { id: true, leaseId: true, amount: true, paidDate: true, method: true, bankAccountId: true, notes: true, appliedToArrears: true, settledRolledRent: true, expenseId: true },
+  });
+  if (!p || p.method === 'CREDIT') return null;
+  const amount = Number(p.amount);
+  const notes = [p.notes, 'moved from rent to utilities'].filter(Boolean).join(' · ');
+  const inv = await utilityInvoiceFor(p.leaseId, userId, amount);
+  if (inv) {
+    const { payInvoice } = await import('./reimbursement');
+    await payInvoice(inv.invoiceId, userId, { amount, paidAt: p.paidDate.toISOString().slice(0, 10), method: p.method, bankAccountId: p.bankAccountId, notes });
+  } else {
+    await recordReimbursementPayment(p.leaseId, userId, { amount, paidDate: p.paidDate.toISOString().slice(0, 10), method: p.method, bankAccountId: p.bankAccountId, notes, allocations: [], invoiceId: null });
+  }
+  await db.rentPayment.delete({ where: { id: p.id } });
+  const restored = Number(p.appliedToArrears) + Number(p.settledRolledRent);
+  if (restored > 0) await db.lease.update({ where: { id: p.leaseId }, data: { arrearsBalance: { increment: restored } } });
+  const note = inv ? `${usd(amount)} moved to utilities — the ${inv.label} invoice.` : `${usd(amount)} moved to utilities.`;
+  await db.incomingTransaction.updateMany({ where: { rentPaymentId: p.id }, data: { rentPaymentId: null, reviewNote: note } });
+  return { note };
+}
+
+/**
+ * Once: the extra Sollux put on a coming month's rent ("paid ahead") for a tenant who pays the
+ * utilities back with the rent goes to utilities, so the tenant no longer reads as paid for a month
+ * they have not paid. Only months still ahead: past months' rent has been reckoned with since.
+ */
+export async function movePaidAheadToUtilities(): Promise<number> {
+  const thisMonth = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1));
+  const rows = await db.rentPayment.findMany({
+    where: { periodDate: { gt: thisMonth }, notes: { contains: '· paid ahead:' }, status: 'RECEIVED' },
+    select: { id: true, leaseId: true, paidDate: true, lease: { select: { unit: { select: { property: { select: { userId: true } } } } } } },
+  });
+  let moved = 0;
+  for (const r of rows) {
+    if (!(await paysUtilitiesWithRent(r.leaseId, r.paidDate))) continue;
+    if (await rentPaymentToUtilities(r.lease.unit.property.userId, r.id).catch(() => null)) moved++;
+  }
+  return moved;
 }
 
 // ─── Security deposits ───────────────────────────────────────────────────

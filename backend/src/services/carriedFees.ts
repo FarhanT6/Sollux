@@ -31,11 +31,18 @@ function factsOf(s: Row, loggedHere: number): BillFacts {
   const current = asNum(raw.currentCharges);
   // Carried in, after the payments the bill shows; none printed on a bill that asks for its own charges alone is nothing carried.
   const carried = asNum(raw.previousBalance) ?? asNum(s.pastDueCarried) ?? (total != null && current != null ? r2(total - current) : null);
+  // A running ledger (an HOA manager's statement) lists its payments on their own dates. A lone
+  // "Last payment (effective …)" line is not one: it shows only the latest payment, not all since.
+  const rows = (Array.isArray(raw.ledgerPayments) ? raw.ledgerPayments as { date?: unknown; amount?: unknown; description?: unknown }[] : [])
+    .map(l => ({ date: typeof l.date === 'string' ? l.date.slice(0, 10) : '', amount: asNum(l.amount) ?? 0, description: String(l.description ?? '') }))
+    .filter(l => /^\d{4}-\d{2}-\d{2}$/.test(l.date) && l.amount > 0);
+  const ledger = rows.some(l => !/last\s*pay/i.test(l.description)) ? rows.map(({ date, amount }) => ({ date, amount })) : null;
   return {
     statementDate: s.statementDate,
     total,
     carried,
     paymentsShown: asNum(raw.paymentsReceived),
+    ledger,
     ownFee: Math.max(0, r2(num(s.penaltiesFees) - appliedOn(s) - loggedHere)),
     unsure: !!(raw.paymentPlan || asNum(raw.paymentPlanAmount) || num(s.paymentPlanAmount) || s.trueUpDeferred != null || s.trueUpBalance != null || raw.emailNotice || raw.scheduled),
   };
