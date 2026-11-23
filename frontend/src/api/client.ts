@@ -1038,7 +1038,7 @@ export const deletePayment = (id: string) =>
 export const createPayment = (data: any) =>
   api.post<Payment>('/payments', data).then(r => r.data);
 // One real payment covering several bills: one row per bill, sharing a splitGroupId.
-export const createSplitPayment = (data: any & { allocations: { statementId: string; amount: number }[] }) =>
+export const createSplitPayment = (data: any & { allocations: { statementId: string | null; amount: number; towardPlan?: boolean }[] }) =>
   api.post<Payment[]>('/payments/split', data).then(r => r.data);
 
 // Where the owner can save: each finding a dollar figure a year, from the owner's own records.
