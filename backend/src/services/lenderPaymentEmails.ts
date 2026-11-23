@@ -67,7 +67,7 @@ export function parseLenderPaymentEmail(from: string, subject: string, body: str
   let confirmation: string | null = null;
   for (let m; (m = confRe.exec(text)); ) if (/\d/.test(m[1])) { confirmation = m[1]; break; }
   // "Loan number: ****1234"; and every "ending in 1234": the bank account it was paid from when the
-  // words before it say so ("Wells Fargo Bank NA account ending in 0705"), else the account paid.
+  // words before it say so ("Example Bank NA account ending in 1111"), else the account paid.
   let loanLast4 = /loan\s*(?:number|no\.?|#|account)\s*(?:ending(?: in| with)?)?\s*:?\s*[*xX•.…\s]*(\d{4})\b/i.exec(text)?.[1] ?? null;
   let fromLast4: string | null = null;
   for (const m of text.matchAll(/ending(?: in| with)?\s*:?\s*[*xX•.…\s]*(\d{4})\b/gi)) {
