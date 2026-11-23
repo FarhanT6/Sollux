@@ -26,6 +26,7 @@ import { db } from '../config/db';
 import { intakeBill, type ReviewItem } from '../services/documentIntake';
 import { parseP2PEmail, recordP2PEmail } from '../services/p2pPaymentEmails';
 import { parseOutgoingP2P, recordOutgoingP2P } from '../services/outgoingP2PEmails';
+import { parseLenderPaymentEmail, recordLenderPayment } from '../services/lenderPaymentEmails';
 import { parseWithdrawalEmail, recordWithdrawal, parseTopUpEmail, recordTopUp } from '../services/walletEmails';
 import { intakeManagerStatement, isManagerStatementPdf, managerForSender } from '../services/managerStatementEmail';
 
@@ -42,6 +43,8 @@ const MAX_MESSAGES_PER_MAILBOX = 1000;
 const MAX_DOCUMENTS_PER_RUN = Number(process.env.INBOX_MAX_DOCUMENTS_PER_RUN) || 25;
 
 const BILL_SUBJECT = /\b(bill|statement|invoice|payment (is )?due|amount due|balance due|past due|premium|renewal|notice|e-?bill|autopay|tax|cancell?ation|disconnect)/i;
+// A servicer's payment confirmation (lenderPaymentEmails.ts), as Gmail searches for it.
+const LENDER_PAID_SUBJECTS = '"payment confirmation" OR "payment received" OR "thank you for your payment" OR "payment scheduled" OR "payment processed" OR "payment successful" OR "received your payment" OR "payment submitted" OR "payment posted"';
 const PAYMENT_CONFIRMATION = /thank you for (your )?payment|payment (received|confirmation|processed|successful)|we received your payment|receipt for your payment|your receipt from|^receipt\b/i;
 // "Your bill is ready / available / posted", "New bill notification": the bill
 // is on the provider's site and the email carries no amount. Nothing to read,
@@ -268,7 +271,7 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
         await readPaymentHistory(userId, token, gmail, sum).catch(err => sum.errors.push(`${token.email}: payment history: ${err instanceof Error ? err.message : String(err)}`));
         const since = token.backfillFrom
           ?? (token.lastScanAt ? new Date(token.lastScanAt.getTime() - 24 * 3600 * 1000) : new Date(Date.now() - FIRST_RUN_DAYS * 24 * 3600 * 1000));
-        const q = `after:${Math.floor(since.getTime() / 1000)} -category:promotions -category:social (has:attachment OR subject:(bill OR statement OR invoice OR due OR notice OR premium OR renewal OR tax OR cancellation OR disconnection) OR subject:(zelle OR venmo OR "cash app" OR "apple cash" OR "sent you" OR "paid you" OR "received money" OR "got money" OR "been paid" OR "you sent" OR "you paid") OR from:(venmo.com OR cash.app OR square.com) OR (from:(paypal.com OR apple.com) subject:(transfer OR withdraw OR withdrawn OR "cash out" OR "apple cash" OR added OR "add money" OR "add cash")))`;
+        const q = `after:${Math.floor(since.getTime() / 1000)} -category:promotions -category:social (has:attachment OR subject:(bill OR statement OR invoice OR due OR notice OR premium OR renewal OR tax OR cancellation OR disconnection) OR subject:(zelle OR venmo OR "cash app" OR "apple cash" OR "sent you" OR "paid you" OR "received money" OR "got money" OR "been paid" OR "you sent" OR "you paid") OR from:(venmo.com OR cash.app OR square.com) OR (from:(paypal.com OR apple.com) subject:(transfer OR withdraw OR withdrawn OR "cash out" OR "apple cash" OR added OR "add money" OR "add cash")) OR subject:(${LENDER_PAID_SUBJECTS}))`;
 
         const ids: string[] = [];
         let pageToken: string | undefined;
@@ -378,6 +381,18 @@ export async function runInboxAgent(userId: string, opts: { tokenId?: string } =
             }
           }
 
+          // A loan paid on the servicer's website: logged on the loan (lenderPaymentEmails.ts).
+          if (PAYMENT_CONFIRMATION.test(subject) || /payment (?:scheduled|submitted|posted)/i.test(subject)) {
+            try {
+              const html = await textOf('text/html');
+              const text = html ? htmlToText(html) : await textOf('text/plain');
+              const lent = parseLenderPaymentEmail(from, subject, text, receivedAt);
+              if (lent) {
+                const r = await recordLenderPayment(userId, lent, rfcMessageId ?? messageId);
+                if (r.outcome !== 'skipped') { sum.applied++; await record(r.outcome === 'loan' ? 'applied' : r.outcome, r.detail); continue; }
+              }
+            } catch { /* read as before */ }
+          }
           if (PAYMENT_CONFIRMATION.test(subject)) { sum.skipped++; await record('skipped', 'payment confirmation or receipt'); continue; }
           // The same email delivered to two connected inboxes (sent to both, or
           // forwarded) is read once: a second read files nothing new and costs a read.
@@ -527,6 +542,13 @@ async function applyMoneyEmail(userId: string, from: string, subject: string, te
   if (out) return recordWithdrawal(userId, out, ref);
   const top = parseTopUpEmail(from, subject, text, receivedAt);
   if (top) return recordTopUp(userId, top, ref);
+  // A loan paid on the servicer's website: its payment confirmation. One about no loan of the
+  // owner's (a utility's receipt) is left for the nightly read, which may have a bill to file in it.
+  const lent = parseLenderPaymentEmail(from, subject, text, receivedAt);
+  if (lent) {
+    const r = await recordLenderPayment(userId, lent, ref);
+    if (r.outcome !== 'skipped') return { outcome: r.outcome === 'loan' ? 'applied' : r.outcome, detail: r.detail };
+  }
   return null;
 }
 
@@ -545,8 +567,16 @@ export async function checkMoneyEmailsNow(): Promise<number> {
   for (const token of tokens) {
     try {
       const gmail = google.gmail({ version: 'v1', auth: oauthFor(token) });
-      const q = `newer_than:2d -category:promotions (from:(venmo.com OR cash.app OR square.com OR squareup.com OR paypal.com OR apple.com) OR subject:(zelle OR "sent you" OR "paid you" OR "you sent" OR "you paid" OR "received money" OR "got money"))`;
+      // Loans paid on the servicer's site: their confirmations, the last 60 days once, then the last two.
+      const backKey = `lender-receipts:${token.id}`;
+      const lookBack = !(await db.appSetting.findUnique({ where: { key: backKey } }).catch(() => null));
+      const q = `newer_than:2d -category:promotions (from:(venmo.com OR cash.app OR square.com OR squareup.com OR paypal.com OR apple.com) OR subject:(zelle OR "sent you" OR "paid you" OR "you sent" OR "you paid" OR "received money" OR "got money" OR ${LENDER_PAID_SUBJECTS}))`;
       const ids = ((await gmail.users.messages.list({ userId: 'me', q, maxResults: 50 })).data.messages ?? []).map(m => m.id).filter((id): id is string => !!id);
+      if (lookBack) {
+        const back = await gmail.users.messages.list({ userId: 'me', q: `newer_than:60d -category:promotions subject:(${LENDER_PAID_SUBJECTS})`, maxResults: 150 }).catch(() => null);
+        for (const m of back?.data.messages ?? []) if (m.id && !ids.includes(m.id)) ids.push(m.id);
+        await db.appSetting.upsert({ where: { key: backKey }, create: { key: backKey, value: new Date().toISOString() }, update: {} }).catch(() => {});
+      }
       if (!ids.length) continue;
       const checked = quickChecked.get(token.id) ?? new Set<string>();
       quickChecked.set(token.id, checked);
