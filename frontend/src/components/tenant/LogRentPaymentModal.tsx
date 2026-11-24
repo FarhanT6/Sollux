@@ -18,6 +18,9 @@ import { monthRentDue } from '../../lib/rentDue';
  *
  * Utilities: the same dialog logs a tenant paying back utilities, on their
  * open utility invoice (or on the lease's utility payments when none is open).
+ * Rent + utilities: one payment that is both — the month's rent first, the rest
+ * utilities (or the split the owner types), logged as a rent payment and a
+ * utility payment with the same date, method and account.
  *
  * Credit: rent settled without money — the tenant paid for a repair or a bill,
  * a concession, a deposit applied. It says what for; a cost the tenant paid is
@@ -84,8 +87,11 @@ export default function LogRentPaymentModal({ target, period, method: initialMet
   const [accounts, setAccounts] = useState<BankAccount[]>([]);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  // Rent, or a utility payment (on the lease's utility invoices).
-  const [kind, setKind] = useState<'rent' | 'deposit' | 'utilities' | 'credit'>('rent');
+  // Rent, or a utility payment (on the lease's utility invoices), or one payment that is both.
+  const [kind, setKind] = useState<'rent' | 'both' | 'deposit' | 'utilities' | 'credit'>('rent');
+  // Rent + utilities: the utilities part (the rest is rent); follows the amount until typed.
+  const [utilPart, setUtilPart] = useState('');
+  const utilTyped = useRef(false);
   // Credit toward rent: what for, and whether to record the property expense the tenant paid.
   const [creditFor, setCreditFor] = useState<CreditReason>('REPAIR');
   const [recordExpense, setRecordExpense] = useState(true);
@@ -95,12 +101,12 @@ export default function LogRentPaymentModal({ target, period, method: initialMet
   const [invoices, setInvoices] = useState<OpenInvoice[] | null>(null);
   const [invoiceId, setInvoiceId] = useState('');
   useEffect(() => {
-    if (kind !== 'utilities' || invoices) return;
+    if ((kind !== 'utilities' && kind !== 'both') || invoices) return;
     getReimbursableItems(target.leaseId)
       .then(r => {
         const open = r.invoices.filter(i => i.outstanding > 0.005).sort((a, b) => a.periodStart.localeCompare(b.periodStart));
         setInvoices(open);
-        if (open[0]) { setInvoiceId(open[0].id); setAmount(open[0].outstanding.toFixed(2)); }
+        if (open[0]) { setInvoiceId(open[0].id); if (kind === 'utilities') setAmount(open[0].outstanding.toFixed(2)); }
       })
       .catch(() => setInvoices([]));
   }, [kind, invoices, target.leaseId]);
@@ -131,9 +137,15 @@ export default function LogRentPaymentModal({ target, period, method: initialMet
     setForMonth(m);
     if (kind === 'rent' && !allToArrears) setAmount(String(rentFor(m)));
     else if (kind === 'deposit') setAmount(String(rentFor(m) + (parseFloat(deposit) || 0)));
+    else if (kind === 'both' && !utilTyped.current) splitBoth(parseFloat(amount), m);
+  };
+  // Rent + utilities: the month's rent first, the rest utilities.
+  const splitBoth = (total: number, m: string) => {
+    if (!(total > 0)) { setUtilPart(''); return; }
+    setUtilPart(Math.max(0, Number((total - rentFor(m)).toFixed(2))).toFixed(2));
   };
   const owedNote = (() => {
-    if (kind !== 'rent' && kind !== 'deposit') return null;
+    if (kind !== 'rent' && kind !== 'deposit' && kind !== 'both') return null;
     const f = monthFacts(forMonth);
     if (!f) return null;
     if (f.rent <= 0.005) return `The lease had not started in ${monthLabel(forMonth)}.`;
@@ -182,6 +194,29 @@ export default function LogRentPaymentModal({ target, period, method: initialMet
       } finally { setSaving(false); }
       return;
     }
+    if (kind === 'both') {
+      const util = Number((parseFloat(utilPart) || 0).toFixed(2));
+      const rent = Number((amt - util).toFixed(2));
+      if (util < 0 || rent < -0.005) { setErr(`Enter a utilities part between $0 and ${fmtMoney(amt)}.`); setSaving(false); return; }
+      try {
+        if (rent > 0.005) {
+          await createRentPayment({
+            leaseId: target.leaseId, periodDate: `${forMonth}-01T00:00:00.000Z`, amount: rent, paidDate, method,
+            status: pending ? 'PENDING' : 'RECEIVED', ...(bank ? { bankAccountId: bank } : {}),
+            notes: [note, util > 0.005 ? `with ${fmtMoney(util)} utilities` : null].filter(Boolean).join(' · ') || undefined,
+          });
+        }
+        if (util > 0.005) {
+          const unote = [note, rent > 0.005 ? `with ${fmtMoney(rent)} rent for ${monthLabel(forMonth)}` : null].filter(Boolean).join(' · ') || null;
+          if (invoiceId) await payUtilityInvoice(invoiceId, { amount: util, paidAt: paidDate, method, bankAccountId: bank, notes: unote });
+          else await createReimbursementPayment(target.leaseId, { amount: util, paidDate, method, bankAccountId: bank, notes: unote, allocations: [] });
+        }
+        onSaved();
+      } catch (e) {
+        setErr(describeApiError(e, 'The payment was not saved.'));
+      } finally { setSaving(false); }
+      return;
+    }
     if (kind === 'utilities') {
       try {
         if (invoiceId) await payUtilityInvoice(invoiceId, { amount: amt, paidAt: paidDate, method, bankAccountId: bank, notes: note });
@@ -221,29 +256,30 @@ export default function LogRentPaymentModal({ target, period, method: initialMet
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.6)' }} onClick={onClose}>
       <div className="card p-5 w-full max-w-lg space-y-3 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div>
-          <p className="text-sm font-semibold text-white">{kind === 'credit' ? 'Credit toward rent' : `Log ${kind === 'utilities' ? 'utility' : kind === 'deposit' ? 'rent + deposit' : 'rent'} payment`} — {target.tenant}</p>
+          <p className="text-sm font-semibold text-white">{kind === 'credit' ? 'Credit toward rent' : `Log ${kind === 'utilities' ? 'utility' : kind === 'deposit' ? 'rent + deposit' : kind === 'both' ? 'rent + utilities' : 'rent'} payment`} — {target.tenant}</p>
           <p className="text-xs text-gray-500">{target.unit} · {target.property} · rent {fmtMoney(target.rent)}{target.arrears > 0 ? <span className="text-red-400"> · {fmtMoney(target.arrears)} back rent owed</span> : null}</p>
         </div>
 
         {/* What it pays: rent, or utilities the tenant pays back. */}
         <div className="flex gap-1 p-0.5 rounded-lg w-fit" style={{ background: 'rgba(255,255,255,0.05)' }}>
-          {(['rent', 'deposit', 'utilities', 'credit'] as const).map(k => (
+          {(['rent', 'both', 'utilities', 'deposit', 'credit'] as const).map(k => (
             <button key={k} type="button" onClick={() => {
               setKind(k); setAllToArrears(false);
               if (k === 'rent') setAmount(String(rentFor(forMonth)));
+              else if (k === 'both') { utilTyped.current = false; splitBoth(parseFloat(amount), forMonth); }
               else if (k === 'credit') setAmount('');
               else if (k === 'deposit') { setDeposit(String(target.rent)); setAmount(String(rentFor(forMonth) + target.rent)); }
               else if (invoices?.[0]) { setInvoiceId(invoices[0].id); setAmount(invoices[0].outstanding.toFixed(2)); }
             }}
               className={`text-xs px-3 py-1 rounded-md ${kind === k ? 'bg-white/10 text-white' : 'text-gray-500 hover:text-gray-300'}`}>
-              {k === 'rent' ? 'Rent' : k === 'deposit' ? 'Rent + deposit' : k === 'utilities' ? 'Utilities' : 'Credit'}
+              {k === 'rent' ? 'Rent' : k === 'both' ? 'Rent + utilities' : k === 'deposit' ? 'Rent + deposit' : k === 'utilities' ? 'Utilities' : 'Credit'}
             </button>
           ))}
         </div>
 
         <div>
           <span className={label}>{kind === 'credit' ? 'Amount credited toward rent' : 'Amount received'}</span>
-          <input type="number" step="0.01" inputMode="decimal" className={input} value={amount} onChange={e => { typed.current = true; setAmount(e.target.value); }} autoFocus />
+          <input type="number" step="0.01" inputMode="decimal" className={input} value={amount} onChange={e => { typed.current = true; setAmount(e.target.value); if (kind === 'both' && !utilTyped.current) splitBoth(parseFloat(e.target.value), forMonth); }} autoFocus />
           {kind === 'rent' && <div className="flex flex-wrap gap-1.5 mt-1.5">
             {quick('Full rent', target.rent)}
             {target.remainingThisMonth != null && target.remainingThisMonth > 0 && target.remainingThisMonth < target.rent ? quick('Rest of this month', target.remainingThisMonth) : null}
@@ -272,6 +308,28 @@ export default function LogRentPaymentModal({ target, period, method: initialMet
             ) : (
               <p className="text-[11px] text-gray-500">{reason.income ? 'Counts as rent received (income) — no money changes hands.' : "Settles rent owed but isn't income — left out of P&L, cash flow and Schedule E."}</p>
             )}
+          </div>
+        )}
+
+        {kind === 'both' && (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <span className={label}>Utilities part</span>
+              <input type="number" step="0.01" inputMode="decimal" className={input} value={utilPart} onChange={e => { utilTyped.current = true; setUtilPart(e.target.value); }} />
+              <p className="text-[11px] text-gray-500 mt-1">
+                {fmtMoney(Math.max(0, (amt || 0) - (parseFloat(utilPart) || 0)))} rent for {monthLabel(forMonth)} · {fmtMoney(parseFloat(utilPart) || 0)} utilities
+              </p>
+            </div>
+            <div>
+              <span className={label}>Utility invoice it pays</span>
+              {invoices === null ? <p className="text-xs text-gray-500 py-2">Loading…</p> : (
+                <select className={input} value={invoiceId} onChange={e => setInvoiceId(e.target.value)}>
+                  {invoices.map(i => <option key={i.id} value={i.id}>{invoiceLabel(i)} · {fmtMoney(i.outstanding)} open</option>)}
+                  <option value="">Not on an invoice</option>
+                </select>
+              )}
+              {invoices?.length === 0 && <p className="text-[11px] text-gray-500 mt-1">No open utility invoice: kept on the lease's utility payments.</p>}
+            </div>
           </div>
         )}
 
@@ -351,7 +409,7 @@ export default function LogRentPaymentModal({ target, period, method: initialMet
             <span className={label}>{method === 'CHECK' || method === 'MONEY_ORDER' ? 'Check / money order #' : 'Confirmation # (optional)'}</span>
             <input className={input} value={reference} onChange={e => setReference(e.target.value)} />
           </div>
-          {kind === 'rent' ? (
+          {kind === 'rent' || kind === 'both' ? (
           <div className="flex items-end pb-2">
             <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
               <input type="checkbox" checked={pending} onChange={e => setPending(e.target.checked)} />

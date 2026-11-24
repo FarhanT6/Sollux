@@ -1,5 +1,5 @@
-import { Link } from 'react-router-dom';
-import { useCallback, useState, useRef, useEffect } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { useCallback, useMemo, useState, useRef, useEffect } from 'react';
 import { openOAuth } from '../lib/native';
 import { loadGooglePicker, downloadDriveFiles, dropTexts, driveIdsIn, filesFromDriveIds, DriveNotConnected } from '../lib/drivePicker';
 import { DrivePreview } from '../components/DriveButton';
@@ -10,7 +10,7 @@ import { PageHeader } from '../components/ui';
 import BulkTaxUpload from '../components/taxes/BulkTaxUpload';
 import PaymentDetailsImport from '../components/loans/PaymentDetailsImport';
 import ManagerStatementsPage from './ManagerStatementsPage';
-import api, { getDriveStatus, getDriveConnectUrl, getDriveAccessToken, startDriveImport, getDriveImportJob, getProperties, getGmailStatus, getGmailConnectUrl, getInboxActivity, syncInbox, markInboxReviewed, getDuplicateStatements, mergeDuplicateStatements, getGmailCoverage, type GmailCoverage, type DuplicateStatementPair, type GmailMailbox, type InboxActivity } from '../api/client';
+import api, { getHousehold, getDriveStatus, getDriveConnectUrl, getDriveAccessToken, startDriveImport, getDriveImportJob, getProperties, getGmailStatus, getGmailConnectUrl, getInboxActivity, syncInbox, markInboxReviewed, getDuplicateStatements, mergeDuplicateStatements, getGmailCoverage, type GmailCoverage, type DuplicateStatementPair, type GmailMailbox, type InboxActivity } from '../api/client';
 import type { Property, UtilityCategory } from '../types';
 import { CATEGORY_LABELS } from '../types';
 
@@ -96,6 +96,9 @@ interface ParsedBill {
   // A one-time invoice: the property it is an expense of ('' = personal) and its category.
   expensePropertyId?: string;
   expenseCategory?: string;
+  // The owner's own or a household member's (memberId): a new account is a personal bill, a new
+  // card and a personal invoice's expense are that person's.
+  personal?: { memberId: string | null };
 }
 
 interface SlimAccount {
@@ -104,6 +107,8 @@ interface SlimAccount {
   // the picker; these are what tells them apart.
   serviceLabel?: string | null;
   accountNumber?: string | null;
+  isPersonal?: boolean;
+  memberId?: string | null;
 }
 interface PropertyWithAccounts extends Omit<Property, 'utilityAccounts'> {
   utilityAccounts: SlimAccount[];
@@ -1218,9 +1223,108 @@ function AddAccountForm({
   );
 }
 
+/**
+ * A bill that is the owner's own or a household member's: whose it is, the account (company, kind,
+ * number) and the property it is kept with. A personal bill keeps a property for fetching and
+ * payments but stays out of that property's costs, and shows under Personal on the Bills page.
+ * A card statement or a one-time expense goes where those go, for the same person.
+ */
+function PersonalForm({ bill, properties, people, acctForm, onChangeAcct, initialMember, onUseAccount, onSave, onOtherKind, onCancel }: {
+  bill: ParsedBill;
+  properties: PropertyWithAccounts[];
+  people: Person[];
+  acctForm: NewAccountPayload;
+  onChangeAcct: (f: NewAccountPayload) => void;
+  initialMember: string | null;
+  onUseAccount: (utilityAccountId: string) => void;
+  onSave: (memberId: string | null, propertyId: string) => void;
+  onOtherKind: (kind: 'credit_card_statement' | 'service_invoice', memberId: string | null) => void;
+  onCancel: () => void;
+}) {
+  const [member, setMember] = useState<string>(initialMember ?? '');
+  // Kept with: where the owner's other personal bills are, else their home, else the bill's address.
+  const home = useMemo(() => {
+    const withPersonal = [...properties].map(p => ({ p, n: p.utilityAccounts.filter(a => a.isPersonal).length })).sort((a, b) => b.n - a.n)[0];
+    if (withPersonal && withPersonal.n > 0) return withPersonal.p.id;
+    return properties.find(p => (p as any).type === 'PRIMARY')?.id ?? bill.match.propertyId ?? properties[0]?.id ?? '';
+  }, [properties, bill.match.propertyId]);
+  const [keptWith, setKeptWith] = useState(bill.addToPropertyId ?? home);
+  useEffect(() => { if (!keptWith && home) setKeptWith(home); }, [home, keptWith]);
+  // Personal accounts already on file from this company: file the bill there instead.
+  const word = (acctForm.providerName || bill.extracted.providerName || '').toLowerCase().split(/\s+/).find(w => w.length > 2) ?? '';
+  const existing = word ? properties.flatMap(p => p.utilityAccounts.filter(a => a.isPersonal && a.providerName.toLowerCase().includes(word)).map(a => ({ a, p }))) : [];
+  const inputCls = 'w-full rounded-lg px-2.5 py-1.5 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-purple-400/50';
+  const inputStyle = { background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)' };
+  const labelCls = 'block text-xs text-gray-500 mb-0.5';
+  const memberId = member || null;
+  return (
+    <div className="space-y-3 pt-2">
+      <div className="rounded-lg p-3 space-y-2.5" style={{ background: 'rgba(168,85,247,0.06)', border: '1px solid rgba(168,85,247,0.25)' }}>
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs font-medium text-purple-200">Personal</p>
+          <label className="text-xs text-gray-400 flex items-center gap-1.5">Whose
+            <select className="input-dark text-xs py-0.5" value={member} onChange={e => setMember(e.target.value)}>
+              <option value="">Mine</option>
+              {people.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </label>
+        </div>
+        <p className="text-xs text-gray-500">
+          Not a monthly bill? It's a{' '}
+          <button className="underline hover:text-gray-300" onClick={() => onOtherKind('credit_card_statement', memberId)}>credit card statement</button>{' '}or a{' '}
+          <button className="underline hover:text-gray-300" onClick={() => onOtherKind('service_invoice', memberId)}>one-time expense</button>.
+        </p>
+        {existing.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="text-gray-500">Already on file:</span>
+            {existing.map(({ a, p }) => (
+              <button key={a.id} onClick={() => onUseAccount(a.id)} className="px-2 py-0.5 rounded-md text-gray-200 hover:text-white" style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)' }}>
+                {describeAccount(a)}{p.nickname || p.address ? ` · ${p.nickname || p.address}` : ''}
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className={labelCls}>Company *</label>
+            <input className={inputCls} style={inputStyle} value={acctForm.providerName} placeholder="e.g. a credit union"
+              onChange={e => onChangeAcct({ ...acctForm, providerName: e.target.value, providerSlug: toSlug(e.target.value) })} />
+          </div>
+          <div>
+            <label className={labelCls}>What it is</label>
+            <select className={inputCls} style={inputStyle} value={acctForm.category} onChange={e => onChangeAcct({ ...acctForm, category: e.target.value })}>
+              {CATEGORIES.map(c => <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className={labelCls}>Account number</label>
+            <input className={inputCls} style={inputStyle} value={acctForm.accountNumber} onChange={e => onChangeAcct({ ...acctForm, accountNumber: e.target.value })} />
+          </div>
+          <div>
+            <label className={labelCls}>Kept with</label>
+            <select className={inputCls} style={inputStyle} value={keptWith} onChange={e => setKeptWith(e.target.value)}>
+              {properties.map(p => <option key={p.id} value={p.id}>{p.nickname || p.address}</option>)}
+            </select>
+          </div>
+        </div>
+        <p className="text-xs text-gray-500">Sollux keeps every bill with a property for fetching and payments; a personal one stays out of that property's costs and shows under Personal on the Bills page.</p>
+      </div>
+      <div className="flex items-center justify-between pt-1">
+        <button onClick={onCancel} className="text-xs text-gray-500 hover:text-gray-400">← Other options</button>
+        <button onClick={() => onSave(memberId, keptWith)} disabled={!acctForm.providerName.trim() || !keptWith}
+          className="rounded-lg px-3 py-1.5 text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed" style={{ background: '#c084fc', color: '#000' }}>
+          Add as a personal bill
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Bill review card ──────────────────────────────────────────────────────────
 
-type CardMode = 'select' | 'add-existing' | 'new';
+type CardMode = 'select' | 'add-existing' | 'new' | 'personal';
+
+type Person = { id: string; name: string };
 
 /**
  * Adds bills to the review, giving each a name no other card has. Cards are
@@ -1260,6 +1364,9 @@ function BillCard({
   onKeepMine,
   onSetKind,
   onExpenseChoice,
+  people,
+  onPersonal,
+  startPersonal,
 }: {
   bill:               ParsedBill;
   properties:         PropertyWithAccounts[];
@@ -1275,12 +1382,18 @@ function BillCard({
   onKeepMine:         (keep: boolean) => void;
   onSetKind:          (kind: string) => void;
   onExpenseChoice:    (propertyId: string, category: string) => void;
+  /** The household: whose a personal document is. */
+  people:             Person[];
+  /** Personal (whose: memberId, null for the owner), with the new account to keep with a property when it is a bill; null: not personal. */
+  onPersonal:         (personal: { memberId: string | null } | null, account?: { propertyId: string; acct: NewAccountPayload }) => void;
+  /** Opened from Personal: a bill with no account on file starts on the personal form. */
+  startPersonal?:     { memberId: string | null } | null;
 }) {
   const { extracted: ex, match, error } = bill;
   const confColor = CONFIDENCE_COLORS[match.confidence];
 
   // Default to 'add-existing' when the backend found the property but no account
-  const defaultMode: CardMode = match.method === 'property_exists_no_account' ? 'add-existing' : 'select';
+  const defaultMode: CardMode = startPersonal && !match.utilityAccountId ? 'personal' : match.method === 'property_exists_no_account' ? 'add-existing' : 'select';
 
   const [selectedAcctId, setSelectedAcctId]           = useState(match.utilityAccountId || '');
   const [mode, setMode]                               = useState<CardMode>(defaultMode);
@@ -1293,11 +1406,14 @@ function BillCard({
   // read as "apply to all did nothing".
   const assignmentKey =
     `${bill.match.utilityAccountId ?? ''}|${bill.addToPropertyId ?? ''}|` +
-    `${bill.newAccount?.providerName ?? ''}|${bill.newProperty?.address ?? ''}`;
+    `${bill.newAccount?.providerName ?? ''}|${bill.newProperty?.address ?? ''}|${bill.personal ? bill.personal.memberId ?? 'me' : ''}`;
   useEffect(() => {
     if (bill.match.utilityAccountId) {
       setSelectedAcctId(bill.match.utilityAccountId);
       setMode('select');
+      setApplied(true);
+    } else if (bill.personal && bill.addToPropertyId && bill.newAccount) {
+      setMode('personal');
       setApplied(true);
     } else if (bill.addToPropertyId && bill.newAccount) {
       setMode('add-existing');
@@ -1393,7 +1509,11 @@ function BillCard({
   // The account the card is filing to, when it is one already on file.
   const chosenProp = mode === 'select' && selectedAcctId ? properties.find(p => p.utilityAccounts.some(a => a.id === selectedAcctId)) ?? null : null;
   const chosenAcct = chosenProp?.utilityAccounts.find(a => a.id === selectedAcctId) ?? null;
-  const statusLabel = applied
+  const keptWith = bill.personal && bill.addToPropertyId ? properties.find(p => p.id === bill.addToPropertyId) : null;
+  const whoseName = (m: string | null | undefined) => (m ? people.find(p => p.id === m)?.name ?? 'Someone' : 'You');
+  const statusLabel = applied && mode === 'personal' && bill.personal
+    ? `New personal bill (${whoseName(bill.personal.memberId) === 'You' ? 'yours' : `${whoseName(bill.personal.memberId)}'s`})`
+    : applied
     ? chosenAcct
       ? 'Files to an existing account'
       : (mode === 'add-existing' || resolvedPropertyName != null)
@@ -1437,6 +1557,15 @@ function BillCard({
                   <p className="text-xs mt-1 text-emerald-400">
                     Credit card statement: files to {cc.cardName ?? cc.issuer ?? ex.providerName ?? 'the card'}{last4 ? ` ••${last4}` : ''} under Personal → Credit cards, adding the card if Sollux doesn't have it.{' '}
                     <span className="text-gray-500">{link('bill', 'It is a bill')}</span>
+                    {people.length > 0 && (
+                      <span className="block mt-1 text-gray-400">
+                        A new card is{' '}
+                        <select className="input-dark text-xs py-0.5" value={bill.personal?.memberId ?? ''} onChange={e => onPersonal({ memberId: e.target.value || null })}>
+                          <option value="">yours</option>
+                          {people.map(p => <option key={p.id} value={p.id}>{p.name}'s</option>)}
+                        </select>
+                      </span>
+                    )}
                   </p>
                 );
               }
@@ -1584,6 +1713,14 @@ function BillCard({
               {INVOICE_CATEGORIES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
           </div>
+          {people.length > 0 && (bill.expensePropertyId ?? match.propertyId ?? '') === '' && (
+            <label className="text-xs text-gray-400 flex items-center gap-2">Whose expense
+              <select className="input-dark text-xs py-0.5" value={bill.personal?.memberId ?? ''} onChange={e => onPersonal({ memberId: e.target.value || null })}>
+                <option value="">Yours</option>
+                {people.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </label>
+          )}
         </div>
       )}
 
@@ -1601,7 +1738,16 @@ function BillCard({
         {applied && (
           <div className="space-y-2">
             <div className="rounded-lg px-3 py-2.5 space-y-0.5" style={{ background: 'rgba(52,211,153,0.07)', border: '1px solid rgba(52,211,153,0.2)' }}>
-              {chosenAcct && chosenProp ? (
+              {mode === 'personal' && bill.personal ? (
+                <>
+                  <p className="text-xs text-emerald-300 font-medium">Personal · {whoseName(bill.personal.memberId) === 'You' ? 'yours' : whoseName(bill.personal.memberId)}</p>
+                  <p className="text-xs text-gray-400">
+                    {acctForm.providerName} · {acctForm.category.toLowerCase()}
+                    {acctForm.accountNumber ? ` · #${acctForm.accountNumber.slice(-4)}` : ''}
+                    {keptWith ? ` · kept with ${keptWith.nickname || keptWith.address}, out of its costs` : ''}
+                  </p>
+                </>
+              ) : chosenAcct && chosenProp ? (
                 <>
                   <p className="text-xs text-emerald-300 font-medium">{chosenProp.nickname || chosenProp.address}</p>
                   <p className="text-xs text-gray-400">{describeAccount(chosenAcct)}</p>
@@ -1825,7 +1971,34 @@ function BillCard({
                   </svg>
                   Create new property &amp; account
                 </button>
+                <button
+                  onClick={() => { setSelectedAcctId(''); setApplied(false); setMode('personal'); }}
+                  className="w-full rounded-lg px-3 py-2 text-xs transition-colors"
+                  style={{ background: 'rgba(168,85,247,0.08)', border: '1px dashed rgba(168,85,247,0.4)', color: '#d8b4fe' }}
+                >
+                  It's personal — yours or family's
+                </button>
               </>
+            )}
+
+            {mode === 'personal' && (
+              <PersonalForm
+                bill={bill}
+                properties={properties}
+                people={people}
+                acctForm={acctForm}
+                onChangeAcct={setAcctForm}
+                initialMember={bill.personal?.memberId ?? startPersonal?.memberId ?? null}
+                onUseAccount={id => { setMode('select'); handleAcctSelect(id); }}
+                onSave={(memberId, propertyId) => { onPersonal({ memberId }, { propertyId, acct: acctForm }); setApplied(true); }}
+                onOtherKind={(kind, memberId) => {
+                  onSetKind(kind);
+                  // A personal expense has no property.
+                  if (kind === 'service_invoice') onExpenseChoice('', bill.expenseCategory ?? 'OTHER');
+                  onPersonal({ memberId });
+                }}
+                onCancel={() => { onPersonal(null); handleCancelSubform(); }}
+              />
             )}
 
             {mode === 'add-existing' && match.propertyId && (
@@ -1891,9 +2064,9 @@ async function refreshAccounts(): Promise<PropertyWithAccounts[]> {
  */
 function describeAccount(acct: {
   providerName: string; category: string;
-  serviceLabel?: string | null; accountNumber?: string | null;
+  serviceLabel?: string | null; accountNumber?: string | null; isPersonal?: boolean;
 }): string {
-  const base = `${acct.providerName} (${acct.category.toLowerCase()})`;
+  const base = `${acct.providerName} (${acct.category.toLowerCase()}${acct.isPersonal ? ', personal' : ''})`;
   if (acct.serviceLabel) return `${base} — ${acct.serviceLabel}`;
   if (acct.accountNumber) return `${base} — ${acct.accountNumber}`;
   return base;
@@ -1920,6 +2093,12 @@ export default function ImportPage() {
   const [stage, setStage]                   = useState<Stage>('drop');
   const [bills, setBills]                   = useState<ParsedBill[]>([]);
   const [properties, setProperties]         = useState<PropertyWithAccounts[]>([]);
+  // The household, for whose a personal document is; and Add opened from Personal (?personal=me|<member>).
+  const [people, setPeople]                 = useState<Person[]>([]);
+  useEffect(() => { void getHousehold().then(h => setPeople(h.members.map(m => ({ id: m.id, name: m.name })))).catch(() => {}); }, []);
+  const [params] = useSearchParams();
+  const personalParam = params.get('personal');
+  const startPersonal = personalParam ? { memberId: personalParam === 'me' ? null : personalParam } : null;
   const [result, setResult]                 = useState<{ imported: number; skipped: number; errors: string[] } | null>(null);
   const [driveNote, setDriveNote]           = useState<string | null>(null);
   const [progress, setProgress]             = useState('');
@@ -2074,7 +2253,7 @@ export default function ImportPage() {
   const handleAssign = (filename: string, utilityAccountId: string) => {
     setBills(prev => prev.map(b =>
       b.filename === filename
-        ? { ...b, match: { ...b.match, utilityAccountId: utilityAccountId || null }, newProperty: undefined, newAccount: undefined, ownerChose: !!utilityAccountId }
+        ? { ...b, match: { ...b.match, utilityAccountId: utilityAccountId || null }, newProperty: undefined, newAccount: undefined, ownerChose: !!utilityAccountId, personal: undefined }
         : b
     ));
   };
@@ -2082,7 +2261,7 @@ export default function ImportPage() {
   const handleAddToProperty = (filename: string, propertyId: string, acct: NewAccountPayload) => {
     setBills(prev => prev.map(b =>
       b.filename === filename
-        ? { ...b, match: { ...b.match, utilityAccountId: null }, addToPropertyId: propertyId, newAccount: acct, newProperty: undefined }
+        ? { ...b, match: { ...b.match, utilityAccountId: null }, addToPropertyId: propertyId, newAccount: acct, newProperty: undefined, personal: undefined }
         : b
     ));
   };
@@ -2090,9 +2269,20 @@ export default function ImportPage() {
   const handleAssignNew = (filename: string, prop: NewPropertyPayload, acct: NewAccountPayload) => {
     setBills(prev => prev.map(b =>
       b.filename === filename
-        ? { ...b, match: { ...b.match, utilityAccountId: null }, newProperty: prop, newAccount: acct, addToPropertyId: undefined }
+        ? { ...b, match: { ...b.match, utilityAccountId: null }, newProperty: prop, newAccount: acct, addToPropertyId: undefined, personal: undefined }
         : b
     ));
+  };
+
+  // Personal: whose it is, and for a bill the new personal account and the property it is kept with.
+  const handlePersonal = (filename: string, personal: { memberId: string | null } | null, account?: { propertyId: string; acct: NewAccountPayload }) => {
+    setBills(prev => prev.map(b => {
+      if (b.filename !== filename) return b;
+      if (!personal) return { ...b, personal: undefined };
+      return account
+        ? { ...b, personal, match: { ...b.match, utilityAccountId: null }, addToPropertyId: account.propertyId, newAccount: account.acct, newProperty: undefined }
+        : { ...b, personal };
+    }));
   };
 
   const handleSetKind = (filename: string, kind: string) => {
@@ -2127,7 +2317,7 @@ export default function ImportPage() {
       return { ...target, match: { ...target.match, utilityAccountId: source.match.utilityAccountId }, newProperty: undefined, newAccount: undefined, addToPropertyId: undefined, ownerChose: true };
     }
     if (source.addToPropertyId && source.newAccount) {
-      return { ...target, match: { ...target.match, utilityAccountId: null }, addToPropertyId: source.addToPropertyId, newAccount: source.newAccount, newProperty: undefined };
+      return { ...target, match: { ...target.match, utilityAccountId: null }, addToPropertyId: source.addToPropertyId, newAccount: source.newAccount, newProperty: undefined, personal: source.personal };
     }
     if (source.newProperty && source.newAccount) {
       return { ...target, match: { ...target.match, utilityAccountId: null }, newProperty: source.newProperty, newAccount: source.newAccount, addToPropertyId: undefined };
@@ -2247,6 +2437,11 @@ export default function ImportPage() {
       keepMine:         !!b.match.conflict && b.match.utilityAccountId === b.match.conflict.utilityAccountId && (b.keepMine ?? true),
       expensePropertyId: (b.extracted as any)?.documentKind === 'service_invoice' ? ((b.expensePropertyId ?? b.match.propertyId ?? '') || null) : undefined,
       expenseCategory:   (b.extracted as any)?.documentKind === 'service_invoice' ? (b.expenseCategory ?? (b.extracted as any).expenseCategory ?? 'REPAIRS_MAINTENANCE') : undefined,
+      // Whose: a personal invoice (no property), a card statement's new card, or a new personal account.
+      personal: (b.extracted as any)?.documentKind === 'service_invoice'
+        ? (((b.expensePropertyId ?? b.match.propertyId ?? '') === '') ? b.personal ?? startPersonal : null)
+        : (b.extracted as any)?.documentKind === 'credit_card_statement' ? b.personal ?? startPersonal
+        : b.addToPropertyId && b.newAccount && !b.match.utilityAccountId ? b.personal ?? null : null,
     });
 
     // Submit in batches rather than one request. Every item carries its PDF as
@@ -2538,6 +2733,9 @@ export default function ImportPage() {
                   onKeepMine={keep => handleKeepMine(bill.filename, keep)}
                   onSetKind={kind => handleSetKind(bill.filename, kind)}
                   onExpenseChoice={(propId, cat) => handleExpenseChoice(bill.filename, propId, cat)}
+                  people={people}
+                  onPersonal={(personal, account) => handlePersonal(bill.filename, personal, account)}
+                  startPersonal={startPersonal}
                 />
               ))}
             </div>

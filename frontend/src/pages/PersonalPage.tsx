@@ -422,6 +422,7 @@ export default function PersonalPage() {
     : <OverviewTab cards={data.cards} summary={data.summary} go={go} member={member} people={people.map(p => ({ id: p.id, name: label(p.id) }))} ownerLabel={ownerLabel} pick={pick} reload={() => void reload()} />;
   if (phone) return (
     <Screen title="Personal" back onRefresh={reload}>
+      <Link to={`/import?personal=${newFor ?? 'me'}`} className="btn btn-primary text-xs" style={{ display: 'inline-block', marginBottom: 12 }}>Add a bill or statement</Link>
       <Segmented<TabKey> label="Section" value={tab} onChange={t => setParams({ tab: t }, { replace: true })}
         options={TABS.map(t => ({ value: t.key, label: t.key === 'cards' ? 'Cards' : t.label }))} />
       <div style={{ margin: '0 0 14px' }}>{bar}</div>
@@ -431,7 +432,8 @@ export default function PersonalPage() {
   );
   return (
     <div>
-      <PageHeader title="Personal" subtitle="Your own money, apart from the rental portfolio: credit cards, expenses and loans (your own bills are under Personal on Bills)" />
+      <PageHeader title="Personal" subtitle="Your own money, apart from the rental portfolio: credit cards, expenses and loans (your own bills are under Personal on Bills)"
+        action={<Link to={`/import?personal=${newFor ?? 'me'}`} className="btn btn-primary text-xs" title="Drop a bill, card statement or receipt: it is filed as personal, for the person shown">Add a bill or statement</Link>} />
       <div className="px-6 pt-4 flex gap-1 flex-wrap">
         {TABS.map(t => (
           <button key={t.key} onClick={() => go(t.key)} className={`text-xs px-3 py-1.5 rounded-lg font-medium ${tab === t.key ? 'bg-gold-500 text-white' : 'text-gray-400 hover:text-gray-200'}`}
