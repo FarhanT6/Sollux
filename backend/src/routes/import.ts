@@ -38,7 +38,7 @@ router.get('/accounts', async (req: Request, res: Response) => {
           // serviceLabel and the masked number travel with the account so the
           // picker can tell two meters for one provider apart — the provider
           // name and category are identical between them.
-          select: { id: true, providerName: true, category: true, serviceLabel: true, accountNumber: true },
+          select: { id: true, providerName: true, category: true, serviceLabel: true, accountNumber: true, isPersonal: true, memberId: true },
           orderBy: { providerName: 'asc' },
         },
       },
@@ -114,7 +114,7 @@ router.post('/analyze', async (req: Request, res: Response) => {
           // serviceLabel and the masked number travel with the account so the
           // picker can tell two meters for one provider apart — the provider
           // name and category are identical between them.
-          select: { id: true, providerName: true, category: true, serviceLabel: true, accountNumber: true },
+          select: { id: true, providerName: true, category: true, serviceLabel: true, accountNumber: true, isPersonal: true, memberId: true },
           orderBy: { providerName: 'asc' },
         },
       },
@@ -169,6 +169,24 @@ interface ConfirmItem {
   /** A one-time invoice recorded as an expense: on this property (null = personal), in this category. */
   expensePropertyId?: string | null;
   expenseCategory?:   string | null;
+  /**
+   * The owner's own (or a household member's, memberId): a new account is a personal bill, kept with
+   * the property chosen but out of its costs; a card statement's new card and an invoice's expense
+   * are that person's.
+   */
+  personal?: { memberId: string | null } | null;
+}
+
+const last4Of = (n?: string | null) => (n ? n.replace(/[^0-9A-Za-z]/g, '').slice(-4) || null : null);
+
+/** The account on a property this new account already is: the same provider, and the same number when both have one. */
+async function sameAccount(propertyId: string, na: NewAccountPayload) {
+  const mine = last4Of(na.accountNumber);
+  const rows = await db.utilityAccount.findMany({
+    where: { propertyId, providerName: { equals: na.providerName, mode: 'insensitive' } },
+    select: { id: true, accountNumber: true },
+  });
+  return rows.find(a => { const theirs = last4Of(a.accountNumber); return !mine || !theirs || theirs === mine; }) ?? null;
 }
 
 router.post('/confirm', async (req: Request, res: Response) => {
@@ -199,8 +217,10 @@ router.post('/confirm', async (req: Request, res: Response) => {
     // before it (AmTrust) needs that bill on file already.
     items.sort((a, b) => (a.extracted?.statementDate ?? '9999').localeCompare(b.extracted?.statementDate ?? '9999'));
 
+    const members = new Set((await db.householdMember.findMany({ where: { userId }, select: { id: true } })).map(m => m.id));
     for (const item of items) {
       try {
+        const personal = item.personal ? { memberId: item.personal.memberId && members.has(item.personal.memberId) ? item.personal.memberId : null } : null;
         // A credit card statement goes to its card (created if Sollux does
         // not have it), whatever account the card was left on.
         // A one-time invoice for work at a property: an expense on the property
@@ -210,13 +230,16 @@ router.post('/confirm', async (req: Request, res: Response) => {
             const prop = await db.property.findFirst({ where: { id: item.expensePropertyId, userId }, select: { id: true } });
             if (!prop) { errors.push(`${item.filename}: property not found`); continue; }
           }
-          await fileServiceInvoice(userId, item.expensePropertyId ?? null, item.extracted, item.fileData && !item.extracted.fromEmailBody ? Buffer.from(item.fileData, 'base64') : null, item.filename, item.expenseCategory);
+          const inv = await fileServiceInvoice(userId, personal ? null : item.expensePropertyId ?? null, item.extracted, item.fileData && !item.extracted.fromEmailBody ? Buffer.from(item.fileData, 'base64') : null, item.filename, item.expenseCategory);
+          if (personal && !inv.duplicate) await db.expense.updateMany({ where: { id: inv.expenseId, userId }, data: { isPersonal: true, memberId: personal.memberId } });
           imported++;
           continue;
         }
         if (item.extracted?.documentKind === 'receipt' || item.extracted?.documentKind === 'estimate') { skipped++; continue; }
         if (item.extracted?.documentKind === 'credit_card_statement') {
-          await fileCardStatement(userId, item.extracted, item.fileData && !item.extracted.fromEmailBody ? Buffer.from(item.fileData, 'base64') : null, item.filename);
+          const card = await fileCardStatement(userId, item.extracted, item.fileData && !item.extracted.fromEmailBody ? Buffer.from(item.fileData, 'base64') : null, item.filename);
+          // Whose card: said on the import card, for a card just added (one already on file keeps its person).
+          if (personal && card.created) await db.creditCard.updateMany({ where: { id: card.cardId, userId }, data: { memberId: personal.memberId } });
           imported++;
           continue;
         }
@@ -238,15 +261,13 @@ router.post('/confirm', async (req: Request, res: Response) => {
           }
 
           // Dedup: reuse account created earlier in this batch
-          const key = acctKey(existingProp.id, na.providerName);
+          const key = `${acctKey(existingProp.id, na.providerName)}:${last4Of(na.accountNumber) ?? ''}`;
           if (createdAccounts[key]) {
             utilityAccountId = createdAccounts[key];
           } else {
-            // Also check DB for an account that already exists with same provider
-            const existingAcct = await db.utilityAccount.findFirst({
-              where: { propertyId: existingProp.id, providerName: { equals: na.providerName, mode: 'insensitive' } },
-              select: { id: true },
-            });
+            // Also check DB for an account that already exists with same provider — and the same
+            // number when both have one: a second credit-union loan is not the first one's bills.
+            const existingAcct = await sameAccount(existingProp.id, na);
             if (existingAcct) {
               utilityAccountId = existingAcct.id;
               createdAccounts[key] = existingAcct.id;
@@ -258,11 +279,12 @@ router.post('/confirm', async (req: Request, res: Response) => {
                   providerSlug:  na.providerSlug,
                   category:      (na.category as any) || 'OTHER',
                   accountNumber: na.accountNumber ? na.accountNumber.slice(-4) : null,
+                  ...(personal ? { isPersonal: true, memberId: personal.memberId } : {}),
                 },
               });
               utilityAccountId = acct.id;
               createdAccounts[key] = acct.id;
-              console.log(`[Import] Created account ${acct.id} on existing property ${existingProp.id}`);
+              console.log(`[Import] Created ${personal ? 'personal ' : ''}account ${acct.id} on existing property ${existingProp.id}`);
             }
           }
           propertyId = existingProp.id;
@@ -312,14 +334,11 @@ router.post('/confirm', async (req: Request, res: Response) => {
           }
 
           // Dedup account on that property
-          const aKey = acctKey(propertyId, na.providerName);
+          const aKey = `${acctKey(propertyId, na.providerName)}:${last4Of(na.accountNumber) ?? ''}`;
           if (createdAccounts[aKey]) {
             utilityAccountId = createdAccounts[aKey];
           } else {
-            const existingAcct = await db.utilityAccount.findFirst({
-              where: { propertyId, providerName: { equals: na.providerName, mode: 'insensitive' } },
-              select: { id: true },
-            });
+            const existingAcct = await sameAccount(propertyId, na);
             if (existingAcct) {
               utilityAccountId = existingAcct.id;
               createdAccounts[aKey] = existingAcct.id;
@@ -331,6 +350,7 @@ router.post('/confirm', async (req: Request, res: Response) => {
                   providerSlug: na.providerSlug,
                   category:     (na.category as any) || 'OTHER',
                   accountNumber: na.accountNumber ? na.accountNumber.slice(-4) : null,
+                  ...(personal ? { isPersonal: true, memberId: personal.memberId } : {}),
                 },
               });
               utilityAccountId = acct.id;
