@@ -6,6 +6,7 @@ import { scheduledWait } from '../services/nextFetch';
 import { Prisma } from '@prisma/client';
 import { loggedLines, restoreLateFees } from '../services/lateFees';
 import { settleCarriedFees } from '../services/carriedFees';
+import { reconcileRecent } from '../services/billIdentity';
 import { db } from '../config/db';
 import { decrypt } from '../crypto/encrypt';
 import { getScraperProvider } from '../scrapers/registry';
@@ -649,7 +650,7 @@ const worker = new Worker<ScrapeJobData>(
         }
 
         // A late fee hidden in a bill's previous balance (services/carriedFees.ts), on the bill paid late.
-        await settleCarriedFees(acct.id).catch(() => {});
+        await reconcileRecent(acct.id).catch(() => {}); await settleCarriedFees(acct.id).catch(() => {});
 
         // Payments routing:
         //  - If the scraped payment carries an accountNumber, route it to THAT account

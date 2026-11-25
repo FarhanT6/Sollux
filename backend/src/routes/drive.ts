@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { settleCarriedFees } from '../services/carriedFees';
+import { reconcileRecent } from '../services/billIdentity';
 import { learnProviderWebsite } from '../services/providerWebsite';
 import { findExistingBill } from '../services/billMatch';
 import { google, drive_v3 } from 'googleapis';
@@ -13,7 +14,7 @@ import { compareWithOwner, keepOwnerFigures, ownerEntered, sameBillByDue, thinne
 import { attachDbUser } from '../middleware/requireAuth';
 import { getSignedDocumentUrl, downloadDocument, uploadDocument, buildStatementKey } from '../services/s3Service';
 import { markEscrowedStatements } from '../services/escrow';
-import { applyPolicyDocument, settleInFull } from '../services/pdfImportService';
+import { applyPolicyDocument, settleInFull, periodChargeOf } from '../services/pdfImportService';
 import { applyPastDueNotice, parseBill, recordConfirmedPayment, syncPaymentPlanFromBill, syncInsurancePolicyFromBill, syncLoanComponentsFromBill } from '../services/pdfImportService';
 import { findOrCreateUtilityAccount } from '../services/utilityAccountResolver';
 
@@ -368,9 +369,12 @@ router.post('/stream', attachDbUser, async (req, res) => {
             const totalDue = (ex.currentCharges != null || ex.previousBalance != null)
               ? (ex.currentCharges ?? 0) + (ex.previousBalance ?? 0)
               : ex.amountDue;
-            const amountDueCurrent = ex.currentCharges ?? ex.amountDue;
+            // The same rule as intake and Add (#278): an installment billed inside the charge stays in it.
+            const amountDueCurrent = periodChargeOf(ex);
             const rawData: Record<string, unknown> = {
               source: 'drive_import',
+              // Which reader produced these figures, as every other path records it.
+              extractedBy: parsed.extractedBy ?? null,
               providerName: ex.providerName,
               serviceAddress: ex.serviceAddress,
               accountNumber: ex.accountNumber,
@@ -424,7 +428,9 @@ router.post('/stream', attachDbUser, async (req, res) => {
                 dueDate: ex.dueDate ? new Date(ex.dueDate) : existing.dueDate,
                 chargesExcludingFees: ex.currentCharges ?? existing.chargesExcludingFees,
                 penaltiesFees: ex.lateFee ?? existing.penaltiesFees,
-                pastDueCarried: pastDueAmt ?? existing.pastDueCarried,
+                // A bill that prints its total says what was carried, nothing included: a stale carried
+                // figure from an earlier reading goes (the rule intake uses, #278).
+                pastDueCarried: pastDueAmt ?? (ex.statedTotalDue != null ? null : existing.pastDueCarried),
                 // These were written on create but omitted on update, so a
                 // re-import silently dropped the billing period and usage it
                 // had just extracted. Every field the create branch sets must
@@ -445,7 +451,7 @@ router.post('/stream', attachDbUser, async (req, res) => {
               await learnProviderWebsite(acct.id, ex);
               await syncLoanComponentsFromBill(acct.id, ex);
               await markEscrowedStatements(acct.id);
-              await settleCarriedFees(acct.id).catch(() => {});
+              await reconcileRecent(acct.id).catch(() => {}); await settleCarriedFees(acct.id).catch(() => {});
               if (nem) await db.utilityAccount.update({ where: { id: acct.id }, data: { hasTrueUp: true, ...(nem.trueUpDate ? { trueUpDate: new Date(nem.trueUpDate) } : {}) } });
             } else {
               const created = await db.statement.create({ data: {
@@ -470,7 +476,7 @@ router.post('/stream', attachDbUser, async (req, res) => {
               await learnProviderWebsite(acct.id, ex);
               await syncLoanComponentsFromBill(acct.id, ex);
               await markEscrowedStatements(acct.id);
-              await settleCarriedFees(acct.id).catch(() => {});
+              await reconcileRecent(acct.id).catch(() => {}); await settleCarriedFees(acct.id).catch(() => {});
               if (nem) await db.utilityAccount.update({ where: { id: acct.id }, data: { hasTrueUp: true, ...(nem.trueUpDate ? { trueUpDate: new Date(nem.trueUpDate) } : {}) } });
             }
             autoImported++;

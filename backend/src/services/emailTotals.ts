@@ -16,7 +16,7 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
 const asNum = (v: unknown): number | null => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
 
 /** The bill before `date` on the account, its printed total, and what was paid between the two. */
-async function carriedInto(utilityAccountId: string, date: Date, excludeId?: string): Promise<{ carried: number; prevTotal: number; paid: number } | null> {
+export async function carriedInto(utilityAccountId: string, date: Date, excludeId?: string): Promise<{ carried: number; prevTotal: number; paid: number } | null> {
   const prev = await db.statement.findFirst({
     where: { utilityAccountId, isDownPayment: false, isScheduled: false, statementDate: { lt: date, gte: new Date(date.getTime() - 75 * DAY) }, ...(excludeId ? { id: { not: excludeId } } : {}) },
     orderBy: { statementDate: 'desc' },

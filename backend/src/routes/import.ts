@@ -3,6 +3,7 @@
  * POST /api/import/confirm  — Save confirmed statements (creates properties/accounts as needed)
  */
 import { settleCarriedFees } from '../services/carriedFees';
+import { reconcileRecent } from '../services/billIdentity';
 import { Router, Request, Response } from 'express';
 import { propertyLimitReached } from '../services/planLimits';
 import { learnProviderWebsite } from '../services/providerWebsite';
@@ -686,7 +687,7 @@ router.post('/confirm', async (req: Request, res: Response) => {
           await syncLoanComponentsFromBill(utilityAccountId, ex);
           await syncTrueUpFromBill(utilityAccountId, ex);
           await markEscrowedStatements(utilityAccountId);
-          await settleCarriedFees(utilityAccountId).catch(() => {});
+          await reconcileRecent(utilityAccountId).catch(() => {}); await settleCarriedFees(utilityAccountId).catch(() => {});
           skipped++;
         } else {
           const created = await db.statement.create({
@@ -722,7 +723,7 @@ router.post('/confirm', async (req: Request, res: Response) => {
           await syncLoanComponentsFromBill(utilityAccountId, ex);
           await syncTrueUpFromBill(utilityAccountId, ex);
           await markEscrowedStatements(utilityAccountId);
-          await settleCarriedFees(utilityAccountId).catch(() => {});
+          await reconcileRecent(utilityAccountId).catch(() => {}); await settleCarriedFees(utilityAccountId).catch(() => {});
           imported++;
         }
 

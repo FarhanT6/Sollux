@@ -48,7 +48,7 @@ router.get('/report', async (req, res, next) => {
       where: { createdAt: { gte: days(30) }, isDownPayment: false, utilityAccount: mineAcct },
       select: {
         id: true, statementDate: true, dueDate: true, billingPeriodStart: true, billingPeriodEnd: true,
-        amountDue: true, pastDueCarried: true, penaltiesFees: true, balance: true, isScheduled: true, rawDataJson: true, sourceType: true,
+        amountDue: true, pastDueCarried: true, penaltiesFees: true, carriedFee: true, balance: true, isScheduled: true, rawDataJson: true, sourceType: true,
         utilityAccount: { select: { id: true, providerName: true, providerSlug: true, category: true, billingCadence: true } },
       },
       orderBy: { createdAt: 'desc' },
@@ -59,14 +59,20 @@ router.get('/report', async (req, res, next) => {
       statementId: s.id, provider: s.utilityAccount.providerName, category: s.utilityAccount.category,
       statementDate: s.statementDate, amountDue: num(s.amountDue), pastDueCarried: num(s.pastDueCarried),
       statedTotalDue: num((s.rawDataJson as any)?.statedTotalDue), extractedBy: (s.rawDataJson as any)?.extractedBy ?? null,
+      // Which path wrote it (#278), and what the identity check did to it.
+      source: (s.rawDataJson as any)?.source ?? null, identityFixed: (s.rawDataJson as any)?.identityFixed ?? null,
     });
     const textFallback = recent.filter(s => (s.rawDataJson as any)?.extractedBy === 'text');
     const nullAmount = recent.filter(s => s.amountDue == null && !s.isScheduled);
     const identityMismatch = recent.filter(s => {
       const stated = num((s.rawDataJson as any)?.statedTotalDue);
       if (stated == null || s.amountDue == null) return false;
+      // A zero total (a paid bill) and stand-ins (an email's figures, a saved portal page) are not read figures.
+      const raw = (s.rawDataJson ?? {}) as Record<string, unknown>;
+      if (stated <= 0.005 || raw.emailNotice || raw.pageSaved || raw.ownerEditedAt) return false;
       const deferred = num((s.rawDataJson as any)?.netMetering?.deferred) ?? 0;
-      const payable = Number(s.amountDue) - deferred + Number(s.pastDueCarried ?? 0);
+      // A late fee folded into the next bill is on this bill in Sollux, not on its PDF.
+      const payable = Number(s.amountDue) - Number(s.carriedFee ?? 0) - deferred + Number(s.pastDueCarried ?? 0);
       return Math.abs(payable - stated) > 0.05;
     });
     // How long a period may run for the account's cadence: a bimonthly hauler's 60 days is no defect.
@@ -173,7 +179,7 @@ router.get('/report', async (req, res, next) => {
       // The one-time passes the workers run after a deploy: when each ran and what it changed. A pass
       // missing here never ran (the workers were down, or failed before it) — that is a defect.
       maintenance: Object.fromEntries((await db.appSetting.findMany({
-        where: { key: { in: ['text-recheck:v1', 'email-totals:split-v1', 'carried-fees:history-v3', 'rent-paid-ahead-to-utilities:v1', 'confirmed-payments:dedupe-v1', 'page-saved:mark-v1'] } },
+        where: { key: { in: ['text-recheck:v1', 'email-totals:split-v1', 'carried-fees:history-v3', 'rent-paid-ahead-to-utilities:v1', 'confirmed-payments:dedupe-v1', 'page-saved:mark-v1', 'bill-identity:v1'] } },
         select: { key: true, value: true },
       })).map(r => { let v: unknown = r.value; try { v = JSON.parse(r.value); } catch { /* as stored */ } return [r.key, v]; })),
       queuedFetchesWaiting: await db.syncJob.count({ where: { status: 'PENDING', startedAt: null, createdAt: { lt: new Date(Date.now() - 10 * 60_000) }, utilityAccountId: { in: (await db.utilityAccount.findMany({ where: mineAcct, select: { id: true } })).map(a => a.id) } } }),
