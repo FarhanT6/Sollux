@@ -1488,7 +1488,7 @@ export default function UtilityDetailPage() {
       <div className="px-8 pt-10 pb-6 flex items-end justify-between gap-4 flex-wrap">
         <div>
           <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-1">
-            <Link to="/properties" className="hover:text-gray-300 transition-colors">Properties</Link>
+            <Link to="/bills" className="hover:text-gray-300 transition-colors">Bills & accounts</Link>
             <span>›</span>
             <Link to={`/portfolio/${propertyId}?tab=Bills`} className="hover:text-gray-300 transition-colors">{propertyLabel}</Link>
             <span>›</span>
@@ -1608,67 +1608,26 @@ export default function UtilityDetailPage() {
       {/* An open shut-off or cancellation notice on this account. */}
       <UrgentNotices utilityAccountId={account.id} className="mx-6 mt-3" />
 
-      {/* Stats bar */}
-      <div className="px-8 pb-2 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-        {[
-          {
-            label: 'Current balance',
-            // A running-balance account: what the bills still owe, as the provider counts it.
-            value: fmtMoney(runningTotal ?? (isLatestPaid ? 0 : (latestTotalDue ?? latestAmt))),
-            // In credit: nothing to pay, and the provider holds the rest. The
-            // bill's own charge still shows so the month's cost is visible.
-            sub: balanceSub,
-          },
-          {
-            label: 'Month over month',
-            value: momPct != null ? `${momPct > 0 ? '↑' : '↓'} ${Math.abs(momPct).toFixed(1)}%` : '—',
-            color: momPct != null ? (momPct > 0 ? 'text-red-400' : 'text-emerald-400') : 'text-white',
-          },
-          {
-            label: `YTD ${currentYear} operating`,
-            value: fmtMoney(ytdTotal || null),
-            sub: ytdExcluded > 0
-              ? <span className="text-gray-500" title="Penalties and arrears installments are not operating cost">
-                  {fmtMoney(ytdBilled)} billed
-                </span>
-              : undefined,
-          },
-          { label: 'Total paid', value: fmtMoney(totalPaid || null), sub: `${payments.length} payments` },
-          {
-            label: 'Total fees & penalties',
-            value: fmtMoney(totalFees || null),
-            color: totalFees > 0 ? 'text-orange-400' : 'text-white',
-            sub: totalFees > 0 ? `across ${feesData.length} bills` : undefined,
-          },
-        // A figure with nothing to show (no fees yet) is left out, not shown as a dash.
-        ].filter(t => t.value !== '—').map(({ label, value, color: c, sub }) => (
-          <div key={label} className="stat-card">
-            <p className="text-[13px] text-gray-500 mb-2">{label}</p>
-            <p className={`text-[24px] leading-none font-semibold tracking-tight tabular-nums ${c || 'text-white'}`}>{value}</p>
-            {sub && <p className="text-xs text-gray-500 mt-2">{sub}</p>}
+      {/* What's owed now first: the one figure the page is opened for, and paying it. The rest is one quiet column. */}
+      <div className="px-8 pb-2">
+        <div className="card p-5 flex flex-wrap items-center gap-x-8 gap-y-4">
+          <div>
+            <p className="text-[13px] text-gray-500 mb-1">Owed now</p>
+            {/* A running-balance account: what the bills still owe, as the provider counts it. */}
+            <p className="text-[32px] leading-none font-semibold tracking-tight tabular-nums text-white">{fmtMoney(runningTotal ?? (isLatestPaid ? 0 : (latestTotalDue ?? latestAmt)))}</p>
+            {balanceSub && <p className="text-xs text-gray-500 mt-2">{balanceSub}</p>}
           </div>
-        ))}
+          <button onClick={() => { setTab('payments'); setEditPaymentId(null); resetPayForm(); setShowPayForm(true); }} className="btn btn-primary text-sm">Log payment</button>
+          <dl className="ml-auto grid grid-cols-[auto_auto] gap-x-4 gap-y-1 text-xs">
+            {ytdTotal ? <><dt className="text-gray-500">{currentYear} operating</dt><dd className="text-right tabular-nums text-gray-200">{fmtMoney(ytdTotal)}{ytdExcluded > 0 && <span className="text-gray-500" title="Penalties and arrears installments are not operating cost"> · {fmtMoney(ytdBilled)} billed</span>}</dd></> : null}
+            {totalPaid ? <><dt className="text-gray-500">Paid in all</dt><dd className="text-right tabular-nums text-gray-200">{fmtMoney(totalPaid)} · {payments.length} payment{payments.length === 1 ? '' : 's'}</dd></> : null}
+            {totalFees > 0 && <><dt className="text-gray-500">Fees & penalties</dt><dd className="text-right tabular-nums text-orange-400">{fmtMoney(totalFees)} · {feesData.length} bill{feesData.length === 1 ? '' : 's'}</dd></>}
+            {momPct != null && <><dt className="text-gray-500">Last bill vs the one before</dt><dd className={`text-right tabular-nums ${momPct > 0 ? 'text-red-400' : 'text-emerald-400'}`}>{momPct > 0 ? '↑' : '↓'} {Math.abs(momPct).toFixed(1)}%</dd></>}
+          </dl>
+        </div>
       </div>
 
       <div className="px-8 pt-6">
-        {/* Payment Plan section */}
-        {/* Loan Details */}
-        {loan ? (
-          <LoanCard loan={loan} accountId={accountId!} arrears={latestPastDue}
-            onUpdate={setLoan} onDelete={() => setLoan(null)} />
-        ) : null /* added from More ⋯ */}
-
-        {account.category === 'INSURANCE' && (
-          <PolicyCard accountId={accountId!} propertyId={propertyId!} carrier={account.providerName} account={account}
-            onAccountChange={patch => setAccount((prev: any) => prev ? { ...prev, ...patch } : prev)} />
-        )}
-
-        {/* Payment Plan */}
-        {plan ? (
-          <PaymentPlanCard plan={plan} accountId={accountId!}
-            onUpdate={setPlan} onDelete={() => setPlan(null)} />
-        ) : null /* added from More ⋯ */}
-
         {/* Tabs + search */}
         <div className="flex items-end justify-between mb-5 border-b border-white/[0.07]">
           {/* Tabs as an underline, not filled gold buttons. */}
@@ -1741,6 +1700,18 @@ export default function UtilityDetailPage() {
             : (
               /* One list with hairlines between bills, not a stack of outlined boxes. */
               <div className="mb-8 rounded-2xl overflow-hidden" style={{ background: 'rgba(255,255,255,0.025)' }}>
+                {/* Each bill as it printed: its own charge, what it carried in, and the total it asked. */}
+                <div className="px-5 py-2 flex items-center gap-4 text-[11px] text-gray-500 border-b border-white/[0.06]">
+                  {selecting && <span className="w-4 flex-shrink-0" />}
+                  <span className="w-20 flex-shrink-0">Month</span>
+                  <span className="flex-1" />
+                  <span className="w-24 flex-shrink-0 text-right">Due</span>
+                  <span className="w-24 flex-shrink-0 text-right" title="This period's own charges">Bill</span>
+                  <span className="w-24 flex-shrink-0 text-right" title="Carried in from earlier bills: unpaid balance, or a credit">Carried</span>
+                  <span className="w-28 flex-shrink-0 text-right" title="What the statement asked for">Total</span>
+                  <span className="w-20 flex-shrink-0" />
+                  <span className="w-52 flex-shrink-0" />
+                </div>
                 {(() => {
                   // Installments scheduled ahead: the next one is listed; the rest fold into one row.
                   const ahead = filteredStatements.filter(isUpcoming);
@@ -1955,12 +1926,25 @@ export default function UtilityDetailPage() {
                         ) : null}
                       </div>
 
-                      {/* Amount column.
-                       *  - Paid statement (balance/totalDue is 0): show the actual bill amount
-                       *    that was paid (amountDue) — the user wants history of what was billed.
-                       *  - Unpaid statement: show the current open balance. If it equals the
-                       *    bill amount, no sub-line. If it's larger (past-due rolled in),
-                       *    show "Bill: $X" so the per-period charge is still visible. */}
+                      {/* Bill · Carried · Total: the statement's own figures, the total with how it stands now. */}
+                      <div className="text-right flex-shrink-0 w-24 tabular-nums">
+                        {(() => {
+                          const amt = Number(s.amountDue ?? 0);
+                          const plan = Number(s.paymentPlanAmount ?? 0);
+                          const own = plan > 0 && amt > plan ? Number((amt - plan).toFixed(2)) : amt;
+                          return (
+                            <>
+                              <p className="text-sm text-gray-300">{s.amountDue != null ? fmtMoney(own) : '—'}</p>
+                              {plan > 0 && amt > plan && <p className="text-xs text-gray-500" title="The arrangement installment billed inside this bill">+ {fmtMoney(plan)} plan</p>}
+                            </>
+                          );
+                        })()}
+                      </div>
+                      <div className="text-right flex-shrink-0 w-24 tabular-nums">
+                        {pastDue != null && Math.abs(pastDue) > 0.005
+                          ? <p className={`text-sm ${pastDue < 0 ? 'text-emerald-400' : 'text-amber-300'}`} title={pastDue < 0 ? 'A credit carried in' : 'Unpaid balance carried in'}>{pastDue < 0 ? `−${fmtMoney(-pastDue)}` : fmtMoney(pastDue)}</p>
+                          : <p className="text-sm text-gray-600">—</p>}
+                      </div>
                       <div className="text-right flex-shrink-0 w-28">
                         {(() => {
                           // The statement's total, paid or not: the charge plus
@@ -1968,13 +1952,7 @@ export default function UtilityDetailPage() {
                           const isFullyPaid = isPaid || (totalDue === 0 && Number(s.amountDue ?? 0) > 0);
                           const amt = Number(s.amountDue ?? 0);
                           const primary = totalDue ?? amt;
-                          // "Bill" is this period's own charges: an agreement
-                          // installment inside the charge is on its own line.
                           const plan = Number(s.paymentPlanAmount ?? 0);
-                          const ownCharge = plan > 0 && amt > plan ? Number((amt - plan).toFixed(2)) : amt;
-                          // The subline explains a total that differs from the
-                          // charge: arrears rolled in, or a credit taken off.
-                          const showBillSubline = Math.abs(primary - amt) > 0.01 && amt > 0;
                           // A negative amount is a credit memo: money the
                           // provider owes, offsetting the next bill. Rendering
                           // it like a charge reads as a payment demand.
@@ -1991,9 +1969,6 @@ export default function UtilityDetailPage() {
                           return (
                             <>
                               <p className="text-base font-semibold text-white">{fmtMoney(primary)}</p>
-                              {(showBillSubline || ownCharge !== amt) && (
-                                <p className="text-xs text-gray-500">Bill: {fmtMoney(ownCharge)}</p>
-                              )}
                               {/* The statement's total stands above; what is
                                   left of it after payments toward its arrears. */}
                               {!isFullyPaid && owedNow != null && (
@@ -2276,6 +2251,19 @@ export default function UtilityDetailPage() {
                 ))}
               </div>
             )
+        )}
+
+        {/* The loan, policy or payment arrangement behind the bills, after them (added from More ⋯). */}
+        {(loan || plan || account.category === 'INSURANCE') && (
+          <div className="mt-6 mb-8">
+            <p className="text-sm font-medium text-white mb-3">{loan ? 'Loan' : plan ? 'Payment arrangement' : 'Policy'}</p>
+            {loan && <LoanCard loan={loan} accountId={accountId!} arrears={latestPastDue} onUpdate={setLoan} onDelete={() => setLoan(null)} />}
+            {account.category === 'INSURANCE' && (
+              <PolicyCard accountId={accountId!} propertyId={propertyId!} carrier={account.providerName} account={account}
+                onAccountChange={patch => setAccount((prev: any) => prev ? { ...prev, ...patch } : prev)} />
+            )}
+            {plan && <PaymentPlanCard plan={plan} accountId={accountId!} onUpdate={setPlan} onDelete={() => setPlan(null)} />}
+          </div>
         )}
       </div>
     </div>
