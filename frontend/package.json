@@ -4,13 +4,13 @@
   "type": "module",
   "scripts": {
     "dev": "node scripts/gen-light-theme.mjs && vite",
-    "build": "node scripts/gen-light-theme.mjs && tsc && vite build",
+    "build": "node scripts/gen-light-theme.mjs && npm run lint && tsc && vite build",
     "build:ios": "node scripts/gen-light-theme.mjs && tsc && vite build --mode ios",
     "theme:light": "node scripts/gen-light-theme.mjs",
     "ios": "npm run build:ios && cap sync ios && cap open ios",
     "ios:sync": "npm run build:ios && cap sync ios",
     "preview": "vite preview",
-    "lint": "eslint src --ext ts,tsx",
+    "lint": "eslint src --ext ts,tsx --max-warnings 0",
     "screens": "node scripts/screens.mjs",
     "crawl": "node scripts/crawl.mjs"
   },
@@ -45,8 +45,11 @@
   "devDependencies": {
     "@types/react": "^18.3.1",
     "@types/react-dom": "^18.3.0",
+    "@typescript-eslint/parser": "^7.18.0",
     "@vitejs/plugin-react": "^4.2.1",
     "autoprefixer": "^10.4.19",
+    "eslint": "^8.57.0",
+    "eslint-plugin-react-hooks": "^4.6.2",
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.3",
     "typescript": "^5.4.3",

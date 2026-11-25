@@ -32,10 +32,13 @@ export async function recheckStoredStatements(opts: {
   accountIds?: string[];
   /** Also bills the owner edited by hand: the owner asked for the PDF's figures. */
   includeOwnerEdited?: boolean;
+  /** Only bills dated in the last this many days (the nightly check). */
+  recentDays?: number;
 } = {}): Promise<{ checked: number; fixed: number; loans: number; lines: RecheckLine[] }> {
   const rows = await db.statement.findMany({
     where: {
       pdfS3Key: { not: null }, isDownPayment: false, isScheduled: false,
+      ...(opts.recentDays ? { statementDate: { gte: new Date(Date.now() - opts.recentDays * 86_400_000) } } : {}),
       ...(opts.accountIds ? { utilityAccountId: { in: opts.accountIds } } : {}),
       utilityAccount: {
         ...(opts.accountIds ? {} : { category: { in: (opts.categories ?? ['LOAN', 'HOA', 'OTHER']) as never[] } }),

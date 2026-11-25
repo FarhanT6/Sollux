@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { isPlatformAdmin } from '../lib/plans';
 import { workerStatus } from '../workers/heartbeat';
+import { syncFailureKind } from '../lib/syncFailure';
 import { timingSafeEqual } from 'crypto';
 import { db } from '../config/db';
 
@@ -110,11 +111,9 @@ router.get('/report', async (req, res, next) => {
     // Not every failed sync is a defect (#279): a login the site rejected or none on file is the
     // owner's to fix (a data chore), a site that turns automated sign-in away is a site's choice,
     // and a run the owner cancelled is no failure at all. Only the rest are counted as failing.
-    const needsOwner = /rejected the username or password|invalid user ?id|wrong password|incorrect password|bad_login|no (?:portal )?login|add (?:a )?(?:portal )?login|needs? (?:a )?(?:login|website|password)|no website|does not list this account|credentials/i;
-    const blockedBySite = /captcha|bot[- ]?(?:check|protection)|turned away|access denied|unable to process your request|verify you are human/i;
-    const ownerRows = failedSyncs.filter(a => a.lastSyncError && needsOwner.test(a.lastSyncError));
-    const blockedRows = failedSyncs.filter(a => !ownerRows.includes(a) && a.lastSyncError && blockedBySite.test(a.lastSyncError));
-    const defectRows = failedSyncs.filter(a => !ownerRows.includes(a) && !blockedRows.includes(a) && !/^Cancelled by you/.test(a.lastSyncError ?? ''));
+    const ownerRows = failedSyncs.filter(a => syncFailureKind(a.lastSyncError) === 'needs-owner');
+    const blockedRows = failedSyncs.filter(a => syncFailureKind(a.lastSyncError) === 'blocked-by-site');
+    const defectRows = failedSyncs.filter(a => syncFailureKind(a.lastSyncError) === 'defect');
     const countBy = (rows: typeof failedSyncs) => Object.fromEntries([...rows.reduce((m, a) => m.set(a.providerSlug, (m.get(a.providerSlug) ?? 0) + 1), new Map<string, number>())]);
     const syncByProvider = new Map<string, { failing: number; errors: Set<string> }>();
     for (const a of defectRows) {
@@ -194,7 +193,7 @@ router.get('/report', async (req, res, next) => {
       // The one-time passes the workers run after a deploy: when each ran and what it changed. A pass
       // missing here never ran (the workers were down, or failed before it) — that is a defect.
       maintenance: Object.fromEntries((await db.appSetting.findMany({
-        where: { key: { in: ['text-recheck:v1', 'email-totals:split-v1', 'carried-fees:history-v3', 'rent-paid-ahead-to-utilities:v1', 'confirmed-payments:dedupe-v1', 'page-saved:mark-v1', 'bill-identity:v1'] } },
+        where: { key: { in: ['text-recheck:v1', 'email-totals:split-v1', 'carried-fees:history-v3', 'rent-paid-ahead-to-utilities:v1', 'confirmed-payments:dedupe-v1', 'page-saved:mark-v1', 'bill-identity:v1', 'figure-check:last'] } },
         select: { key: true, value: true },
       })).map(r => { let v: unknown = r.value; try { v = JSON.parse(r.value); } catch { /* as stored */ } return [r.key, v]; })),
       queuedFetchesWaiting: await db.syncJob.count({ where: { status: 'PENDING', startedAt: null, createdAt: { lt: new Date(Date.now() - 10 * 60_000) }, utilityAccountId: { in: (await db.utilityAccount.findMany({ where: mineAcct, select: { id: true } })).map(a => a.id) } } }),

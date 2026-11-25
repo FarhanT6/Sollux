@@ -72,7 +72,7 @@ jobs:
                - Make the change. Keep to what the issue asks. Match the conventions in CLAUDE.md and the surrounding code.
                - Schema changes need both a `backend/prisma/schema.prisma` edit and a hand-written migration under `backend/prisma/migrations/<YYYYMMDDHHMMSS>_<name>/migration.sql` with `IF NOT EXISTS` guards.
                - For bill-extraction work, verify against real statement PDFs when the issue attaches any (download them; run a scratch `npx tsx` script from `backend/`). Never guess at a bill's layout.
-               - Type-check both sides and fix everything until clean: `cd backend && npx prisma generate && npx tsc --noEmit -p .` and `cd frontend && npx tsc --noEmit -p .`
+               - Type-check both sides and fix everything until clean: `cd backend && npx prisma generate && npx tsc --noEmit -p .` and `cd frontend && npx tsc --noEmit -p . && npm run lint` (the lint enforces React's rules of hooks: a hook after an early return crashes the page)
                - Commit with a message that says what was wrong and what changed. Push the branch.
                - Open a pull request against `main`. Title: the change in one line. Body: what was wrong, what changed, which files, and `Closes #<issue number>`. Do NOT merge it unless the issue explicitly says "merge it".
                - Comment on the issue with one or two sentences and the PR link.

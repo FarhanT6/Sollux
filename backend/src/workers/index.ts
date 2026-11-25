@@ -171,6 +171,26 @@ setTimeout(() => void (async () => {
   console.log(`[BillIdentity] carried fixed ${counts.carried}, charge fixed ${counts.charge}, double-carried ${counts['double-carried']}, unsure ${counts.unsure}`);
 })().catch(err => console.warn('[BillIdentity] failed:', err instanceof Error ? err.message : err)), 5 * 60_000);
 
+// Every night (2–6 am Pacific, once a day by the last run kept in app_settings, so a deploy
+// neither repeats it nor skips it): each active account's recent bills checked against their PDFs
+// with the free readers and their own arithmetic (services/accountRecheck.ts).
+const figureCheck = () => void (async () => {
+  const hour = Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: 'America/Los_Angeles' }).format(new Date()));
+  if (hour < 2 || hour >= 6) return;
+  const { db } = await import('../config/db');
+  const KEY = 'figure-check:last';
+  const last = await db.appSetting.findUnique({ where: { key: KEY } }).catch(() => null);
+  const lastAt = last ? Date.parse(JSON.parse(last.value).at ?? '') : 0;
+  if (Date.now() - lastAt < 20 * 3600_000) return;
+  // Claimed before it runs: a second worker (or a restart mid-run) does not start it again tonight.
+  await db.appSetting.upsert({ where: { key: KEY }, create: { key: KEY, value: JSON.stringify({ at: new Date().toISOString(), running: true }) }, update: { value: JSON.stringify({ at: new Date().toISOString(), running: true }) } });
+  const r = await (await import('../services/accountRecheck')).nightlyFigureCheck();
+  await db.appSetting.update({ where: { key: KEY }, data: { value: JSON.stringify({ ...r, at: new Date().toISOString() }) } });
+  console.log(`[FigureCheck] ${r.accounts} account(s): ${r.fixed} bill(s) put right, $${r.feesRemoved.toFixed(2)} of fees that were not fees taken off, ${r.emailSplit} email bill(s) split, ${r.loans} loan(s) updated`);
+})().catch(err => console.warn('[FigureCheck] failed:', err instanceof Error ? err.message : err));
+setInterval(figureCheck, 30 * 60_000);
+setTimeout(figureCheck, 6 * 60_000);
+
 // Property-tax lookups older than 30 days run again (services/taxLookupJobs.ts).
 const refreshTaxes = () => import('../services/taxLookupJobs').then(m => m.refreshTaxLookups())
   .then(n => { if (n) console.log(`[TaxLookup] Queued ${n} monthly refresh(es)`); })
