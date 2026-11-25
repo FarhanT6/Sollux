@@ -159,6 +159,18 @@ setTimeout(() => void (async () => {
   if (marked) console.log(`[PageSaved] ${marked} saved portal page(s) marked; their PDFs will be fetched`);
 })().catch(err => console.warn('[PageSaved] marking failed:', err instanceof Error ? err.message : err)), 90_000);
 
+// Once: every bill that printed a total checked against it, the bill before saying which figure
+// was misread (services/billIdentity.ts, #278); late fees settled again after.
+setTimeout(() => void (async () => {
+  const { db } = await import('../config/db');
+  const KEY = 'bill-identity:v1';
+  if (await db.appSetting.findUnique({ where: { key: KEY } }).catch(() => null)) return;
+  const counts = await (await import('../services/billIdentity')).reconcileAll();
+  await (await import('../services/carriedFees')).settleAllCarriedFees().catch(() => null);
+  await db.appSetting.upsert({ where: { key: KEY }, create: { key: KEY, value: JSON.stringify({ ...counts, at: new Date().toISOString() }) }, update: { value: JSON.stringify({ ...counts, at: new Date().toISOString() }) } });
+  console.log(`[BillIdentity] carried fixed ${counts.carried}, charge fixed ${counts.charge}, double-carried ${counts['double-carried']}, unsure ${counts.unsure}`);
+})().catch(err => console.warn('[BillIdentity] failed:', err instanceof Error ? err.message : err)), 5 * 60_000);
+
 // Property-tax lookups older than 30 days run again (services/taxLookupJobs.ts).
 const refreshTaxes = () => import('../services/taxLookupJobs').then(m => m.refreshTaxLookups())
   .then(n => { if (n) console.log(`[TaxLookup] Queued ${n} monthly refresh(es)`); })
