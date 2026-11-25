@@ -6,7 +6,7 @@ import {
 } from '../api/client';
 import type { DevelopmentProject, ProjectTransfer } from '../types';
 import { TRANSFER_PURPOSE_LABELS } from '../types';
-import { PageHeader, EmptyState } from '../components/ui';
+import { PageHeader, EmptyState, LoadFailed } from '../components/ui';
 import { fmtDate, todayISO } from '../lib/date';
 import { fmtMoney, fmtCurrency } from '../lib/money';
 import { fileToPayload } from '../lib/files';
@@ -130,8 +130,10 @@ function ProjectDetail({ id }: { id: string }) {
   const [purposeFilter, setPurposeFilter] = useState('');
   const nav = useNavigate();
 
-  async function load() { setP(await getProject(id)); }
-  useEffect(() => { void load(); void getBankAccounts().then((b: any[]) => setBanks(b)); }, [id]);
+  const [loadError, setLoadError] = useState<unknown>(null);
+  async function load() { setLoadError(null); try { setP(await getProject(id)); } catch (e) { setLoadError(e); } }
+  useEffect(() => { void load(); void getBankAccounts().then((b: any[]) => setBanks(b)).catch(() => {}); }, [id]);
+  if (!p && loadError) return <LoadFailed what="this project" error={loadError} onRetry={() => void load()} back={{ to: '/projects', label: 'Back to projects' }} />;
   if (!p) return <div className="p-6 text-sm text-gray-500">Loading…</div>;
   const cur = p.localCurrency;
   const t = p.totals;

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { format } from 'date-fns';
 import { getStatementsSummary, getProperties } from '../api/client';
 import type { StatementSummaryRow, Property } from '../types';
-import { PageHeader, Modal } from '../components/ui';
+import { PageHeader, Modal, LoadFailed } from '../components/ui';
 import CarriedFeesPanel from '../components/fees/CarriedFeesPanel';
 import { fmtDate, todayISO } from '../lib/date';
 
@@ -89,11 +89,13 @@ export default function FeesSummaryPage({ embedded }: { embedded?: boolean } = {
   const [loading, setLoading] = useState(true);
   const [drillDown, setDrillDown] = useState<DrillDown | null>(null);
 
-  useEffect(() => { getProperties().then(setProperties); }, []);
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => { getProperties().then(setProperties).catch(() => {}); }, []);
   useEffect(() => {
-    setLoading(true);
-    getStatementsSummary(propertyId ? { propertyId } : undefined).then(setRows).finally(() => setLoading(false));
-  }, [propertyId]);
+    setLoading(true); setLoadError(null);
+    getStatementsSummary(propertyId ? { propertyId } : undefined).then(setRows).catch(setLoadError).finally(() => setLoading(false));
+  }, [propertyId, attempt]);
 
   // Which months count, and what the columns are.
   const now = thisMonthKey();
@@ -165,6 +167,8 @@ export default function FeesSummaryPage({ embedded }: { embedded?: boolean } = {
 
         {loading ? (
           <p className="text-sm text-gray-500 py-8 text-center">Loading…</p>
+        ) : loadError ? (
+          <LoadFailed what="the fees" error={loadError} onRetry={() => setAttempt(n => n + 1)} compact />
         ) : data.props.length === 0 ? (
           <p className="text-sm text-gray-500 py-8 text-center">No {metricLabel.toLowerCase()} {period === 'all' ? 'on record' : `for ${periodName}`}.</p>
         ) : (

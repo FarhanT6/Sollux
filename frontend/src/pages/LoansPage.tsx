@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { LoadFailed } from '../components/ui';
 import { getLoans, createLoan, updateLoan, deleteLoan, getProperties, getLoanTrackerMonth, getCatchUpLoans, runCatchUp, type LoanTrackerRow } from '../api/client';
 import { todayISO, thisMonthISO, lastMonthISO } from '../lib/date';
 import type { Loan, Property, LoanType } from '../types';
@@ -206,9 +207,9 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
 
   const loadLoans = () => getLoans().then(ls => setLoans(ls.filter(onLoansTab)));
 
-  useEffect(() => {
-    Promise.all([loadLoans(), getProperties().then(setProperties)]).finally(() => setLoading(false));
-  }, []);
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const loadAll = () => { setLoadError(null); setLoading(true); Promise.all([loadLoans(), getProperties().then(setProperties)]).catch(setLoadError).finally(() => setLoading(false)); };
+  useEffect(loadAll, []);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -433,6 +434,8 @@ export default function LoansPage({ embedded }: { embedded?: boolean } = {}) {
 
       {loading ? (
         <div className="text-gray-500 text-sm">Loading…</div>
+      ) : loadError ? (
+        <LoadFailed what="your loans" error={loadError} onRetry={loadAll} />
       ) : (
         <>
           <LoanTable

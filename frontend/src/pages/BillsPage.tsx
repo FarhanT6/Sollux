@@ -5,7 +5,7 @@ import {
   getBillsSheet, getLoanTrackerYear, getCatchUpLoans, runCatchUp, undoCatchUp, type CatchUpLoan, getStatementDownloadUrl, patchStatement, markStatementUnpaid, createPayment, createLoanPayment,
   type BillsSheet, type BillsSheetAccount, type BillsSheetStatement, type LoanTrackerYear, type LoanTrackerStatus,
 } from '../api/client';
-import { PageHeader } from '../components/ui';
+import { PageHeader, LoadFailed } from '../components/ui';
 import { fmtMoney } from '../lib/money';
 import { fmtDate, monthKey, todayISO, lastMonthISO } from '../lib/date';
 import { computePaidMap, computeResolvedByFutureCheckpoint, openBalanceOf, deferredOf, isUpcoming } from '../lib/paidState';
@@ -218,7 +218,7 @@ export function BillsSheet({ propertyId }: { propertyId?: string } = {}) {
           </div>
         </div>
 
-        {error && <p className="text-sm text-red-400 mb-3">{error}</p>}
+        {error && (sheet ? <p className="text-sm text-red-400 mb-3">{error}</p> : <LoadFailed what="your bills" error={null} reason={error} onRetry={() => { setError(''); void load(); }} compact />)}
         {!sheet && !error && <p className="text-sm text-gray-500">Loading…</p>}
         {sheet && !properties.length && <p className="text-sm text-gray-500">Nothing matches.</p>}
 

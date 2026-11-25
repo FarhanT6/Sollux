@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { LoadFailed } from '../components/ui';
 import { getTenants, createTenant, deleteTenant } from '../api/client';
 import type { Tenant } from '../types';
 
@@ -21,9 +22,9 @@ export default function TenantsPage({ embedded }: { embedded?: boolean } = {}) {
   const [form, setForm] = useState({ fullName: '', email: '', phone: '', notes: '' });
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    getTenants().then(setTenants).finally(() => setLoading(false));
-  }, []);
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const load = () => { setLoadError(null); setLoading(true); getTenants().then(setTenants).catch(setLoadError).finally(() => setLoading(false)); };
+  useEffect(load, []);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -90,6 +91,8 @@ export default function TenantsPage({ embedded }: { embedded?: boolean } = {}) {
 
       {loading ? (
         <div className="text-gray-500 text-sm">Loading…</div>
+      ) : loadError ? (
+        <LoadFailed what="your tenants" error={loadError} onRetry={load} />
       ) : tenants.length === 0 ? (
         <div className="text-center py-16 text-gray-500">No tenants yet</div>
       ) : (

@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
+import { LoadFailed } from '../components/ui';
 import { getProperties, getLeases, getLoans } from '../api/client';
 import type { Property, Lease, Loan } from '../types';
 import { PROPERTY_TYPE_LABELS } from '../types';
@@ -19,7 +20,9 @@ export default function PortfolioPage() {
   const [filterStatus, setFilterStatus] = useState('ACTIVE');
   const [sortBy, setSortBy]           = useState<'name' | 'rent' | 'arrears' | 'equity'>('name');
 
-  useEffect(() => {
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const load = () => {
+    setLoadError(null); setLoading(true);
     Promise.all([
       getProperties(),
       getLeases({ status: 'ACTIVE' }),
@@ -28,8 +31,9 @@ export default function PortfolioPage() {
       setProperties(props);
       setLeases(lses);
       setLoans(lns);
-    }).finally(() => setLoading(false));
-  }, []);
+    }).catch(setLoadError).finally(() => setLoading(false));
+  };
+  useEffect(load, []);
 
   const stats = useMemo(() => {
     const map: Record<string, { rent: number; arrears: number; occupied: number; debt: number; debtService: number; net: number }> = {};
@@ -168,6 +172,8 @@ export default function PortfolioPage() {
               <div key={i} className="card h-36 animate-pulse" style={{ background: 'rgba(255,255,255,0.04)' }} />
             ))}
           </div>
+        ) : loadError ? (
+          <LoadFailed what="your properties" error={loadError} onRetry={load} />
         ) : filtered.length === 0 ? (
           <div className="text-center py-16 text-gray-500 text-sm">No properties match your filters</div>
         ) : (

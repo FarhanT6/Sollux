@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getPayments } from '../api/client';
 import type { Payment } from '../types/index';
-import { PageHeader, Pill, EmptyState, Skeleton } from '../components/ui';
+import { PageHeader, Pill, EmptyState, Skeleton, LoadFailed } from '../components/ui';
 import { CategoryGlyph } from '../ios';
 import { format } from 'date-fns';
 import { fmtDate } from '../lib/date';
@@ -62,9 +62,9 @@ export default function PaymentsPage({ embedded }: { embedded?: boolean } = {}) 
   const [payments, setPayments] = useState<Payment[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    getPayments({}).then(setPayments).finally(() => setLoading(false));
-  }, []);
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const load = () => { setLoadError(null); setLoading(true); getPayments({}).then(setPayments).catch(setLoadError).finally(() => setLoading(false)); };
+  useEffect(load, []);
 
   // Every payment, newest first (the paid / pending / failed filter was taken off).
   const filtered = payments;
@@ -86,6 +86,8 @@ export default function PaymentsPage({ embedded }: { embedded?: boolean } = {}) 
           <div className="space-y-4">
             {[1, 2].map(i => <Skeleton key={i} className="h-48" />)}
           </div>
+        ) : loadError ? (
+          <LoadFailed what="your payments" error={loadError} onRetry={load} />
         ) : filtered.length === 0 ? (
           <EmptyState title="No payments yet" body="Payment history will appear here after accounts are synced." />
         ) : (

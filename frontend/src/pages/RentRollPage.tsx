@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { LoadFailed } from '../components/ui';
 import { getLeases, getProperties } from '../api/client';
 import type { Lease, Property } from '../types';
 import { fmtDate } from '../lib/date';
@@ -30,15 +31,18 @@ export default function RentRollPage({ embedded }: { embedded?: boolean } = {}) 
         {properties.map(p => <option key={p.id} value={p.id}>{p.nickname || p.address}</option>)}
       </select>
     );
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
+    setLoadError(null);
     Promise.all([
       getLeases({ status: filterStatus || undefined }),
       getProperties(),
     ]).then(([l, p]) => {
       setLeases(l);
       setProperties(p);
-    }).finally(() => setLoading(false));
-  }, [filterStatus]);
+    }).catch(setLoadError).finally(() => setLoading(false));
+  }, [filterStatus, attempt]);
 
   const filtered = (filterPropId
     ? leases.filter(l => l.unit?.property?.id === filterPropId)
@@ -97,6 +101,8 @@ export default function RentRollPage({ embedded }: { embedded?: boolean } = {}) 
 
       {loading ? (
         <div className="text-gray-500 text-sm">Loading…</div>
+      ) : loadError ? (
+        <LoadFailed what="the leases" error={loadError} onRetry={() => { setLoading(true); setAttempt(n => n + 1); }} />
       ) : filtered.length === 0 ? (
         <div className="text-center py-16 text-gray-500">No leases found</div>
       ) : (

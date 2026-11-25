@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { LoadFailed } from '../components/ui';
 import { getNotices, getLeases, createNotice, getNoticePreview } from '../api/client';
 import type { RentNotice, Lease } from '../types';
 import { format } from 'date-fns';
@@ -18,12 +19,15 @@ export default function NoticesPage({ embedded }: { embedded?: boolean } = {}) {
   const [previewing, setPreviewing] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const load = () => {
+    setLoadError(null); setLoading(true);
     Promise.all([getNotices(), getLeases({ status: 'ACTIVE' })]).then(([n, l]) => {
       setNotices(n);
       setActiveLeases(l);
-    }).finally(() => setLoading(false));
-  }, []);
+    }).catch(setLoadError).finally(() => setLoading(false));
+  };
+  useEffect(load, []);
 
   async function handlePreview() {
     if (!selectedLeaseId) return;
@@ -140,6 +144,8 @@ export default function NoticesPage({ embedded }: { embedded?: boolean } = {}) {
 
       {loading ? (
         <div className="text-gray-500 text-sm">Loading…</div>
+      ) : loadError ? (
+        <LoadFailed what="your notices" error={loadError} onRetry={load} />
       ) : notices.length === 0 ? (
         <div className="text-center py-16 text-gray-500">No notices on file</div>
       ) : (
