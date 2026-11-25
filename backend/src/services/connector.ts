@@ -44,6 +44,13 @@ const SILENT_MS = Number(process.env.CONNECTOR_SILENT_MS) || 70_000;
 const STALE_MS = Number(process.env.CONNECTOR_STALE_MS) || 45_000;
 /** A browser session asked for: the helper has this long to say Chrome is open (a cold Chrome start takes up to 20 s). */
 const OPEN_MS = Number(process.env.CONNECTOR_OPEN_MS) || 25_000;
+/**
+ * Chrome said it was open, the worker asked it something, and nothing came back for this long:
+ * Chrome on the computer is hung (or answering another window). Before, the computer read as
+ * online, Chrome as open, and the worker's attach waited out its 30 seconds (#344) before falling
+ * back to the cloud browser the sites turn away; now the session ends with the reason.
+ */
+const ANSWER_MS = Number(process.env.CONNECTOR_ANSWER_MS) || 15_000;
 
 /** The owner's connector, if one is online: where the worker connects for a browser there. */
 export async function connectorFor(userId: string): Promise<{ wsUrl: string; name: string } | null> {
@@ -57,7 +64,7 @@ export async function connectorFor(userId: string): Promise<{ wsUrl: string; nam
 }
 
 interface Helper { ws: WebSocket; deviceId: string; userId: string; /** When the helper last said anything (a ping, Chrome's traffic). */ heard: number }
-interface Session { id: string; worker: WebSocket; helper: Helper; queue: string[]; open: boolean }
+interface Session { id: string; worker: WebSocket; helper: Helper; queue: string[]; open: boolean; /** Waiting for Chrome's first answer since the worker asked. */ awaiting?: NodeJS.Timeout | null; answered?: boolean }
 
 /** The connector version this API expects; an older helper is shown as out of date. */
 export const CONNECTOR_VERSION = 3;
@@ -163,8 +170,8 @@ function onHelper(ws: WebSocket, req: IncomingMessage): void {
     const s = typeof m.id === 'string' ? sessions.get(m.id) : undefined;
     if (m.type === 'ping') send(ws, { type: 'pong' });
     else if (!s || s.helper !== helper) return;
-    else if (m.type === 'opened') { s.open = true; for (const d of s.queue.splice(0)) send(ws, { type: 'data', id: s.id, d }); }
-    else if (m.type === 'data' && typeof m.d === 'string') { if (s.worker.readyState === WebSocket.OPEN) s.worker.send(m.d); }
+    else if (m.type === 'opened') { s.open = true; if (s.queue.length) watchAnswer(s); for (const d of s.queue.splice(0)) send(ws, { type: 'data', id: s.id, d }); }
+    else if (m.type === 'data' && typeof m.d === 'string') { s.answered = true; if (s.awaiting) { clearTimeout(s.awaiting); s.awaiting = null; } if (s.worker.readyState === WebSocket.OPEN) s.worker.send(m.d); }
     else if (m.type === 'closed') { dropped(helper.userId, `Chrome on the computer closed its connection (${String(m.reason ?? 'no reason given').slice(0, 120)})`); s.worker.close(1011, String(m.reason ?? 'the browser on the computer closed').slice(0, 100)); }
     else if (m.type === 'file' && typeof m.data === 'string') {
       const list = files.get(s.id) ?? [];
@@ -193,6 +200,18 @@ function onHelper(ws: WebSocket, req: IncomingMessage): void {
   ws.on('error', err => { if (helper) dropped(helper.userId, `the connector's connection failed: ${err.message.slice(0, 120)}`); });
 }
 
+/** The worker asked Chrome something: Chrome has ANSWER_MS to say anything back, once per session (its first answer). */
+function watchAnswer(s: Session): void {
+  if (s.answered || s.awaiting) return;
+  s.awaiting = setTimeout(() => {
+    s.awaiting = null;
+    if (s.answered || s.worker.readyState !== WebSocket.OPEN) return;
+    dropped(s.helper.userId, 'Chrome on the computer opened but did not answer');
+    s.worker.close(4408, 'Chrome on the computer opened but did not answer');
+  }, ANSWER_MS);
+  s.awaiting.unref();
+}
+
 function onWorker(ws: WebSocket, userId: string, id: string): void {
   const helper = helpers.get(userId);
   if (!helper) return void ws.close(4404, 'connector offline');
@@ -213,10 +232,11 @@ function onWorker(ws: WebSocket, userId: string, id: string): void {
   opening.unref();
   ws.on('message', raw => {
     const d = text(raw);
-    if (s.open) send(helper.ws, { type: 'data', id, d }); else s.queue.push(d);
+    if (s.open) { watchAnswer(s); send(helper.ws, { type: 'data', id, d }); } else s.queue.push(d);
   });
   ws.on('close', (code: number) => {
     clearTimeout(opening);
+    if (s.awaiting) clearTimeout(s.awaiting);
     // 1009: a message bigger than the relay takes (a huge screenshot or PDF).
     if (code === 1009) dropped(userId, 'a message from the browser was too large for the connection');
     sessions.delete(id); send(helper.ws, { type: 'close', id });

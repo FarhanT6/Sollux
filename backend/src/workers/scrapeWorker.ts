@@ -176,6 +176,8 @@ async function scheduledSkip(account: { id: string; billingCadence: string | nul
 
 export async function agentJob(job: Job<ScrapeJobData>, account: { id: string; providerName: string; property: { id: string } }): Promise<void> {
   const utilityAccountId = account.id;
+    // How the account stood before this run: a run the owner cancels leaves it so (#279), not "failed".
+    const before = await db.utilityAccount.findUnique({ where: { id: utilityAccountId }, select: { lastSyncStatus: true, lastSyncError: true } });
     await db.utilityAccount.update({ where: { id: utilityAccountId }, data: { lastSyncStatus: 'PENDING' } });
     const syncJob = job.data.syncJobId
       ? await db.syncJob.update({ where: { id: job.data.syncJobId }, data: { status: 'PENDING', startedAt: new Date(), progress: 'Starting the browser' } }).catch(() => null)
@@ -195,6 +197,7 @@ export async function agentJob(job: Job<ScrapeJobData>, account: { id: string; p
       if (pending.length) alsoJobs.push(...pending.map(j => j.id));
       else alsoJobs.push((await db.syncJob.create({ data: { utilityAccountId: o.id, status: 'PENDING', startedAt: new Date(), progress: `In the same sign-in as ${myLabel}` } })).id);
     }
+    const alsoBefore = new Map((await db.utilityAccount.findMany({ where: { id: { in: also.map(o => o.id) } }, select: { id: true, lastSyncStatus: true, lastSyncError: true } })).map(a => [a.id, a]));
     if (also.length) await db.utilityAccount.updateMany({ where: { id: { in: also.map(o => o.id) } }, data: { lastSyncStatus: 'PENDING' } });
     let lastWrite = 0, latest = '', timer: NodeJS.Timeout | null = null;
     const write = () => {
@@ -216,9 +219,12 @@ export async function agentJob(job: Job<ScrapeJobData>, account: { id: string; p
     if (timer) clearTimeout(timer); // the final status below replaces any pending progress line
     const clash = !r.ok && r.error && REJECTED.test(r.error) ? await loginClash(utilityAccountId) : '';
     const failure = readableError(r.error ?? 'The portal agent stopped.') + clash;
+    const cancelledByOwner = !r.ok && /^Cancelled by you/.test(r.error ?? '');
     await db.utilityAccount.update({
       where: { id: utilityAccountId },
-      data: r.ok ? { lastSyncedAt: new Date(), lastSyncStatus: 'SUCCESS', lastSyncError: null } : { lastSyncStatus: 'FAILED', lastSyncError: failure },
+      data: r.ok ? { lastSyncedAt: new Date(), lastSyncStatus: 'SUCCESS', lastSyncError: null }
+        : cancelledByOwner ? { lastSyncStatus: before?.lastSyncStatus === 'PENDING' ? null : before?.lastSyncStatus ?? null, lastSyncError: before?.lastSyncError ?? null }
+        : { lastSyncStatus: 'FAILED', lastSyncError: failure },
     });
     const myLast4 = String(me?.accountNumber ?? '').replace(/\D/g, '').slice(-4);
     // Found: new to Sollux for this account (a statement already on file in full is not; a run that found nothing is a miss for the schedule).
@@ -237,7 +243,10 @@ export async function agentJob(job: Job<ScrapeJobData>, account: { id: string; p
         : said === 'nothing_new' ? `Nothing new (checked in the same sign-in as ${myLabel})`
         : said === 'not_listed' ? `The portal does not list this account under the login it shares with ${myLabel} — check the login on this account`
         : `Not reached in the same sign-in as ${myLabel} — press Fetch now on it`;
-      await db.utilityAccount.update({ where: { id: o.id }, data: ok ? { lastSyncedAt: new Date(), lastAgentRunAt: new Date(), lastSyncStatus: 'SUCCESS', lastSyncError: null } : { lastSyncStatus: 'FAILED', lastSyncError: note.slice(0, 1000), ...(r.ok ? {} : { lastAgentRunAt: new Date() }) } }).catch(() => {});
+      const prior = alsoBefore.get(o.id);
+      await db.utilityAccount.update({ where: { id: o.id }, data: ok ? { lastSyncedAt: new Date(), lastAgentRunAt: new Date(), lastSyncStatus: 'SUCCESS', lastSyncError: null }
+        : cancelledByOwner ? { lastSyncStatus: prior?.lastSyncStatus === 'PENDING' ? null : prior?.lastSyncStatus ?? null, lastSyncError: prior?.lastSyncError ?? null }
+        : { lastSyncStatus: 'FAILED', lastSyncError: note.slice(0, 1000), ...(r.ok ? {} : { lastAgentRunAt: new Date() }) } }).catch(() => {});
       await db.syncJob.updateMany({ where: { id: { in: alsoJobs }, utilityAccountId: o.id }, data: { status: ok ? 'SUCCESS' : 'FAILED', completedAt: new Date(), statementsFound: newFor(r, o.id), error: ok ? null : note.slice(0, 1000), progress: ok ? note.slice(0, 300) : null } }).catch(() => {});
     }
     const filedProps = new Set([...(r.filed ? [account.property.id] : [])]);
