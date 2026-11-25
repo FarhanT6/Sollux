@@ -1906,6 +1906,7 @@ export default function UtilityDetailPage() {
                         {(s.rawDataJson as any)?.emailNotice && !s.pdfS3Key && (
                           <p className="text-xs text-gray-500 mt-0.5">From the bill email · statement PDF not on file yet</p>
                         )}
+                        <StatementSource s={s} />
                         {typeof (s.rawDataJson as any)?.statementSaid === 'number' && (
                           <p className="text-xs text-gray-500 mt-0.5">Statement read {fmtMoney((s.rawDataJson as any).statementSaid)} · you kept your amount</p>
                         )}
@@ -2616,5 +2617,36 @@ function RecheckPanel({ state, onClose, onUsePdf }: { state: { running: boolean;
         <div className="flex justify-end"><button onClick={onClose} className="btn text-xs">Close</button></div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Where a statement's figures came from, and what Sollux did to them — so a bill that reads
+ * differently from its neighbours says why (a web page saved before the PDF was out, an email's
+ * total, figures you typed, a correction to make it add up).
+ */
+function StatementSource({ s }: { s: any }) {
+  const raw = (s.rawDataJson ?? {}) as Record<string, any>;
+  const tags: { text: string; tone: string; title?: string }[] = [];
+  if (raw.ownerEditedAt) tags.push({ text: 'Edited by you', tone: 'text-amber-300', title: 'You changed these figures by hand; re-reads and checks leave them' });
+  if (raw.pageSaved) tags.push({ text: 'Saved web page · PDF to come', tone: 'text-sky-300', title: "The provider's bill page, saved before the PDF was out; Sollux fetches the PDF and it replaces this" });
+  else if (raw.emailNotice) { if (s.pdfS3Key) tags.push({ text: 'From the bill email', tone: 'text-gray-400' }); }
+  else if (s.pdfS3Key) {
+    const from = raw.source === 'portal' ? "Statement PDF · fetched from the provider's website"
+      : raw.source === 'email' ? 'Statement PDF · from your email'
+      : raw.source === 'drive_import' ? 'Statement PDF · from Google Drive'
+      : raw.source === 'pdf_import' ? 'Statement PDF · uploaded'
+      : 'Statement PDF';
+    tags.push({ text: from, tone: 'text-gray-500' });
+  } else if (!raw.emailNotice) tags.push({ text: 'Entered by hand · no PDF', tone: 'text-gray-500' });
+  if (raw.splitFromEmailTotal) tags.push({ text: "Split from the email's total", tone: 'text-gray-400', title: "The email gave only the total; what the bill before left unpaid was taken out of it" });
+  if (raw.identityFixed) tags.push({ text: 'Corrected to add up to the printed total', tone: 'text-emerald-400', title: raw.identityFixed === 'charge' ? 'The charge was misread; set from the printed total less what was carried' : raw.identityFixed === 'carried' ? 'The carried balance was misread; set from the bill before less payments since' : 'A carried balance was counted on a bill that asks only for its own charge' });
+  if (raw.recheckedFromText) tags.push({ text: `Checked against the PDF ${String(raw.recheckedFromText).slice(5).replace('-', '/')}`, tone: 'text-emerald-400' });
+  if (raw.extractedBy === 'text' && !raw.recheckedFromText) tags.push({ text: 'Read without AI', tone: 'text-gray-500' });
+  if (!tags.length) return null;
+  return (
+    <p className="text-[11px] mt-0.5 flex flex-wrap gap-x-2">
+      {tags.map((t, i) => <span key={i} className={t.tone} title={t.title}>{t.text}</span>)}
+    </p>
   );
 }

@@ -11,6 +11,7 @@ import { recheckStoredStatements, type RecheckLine } from './textRecheck';
 import { repairEmailTotals } from './emailTotals';
 import { settleCarriedFees } from './carriedFees';
 import { syncLoanFromStatement } from './loanStatements';
+import { reconcileRecent } from './billIdentity';
 import type { ExtractedBillData } from './pdfImportService';
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -30,11 +31,13 @@ export interface AccountRecheck {
   loan: { balance: number | null; rate: number | null; payment: number | null; dueDay: number | null } | { none: string } | null;
 }
 
-export async function recheckAccount(userId: string, utilityAccountId: string, opts: { includeOwnerEdited?: boolean; textOf?: (pdfKey: string) => Promise<string> } = {}): Promise<AccountRecheck | null> {
+export async function recheckAccount(userId: string, utilityAccountId: string, opts: { includeOwnerEdited?: boolean; textOf?: (pdfKey: string) => Promise<string>; recentDays?: number } = {}): Promise<AccountRecheck | null> {
   const acct = await db.utilityAccount.findFirst({ where: { id: utilityAccountId, property: { userId } }, select: { id: true } });
   if (!acct) return null;
   const feesBefore = await carriedTotal(utilityAccountId);
-  const r = await recheckStoredStatements({ accountIds: [utilityAccountId], includeOwnerEdited: !!opts.includeOwnerEdited, textOf: opts.textOf });
+  const r = await recheckStoredStatements({ accountIds: [utilityAccountId], includeOwnerEdited: !!opts.includeOwnerEdited, textOf: opts.textOf, recentDays: opts.recentDays });
+  // The newest bills' own arithmetic too (#278), before the late-fee check below.
+  await reconcileRecent(utilityAccountId).catch(() => null);
   const emailSplit = await repairEmailTotals([utilityAccountId]);
   await settleCarriedFees(utilityAccountId).catch(() => null);
   const feesAfter = await carriedTotal(utilityAccountId);
@@ -66,4 +69,24 @@ export async function recheckAccount(userId: string, utilityAccountId: string, o
     feesRemoved: r2(feesBefore - feesAfter),
     loan,
   };
+}
+
+/**
+ * Every night: each active account with a bill in the last 75 days checked the same way, free (the
+ * text readers, no model), so a misread is put right without the owner pressing anything. Bills
+ * the owner edited are left. Results kept for the audit report (`figure-check:last`).
+ */
+export async function nightlyFigureCheck(): Promise<{ accounts: number; fixed: number; feesRemoved: number; emailSplit: number; loans: number }> {
+  const accounts = await db.utilityAccount.findMany({
+    where: { isActive: true, statements: { some: { statementDate: { gte: new Date(Date.now() - 75 * 86_400_000) } } } },
+    select: { id: true, property: { select: { userId: true } } },
+  });
+  let fixed = 0, feesRemoved = 0, emailSplit = 0, loans = 0;
+  for (const a of accounts) {
+    const r = await recheckAccount(a.property.userId, a.id, { recentDays: 75 }).catch(() => null);
+    if (!r) continue;
+    fixed += r.fixed; feesRemoved = r2(feesRemoved + Math.max(0, r.feesRemoved)); emailSplit += r.emailSplit;
+    if (r.loan && !('none' in r.loan)) loans++;
+  }
+  return { accounts: accounts.length, fixed, feesRemoved, emailSplit, loans };
 }
