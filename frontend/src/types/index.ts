@@ -606,6 +606,8 @@ export interface Loan {
   createdAt: string;
   property?: Pick<Property, 'id' | 'address' | 'nickname'>;
   loanPayments?: LoanPayment[];
+  /** A loan billed through an account: each payment as its statements printed it (services/loanStatements.ts). */
+  statementPayments?: { payments: { date: string; amount: number; principal: number | null; interest: number | null; escrow: number | null; fees: number | null; balance: number | null; statementDate: string }[]; ytdInterest: number | null; ytdAsOf: string | null };
   loanExtensions?: LoanExtension[];
   /** The individual loans a servicer bills together under this account
    *  (student loans: subsidized + unsubsidized). When any exist, the

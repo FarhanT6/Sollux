@@ -299,7 +299,11 @@ router.get('/:id', async (req, res, next) => {
     });
     if (!rawLoan) return res.status(404).json({ error: 'Loan not found' });
     const loan = await recalcVariableRate(rawLoan);
-    res.json({ ...serializeLoan(loan), accountNumber: decryptOptional(loan.accountNumberEnc) });
+    // A loan billed through an account keeps its payments there; its statements print each one's split.
+    const fromStatements = loan.utilityAccountId
+      ? await (await import('../services/loanStatements')).statementPaymentsOf(loan.utilityAccountId).catch(() => null)
+      : null;
+    res.json({ ...serializeLoan(loan), accountNumber: decryptOptional(loan.accountNumberEnc), ...(fromStatements ? { statementPayments: fromStatements } : {}) });
   } catch (err) { next(err); }
 });
 
