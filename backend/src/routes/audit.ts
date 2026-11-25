@@ -49,7 +49,7 @@ router.get('/report', async (req, res, next) => {
       select: {
         id: true, statementDate: true, dueDate: true, billingPeriodStart: true, billingPeriodEnd: true,
         amountDue: true, pastDueCarried: true, penaltiesFees: true, balance: true, isScheduled: true, rawDataJson: true, sourceType: true,
-        utilityAccount: { select: { id: true, providerName: true, providerSlug: true, category: true } },
+        utilityAccount: { select: { id: true, providerName: true, providerSlug: true, category: true, billingCadence: true } },
       },
       orderBy: { createdAt: 'desc' },
       take: 500,
@@ -69,9 +69,14 @@ router.get('/report', async (req, res, next) => {
       const payable = Number(s.amountDue) - deferred + Number(s.pastDueCarried ?? 0);
       return Math.abs(payable - stated) > 0.05;
     });
-    const longPeriod = recent.filter(s => s.billingPeriodStart && s.billingPeriodEnd && !s.isScheduled
-      && (new Date(s.billingPeriodEnd).getTime() - new Date(s.billingPeriodStart).getTime()) / 86400000 > 45
-      && s.utilityAccount.category !== 'INSURANCE');
+    // How long a period may run for the account's cadence: a bimonthly hauler's 60 days is no defect.
+    const ALLOWED_DAYS: Record<string, number | null> = { MONTHLY: 45, BIMONTHLY: 75, QUARTERLY: 105, SEMI_ANNUAL: 200, ANNUAL: null, TERM: null, ONE_TIME: null };
+    const spanDays = (s: any) => Math.round((new Date(s.billingPeriodEnd).getTime() - new Date(s.billingPeriodStart).getTime()) / 86400000);
+    const longPeriod = recent.filter(s => {
+      if (!s.billingPeriodStart || !s.billingPeriodEnd || s.isScheduled || s.utilityAccount.category === 'INSURANCE') return false;
+      const allowed = ALLOWED_DAYS[String(s.utilityAccount.billingCadence ?? 'MONTHLY')] ?? null;
+      return allowed != null && spanDays(s) > allowed;
+    });
     const byDayKey = new Map<string, any[]>();
     for (const s of recent) {
       // Installments filed from one policy document legitimately share its
@@ -152,7 +157,7 @@ router.get('/report', async (req, res, next) => {
         textFallback: { count: textFallback.length, sample: sample(textFallback).map(describe) },
         nullAmount: { count: nullAmount.length, sample: sample(nullAmount).map(describe) },
         identityMismatch: { count: identityMismatch.length, note: 'amountDue − deferred + pastDueCarried ≠ statedTotalDue', sample: sample(identityMismatch).map(describe) },
-        longBillingPeriod: { count: longPeriod.length, note: 'non-insurance bill whose period spans > 45 days', sample: sample(longPeriod).map(describe) },
+        longBillingPeriod: { count: longPeriod.length, note: "non-insurance bill whose period runs longer than its account's cadence allows (monthly 45 days, bimonthly 75, quarterly 105, semi-annual 200)", sample: sample(longPeriod).map(s => ({ ...describe(s), cadence: s.utilityAccount.billingCadence ?? 'MONTHLY', spanDays: spanDays(s) })) },
         duplicates: { count: duplicates.length, sample: sample(duplicates, 5) },
         byProvider: Object.fromEntries(byProvider),
       },
@@ -165,6 +170,12 @@ router.get('/report', async (req, res, next) => {
       // Whether anything processes queued jobs (statement fetching, insights,
       // the bookkeeper, autopay). Not 'ok' or 'busy' is a defect to file.
       workers: await workerStatus(),
+      // The one-time passes the workers run after a deploy: when each ran and what it changed. A pass
+      // missing here never ran (the workers were down, or failed before it) — that is a defect.
+      maintenance: Object.fromEntries((await db.appSetting.findMany({
+        where: { key: { in: ['text-recheck:v1', 'email-totals:split-v1', 'carried-fees:history-v3', 'rent-paid-ahead-to-utilities:v1', 'confirmed-payments:dedupe-v1'] } },
+        select: { key: true, value: true },
+      })).map(r => { let v: unknown = r.value; try { v = JSON.parse(r.value); } catch { /* as stored */ } return [r.key, v]; })),
       queuedFetchesWaiting: await db.syncJob.count({ where: { status: 'PENDING', startedAt: null, createdAt: { lt: new Date(Date.now() - 10 * 60_000) }, utilityAccountId: { in: (await db.utilityAccount.findMany({ where: mineAcct, select: { id: true } })).map(a => a.id) } } }),
     });
   } catch (err) { next(err); }

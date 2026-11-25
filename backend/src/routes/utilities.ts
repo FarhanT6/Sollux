@@ -702,6 +702,17 @@ router.delete('/:id/payment-plan', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// POST /api/utilities/:id/recheck — { includeOwnerEdited? }: the account's bills checked against
+// their PDFs now with the free readers, and a report of what changed and what was left.
+router.post('/:id/recheck', async (req, res, next) => {
+  try {
+    const { recheckAccount } = await import('../services/accountRecheck');
+    const r = await recheckAccount(req.dbUserId!, req.params.id, { includeOwnerEdited: req.body?.includeOwnerEdited === true });
+    if (!r) return res.status(404).json({ error: 'Utility account not found' });
+    res.json(r);
+  } catch (err) { next(err); }
+});
+
 // ── Loan linked to this utility account ──────────────────────────────────────
 
 // PUT /api/utilities/:id/loan  — create or update the linked loan
