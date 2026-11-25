@@ -1146,7 +1146,9 @@ export default function LoanDetailPage() {
       {/* Payment history */}
       <div className="card p-4">
         <p className="text-sm font-medium text-white mb-3">Payment history</p>
-        {(!loan.loanPayments || loan.loanPayments.length === 0) ? (
+        {(!loan.loanPayments || loan.loanPayments.length === 0) && loan.statementPayments?.payments.length ? (
+          <StatementPaymentTable sp={loan.statementPayments} />
+        ) : (!loan.loanPayments || loan.loanPayments.length === 0) ? (
           <p className="text-xs text-gray-600 py-4 text-center">No payments recorded yet</p>
         ) : (
           <div className="overflow-x-auto">
@@ -1157,6 +1159,7 @@ export default function LoanDetailPage() {
                   <th className="text-right">Amount</th>
                   <th className="text-right">Principal</th>
                   <th className="text-right">Interest</th>
+                  {loan.loanPayments.some(p => p.escrow != null) && <th className="text-right">Escrow</th>}
                   <th>Status</th>
                 </tr>
               </thead>
@@ -1167,6 +1170,7 @@ export default function LoanDetailPage() {
                     <td className="text-right font-mono">{moneyPrecise(p.amount)}</td>
                     <td className="text-right font-mono text-green-400">{p.principal != null ? moneyPrecise(p.principal) : '—'}</td>
                     <td className="text-right font-mono text-gray-400">{p.interest != null ? moneyPrecise(p.interest) : '—'}</td>
+                    {loan.loanPayments!.some(x => x.escrow != null) && <td className="text-right font-mono text-gray-400">{p.escrow != null ? moneyPrecise(p.escrow) : '—'}</td>}
                     <td>
                       <span className={`pill ${p.status === 'PAID' ? 'pill-green' : p.status === 'PAST_DUE' ? 'pill-red' : 'pill-amber'}`}>
                         {p.status.replace('_', ' ')}
@@ -1253,6 +1257,46 @@ function ExtendLoanModal({ loan, onClose, onSave }: {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** A loan billed through an account: its payments as the lender's statements split them. */
+function StatementPaymentTable({ sp }: { sp: NonNullable<Loan['statementPayments']> }) {
+  const escrow = sp.payments.some(p => p.escrow != null);
+  const balance = sp.payments.some(p => p.balance != null);
+  return (
+    <div className="overflow-x-auto">
+      <p className="text-xs text-gray-500 mb-2">
+        From the lender's statements — this loan's payments are kept on its account.
+        {sp.ytdInterest != null && sp.ytdAsOf && <> Interest paid this year: <span className="text-gray-300">{moneyPrecise(sp.ytdInterest)}</span> (statement of {fmtDate(sp.ytdAsOf, 'MMM d')}).</>}
+      </p>
+      <table className="table-base">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th className="text-right">Amount</th>
+            <th className="text-right">Principal</th>
+            <th className="text-right">Interest</th>
+            {escrow && <th className="text-right">Escrow</th>}
+            <th className="text-right">Fees</th>
+            {balance && <th className="text-right">Balance after</th>}
+          </tr>
+        </thead>
+        <tbody>
+          {sp.payments.map(p => (
+            <tr key={`${p.date}-${p.amount}`}>
+              <td>{fmtDate(p.date, 'MMM d, yyyy')}</td>
+              <td className="text-right font-mono">{moneyPrecise(p.amount)}</td>
+              <td className="text-right font-mono text-green-400">{p.principal != null ? moneyPrecise(p.principal) : '—'}</td>
+              <td className="text-right font-mono text-gray-400">{p.interest != null ? moneyPrecise(p.interest) : '—'}</td>
+              {escrow && <td className="text-right font-mono text-gray-400">{p.escrow != null ? moneyPrecise(p.escrow) : '—'}</td>}
+              <td className="text-right font-mono text-gray-400">{p.fees ? moneyPrecise(p.fees) : '—'}</td>
+              {balance && <td className="text-right font-mono text-gray-400">{p.balance != null ? moneyPrecise(p.balance) : '—'}</td>}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
