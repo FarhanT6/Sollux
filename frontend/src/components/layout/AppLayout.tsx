@@ -37,16 +37,16 @@ export const NAV = [
     icon: (z: number) => <Ico size={z}><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M3 14h18M9 4v16M15 4v16"/></Ico>,
   },
   {
-    // Phone tabs only: on a computer, Bills is the utilities sheet and the pay planner.
-    group: '', to: '/properties', label: 'Utilities', phoneOnly: true,
-    icon: (z: number) => <Ico size={z}><path d="M3 21h18"/><path d="M6 21V7l6-4 6 4v14"/><path d="M9 21v-9h6v9"/></Ico>,
+    // The phone's Bills tab: each account and what it owes (on a computer, the bills grid).
+    group: '', to: '/properties', label: 'Bills', phoneOnly: true,
+    icon: (z: number) => <Ico size={z}><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M3 14h18M9 4v16M15 4v16"/></Ico>,
   },
   {
     group: '', to: '/payments', label: 'Payments', phoneOnly: true,
     icon: (z: number) => <Ico size={z}><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></Ico>,
   },
   {
-    group: '', to: '/tenants', label: 'Rent & tenants', area: true, module: 'operations' as ModuleKey,
+    group: '', to: '/tenants', label: 'Rent & tenants', short: 'Rent', area: true, module: 'operations' as ModuleKey,
     icon: (z: number) => <Ico size={z}><path d="M3 21h18"/><path d="M9 21V7H5l7-5 7 5v14"/><circle cx="12" cy="12" r="2"/><path d="M9 17c.6-1.5 1.7-2 3-2s2.4.5 3 2"/></Ico>,
   },
   {
@@ -70,11 +70,11 @@ export const NAV = [
     icon: (z: number) => <Ico size={z} d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />,
   },
   {
-    group: 'Records', to: '/import', label: 'Add', add: true,
+    group: 'Records', to: '/import', label: 'Import files', add: true,
     icon: (z: number) => <Ico size={z}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></Ico>,
   },
   {
-    group: 'Records', to: '/scan', label: 'Scan', phoneOnly: true,
+    group: 'Records', to: '/scan', label: 'Add', phoneOnly: true,
     icon: (z: number) => <Ico size={z}><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 3v18"/><path d="M4 12h4"/></Ico>,
   },
   {
@@ -95,8 +95,8 @@ export const NAV = [
   },
 ];
 
-/** The five that fit a thumb; everything else lives behind "More". */
-export const TAB_BAR = ['/dashboard', '/properties', '/scan', '/finances', '/payments'];
+/** The computer's areas, for a thumb: Home, Bills, Add in the middle, Rent, Money; Personal and the rest behind "More". */
+export const TAB_BAR = ['/dashboard', '/properties', '/scan', '/tenants', '/finances'];
 
 /**
  * One layout, two shapes. Wide screens get the sidebar they always had. On a
@@ -132,7 +132,10 @@ export default function AppLayout() {
   useEffect(() => { rememberEntry(location.pathname + location.search); }, [location.key, location.pathname, location.search]);
 
   const section = '/' + location.pathname.split('/')[1];
-  const moreActive = !tabs.includes(section);
+  // The tab the page is under: its own, else its area's (an account's page is under Bills, a loan's under Money).
+  const here = sectionOf(location.pathname);
+  const litTab = tabs.find(t => t === section) ?? (here ? tabs.find(t => sectionOf(t) === here) : undefined);
+  const moreActive = !litTab;
   const summaryBadge = (to: string) => {
     const b = badge(to);
     return b ? b.n : null;
@@ -249,13 +252,22 @@ export default function AppLayout() {
           {tabs.map(to => {
             const n = NAV.find(x => x.to === to)!;
             const b = summaryBadge(to);
+            // Add, in the middle: the camera for a bill, a letter or a receipt, or a file.
+            if (to === '/scan') return (
+              <NavLink key={to} to={to} onClick={() => tap()} className={`ios-tab ${litTab === to ? 'active' : ''}`} aria-label="Add">
+                <span className="flex items-center justify-center rounded-full" style={{ width: 26, height: 26, background: '#F5A623', color: '#1a1a1a' }}>
+                  <Ico size={16} d="M12 5v14M5 12h14" />
+                </span>
+                <span>{n.label}</span>
+              </NavLink>
+            );
             return (
-              <NavLink key={to} to={to} onClick={() => tap()} className={({ isActive }) => `ios-tab ${isActive ? 'active' : ''}`}>
+              <NavLink key={to} to={to} onClick={() => tap()} className={`ios-tab ${litTab === to ? 'active' : ''}`}>
                 <span style={{ position: 'relative' }}>
                   {n.icon(24)}
                   {b != null && <span className="ios-tab-badge">{b}</span>}
                 </span>
-                <span>{n.label}</span>
+                <span>{(n as { short?: string }).short ?? n.label}</span>
               </NavLink>
             );
           })}
