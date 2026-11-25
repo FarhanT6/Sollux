@@ -11,7 +11,7 @@ import {
   LEGAL_EVENT_TYPES, LEGAL_EVENT_LABELS, LEGAL_FEE_CATEGORIES, LEGAL_FEE_LABELS,
   LEGAL_PRIORITIES, LEGAL_DOC_CATEGORIES, DOCUMENT_CATEGORY_LABELS,
 } from '../types';
-import { PageHeader } from '../components/ui';
+import { PageHeader, LoadFailed } from '../components/ui';
 import { fmtDate, todayISO } from '../lib/date';
 
 const money = (n?: number | string | null) =>
@@ -78,14 +78,16 @@ export default function LegalPage({ embedded, propertyId }: { embedded?: boolean
     setSummary(s);
   }
 
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
-    setLoading(true);
+    setLoading(true); setLoadError(null);
     Promise.all([
       load(),
       getProperties().then(setProperties),
       getLeases({ status: 'ACTIVE' }).then(setLeases),
-    ]).finally(() => setLoading(false));
-  }, [propertyId]);
+    ]).catch(setLoadError).finally(() => setLoading(false));
+  }, [propertyId, attempt]);
 
   const visible = useMemo(() => {
     let list = matters;
@@ -181,6 +183,7 @@ export default function LegalPage({ embedded, propertyId }: { embedded?: boolean
   }
 
   if (loading) return <div className="px-6 py-12 text-center text-sm text-gray-500">Loading…</div>;
+  if (loadError) return <LoadFailed what="the legal cases" error={loadError} onRetry={() => setAttempt(n => n + 1)} />;
 
   return (
     <div className={embedded ? '' : ''}>

@@ -4,6 +4,7 @@ import { usePhone } from '../ios';
 import LoanScreen from './phone/LoanScreen';
 import { useParams, Link } from 'react-router-dom';
 import BackLink from '../components/ui/BackLink';
+import { LoadFailed } from '../components/ui';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { getLoan, getLoanAmortization, updateLoan, getProperties, extendLoan, getBankAccounts } from '../api/client';
 import type { Loan, Property, LoanType, PrepaymentPenalty, PrepaymentPenaltyTier, BankAccount } from '../types';
@@ -720,12 +721,16 @@ export default function LoanDetailPage() {
   // without its payments and property; keep those and re-run the schedule.
   const onLoanChange = (l: Loan) => { setLoan(prev => ({ ...(prev ?? l), ...l })); reload(); };
 
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     if (!id) return;
+    setLoadError(null); setLoading(true);
     Promise.all([getLoan(id), getLoanAmortization(id), getProperties()])
       .then(([l, a, props]) => { setLoan(l); setAmort(a as AmortizationResponse); setProperties(props); })
+      .catch(setLoadError)
       .finally(() => setLoading(false));
-  }, [id]);
+  }, [id, attempt]);
 
   const currentBalance = useMemo(() => amort?.balance.balance ?? Number(loan?.currentBalance ?? 0), [amort, loan]);
   const originalAmount = useMemo(() => Number(loan?.originalAmount ?? 0), [loan]);
@@ -735,7 +740,7 @@ export default function LoanDetailPage() {
   const hasBalanceData = amort ? (amort.balance.method !== 'manual' || loan?.currentBalance != null) : true;
 
   if (loading) return <div className="p-6 text-gray-500 text-sm">Loading…</div>;
-  if (!loan || !amort) return <div className="p-6 text-gray-500 text-sm">Loan not found</div>;
+  if (!loan || !amort) return <LoadFailed what="this loan" error={loadError ?? { response: { status: 404 } }} onRetry={() => setAttempt(n => n + 1)} back={{ to: '/finances?tab=loans', label: 'Back to loans' }} />;
 
   const { balance, amortization } = amort;
 

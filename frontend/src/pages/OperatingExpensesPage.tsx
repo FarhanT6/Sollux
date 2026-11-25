@@ -5,7 +5,7 @@ import {
   type OpexConfig, type OpexResponse, type OpexPeriod, type OpexEstimate, type OpexSource, type OpexPer, type OpexLine,
 } from '../api/client';
 import type { Property } from '../types';
-import { PageHeader } from '../components/ui';
+import { PageHeader, LoadFailed } from '../components/ui';
 import { fmtMoney } from '../lib/money';
 import { fmtDate } from '../lib/date';
 import { describeApiError } from '../lib/apiError';
@@ -57,9 +57,10 @@ export default function OperatingExpensesPage({ embedded }: { embedded?: boolean
 
 function Portfolio({ period, onOpen }: { period: OpexPeriod; onOpen: (id: string) => void }) {
   const [data, setData] = useState<Awaited<ReturnType<typeof getOpexPortfolio>> | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => { setData(null); getOpexPortfolio(period).then(setData).catch(e => setError(describeApiError(e, 'Could not load.'))); }, [period]);
-  if (error) return <p className="text-sm text-red-400">{error}</p>;
+  const [error, setError] = useState<unknown>(null);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => { setData(null); setError(null); getOpexPortfolio(period).then(setData).catch(setError); }, [period, attempt]);
+  if (error) return <LoadFailed what="operating expenses" error={error} onRetry={() => setAttempt(n => n + 1)} compact />;
   if (!data) return <p className="text-sm text-gray-500">Loading…</p>;
   const sum = (f: (s: OpexResponse['statement']) => number) => data.properties.reduce((t, r) => t + f(r.statement), 0);
   return (
@@ -100,6 +101,7 @@ function PropertyOpex({ propertyId, period }: { propertyId: string; period: Opex
   const [saving, setSaving] = useState(false);
   const [estimating, setEstimating] = useState<'insurance' | 'tax' | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<unknown>(null);
   const first = useRef(true);
 
   async function load() {
@@ -108,7 +110,7 @@ function PropertyOpex({ propertyId, period }: { propertyId: string; period: Opex
       setData(r); setConfig(r.config);
       // Not set up yet: start with the questions.
       if (first.current) { setSetup(!r.configured); first.current = false; }
-    } catch (e) { setError(describeApiError(e, 'Could not load.')); }
+    } catch (e) { setLoadError(e); }
   }
   useEffect(() => { void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [period]);
 
@@ -119,6 +121,7 @@ function PropertyOpex({ propertyId, period }: { propertyId: string; period: Opex
     return () => clearTimeout(t);
   }, [config, setup, propertyId, period]);
 
+  if (loadError && !data) return <LoadFailed what="this property's operating expenses" error={loadError} onRetry={() => { setLoadError(null); void load(); }} compact />;
   if (error) return <p className="text-sm text-red-400">{error}</p>;
   if (!data || !config) return <p className="text-sm text-gray-500">Loading…</p>;
   const f = data.facts;

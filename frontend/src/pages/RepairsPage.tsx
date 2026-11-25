@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
-import { PageHeader, Modal } from '../components/ui';
+import { Link, useParams } from 'react-router-dom';
+import { PageHeader, Modal, LoadFailed } from '../components/ui';
 import BackLink from '../components/ui/BackLink';
 import { getRepairs, getRepair, createRepair, updateRepair, addRepairNote, logRepairExpense, getProperties, type RepairRow, type RepairDetail, type PhotoUpload } from '../api/client';
 import { REPAIR_CATEGORIES, URGENCY, REPAIR_STATUS } from '../lib/repairs';
@@ -112,18 +112,19 @@ function NewRepairModal({ onClose, onSaved }: { onClose: () => void; onSaved: ()
 /** One repair: what was reported, photos, schedule and status, notes with the tenant, cost → expense. */
 export function RepairDetailPage() {
   const { id } = useParams();
-  const navigate = useNavigate();
   const [r, setR] = useState<RepairDetail | null>(null);
   const [note, setNote] = useState('');
   const [when, setWhen] = useState('');
   const [vendor, setVendor] = useState('');
   const [cost, setCost] = useState('');
+  const [loadError, setLoadError] = useState<unknown>(null);
   const load = () => getRepair(id!).then(x => {
-    setR(x);
+    setR(x); setLoadError(null);
     setVendor(x.vendor ?? ''); setCost(x.cost != null ? String(x.cost) : '');
     setWhen(x.scheduledFor ? new Date(new Date(x.scheduledFor).getTime() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '');
-  }).catch(() => navigate('/repairs', { replace: true }));
+  }).catch(setLoadError);
   useEffect(() => { void load(); }, [id]);
+  if (!r && loadError) return <LoadFailed what="this repair" error={loadError} onRetry={() => { setLoadError(null); void load(); }} back={{ to: '/repairs', label: 'Back to repairs' }} />;
   if (!r) return <div className="p-6 text-sm text-gray-500">Loading…</div>;
 
   const save = (body: Parameters<typeof updateRepair>[1], msg: string) => updateRepair(r.id, body).then(() => { toast(msg); return load(); }).catch((e: any) => toast(e?.response?.data?.error ?? 'Could not save.', 'error'));

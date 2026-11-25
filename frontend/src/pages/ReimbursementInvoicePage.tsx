@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import BackLink from '../components/ui/BackLink';
+import { LoadFailed } from '../components/ui';
 import { getReimbursementInvoice, getInvoicePayments, setReimbursementInvoiceStatus, updateReimbursementInvoiceTerms } from '../api/client';
 import { RENT_PAYMENT_METHOD_LABELS, type RentPaymentMethod } from '../types';
 import { fmtDate } from '../lib/date';
@@ -55,7 +56,8 @@ function Meta({ k, v }: { k: string; v: string }) {
 export default function ReimbursementInvoicePage() {
   const { id } = useParams<{ id: string }>();
   const [inv, setInv] = useState<any>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const [attempt, setAttempt] = useState(0);
   const [editingTerms, setEditingTerms] = useState(false);
   const [savingTerms, setSavingTerms] = useState(false);
   const [termsForm, setTermsForm] = useState({ dueDate: '', payableTo: '', paymentInstructions: '' });
@@ -64,9 +66,10 @@ export default function ReimbursementInvoicePage() {
 
   useEffect(() => {
     if (!id) return;
-    getReimbursementInvoice(id).then(setInv).catch(err => setError(err?.response?.data?.error ?? 'Invoice not found.'));
+    setError(null);
+    getReimbursementInvoice(id).then(setInv).catch(setError);
     getInvoicePayments(id).then(setPays).catch(() => {});
-  }, [id]);
+  }, [id, attempt]);
 
   const months = useMemo(() => {
     if (!inv) return [];
@@ -79,7 +82,7 @@ export default function ReimbursementInvoicePage() {
     return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [inv]);
 
-  if (error) return <div className="p-6 text-sm text-red-400">{error}</div>;
+  if (error && !inv) return <LoadFailed what="this invoice" error={error} onRetry={() => setAttempt(n => n + 1)} />;
   if (!inv) return <div className="p-6 text-sm text-gray-500">Loading…</div>;
 
   const lease = inv.reimbursement.lease;

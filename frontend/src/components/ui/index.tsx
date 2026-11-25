@@ -1,6 +1,8 @@
 // ─── Shared UI building blocks ────────────────────────────
 
 import type { ReactNode } from 'react';
+import { Link } from 'react-router-dom';
+import { describeApiError } from '../../lib/apiError';
 
 // ── PageHeader ───────────────────────────────────────────
 interface PageHeaderProps {
@@ -148,6 +150,40 @@ export function EmptyState({ title, body }: { icon?: string; title: string; body
     <div className="flex flex-col items-center justify-center py-16 text-center">
       <p className="text-sm font-medium text-gray-300 mb-1">{title}</p>
       <p className="text-xs text-gray-500 max-w-xs">{body}</p>
+    </div>
+  );
+}
+
+// ── Could not load ───────────────────────────────────────
+/** Whether a failed request means the thing is gone (a 404 from Sollux, not a route a deploying server lacks). */
+export function isGone(err: unknown): boolean {
+  const r = (err as any)?.response;
+  return r?.status === 404 && !(typeof r.data === 'string' && /Cannot (GET|POST|PUT|PATCH|DELETE)/i.test(r.data));
+}
+
+/**
+ * A page, or a part of one, that could not load — said the same way everywhere: what, why, and
+ * Try again. A page used to sit on "Loading…" for ever, or show "Nothing here yet", when its
+ * request failed. Something deleted (a 404) says so and offers a way back instead of a retry.
+ */
+export function LoadFailed({ what, error, reason, onRetry, back, compact }: {
+  /** What did not load, as it reads after "Couldn't load": "this account", "your payments". */
+  what: string; error: unknown; reason?: string; onRetry?: () => void; back?: { to: string; label: string }; compact?: boolean;
+}) {
+  const gone = isGone(error);
+  const offline = !(error as any)?.response && /network|timeout|fetch/i.test(String((error as any)?.message ?? ''));
+  const why = reason ? reason : gone ? 'It may have been deleted, or merged into another.'
+    : offline ? "Sollux's server didn't answer. Check your connection — or the server may be waking up; try again in a moment."
+    : describeApiError(error, 'Something went wrong on the server.');
+  const title = gone ? `${what.charAt(0).toUpperCase()}${what.slice(1)} isn't on your account any more.` : `Couldn't load ${what}.`;
+  return (
+    <div className={compact ? 'py-3' : 'p-6'} role="alert">
+      <p className={`${compact ? 'text-xs' : 'text-sm'} text-gray-300`}>{title}</p>
+      <p className="text-xs text-gray-500 mt-1 max-w-lg">{why}</p>
+      <div className="flex gap-4 mt-3 text-xs">
+        {onRetry && !gone && <button onClick={onRetry} className="text-amber-400 hover:text-amber-300">Try again</button>}
+        {back && <Link to={back.to} className="text-gray-400 hover:text-white">{back.label}</Link>}
+      </div>
     </div>
   );
 }

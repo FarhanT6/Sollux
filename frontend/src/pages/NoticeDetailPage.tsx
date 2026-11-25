@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { LoadFailed } from '../components/ui';
 import { getNotice, deleteNotice, getRentPayableTo, saveRentPayableTo, type RentPayableTo } from '../api/client';
 import type { RentNotice } from '../types';
 import { fmtDate as fmtDateSafe } from '../lib/date';
@@ -58,10 +59,13 @@ export default function NoticeDetailPage() {
   const [editingPayable, setEditingPayable] = useState(false);
   useEffect(() => { getRentPayableTo().then(setPayable).catch(() => setPayable(null)); }, []);
 
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     if (!id) return;
-    getNotice(id).then(setNotice).finally(() => setLoading(false));
-  }, [id]);
+    setLoadError(null); setLoading(true);
+    getNotice(id).then(setNotice).catch(setLoadError).finally(() => setLoading(false));
+  }, [id, attempt]);
 
   async function handleDelete() {
     if (!confirm('Delete this notice record? This cannot be undone.')) return;
@@ -70,7 +74,7 @@ export default function NoticeDetailPage() {
   }
 
   if (loading) return <div className="p-6 text-gray-500">Loading…</div>;
-  if (!notice) return <div className="p-6 text-gray-500">Notice not found</div>;
+  if (!notice) return <LoadFailed what="this notice" error={loadError ?? { response: { status: 404 } }} onRetry={() => setAttempt(n => n + 1)} back={{ to: '/tenants?tab=notices', label: 'Back to notices' }} />;
 
   const { lease } = notice;
   const property = lease?.unit?.property;

@@ -1,6 +1,6 @@
 import UrgentNotices from '../components/UrgentNotices';
 import { FEE_LINE, FEE_KIND_IDS, FEE_KIND_LABELS, billOwnFees, paymentFees, feeKindPhrase, feesPaidParts, type FeeKind } from '../lib/feeKinds';
-import { useEffect, useState, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import PortalCodeBanner from '../components/utility/PortalCodeBanner';
 import PaymentBreakdownLine from '../components/utility/PaymentBreakdownLine';
 import { runningBalanceOwed, owedByBillWithMarks, openBalanceOf, isStatementPaid, computeResolvedByFutureCheckpoint, computePaidMap, isEffectivelyPaid, isPriorStatementPaid, statementStatus, coveredByCredit, liveCarriedOf, newestIssued, isUpcoming, arrearsPaidSince, unlinkedPaidSince, paidSinceSplit, deferredOf } from '../lib/paidState';
@@ -19,7 +19,7 @@ import { CADENCE_LABELS } from '../lib/cadence';
 import { CATEGORY_LABELS, CATEGORY_COLORS, LOAN_TYPE_LABELS,
   UTILITY_PAYMENT_METHODS, PAYMENT_STATUS_LABELS, isCreditPayment } from '../types';
 import type { BankAccount } from '../types';
-import { Pill, Skeleton, EmptyState } from '../components/ui';
+import { Pill, Skeleton, EmptyState, LoadFailed } from '../components/ui';
 import MoreMenu from '../components/ui/MoreMenu';
 import { format, isAfter } from 'date-fns';
 import { monthKey, fmtDate, yearOf, todayISO, billMonthLabel } from '../lib/date';
@@ -703,14 +703,17 @@ export default function UtilityDetailPage() {
   const [bill, setBill] = useState<BillPickerValue>(emptyBillPick);
   const [newCard, setNewCard] = useState<NewCardForm>(emptyNewCard);
 
-  useEffect(() => {
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const loadAccount = useCallback(() => {
     if (!accountId) return;
+    setLoadError(null); setLoading(true);
     Promise.all([
       getUtility(accountId).then(a => { setAccount(a); setLoan((a as any).loan ?? null); }),
-      getPaymentPlan(accountId).then(setPlan),
+      getPaymentPlan(accountId).then(setPlan).catch(() => {}),
       getBankAccounts().then(bs => setBankAccounts(bs.filter(b => b.isActive))).catch(() => {}),
-    ]).finally(() => setLoading(false));
+    ]).catch(setLoadError).finally(() => setLoading(false));
   }, [accountId]);
+  useEffect(() => { loadAccount(); }, [loadAccount]);
 
   function resetPayForm() {
     setFeeRows([]);
@@ -1142,7 +1145,7 @@ export default function UtilityDetailPage() {
   // Every hook above the early returns: one below them crashed the page once the account loaded.
   const [recheck, setRecheck] = useState<{ running: boolean; result: AccountRecheckResult | null; error?: string } | null>(null);
   if (loading) return <div className="p-6 space-y-4"><Skeleton className="h-24" /><Skeleton className="h-64" /></div>;
-  if (!account) return <div className="p-6 text-gray-400">Account not found</div>;
+  if (!account) return <LoadFailed what="this account" error={loadError ?? { response: { status: 404 } }} onRetry={loadAccount} back={{ to: '/bills', label: 'Back to bills' }} />;
 
   const color = (CATEGORY_COLORS as Record<string, string>)[account.category] || '#888';
   const icon = <CategoryGlyph category={account.category} size={20} />;

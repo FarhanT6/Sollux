@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import TenantPortalCard from '../components/TenantPortalCard';
 import { useParams, Link, useNavigate, Navigate } from 'react-router-dom';
 import BackLink from '../components/ui/BackLink';
+import { LoadFailed } from '../components/ui';
 import { format } from 'date-fns';
 import {
   getTenant, updateTenant, deleteTenant,
@@ -62,15 +63,17 @@ export default function TenantDetailPage({ tenantId, onClose }: { tenantId?: str
   const [maintenanceByLease, setMaintenanceByLease] = useState<Record<string, Improvement[]>>({});
   const phone = usePhone();
   const [actions, setActions] = useState(false);
+  const [loadError, setLoadError] = useState<unknown>(null);
 
   function load() {
     if (!id) return;
+    setLoadError(null);
     getTenant(id).then(t => {
       setTenant(t as FullTenant);
       setContactForm({
         fullName: t.fullName, email: t.email ?? '', phone: t.phone ?? '', notes: t.notes ?? '',
       });
-    }).finally(() => setLoading(false));
+    }).catch(setLoadError).finally(() => setLoading(false));
   }
 
   useEffect(load, [id]);
@@ -121,7 +124,7 @@ export default function TenantDetailPage({ tenantId, onClose }: { tenantId?: str
   }
 
   if (loading) return <div className="p-6 text-gray-500 text-sm">Loading…</div>;
-  if (!tenant) return <div className="p-6 text-gray-500 text-sm">Tenant not found</div>;
+  if (!tenant) return <LoadFailed what="this tenant" error={loadError ?? { response: { status: 404 } }} onRetry={() => { setLoading(true); load(); }} back={{ to: '/tenants', label: 'Back to tenants' }} />;
 
   const leases = tenant.leaseTenants.filter(lt => lt.lease);
 
