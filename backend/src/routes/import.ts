@@ -807,6 +807,8 @@ function buildRawData(ex: ExtractedBillData, extractedBy?: 'ai' | 'text'): Recor
     // The statement's transaction table as printed: payments, fees and
     // reversals since the last statement.
     transactions:        ex.transactions ?? null,
+    ledgerPayments:      ex.ledgerPayments ?? null,
+    loanStatement:       ex.loanStatement ?? null,
   };
 }
 

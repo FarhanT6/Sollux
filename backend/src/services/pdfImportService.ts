@@ -181,6 +181,23 @@ export interface ExtractedBillData {
    *  such as Seabreeze / CINC), each on its own date. Recorded as separate
    *  payments rather than one lump "payments received". */
   ledgerPayments?:    { date: string; amount: number; description: string }[] | null;
+  /**
+   * One loan's statement (an auto loan, a personal loan, a mortgage, a credit-union loan): the
+   * loan's own figures, which go to the loan the account is (services/loanStatements.ts) — its
+   * balance after the period, the rate, the regular payment, the due date.
+   */
+  loanStatement?: {
+    description: string | null;     // what the loan is for, as printed ("2019 Sample Sedan")
+    beginningBalance: number | null;
+    endingBalance: number | null;    // the principal owed after the period
+    regularPayment: number | null;   // the monthly payment
+    pastDue: number | null;
+    totalDue: number | null;         // what the statement asks for now
+    dueDate: string | null;
+    apr: number | null;              // percent
+    ytdInterest: number | null;
+    payments?: { date: string; amount: number; principal: number | null; interest: number | null; fees: number | null }[] | null;
+  } | null;
   /** The statement's own transaction table ("Previous Transaction Detail",
    *  "Transaction Activity"): every row as printed, amount signed as a
    *  movement on the account (payments and reversals negative). */
@@ -307,6 +324,7 @@ Schema (use null for any field not present in the document):
   "providerWebsite": string or null — the provider's website or online-account address exactly as printed ("nationwide.com/bill-pay", "www.dignitymemorial.com"); null when none is printed,
   "ledgerPayments": array or null — ONLY for a dated "Last Payment" line (see paymentsReceived) or a document that lists payments received one by one on their own dates (an HOA ledger, a premium finance portal's payment history, an insurer portal's "Payments Made" tab): [{"date": "YYYY-MM-DD", "amount": n, "description": "as printed"}]. A single "payments received" figure on an ordinary bill goes in paymentsReceived instead,
   "transactions": array or null — when the statement prints a table of account activity since the last statement ("Previous Transaction Detail", "Transaction Activity", "Recent Transactions", "Account Activity", a TRANSACTION DATE / DESCRIPTION / AMOUNT table): EVERY row, in order, as {"date": "YYYY-MM-DD", "description": "as printed", "amount": n}. amount is the movement on the account: a charge or fee positive, a payment, reversal, waiver or credit NEGATIVE, whatever sign the statement prints ("08/30/2026 PAYMENT $722.49" → -722.49; "3/11/2024 PRINCIPAL PAYMENT -$613.76" → -613.76; "05/09/2025 REVERSE LATE CHARGE $36.12" → -36.12; "05/09/2025 LATE CHARGE $36.12" → 36.12). A running-balance column is not the amount. These rows are history, not this period's charges: never add them to amountDue or chargeBreakdown,
+  "loanStatement": object or null — for a statement of ONE loan (an auto loan, personal loan, credit-union loan, mortgage, HELOC; not a credit card, not a utility bill): {"description": "what the loan is for as printed, e.g. '2019 Sample Sedan'", "beginningBalance": n, "endingBalance": n (the principal balance after the period: 'Ending Balance', 'Principal Balance', 'Unpaid Principal'), "regularPayment": n (the regular monthly payment: 'Payment Amount', 'Regular Payment'), "pastDue": n ('Past Due Amount', 0 when none), "totalDue": n ('Total Amount Due', what is asked now), "dueDate": "YYYY-MM-DD", "apr": n (percent, 'Annual Percentage Rate' / 'Interest Rate'), "ytdInterest": n, "payments": [{"date": "YYYY-MM-DD", "amount": n, "principal": n, "interest": n, "fees": n}] (each payment in its transaction table)}. On such a statement amountDue is the regular payment, previousBalance the past due amount and statedTotalDue the total amount due — never the balance of the loan,
   "loanGroups": array or null — ONLY for a loan servicer statement that lists MORE THAN ONE loan under the account (a federal student-loan "Account Snapshot" with columns Group AA / Group BB, or "Loan 1-01 / Loan 1-02"): one entry per loan column, [{"label": "Group AA", "loanKind": "DIRECT SUB", "originalPrincipal": n, "outstandingPrincipal": n, "interestRate": n, "monthlyPayment": n, "accruedInterest": n, "disbursedOn": "YYYY-MM-DD", "payoffDate": "YYYY-MM-DD"}]. Read each column: loanKind from the "Loan Type" row, originalPrincipal from "Original Principal Amount", outstandingPrincipal from "Outstanding Principal Balance", interestRate as a percent from "Interest Rate", monthlyPayment from "Regular Monthly Payment Amount" (the Monthly Payment section, not the Account Snapshot's zeros), accruedInterest from "Accrued Interest" / "Estimated Interest Outstanding", disbursedOn from "First Disbursement Date", payoffDate from "Estimated Payoff Date". A statement for a single loan reports null,
   "statedTotalDue": number or null — the ONE figure the bill asks to be paid now: its "Total Amount Due" / "Amount Due" box. Negative when the account is in credit ("No payment is due. Your account has a credit balance of $0.82" → -0.82). This is the grand total AFTER previous balance, payments, credits and any payment-arrangement deferral; report it exactly as printed,
   "totalAccountBalance": number or null — "Total Account Balance" when printed: everything owed including a balance a payment arrangement has deferred,
@@ -2693,6 +2711,8 @@ export function applyLoanGroupsFromText(ex: ExtractedBillData, text: string): vo
  * older statement never overwrites what a newer one has already set.
  */
 export async function syncLoanComponentsFromBill(utilityAccountId: string, ex: ExtractedBillData): Promise<void> {
+  // One loan's statement: its balance, rate and payment onto the loan the account is.
+  if (ex.loanStatement) await (await import('./loanStatements')).syncLoanFromStatement(utilityAccountId, ex).catch(err => console.warn(`[LoanStatement] ${utilityAccountId}: ${err instanceof Error ? err.message : err}`));
   const groups = (ex.loanGroups ?? []).filter(g => g && g.label);
   if (groups.length === 0) return;
   const loan = await db.loan.findUnique({ where: { utilityAccountId }, select: { id: true, components: { select: { id: true, label: true, loanKind: true } } } });
@@ -4058,6 +4078,56 @@ export function applyCreditFromText(text: string, ex: ExtractedBillData): void {
 }
 
 /**
+ * One loan's statement, as a credit union prints it (SDCCU, made-up figures): a row of labels —
+ * Beginning Balance · Ending Balance · Payment Amount · Past Due Amount · Total Amount Due ·
+ * Payment Due Date · Annual Percentage Rate · Daily Periodic Rate · Year-To-Date Interest Charge —
+ * and under it one row of values, run together in the text layer
+ * ("$9,000.00$8,600.00$400.00$400.00$800.0004/30/20266.000%0.016438%$120.00"), then a table of
+ * payments (posting date, transaction date, amount, fees, interest, principal, balance).
+ * Read as a bill it was the total or nothing: a $400 payment with $400 past due read as an $800
+ * bill with $400 carried ($1,200), a later one as $0.00, and the loan never heard of its balance.
+ * Read here: the bill is the payment, the past due is carried, the total is what is asked; the
+ * loan's balance, rate and payment go to the loan (services/loanStatements.ts).
+ */
+export function applyLoanStatementFromText(text: string, ex: ExtractedBillData): void {
+  if (!text || !/beginning\s*balance/i.test(text) || !/ending\s*balance/i.test(text) || !/past\s*due\s*amount/i.test(text)
+    || !/total\s*amount\s*due/i.test(text) || !/payment\s*due\s*date/i.test(text) || !/annual\s*percentage\s*rate/i.test(text)) return;
+  const amt = '\\$\\s*([\\d,]+\\.\\d{2})\\s*';
+  const row = new RegExp(`${amt}${amt}${amt}${amt}${amt}(\\d{1,2}\\/\\d{1,2}\\/\\d{4})\\s*([\\d.]+)\\s*%\\s*(?:[\\d.]+\\s*%\\s*)?(?:\\$\\s*([\\d,]+\\.\\d{2}))?`, 'g');
+  const rows = [...text.matchAll(row)];
+  if (rows.length !== 1) return;   // none, or several loans on one statement: not this reader's
+  const m = rows[0]!;
+  const n = (v?: string) => (v == null ? null : parseFloat(v.replace(/,/g, '')));
+  const [beginningBalance, endingBalance, regularPayment, pastDue, totalDue] = [n(m[1]), n(m[2]), n(m[3]), n(m[4]), n(m[5])];
+  const dueDate = parseDate(m[6]!);
+  const apr = n(m[7]);
+  const ytdInterest = n(m[8]);
+  const description = /loan\s*-\s*\d+\s*:\s*([^\n]{3,60})/i.exec(text)?.[1]?.trim() ?? null;
+  // Payments: posting date, transaction date, amount, fees, interest, principal, balance, "Payment".
+  const pay = /^(\d{2}\/\d{2}\/\d{2})\s*(\d{2}\/\d{2}\/\d{2})\s*\$?\s*([\d,]*\d\.\d{2})\s*\$?\s*([\d,]*\d\.\d{2})\s*\$?\s*([\d,]*\d\.\d{2})\s*\$?\s*(-?[\d,]*\d\.\d{2})\s*\$?\s*([\d,]*\d\.\d{2})\s*(.*)$/;
+  const payments: NonNullable<NonNullable<ExtractedBillData['loanStatement']>['payments']> = [];
+  for (const line of text.split('\n')) {
+    const p = pay.exec(line.trim());
+    if (!p || !/payment/i.test(p[8] ?? '')) continue;
+    const date = parseDate(p[2]!);
+    if (!date) continue;
+    payments.push({ date, amount: n(p[3])!, fees: n(p[4]), interest: n(p[5]), principal: Math.abs(n(p[6]) ?? 0) });
+  }
+  ex.loanStatement = { description, beginningBalance, endingBalance, regularPayment, pastDue, totalDue, dueDate, apr, ytdInterest, payments };
+  // The bill's own figures, only when they add up: the payment plus what is past due is the total.
+  if (regularPayment == null || totalDue == null || Math.abs(regularPayment + (pastDue ?? 0) - totalDue) > 0.02) return;
+  ex.amountDue = regularPayment;
+  ex.currentCharges = regularPayment;
+  ex.previousBalance = pastDue ?? 0;
+  ex.statedTotalDue = totalDue;
+  if (dueDate) ex.dueDate = dueDate;
+  ex.paymentsReceived = payments.length ? Number(payments.reduce((t, p) => t + p.amount, 0).toFixed(2)) : null;
+  ex.ledgerPayments = payments.length ? payments.map(p => ({ date: p.date, amount: p.amount, description: 'Loan payment' })) : ex.ledgerPayments ?? null;
+  ex.isPaid = totalDue <= 0.01;
+  ex.documentKind = 'bill';
+}
+
+/**
  * A running-ledger statement (Seabreeze / CINC HOA managers): a DATE /
  * DESCRIPTION / CHARGES / CREDITS / BALANCE table opening with BALANCE
  * FORWARD, listing two or three months of assessments, fees and payments,
@@ -4336,6 +4406,7 @@ export async function parseBill(
       try {
         if (!extracted.providerWebsite) extracted.providerWebsite = websiteFromText(text);
         applyLedgerFromText(text, extracted);
+        applyLoanStatementFromText(text, extracted);
         applyNetMeteringFromText(text, extracted);
         applyCreditFromText(text, extracted);
         applyLoanGroupsFromText(extracted, text);

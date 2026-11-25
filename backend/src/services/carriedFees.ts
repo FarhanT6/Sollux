@@ -37,14 +37,19 @@ function factsOf(s: Row, loggedHere: number): BillFacts {
     .map(l => ({ date: typeof l.date === 'string' ? l.date.slice(0, 10) : '', amount: asNum(l.amount) ?? 0, description: String(l.description ?? '') }))
     .filter(l => /^\d{4}-\d{2}-\d{2}$/.test(l.date) && l.amount > 0);
   const ledger = rows.some(l => !/last\s*pay/i.test(l.description)) ? rows.map(({ date, amount }) => ({ date, amount })) : null;
+  const listed = (Array.isArray(raw.transactions) ? raw.transactions as { date?: unknown; amount?: unknown; kind?: unknown }[] : [])
+    .map(t => ({ date: typeof t.date === 'string' ? t.date.slice(0, 10) : '', amount: asNum(t.amount) ?? 0, payment: t.kind === 'payment' }))
+    .filter(t => /^\d{4}-\d{2}-\d{2}$/.test(t.date) && Math.abs(t.amount) > 0.004);
   return {
     statementDate: s.statementDate,
     total,
     carried,
     paymentsShown: asNum(raw.paymentsReceived),
     ledger,
+    listed: listed.length ? listed : null,
     ownFee: Math.max(0, r2(num(s.penaltiesFees) - appliedOn(s) - loggedHere)),
-    unsure: !!(raw.paymentPlan || asNum(raw.paymentPlanAmount) || num(s.paymentPlanAmount) || s.trueUpDeferred != null || s.trueUpBalance != null || raw.emailNotice || raw.scheduled),
+    // A loan statement's past due is a missed payment, not a fee folded in; its fees are its own column.
+    unsure: !!(raw.paymentPlan || asNum(raw.paymentPlanAmount) || num(s.paymentPlanAmount) || s.trueUpDeferred != null || s.trueUpBalance != null || raw.emailNotice || raw.scheduled || raw.loanStatement),
   };
 }
 

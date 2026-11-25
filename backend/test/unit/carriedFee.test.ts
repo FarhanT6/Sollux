@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { carriedFeeBetween, type BillFacts } from '../../src/lib/carriedFee';
-import { applyPreviousBalanceBoxFromText, applyLedgerFromText, type ExtractedBillData } from '../../src/services/pdfImportService';
+import { applyPreviousBalanceBoxFromText, applyLedgerFromText, applyLoanStatementFromText, type ExtractedBillData } from '../../src/services/pdfImportService';
 
 const d = (s: string) => new Date(`${s}T00:00:00Z`);
 const bill = (date: string, f: Partial<BillFacts>): BillFacts => ({ statementDate: d(date), total: null, carried: null, paymentsShown: null, ownFee: 0, unsure: false, ...f });
@@ -137,4 +137,37 @@ test("a ledger whose text runs words together and prints its header box's values
   assert.equal(ex.statedTotalDue, 2_830);
   assert.equal(ex.previousBalance, 1_830);
   assert.deepEqual(ex.ledgerPayments?.map(l => [l.date, l.amount]), [['2026-08-16', 1_200], ['2026-09-14', 800]]);
+});
+
+/** A credit union's loan statement as pdf-parse reads it: labels on their own lines, values run together (made-up figures). */
+export const LOAN_TEXT = [
+  'Account NumberStatement PeriodPage', 'XXXXXX432104/01/26 - 06/30/261 of 2',
+  'Savings - 00: Primary Savings', 'Beginning BalanceTotal Deposits/CreditsTotal Withdrawals/DebitsEnding BalanceYear-To-Date Dividends', '$5.00$0.00$0.00$5.00$0.00',
+  'Loan - 12: 2019 Sample Sedan',
+  'Beginning', 'Balance', 'Ending', 'Balance', 'Payment', 'Amount', 'Past Due', 'Amount', 'Total Amount', 'Due', 'Payment Due', 'Date',
+  'Annual', 'Percentage Rate', 'Daily', 'Periodic Rate', 'Year-To-Date', 'Interest Charge',
+  '$9,000.00$8,650.00$400.00$400.00$800.0007/30/20265.500%0.015068%$210.00',
+  'Posting', 'Date', 'Trans.', 'DateTransactionFeesInterestPrincipalBalanceTransaction Description',
+  '06/01/2606/01/26$400.00$0.00$50.00 $-350.00 $8,650.00  Payment',
+].join('\n');
+
+test('a loan statement: the bill is the payment, the past due is carried, the loan gets its balance and rate', () => {
+  const ex = {} as ExtractedBillData;
+  applyLoanStatementFromText(LOAN_TEXT, ex);
+  assert.equal(ex.amountDue, 400);
+  assert.equal(ex.previousBalance, 400);
+  assert.equal(ex.statedTotalDue, 800);
+  assert.equal(ex.dueDate, '2026-07-30');
+  assert.equal(ex.loanStatement?.endingBalance, 8_650);
+  assert.equal(ex.loanStatement?.apr, 5.5);
+  assert.equal(ex.loanStatement?.description, '2019 Sample Sedan');
+  assert.deepEqual(ex.loanStatement?.payments?.map(p => [p.date, p.amount, p.principal, p.interest]), [['2026-06-01', 400, 350, 50]]);
+});
+
+test('a ledger saved without its dated payments is known by its transaction table', () => {
+  const aug = bill('2026-08-19', { total: 3_000, carried: 2_000, paymentsShown: 2_400 });
+  // As stored: the table reprints July's line (before the bill before), credits negative.
+  const sep = bill('2026-09-20', { total: 2_800, carried: 1_800, paymentsShown: 2_400,
+    listed: [{ date: '2026-08-01', amount: 1_800 }, { date: '2026-08-16', amount: -1_200 }, { date: '2026-09-01', amount: 1_000 }, { date: '2026-09-14', amount: -1_200 }] });
+  assert.equal(carriedFeeBetween(aug, sep).kind, 'none');
 });
