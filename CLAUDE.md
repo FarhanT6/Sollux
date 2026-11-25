@@ -104,7 +104,7 @@ Conventions the code follows: dark UI (`#1e1e1e` cards, amber `#F5A623` accent),
    row 30 s for GETs (any write reads fresh and clears it). Settings → Account → Speed check (`routes/speed.ts`) measures
    the server's uptime (a sleeping server), one database trip (region distance; its region shown to the platform admin
    only) and the browser's trip, and says which is slow
-3. Add nav link to `frontend/src/components/layout/AppLayout.tsx`
+3. Put it in one of the menu's five areas — Home, Bills & accounts, Rent & tenants, Money, Personal (`NAV` items with `area: true` in `frontend/src/components/layout/AppLayout.tsx`; Add is the button above them) — as a tab of that area in `components/layout/Section.tsx` `SECTIONS` (or `ALSO_IN` for a detail page), not as a new menu item; a phone-only entry goes in `NAV` without `area`
 
 ## Database changes
 Always use `npx prisma migrate dev --name <description>` — never edit schema without a migration.
