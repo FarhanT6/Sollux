@@ -105,7 +105,9 @@ setTimeout(() => void (async () => {
   const { db } = await import('../config/db');
   // v2: a running ledger's reprinted payments were counted as payments since the bill before, so
   // an HOA ledger's eCheck read as a late fee on every bill; settling again takes those off.
-  const KEY = 'carried-fees:history-v2';
+  // v3: ledgers saved before their payments were kept are known by their transaction table, and
+  // loan statements are left out.
+  const KEY = 'carried-fees:history-v3';
   if (await db.appSetting.findUnique({ where: { key: KEY } }).catch(() => null)) return;
   const r = await (await import('../services/carriedFees')).settleAllCarriedFees();
   await db.appSetting.upsert({ where: { key: KEY }, create: { key: KEY, value: JSON.stringify({ ...r, at: new Date().toISOString() }) }, update: { value: JSON.stringify({ ...r, at: new Date().toISOString() }) } });
@@ -122,6 +124,29 @@ setTimeout(() => void (async () => {
   await db.appSetting.upsert({ where: { key: KEY }, create: { key: KEY, value: JSON.stringify({ moved, at: new Date().toISOString() }) }, update: { value: JSON.stringify({ moved, at: new Date().toISOString() }) } });
   if (moved) console.log(`[Rent] ${moved} paid-ahead extra(s) moved to utilities`);
 })().catch(err => console.warn('[Rent] paid-ahead cleanup failed:', err instanceof Error ? err.message : err)), 5 * 60_000);
+
+// Once: bills known only from an email and saved as their whole total are split into what was
+// carried from the bill before and their own charge (services/emailTotals.ts).
+setTimeout(() => void (async () => {
+  const { db } = await import('../config/db');
+  const KEY = 'email-totals:split-v1';
+  if (await db.appSetting.findUnique({ where: { key: KEY } }).catch(() => null)) return;
+  const fixed = await (await import('../services/emailTotals')).repairEmailTotals();
+  await db.appSetting.upsert({ where: { key: KEY }, create: { key: KEY, value: JSON.stringify({ fixed, at: new Date().toISOString() }) }, update: { value: JSON.stringify({ fixed, at: new Date().toISOString() }) } });
+  if (fixed) console.log(`[EmailTotals] ${fixed} email bill(s) split into carried and their own charge`);
+})().catch(err => console.warn('[EmailTotals] repair failed:', err instanceof Error ? err.message : err)), 3 * 60_000);
+
+// Once: loan, HOA and other statements on file read again by the free text readers that check
+// their own arithmetic (services/textRecheck.ts), so bills those layouts were read wrong are put
+// right without a re-read by the model.
+setTimeout(() => void (async () => {
+  const { db } = await import('../config/db');
+  const KEY = 'text-recheck:v1';
+  if (await db.appSetting.findUnique({ where: { key: KEY } }).catch(() => null)) return;
+  const r = await (await import('../services/textRecheck')).recheckStoredStatements();
+  await db.appSetting.upsert({ where: { key: KEY }, create: { key: KEY, value: JSON.stringify({ ...r, at: new Date().toISOString() }) }, update: { value: JSON.stringify({ ...r, at: new Date().toISOString() }) } });
+  console.log(`[TextRecheck] ${r.checked} statement(s) read again, ${r.fixed} put right, ${r.loans} loan update(s)`);
+})().catch(err => console.warn('[TextRecheck] failed:', err instanceof Error ? err.message : err)), 2 * 60_000);
 
 // Property-tax lookups older than 30 days run again (services/taxLookupJobs.ts).
 const refreshTaxes = () => import('../services/taxLookupJobs').then(m => m.refreshTaxLookups())

@@ -36,6 +36,12 @@ export interface BillFacts {
    * showed: only those dated after that bill are payments since it. Null on an ordinary bill.
    */
   ledger?: { date: string; amount: number }[] | null;
+  /**
+   * The bill's transaction table as stored (signed: payments and credits negative). Bills saved
+   * before their ledger's payments were kept have only this: a table that reprints lines from
+   * before the bill before is a running ledger, and its credits are read the same way.
+   */
+  listed?: { date: string; amount: number; payment?: boolean }[] | null;
   /** A late fee the bill itself lists (its own, from the document). */
   ownFee: number;
   /** A payment plan, solar true-up or figures from an email: the balance moves for other reasons. */
@@ -61,9 +67,12 @@ export function carriedFeeBetween(a: BillFacts, b: BillFacts, loggedOnA = 0, pai
   // A ledger's payments since the bill before: the credits dated after it. Counting them all took
   // the payment the bill before already showed twice, and an HOA's monthly eCheck read as a late
   // fee of the same amount on every bill.
-  if (b.ledger) {
-    const after = a.statementDate.toISOString().slice(0, 10);
-    const since = b.ledger.filter(l => l.date > after);
+  const after = a.statementDate.toISOString().slice(0, 10);
+  const ledger = b.ledger ?? (b.listed?.length && b.listed.some(r => r.date <= after)
+    ? b.listed.filter(r => r.amount < 0 || r.payment).map(r => ({ date: r.date, amount: Math.abs(r.amount) }))
+    : null);
+  if (ledger) {
+    const since = ledger.filter(l => l.date > after);
     paid = since.length ? r2(since.reduce((t, l) => t + l.amount, 0)) : null;
   }
   if (paid == null) {

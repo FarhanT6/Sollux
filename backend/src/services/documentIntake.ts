@@ -7,6 +7,7 @@
  * files email the same way, with the same duplicate rules.
  */
 import { settleCarriedFees } from './carriedFees';
+import { splitEmailTotal } from './emailTotals';
 import { withAiContext } from '../ai/meter';
 import { Prisma } from '@prisma/client';
 import { learnProviderWebsite } from './providerWebsite';
@@ -72,6 +73,11 @@ export function buildRawData(ex: Awaited<ReturnType<typeof parseBill>>['extracte
     paymentPlanAmount: ex.paymentPlanAmount ?? null,
     insurance: ex.insurance ?? null,
     transactions: ex.transactions ?? null,
+    // A running ledger's payments, each on its date, and a loan statement's figures: what the
+    // late-fee check and the loan read from the stored bill (dropped here, the HOA ledger's
+    // reprinted eCheck read as a late fee again after every re-read).
+    ledgerPayments: ex.ledgerPayments ?? null,
+    loanStatement: ex.loanStatement ?? null,
     // Figures read from an email, not a statement; the real statement replaces them when it comes.
     emailNotice: ex.fromEmailBody ? true : undefined,
   };
@@ -238,6 +244,8 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
 
     // The owner entered this period by hand: a different amount waits for
     // their choice; the same amount keeps their figures and adds the PDF.
+    // An email that gives only the total: what was carried from the bill before is not this bill's charge.
+    await splitEmailTotal(acct.id, ex);
     const ownerCheck = existing && ownerEntered(existing) ? await compareWithOwner(acct.id, ex, existing) : null;
     if (ownerCheck?.kind === 'conflict') {
       const pendingKey = `pending-review/${userId}/${batchId}/${sanitizeFilename(filename)}`;

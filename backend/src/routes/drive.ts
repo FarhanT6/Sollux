@@ -390,6 +390,8 @@ router.post('/stream', attachDbUser, async (req, res) => {
               insurance: ex.insurance ?? null,
               netMetering: ex.netMetering ?? null,
               transactions: ex.transactions ?? null,
+              ledgerPayments: ex.ledgerPayments ?? null,
+              loanStatement: ex.loanStatement ?? null,
             };
             const nem = ex.netMetering ?? null;
             const trueUpFields = nem
