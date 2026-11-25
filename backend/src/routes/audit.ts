@@ -173,7 +173,7 @@ router.get('/report', async (req, res, next) => {
       // The one-time passes the workers run after a deploy: when each ran and what it changed. A pass
       // missing here never ran (the workers were down, or failed before it) — that is a defect.
       maintenance: Object.fromEntries((await db.appSetting.findMany({
-        where: { key: { in: ['text-recheck:v1', 'email-totals:split-v1', 'carried-fees:history-v3', 'rent-paid-ahead-to-utilities:v1', 'confirmed-payments:dedupe-v1'] } },
+        where: { key: { in: ['text-recheck:v1', 'email-totals:split-v1', 'carried-fees:history-v3', 'rent-paid-ahead-to-utilities:v1', 'confirmed-payments:dedupe-v1', 'page-saved:mark-v1'] } },
         select: { key: true, value: true },
       })).map(r => { let v: unknown = r.value; try { v = JSON.parse(r.value); } catch { /* as stored */ } return [r.key, v]; })),
       queuedFetchesWaiting: await db.syncJob.count({ where: { status: 'PENDING', startedAt: null, createdAt: { lt: new Date(Date.now() - 10 * 60_000) }, utilityAccountId: { in: (await db.utilityAccount.findMany({ where: mineAcct, select: { id: true } })).map(a => a.id) } } }),

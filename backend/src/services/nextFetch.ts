@@ -14,11 +14,19 @@ export async function nextBillExpected(utilityAccountId: string, cadence: string
   const rows = await db.statement.findMany({
     where: { utilityAccountId, isScheduled: false, isDownPayment: false },
     orderBy: { statementDate: 'desc' }, take: 8,
-    select: { statementDate: true, createdAt: true },
+    select: { statementDate: true, createdAt: true, pdfS3Key: true, rawDataJson: true },
   });
   const dates = rows.map(r => r.statementDate);
   const { days, learned } = learnedCycleDays(dates, cadence, termMonths);
-  const last = rows[0] ?? null;
+  const last = rows[0] ? { statementDate: rows[0].statementDate, createdAt: rows[0].createdAt } : null;
+  // The newest bill is the portal's page saved in place of its PDF (the PDF was not out yet), on an
+  // account whose portal gives PDFs: the PDF is still due — fetched the next night, then backing
+  // off — for ten days, after which the page stands.
+  const pageSaved = (r: (typeof rows)[number]) => !!(r.rawDataJson as Record<string, unknown> | null)?.pageSaved;
+  if (rows[0] && pageSaved(rows[0]) && Date.now() - rows[0].statementDate.getTime() < 10 * DAY
+    && rows.slice(1).some(r => r.pdfS3Key && !pageSaved(r) && (r.rawDataJson as Record<string, unknown> | null)?.source === 'portal')) {
+    return { on: rows[0].statementDate, fetchAt: midnightAfter(rows[0].statementDate), cycleDays: days, learned, last };
+  }
   const on = last ? nextStatementAfter(last.statementDate, dates, days) : null;
   return { on, fetchAt: on ? midnightAfter(on) : null, cycleDays: days, learned, last };
 }

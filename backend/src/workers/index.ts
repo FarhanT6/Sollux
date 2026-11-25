@@ -148,6 +148,17 @@ setTimeout(() => void (async () => {
   console.log(`[TextRecheck] ${r.checked} statement(s) read again, ${r.fixed} put right, ${r.loans} loan update(s)`);
 })().catch(err => console.warn('[TextRecheck] failed:', err instanceof Error ? err.message : err)), 2 * 60_000);
 
+// Once: portal bill pages saved as statements in the last month are marked as stand-ins, so the
+// PDF is fetched and replaces them (services/pageSaved.ts).
+setTimeout(() => void (async () => {
+  const { db } = await import('../config/db');
+  const KEY = 'page-saved:mark-v1';
+  if (await db.appSetting.findUnique({ where: { key: KEY } }).catch(() => null)) return;
+  const marked = await (await import('../services/pageSaved')).markSavedPages();
+  await db.appSetting.upsert({ where: { key: KEY }, create: { key: KEY, value: JSON.stringify({ marked, at: new Date().toISOString() }) }, update: { value: JSON.stringify({ marked, at: new Date().toISOString() }) } });
+  if (marked) console.log(`[PageSaved] ${marked} saved portal page(s) marked; their PDFs will be fetched`);
+})().catch(err => console.warn('[PageSaved] marking failed:', err instanceof Error ? err.message : err)), 90_000);
+
 // Property-tax lookups older than 30 days run again (services/taxLookupJobs.ts).
 const refreshTaxes = () => import('../services/taxLookupJobs').then(m => m.refreshTaxLookups())
   .then(n => { if (n) console.log(`[TaxLookup] Queued ${n} monthly refresh(es)`); })

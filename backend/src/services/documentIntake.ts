@@ -107,6 +107,9 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
   // that card, and anything else it brings back goes to review, never to a
   // utility account.
   forCard?: string;
+  // The portal's bill page saved as the statement (save_page_as_statement), not the bill's own PDF:
+  // a stand-in the PDF replaces when it comes (services/pageSaved.ts).
+  pageSaved?: boolean;
 } = {}): Promise<IntakeResult> {
   // parseBill defaults to AI; this path must pass the choice through or
   // every bulk import silently bills per PDF regardless of what was picked.
@@ -255,7 +258,7 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
 
     const key = buildStatementKey(userId, acct.propertyId, acct.id, statementDate, sanitizeFilename(filename));
     const pdfS3Key = opts.pdfKey ?? (docBuffer ? await uploadDocument(key, docBuffer) : null);
-    const rawData = buildRawData(ex, source, parsed.extractedBy);
+    const rawData = { ...buildRawData(ex, source, parsed.extractedBy), ...(opts.pageSaved ? { pageSaved: true as const } : {}) };
     // What this bill carried in: positive is arrears, negative a credit. This
     // path never saved it, so a $7,786 SDG&E bill read as its $836 charge
     // alone (#241). Same rule as routes/drive.ts.
@@ -306,8 +309,8 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
           ratePlan: ex.ratePlan ?? existing.ratePlan,
           ...extra,
           rawDataJson: rawData as Prisma.InputJsonValue,
-          // A full statement replaces the printed summary email it updates.
-          ...(pdfS3Key && (!existing.pdfS3Key || !existing.billingPeriodStart) ? { pdfS3Key } : {}),
+          // A full statement replaces the printed summary email it updates, and the portal page saved in its place.
+          ...(pdfS3Key && (!existing.pdfS3Key || !existing.billingPeriodStart || (!opts.pageSaved && (existing.rawDataJson as Record<string, unknown> | null)?.pageSaved)) ? { pdfS3Key } : {}),
         },
       });
       // Late fees logged with payments are not on the PDF; put them back.
