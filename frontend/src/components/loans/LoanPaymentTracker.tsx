@@ -11,6 +11,7 @@ import { fmtDate, todayISO, thisMonthISO } from '../../lib/date';
 import { PAYMENT_METHOD_LABELS, PAYMENT_METHODS, methodsShort } from '../../lib/loanPayment';
 import { describeApiError } from '../../lib/apiError';
 import { onLoansTab } from '../../lib/loanGroups';
+import MonthPicker, { monthsAround } from '../payments/MonthPicker';
 
 /** Ways of paying by check: it stays pending until it is cashed. */
 const CHECK_METHODS = ['CHECK', 'CHECK_DROPPED'];
@@ -332,6 +333,18 @@ function LogLoanPaymentModal({ row, month, payment, onClose, onSaved }: { row: L
   // A payment being changed keeps the amount it was: moving it to another month does not change what was paid.
   const [monthRow, setMonthRow] = useState<LoanTrackerRow>(row);
   const [monthNote, setMonthNote] = useState<string | null>(null);
+  // Every month's payment on this loan, for the month list (what each still owes) and the amount the moment one is picked.
+  const months = useMemo(() => monthsAround(month), [month]);
+  const [cells, setCells] = useState<Map<string, { expected: number; paid: number }>>(new Map());
+  useEffect(() => {
+    const years = [...new Set(months.map(m => Number(m.slice(0, 4))))];
+    void Promise.all(years.map(y => getLoanTrackerYear(y, todayISO()).catch(() => null))).then(list => {
+      const map = new Map<string, { expected: number; paid: number }>();
+      for (const yd of list) for (const c of yd?.rows.find(x => x.loanId === row.loanId)?.cells ?? []) map.set(c.month, { expected: c.expected, paid: c.paid });
+      setCells(map);
+    });
+  }, [months, row.loanId]);
+  const facts = (m: string) => { const c = cells.get(m); return c ? { due: c.expected, owed: Math.max(0, Number((c.expected - c.paid).toFixed(2))) } : null; };
   const asked = useRef('');
   const timer = useRef<ReturnType<typeof setTimeout>>();
   useEffect(() => () => clearTimeout(timer.current), []);
@@ -342,6 +355,9 @@ function LogLoanPaymentModal({ row, month, payment, onClose, onSaved }: { row: L
     asked.current = m;
     clearTimeout(timer.current);
     if (m === month) { setMonthRow(row); setAmount(String(row.remaining || row.expected || '')); return; }
+    // Known already: the amount follows at once; the month's due date follows from the lookup.
+    const known = facts(m);
+    if (known && known.due > 0.005) setAmount(String(known.owed > 0.005 ? known.owed : known.due));
     // A moment's wait: typing a year into the box changes it on every digit.
     timer.current = setTimeout(() => {
       getLoanTrackerMonth(m, todayISO())
@@ -420,7 +436,7 @@ function LogLoanPaymentModal({ row, month, payment, onClose, onSaved }: { row: L
           <div><span className={label}>Amount paid</span><input type="number" step="0.01" className={input} value={amount} onChange={e => setAmount(e.target.value)} /></div>
           <div><span className={label}>Date paid</span><input type="date" className={input} value={date} onChange={e => setDate(e.target.value)} /></div>
           <div>
-            <span className={label}>Month it covers</span><input type="month" className={input} value={period} onChange={e => pickMonth(e.target.value)} />
+            <span className={label}>Month it covers</span><MonthPicker months={months} value={period} onChange={pickMonth} facts={facts} thisMonth={thisMonthISO()} className={input} />
             {monthNote && <p className="text-[11px] text-amber-300/90 mt-1">{monthNote}</p>}
           </div>
           <div>
