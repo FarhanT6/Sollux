@@ -13,15 +13,15 @@ export interface PhoneRoute { title: string; back?: string; backLabel?: string }
 const TABLE: [RegExp, PhoneRoute | ((m: RegExpMatchArray) => PhoneRoute)][] = [
   // Tab roots: no Back.
   [/^\/(dashboard)?$/, { title: 'Overview' }],
-  [/^\/properties$/, { title: 'Utilities' }],
+  [/^\/properties$/, { title: 'Bills' }],
   [/^\/scan$/, { title: 'Scan' }],
   [/^\/finances$/, { title: 'Finances' }],
   [/^\/payments$/, { title: 'Payments' }],
   [/^\/more$/, { title: 'More' }],
 
   // Under Utilities.
-  [/^\/properties\/([^/]+)\/utilities\/[^/]+$/, { title: 'Account', back: '/properties', backLabel: 'Utilities' }],
-  [/^\/properties\/[^/]+$/, { title: 'Property', back: '/properties', backLabel: 'Utilities' }],
+  [/^\/properties\/([^/]+)\/utilities\/[^/]+$/, { title: 'Account', back: '/properties', backLabel: 'Bills' }],
+  [/^\/properties\/[^/]+$/, { title: 'Property', back: '/properties', backLabel: 'Bills' }],
 
   // Under Payments / Finances.
   [/^\/payments\/priorities$/, { title: 'Pay First', back: '/payments', backLabel: 'Payments' }],

@@ -42,7 +42,7 @@ export default function UtilitiesScreen() {
   const accountCount = (properties ?? []).reduce((s, p) => s + (p.utilityAccounts?.length ?? 0), 0);
 
   return (
-    <Screen title="Utilities" subtitle={properties ? `${properties.length} properties · ${accountCount} accounts` : undefined}
+    <Screen title="Bills" subtitle={properties ? `${properties.length} properties · ${accountCount} accounts` : undefined}
       onRefresh={load} right={<BarButton label="Add property" onClick={() => setAdding(true)}><Icon.Plus /></BarButton>}>
       <div className="ios-search">
         <Icon.Search />
