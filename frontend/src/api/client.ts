@@ -1151,6 +1151,14 @@ export const deleteLoanComponent = (loanId: string, componentId: string) =>
 // Loan linked to utility account
 export const upsertUtilityLoan = (utilityAccountId: string, data: Record<string, unknown>) =>
   api.put(`/utilities/${utilityAccountId}/loan`, data).then(r => r.data);
+// The account's bills checked against their PDFs now with the free readers: what changed and what was left.
+export interface AccountRecheckLine { statementId: string; statementDate: string; outcome: 'fixed' | 'same' | 'not-read' | 'owner-edited' | 'email'; before?: { charge: number; carried: number | null }; after?: { charge: number; carried: number | null; total: number } }
+export interface AccountRecheckResult {
+  lines: AccountRecheckLine[]; fixed: number; ownerEdited: number; notRead: number; emailSplit: number; feesRemoved: number;
+  loan: { balance: number | null; rate: number | null; payment: number | null; dueDay: number | null } | { none: string } | null;
+}
+export const recheckAccount = (utilityAccountId: string, includeOwnerEdited = false) =>
+  api.post<AccountRecheckResult>(`/utilities/${utilityAccountId}/recheck`, { includeOwnerEdited }, { timeout: 180_000 }).then(r => r.data);
 export const deleteUtilityLoan = (utilityAccountId: string) =>
   api.delete(`/utilities/${utilityAccountId}/loan`);
 

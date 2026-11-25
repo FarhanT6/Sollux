@@ -20,22 +20,41 @@ import { syncLoanFromStatement } from './loanStatements';
 import pdfParse from '../lib/pdfParse';
 const near = (a: unknown, b: unknown) => Math.abs(Number(a ?? 0) - Number(b ?? 0)) < 0.01;
 
-export async function recheckStoredStatements(opts: { userId?: string; categories?: string[]; textOf?: (pdfKey: string) => Promise<string> } = {}): Promise<{ checked: number; fixed: number; loans: number }> {
+export interface RecheckLine {
+  statementId: string; statementDate: string;
+  outcome: 'fixed' | 'same' | 'not-read' | 'owner-edited' | 'email';
+  before?: { charge: number; carried: number | null }; after?: { charge: number; carried: number | null; total: number };
+}
+
+export async function recheckStoredStatements(opts: {
+  userId?: string; categories?: string[]; textOf?: (pdfKey: string) => Promise<string>;
+  /** Only these accounts (any category). */
+  accountIds?: string[];
+  /** Also bills the owner edited by hand: the owner asked for the PDF's figures. */
+  includeOwnerEdited?: boolean;
+} = {}): Promise<{ checked: number; fixed: number; loans: number; lines: RecheckLine[] }> {
   const rows = await db.statement.findMany({
     where: {
       pdfS3Key: { not: null }, isDownPayment: false, isScheduled: false,
-      utilityAccount: { category: { in: (opts.categories ?? ['LOAN', 'HOA', 'OTHER']) as never[] }, ...(opts.userId ? { property: { userId: opts.userId } } : {}) },
+      ...(opts.accountIds ? { utilityAccountId: { in: opts.accountIds } } : {}),
+      utilityAccount: {
+        ...(opts.accountIds ? {} : { category: { in: (opts.categories ?? ['LOAN', 'HOA', 'OTHER']) as never[] } }),
+        ...(opts.userId ? { property: { userId: opts.userId } } : {}),
+      },
     },
     orderBy: { statementDate: 'asc' },
     select: { id: true, utilityAccountId: true, pdfS3Key: true, statementDate: true, amountDue: true, pastDueCarried: true, carriedFee: true, rawDataJson: true },
   });
   let checked = 0, fixed = 0, loans = 0;
+  const lines: RecheckLine[] = [];
   const touched = new Set<string>();
   for (const s of rows) {
     const raw = (s.rawDataJson && typeof s.rawDataJson === 'object' && !Array.isArray(s.rawDataJson) ? s.rawDataJson : {}) as Record<string, unknown>;
-    if (raw.ownerEditedAt || raw.emailNotice) continue;
+    const line: RecheckLine = { statementId: s.id, statementDate: s.statementDate.toISOString().slice(0, 10), outcome: 'not-read' };
+    if (raw.emailNotice) { lines.push({ ...line, outcome: 'email' }); continue; }
+    if (raw.ownerEditedAt && !opts.includeOwnerEdited) { lines.push({ ...line, outcome: 'owner-edited' }); continue; }
     let text = '';
-    try { text = opts.textOf ? await opts.textOf(s.pdfS3Key!) : (await pdfParse(await downloadDocument(s.pdfS3Key!))).text ?? ''; } catch { continue; }
+    try { text = opts.textOf ? await opts.textOf(s.pdfS3Key!) : (await pdfParse(await downloadDocument(s.pdfS3Key!))).text ?? ''; } catch { lines.push(line); continue; }
     checked++;
     const ex = {} as ExtractedBillData;
     applyLedgerFromText(text, ex);
@@ -43,12 +62,15 @@ export async function recheckStoredStatements(opts: { userId?: string; categorie
     if (ex.amountDue == null || ex.statedTotalDue == null) {
       // A loan statement whose figures do not add up still tells its loan the balance and rate.
       if (ex.loanStatement) { ex.statementDate = s.statementDate.toISOString().slice(0, 10); if (await syncLoanFromStatement(s.utilityAccountId, ex).catch(() => null)) loans++; }
+      lines.push(line);
       continue;
     }
     const carried = ex.previousBalance != null && Math.abs(ex.previousBalance) > 0.005 ? ex.previousBalance : null;
     const ownCharge = Number(s.amountDue ?? 0) - Number(s.carriedFee ?? 0);
     const same = near(ownCharge, ex.amountDue) && near(s.pastDueCarried, carried) && near(raw.statedTotalDue, ex.statedTotalDue)
       && (!ex.ledgerPayments?.length || Array.isArray(raw.ledgerPayments)) && (!ex.loanStatement || !!raw.loanStatement);
+    const beforeFig = { charge: Number(s.amountDue ?? 0), carried: s.pastDueCarried != null ? Number(s.pastDueCarried) : null };
+    if (same) lines.push({ ...line, outcome: 'same', before: beforeFig });
     if (!same) {
       await db.statement.update({
         where: { id: s.id },
@@ -66,6 +88,8 @@ export async function recheckStoredStatements(opts: { userId?: string; categorie
             ...(ex.chargeBreakdown ? { chargeBreakdown: ex.chargeBreakdown } : {}),
             ledgerPayments: ex.ledgerPayments ?? null, loanStatement: ex.loanStatement ?? null,
             recheckedFromText: new Date().toISOString().slice(0, 10),
+            // The owner asked for the PDF's figures over their own: theirs are no longer kept.
+            ...(raw.ownerEditedAt && opts.includeOwnerEdited ? { ownerEditedAt: undefined, ownerFiguresReplacedAt: new Date().toISOString() } : {}),
           } as Prisma.InputJsonValue,
         },
       });
@@ -73,6 +97,7 @@ export async function recheckStoredStatements(opts: { userId?: string; categorie
       await restoreLateFees(s.id, null);
       fixed++;
       touched.add(s.utilityAccountId);
+      lines.push({ ...line, outcome: 'fixed', before: beforeFig, after: { charge: ex.amountDue, carried, total: ex.statedTotalDue } });
     }
     if (ex.loanStatement) {
       ex.statementDate = s.statementDate.toISOString().slice(0, 10);
@@ -80,5 +105,5 @@ export async function recheckStoredStatements(opts: { userId?: string; categorie
     }
   }
   for (const id of touched) await settleCarriedFees(id).catch(() => null);
-  return { checked, fixed, loans };
+  return { checked, fixed, loans, lines };
 }

@@ -174,10 +174,24 @@ export default function CreditCardPage() {
   const [balance, setBalance] = useState<string | null>(null);
   const nav = useNavigate();
 
-  async function load() { setCard(await getCreditCard(id!)); }
-  useEffect(() => { void load(); void getCreditCards().then(d => setCards(d.cards)); void getProperties().then(setProperties); void getBankAccounts().then((b: any) => setBanks(b)); }, [id]);
+  // A card that is gone (deleted, an old link, another login's) said so, instead of "Loading…" for ever.
+  const [loadError, setLoadError] = useState<'gone' | 'failed' | null>(null);
+  async function load() {
+    try { setCard(await getCreditCard(id!)); setLoadError(null); }
+    catch (e: any) { setLoadError(e?.response?.status === 404 ? 'gone' : 'failed'); }
+  }
+  useEffect(() => { setCard(null); setLoadError(null); void load(); void getCreditCards().then(d => setCards(d.cards)); void getProperties().then(setProperties); void getBankAccounts().then((b: any) => setBanks(b)); }, [id]);
   const spendingCats = useMemo(() => Object.entries(card?.spending?.byCategory ?? {}).sort((a, b) => b[1] - a[1]), [card]);
   const spendingMonths = useMemo(() => Object.entries(card?.spending?.byMonth ?? {}).sort((a, b) => a[0].localeCompare(b[0])).slice(-12), [card]);
+  if (!card && loadError) return (
+    <div className="p-6 space-y-2">
+      <p className="text-sm text-gray-300">{loadError === 'gone' ? "This card isn't on your account any more." : 'The card could not be loaded.'}</p>
+      <div className="flex gap-3 text-sm">
+        {loadError === 'failed' && <button onClick={() => void load()} className="text-amber-400 hover:text-amber-300">Try again</button>}
+        <Link to="/personal?tab=cards" className="text-amber-400 hover:text-amber-300">Back to your cards</Link>
+      </div>
+    </div>
+  );
   if (!card) return <div className="p-6 text-sm text-gray-500">Loading…</div>;
   const p = card.position;
   const st = p.statementStatus ? STATUS_PILL[p.statementStatus] : null;

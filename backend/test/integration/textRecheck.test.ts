@@ -91,3 +91,23 @@ test("an email bill saved as its whole total: the bill before's balance less wha
   assert.equal(Number(oct.pastDueCarried), 1_500);
   assert.equal(Number(oct.amountDue), 1_000);
 });
+
+test('an account checked by hand: a bill edited by hand is reported and left, then put right when asked', { skip }, async () => {
+  const { recheckAccount } = await import('../../src/services/accountRecheck');
+  const me = await api.db.user.findFirstOrThrow({ where: { email: OWNER.email } });
+  const p = await api.db.property.findFirstOrThrow({ where: { userId: me.id } });
+  const acct = await api.db.utilityAccount.create({ data: { propertyId: p.id, providerName: 'Sample Lender Two', providerSlug: 'gmail-fallback', category: 'LOAN' } });
+  const st = await api.db.statement.create({ data: {
+    utilityAccountId: acct.id, statementDate: d('2026-06-30'), amountDue: 800, pastDueCarried: 400, pdfS3Key: 'loan/jun.pdf',
+    rawDataJson: { source: 'pdf_import', statedTotalDue: 800, ownerEditedAt: '2026-07-02T00:00:00.000Z' },
+  } });
+  const textOf = async (key: string) => TEXTS[key] ?? '';
+  const first = await recheckAccount(me.id, acct.id, { textOf });
+  assert.equal(first?.ownerEdited, 1);
+  assert.equal(Number((await api.db.statement.findUniqueOrThrow({ where: { id: st.id } })).amountDue), 800);
+  const second = await recheckAccount(me.id, acct.id, { textOf, includeOwnerEdited: true });
+  assert.equal(second?.fixed, 1);
+  assert.equal(Number((await api.db.statement.findUniqueOrThrow({ where: { id: st.id } })).amountDue), 400);
+  // A LOAN account with no loan gets one from its statement.
+  assert.ok(second?.loan && !('none' in second.loan) && second.loan.balance === 8_650, JSON.stringify(second?.loan));
+});

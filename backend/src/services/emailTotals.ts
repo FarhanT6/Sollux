@@ -53,9 +53,9 @@ export async function splitEmailTotal(utilityAccountId: string, ex: ExtractedBil
 }
 
 /** Once: email bills already saved as their whole total, split the same way (oldest first, so each reads the one before as fixed). */
-export async function repairEmailTotals(): Promise<number> {
+export async function repairEmailTotals(accountIds?: string[]): Promise<number> {
   const rows = await db.statement.findMany({
-    where: { pastDueCarried: null, isDownPayment: false, isScheduled: false, rawDataJson: { path: ['emailNotice'], equals: true } },
+    where: { pastDueCarried: null, isDownPayment: false, isScheduled: false, rawDataJson: { path: ['emailNotice'], equals: true }, ...(accountIds ? { utilityAccountId: { in: accountIds } } : {}) },
     orderBy: { statementDate: 'asc' },
     select: { id: true, utilityAccountId: true, statementDate: true, amountDue: true, rawDataJson: true },
   });

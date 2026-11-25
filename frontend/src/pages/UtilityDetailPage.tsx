@@ -12,7 +12,7 @@ import {
   upsertUtilityLoan, deleteUtilityLoan, patchStatement, createStatement, deleteStatement, markStatementUnpaid,
   revealUtilityAccountNumber, createPayment, createSplitPayment, updatePayment, deletePayment,
   getBankAccounts, getCostSettings, updateCostSettings, getLoans, getLoanPayments,
-  getInsurancePolicies, updateInsurancePolicy,
+  getInsurancePolicies, updateInsurancePolicy, recheckAccount, type AccountRecheckResult,
 } from '../api/client';
 import api from '../api/client';
 import { CADENCE_LABELS } from '../lib/cadence';
@@ -1347,6 +1347,13 @@ export default function UtilityDetailPage() {
   const openWebsite = () => void openUrl(website?.url ?? `https://www.google.com/search?q=${encodeURIComponent(`${account?.providerName ?? ''} pay bill online login`)}`);
   // Saved PDFs read again with the current reader: a reading fix reaches
   // bills already on file. Runs in the background.
+  // Check figures against the PDFs: free, now, with a report of each bill.
+  const [recheck, setRecheck] = useState<{ running: boolean; result: AccountRecheckResult | null; error?: string } | null>(null);
+  const runRecheck = async (includeOwnerEdited = false) => {
+    setRecheck({ running: true, result: null });
+    try { const result = await recheckAccount(account!.id, includeOwnerEdited); setRecheck({ running: false, result }); void reloadAccount(); }
+    catch (e: any) { setRecheck({ running: false, result: null, error: e?.response?.data?.error ?? 'The check could not run.' }); }
+  };
   const rereadStatements = async () => {
     try {
       const { data } = await api.post('/statements/reread', { utilityAccountId: account!.id });
@@ -1564,6 +1571,7 @@ export default function UtilityDetailPage() {
           {(syncing || account.lastSyncStatus === 'PENDING') && (
             <button onClick={() => void cancelFetch(account.id).then(() => { toast('Cancelled — the fetch stops within a few seconds.'); setSyncing(false); return getUtility(account.id).then(setAccount); }).catch(() => toast('Could not cancel it.', 'error'))} className="btn text-xs">Cancel</button>
           )}
+          {recheck && <RecheckPanel state={recheck} onClose={() => setRecheck(null)} onUsePdf={() => void runRecheck(true)} />}
           {/* Now-and-then actions, out of the way. */}
           <MoreMenu items={[
             { label: 'Edit account details', onClick: () => setEditingAccount(true), title: 'Name, type, account number, portal login, website, nickname and notes' },
@@ -1571,7 +1579,8 @@ export default function UtilityDetailPage() {
               ? { label: lookupValue ? lookupLabel : `Add ${lookupLabel.toLowerCase()}`, onClick: editLookupName, title: `The bill lookup page finds the bills by account number and this ${byCustomer ? 'customer ID' : 'name'}` }
               : { label: account.hasCredentials ? 'Portal login' : 'Add portal login', onClick: () => setPortalLogin(true), title: "Let Sollux fetch statements from the provider's website" },
             { label: `${website ? 'Edit' : 'Save'} website link`, onClick: () => void saveWebsite(), title: 'Set the website for this account' },
-            { label: 'Re-read statements', onClick: () => void rereadStatements(), title: "Read this account's saved statement PDFs again with the latest reader" },
+            { label: 'Check figures against the PDFs', onClick: () => void runRecheck(), title: 'Free: reads the saved PDFs again with the readers that check their own arithmetic, and shows what it changed' },
+            { label: 'Re-read statements (AI)', onClick: () => void rereadStatements(), title: "Read this account's saved statement PDFs again with the latest reader" },
             ...(account.category === 'ELECTRIC' || account.category === 'SOLAR' ? [{ label: account.hasTrueUp ? 'Turn off true-up' : 'Set true-up (net metering)', onClick: () => void toggleTrueUp() }] : []),
             ...(!loan ? [{ label: 'Add loan details', onClick: () => setShowLoanModal(true) }] : []),
             ...(!plan ? [{ label: 'Add payment plan', onClick: () => setShowPlanModal(true) }] : []),
@@ -2560,6 +2569,51 @@ function PolicyCard({ accountId, propertyId, carrier, account, onAccountChange }
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/** What "Check figures against the PDFs" did to each bill, and what it left and why. */
+function RecheckPanel({ state, onClose, onUsePdf }: { state: { running: boolean; result: AccountRecheckResult | null; error?: string }; onClose: () => void; onUsePdf: () => void }) {
+  const r = state.result;
+  const word = { fixed: 'Put right', same: 'Already right', 'not-read': "Not a layout the free readers know (an AI re-read can read it)", 'owner-edited': 'Left: you edited it by hand', email: 'From an email (no PDF)' } as const;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.6)' }} onClick={onClose}>
+      <div className="card p-5 w-full max-w-lg space-y-3 max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <p className="text-sm font-semibold text-white">Figures checked against the PDFs</p>
+        {state.running && <p className="text-sm text-gray-400">Reading the saved PDFs…</p>}
+        {state.error && <p className="text-sm text-red-400">{state.error}</p>}
+        {r && (
+          <>
+            <ul className="text-sm text-gray-300 space-y-1">
+              <li>{r.fixed ? `${r.fixed} bill${r.fixed === 1 ? '' : 's'} put right from their PDFs` : 'No bill needed changing from its PDF'}</li>
+              {r.feesRemoved > 0.005 && <li>{fmtMoney(r.feesRemoved)} of late fees that were not fees taken off</li>}
+              {r.feesRemoved < -0.005 && <li>{fmtMoney(-r.feesRemoved)} of late fees found between bills</li>}
+              {r.emailSplit > 0 && <li>{r.emailSplit} bill{r.emailSplit === 1 ? '' : 's'} from emails split into what was carried and its own charge</li>}
+              {r.loan && ('none' in r.loan
+                ? <li className="text-gray-400">{r.loan.none}</li>
+                : <li>Loan updated: {r.loan.balance != null ? `${fmtMoney(r.loan.balance)} balance` : 'balance unknown'}{r.loan.rate != null ? ` · ${r.loan.rate}%` : ''}{r.loan.payment != null ? ` · ${fmtMoney(r.loan.payment)} a month` : ''}{r.loan.dueDay ? ` · due on the ${r.loan.dueDay}${r.loan.dueDay % 10 === 1 && r.loan.dueDay !== 11 ? 'st' : r.loan.dueDay % 10 === 2 && r.loan.dueDay !== 12 ? 'nd' : r.loan.dueDay % 10 === 3 && r.loan.dueDay !== 13 ? 'rd' : 'th'}` : ''}</li>)}
+            </ul>
+            <div className="text-xs space-y-1 border-t pt-2" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
+              {r.lines.map(l => (
+                <div key={l.statementId} className="flex justify-between gap-3">
+                  <span className="text-gray-400">{fmtDate(l.statementDate, 'MMM d, yyyy')}</span>
+                  <span className={l.outcome === 'fixed' ? 'text-emerald-400' : l.outcome === 'owner-edited' ? 'text-amber-300' : 'text-gray-500'}>
+                    {word[l.outcome]}{l.outcome === 'fixed' && l.before && l.after ? `: ${fmtMoney(l.before.charge)} → ${fmtMoney(l.after.charge)}${l.after.carried ? ` + ${fmtMoney(l.after.carried)} carried` : ''}` : ''}
+                  </span>
+                </div>
+              ))}
+            </div>
+            {r.ownerEdited > 0 && (
+              <div className="rounded-lg px-3 py-2 text-xs" style={{ background: 'rgba(251,191,36,0.08)' }}>
+                <p className="text-amber-300">{r.ownerEdited} bill{r.ownerEdited === 1 ? ' was' : 's were'} edited by hand, so {r.ownerEdited === 1 ? 'it was' : 'they were'} left as you entered {r.ownerEdited === 1 ? 'it' : 'them'}.</p>
+                <button onClick={onUsePdf} className="text-amber-400 hover:text-amber-300 underline mt-1">Use the PDFs' figures for {r.ownerEdited === 1 ? 'it' : 'them'} too</button>
+              </div>
+            )}
+          </>
+        )}
+        <div className="flex justify-end"><button onClick={onClose} className="btn text-xs">Close</button></div>
+      </div>
     </div>
   );
 }
