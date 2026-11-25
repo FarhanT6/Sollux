@@ -149,7 +149,7 @@ export default function BillPicker({ statements, payments, amount, value, onChan
       ? running?.has(st.id) ? money(running.get(st.id)!) : `${money(own.share)}${own.fee > 0 ? ` (${money(own.charge)} + ${money(own.fee)} fee)` : ''}`
       : money(own.charge);
     const inst = Number(st.paymentPlanAmount ?? 0);
-    return `${billMonthLabel(st)} — ${figure}${inst > 0 ? ` (incl. ${money(inst)} arrangement installment)` : ''} · billed ${fmtDate(st.statementDate, 'MMM d')}${!open && st.dueDate ? ` · due ${fmtDate(st.dueDate, 'MMM d')}` : ''}${paidMap.get(st.id) ? ' · already paid' : ' · open'}`;
+    return `${billMonthLabel(st)} — ${figure}${inst > 0 ? ` (incl. ${money(inst)} arrangement installment)` : ''} · billed ${fmtDate(st.statementDate, 'MMM d')}${!open && st.dueDate ? ` · due ${fmtDate(st.dueDate, 'MMM d')}` : ''}${paidMap.get(st.id) ? ' · paid' : ' · open'}`;
   };
   // "Toward the arrangement": the newest open bill that bills the installment
   // (SDG&E prints it inside the bill — paying that bill pays it), else no

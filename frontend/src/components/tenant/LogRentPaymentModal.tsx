@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import MonthPicker, { monthsAround } from '../payments/MonthPicker';
 import { createRentPayment, addLeaseDeposit, getLease, getBankAccounts, getReimbursableItems, payUtilityInvoice, createReimbursementPayment, type OpenInvoice } from '../../api/client';
 import type { BankAccount, Lease, RentPaymentMethod } from '../../types';
 import { RENT_PAYMENT_METHODS, RENT_PAYMENT_METHOD_LABELS, BANK_LINKED_METHODS, CREDIT_REASONS, type CreditReason } from '../../types';
@@ -57,15 +58,7 @@ function owedByMonth(lease: Lease, months: string[]): Map<string, { rent: number
   }));
 }
 
-function monthOptions(center: string) {
-  const [y, m] = center.split('-').map(Number);
-  const out: string[] = [];
-  for (let i = 2; i >= -12; i--) {
-    const d = new Date(Date.UTC(y, m - 1 + i, 1));
-    out.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`);
-  }
-  return out;
-}
+const monthOptions = (center: string) => monthsAround(center);
 
 export default function LogRentPaymentModal({ target, period, method: initialMethod, onClose, onSaved }: {
   /** method: how it was paid, when it is already known (opened from a wallet in Cash, checks & apps). */
@@ -366,9 +359,8 @@ export default function LogRentPaymentModal({ target, period, method: initialMet
         <div className="grid grid-cols-2 gap-3">
           <div>
             <span className={label}>Rent for (which month it pays)</span>
-            <select className={input} value={forMonth} onChange={e => pickMonth(e.target.value)} disabled={allToArrears}>
-              {months.map(m => <option key={m} value={m}>{monthLabel(m)}{m === thisMonth ? ' (this month)' : ''}</option>)}
-            </select>
+            <MonthPicker months={months} value={forMonth} onChange={pickMonth} disabled={allToArrears} thisMonth={thisMonth}
+              facts={m => { const f = monthFacts(m); return f ? { due: f.rent, owed: f.owed } : null; }} />
             {owedNote && <p className="text-[11px] text-amber-300/90 mt-1">{owedNote}</p>}
           </div>
           <div>
