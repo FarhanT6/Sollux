@@ -131,4 +131,12 @@ router.get('/recent-activity', async (req, res, next) => {
   }
 });
 
+// GET /api/dashboard/needs-you — everything waiting on the owner, in one list (services/needsYou.ts).
+router.get('/needs-you', async (req, res, next) => {
+  try {
+    const { needsYou } = await import('../services/needsYou');
+    res.json(await needsYou(req.dbUserId!));
+  } catch (err) { next(err); }
+});
+
 export default router;

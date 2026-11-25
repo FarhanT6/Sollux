@@ -120,6 +120,9 @@ export const getDashboardSummary = () => {
 };
 export const getRecentActivity = () =>
   api.get('/dashboard/recent-activity').then(r => r.data);
+/** Everything waiting on the owner, in one list (services/needsYou.ts). */
+export interface NeedsYouSection { key: string; title: string; hint: string; count: number; items: { title: string; detail?: string; to: string }[] }
+export const getNeedsYou = () => api.get<{ total: number; sections: NeedsYouSection[] }>('/dashboard/needs-you').then(r => r.data);
 
 // Properties
 export const getProperties = () =>
