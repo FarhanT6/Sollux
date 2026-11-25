@@ -122,6 +122,9 @@ export const getRecentActivity = () =>
   api.get('/dashboard/recent-activity').then(r => r.data);
 /** Everything waiting on the owner, in one list (services/needsYou.ts). */
 export interface NeedsYouSection { key: string; title: string; hint: string; count: number; items: { title: string; detail?: string; to: string }[] }
+/** The setup checklist, read live from the account (services/setupChecklist.ts). */
+export interface SetupItem { key: string; title: string; state: 'done' | 'todo' | 'warn' | 'optional'; detail: string; to?: string; action?: string }
+export const getSetupChecklist = () => api.get<{ done: number; total: number; items: SetupItem[] }>('/dashboard/setup').then(r => r.data);
 export const getNeedsYou = () => api.get<{ total: number; sections: NeedsYouSection[] }>('/dashboard/needs-you').then(r => r.data);
 
 // Properties
