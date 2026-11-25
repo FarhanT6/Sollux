@@ -1,21 +1,16 @@
 import { Router } from 'express';
-import { settleCarriedFees } from '../services/carriedFees';
-import { reconcileRecent } from '../services/billIdentity';
-import { learnProviderWebsite } from '../services/providerWebsite';
 import { findExistingBill } from '../services/billMatch';
 import { google, drive_v3 } from 'googleapis';
-import { Prisma } from '@prisma/client';
 import { db } from '../config/db';
-import { restoreLateFees } from '../services/lateFees';
 import { fileCardStatement } from '../services/cardIntake';
 import { recordNotice } from '../services/noticeTracker';
 import { fileServiceInvoice, invoiceAmount } from '../services/expenseIntake';
-import { compareWithOwner, keepOwnerFigures, ownerEntered, sameBillByDue, thinnerThan } from '../services/statementConflict';
+import { compareWithOwner, ownerEntered, sameBillByDue, thinnerThan } from '../services/statementConflict';
+import { saveStatement, buildRawData } from '../services/saveStatement';
 import { attachDbUser } from '../middleware/requireAuth';
 import { getSignedDocumentUrl, downloadDocument, uploadDocument, buildStatementKey } from '../services/s3Service';
-import { markEscrowedStatements } from '../services/escrow';
-import { applyPolicyDocument, settleInFull, periodChargeOf } from '../services/pdfImportService';
-import { applyPastDueNotice, parseBill, recordConfirmedPayment, syncPaymentPlanFromBill, syncInsurancePolicyFromBill, syncLoanComponentsFromBill } from '../services/pdfImportService';
+import { applyPolicyDocument, settleInFull } from '../services/pdfImportService';
+import { applyPastDueNotice, parseBill, recordConfirmedPayment } from '../services/pdfImportService';
 import { findOrCreateUtilityAccount } from '../services/utilityAccountResolver';
 
 const router = Router();
@@ -364,121 +359,11 @@ router.post('/stream', attachDbUser, async (req, res) => {
             const s3Key = buildStatementKey(userId, acct.propertyId, acct.id, statementDate, sanitizeFilename(file.name));
             const pdfS3Key = await uploadDocument(s3Key, buffer);
 
-            // Compute the breakdown: amountDue = current period charges only;
-            // balance/totalDue = full amount owed including any past-due carry-forward.
-            const totalDue = (ex.currentCharges != null || ex.previousBalance != null)
-              ? (ex.currentCharges ?? 0) + (ex.previousBalance ?? 0)
-              : ex.amountDue;
-            // The same rule as intake and Add (#278): an installment billed inside the charge stays in it.
-            const amountDueCurrent = periodChargeOf(ex);
-            const rawData: Record<string, unknown> = {
-              source: 'drive_import',
-              // Which reader produced these figures, as every other path records it.
-              extractedBy: parsed.extractedBy ?? null,
-              providerName: ex.providerName,
-              serviceAddress: ex.serviceAddress,
-              accountNumber: ex.accountNumber,
-              previousBalance: ex.previousBalance,
-              paymentsReceived: ex.paymentsReceived,
-              currentCharges: ex.currentCharges,
-              totalDue,
-              pastDue: ex.previousBalance != null && ex.previousBalance > 0 ? ex.previousBalance : undefined,
-              isPaid: ex.isPaid,
-              utilityType: ex.utilityType,
-              chargeBreakdown: ex.chargeBreakdown,
-              alerts: ex.alerts,
-              statedTotalDue: ex.statedTotalDue ?? null,
-              totalAccountBalance: ex.totalAccountBalance ?? null,
-              paymentPlan: ex.paymentPlan ?? null,
-              paymentPlanAmount: ex.paymentPlanAmount ?? null,
-              insurance: ex.insurance ?? null,
-              netMetering: ex.netMetering ?? null,
-              transactions: ex.transactions ?? null,
-              ledgerPayments: ex.ledgerPayments ?? null,
-              loanStatement: ex.loanStatement ?? null,
-            };
-            const nem = ex.netMetering ?? null;
-            const trueUpFields = nem
-              ? { trueUpDeferred: nem.deferred, trueUpBalance: nem.ytdBalance, trueUpDate: nem.trueUpDate ? new Date(nem.trueUpDate) : null }
-              : {};
-
-            // Positive is arrears, negative is a credit carried in; both change
-            // what this bill actually asks for. Only an exact zero says nothing.
-            const pastDueAmt = ex.previousBalance != null && ex.previousBalance !== 0 ? ex.previousBalance : null;
-            // paymentsReceived settles the PREVIOUS cycle and is recorded as
-            // a Payment against that statement — writing it onto THIS bill's
-            // amountPaid marked every freshly imported bill "Paid" while its
-            // own charge sat unpaid. Seeded only when the bill proves settled.
-            const amountPaidValue = ex.isPaid ? (totalDue ?? amountDueCurrent ?? null) : null;
-            const legacyDerivedPaid = ex.paymentsReceived != null ? Number(ex.paymentsReceived) : null;
-
-            if (existing && ownerCheck?.kind === 'same') {
-              await keepOwnerFigures(existing, ex, rawData, pdfS3Key);
-              await recordConfirmedPayment(acct.id, existing.id, ex);
-              await syncPaymentPlanFromBill(acct.id, ex);
-              await syncInsurancePolicyFromBill(acct.id, ex);
-              await learnProviderWebsite(acct.id, ex);
-              await syncLoanComponentsFromBill(acct.id, ex);
-            } else if (existing) {
-              await db.statement.update({ where: { id: existing.id }, data: {
-                statementDate,
-                amountDue: amountDueCurrent ?? existing.amountDue,
-                balance: ex.totalAccountBalance ?? totalDue ?? amountDueCurrent ?? existing.balance,
-                amountPaid: amountPaidValue ?? (legacyDerivedPaid != null && Number(existing.amountPaid) === legacyDerivedPaid ? null : existing.amountPaid),
-                dueDate: ex.dueDate ? new Date(ex.dueDate) : existing.dueDate,
-                chargesExcludingFees: ex.currentCharges ?? existing.chargesExcludingFees,
-                penaltiesFees: ex.lateFee ?? existing.penaltiesFees,
-                // A bill that prints its total says what was carried, nothing included: a stale carried
-                // figure from an earlier reading goes (the rule intake uses, #278).
-                pastDueCarried: pastDueAmt ?? (ex.statedTotalDue != null ? null : existing.pastDueCarried),
-                // These were written on create but omitted on update, so a
-                // re-import silently dropped the billing period and usage it
-                // had just extracted. Every field the create branch sets must
-                // be set here too, or the two paths disagree.
-                billingPeriodStart: ex.billingPeriodStart ? new Date(ex.billingPeriodStart) : existing.billingPeriodStart,
-                billingPeriodEnd:   ex.billingPeriodEnd   ? new Date(ex.billingPeriodEnd)   : existing.billingPeriodEnd,
-                usageValue: ex.usageValue ?? existing.usageValue,
-                usageUnit:  ex.usageUnit  ?? existing.usageUnit,
-                ratePlan:   ex.ratePlan   ?? existing.ratePlan,
-                ...trueUpFields,
-                rawDataJson: rawData as Prisma.InputJsonValue,
-                ...(pdfS3Key ? { pdfS3Key } : {}),
-              }});
-              await restoreLateFees(existing.id, ex.lateFee ?? undefined);
-              await recordConfirmedPayment(acct.id, existing.id, ex);
-              await syncPaymentPlanFromBill(acct.id, ex);
-              await syncInsurancePolicyFromBill(acct.id, ex);
-              await learnProviderWebsite(acct.id, ex);
-              await syncLoanComponentsFromBill(acct.id, ex);
-              await markEscrowedStatements(acct.id);
-              await reconcileRecent(acct.id).catch(() => {}); await settleCarriedFees(acct.id).catch(() => {});
-              if (nem) await db.utilityAccount.update({ where: { id: acct.id }, data: { hasTrueUp: true, ...(nem.trueUpDate ? { trueUpDate: new Date(nem.trueUpDate) } : {}) } });
-            } else {
-              const created = await db.statement.create({ data: {
-                utilityAccountId: acct.id, statementDate,
-                dueDate: ex.dueDate ? new Date(ex.dueDate) : null,
-                billingPeriodStart: ex.billingPeriodStart ? new Date(ex.billingPeriodStart) : null,
-                billingPeriodEnd:   ex.billingPeriodEnd   ? new Date(ex.billingPeriodEnd)   : null,
-                amountDue: amountDueCurrent ?? null,
-                balance: ex.totalAccountBalance ?? totalDue ?? amountDueCurrent ?? null,
-                amountPaid: amountPaidValue,
-                chargesExcludingFees: ex.currentCharges ?? null,
-                penaltiesFees: ex.lateFee ?? null,
-                pastDueCarried: pastDueAmt,
-                usageValue: ex.usageValue ?? null, usageUnit: ex.usageUnit ?? null,
-                ratePlan: ex.ratePlan ?? null, pdfS3Key, sourceType: 'MANUAL',
-                ...trueUpFields,
-                rawDataJson: rawData as Prisma.InputJsonValue,
-              }});
-              await recordConfirmedPayment(acct.id, created.id, ex);
-              await syncPaymentPlanFromBill(acct.id, ex);
-              await syncInsurancePolicyFromBill(acct.id, ex);
-              await learnProviderWebsite(acct.id, ex);
-              await syncLoanComponentsFromBill(acct.id, ex);
-              await markEscrowedStatements(acct.id);
-              await reconcileRecent(acct.id).catch(() => {}); await settleCarriedFees(acct.id).catch(() => {});
-              if (nem) await db.utilityAccount.update({ where: { id: acct.id }, data: { hasTrueUp: true, ...(nem.trueUpDate ? { trueUpDate: new Date(nem.trueUpDate) } : {}) } });
-            }
+            // One way to save a bill (services/saveStatement.ts): the same figures and follow-ups as Add and email.
+            await saveStatement({
+              accountId: acct.id, ex, statementDate, existing, keepOwner: ownerCheck?.kind === 'same',
+              rawData: buildRawData(ex, 'drive_import', parsed.extractedBy), pdfS3Key, pdf: 'replace', moveDate: true,
+            });
             autoImported++;
             send({ type: 'auto_imported', filename: file.name });
             return;

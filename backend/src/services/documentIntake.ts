@@ -6,21 +6,16 @@
  * in the Import Bills flow. Moved out of the Drive worker so the inbox agent
  * files email the same way, with the same duplicate rules.
  */
-import { settleCarriedFees } from './carriedFees';
 import { splitEmailTotal } from './emailTotals';
-import { reconcileRecent } from './billIdentity';
 import { withAiContext } from '../ai/meter';
-import { Prisma } from '@prisma/client';
-import { learnProviderWebsite } from './providerWebsite';
 import { db } from '../config/db';
-import { restoreLateFees } from './lateFees';
 import { fileCardStatement } from './cardIntake';
 import { recordNotice } from './noticeTracker';
 import { fileServiceInvoice, invoiceAmount } from './expenseIntake';
-import { compareWithOwner, keepOwnerFigures, ownerEntered, sameBillByDue, thinnerThan } from './statementConflict';
-import { markEscrowedStatements } from './escrow';
-import { settleInFull, applyPolicyDocument, recordConfirmedPayment, syncPaymentPlanFromBill, syncInsurancePolicyFromBill, syncLoanComponentsFromBill, applyPastDueNotice, parseBill, periodChargeOf, syncTrueUpFromBill } from './pdfImportService';
+import { compareWithOwner, ownerEntered, sameBillByDue, thinnerThan } from './statementConflict';
+import { settleInFull, applyPolicyDocument, recordConfirmedPayment, applyPastDueNotice, parseBill } from './pdfImportService';
 import { findExistingBill } from './billMatch';
+import { saveStatement, buildRawData } from './saveStatement';
 import { findOrCreateUtilityAccount } from './utilityAccountResolver';
 import { uploadDocument, buildStatementKey } from './s3Service';
 
@@ -46,43 +41,7 @@ export type IntakeResult =
   | { outcome: 'skipped'; reason: string }
   | { outcome: 'expense'; expenseId: string; duplicate: boolean };
 
-export function buildRawData(ex: Awaited<ReturnType<typeof parseBill>>['extracted'], source = 'drive_import', extractedBy?: 'ai' | 'text') {
-  const totalDue = (ex.currentCharges != null || ex.previousBalance != null)
-    ? (ex.currentCharges ?? 0) + (ex.previousBalance ?? 0)
-    : ex.amountDue;
-  return {
-    source,
-    // Which reader produced these figures; without it the auditor cannot
-    // tell these rows from legacy imports (#241).
-    extractedBy: extractedBy ?? undefined,
-    providerName: ex.providerName,
-    serviceAddress: ex.serviceAddress,
-    accountNumber: ex.accountNumber,
-    previousBalance: ex.previousBalance,
-    paymentsReceived: ex.paymentsReceived,
-    currentCharges: ex.currentCharges,
-    totalDue,
-    pastDue: ex.previousBalance != null && ex.previousBalance > 0 ? ex.previousBalance : undefined,
-    isPaid: ex.isPaid,
-    utilityType: ex.utilityType,
-    chargeBreakdown: ex.chargeBreakdown,
-    alerts: ex.alerts,
-    ratePlan: ex.ratePlan,
-    statedTotalDue: ex.statedTotalDue ?? null,
-    totalAccountBalance: ex.totalAccountBalance ?? null,
-    paymentPlan: ex.paymentPlan ?? null,
-    paymentPlanAmount: ex.paymentPlanAmount ?? null,
-    insurance: ex.insurance ?? null,
-    transactions: ex.transactions ?? null,
-    // A running ledger's payments, each on its date, and a loan statement's figures: what the
-    // late-fee check and the loan read from the stored bill (dropped here, the HOA ledger's
-    // reprinted eCheck read as a late fee again after every re-read).
-    ledgerPayments: ex.ledgerPayments ?? null,
-    loanStatement: ex.loanStatement ?? null,
-    // Figures read from an email, not a statement; the real statement replaces them when it comes.
-    emailNotice: ex.fromEmailBody ? true : undefined,
-  };
-}
+export { buildRawData } from './saveStatement';
 
 /**
  * @param batchId groups staged review copies under pending-review/<user>/<batch>/
@@ -260,104 +219,12 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
     const key = buildStatementKey(userId, acct.propertyId, acct.id, statementDate, sanitizeFilename(filename));
     const pdfS3Key = opts.pdfKey ?? (docBuffer ? await uploadDocument(key, docBuffer) : null);
     const rawData = { ...buildRawData(ex, source, parsed.extractedBy), ...(opts.pageSaved ? { pageSaved: true as const } : {}) };
-    // What this bill carried in: positive is arrears, negative a credit. This
-    // path never saved it, so a $7,786 SDG&E bill read as its $836 charge
-    // alone (#241). Same rule as routes/drive.ts.
-    const pastDueAmt = ex.previousBalance != null && ex.previousBalance !== 0 ? ex.previousBalance : null;
-    if (existing && ownerCheck?.kind === 'same') {
-      await keepOwnerFigures(existing, ex, rawData, pdfS3Key);
-      await recordConfirmedPayment(acct.id, existing.id, ex);
-      await syncPaymentPlanFromBill(acct.id, ex);
-      await syncInsurancePolicyFromBill(acct.id, ex);
-      await learnProviderWebsite(acct.id, ex);
-      await syncLoanComponentsFromBill(acct.id, ex);
-      return filed('on-file');
-    }
-    // amountDue = this period's charges (with an installment billed inside
-    // them); balance = full amount owed. Same rule as routes/import.ts.
-    const amountDueCurrent = periodChargeOf(ex);
-    const totalBalance = rawData.totalDue ?? amountDueCurrent;
-    // What the manual import keeps and this path used to drop: the part
-    // deferred to a net-metering true-up, an arrangement's installment, the
-    // penalty date and aging. Without the deferral an SDG&E bill read as
-    // owing its whole charge (or as a credit when the total said less).
-    const nem = ex.netMetering ?? null;
-    const extra = {
-      ...(nem ? { trueUpDeferred: nem.deferred, trueUpBalance: nem.ytdBalance, trueUpDate: nem.trueUpDate ? new Date(nem.trueUpDate) : null } : {}),
-      ...(ex.paymentPlanAmount != null ? { paymentPlanAmount: ex.paymentPlanAmount } : {}),
-      ...(ex.penaltyDate ? { penaltyDate: new Date(ex.penaltyDate) } : {}),
-      ...(ex.amountAfterDueDate != null ? { amountAfterDueDate: ex.amountAfterDueDate } : {}),
-      ...(ex.agingBuckets ? { agingBuckets: ex.agingBuckets as Prisma.InputJsonValue } : {}),
-    };
-    // A bill that states its total says what was carried in, nothing
-    // included: a stale carried figure from an earlier reading must go.
-    const carriedOnUpdate = pastDueAmt ?? (ex.statedTotalDue != null ? null : undefined);
-
-    if (existing) {
-      await db.statement.update({
-        where: { id: existing.id },
-        data: {
-          dueDate: ex.dueDate ? new Date(ex.dueDate) : existing.dueDate,
-          billingPeriodStart: ex.billingPeriodStart ? new Date(ex.billingPeriodStart) : existing.billingPeriodStart,
-          billingPeriodEnd: ex.billingPeriodEnd ? new Date(ex.billingPeriodEnd) : existing.billingPeriodEnd,
-          amountDue: amountDueCurrent ?? existing.amountDue,
-          balance: ex.totalAccountBalance ?? totalBalance ?? existing.balance,
-          pastDueCarried: carriedOnUpdate === undefined ? existing.pastDueCarried : carriedOnUpdate,
-          chargesExcludingFees: ex.currentCharges ?? existing.chargesExcludingFees,
-          penaltiesFees: ex.lateFee ?? existing.penaltiesFees,
-          usageValue: ex.usageValue ?? existing.usageValue,
-          usageUnit: ex.usageUnit ?? existing.usageUnit,
-          ratePlan: ex.ratePlan ?? existing.ratePlan,
-          ...extra,
-          rawDataJson: rawData as Prisma.InputJsonValue,
-          // A full statement replaces the printed summary email it updates, and the portal page saved in its place.
-          ...(pdfS3Key && (!existing.pdfS3Key || !existing.billingPeriodStart || (!opts.pageSaved && (existing.rawDataJson as Record<string, unknown> | null)?.pageSaved)) ? { pdfS3Key } : {}),
-        },
-      });
-      // Late fees logged with payments are not on the PDF; put them back.
-      await restoreLateFees(existing.id, ex.lateFee ?? undefined);
-      await recordConfirmedPayment(acct.id, existing.id, ex);
-      await syncPaymentPlanFromBill(acct.id, ex);
-      await syncInsurancePolicyFromBill(acct.id, ex);
-      await learnProviderWebsite(acct.id, ex);
-      await syncLoanComponentsFromBill(acct.id, ex);
-      await markEscrowedStatements(acct.id);
-      await reconcileRecent(acct.id).catch(() => {}); await settleCarriedFees(acct.id).catch(() => {});
-      await syncTrueUpFromBill(acct.id, ex);
-    } else {
-      const created = await db.statement.create({
-        data: {
-          utilityAccountId: acct.id,
-          statementDate,
-          dueDate: ex.dueDate ? new Date(ex.dueDate) : null,
-          billingPeriodStart: ex.billingPeriodStart ? new Date(ex.billingPeriodStart) : null,
-          billingPeriodEnd: ex.billingPeriodEnd ? new Date(ex.billingPeriodEnd) : null,
-          amountDue: amountDueCurrent ?? null,
-          balance: ex.totalAccountBalance ?? totalBalance ?? null,
-          pastDueCarried: pastDueAmt,
-          chargesExcludingFees: ex.currentCharges ?? null,
-          penaltiesFees: ex.lateFee ?? null,
-          amountPaid: ex.isPaid ? (totalBalance ?? amountDueCurrent ?? null) : null,
-          usageValue: ex.usageValue ?? null,
-          usageUnit: ex.usageUnit ?? null,
-          ratePlan: ex.ratePlan ?? null,
-          pdfS3Key,
-          sourceType: 'MANUAL',
-          ...extra,
-          rawDataJson: rawData as Prisma.InputJsonValue,
-        },
-      });
-    await recordConfirmedPayment(acct.id, created.id, ex);
-    await syncPaymentPlanFromBill(acct.id, ex);
-    await syncInsurancePolicyFromBill(acct.id, ex);
-    await learnProviderWebsite(acct.id, ex);
-    await syncLoanComponentsFromBill(acct.id, ex);
-    await markEscrowedStatements(acct.id);
-    await reconcileRecent(acct.id).catch(() => {}); await settleCarriedFees(acct.id).catch(() => {});
-    await syncTrueUpFromBill(acct.id, ex);
-  }
-
-    return filed(existing ? 'updated' : 'new');
+    // One way to save a bill (services/saveStatement.ts): an email or a portal's file replaces only a stand-in.
+    const saved = await saveStatement({
+      accountId: acct.id, ex, statementDate, existing, rawData, pdfS3Key,
+      keepOwner: ownerCheck?.kind === 'same', pdf: 'upgrade', pageSaved: !!opts.pageSaved,
+    });
+    return filed(saved.outcome === 'kept-owner' ? 'on-file' : saved.outcome);
   } else {
     // Ambiguous — stage the PDF and hand it to the normal Import Bills review flow.
     const pendingKey = `pending-review/${userId}/${batchId}/${sanitizeFilename(filename)}`;
