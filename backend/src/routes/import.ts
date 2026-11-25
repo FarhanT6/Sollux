@@ -2,27 +2,22 @@
  * POST /api/import/analyze  — Parse PDFs and return extracted data for review
  * POST /api/import/confirm  — Save confirmed statements (creates properties/accounts as needed)
  */
-import { settleCarriedFees } from '../services/carriedFees';
-import { reconcileRecent } from '../services/billIdentity';
 import { Router, Request, Response } from 'express';
 import { propertyLimitReached } from '../services/planLimits';
-import { learnProviderWebsite } from '../services/providerWebsite';
 import { findExistingBill } from '../services/billMatch';
-import { Prisma } from '@prisma/client';
-import { markEscrowedStatements } from '../services/escrow';
-import { applyPolicyDocument, settleInFull, periodChargeOf, syncTrueUpFromBill } from '../services/pdfImportService';
-import { parseBill, applyPastDueNotice, recordConfirmedPayment, syncPaymentPlanFromBill, syncInsurancePolicyFromBill, syncLoanComponentsFromBill, normalizeAcct, ExtractedBillData, MatchResult } from '../services/pdfImportService';
+import { applyPolicyDocument, settleInFull } from '../services/pdfImportService';
+import { parseBill, applyPastDueNotice, recordConfirmedPayment, normalizeAcct, ExtractedBillData, MatchResult } from '../services/pdfImportService';
 import { encrypt, decrypt } from '../crypto/encrypt';
 import { uploadDocument, buildStatementKey } from '../services/s3Service';
 import { attachDbUser } from '../middleware/requireAuth';
 import { db } from '../config/db';
-import { restoreLateFees } from '../services/lateFees';
 import { fileCardStatement } from '../services/cardIntake';
 import { recordNotice } from '../services/noticeTracker';
 import { fileServiceInvoice } from '../services/expenseIntake';
 import { isEmailPrintout } from '../services/emailPrintouts';
 import { classifyUpload } from '../services/uploadKind';
-import { compareWithOwner, keepOwnerFigures, ownerEntered, sameBillByDue, thinnerThan } from '../services/statementConflict';
+import { compareWithOwner, ownerEntered, sameBillByDue, thinnerThan } from '../services/statementConflict';
+import { saveStatement, buildRawData } from '../services/saveStatement';
 
 const router = Router();
 
@@ -584,32 +579,6 @@ router.post('/confirm', async (req: Request, res: Response) => {
             where: { utilityAccountId, isScheduled: true, payments: { none: {} }, amountDue: { gt: ex.statedTotalDue * 3 } },
           });
         }
-        const periodCharge = periodChargeOf(ex);
-        const totalDue = (ex.currentCharges != null || ex.previousBalance != null)
-          ? (ex.currentCharges ?? 0) + (ex.previousBalance ?? 0)
-          : ex.amountDue ?? null;
-        // paymentsReceived settles the PREVIOUS cycle and is recorded as a
-        // Payment against that statement — writing it onto THIS bill's
-        // amountPaid marked every freshly imported bill "Paid" while its own
-        // charge sat unpaid. Seeded only when the bill itself proves settled.
-        // A bill in credit is settled by the credit, not by money paid.
-        const paidAmount = ex.isPaid && totalDue != null ? Math.max(totalDue, 0) : null;
-        // Re-imports also clear the legacy value this bug wrote: an existing
-        // amountPaid equal to the bill's own "payments received" figure is
-        // bill-derived, not something the owner recorded.
-        const legacyDerivedPaid = ex.paymentsReceived != null ? Number(ex.paymentsReceived) : null;
-        // Kept as its own column: an arrears installment inside a current bill
-        // is repayment, not this month's service (see operatingCost.ts).
-        const planAmount = ex.paymentPlanAmount ?? null;
-        const aging = ex.agingBuckets ?? null;
-        const penaltyOn = ex.penaltyDate ? new Date(ex.penaltyDate) : null;
-        // Net metering: the part of the charge deferred to the true-up, the
-        // deferred balance after this bill, and the true-up date.
-        const nem = ex.netMetering ?? null;
-        const trueUpFields = nem
-          ? { trueUpDeferred: nem.deferred, trueUpBalance: nem.ytdBalance, trueUpDate: nem.trueUpDate ? new Date(nem.trueUpDate) : null }
-          : {};
-
         // A "your bill is ready" email and the PDF statement are one bill;
         // a reading thinner than what is on file only confirms it.
         if (!existing) existing = await sameBillByDue(utilityAccountId, ex);
@@ -619,113 +588,17 @@ router.post('/confirm', async (req: Request, res: Response) => {
           continue;
         }
 
-        // A period the owner entered by hand keeps their figures when the
-        // bill agrees, or when they chose "Keep mine" on the card; the PDF,
+        // One way to save a bill (services/saveStatement.ts). A period the owner entered by hand keeps
+        // their figures when the bill agrees, or when they chose "Keep mine" on the card; the PDF,
         // charge list and payments it lists are added either way.
-        if (existing && (item.keepMine || (ownerEntered(existing) && (await compareWithOwner(utilityAccountId, ex, existing)).kind === 'same'))) {
-          await keepOwnerFigures(existing, ex, buildRawData(ex, item.extractedBy), pdfS3Key ?? null);
-          await recordConfirmedPayment(utilityAccountId, existing.id, ex);
-          await syncPaymentPlanFromBill(utilityAccountId, ex);
-          await syncInsurancePolicyFromBill(utilityAccountId, ex);
-          await learnProviderWebsite(utilityAccountId, ex);
-          await syncLoanComponentsFromBill(utilityAccountId, ex);
-          skipped++;
-          continue;
-        }
-
-        // A paid mark the bill itself put there — the old reading's amount,
-        // paid in full, with no owner override — goes when the re-read
-        // amount differs and the bill no longer reads as paid. Westlake's
-        // statements were read as $5.00 "PAID IN FULL" off the fine print;
-        // what was really paid is what the payments linked to them say.
-        let stalePaid = false;
-        if (existing && !ex.isPaid && existing.paidOverride == null && existing.amountPaid != null && existing.amountDue != null
-            && periodCharge != null && Math.abs(Number(existing.amountPaid) - Number(existing.amountDue)) < 0.01
-            && Math.abs(periodCharge - Number(existing.amountDue)) > 0.01) {
-          stalePaid = true;
-        }
-        const linkedPaid = stalePaid
-          ? (await db.payment.aggregate({ where: { statementId: existing!.id, status: 'PAID' }, _sum: { amount: true } }))._sum.amount
-          : null;
-
-        if (existing) {
-          // Overwrite with better data from the new extraction
-          await db.statement.update({
-            where: { id: existing.id },
-            data: {
-              statementDate,
-              dueDate:            ex.dueDate ? new Date(ex.dueDate) : existing.dueDate,
-              billingPeriodStart,
-              billingPeriodEnd,
-              amountDue:      periodCharge      ?? existing.amountDue,
-              balance:        ex.totalAccountBalance ?? totalDue ?? existing.balance,
-              amountPaid:     paidAmount ?? (stalePaid ? (linkedPaid != null && Number(linkedPaid) > 0 ? linkedPaid : null)
-                : legacyDerivedPaid != null && Number(existing.amountPaid) === legacyDerivedPaid ? null : existing.amountPaid),
-              chargesExcludingFees: ex.currentCharges ?? existing.chargesExcludingFees,
-              penaltiesFees:  ex.lateFee         ?? existing.penaltiesFees,
-              paymentPlanAmount: planAmount       ?? existing.paymentPlanAmount,
-              penaltyDate:       penaltyOn         ?? existing.penaltyDate,
-              amountAfterDueDate: ex.amountAfterDueDate ?? existing.amountAfterDueDate,
-              ...(aging ? { agingBuckets: aging as any } : {}),
-              pastDueCarried: ex.previousBalance ?? existing.pastDueCarried,
-              // A real bill now stands where a scheduled installment was.
-              isScheduled: false,
-              usageValue:  ex.usageValue ?? existing.usageValue,
-              usageUnit:   ex.usageUnit  ?? existing.usageUnit,
-              ratePlan:    ex.ratePlan   ?? existing.ratePlan,
-              ...trueUpFields,
-              rawDataJson: buildRawData(ex, item.extractedBy) as Prisma.InputJsonValue,
-              ...(pdfS3Key ? { pdfS3Key } : {}),
-            },
-          });
-          // Late fees logged with payments are not on the PDF; put them back.
-          await restoreLateFees(existing.id, ex.lateFee ?? undefined);
-          await recordConfirmedPayment(utilityAccountId, existing.id, ex);
-          await syncPaymentPlanFromBill(utilityAccountId, ex);
-          await syncInsurancePolicyFromBill(utilityAccountId, ex);
-          await learnProviderWebsite(utilityAccountId, ex);
-          await syncLoanComponentsFromBill(utilityAccountId, ex);
-          await syncTrueUpFromBill(utilityAccountId, ex);
-          await markEscrowedStatements(utilityAccountId);
-          await reconcileRecent(utilityAccountId).catch(() => {}); await settleCarriedFees(utilityAccountId).catch(() => {});
-          skipped++;
-        } else {
-          const created = await db.statement.create({
-            data: {
-              utilityAccountId,
-              statementDate,
-              dueDate:            ex.dueDate ? new Date(ex.dueDate) : null,
-              billingPeriodStart,
-              billingPeriodEnd,
-              amountDue:      periodCharge      ?? null,
-              balance:        ex.totalAccountBalance ?? totalDue ?? null,
-              amountPaid:     paidAmount        ?? null,
-              chargesExcludingFees: ex.currentCharges ?? null,
-              penaltiesFees:  ex.lateFee         ?? null,
-              paymentPlanAmount: planAmount       ?? null,
-              penaltyDate:       penaltyOn         ?? null,
-              amountAfterDueDate: ex.amountAfterDueDate ?? null,
-              ...(aging ? { agingBuckets: aging as any } : {}),
-              pastDueCarried: ex.previousBalance ?? null,
-              usageValue:  ex.usageValue ?? null,
-              usageUnit:   ex.usageUnit  ?? null,
-              ratePlan:    ex.ratePlan   ?? null,
-              ...trueUpFields,
-              pdfS3Key:    pdfS3Key      ?? null,
-              sourceType:  'MANUAL',
-              rawDataJson: buildRawData(ex, item.extractedBy) as Prisma.InputJsonValue,
-            },
-          });
-          await recordConfirmedPayment(utilityAccountId, created.id, ex);
-          await syncPaymentPlanFromBill(utilityAccountId, ex);
-          await syncInsurancePolicyFromBill(utilityAccountId, ex);
-          await learnProviderWebsite(utilityAccountId, ex);
-          await syncLoanComponentsFromBill(utilityAccountId, ex);
-          await syncTrueUpFromBill(utilityAccountId, ex);
-          await markEscrowedStatements(utilityAccountId);
-          await reconcileRecent(utilityAccountId).catch(() => {}); await settleCarriedFees(utilityAccountId).catch(() => {});
-          imported++;
-        }
+        const keepOwner = !!existing && (!!item.keepMine || (ownerEntered(existing) && (await compareWithOwner(utilityAccountId, ex, existing)).kind === 'same'));
+        const saved = await saveStatement({
+          accountId: utilityAccountId, ex, statementDate, existing, keepOwner,
+          rawData: buildRawData(ex, 'pdf_import', item.extractedBy), pdfS3Key: pdfS3Key ?? null,
+          period: { start: billingPeriodStart, end: billingPeriodEnd }, pdf: 'replace', moveDate: true,
+        });
+        if (saved.outcome === 'new') imported++; else skipped++;
+        if (saved.outcome === 'kept-owner') continue;
 
         // If this statement shows paymentsReceived > 0, the prior statement was paid.
         // Find the most recent prior statement with no amountPaid and mark it paid.
@@ -776,42 +649,6 @@ function parseDateFromFilename(filename: string): Date | null {
   return null;
 }
 
-function buildRawData(ex: ExtractedBillData, extractedBy?: 'ai' | 'text'): Record<string, unknown> {
-  return {
-    source:           'pdf_import',
-    // Which extractor produced this. AI extraction silently falls back to the
-    // text layer for PDFs the API cannot open, and the two are not equally
-    // trustworthy, so the row records which one it came from.
-    extractedBy:      extractedBy ?? null,
-    providerName:     ex.providerName,
-    serviceAddress:   ex.serviceAddress,
-    accountNumber:    ex.accountNumber,
-    previousBalance:  ex.previousBalance,
-    paymentsReceived: ex.paymentsReceived,
-    currentCharges:   ex.currentCharges,
-    lateFee:          ex.lateFee,
-    isPaid:           ex.isPaid,
-    utilityType:      ex.utilityType,
-    chargeBreakdown:  ex.chargeBreakdown,
-    alerts:           ex.alerts,
-    ratePlan:         ex.ratePlan,
-    // What the bill itself states about the account as a whole — its total
-    // balance and any payment arrangement — so the statement row can show
-    // them without re-reading the PDF.
-    statedTotalDue:      ex.statedTotalDue ?? null,
-    totalAccountBalance: ex.totalAccountBalance ?? null,
-    paymentPlan:         ex.paymentPlan ?? null,
-    paymentPlanAmount:   ex.paymentPlanAmount ?? null,
-    insurance:           ex.insurance ?? null,
-    netMetering:         ex.netMetering ?? null,
-    emailNotice:         ex.fromEmailBody ? true : undefined,
-    // The statement's transaction table as printed: payments, fees and
-    // reversals since the last statement.
-    transactions:        ex.transactions ?? null,
-    ledgerPayments:      ex.ledgerPayments ?? null,
-    loanStatement:       ex.loanStatement ?? null,
-  };
-}
 
 function sanitizeFilename(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120);
