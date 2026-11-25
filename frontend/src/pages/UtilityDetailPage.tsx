@@ -1139,6 +1139,8 @@ export default function UtilityDetailPage() {
       return Math.max(0, Number((base - beyondArrears).toFixed(2)));
     })();
 
+  // Every hook above the early returns: one below them crashed the page once the account loaded.
+  const [recheck, setRecheck] = useState<{ running: boolean; result: AccountRecheckResult | null; error?: string } | null>(null);
   if (loading) return <div className="p-6 space-y-4"><Skeleton className="h-24" /><Skeleton className="h-64" /></div>;
   if (!account) return <div className="p-6 text-gray-400">Account not found</div>;
 
@@ -1347,8 +1349,7 @@ export default function UtilityDetailPage() {
   const openWebsite = () => void openUrl(website?.url ?? `https://www.google.com/search?q=${encodeURIComponent(`${account?.providerName ?? ''} pay bill online login`)}`);
   // Saved PDFs read again with the current reader: a reading fix reaches
   // bills already on file. Runs in the background.
-  // Check figures against the PDFs: free, now, with a report of each bill.
-  const [recheck, setRecheck] = useState<{ running: boolean; result: AccountRecheckResult | null; error?: string } | null>(null);
+  // Check figures against the PDFs: free, now, with a report of each bill (its state is declared above the early returns).
   const runRecheck = async (includeOwnerEdited = false) => {
     setRecheck({ running: true, result: null });
     try { const result = await recheckAccount(account!.id, includeOwnerEdited); setRecheck({ running: false, result }); void reloadAccount(); }

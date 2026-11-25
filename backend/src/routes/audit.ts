@@ -107,8 +107,17 @@ router.get('/report', async (req, res, next) => {
       where: { isActive: true, syncEnabled: true, lastSyncStatus: 'FAILED', ...mineAcct },
       select: { providerName: true, providerSlug: true, lastSyncError: true, lastSyncedAt: true },
     });
+    // Not every failed sync is a defect (#279): a login the site rejected or none on file is the
+    // owner's to fix (a data chore), a site that turns automated sign-in away is a site's choice,
+    // and a run the owner cancelled is no failure at all. Only the rest are counted as failing.
+    const needsOwner = /rejected the username or password|invalid user ?id|wrong password|incorrect password|bad_login|no (?:portal )?login|add (?:a )?(?:portal )?login|needs? (?:a )?(?:login|website|password)|no website|does not list this account|credentials/i;
+    const blockedBySite = /captcha|bot[- ]?(?:check|protection)|turned away|access denied|unable to process your request|verify you are human/i;
+    const ownerRows = failedSyncs.filter(a => a.lastSyncError && needsOwner.test(a.lastSyncError));
+    const blockedRows = failedSyncs.filter(a => !ownerRows.includes(a) && a.lastSyncError && blockedBySite.test(a.lastSyncError));
+    const defectRows = failedSyncs.filter(a => !ownerRows.includes(a) && !blockedRows.includes(a) && !/^Cancelled by you/.test(a.lastSyncError ?? ''));
+    const countBy = (rows: typeof failedSyncs) => Object.fromEntries([...rows.reduce((m, a) => m.set(a.providerSlug, (m.get(a.providerSlug) ?? 0) + 1), new Map<string, number>())]);
     const syncByProvider = new Map<string, { failing: number; errors: Set<string> }>();
-    for (const a of failedSyncs) {
+    for (const a of defectRows) {
       const row = syncByProvider.get(a.providerSlug) ?? { failing: 0, errors: new Set<string>() };
       row.failing++;
       if (a.lastSyncError) row.errors.add(a.lastSyncError.slice(0, 160));
@@ -167,7 +176,13 @@ router.get('/report', async (req, res, next) => {
         duplicates: { count: duplicates.length, sample: sample(duplicates, 5) },
         byProvider: Object.fromEntries(byProvider),
       },
-      sync: { failingAccounts: failedSyncs.length, byProvider: Object.fromEntries([...syncByProvider.entries()].map(([k, v]) => [k, { failing: v.failing, errors: [...v.errors].slice(0, 3) }])) },
+      sync: {
+        failingAccounts: defectRows.length,
+        byProvider: Object.fromEntries([...syncByProvider.entries()].map(([k, v]) => [k, { failing: v.failing, errors: [...v.errors].slice(0, 3) }])),
+        // Data chores and sites' choices, counted apart so they are not mistaken for defects.
+        needsOwner: { count: ownerRows.length, note: 'the site rejected the saved login, or none is on file: the owner updates it (a data chore, not an issue)', byProvider: countBy(ownerRows) },
+        blockedBySite: { count: blockedRows.length, note: 'the site turns automated sign-in away (captcha, bot check); these accounts come in by email or upload', byProvider: countBy(blockedRows) },
+      },
       silentAccounts: { count: silent.length, sample: sample(silent, 12) },
       unlinkedPaymentsOlderThan14d: unlinked,
       scheduledInstallmentsOverdue: scheduledOverdue,
