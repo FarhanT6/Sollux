@@ -1,4 +1,5 @@
 import { useUser, useClerk } from '@clerk/clerk-react';
+import SetupChecklist from '../components/SetupChecklist';
 import ModulesCard from '../components/settings/ModulesCard';
 import MenuCard from '../components/settings/MenuCard';
 import SpeedCheck from '../components/settings/SpeedCheck';
@@ -54,7 +55,7 @@ import { getAccount, setAlertPhone, inviteAccountMember, cancelAccountInvite, re
 import type { AccountInfo, WalletsT } from '../api/client';
 import { moneyPicture, moneyTiles, balanceOf, WALLET_PAGE } from '../lib/moneyPicture';
 
-type SettingsTab = 'account' | 'billing' | 'rent' | 'ai' | 'notifications' | 'banking' | 'rates' | 'audits';
+type SettingsTab = 'account' | 'setup' | 'billing' | 'rent' | 'ai' | 'notifications' | 'banking' | 'rates' | 'audits';
 
 export default function SettingsPage() {
   const { has: modulesHas, isAdmin } = useModules();
@@ -107,6 +108,7 @@ export default function SettingsPage() {
 
   if (phone) {
     const SECTIONS: Record<Exclude<SettingsTab, 'account'>, { title: string; render: () => JSX.Element }> = {
+      setup: { title: 'Setup Checklist', render: () => <SetupChecklist /> },
       billing: { title: 'Plan & Billing', render: () => <BillingPanel /> },
       rent: { title: 'Rent Collection', render: () => <RentCollectionPanel /> },
       ai: { title: 'AI Usage', render: () => <AiSpendPanel /> },
@@ -128,6 +130,7 @@ export default function SettingsPage() {
             title={user?.fullName || 'Your account'} subtitle={user?.primaryEmailAddress?.emailAddress} chevron={false} />
         </Section>
         <Section>
+          <Row title="Setup checklist" subtitle="What's connected and what is left" to="/settings?tab=setup" icon={{ bg: '#F5A623', glyph: <span style={{ fontWeight: 700, color: '#000' }}>✓</span> }} />
           <Row title="Notifications" to="/settings?tab=notifications" icon={{ bg: '#ff453a', glyph: <span style={{ fontWeight: 700 }}>!</span> }} />
           <Row title="Bank accounts" to="/settings?tab=banking" icon={{ bg: '#30d158', glyph: <span style={{ fontWeight: 700 }}>$</span> }} />
           <Row title="Reference rates" subtitle="For variable-rate loans" to="/settings?tab=rates" icon={{ bg: '#0a84ff', glyph: <span style={{ fontWeight: 700 }}>%</span> }} />
@@ -185,12 +188,13 @@ export default function SettingsPage() {
           : tab === 'rent'        ? 'Tenants pay rent online; payouts go to your bank'
           : tab === 'ai'          ? 'What Claude costs, by feature, and a test of every AI feature'
           : tab === 'audits'      ? 'Free portfolio audit requests from the landing page'
+          : tab === 'setup'       ? "What's connected, and what is left to set up"
           : 'Manage your account and subscription'
         }
       />
 
       <div className="flex border-b px-6" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
-        {(['account', 'billing', 'rent', 'ai', 'notifications', 'banking', 'rates', 'audits'] as SettingsTab[]).filter(t => (t !== 'rent' || modulesHas('operations')) && (t !== 'audits' || showAudits)).map(t => (
+        {(['account', 'setup', 'billing', 'rent', 'ai', 'notifications', 'banking', 'rates', 'audits'] as SettingsTab[]).filter(t => (t !== 'rent' || modulesHas('operations')) && (t !== 'audits' || showAudits)).map(t => (
           <button
             key={t}
             onClick={() => setSearchParams({ tab: t }, { replace: true })}
@@ -205,7 +209,9 @@ export default function SettingsPage() {
         ))}
       </div>
 
-      {tab === 'billing' ? (
+      {tab === 'setup' ? (
+        <SetupChecklist />
+      ) : tab === 'billing' ? (
         <div className="px-6 py-5 max-w-3xl"><BillingPanel /></div>
       ) : tab === 'rent' ? (
         <div className="px-6 py-5 max-w-3xl"><RentCollectionPanel /></div>

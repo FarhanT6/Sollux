@@ -1,5 +1,6 @@
 import UrgentNotices from '../components/UrgentNotices';
 import NeedsYou from '../components/NeedsYou';
+import { SetupNudge } from '../components/SetupChecklist';
 import { markLoad } from '../lib/loadTiming';
 import { monthRentDue } from '../lib/rentDue';
 import { useEffect, useState } from 'react';
@@ -77,7 +78,8 @@ export default function DashboardPage() {
         {/* Shut-off and cancellation notices come before everything else. */}
         <UrgentNotices className="mb-5" />
         {/* Everything waiting on the owner, in one list. */}
-        <NeedsYou className="mb-6" />
+        <NeedsYou className="mb-3" />
+        <SetupNudge className="mb-6" />
         {/* Stats */}
         <p className="section-label mb-2">Portfolio summary</p>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-10">

@@ -131,6 +131,14 @@ router.get('/recent-activity', async (req, res, next) => {
   }
 });
 
+// GET /api/dashboard/setup — the setup checklist, read live (services/setupChecklist.ts).
+router.get('/setup', async (req, res, next) => {
+  try {
+    const { setupChecklist } = await import('../services/setupChecklist');
+    res.json(await setupChecklist(req.dbUserId!));
+  } catch (err) { next(err); }
+});
+
 // GET /api/dashboard/needs-you — everything waiting on the owner, in one list (services/needsYou.ts).
 router.get('/needs-you', async (req, res, next) => {
   try {
