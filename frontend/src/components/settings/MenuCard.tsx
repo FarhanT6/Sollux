@@ -12,7 +12,8 @@ export default function MenuCard() {
   const { hidden, has, isOwner, loaded } = useModules();
   const [busy, setBusy] = useState(false);
   if (!loaded) return null;
-  const pages = NAV.filter(n => has((n as { module?: ModuleKey }).module) && !(n as { phoneOnly?: boolean }).phoneOnly);
+  // The menu's areas; Add stays (it is a button, always there).
+  const pages = NAV.filter(n => has((n as { module?: ModuleKey }).module) && (n as { area?: boolean }).area && n.to !== '/dashboard');
   const toggle = async (to: string) => {
     const next = new Set(hidden);
     if (next.has(to)) next.delete(to); else next.add(to);

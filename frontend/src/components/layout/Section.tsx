@@ -11,13 +11,19 @@ export const SECTIONS = {
     { to: '/dashboard', label: 'Today' },
     { to: '/insights', label: 'Where you can save' },
   ],
-  properties: [
-    { to: '/portfolio', label: 'All properties' },
+  bills: [
+    { to: '/bills', label: 'Bills' },
+  ],
+  rent: [
+    { to: '/portfolio', label: 'Properties' },
     { to: '/tenants', label: 'Tenants & rent' },
-    { to: '/insurance', label: 'Insurance' },
-    { to: '/taxes', label: 'Taxes' },
     { to: '/repairs', label: 'Repairs' },
     { to: '/legal', label: 'Legal' },
+  ],
+  money: [
+    { to: '/finances', label: 'Finances' },
+    { to: '/taxes', label: 'Taxes' },
+    { to: '/insurance', label: 'Insurance' },
   ],
   add: [
     { to: '/import', label: 'Import files' },
@@ -32,10 +38,21 @@ export const SECTIONS = {
 
 export type SectionKey = keyof typeof SECTIONS;
 
+/** Pages that belong to an area without a tab of their own: an account's page is Bills & accounts', a loan's is Money's. */
+const ALSO_IN: Partial<Record<SectionKey, string[]>> = {
+  bills: ['/properties', '/payments'],
+  rent: ['/notices', '/reimbursements', '/compliance'],
+  money: ['/loans', '/operating-expenses'],
+};
+
 /** The area a path belongs to, for keeping its menu item lit on every view in it. */
 export function sectionOf(pathname: string): SectionKey | null {
+  const under = (to: string) => pathname === to || pathname.startsWith(`${to}/`);
   for (const [key, views] of Object.entries(SECTIONS) as [SectionKey, readonly { to: string }[]][]) {
-    if (views.some(v => pathname === v.to || pathname.startsWith(`${v.to}/`))) return key;
+    if (views.some(v => under(v.to))) return key;
+  }
+  for (const [key, prefixes] of Object.entries(ALSO_IN) as [SectionKey, string[]][]) {
+    if (prefixes.some(under)) return key;
   }
   return null;
 }

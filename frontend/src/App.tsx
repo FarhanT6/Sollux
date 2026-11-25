@@ -137,9 +137,9 @@ export default function App() {
           <Route path="properties/:propertyId/utilities/:accountId" element={<UtilityDetailPage />} />
 
           {/* Finances hub */}
-          <Route path="finances" element={<Responsive phone={<FinancesScreen />} desktop={<FinancesPage />} />} />
-          <Route path="taxes" element={<Section group="properties"><TaxesPage /></Section>} />
-          <Route path="insurance" element={<Section group="properties"><InsurancePage /></Section>} />
+          <Route path="finances" element={<Responsive phone={<FinancesScreen />} desktop={<Section group="money"><FinancesPage /></Section>} />} />
+          <Route path="taxes" element={<Section group="money"><TaxesPage /></Section>} />
+          <Route path="insurance" element={<Section group="money"><InsurancePage /></Section>} />
           {/* On a computer, part of Finances → Costs; a phone keeps the page (from More). */}
           <Route path="operating-expenses" element={<Responsive phone={<OperatingExpensesPage />} desktop={<Navigate to="/finances?tab=costs&view=property" replace />} />} />
           <Route path="bills" element={<BillsPage />} />
@@ -153,19 +153,19 @@ export default function App() {
           <Route path="loans/:id" element={<LoanDetailPage />} />
 
           {/* Portfolio hub */}
-          <Route path="portfolio" element={<Section group="properties"><PortfolioPage /></Section>} />
+          <Route path="portfolio" element={<Section group="rent"><PortfolioPage /></Section>} />
           <Route path="portfolio/:id" element={<PropertyHubPage />} />
 
           {/* Tenants hub */}
-          <Route path="tenants" element={<Section group="properties"><TenantsHubPage /></Section>} />
+          <Route path="tenants" element={<Section group="rent"><TenantsHubPage /></Section>} />
           <Route path="tenants/:id" element={<TenantRoute />} />
           <Route path="notices/:id" element={<NoticeDetailPage />} />
-          <Route path="repairs" element={<Section group="properties"><RepairsPage /></Section>} />
+          <Route path="repairs" element={<Section group="rent"><RepairsPage /></Section>} />
           <Route path="repairs/:id" element={<RepairDetailPage />} />
 
 
           {/* Legal */}
-          <Route path="legal" element={<Section group="properties"><LegalPage /></Section>} />
+          <Route path="legal" element={<Section group="rent"><LegalPage /></Section>} />
 
           {/* Standalone pages */}
           {/* On a computer, payments live on Bills (the pay planner and pay-first are off for now). */}
