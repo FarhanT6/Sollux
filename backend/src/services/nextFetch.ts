@@ -23,7 +23,7 @@ export async function nextBillExpected(utilityAccountId: string, cadence: string
   // account whose portal gives PDFs: the PDF is still due — fetched the next night, then backing
   // off — for ten days, after which the page stands.
   const pageSaved = (r: (typeof rows)[number]) => !!(r.rawDataJson as Record<string, unknown> | null)?.pageSaved;
-  if (rows[0] && pageSaved(rows[0]) && Date.now() - rows[0].statementDate.getTime() < 10 * DAY
+  if (rows[0] && pageSaved(rows[0]) && (rows[0].rawDataJson as Record<string, unknown> | null)?.pdfToCome !== false && Date.now() - rows[0].statementDate.getTime() < 10 * DAY
     && rows.slice(1).some(r => r.pdfS3Key && !pageSaved(r) && (r.rawDataJson as Record<string, unknown> | null)?.source === 'portal')) {
     return { on: rows[0].statementDate, fetchAt: midnightAfter(rows[0].statementDate), cycleDays: days, learned, last };
   }
