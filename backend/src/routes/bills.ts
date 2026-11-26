@@ -42,10 +42,14 @@ router.get('/', async (req, res, next) => {
         select: {
           id: true, utilityAccountId: true, statementDate: true, dueDate: true, amountDue: true, amountPaid: true,
           pastDueCarried: true, balance: true, trueUpDeferred: true, paymentPlanAmount: true, paidOverride: true,
-          isScheduled: true, isDownPayment: true, pdfS3Key: true,
+          isScheduled: true, isDownPayment: true, pdfS3Key: true, rawDataJson: true,
         },
         orderBy: { statementDate: 'desc' },
-      }),
+      }).then(rows => rows.map(({ rawDataJson, ...s }) => ({
+        ...s,
+        // A bill page saved from the provider's website: its balance is that bill's alone (lib/paidState.ts).
+        pageSaved: !!(rawDataJson as Record<string, unknown> | null)?.pageSaved,
+      }))),
       db.payment.findMany({
         where: { utilityAccountId: { in: accountIds } },
         select: {
@@ -62,7 +66,7 @@ router.get('/', async (req, res, next) => {
         id: s.id, statementDate: day(s.statementDate), dueDate: day(s.dueDate),
         amountDue: num(s.amountDue), amountPaid: num(s.amountPaid), pastDueCarried: num(s.pastDueCarried), balance: num(s.balance),
         trueUpDeferred: num(s.trueUpDeferred), paymentPlanAmount: num(s.paymentPlanAmount), paidOverride: s.paidOverride,
-        isScheduled: s.isScheduled, isDownPayment: s.isDownPayment, hasPdf: !!s.pdfS3Key,
+        isScheduled: s.isScheduled, isDownPayment: s.isDownPayment, hasPdf: !!s.pdfS3Key, pageSaved: s.pageSaved,
       });
       stmtsBy.set(s.utilityAccountId, list);
     }
