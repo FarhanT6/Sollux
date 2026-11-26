@@ -164,6 +164,8 @@ app.use('/api/import', express.json({ limit: '100mb' }));
 app.use('/api/reconciliation/read', express.json({ limit: '40mb' }));
 // Screenshots of a bank deposit's checks (routes/deposits.ts).
 app.use('/api/deposits/read', express.json({ limit: '30mb' }));
+// The insurer's installments and payments pages (services/insurerLedger.ts).
+app.use(/^\/api\/utilities\/[^/]+\/insurer-records\/read$/, express.json({ limit: '30mb' }));
 // Document uploads (lease agreements, applications, insurance/tax/maintenance
 // scans) can be large multi-page PDFs — allow well above the default cap.
 app.use('/api/leases', express.json({ limit: '50mb' }));

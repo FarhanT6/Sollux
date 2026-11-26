@@ -100,6 +100,27 @@ export interface DepositDraft {
 }
 export const readDeposit = (files: { fileData: string; filename: string }[]) =>
   api.post<DepositDraft>('/deposits/read', { files }, { timeout: 180_000 }).then(r => r.data);
+/** An insurance account lined up with the insurer's installments and payments pages (backend services/insurerLedger.ts). */
+export interface InsurerLedgerRead {
+  policyNumber: string | null;
+  installments: { label: string; date: string; amount: number }[];
+  fees: { label: string; date: string; amount: number }[];
+  payments: { date: string; amount: number; status: string | null }[];
+}
+export interface InsurerLineUpPlan {
+  bills: { key: string; label: string; invoiceDate: string; dueDate: string; installment: number; fees: { label: string; amount: number }[]; installmentFee: number; charge: number; carried: number; total: number; statementId: string | null; onFile: { statementDate: string; amountDue: number | null; carried: number | null; total: number | null } | null }[];
+  removeBills: { statementId: string; statementDate: string; amountDue: number | null; payments: number }[];
+  payments: { date: string; amount: number; status: string | null; paymentId: string | null }[];
+  removePayments: { paymentId: string; date: string; amount: number }[];
+  totals: { billed: number; paid: number; owed: number; onFileBilled: number; onFilePaid: number };
+  installmentFee: number;
+}
+export const readInsurerRecords = (accountId: string, files: { fileData: string; filename: string }[], installmentFee: number) =>
+  api.post<{ read: InsurerLedgerRead; plan: InsurerLineUpPlan }>(`/utilities/${accountId}/insurer-records/read`, { files, installmentFee }, { timeout: 180_000 }).then(r => r.data);
+export const planInsurerRecords = (accountId: string, read: InsurerLedgerRead, installmentFee: number) =>
+  api.post<{ plan: InsurerLineUpPlan }>(`/utilities/${accountId}/insurer-records/plan`, { read, installmentFee }).then(r => r.data.plan);
+export const applyInsurerRecords = (accountId: string, read: InsurerLedgerRead, installmentFee: number) =>
+  api.post<{ updated: number; added: number; removed: number; paymentsAdded: number; paymentsRemoved: number }>(`/utilities/${accountId}/insurer-records/apply`, { read, installmentFee }, { timeout: 120_000 }).then(r => r.data);
 export const recordDeposit = (body: { bankAccountId: string; postDate: string; total: number; checks: { leaseId: string; amount: number; month: string; rent: number; utilities: number; payer?: string | null; checkNumber?: string | null; memo?: string | null }[] }) =>
   api.post<{ key: string; rent: number; utilities: number; checks: number }>('/deposits/record', body, { timeout: 120_000 }).then(r => r.data);
 export const undoDeposit = (key: string) => api.post<{ removed: number }>('/deposits/undo', { key }).then(r => r.data);

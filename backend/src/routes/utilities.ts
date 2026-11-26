@@ -713,6 +713,64 @@ router.post('/:id/recheck', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// POST /api/utilities/:id/insurer-records/read { files: [{ fileData (base64), filename }], installmentFee? }
+// — the insurer's Policy Installments and Payments Made pages read, and the plan to line the
+// account up with them; nothing is changed (services/insurerLedger.ts).
+router.post('/:id/insurer-records/read', async (req, res, next) => {
+  try {
+    const { z } = await import('zod');
+    const { files, installmentFee } = z.object({
+      files: z.array(z.object({ fileData: z.string().min(1), filename: z.string().max(200).default('page.png') })).min(1).max(8),
+      installmentFee: z.number().min(0).max(100).optional(),
+    }).parse(req.body);
+    const bufs = files.map(f => ({ buf: Buffer.from(f.fileData, 'base64'), name: f.filename }));
+    if (bufs.reduce((s, f) => s + f.buf.length, 0) > 20 * 1024 * 1024) return res.status(400).json({ error: 'Those files are over 20 MB together — send fewer or smaller screenshots.' });
+    const { detectContentType } = await import('../services/s3Service');
+    for (const f of bufs) if (!/^(application\/pdf|image\/)/.test(detectContentType(f.buf, f.name))) return res.status(400).json({ error: `${f.name}: send screenshots or a PDF of the insurer's pages.` });
+    const ledger = await import('../services/insurerLedger');
+    const read = await ledger.readInsurerLedger(bufs);
+    const plan = await ledger.planLineUp(req.dbUserId!, req.params.id, read, { installmentFee });
+    if (!plan) return res.status(404).json({ error: 'Utility account not found' });
+    res.json({ read, plan });
+  } catch (err: any) {
+    if (err?.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
+// POST /api/utilities/:id/insurer-records/plan { read, installmentFee } — the plan again (a fee changed), nothing read or changed.
+// POST /api/utilities/:id/insurer-records/apply { read, installmentFee } — the account lined up with the records.
+const LedgerBody = async (body: unknown) => {
+  const { z } = await import('zod');
+  const row = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), amount: z.number() });
+  return z.object({
+    read: z.object({
+      policyNumber: z.string().nullable(),
+      installments: z.array(row.extend({ label: z.string().max(60) })).min(1).max(60),
+      fees: z.array(row.extend({ label: z.string().max(60) })).max(60),
+      payments: z.array(row.extend({ status: z.string().max(30).nullable() })).max(80),
+    }),
+    installmentFee: z.number().min(0).max(100).optional(),
+  }).parse(body);
+};
+router.post('/:id/insurer-records/plan', async (req, res, next) => {
+  try {
+    const { read, installmentFee } = await LedgerBody(req.body);
+    const plan = await (await import('../services/insurerLedger')).planLineUp(req.dbUserId!, req.params.id, read, { installmentFee });
+    if (!plan) return res.status(404).json({ error: 'Utility account not found' });
+    res.json({ plan });
+  } catch (err: any) { if (err?.status) return res.status(err.status).json({ error: err.message }); next(err); }
+});
+router.post('/:id/insurer-records/apply', async (req, res, next) => {
+  try {
+    const { read, installmentFee } = await LedgerBody(req.body);
+    const account = await db.utilityAccount.findFirst({ where: { id: req.params.id, property: { userId: req.dbUserId! } }, select: { providerName: true } });
+    if (!account) return res.status(404).json({ error: 'Utility account not found' });
+    const r = await (await import('../services/insurerLedger')).applyLineUp(req.dbUserId!, req.params.id, read, { installmentFee, insurer: account.providerName });
+    res.json(r);
+  } catch (err: any) { if (err?.status) return res.status(err.status).json({ error: err.message }); next(err); }
+});
+
 // ── Loan linked to this utility account ──────────────────────────────────────
 
 // PUT /api/utilities/:id/loan  — create or update the linked loan

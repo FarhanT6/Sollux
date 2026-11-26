@@ -1262,8 +1262,9 @@ export async function extractWithRegex(pdfBuffer: Buffer, filename: string, laye
       const m = text.match(/(?:amount\s+due\s+after|after\s+due\s+date\s+pay)[^$]{0,30}\$\s*([\d,]+\.\d{2})/i);
       return m ? parseFloat(m[1].replace(/,/g, '')) : null;
     })(),
+    // An insurer's "Premium installment" and "Installment fee" are the bill itself, not an arrangement.
     paymentPlanAmount: Object.entries(chargeBreakdown)
-      .find(([label]) => /payment\s*plan|installment|arrears/i.test(label))?.[1] ?? null,
+      .find(([label]) => /payment\s*plan|installment|arrears/i.test(label) && !/premium|fee/i.test(label))?.[1] ?? null,
     paymentsReceived,
     currentCharges,
     // The regex path's amountDue is the bill's grand total; keep it as such
@@ -2900,7 +2901,7 @@ export function applyInsuranceFromText(ex: ExtractedBillData, text: string): voi
       ?? text.match(/(?:total|term|policy)\s+premium[^$\n]{0,40}\$\s*([\d,]+\.\d{2})/i);
     return m ? money(m[m.length - 1]!) : null;
   })();
-  // AmTrust's invoice: a policy row "WBP2036370 02 · Business Owners ·
+  // AmTrust's invoice: a policy row "WBP1234567 02 · Business Owners ·
   // 2/23/2026 · In Effect · Total Policy Cost · Total Billed To Date · Total
   // Paid To Date · Currently Due", then an "Installment Fee" row.
   {
@@ -3014,7 +3015,7 @@ export function applyInsuranceFromText(ex: ExtractedBillData, text: string): voi
   const totals = text.match(/TOTALS\s*\$\s*([\d,]+\.\d{2})\s*\$\s*([\d,]+\.\d{2})/i);
   const stub = text.match(/pay\s*the\s*minimum\s*by\s*the\s*due\s*date\s*\$\s*([\d,]+\.\d{2})\s*(\d{1,2}\/\d{1,2}\/\d{2,4})\s*(\d{6,12})?\s*\$\s*([\d,]+\.\d{2})/i);
   // AmTrust's coupon: account number, minimum payment due and due date on
-  // three bare lines ("32566656 / $249.90 / 3/23/2026").
+  // three bare lines ("12345678 / $259.90 / 3/23/2026").
   const coupon = text.match(/^\s*(\d{7,12})\s*\n\s*\$\s*([\d,]+\.\d{2})\s*\n\s*(\d{1,2}\/\d{1,2}\/\d{4})\s*$/m);
   const minM = totals ? { v: totals[2]! } : stub ? { v: stub[1]! } : coupon ? { v: coupon[2]! } : (() => {
     // "Please pay $449.58 by" first; "Minimum amount due (includes a $6.00
@@ -3113,7 +3114,7 @@ export function applyInsuranceFromText(ex: ExtractedBillData, text: string): voi
     }
   }
 
-  // A policy number printed on its own line ("WBP2036370 02" — the suffix
+  // A policy number printed on its own line ("WBP1234567 02" — the suffix
   // is the term's endorsement number, not part of the policy's identity).
   if (!wellFormed(ins.policyNumber)) {
     const lone = text.match(/(?<![A-Za-z0-9])([A-Z]{2,4}\d{6,})(?:\s+\d{2})?(?=[A-Z][a-z]|\s|$)/)?.[1] ?? null;
@@ -3728,11 +3729,20 @@ export function sanitiseLateFee(ex: ExtractedBillData): void {
 }
 
 export function derivePaymentPlanFromBreakdown(ex: ExtractedBillData): void {
+  // An insurer's installment bill is the policy's own payment plan, not an arrangement on arrears:
+  // its "Premium installment" is the bill and its "Installment fee" a fee (insurance.serviceCharge).
+  // Read as an arrangement, AmTrust's $15 fee showed as "Payment agreement $15" and "+ $15 plan".
+  if (ex.insurance && !ex.paymentPlan) {
+    const asPlan = ex.paymentPlanAmount;
+    if (asPlan != null && asPlan > 0 && asPlan <= 50 && ex.insurance.serviceCharge == null) ex.insurance.serviceCharge = asPlan;
+    ex.paymentPlanAmount = null;
+    return;
+  }
   if (ex.paymentPlanAmount != null || !ex.chargeBreakdown) return;
   const PLAN_LINE = /payment\s*plan|installment|arrears\s*(?:payment|repayment)?|payment\s*arrangement|deferred\s*payment/i;
   let plan = 0;
   for (const [label, value] of Object.entries(ex.chargeBreakdown)) {
-    if (PLAN_LINE.test(label)) plan += Number(value) || 0;
+    if (PLAN_LINE.test(label) && !/premium|fee/i.test(label)) plan += Number(value) || 0;
   }
   if (plan > 0) ex.paymentPlanAmount = Number(plan.toFixed(2));
 }
