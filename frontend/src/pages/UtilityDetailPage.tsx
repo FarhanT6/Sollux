@@ -2620,7 +2620,9 @@ function StatementSource({ s }: { s: any }) {
   const raw = (s.rawDataJson ?? {}) as Record<string, any>;
   const tags: { text: string; tone: string; title?: string }[] = [];
   if (raw.ownerEditedAt) tags.push({ text: 'Edited by you', tone: 'text-amber-300', title: 'You changed these figures by hand; re-reads and checks leave them' });
-  if (raw.pageSaved) tags.push({ text: 'Saved web page · PDF to come', tone: 'text-sky-300', title: "The provider's bill page, saved before the PDF was out; Sollux fetches the PDF and it replaces this" });
+  if (raw.pageSaved) tags.push(raw.pdfToCome === false
+    ? { text: "Saved from the provider's website", tone: 'text-gray-500', title: "The provider's bill page, saved as the statement: this website shows bills as pages and gives no PDF" }
+    : { text: 'Saved web page · PDF to come', tone: 'text-sky-300', title: "The provider's bill page, saved before the PDF was out; Sollux fetches the PDF and it replaces this" });
   else if (raw.emailNotice) { if (s.pdfS3Key) tags.push({ text: 'From the bill email', tone: 'text-gray-400' }); }
   else if (s.pdfS3Key) {
     const from = raw.source === 'portal' ? "Statement PDF · fetched from the provider's website"

@@ -15,6 +15,7 @@
  * Downloaded statements go through the same filing as email and Drive
  * (documentIntake): filed on a confident match, staged for review otherwise.
  */
+import { accountGivesPdfs, NO_PDF_PORTALS } from '../services/pageSaved';
 import Anthropic from '@anthropic-ai/sdk';
 import * as crypto from 'crypto';
 import { websiteFor, findProvider, isLookupPage, lookupStartFor } from '../lib/providerDirectory';
@@ -113,6 +114,8 @@ export async function pageAsPdf(page: Page): Promise<Buffer | null> {
     const png = await page.screenshot({ fullPage: true, scale: 'css' });
     const { PDFDocument } = await import('pdf-lib');
     const doc = await PDFDocument.create();
+    // Marked as Sollux's own, so it is never taken for the portal's PDF (services/pageSaved.ts).
+    doc.setProducer('Sollux saved page'); doc.setCreator('Sollux saved page');
     const img = await doc.embedPng(png);
     const W = 612, H = 792; // US letter, in points
     const h = img.height * (W / img.width);
@@ -121,18 +124,8 @@ export async function pageAsPdf(page: Page): Promise<Buffer | null> {
   } catch { return null; }
 }
 
-/**
- * Whether the portal has given these accounts real statement PDFs (fetched from it, not a page
- * saved in their place) in the last year: then a bill page is never the statement.
- */
-async function portalGivesPdfs(accountIds: string[]): Promise<boolean> {
-  if (!accountIds.length) return false;
-  const rows = await db.statement.findMany({
-    where: { utilityAccountId: { in: accountIds }, pdfS3Key: { not: null }, isScheduled: false, statementDate: { gte: new Date(Date.now() - 365 * 864e5) }, rawDataJson: { path: ['source'], equals: 'portal' } },
-    select: { rawDataJson: true }, take: 12,
-  });
-  return rows.some(r => !(r.rawDataJson as Record<string, unknown> | null)?.pageSaved);
-}
+/** Whether the portal gives these accounts statement PDFs (services/pageSaved.ts accountGivesPdfs). */
+const portalGivesPdfs = (accountIds: string[], host?: string | null) => accountGivesPdfs(accountIds, host);
 
 /** The tools for an account found by its biller's lookup page: no way to sign in. */
 const LOOKUP_TOOLS = TOOLS.filter(t => !['fill_login', 'ask_owner_for_code', 'open_emailed_link', 'type_code'].includes(t.name));
@@ -620,8 +613,8 @@ async function runAgent(target: { kind: 'utility' | 'card'; id: string }, opts: 
     ? await db.cardLogin.findUnique({ where: { cardId: account.id }, select: { mfaCodeEnc: true } })
     : await db.utilityAccount.findUnique({ where: { id: account.id }, select: { mfaCodeEnc: true } }))?.mfaCodeEnc ?? null;
   // A downloaded statement filed: to the card a card's run is for, else to the accounts this run fetches for.
-  const fileOne = (pdf: Buffer, name: string, designated?: string, pageSaved = false) => withAiContext({ userId, source: 'portal' },
-    () => intakeBill(pdf, name, userId, 'ai', batchId, 'portal', isCard ? { forCard: account.id } : { forAccounts, designated, pageSaved }));
+  const fileOne = (pdf: Buffer, name: string, designated?: string, pageSaved = false, pdfToCome = false) => withAiContext({ userId, source: 'portal' },
+    () => intakeBill(pdf, name, userId, 'ai', batchId, 'portal', isCard ? { forCard: account.id } : { forAccounts, designated, pageSaved, pdfToCome }));
   // A browser that looks like the Chrome it is (scrapers/browser.ts), with the
   // saved cookies restored. The agent reads pages as text: images, video and
   // fonts only cost memory (a 512MB worker ran out with Chrome on a heavy portal).
@@ -879,10 +872,10 @@ This is the owner's own account, signed in with the owner's own login at the own
 ${others.length ? `This login holds several of the owner's accounts. Fetch every one of them in this one visit — sign in once, then for each account open it (account picker, "switch account", or a list of accounts) and its billing / statement history, and download each statement PDF dated after its date, newest first:
 - ${account.accountNumber ? `account ending ${String(account.accountNumber).slice(-4)}` : 'this account'} at ${account.property.address}: after ${since ?? 'the last 12 months'}
 ${othersFrom.map(o => `- ${o.accountNumber ? `account ending ${String(o.accountNumber).slice(-4)}` : 'an account'} at ${o.property.address}: after ${o.from ?? 'the last 12 months'}`).join('\n')}
-Give download_statement and save_page_as_statement the account's last 4 (account) for each one, so it is filed to that account. At most ${maxDownloads} downloads in all. An account the portal does not list is not an error: say so and carry on. Finish with outcome done when every listed account is checked, and fill in accounts with each one's result (downloaded, nothing_new, not_listed, or not_checked if you did not get to it) — an account is only nothing_new if you opened its own statement history.` : lookup ? `Goal: this account's bills are found on the biller's lookup page you start on, by account number and the name on the bill — never by signing in. Do not open a sign-in or register page, even if one is offered. Sollux fills in the lookup fields and presses Search for you where it can; otherwise fill them with fill_account_number (part 'customer' for a Customer ID field, 'name' for a name field), then open the invoices / bill history and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If the lookup shows the bills but offers no statement PDF (Tyler Munis self service shows each bill as a page, not a document), open each bill dated after ${since ?? 'the last 12 months'} — its bill or charges detail, showing the amount, due date and charges — and call save_page_as_statement on it with that bill's date; if there is only an account summary with the current bill, save that. If the lookup says the account was not found, finish with blocked and quote what it said. If there is nothing newer, finish with outcome done.` : isCard ? `Goal: log in, open this card's statements ("Statements", "Statements & documents", "Documents", "View statements"), and ${since ? `download each monthly statement PDF with a closing date after ${since} — newest first, at most ${MAX_DOWNLOADS}` : 'download the newest monthly statement PDF only — older ones are brought in separately'}; give download_statement the statement's closing date. ${cardLast4 ? `If the login holds several cards, open the one ending ${cardLast4} and download only its statements.` : ''} If there is nothing newer, finish with outcome done.` : `Goal: log in, open the billing / statement history, and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If there is nothing newer, finish with outcome done.`}
+Give download_statement and save_page_as_statement the account's last 4 (account) for each one, so it is filed to that account. At most ${maxDownloads} downloads in all. An account the portal does not list is not an error: say so and carry on. Finish with outcome done when every listed account is checked, and fill in accounts with each one's result (downloaded, nothing_new, not_listed, or not_checked if you did not get to it) — an account is only nothing_new if you opened its own statement history.` : lookup ? `Goal: this account's bills are found on the biller's lookup page you start on, by account number and the name on the bill — never by signing in. Do not open a sign-in or register page, even if one is offered. Sollux fills in the lookup fields and presses Search for you where it can; otherwise fill them with fill_account_number (part 'customer' for a Customer ID field, 'name' for a name field), then open the invoices / bill history and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If the lookup shows the bills but offers no statement PDF (Tyler Munis self service shows each bill as a page, not a document), open each bill dated after ${since ?? 'the last 12 months'} — its bill or charges detail, showing the amount, due date and charges — and call save_page_as_statement on it with that bill's date; if there is only an account summary with the current bill, save that. If the lookup says the account was not found, finish with blocked and quote what it said. If there is nothing newer, finish with outcome done.` : isCard ? `Goal: log in, open this card's statements ("Statements", "Statements & documents", "Documents", "View statements"), and ${since ? `download each monthly statement PDF with a closing date after ${since} — newest first, at most ${MAX_DOWNLOADS}` : 'download the newest monthly statement PDF only — older ones are brought in separately'}; give download_statement the statement's closing date. ${cardLast4 ? `If the login holds several cards, open the one ending ${cardLast4} and download only its statements.` : ''} If there is nothing newer, finish with outcome done.` : NO_PDF_PORTALS.test(start.hostname) ? `Goal: log in and open the bills (Utility Billing → Manage / View & Pay Bills, with Show Past Bills). This site shows each bill as a page, not a PDF: for each bill dated after ${since ?? 'the last 12 months'} — every one, the newest too, even if it was issued today — open its Bill Details and call save_page_as_statement with that bill's date (its Bill Date). At most ${MAX_DOWNLOADS}. If there is nothing newer, finish with outcome done.` : `Goal: log in, open the billing / statement history, and download each statement PDF dated after ${since ?? 'the last 12 months'} — newest first, at most ${MAX_DOWNLOADS}. If there is nothing newer, finish with outcome done.`}
 Rules: use fill_login for credentials (you never see them). If the portal offers where to send a verification code, choose email over text or a phone call. If it emails a sign-in link instead of a code, call open_emailed_link (the owner is never asked for it); if none arrives, finish with no_code. When a code has been sent, call ask_owner_for_code (it reads the code from the owner's email, or asks the owner), then type_code. Pass any "Remember this device", "Trust this browser", "Keep me signed in" or "Don't ask again" checkbox as rememberRef so the next visit is not asked again. Never pay, enroll, change settings, accept offers or send messages. If a "Verify you are human" / "I'm not a robot" checkbox is on the page, call tick_captcha before submitting. If the page you start on asks for an account number (a bill lookup), use fill_account_number there rather than going to the sign-in. If the sign-in stays blocked by such a check, look for a way in without signing in — "Pay as guest", "Quick pay", "View bill", "Find my account" — and use fill_account_number (with the property's ZIP code if asked); statements found that way count the same. If a captcha still blocks you (a picture puzzle, or the check keeps failing), finish with captcha (on the owner's own computer they may solve it, and you are then shown the page to carry on). If the login you submit is rejected, finish with bad_login. An "incorrect username or password" message already on the page before you have submitted anything is left over from an earlier visit: sign in anyway, once. If a code you entered is rejected, ask_owner_for_code once more for a fresh one; after a second rejection finish with no_code — never start the login over.
 Once you are signed in (you see the account, a greeting, a Log out button), an error after that — a bill viewer that fails, "unable to process your request" on one page — is not the site refusing the browser: go back and try another way to the statements ("View bill", "Billing history", "Documents", "View policy documents", "Statements"), and finish with blocked, saying which page failed, only when none works. Before signing in: if the site refuses the browser itself (Access Denied, "invalid request", "unable to process your request" right after submitting the sign-in, a bot check), finish with turned_away at once: never submit the login a second time — each retry makes the site more suspicious and can lock the owner's account.
-If the portal says a statement's PDF is not available yet ("not available at this time", "try again later"), do not save the page in its place: finish with outcome done and say the PDF is not ready — Sollux comes back for it.
+If the portal says a statement's PDF is not available yet ("not available at this time", "try again later") for a bill from the last ten days, save that bill's page with save_page_as_statement (its own bill date) so the bill is on file — Sollux comes back for the PDF and it replaces the page — then carry on with the other bills. Every bill dated after the one on file is wanted: do not stop at the first.
 If the portal has no statement documents at all (premium financing, some lenders), use save_page_as_statement on each account's payment schedule / history page, and on its main summary page when that shows an amount due or fees due (late fee, NSF fee) — so new fees are caught on every fetch.
 Always end with the finish tool, never with a message. If the page seems gone or closed, call look: the browser follows the site to its newest tab. Each action returns the page as it is afterwards: do not call look after it. Fill and submit in one step (submitRef). A typical visit is: look, fill_login (with submit), code if asked, open billing/statements, download, finish — aim for about 10 steps. When several accounts are listed, choose the one matching the account number, else the address. The account number is what identifies the account: the address a portal shows is often the owner's mailing address, not the property's, so an account whose number matches is the right one whatever address it shows.`;
   // Every step that changed the page, in order: replayed ones and Claude's.
@@ -1089,9 +1082,16 @@ Always end with the finish tool, never with a message. If the page seems gone or
               // page is not the statement. SoCalGas's "View My Bill" said "Your PDF bill is not available
               // at this time" the night the bill was dated; saved as the statement, it stood in for the
               // PDF with no charges, no usage, and Sollux never came back for the PDF.
-              if (u.name === 'save_page_as_statement' && !isCard && await portalGivesPdfs(forAccounts.map(a => a.id))) {
-                content = "This portal has given statement PDFs before, so a page is not saved in place of one. If the PDF is not ready yet (\"not available at this time\", \"try again later\"), finish with outcome done and say the PDF is not ready — Sollux comes back for it tomorrow.";
-                break;
+              // A bill out in the last ten days whose PDF is not ready yet is saved as a stand-in, so the
+              // bill is on file today; the PDF replaces it when it comes. An older bill's PDF is there: download it.
+              const givesPdfs = u.name === 'save_page_as_statement' && !isCard && await portalGivesPdfs(forAccounts.map(a => a.id), start.hostname);
+              if (givesPdfs) {
+                const billDay = /^\d{4}-\d{2}-\d{2}$/.test(String(i.statementDate ?? '')) ? new Date(`${i.statementDate}T12:00:00Z`).getTime() : NaN;
+                const recent = Number.isFinite(billDay) && Date.now() - billDay < 10 * 864e5 && billDay - Date.now() < 5 * 864e5;
+                if (!recent) {
+                  content = "This portal gives statement PDFs, and this bill is more than ten days old, so its PDF is there: download it with download_statement rather than saving the page. (A bill from the last ten days whose PDF is not out yet can be saved as a page — give its own bill date.)";
+                  break;
+                }
               }
               const got = [...pdfsSeen.values()].join(', ') || 'none yet';
               // Already on file for that date: nothing to click for. A saved
@@ -1150,7 +1150,7 @@ Always end with the finish tool, never with a message. If the page seems gone or
               // The account the agent had open: a document that prints no number Sollux can
               // match (an Eternal Hills contract page) is filed to it instead of going to review.
               const designated = whose;
-              const r = await fileOne(pdf, name, designated, u.name === 'save_page_as_statement');
+              const r = await fileOne(pdf, name, designated, u.name === 'save_page_as_statement', givesPdfs);
               if (r.outcome === 'filed') { run.filed++; run.filedFor![r.utilityAccountId] = (run.filedFor![r.utilityAccountId] ?? 0) + 1; (run.filedList ??= []).push({ accountId: r.utilityAccountId, statementDate: r.statementDate, amount: r.amount, was: r.was }); }
               else if (r.outcome === 'card') { run.filed++; run.filedFor![r.cardId] = (run.filedFor![r.cardId] ?? 0) + 1; }
               else if (r.outcome === 'review') { run.review++; review.push(r.reviewItem); if (designated) reviewedFor.add(designated); }

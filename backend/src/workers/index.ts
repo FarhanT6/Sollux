@@ -159,6 +159,21 @@ setTimeout(() => void (async () => {
   if (marked) console.log(`[PageSaved] ${marked} saved portal page(s) marked; their PDFs will be fetched`);
 })().catch(err => console.warn('[PageSaved] marking failed:', err instanceof Error ? err.message : err)), 90_000);
 
+// Once: pages saved from a screenshot (a fetch in the owner's Chrome, which cannot print to PDF) were
+// taken for the portal's own PDFs, so a portal that gives none (City of El Centro's Tyler site) had its
+// bill pages refused and new bills went unrecorded. Marked over the last year; each saved page then
+// says whether a PDF is still to come (services/pageSaved.ts).
+setTimeout(() => void (async () => {
+  const { db } = await import('../config/db');
+  const KEY = 'page-saved:mark-v2';
+  if (await db.appSetting.findUnique({ where: { key: KEY } }).catch(() => null)) return;
+  const ps = await import('../services/pageSaved');
+  const marked = await ps.markSavedPages({ days: 400 });
+  const settled = await ps.settlePdfToCome();
+  await db.appSetting.upsert({ where: { key: KEY }, create: { key: KEY, value: JSON.stringify({ marked, settled, at: new Date().toISOString() }) }, update: { value: JSON.stringify({ marked, settled, at: new Date().toISOString() }) } });
+  console.log(`[PageSaved] v2: ${marked} saved page(s) marked, ${settled} told whether a PDF is to come`);
+})().catch(err => console.warn('[PageSaved] v2 failed:', err instanceof Error ? err.message : err)), 3 * 60_000);
+
 // Once: every bill that printed a total checked against it, the bill before saying which figure
 // was misread (services/billIdentity.ts, #278); late fees settled again after.
 setTimeout(() => void (async () => {

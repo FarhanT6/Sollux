@@ -70,6 +70,8 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
   // The portal's bill page saved as the statement (save_page_as_statement), not the bill's own PDF:
   // a stand-in the PDF replaces when it comes (services/pageSaved.ts).
   pageSaved?: boolean;
+  // That page stands in for a PDF the portal gives (a bill whose PDF was not out yet), not the statement itself.
+  pdfToCome?: boolean;
 } = {}): Promise<IntakeResult> {
   // parseBill defaults to AI; this path must pass the choice through or
   // every bulk import silently bills per PDF regardless of what was picked.
@@ -218,7 +220,7 @@ export async function intakeBill(buffer: Buffer, filename: string, userId: strin
 
     const key = buildStatementKey(userId, acct.propertyId, acct.id, statementDate, sanitizeFilename(filename));
     const pdfS3Key = opts.pdfKey ?? (docBuffer ? await uploadDocument(key, docBuffer) : null);
-    const rawData = { ...buildRawData(ex, source, parsed.extractedBy), ...(opts.pageSaved ? { pageSaved: true as const } : {}) };
+    const rawData = { ...buildRawData(ex, source, parsed.extractedBy), ...(opts.pageSaved ? { pageSaved: true as const, pdfToCome: !!opts.pdfToCome } : {}) };
     // One way to save a bill (services/saveStatement.ts): an email or a portal's file replaces only a stand-in.
     const saved = await saveStatement({
       accountId: acct.id, ex, statementDate, existing, rawData, pdfS3Key,
