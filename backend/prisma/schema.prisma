@@ -224,6 +224,9 @@ model UtilityAccount {
   // (Tyler Munis self service: "Account Number" and "Customer ID"). With it
   // and the account number the bills are found without signing in.
   lookupCustomerId String?
+  // The mailing ZIP code a lookup page asks for with the account or policy number (California FAIR
+  // Plan's make-payment page); the property's ZIP when not set.
+  lookupZip        String?
   // Portal agent: a verification code the portal sent, asked of the owner
   // mid-login. The prompt is what the portal said; the code is encrypted and
   // cleared as soon as the agent has typed it.

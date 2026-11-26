@@ -191,10 +191,11 @@ async function assertUnitBelongsToProperty(unitId: string | null | undefined, pr
  * page, and what it asks for beside the account number — a customer ID
  * (Tyler Munis self service) or the name on the bill (InvoiceCloud).
  */
-function lookupInfo(a: Parameters<typeof isLookupAccount>[0]): { lookupPage: boolean; lookupKind: 'customer' | 'name' | null; lookupUrl: string | null } {
+function lookupInfo(a: Parameters<typeof isLookupAccount>[0]): { lookupPage: boolean; lookupKind: 'customer' | 'name' | 'zip' | null; lookupUrl: string | null } {
   if (!isLookupAccount(a)) return { lookupPage: false, lookupKind: null, lookupUrl: null };
   const url = a.usernameEnc ? websiteFor(a)?.url ?? null : lookupStartFor(a);
-  const kind = a.lookupCustomerId || /munisselfservice\.com/i.test(url ?? '') ? 'customer' : 'name';
+  // The FAIR Plan's make-payment page finds a policy by its number and the mailing ZIP.
+  const kind = /cfpnet\.com/i.test(url ?? '') ? 'zip' : a.lookupCustomerId || /munisselfservice\.com/i.test(url ?? '') ? 'customer' : 'name';
   return { lookupPage: true, lookupKind: kind, lookupUrl: url };
 }
 
@@ -208,6 +209,9 @@ const UtilitySchema = z.object({
   loginUrl: z.union([z.string().url(), z.literal('')]).optional().transform(v => v === '' ? null : v),
   lookupName: z.string().max(120).nullable().optional().transform(v => (v == null ? v : v.trim() || null)),
   lookupCustomerId: z.string().max(60).nullable().optional().transform(v => (v == null ? v : v.trim() || null)),
+  // The mailing ZIP a lookup page asks for (California FAIR Plan); the property's when not set.
+  lookupZip: z.string().max(10).nullable().optional().transform(v => (v == null ? v : v.trim() || null))
+    .refine(v => v == null || /^\d{5}(-\d{4})?$/.test(v), 'Enter a 5-digit ZIP code'),
   category: z.enum(['ELECTRIC', 'GAS', 'WATER', 'SEWER', 'TRASH', 'SOLAR',
     'INTERNET', 'PHONE', 'INSURANCE', 'HOA', 'TAXES', 'LOAN', 'CREDIT_CARD', 'OTHER']),
   notes: z.string().optional(),

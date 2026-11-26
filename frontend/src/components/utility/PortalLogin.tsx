@@ -14,10 +14,10 @@ import { toast } from '../../lib/toast';
 /** A biller's lookup page (bills by account number and a name or customer ID, no sign-in) — as backend/src/lib/providerDirectory.ts isLookupPage. */
 const isLookupPage = (url: string) => /invoicecloud\.com\/.*customerlocator/i.test(url)
   || /munisselfservice\.com\/.*(utilitybilling|customeraccountlink)/i.test(url)
-  || /\/(quick-?pay|guest-?pay|pay-?as-?guest|bill-?lookup|find-?my-?(bill|account))\b/i.test(url);
+  || /\/(quick-?pay|guest-?pay|pay-?as-?guest|bill-?lookup|find-?my-?(bill|account)|make-?(a-?)?payment|one-?time-?payment)\b/i.test(url);
 
 export default function PortalLogin({ account, website, onClose, onSaved }: {
-  account: { id: string; providerName: string; hasCredentials?: boolean; lookupName?: string | null; lookupCustomerId?: string | null };
+  account: { id: string; providerName: string; hasCredentials?: boolean; lookupName?: string | null; lookupCustomerId?: string | null; lookupZip?: string | null };
   website: string | null;
   onClose: () => void;
   onSaved: () => void;
@@ -28,15 +28,21 @@ export default function PortalLogin({ account, website, onClose, onSaved }: {
   const [password, setPassword] = useState('');
   const [name, setName] = useState(account.lookupName ?? '');
   const [customerId, setCustomerId] = useState(account.lookupCustomerId ?? '');
+  const [zip, setZip] = useState(account.lookupZip ?? '');
   const [busy, setBusy] = useState(false);
   // A lookup page needs a customer ID (Tyler Munis) or the name on the bill (InvoiceCloud), not a login.
   const lookup = isLookupPage(url);
   const munis = /munisselfservice\.com/i.test(url);
   // InvoiceCloud pages ask for the account number and either a customer number
   // (City of Oceanside) or the name on the bill, depending on the biller: both are offered.
-  const byCustomer = lookup && (munis || !!account.lookupCustomerId);
-  const askBoth = lookup && !munis;
-  const canSave = lookup ? !!(askBoth ? customerId.trim() || name.trim() : (byCustomer ? customerId : name).trim()) : !!username && !!password;
+  // The FAIR Plan's make-payment page finds the policy by its number (on the account) and the mailing ZIP.
+  const byZip = lookup && /cfpnet\.com/i.test(url);
+  const byCustomer = lookup && !byZip && (munis || !!account.lookupCustomerId);
+  const askBoth = lookup && !munis && !byZip;
+  const zipOk = /^\d{5}(-\d{4})?$/.test(zip.trim());
+  const canSave = lookup
+    ? (byZip ? zipOk : askBoth ? !!(customerId.trim() || name.trim() || zipOk) : !!(byCustomer ? customerId : name).trim()) && (!zip.trim() || zipOk)
+    : !!username && !!password;
 
   async function save(fetchNow: boolean) {
     setBusy(true);
@@ -47,6 +53,7 @@ export default function PortalLogin({ account, website, onClose, onSaved }: {
         ...(loginUrl ? { loginUrl } : {}),
         lookupName: name.trim() || null,
         lookupCustomerId: customerId.trim() || null,
+        lookupZip: zip.trim() || null,
       });
       if (fetchNow) {
         await syncUtility(account.id);
@@ -62,7 +69,7 @@ export default function PortalLogin({ account, website, onClose, onSaved }: {
   const note = (
     <p className="text-xs text-gray-500 leading-relaxed" style={phone ? { margin: '0 16px 16px' } : undefined}>
       {lookup
-        ? `This website is a bill lookup page: Sollux finds the bills with the account number and ${askBoth ? 'the customer number or the name on the bill — fill in whichever the page asks for' : byCustomer ? 'the customer ID' : 'the name on the bill'}, and never signs in. A username and password are not needed. If the page shows a "verify you are human" check, Sollux fetches through your own Chrome when the Sollux connector is open on your computer.`
+        ? `This website is a bill lookup page: Sollux finds the bills with ${byZip ? 'the policy number saved on the account (as the coupon prints it, space included — "CFP 0123456") and the mailing ZIP code' : `the account number and ${askBoth ? 'the customer number, the name on the bill or the mailing ZIP — fill in whichever the page asks for' : byCustomer ? 'the customer ID' : 'the name on the bill'}`}, and never signs in. A username and password are not needed. If the page shows a "verify you are human" check, Sollux fetches through your own Chrome when the Sollux connector is open on your computer.`
         : <>No login? Some billers (City of Oceanside, for one) find bills by account number instead: paste that bill lookup page's address as the website and the form asks for what it needs.{' '}
           Stored encrypted. Sollux signs in only to read and download statements — it can't pay, change settings or send anything.
           If the portal texts a code, Sollux asks you for it.
@@ -74,9 +81,12 @@ export default function PortalLogin({ account, website, onClose, onSaved }: {
     <Sheet open onClose={onClose} title="Portal login" right={{ label: 'Save', onClick: () => void save(true), disabled: !canSave, busy }}>
       <Section header={account.providerName}>
         <Field label="Website"><input inputMode="url" autoCapitalize="off" autoCorrect="off" placeholder="provider.com" value={url} onChange={e => setUrl(e.target.value)} /></Field>
-        {lookup ? (askBoth ? <>
+        {lookup ? (byZip ? (
+          <Field label="Mailing ZIP"><input autoCorrect="off" inputMode="numeric" placeholder="The policy's mailing ZIP" value={zip} onChange={e => setZip(e.target.value)} /></Field>
+        ) : askBoth ? <>
           <Field label="Customer number"><input autoCorrect="off" inputMode="numeric" placeholder="If the page asks for it" value={customerId} onChange={e => setCustomerId(e.target.value)} /></Field>
           <Field label="Name on the bill"><input autoCorrect="off" placeholder="If the page asks for it" value={name} onChange={e => setName(e.target.value)} /></Field>
+          <Field label="Mailing ZIP"><input autoCorrect="off" inputMode="numeric" placeholder="If the page asks for it" value={zip} onChange={e => setZip(e.target.value)} /></Field>
         </> : byCustomer
           ? <Field label="Customer ID"><input autoCorrect="off" inputMode="numeric" placeholder="As the bill prints it" value={customerId} onChange={e => setCustomerId(e.target.value)} /></Field>
           : <Field label="Name on the bill"><input autoCorrect="off" placeholder="As the bill prints it" value={name} onChange={e => setName(e.target.value)} /></Field>
@@ -99,11 +109,17 @@ export default function PortalLogin({ account, website, onClose, onSaved }: {
       <div className="space-y-3">
         <label className="block"><span className="text-xs text-gray-400">Website (where you sign in, or the bill lookup page)</span>
           <input className="input-dark w-full text-sm mt-1" placeholder="https://provider.com" value={url} onChange={e => setUrl(e.target.value)} /></label>
-        {lookup ? (askBoth ? <>
+        {lookup ? (byZip ? (
+          <label className="block"><span className="text-xs text-gray-400">Mailing ZIP code</span>
+            <input className="input-dark w-full text-sm mt-1" inputMode="numeric" placeholder="The ZIP of the policy's mailing address" value={zip} onChange={e => setZip(e.target.value)} />
+            {zip.trim() && !zipOk && <span className="text-[11px] text-red-400">A 5-digit ZIP code</span>}</label>
+        ) : askBoth ? <>
           <label className="block"><span className="text-xs text-gray-400">Customer number — if the page asks for it</span>
             <input className="input-dark w-full text-sm mt-1" placeholder="As the bill prints it" value={customerId} onChange={e => setCustomerId(e.target.value)} /></label>
           <label className="block"><span className="text-xs text-gray-400">Name on the bill — if the page asks for it</span>
             <input className="input-dark w-full text-sm mt-1" placeholder="As the bill prints it, e.g. JANE SMITH" value={name} onChange={e => setName(e.target.value)} /></label>
+          <label className="block"><span className="text-xs text-gray-400">Mailing ZIP code — if the page asks for it</span>
+            <input className="input-dark w-full text-sm mt-1" inputMode="numeric" placeholder="e.g. 92501" value={zip} onChange={e => setZip(e.target.value)} /></label>
         </> : byCustomer
           ? <label className="block"><span className="text-xs text-gray-400">Customer ID</span>
             <input className="input-dark w-full text-sm mt-1" placeholder="As the bill prints it" value={customerId} onChange={e => setCustomerId(e.target.value)} /></label>
