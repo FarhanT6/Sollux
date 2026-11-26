@@ -203,8 +203,12 @@ export function computeResolvedByFutureCheckpoint(statements: any[]): Set<string
     const balance = s.balance != null ? Number(s.balance) : null;
     const due = s.amountDue != null ? Number(s.amountDue) : null;
     // A credit carried in (negative) proves nothing older is owed, as a zero does.
-    const provenZero = (carried != null && carried <= 0)
-      || (carried == null && balance != null && due != null && Math.abs(balance - due) < 0.01);
+    // A bill page saved from the provider's website proves nothing: a portal that lists bills one by
+    // one (City of El Centro's Tyler site) shows each bill's own balance, so a December page reading
+    // $3.56 owed, its own charge, said nothing of November's $3.56 still open — and marked it Paid.
+    const page = !!(s.pageSaved ?? s.rawDataJson?.pageSaved);
+    const provenZero = !page && ((carried != null && carried <= 0)
+      || (carried == null && balance != null && due != null && Math.abs(balance - due) < 0.01));
     if (provenZero) sawZeroCheckpoint = true;
   }
 
