@@ -3,7 +3,7 @@ import { FEE_LINE, FEE_KIND_IDS, FEE_KIND_LABELS, billOwnFees, paymentFees, feeK
 import { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import PortalCodeBanner from '../components/utility/PortalCodeBanner';
 import PaymentBreakdownLine from '../components/utility/PaymentBreakdownLine';
-import { runningBalanceOwed, owedByBillWithMarks, openBalanceOf, isStatementPaid, computeResolvedByFutureCheckpoint, computePaidMap, isEffectivelyPaid, isPriorStatementPaid, statementStatus, coveredByCredit, liveCarriedOf, newestIssued, isUpcoming, arrearsPaidSince, unlinkedPaidSince, paidSinceSplit, deferredOf } from '../lib/paidState';
+import { runningBalanceOwed, owedByBillWithMarks, openBalanceOf, isStatementPaid, computeResolvedByFutureCheckpoint, computePaidMap, isEffectivelyPaid, isPriorStatementPaid, statementStatus, coveredByCredit, liveCarriedOf, newestIssued, isUpcoming, arrearsPaidSince, unlinkedPaidSince, paidSinceSplit, deferredOf, olderOpenBills } from '../lib/paidState';
 import { bankAccountLabel } from '../lib/bankAccountLabel';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
@@ -1142,6 +1142,12 @@ export default function UtilityDetailPage() {
       return Math.max(0, Number((base - beyondArrears).toFixed(2)));
     })();
 
+  // Older bills still open that the newest bill does not carry (lib/paidState.ts olderOpenBills):
+  // on a portal that lists bills one by one, an overdue bill is outside the newest one's total.
+  const olderOpen = runningTotal != null ? 0 : olderOpenBills(statements, payments, paidMap).total;
+  // Owed now, the same on the computer and the phone.
+  const owedNow = runningTotal ?? Number(((isLatestPaid ? 0 : (latestTotalDue ?? latestAmt ?? 0)) + olderOpen).toFixed(2));
+
   // Every hook above the early returns: one below them crashed the page once the account loaded.
   const [recheck, setRecheck] = useState<{ running: boolean; result: AccountRecheckResult | null; error?: string } | null>(null);
   if (loading) return <div className="p-6 space-y-4"><Skeleton className="h-24" /><Skeleton className="h-64" /></div>;
@@ -1282,12 +1288,12 @@ export default function UtilityDetailPage() {
                   {latestOwed != null && latestOwed < -0.01 && <span className="block">{fmtMoney(-latestOwed)} credit remains on the account</span>}
                 </span>
               )
-              : isLatestPaid && !(runningTotal != null && runningTotal > 0.01)
+              : isLatestPaid && !(runningTotal != null && runningTotal > 0.01) && olderOpen <= 0.01
               ? <span className="text-emerald-400">Paid</span>
               : (
                 <span>
                   {(() => {
-                    const carried = runningPastDue ?? latestPastDue ?? 0;
+                    const carried = (runningPastDue ?? latestPastDue ?? 0) + olderOpen;
                     const active = plan && plan.status === 'ACTIVE' ? plan : null;
                     const installmentBilled = Number(latestStmt?.paymentPlanAmount ?? 0) > 0;
                     // Under an arrangement the deferred balance is owed, not
@@ -1440,8 +1446,8 @@ export default function UtilityDetailPage() {
       account={account} propertyLabel={propertyLabel}
       statements={statements} payments={payments}
       latestId={latestStmt?.id ?? null}
-      balance={isLatestPaid ? 0 : (latestTotalDue ?? latestAmt)}
-      isLatestPaid={isLatestPaid} balanceSub={balanceSub}
+      balance={owedNow}
+      isLatestPaid={isLatestPaid && owedNow <= 0.01} balanceSub={balanceSub}
       momPct={momPct} ytdOperating={ytdTotal} totalPaid={totalPaid} totalFees={totalFees}
       feesData={feesData as any}
       statusOf={(s, idx) => statementStatus(s, payments, statements[idx - 1], s.id === latestStmt?.id, resolvedByFuture, paidMap)}
@@ -1614,7 +1620,7 @@ export default function UtilityDetailPage() {
           <div>
             <p className="text-[13px] text-gray-500 mb-1">Owed now</p>
             {/* A running-balance account: what the bills still owe, as the provider counts it. */}
-            <p className="text-[32px] leading-none font-semibold tracking-tight tabular-nums text-white">{fmtMoney(runningTotal ?? (isLatestPaid ? 0 : (latestTotalDue ?? latestAmt)))}</p>
+            <p className="text-[32px] leading-none font-semibold tracking-tight tabular-nums text-white">{fmtMoney(owedNow)}</p>
             {balanceSub && <p className="text-xs text-gray-500 mt-2">{balanceSub}</p>}
           </div>
           <button onClick={() => { setTab('payments'); setEditPaymentId(null); resetPayForm(); setShowPayForm(true); }} className="btn btn-primary text-sm">Log payment</button>

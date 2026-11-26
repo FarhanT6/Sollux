@@ -467,6 +467,32 @@ export interface AccountView {
 }
 
 /**
+ * Older bills still open that the newest bill does not carry. A bill that prints what it carried in
+ * (arrears, or a credit) accounts for everything before it, and so does one whose balance is more
+ * than its own charge. One that does not — a portal that lists bills one by one (City of El
+ * Centro's Tyler site) shows each bill's own balance — leaves an overdue bill outside its total:
+ * Owed now read $3.56, the newest bill, while November's $3.56 above it read Overdue.
+ */
+export function olderOpenBills(statements: any[], payments: any[], paidMap: Map<string, boolean>): { total: number; count: number } {
+  const latest = newestIssued(statements);
+  if (!latest) return { total: 0, count: 0 };
+  const carried = latest.pastDueCarried != null ? Number(latest.pastDueCarried) : 0;
+  const balance = latest.balance != null ? Number(latest.balance) : null;
+  if (Math.abs(carried) > 0.005 || (balance != null && balance - Number(latest.amountDue ?? 0) > 0.005)) return { total: 0, count: 0 };
+  const counted = (p: any) => p.status !== 'FAILED' && p.status !== 'PENDING';
+  let total = 0, count = 0;
+  for (const s of statements) {
+    if (s.id === latest.id || isUpcoming(s) || s.isDownPayment || new Date(s.statementDate) > new Date(latest.statementDate)) continue;
+    if (paidMap.get(s.id) !== false) continue;
+    const own = Number(s.amountDue ?? 0) - deferredOf(s);
+    const linked = payments.filter(p => counted(p) && p.statementId === s.id).reduce((t, p) => t + Number(p.amount ?? 0), 0);
+    const left = Number((own - linked).toFixed(2));
+    if (left > 0.005) { total += left; count++; }
+  }
+  return { total: Number(total.toFixed(2)), count };
+}
+
+/**
  * The account's position from its statements (newest first) and payments.
  * Works with however many statements the caller loaded; with only the
  * newest, the prior bill is treated as unsettled, as before.
@@ -489,8 +515,10 @@ export function accountView(statements: any[], payments: any[] = []): AccountVie
   const unlinked = unlinkedPaidSince(latest, payments);
   const pastDue = carried > 0 && !priorSettled ? Math.max(0, Number((carried - unlinked).toFixed(2))) : 0;
   const credit = carried < 0 ? -carried : 0;
-  const owed = isPaid ? 0 : Math.max(Number((current + (carried > 0 && !priorSettled ? carried : 0) - credit - unlinked).toFixed(2)), 0);
-  return { latest, isPaid, priorSettled, pastDue, credit, current, owed };
+  const ownOwed = isPaid ? 0 : Math.max(Number((current + (carried > 0 && !priorSettled ? carried : 0) - credit - unlinked).toFixed(2)), 0);
+  // Older bills still open that the newest one does not carry (a portal listing bills one by one).
+  const older = olderOpenBills(sorted, payments, paid).total;
+  return { latest, isPaid, priorSettled, pastDue: Number((pastDue + older).toFixed(2)), credit, current, owed: Number((ownOwed + older).toFixed(2)) };
 }
 
 /**

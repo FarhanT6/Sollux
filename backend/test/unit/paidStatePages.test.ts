@@ -26,3 +26,16 @@ test('the Bills grid passes the flag on its own', () => {
   const rows = [{ ...bill('dec', '2026-11-25', {}), rawDataJson: undefined, pageSaved: true }, { ...bill('nov', '2026-10-25', {}), rawDataJson: undefined, pageSaved: true }];
   assert.deepEqual(status(rows), { nov: false, dec: false });
 });
+
+test("Owed now counts an older bill still open that the newest page does not carry", async () => {
+  const { olderOpenBills, accountView } = await import('../../../frontend/src/lib/paidState');
+  const pages = ['2026-11-25', '2026-10-25', '2026-09-25'].map((d, i) => bill(['dec', 'nov', 'oct'][i], d, { pageSaved: true, pdfToCome: false }));
+  const pays = [{ id: 'p', statementId: 'oct', amount: 3.5, paymentDate: '2026-10-10', status: 'PAID' }];
+  const paidMap = computePaidMap(pages, pays, computeResolvedByFutureCheckpoint(pages));
+  assert.deepEqual(olderOpenBills(pages, pays, paidMap), { total: 3.5, count: 1 });
+  assert.equal(accountView(pages, pays).owed, 7);
+  // A newest bill that carries the older one's balance already holds it: not counted twice.
+  const carried = [{ ...bill('dec', '2026-11-25', {}), pastDueCarried: 3.5, balance: 7 }, bill('nov', '2026-10-25', {})];
+  assert.equal(olderOpenBills(carried, [], computePaidMap(carried, [], computeResolvedByFutureCheckpoint(carried))).total, 0);
+  assert.equal(accountView(carried, []).owed, 7);
+});
