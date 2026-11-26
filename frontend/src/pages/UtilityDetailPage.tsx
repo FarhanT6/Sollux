@@ -1393,11 +1393,13 @@ export default function UtilityDetailPage() {
   // What the lookup page asks for beside the account number: a customer ID
   // (Tyler Munis self service) or the name on the bill (InvoiceCloud).
   const byCustomer = account?.lookupKind === 'customer';
-  const lookupLabel = byCustomer ? 'Customer ID' : 'Name on the bill';
-  const lookupValue: string = (byCustomer ? account?.lookupCustomerId : account?.lookupName) ?? '';
+  // The FAIR Plan's payment page: the policy number and the mailing ZIP.
+  const byZip = account?.lookupKind === 'zip';
+  const lookupLabel = byZip ? 'Mailing ZIP code' : byCustomer ? 'Customer ID' : 'Name on the bill';
+  const lookupValue: string = (byZip ? account?.lookupZip : byCustomer ? account?.lookupCustomerId : account?.lookupName) ?? '';
   async function saveLookupName(value: string) {
     try {
-      await updateUtility(accountId!, byCustomer ? { lookupCustomerId: value.trim() || null } : { lookupName: value.trim() || null });
+      await updateUtility(accountId!, byZip ? { lookupZip: value.trim() || null } : byCustomer ? { lookupCustomerId: value.trim() || null } : { lookupName: value.trim() || null });
       await reloadAccount();
       if (value.trim()) { toast('Saved — looking up the bills now.'); void handleSync(); }
       else toast(`${lookupLabel} removed.`);

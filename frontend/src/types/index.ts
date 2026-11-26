@@ -991,10 +991,12 @@ export interface UtilityAccount {
   lookupName?: string | null;
   /** The customer ID a bill lookup page asks for beside the account number (Tyler Munis). */
   lookupCustomerId?: string | null;
+  /** The mailing ZIP a lookup page asks for with the policy number (California FAIR Plan). */
+  lookupZip?: string | null;
   // The website is a bill lookup page: no login, the name on the bill instead.
   lookupPage?: boolean;
   /** What the lookup page asks for beside the account number, and where it is. */
-  lookupKind?: 'customer' | 'name' | null;
+  lookupKind?: 'customer' | 'name' | 'zip' | null;
   lookupUrl?: string | null;
   category: UtilityCategory;
   // Which unit this meter serves, if it serves one. serviceLabel covers the

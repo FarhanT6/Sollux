@@ -34,6 +34,8 @@ const DIRECTORY: ProviderSite[] = [
   { match: /duke energy/i, site: 'https://www.duke-energy.com', domains: ['duke-energy.com'] },
   { match: /\bpg\s*&?\s*e\b|pacific gas/i, site: 'https://www.pge.com', domains: ['pge.com'] },
   { match: /\bsce\b|southern california edison/i, site: 'https://www.sce.com', domains: ['sce.com'] },
+  // Insurance: the FAIR Plan finds a policy by its number (with its space, "CFP 0123456") and mailing ZIP.
+  { match: /california\s*fair\s*plan|\bcfp\b/i, site: 'https://www.cfpnet.com', login: 'https://action.cfpnet.com/#/make-payment', domains: ['cfpnet.com'] },
   // Internet and phone
   { match: /\bcox\b/i, site: 'https://www.cox.com', domains: ['cox.com', 'cox.net'] },
   { match: /t-?mobile/i, site: 'https://www.t-mobile.com', login: 'https://account.t-mobile.com', domains: ['t-mobile.com'] },
@@ -92,7 +94,7 @@ export function isLookupPage(url: string | null | undefined): boolean {
   if (!url) return false;
   return /invoicecloud\.com\/.*customerlocator/i.test(url)
     || /munisselfservice\.com\/.*(utilitybilling|customeraccountlink)/i.test(url)
-    || /\/(quick-?pay|guest-?pay|pay-?as-?guest|bill-?lookup|find-?my-?(bill|account))\b/i.test(url);
+    || /\/(quick-?pay|guest-?pay|pay-?as-?guest|bill-?lookup|find-?my-?(bill|account)|make-?(a-?)?payment|one-?time-?payment)\b/i.test(url);
 }
 
 /**
