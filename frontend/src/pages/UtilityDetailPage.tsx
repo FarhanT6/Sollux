@@ -1,4 +1,5 @@
 import UrgentNotices from '../components/UrgentNotices';
+import InsurerRecordsDialog from '../components/InsurerRecordsDialog';
 import { FEE_LINE, FEE_KIND_IDS, FEE_KIND_LABELS, billOwnFees, paymentFees, feeKindPhrase, feesPaidParts, type FeeKind } from '../lib/feeKinds';
 import { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import PortalCodeBanner from '../components/utility/PortalCodeBanner';
@@ -1150,6 +1151,7 @@ export default function UtilityDetailPage() {
 
   // Every hook above the early returns: one below them crashed the page once the account loaded.
   const [recheck, setRecheck] = useState<{ running: boolean; result: AccountRecheckResult | null; error?: string } | null>(null);
+  const [insurerRecords, setInsurerRecords] = useState(false);
   if (loading) return <div className="p-6 space-y-4"><Skeleton className="h-24" /><Skeleton className="h-64" /></div>;
   if (!account) return <LoadFailed what="this account" error={loadError ?? { response: { status: 404 } }} onRetry={loadAccount} back={{ to: '/bills', label: 'Back to bills' }} />;
 
@@ -1582,6 +1584,8 @@ export default function UtilityDetailPage() {
             <button onClick={() => void cancelFetch(account.id).then(() => { toast('Cancelled — the fetch stops within a few seconds.'); setSyncing(false); return getUtility(account.id).then(setAccount); }).catch(() => toast('Could not cancel it.', 'error'))} className="btn text-xs">Cancel</button>
           )}
           {recheck && <RecheckPanel state={recheck} onClose={() => setRecheck(null)} onUsePdf={() => void runRecheck(true)} />}
+          {insurerRecords && <InsurerRecordsDialog accountId={account.id} insurer={account.providerName} onClose={() => setInsurerRecords(false)}
+            onApplied={() => { setInsurerRecords(false); toast(`Lined up with ${account.providerName}'s records.`); void reloadAccount(); }} />}
           {/* Now-and-then actions, out of the way. */}
           <MoreMenu items={[
             { label: 'Edit account details', onClick: () => setEditingAccount(true), title: 'Name, type, account number, portal login, website, nickname and notes' },
@@ -1590,6 +1594,7 @@ export default function UtilityDetailPage() {
               : { label: account.hasCredentials ? 'Portal login' : 'Add portal login', onClick: () => setPortalLogin(true), title: "Let Sollux fetch statements from the provider's website" },
             { label: `${website ? 'Edit' : 'Save'} website link`, onClick: () => void saveWebsite(), title: 'Set the website for this account' },
             { label: 'Check figures against the PDFs', onClick: () => void runRecheck(), title: 'Free: reads the saved PDFs again with the readers that check their own arithmetic, and shows what it changed' },
+            ...(account.category === 'INSURANCE' ? [{ label: `Line up with ${account.providerName}'s records`, onClick: () => setInsurerRecords(true), title: "Upload the insurer's installments and payments pages; every bill and payment is set to match them, after you see the changes" }] : []),
             { label: 'Re-read statements (AI)', onClick: () => void rereadStatements(), title: "Read this account's saved statement PDFs again with the latest reader" },
             ...(account.category === 'ELECTRIC' || account.category === 'SOLAR' ? [{ label: account.hasTrueUp ? 'Turn off true-up' : 'Set true-up (net metering)', onClick: () => void toggleTrueUp() }] : []),
             ...(!loan ? [{ label: 'Add loan details', onClick: () => setShowLoanModal(true) }] : []),
@@ -2625,7 +2630,8 @@ function RecheckPanel({ state, onClose, onUsePdf }: { state: { running: boolean;
 function StatementSource({ s }: { s: any }) {
   const raw = (s.rawDataJson ?? {}) as Record<string, any>;
   const tags: { text: string; tone: string; title?: string }[] = [];
-  if (raw.ownerEditedAt) tags.push({ text: 'Edited by you', tone: 'text-amber-300', title: 'You changed these figures by hand; re-reads and checks leave them' });
+  if (raw.lineUp) tags.push({ text: `Lined up with ${String(raw.lineUp.from ?? "the insurer's records")}`, tone: 'text-emerald-400', title: `Set from the insurer's installments and payments on ${String(raw.lineUp.at ?? '').slice(0, 10)}; re-reads leave these figures` });
+  else if (raw.ownerEditedAt) tags.push({ text: 'Edited by you', tone: 'text-amber-300', title: 'You changed these figures by hand; re-reads and checks leave them' });
   if (raw.pageSaved) tags.push(raw.pdfToCome === false
     ? { text: "Saved from the provider's website", tone: 'text-gray-500', title: "The provider's bill page, saved as the statement: this website shows bills as pages and gives no PDF" }
     : { text: 'Saved web page · PDF to come', tone: 'text-sky-300', title: "The provider's bill page, saved before the PDF was out; Sollux fetches the PDF and it replaces this" });
