@@ -3,7 +3,7 @@
  * figures: four installments of $200 with a $20 late fee and a $50 reinstatement fee invoiced
  * among them, and four payments. On file: an invoice whose overdue installment was counted as its
  * own charge, the installment fee read as a "payment agreement", a second copy of one bill, a
- * payment logged twice, and one payment missing.
+ * payment logged twice, one logged a day late at the invoice's figure, and one payment missing.
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -47,6 +47,8 @@ before(async () => {
   await db.payment.create({ data: { utilityAccountId: a.id, amount: 200, paymentDate: d('2026-01-20'), status: 'PAID', statementId: ids.jan } });
   await db.payment.create({ data: { utilityAccountId: a.id, amount: 270, paymentDate: d('2026-03-21'), status: 'PAID' } });
   await db.payment.create({ data: { utilityAccountId: a.id, amount: 270, paymentDate: d('2026-03-22'), status: 'PAID' } });
+  // The April payment logged eight days late, and at the invoice's figure.
+  ids.late = (await db.payment.create({ data: { utilityAccountId: a.id, amount: 215, paymentDate: d('2026-04-21'), status: 'PAID' } })).id;
   ids.acct = a.id;
   ids.me = me.id;
 });
@@ -55,14 +57,19 @@ after(async () => { if (!skip) await api.stop(); });
 test('the plan: each installment its bill, the copy and the repeat payment flagged, totals as the records say', { skip }, async () => {
   const { planLineUp } = await import('../../src/services/insurerLedger');
   const plan = (await planLineUp(ids.me, ids.acct, READ))!;
+  // The late fee (Feb 28, still owed when March's invoice went out) is on March's; the reinstatement
+  // fee (Mar 20, paid off by the Mar 21 and 25 payments before April's) stays with March too.
   assert.deepEqual(plan.bills.map(b => [b.invoiceDate, b.charge, b.carried, b.total, b.statementId]), [
     ['2026-01-05', 200, 0, 200, ids.jan],
-    ['2026-02-03', 220, 0, 220, ids.feb],
-    ['2026-03-03', 250, 220, 470, ids.mar],
+    ['2026-02-03', 200, 0, 200, ids.feb],
+    ['2026-03-03', 270, 200, 470, ids.mar],
     ['2026-04-02', 200, 0, 200, null],
   ]);
   assert.deepEqual(plan.removeBills.map(b => b.statementId), [ids.dupe]);
-  assert.equal(plan.payments.filter(x => x.paymentId).length, 2);
+  assert.equal(plan.payments.filter(x => x.paymentId).length, 3);
+  // The April payment on file a day off and at $215 is the records' $200, corrected, the $15 kept as a fee.
+  const late = plan.payments.find(x => x.paymentId === ids.late)!;
+  assert.deepEqual([late.onFile, late.keptAsFee], [{ date: '2026-04-21', amount: 215 }, 15]);
   assert.equal(plan.removePayments.length, 1, 'the second $270 is not in the records');
   assert.deepEqual([plan.totals.billed, plan.totals.paid, plan.totals.owed], [870, 870, 0]);
 });
@@ -70,13 +77,14 @@ test('the plan: each installment its bill, the copy and the repeat payment flagg
 test('applied: the bills and payments are the records\', and the fee is no "payment agreement"', { skip }, async () => {
   const { applyLineUp } = await import('../../src/services/insurerLedger');
   const r = (await applyLineUp(ids.me, ids.acct, READ, { insurer: 'Sample Insurer' }))!;
-  assert.deepEqual([r.updated, r.added, r.removed, r.paymentsAdded, r.paymentsRemoved], [3, 1, 1, 2, 1]);
+  assert.deepEqual([r.updated, r.added, r.removed, r.paymentsAdded, r.paymentsRemoved], [3, 1, 1, 1, 1]);
   const rows = await api.db.statement.findMany({ where: { utilityAccountId: ids.acct }, orderBy: { statementDate: 'asc' } });
-  assert.deepEqual(rows.map(s => Number(s.amountDue)), [200, 220, 250, 200]);
-  const feb = rows[1]!;
-  assert.equal(feb.paymentPlanAmount, null);
-  assert.deepEqual((feb.rawDataJson as any).chargeBreakdown, { 'Premium installment': 200, 'Late Fee': 20 });
-  assert.equal(Number(rows[2]!.pastDueCarried), 220);
+  assert.deepEqual(rows.map(s => Number(s.amountDue)), [200, 200, 270, 200]);
+  assert.equal(rows[1]!.paymentPlanAmount, null);
+  assert.deepEqual((rows[2]!.rawDataJson as any).chargeBreakdown, { 'Premium installment': 200, 'Late Fee': 20, 'Reinstatement Fee': 50 });
+  assert.equal(Number(rows[2]!.pastDueCarried), 200);
+  const late = await api.db.payment.findUniqueOrThrow({ where: { id: ids.late } });
+  assert.deepEqual([late.paymentDate.toISOString().slice(0, 10), Number(late.amount), Number(late.feeAmount)], ['2026-04-20', 200, 15]);
   const pays = await api.db.payment.findMany({ where: { utilityAccountId: ids.acct } });
   assert.equal(pays.reduce((t, p) => t + Number(p.amount), 0), 870);
   assert.ok(pays.every(p => p.statementId == null), 'left to pay the oldest bills first');

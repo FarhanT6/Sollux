@@ -50,6 +50,9 @@ export default function InsurerRecordsDialog({ accountId, insurer, onClose, onAp
   }
 
   const added = plan?.payments.filter(p => !p.paymentId) ?? [];
+  const corrected = plan?.payments.filter(p => p.paymentId && p.onFile) ?? [];
+  // The insurer's own payments settle every installment and fee without the fee typed in: it is not charged.
+  const feeNotCharged = !!plan && plan.installmentFee > 0 && Math.abs(plan.totals.owedWithoutFee) < 0.01 && plan.totals.owed > 0.005;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.6)' }} onClick={onClose}>
       <div className="card p-5 w-full max-w-3xl space-y-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
@@ -91,6 +94,11 @@ export default function InsurerRecordsDialog({ accountId, insurer, onClose, onAp
               <input value={fee} onChange={e => void replan(e.target.value)} inputMode="decimal" className="input-dark text-sm w-20" />
               {busy === 'plan' && <span className="text-gray-500">…</span>}
             </label>
+            {feeNotCharged && (
+              <p className="text-xs text-amber-300 rounded-lg p-3" style={{ background: 'rgba(245,166,35,0.08)' }}>
+                {insurer}'s payments cover every installment and fee without the {fmtMoney(plan.installmentFee)} — so it is not being charged on these. With it, Sollux would show {fmtMoney(plan.totals.owed)} owed that {insurer} does not. Set it to 0 unless {insurer}'s records list it.
+              </p>
+            )}
 
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
@@ -125,10 +133,18 @@ export default function InsurerRecordsDialog({ accountId, insurer, onClose, onAp
             )}
             <div className="text-xs space-y-1">
               <p className="text-gray-400">Payments: {plan.payments.length - added.length} already on file{added.length ? `, ${added.length} added (${added.map(p => `${fmtDate(p.date, 'MMM d')} ${fmtMoney(p.amount)}`).join(', ')})` : ''}.</p>
+              {corrected.length > 0 && (
+                <div>
+                  <p className="text-amber-300">Set to {insurer}'s date and amount:</p>
+                  <ul className="mt-0.5 text-gray-400 space-y-0.5">{corrected.map(p => (
+                    <li key={p.paymentId}>{fmtDate(p.onFile!.date, 'MMM d')} {fmtMoney(p.onFile!.amount)} → {fmtDate(p.date, 'MMM d')} {fmtMoney(p.amount)}{p.keptAsFee ? <span className="text-gray-500"> + {fmtMoney(p.keptAsFee)} kept as a processing fee (paid, but not toward the bill)</span> : null}</li>
+                  ))}</ul>
+                </div>
+              )}
               {plan.removePayments.length > 0 && <p className="text-red-300">Not in the records — removed: {plan.removePayments.map(p => `${fmtDate(p.date, 'MMM d')} ${fmtMoney(p.amount)}`).join(', ')}</p>}
             </div>
 
-            <p className="text-[11px] text-gray-500">The bills keep their PDFs and are marked as lined up with {insurer}'s records, so a later re-read does not change them.</p>
+            <p className="text-[11px] text-gray-500">A fee {insurer} charged is on the next invoice when it was still owed then, else with the installment it was charged on. The bills keep their PDFs and are marked as lined up with {insurer}'s records, so a later re-read does not change them.</p>
             <div className="flex justify-end gap-2">
               <button onClick={() => { setPlan(null); setRead(null); }} className="btn text-xs">Start over</button>
               <button onClick={() => void apply()} disabled={busy != null} className="btn btn-primary text-xs disabled:opacity-50">{busy === 'apply' ? 'Lining up…' : 'Apply'}</button>
