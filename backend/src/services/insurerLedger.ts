@@ -12,8 +12,10 @@
  * will charge, carry and total, and which bills and payments on file the records do not have — and
  * nothing changes until the owner applies it. Every bill is then: the installment, plus the fees
  * invoiced with it, plus the per-installment fee when the owner says one is charged; carried, the
- * records' billed-to-date before it less paid-to-date before it. Payments are the records' own,
- * left to pay the oldest bills first (lib/paidState.ts).
+ * records' billed-to-date before it less paid-to-date before it. A fee is on the next invoice when it
+ * was still owed then, else with the installment it was charged on. A payment on file matched to one
+ * of the records' takes its date and amount, anything above that kept as a processing fee. Payments are the records' own (one on file under another date or at the
+ * invoice's figure is that payment, corrected), left to pay the oldest bills first (lib/paidState.ts).
  */
 import Anthropic from '@anthropic-ai/sdk';
 import { Prisma } from '@prisma/client';
@@ -99,10 +101,13 @@ export interface LineUpPlan {
   bills: PlannedBill[];
   /** Bills on file in the term that no installment is: duplicates and misreads. */
   removeBills: { statementId: string; statementDate: string; amountDue: number | null; payments: number }[];
-  payments: { date: string; amount: number; status: string | null; paymentId: string | null }[];
+  /** The records' payments; one on file is matched (onFile: as Sollux had it, when its date or amount
+   *  differed; keptAsFee: what it had above the records', kept on it as a processing fee). */
+  payments: { date: string; amount: number; status: string | null; paymentId: string | null; onFile: { date: string; amount: number } | null; keptAsFee: number | null; feeOnFile: number | null }[];
   /** Payments on file in the term the records do not have. */
   removePayments: { paymentId: string; date: string; amount: number }[];
-  totals: { billed: number; paid: number; owed: number; onFileBilled: number; onFilePaid: number };
+  /** owedWithoutFee: what the records leave owed before any per-installment fee the owner entered. */
+  totals: { billed: number; paid: number; owed: number; owedWithoutFee: number; onFileBilled: number; onFilePaid: number };
   installmentFee: number;
 }
 
@@ -125,17 +130,26 @@ export async function planLineUp(userId: string, accountId: string, read: Ledger
   const payments = await db.payment.findMany({
     where: { utilityAccountId: accountId, paymentDate: { gte: from, lte: new Date(Math.max(to.getTime(), Date.now()) + 5 * DAY) } },
     orderBy: { paymentDate: 'asc' },
-    select: { id: true, paymentDate: true, amount: true, status: true },
+    select: { id: true, paymentDate: true, amount: true, status: true, feeAmount: true },
   });
   // How long after its invoice a bill falls due on this account (20 days when none says).
   const gaps = statements.filter(s => !s.isScheduled && s.dueDate).map(s => Math.round((s.dueDate!.getTime() - s.statementDate.getTime()) / DAY)).filter(g => g >= 5 && g <= 45).sort((a, b) => a - b);
   const dueAfter = gaps.length ? gaps[Math.floor(gaps.length / 2)]! : 20;
 
-  // Each fee goes with the last installment invoiced on or before it (the one it was charged for).
+  // A fee still owed when the next invoice went out is on that invoice (a late fee charged Mar 30 and
+  // not paid by Apr 1 is on the Apr 1 invoice); one paid off before then — everything billed through
+  // it was paid by the next invoice — stays with the installment it was charged on, so no invoice
+  // shows a credit for a fee paid before it was printed.
   const feesBy = new Map<number, { label: string; amount: number }[]>();
+  const paidBefore = (d: string) => read.payments.filter(x => x.date < d).reduce((t, x) => t + x.amount, 0);
   for (const f of read.fees) {
-    let idx = 0;
-    for (const [j, p] of read.installments.entries()) if (p.date <= f.date) idx = j;
+    const next = read.installments.findIndex(p => p.date >= f.date);
+    let charged = -1;
+    for (const [j, p] of read.installments.entries()) if (p.date <= f.date) charged = j;
+    const billedThrough = read.installments.filter(p => p.date <= f.date).reduce((t, p) => t + p.amount + (/down\s*pay/i.test(p.label) ? 0 : fee), 0)
+      + read.fees.filter(g => g.date <= f.date).reduce((t, g) => t + g.amount, 0);
+    const paidOff = next >= 0 && paidBefore(read.installments[next]!.date) >= billedThrough - 0.01;
+    const idx = next < 0 ? read.installments.length - 1 : paidOff && charged >= 0 ? charged : next;
     feesBy.set(idx, [...(feesBy.get(idx) ?? []), { label: f.label, amount: f.amount }]);
   }
   const used = new Set<string>();
@@ -144,8 +158,7 @@ export async function planLineUp(userId: string, accountId: string, read: Ledger
     const fees = feesBy.get(i) ?? [];
     const perFee = /down\s*pay/i.test(p.label) ? 0 : fee;
     const charge = r2(p.amount + fees.reduce((t, f) => t + f.amount, 0) + perFee);
-    const paidBefore = read.payments.filter(x => x.date < p.date).reduce((t, x) => t + x.amount, 0);
-    const carried = r2(billedBefore - paidBefore);
+    const carried = r2(billedBefore - paidBefore(p.date));
     billedBefore = r2(billedBefore + charge);
     // The bill on file for this invoice: issued within six days of it, a real one before a scheduled one.
     const day = at(p.date).getTime();
@@ -165,25 +178,48 @@ export async function planLineUp(userId: string, accountId: string, read: Ledger
   const removeBills = statements.filter(s => !used.has(s.id))
     .map(s => ({ statementId: s.id, statementDate: dayOf(s.statementDate), amountDue: s.amountDue != null ? Number(s.amountDue) : null, payments: s._count.payments }));
 
-  // Each payment the records show, matched to one on file of the same amount within five days.
+  // Each payment the records show, matched to one on file: the same amount within five weeks (a
+  // payment logged under the day it posted, or the bill's date), else the same few days with an
+  // amount near it (logged at the invoice's figure, $249.90 for a $234.90 payment). A match takes
+  // the records' date and amount; what it had above the records' is kept as a processing fee on it
+  // (money out that never reduced the bill), so the money paid stays as it was.
+  // Closest pairs first across all of them, so one payment logged late is not taken by an earlier one.
   const takenPay = new Set<string>();
-  const plannedPays = read.payments.map(x => {
-    const d = at(x.date).getTime();
-    const hit = payments
-      .filter(p => !takenPay.has(p.id) && Math.abs(Number(p.amount) - x.amount) <= 0.01 && Math.abs(p.paymentDate.getTime() - d) <= 5 * DAY)
-      .sort((a, b) => Math.abs(a.paymentDate.getTime() - d) - Math.abs(b.paymentDate.getTime() - d))[0];
-    if (hit) takenPay.add(hit.id);
-    return { date: x.date, amount: x.amount, status: x.status, paymentId: hit?.id ?? null };
+  const hits = new Map<number, typeof payments[number]>();
+  const pairUp = (fits: (x: LedgerRead['payments'][number], p: typeof payments[number]) => boolean) => {
+    const pairs: { k: number; p: typeof payments[number]; gap: number }[] = [];
+    for (const [k, x] of read.payments.entries()) {
+      if (hits.has(k)) continue;
+      for (const p of payments) if (!takenPay.has(p.id) && fits(x, p)) pairs.push({ k, p, gap: Math.abs(p.paymentDate.getTime() - at(x.date).getTime()) });
+    }
+    for (const { k, p } of pairs.sort((a, b) => a.gap - b.gap)) {
+      if (hits.has(k) || takenPay.has(p.id)) continue;
+      hits.set(k, p); takenPay.add(p.id);
+    }
+  };
+  pairUp((x, p) => Math.abs(Number(p.amount) - x.amount) <= 0.01 && Math.abs(p.paymentDate.getTime() - at(x.date).getTime()) <= 35 * DAY);
+  pairUp((x, p) => Math.abs(p.paymentDate.getTime() - at(x.date).getTime()) <= 3 * DAY && Math.abs(Number(p.amount) - x.amount) <= Math.max(20, x.amount * 0.1));
+  const plannedPays = read.payments.map((x, k) => {
+    const hit = hits.get(k);
+    const differs = hit && (dayOf(hit.paymentDate) !== x.date || Math.abs(Number(hit.amount) - x.amount) > 0.005);
+    const over = hit ? r2(Number(hit.amount) - x.amount) : 0;
+    return {
+      date: x.date, amount: x.amount, status: x.status, paymentId: hit?.id ?? null,
+      onFile: hit && differs ? { date: dayOf(hit.paymentDate), amount: Number(hit.amount) } : null,
+      keptAsFee: over > 0.005 ? over : null,
+      feeOnFile: hit?.feeAmount != null ? Number(hit.feeAmount) : null,
+    };
   });
   const removePayments = payments.filter(p => !takenPay.has(p.id) && p.paymentDate.getTime() >= from.getTime())
     .map(p => ({ paymentId: p.id, date: dayOf(p.paymentDate), amount: Number(p.amount) }));
 
   const billed = r2(bills.reduce((t, b) => t + b.charge, 0));
   const paid = r2(read.payments.reduce((t, x) => t + x.amount, 0));
+  const fees = r2(bills.reduce((t, b) => t + b.installmentFee, 0));
   return {
     bills, removeBills, payments: plannedPays, removePayments, installmentFee: fee,
     totals: {
-      billed, paid, owed: r2(billed - paid),
+      billed, paid, owed: r2(billed - paid), owedWithoutFee: r2(billed - fees - paid),
       onFileBilled: r2(statements.filter(s => !s.isScheduled).reduce((t, s) => t + Number(s.amountDue ?? 0), 0)),
       onFilePaid: r2(payments.filter(p => p.status !== 'FAILED').reduce((t, p) => t + Number(p.amount), 0)),
     },
@@ -240,7 +276,10 @@ export async function applyLineUp(userId: string, accountId: string, read: Ledge
   let paymentsAdded = 0;
   for (const x of plan.payments) {
     const note = `From ${source}${x.status && !/complete/i.test(x.status) ? ` (${x.status.toLowerCase()} there on ${today})` : ''}`;
-    if (x.paymentId) await db.payment.update({ where: { id: x.paymentId }, data: { statementId: null, splitGroupId: null } });
+    if (x.paymentId) await db.payment.update({ where: { id: x.paymentId }, data: {
+      statementId: null, splitGroupId: null, paymentDate: at(x.date), amount: x.amount,
+      ...(x.keptAsFee ? { feeAmount: r2((x.feeOnFile ?? 0) + x.keptAsFee) } : {}),
+    } });
     else { await db.payment.create({ data: { utilityAccountId: accountId, amount: x.amount, paymentDate: at(x.date), status: 'PAID', paymentMethod: 'ONLINE', notes: note } }); paymentsAdded++; }
   }
   const removedPayments = plan.removePayments.length

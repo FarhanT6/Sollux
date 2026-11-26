@@ -110,9 +110,12 @@ export interface InsurerLedgerRead {
 export interface InsurerLineUpPlan {
   bills: { key: string; label: string; invoiceDate: string; dueDate: string; installment: number; fees: { label: string; amount: number }[]; installmentFee: number; charge: number; carried: number; total: number; statementId: string | null; onFile: { statementDate: string; amountDue: number | null; carried: number | null; total: number | null } | null }[];
   removeBills: { statementId: string; statementDate: string; amountDue: number | null; payments: number }[];
-  payments: { date: string; amount: number; status: string | null; paymentId: string | null }[];
+  /** onFile: the payment as Sollux has it, when its date or amount differs from the records' (Apply corrects it);
+   *  keptAsFee: what it had above the records', kept on it as a processing fee. */
+  payments: { date: string; amount: number; status: string | null; paymentId: string | null; onFile: { date: string; amount: number } | null; keptAsFee: number | null; feeOnFile: number | null }[];
   removePayments: { paymentId: string; date: string; amount: number }[];
-  totals: { billed: number; paid: number; owed: number; onFileBilled: number; onFilePaid: number };
+  /** owedWithoutFee: what the records leave owed before the installment fee the owner entered. */
+  totals: { billed: number; paid: number; owed: number; owedWithoutFee: number; onFileBilled: number; onFilePaid: number };
   installmentFee: number;
 }
 export const readInsurerRecords = (accountId: string, files: { fileData: string; filename: string }[], installmentFee: number) =>
