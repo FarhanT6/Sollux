@@ -39,3 +39,17 @@ test("Owed now counts an older bill still open that the newest page does not car
   assert.equal(olderOpenBills(carried, [], computePaidMap(carried, [], computeResolvedByFutureCheckpoint(carried))).total, 0);
   assert.equal(accountView(carried, []).owed, 7);
 });
+
+test("a payment logged toward a bill that printed it is counted once: a part payment leaves the rest owed", async () => {
+  const { accountView } = await import('../../../frontend/src/lib/paidState');
+  // A policy statement: premium $1,200.00, "Payments received $700.00", dated before the payment was made.
+  const policy = [{ id: 'jul', statementDate: '2026-07-01', dueDate: '2026-07-15', amountDue: 1200, pastDueCarried: null, amountPaid: 700, balance: 500 }];
+  const ach = [{ id: 'p', statementId: 'jul', amount: 700, paymentDate: '2026-09-15', status: 'PAID' }];
+  assert.deepEqual(status(policy, ach), { jul: false });
+  assert.equal(accountView(policy, ach).owed, 500);
+  // Printed and not logged anywhere, it still counts toward the bill.
+  assert.deepEqual(status(policy, [{ id: 'q', statementId: 'jul', amount: 500, paymentDate: '2026-09-15', status: 'PAID' }]), { jul: true });
+  // A part payment filed against the newest bill comes off Owed now.
+  const plain = [{ id: 'aug', statementDate: '2026-08-01', dueDate: '2026-08-20', amountDue: 300, pastDueCarried: null }];
+  assert.equal(accountView(plain, [{ id: 'r', statementId: 'aug', amount: 120, paymentDate: '2026-08-10', status: 'PAID' }]).owed, 180);
+});

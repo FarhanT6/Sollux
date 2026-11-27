@@ -320,6 +320,12 @@ export function runningBalanceOwed(statements: any[], payments: any[]): Map<stri
 function printedPaidNotLogged(s: any, prior: any, payments: any[]): number {
   const printed = Number(s.amountPaid ?? 0);
   if (printed <= 0.005 || !s.statementDate) return printed;
+  // The same money filed against this very bill is that payment, not a second one: a statement that
+  // shows the premium, "Payments received $700.00" and the $500.00 left, with the owner's $700.00
+  // logged toward it, read Paid — the $700 counted once as printed and again as logged.
+  const own = payments.filter(p => p.status !== 'FAILED' && p.status !== 'PENDING' && p.statementId === s.id);
+  if (own.some(p => Math.abs(Number(p.amount ?? 0) - printed) <= 0.01)
+    || (own.length > 1 && Math.abs(own.reduce((t, p) => t + Number(p.amount ?? 0), 0) - printed) <= 0.01)) return 0;
   const end = new Date(s.statementDate).getTime() + 86400000;
   const start = prior?.statementDate ? new Date(prior.statementDate).getTime() - 86400000 : end - 45 * 86400000;
   const logged = payments
@@ -492,6 +498,13 @@ export function olderOpenBills(statements: any[], payments: any[], paidMap: Map<
   return { total: Number(total.toFixed(2)), count };
 }
 
+/** Money filed against this bill itself (not failed or pending). */
+export function linkedTo(s: any, payments: any[] = []): number {
+  if (!s?.id) return 0;
+  return Number(payments.filter(p => p.statementId === s.id && p.status !== 'FAILED' && p.status !== 'PENDING')
+    .reduce((t, p) => t + Number(p.amount ?? 0), 0).toFixed(2));
+}
+
 /**
  * The account's position from its statements (newest first) and payments.
  * Works with however many statements the caller loaded; with only the
@@ -515,7 +528,10 @@ export function accountView(statements: any[], payments: any[] = []): AccountVie
   const unlinked = unlinkedPaidSince(latest, payments);
   const pastDue = carried > 0 && !priorSettled ? Math.max(0, Number((carried - unlinked).toFixed(2))) : 0;
   const credit = carried < 0 ? -carried : 0;
-  const ownOwed = isPaid ? 0 : Math.max(Number((current + (carried > 0 && !priorSettled ? carried : 0) - credit - unlinked).toFixed(2)), 0);
+  // Money filed against the newest bill itself comes off it too: a part payment toward it left Owed
+  // now at the whole bill.
+  const linked = linkedTo(latest, payments);
+  const ownOwed = isPaid ? 0 : Math.max(Number((current + (carried > 0 && !priorSettled ? carried : 0) - credit - unlinked - linked).toFixed(2)), 0);
   // Older bills still open that the newest one does not carry (a portal listing bills one by one).
   const older = olderOpenBills(sorted, payments, paid).total;
   return { latest, isPaid, priorSettled, pastDue: Number((pastDue + older).toFixed(2)), credit, current, owed: Number((ownOwed + older).toFixed(2)) };

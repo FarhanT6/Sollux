@@ -4,7 +4,7 @@ import { FEE_LINE, FEE_KIND_IDS, FEE_KIND_LABELS, billOwnFees, paymentFees, feeK
 import { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import PortalCodeBanner from '../components/utility/PortalCodeBanner';
 import PaymentBreakdownLine from '../components/utility/PaymentBreakdownLine';
-import { runningBalanceOwed, owedByBillWithMarks, openBalanceOf, isStatementPaid, computeResolvedByFutureCheckpoint, computePaidMap, isEffectivelyPaid, isPriorStatementPaid, statementStatus, coveredByCredit, liveCarriedOf, newestIssued, isUpcoming, arrearsPaidSince, unlinkedPaidSince, paidSinceSplit, deferredOf, olderOpenBills } from '../lib/paidState';
+import { runningBalanceOwed, owedByBillWithMarks, openBalanceOf, isStatementPaid, computeResolvedByFutureCheckpoint, computePaidMap, isEffectivelyPaid, isPriorStatementPaid, statementStatus, coveredByCredit, liveCarriedOf, newestIssued, isUpcoming, arrearsPaidSince, unlinkedPaidSince, paidSinceSplit, deferredOf, olderOpenBills, linkedTo } from '../lib/paidState';
 import { bankAccountLabel } from '../lib/bankAccountLabel';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
@@ -1140,7 +1140,8 @@ export default function UtilityDetailPage() {
       // latestOwed already reflects the arrears reduction; what is left of
       // the unfiled money beyond the arrears comes off the charge.
       const beyondArrears = Math.max(0, Number((unlinkedSince - Math.max(0, latestCarriedRaw ?? 0)).toFixed(2)));
-      return Math.max(0, Number((base - beyondArrears).toFixed(2)));
+      // Money filed against the newest bill itself comes off it too (a part payment toward it).
+      return Math.max(0, Number((base - beyondArrears - linkedTo(latestStmt, payments)).toFixed(2)));
     })();
 
   // Older bills still open that the newest bill does not carry (lib/paidState.ts olderOpenBills):
@@ -1769,7 +1770,8 @@ export default function UtilityDetailPage() {
                   // Toward the older bills in its arrears, plus unfiled money
                   // on the account, which pays the running balance oldest first.
                   const split = paidSinceSplit(s, payments, statements);
-                  const paidSince = split.total;
+                  // …and money filed against this bill itself (a part payment toward it).
+                  const paidSince = Number((split.total + linkedTo(s, payments)).toFixed(2));
                   const arrearsPaid = pastDue != null && pastDue > 0 ? split.towardArrears : 0;
                   const liveCarried = pastDue != null && pastDue > 0 ? Number((pastDue - arrearsPaid).toFixed(2)) : liveCarriedOf(s, payments, statements);
                   // Running balance: the bill's share of what the account owes now; otherwise its total less what has been paid since.
